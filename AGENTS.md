@@ -1,34 +1,66 @@
 # AGENTS.md
 
-Instructions for coding agents working in this repository.
+This repository builds a local-first Python coding agent with a Leader,
+dynamic Teammates, isolated Subagents, and independent verification.
 
-## Project Intent
+## Start Work
 
-This project explores a coding agent built around an agent team workflow: planning, implementation, review, verification, and progress tracking.
+Before editing:
 
-## Working Rules
+1. Confirm the repository root and inspect `git status`.
+2. Read the active plan under `docs/exec-plans/active/`, if one exists.
+3. Read the relevant design documents linked from that plan.
+4. Inspect recent Git history and existing implementation/tests.
+5. Run the repository health and baseline checks once they exist.
 
-- Keep changes small, explicit, and easy to review.
-- Prefer project-local conventions over introducing new tools.
-- Update `PROGRESS.md` when meaningful work is started, completed, blocked, or deferred.
-- Update `DECISIONS.md` when a technical choice affects architecture, dependencies, data model, agent roles, or long-term maintenance.
-- Do not commit secrets, API keys, credentials, local cache files, or generated build output.
+If the baseline is unhealthy, fix or record the baseline failure before feature
+work.
 
-## Expected Checks
+## Hard Rules
 
-This project does not have a runtime or test suite yet. When those are added, document the commands here.
+- The repository is the source of truth; do not rely on chat history alone.
+- Default to `WIP = 1`: finish and verify one plan milestone at a time.
+- Keep changes within the active milestone's scope and exclusions.
+- Do not weaken acceptance criteria to make work pass.
+- Do not mark implementation complete without recorded verification evidence.
+- Preserve user changes and never discard unrelated work.
+- Keep secrets, credentials, full source, and raw tool output out of memory.
+- Use Docker for untrusted execution. Host execution requires explicit
+  `--trusted-local` consent.
+- Team-mode work requires an independent Verifier before the Leader may finish.
 
-```powershell
-# Example placeholders
-# python -m pytest
-# npm test
-```
+## Validation Order
 
-## Repository Map
+Run required gates in this order:
 
-- `README.md`: human-facing project entry point.
-- `AGENTS.md`: agent-facing operating instructions.
-- `PROGRESS.md`: current status and work log.
-- `DECISIONS.md`: lightweight decision log.
-- `docs/ARCHITECTURE.md`: architecture notes for the agent team design.
+1. formatting and lint
+2. type checking
+3. unit tests
+4. structural tests
+5. integration tests
+6. application startup
+7. end-to-end tests for cross-component behavior
 
+Do not advance past a failed lower gate. Record commands, results, and any
+unverified paths in the active execution plan.
+
+## Finish Work
+
+Before ending:
+
+1. Update the active plan status and handoff section.
+2. Record validation evidence, blockers, risks, and next action.
+3. Update architecture or decision docs when behavior or boundaries changed.
+4. Remove temporary files and debugging code.
+5. Leave the worktree in a reviewable, recoverable state.
+
+## Documentation Map
+
+- `ARCHITECTURE.md`: system boundaries and dependency direction.
+- `docs/design-docs/index.md`: detailed technical designs.
+- `docs/exec-plans/active/`: active scope, evidence, and handoff.
+- `docs/PLANS.md`: execution-plan rules.
+- `docs/QUALITY_SCORE.md`: quality gates and current score.
+- `docs/RELIABILITY.md`: failure and recovery requirements.
+- `docs/SECURITY.md`: sandbox, approval, and data-safety rules.
+- `docs/design-docs/harness-engineering.md`: repository harness contract.

@@ -1,0 +1,93 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "awesome-agent"
+version = "0.1.0"
+description = "Observable local-first coding agent with teams and subagents."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = {text = "MIT"}
+authors = [{name = "JAGGER-L"}]
+dependencies = [
+  "fastapi>=0.115",
+  "langgraph>=0.6",
+  "openai>=1.100",
+  "pydantic-settings>=2.10",
+  "typer>=0.16",
+  "uvicorn[standard]>=0.35",
+]
+
+[project.optional-dependencies]
+postgres = [
+  "alembic>=1.16",
+  "asyncpg>=0.30",
+  "langgraph-checkpoint-postgres>=2.0",
+  "psycopg[binary,pool]>=3.2",
+  "sqlalchemy[asyncio]>=2.0",
+]
+observability = [
+  "opentelemetry-api>=1.36",
+  "opentelemetry-exporter-otlp>=1.36",
+  "opentelemetry-sdk>=1.36",
+  "structlog>=25.4",
+]
+memory = [
+  "mem0ai>=0.1",
+]
+
+[project.scripts]
+awesome-agent = "awesome_agent.cli.app:app"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.17",
+  "pytest>=8.4",
+  "pytest-asyncio>=1.1",
+  "pytest-cov>=6.2",
+  "ruff>=0.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/awesome_agent"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["mem0", "mem0.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --cov=awesome_agent --cov-report=term-missing"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+  "integration: requires local infrastructure such as PostgreSQL or Docker",
+  "e2e: exercises a complete user-facing workflow",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["awesome_agent"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

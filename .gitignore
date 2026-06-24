@@ -3,6 +3,14 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.uv-cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
 
 # Node
 node_modules/
@@ -21,3 +29,8 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local runtime data
+.awesome-agent/
+USER.md
+MEMORY.md

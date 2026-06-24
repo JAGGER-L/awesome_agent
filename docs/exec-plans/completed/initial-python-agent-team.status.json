@@ -1,0 +1,23 @@
+{
+  "plan": "initial-python-agent-team",
+  "updated_at": "2026-06-24",
+  "wip_limit": 1,
+  "current_milestone": null,
+  "milestones": [
+    {"id": 0, "name": "Baseline and document migration", "status": "completed"},
+    {"id": 1, "name": "Python and harness bootstrap", "status": "completed"},
+    {"id": 2, "name": "Domain, events, and persistence", "status": "completed"},
+    {"id": 3, "name": "Provider and solo Leader", "status": "completed"},
+    {"id": 4, "name": "Tools, approvals, and sandbox", "status": "completed"},
+    {"id": 5, "name": "Team and Subagent runtime", "status": "completed"},
+    {"id": 6, "name": "Verification loop", "status": "completed"},
+    {"id": 7, "name": "Memory and compression", "status": "completed"},
+    {"id": 8, "name": "Observability, artifacts, CLI, and API", "status": "completed"},
+    {"id": 9, "name": "End-to-end harness validation", "status": "completed"}
+  ],
+  "baseline": {
+    "uv": "0.11.24",
+    "python_3_12": "3.12.13",
+    "docker_daemon": "29.5.3"
+  }
+}
