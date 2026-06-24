@@ -6,7 +6,6 @@ import typer
 
 from awesome_agent import __version__
 from awesome_agent.health import collect_health, is_healthy
-from awesome_agent.observability.setup import configure_observability
 from awesome_agent.runtime.asyncio import configure_event_loop_policy
 
 configure_event_loop_policy()
@@ -48,7 +47,15 @@ def serve(
     """Start the local FastAPI inspection server."""
     import uvicorn
 
-    configure_observability()
+    try:
+        from awesome_agent.observability.setup import configure_observability
+
+        configure_observability()
+    except ImportError:
+        typer.echo(
+            "Observability not installed. Run `uv sync --extra observability` "
+            "for structured logging and OpenTelemetry.",
+        )
     uvicorn.run("awesome_agent.api.app:app", host=host, port=port, reload=False)
 
 

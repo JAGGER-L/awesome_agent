@@ -12,6 +12,7 @@ license = {text = "MIT"}
 authors = [{name = "JAGGER-L"}]
 dependencies = [
   "fastapi>=0.115",
+  "httpx2>=2.4.0",
   "langgraph>=0.6",
   "openai>=1.100",
   "pydantic-settings>=2.10",
