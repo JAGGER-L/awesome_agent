@@ -3,7 +3,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from awesome_agent.agents.profiles import AgentProfile, ProfileRegistry
+from awesome_agent.agents.profiles import (
+    AgentProfile,
+    ProfileRegistry,
+    RoleModelResolver,
+)
 from awesome_agent.domain.enums import AgentKind
 from awesome_agent.domain.models import Agent
 from awesome_agent.orchestration.team import TeamRuntime
@@ -26,7 +30,21 @@ class FakeWorkspaceProvisioner:
 
 
 def _leader(run_id: UUID) -> Agent:
-    return Agent(run_id=run_id, kind=AgentKind.LEADER, profile="leader")
+    return Agent(
+        run_id=run_id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="deepseek-v4-pro",
+    )
+
+
+def _models() -> RoleModelResolver:
+    return RoleModelResolver(
+        leader_model="deepseek-v4-pro",
+        teammate_model="deepseek-v4-flash",
+        verifier_model="deepseek-v4-flash",
+        subagent_model="deepseek-v4-flash",
+    )
 
 
 @pytest.mark.asyncio
@@ -36,6 +54,7 @@ async def test_team_activation_always_adds_verifier(tmp_path: Path) -> None:
         run_id=run_id,
         leader=_leader(run_id),
         profiles=ProfileRegistry(),
+        model_resolver=_models(),
         workspace_provisioner=FakeWorkspaceProvisioner(tmp_path),
     )
 
@@ -43,6 +62,7 @@ async def test_team_activation_always_adds_verifier(tmp_path: Path) -> None:
 
     assert len(team.teammates) == 3
     assert team.verifier().session.agent.profile == "verifier"
+    assert team.verifier().session.agent.model == "deepseek-v4-flash"
 
 
 @pytest.mark.asyncio
@@ -52,6 +72,7 @@ async def test_teammate_creates_isolated_subagents(tmp_path: Path) -> None:
         run_id=run_id,
         leader=_leader(run_id),
         profiles=ProfileRegistry(),
+        model_resolver=_models(),
         workspace_provisioner=FakeWorkspaceProvisioner(tmp_path),
     )
     await team.activate(["backend-engineer"])
@@ -67,6 +88,7 @@ async def test_teammate_creates_isolated_subagents(tmp_path: Path) -> None:
     assert not subagent.mailbox_access
     assert not subagent.can_delegate
     assert subagent.context_id != teammate.session.context_id
+    assert subagent.agent.model == "deepseek-v4-flash"
 
 
 @pytest.mark.asyncio
@@ -76,6 +98,7 @@ async def test_subagent_limit_is_per_teammate(tmp_path: Path) -> None:
         run_id=run_id,
         leader=_leader(run_id),
         profiles=ProfileRegistry(),
+        model_resolver=_models(),
         workspace_provisioner=FakeWorkspaceProvisioner(tmp_path),
     )
     await team.activate(["backend-engineer"])
@@ -100,6 +123,7 @@ async def test_leader_can_observe_all_mailbox_messages(tmp_path: Path) -> None:
         run_id=run_id,
         leader=leader,
         profiles=ProfileRegistry(),
+        model_resolver=_models(),
         workspace_provisioner=FakeWorkspaceProvisioner(tmp_path),
     )
     await team.activate(["backend-engineer", "frontend-engineer"])

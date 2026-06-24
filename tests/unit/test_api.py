@@ -3,16 +3,29 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.runtime.events import EventStream
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
+
+
+def _models() -> RoleModelResolver:
+    return RoleModelResolver(
+        leader_model="deepseek-v4-pro",
+        teammate_model="deepseek-v4-flash",
+        verifier_model="deepseek-v4-flash",
+        subagent_model="deepseek-v4-flash",
+    )
 
 
 def _client(tmp_path: Path) -> TestClient:
     service = RuntimeService(
+        repository=InMemoryRuntimeRepository(),
         events=EventStream(),
         artifacts=LocalArtifactStore(tmp_path),
+        model_resolver=_models(),
     )
     return TestClient(create_app(service))
 
@@ -25,7 +38,9 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     run_id = created.json()["id"]
 
     assert client.get(f"/runs/{run_id}").json()["status"] == "running"
-    assert len(client.get(f"/runs/{run_id}/agents").json()) == 1
+    agents = client.get(f"/runs/{run_id}/agents").json()
+    assert len(agents) == 1
+    assert agents[0]["model"] == "deepseek-v4-pro"
     assert len(client.get(f"/runs/{run_id}/events/history").json()) == 2
 
     cancelled = client.post(f"/runs/{run_id}/cancel")

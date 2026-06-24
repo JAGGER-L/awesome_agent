@@ -16,7 +16,9 @@ team output.
 - mandatory team verification
 - Docker command execution
 - PostgreSQL resume
+- durable PostgreSQL API projections across service restarts
 - traceable conversations, tools, artifacts, and approvals
+- configurable per-role model assignments, exposed for inspection
 - optional built-in and Mem0 memory
 - Typer CLI and local FastAPI inspection API
 
@@ -25,7 +27,6 @@ team output.
 - production deployment
 - production frontend
 - multi-user authentication
-- multiple model providers
+- multiple active model providers
 - recursive delegation
 - LangSmith or LangGraph Agent Server
-

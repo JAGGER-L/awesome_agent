@@ -37,6 +37,7 @@ class AgentRecord(Base):
     )
     kind: Mapped[str] = mapped_column(String(32))
     profile: Mapped[str] = mapped_column(String(128))
+    model: Mapped[str] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 

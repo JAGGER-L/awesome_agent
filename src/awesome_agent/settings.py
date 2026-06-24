@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,18 @@ class Settings(BaseSettings):
     checkpoint_database_url: str = (
         "postgresql://awesome_agent:awesome_agent@localhost:54329/awesome_agent"
     )
+    deepseek_api_key: SecretStr | None = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_pro_model: str = "deepseek-v4-pro"
+    deepseek_flash_model: str = "deepseek-v4-flash"
+    deepseek_thinking_enabled: bool = True
+    deepseek_reasoning_effort: Literal["high", "max"] = "high"
+    leader_model: str = "deepseek-v4-pro"
+    teammate_model: str = "deepseek-v4-flash"
+    verifier_model: str = "deepseek-v4-flash"
+    subagent_model: str = "deepseek-v4-flash"
+    role_model_overrides: dict[str, str] = Field(default_factory=dict)
+    mem0_api_key: SecretStr | None = None
     artifact_root: Path = Field(
         default_factory=lambda: Path.home() / ".awesome-agent" / "artifacts"
     )

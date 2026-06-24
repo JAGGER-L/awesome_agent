@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from pydantic import BaseModel
 
 from awesome_agent.domain.enums import AgentKind
+from awesome_agent.settings import Settings
 
 
 class AgentProfile(BaseModel):
@@ -9,6 +12,45 @@ class AgentProfile(BaseModel):
     can_write: bool = False
     can_delegate: bool = True
     is_verifier: bool = False
+
+
+class RoleModelResolver:
+    def __init__(
+        self,
+        *,
+        leader_model: str,
+        teammate_model: str,
+        verifier_model: str,
+        subagent_model: str,
+        role_overrides: dict[str, str] | None = None,
+    ) -> None:
+        self._leader_model = leader_model
+        self._teammate_model = teammate_model
+        self._verifier_model = verifier_model
+        self._subagent_model = subagent_model
+        self._role_overrides = role_overrides or {}
+
+    def resolve(self, *, kind: AgentKind, profile: str) -> str:
+        override = self._role_overrides.get(profile)
+        if override is not None:
+            return override
+        if kind is AgentKind.LEADER:
+            return self._leader_model
+        if kind is AgentKind.VERIFIER:
+            return self._verifier_model
+        if kind is AgentKind.SUBAGENT:
+            return self._subagent_model
+        return self._teammate_model
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> RoleModelResolver:
+        return cls(
+            leader_model=settings.leader_model,
+            teammate_model=settings.teammate_model,
+            verifier_model=settings.verifier_model,
+            subagent_model=settings.subagent_model,
+            role_overrides=settings.role_model_overrides,
+        )
 
 
 class ProfileRegistry:

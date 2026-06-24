@@ -35,6 +35,7 @@ class Agent(BaseModel):
     parent_agent_id: UUID | None = None
     kind: AgentKind
     profile: str
+    model: str
     status: AgentStatus = AgentStatus.CREATED
     created_at: datetime = Field(default_factory=utc_now)
 

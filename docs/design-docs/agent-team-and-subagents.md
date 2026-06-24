@@ -6,6 +6,8 @@ The Leader is the only initial agent. It creates and deletes Teammates, owns the
 task tree, observes team communication, integrates results, and decides when
 the run is complete. It never directly creates Subagents.
 
+The Leader defaults to `deepseek-v4-pro`.
+
 ## Team Mode
 
 Use team mode only when work has independent streams, distinct specialties,
@@ -21,12 +23,18 @@ access, assigned task ownership, and an isolated worktree when writing.
 Teammates may communicate directly and may create up to three Subagents without
 Leader approval.
 
+Teammates and the Verifier default to `deepseek-v4-flash`.
+
 ## Subagents
 
 Subagents execute bounded tasks with isolated context. They do not read the team
 mailbox, communicate with the user, or create descendants. They return
 structured results, evidence, artifacts, and optional patches only to their
 owning Teammate.
+
+Subagents default to `deepseek-v4-flash`. All defaults are configurable by
+agent kind, and a profile-specific override takes precedence. The resolved
+model is stored on the Agent record and exposed through the inspection API.
 
 ## Limits
 
@@ -38,4 +46,3 @@ max_model_calls: 8
 max_tool_calls: 12
 max_sandboxes: 6
 ```
-

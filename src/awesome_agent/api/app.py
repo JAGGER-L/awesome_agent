@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
+from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.schemas import ApprovalDecisionRequest, CreateRunRequest
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.persistence.database import (
+    create_engine,
+    create_session_factory,
+)
+from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.settings import Settings
@@ -18,12 +26,32 @@ from awesome_agent.settings import Settings
 
 def create_app(service: RuntimeService | None = None) -> FastAPI:
     settings = Settings()
-    runtime = service or RuntimeService(
-        events=EventStream(),
-        artifacts=LocalArtifactStore(settings.artifact_root),
-    )
-    app = FastAPI(title="awesome_agent", version="0.1.0")
-    app.state.runtime = runtime
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if service is not None:
+            app.state.runtime = service
+            yield
+            return
+
+        engine = create_engine(settings.database_url)
+        app.state.runtime = RuntimeService(
+            repository=PostgresRuntimeRepository(create_session_factory(engine)),
+            events=EventStream(),
+            artifacts=LocalArtifactStore(settings.artifact_root),
+            model_resolver=RoleModelResolver.from_settings(settings),
+        )
+        try:
+            yield
+        finally:
+            await engine.dispose()
+
+    app = FastAPI(title="awesome_agent", version="0.1.0", lifespan=lifespan)
+    if service is not None:
+        app.state.runtime = service
+
+    def runtime() -> RuntimeService:
+        return cast(RuntimeService, app.state.runtime)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -31,20 +59,20 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
 
     @app.post("/runs", status_code=201)
     async def create_run(request: CreateRunRequest) -> dict[str, object]:
-        run = await runtime.create_run(request.goal)
+        run = await runtime().create_run(request.goal)
         return run.model_dump(mode="json")
 
     @app.get("/runs/{run_id}")
     async def get_run(run_id: UUID) -> dict[str, object]:
         try:
-            return runtime.get_run(run_id).model_dump(mode="json")
+            return (await runtime().get_run(run_id)).model_dump(mode="json")
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found.") from error
 
     @app.post("/runs/{run_id}/cancel")
     async def cancel_run(run_id: UUID) -> dict[str, object]:
         try:
-            run = await runtime.cancel_run(run_id)
+            run = await runtime().cancel_run(run_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found.") from error
         return run.model_dump(mode="json")
@@ -52,7 +80,7 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
     @app.post("/runs/{run_id}/resume")
     async def resume_run(run_id: UUID) -> dict[str, object]:
         try:
-            run = await runtime.resume_run(run_id)
+            run = await runtime().resume_run(run_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found.") from error
         except ValueError as error:
@@ -61,11 +89,16 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
 
     @app.get("/runs/{run_id}/agents")
     async def list_agents(run_id: UUID) -> list[dict[str, object]]:
-        return [agent.model_dump(mode="json") for agent in runtime.list_agents(run_id)]
+        return [
+            agent.model_dump(mode="json")
+            for agent in await runtime().list_agents(run_id)
+        ]
 
     @app.get("/runs/{run_id}/todos")
     async def list_todos(run_id: UUID) -> list[dict[str, object]]:
-        return [todo.model_dump(mode="json") for todo in runtime.list_todos(run_id)]
+        return [
+            todo.model_dump(mode="json") for todo in await runtime().list_todos(run_id)
+        ]
 
     @app.get("/runs/{run_id}/events/history")
     async def event_history(
@@ -74,7 +107,7 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
     ) -> list[dict[str, object]]:
         return [
             event.model_dump(mode="json")
-            for event in runtime.events.history(
+            for event in await runtime().list_events(
                 run_id,
                 after_sequence=after_sequence,
             )
@@ -86,7 +119,7 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
         after_sequence: int = Query(default=0, ge=0),
     ) -> StreamingResponse:
         return StreamingResponse(
-            _sse(runtime.events, run_id, after_sequence=after_sequence),
+            _sse(runtime(), run_id, after_sequence=after_sequence),
             media_type="text/event-stream",
         )
 
@@ -94,7 +127,7 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
     async def list_messages(run_id: UUID) -> list[dict[str, object]]:
         return [
             event.model_dump(mode="json")
-            for event in runtime.events.history(run_id)
+            for event in await runtime().list_events(run_id)
             if event.event_type.value == "message.created"
         ]
 
@@ -102,13 +135,13 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
     async def list_artifacts(run_id: UUID) -> list[dict[str, object]]:
         return [
             artifact.model_dump(mode="json")
-            for artifact in runtime.list_artifacts(run_id)
+            for artifact in runtime().list_artifacts(run_id)
         ]
 
     @app.get("/artifacts/{artifact_id}")
     async def download_artifact(artifact_id: UUID) -> FileResponse:
         try:
-            artifact = runtime.artifacts.get(artifact_id)
+            artifact = runtime().artifacts.get(artifact_id)
         except KeyError as error:
             raise HTTPException(
                 status_code=404, detail="Artifact not found."
@@ -123,7 +156,7 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
     async def list_approvals(run_id: UUID) -> list[dict[str, object]]:
         return [
             event.model_dump(mode="json")
-            for event in runtime.events.history(run_id)
+            for event in await runtime().list_events(run_id)
             if event.event_type.value.startswith("approval.")
         ]
 
@@ -134,7 +167,7 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
         request: ApprovalDecisionRequest,
     ) -> dict[str, object]:
         try:
-            event = await runtime.decide_approval(
+            event = await runtime().decide_approval(
                 run_id,
                 approval_id=approval_id,
                 approved=request.approved,
@@ -151,12 +184,15 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
 
 
 async def _sse(
-    events: EventStream,
+    runtime: RuntimeService,
     run_id: UUID,
     *,
     after_sequence: int,
 ) -> AsyncIterator[str]:
-    async for event in events.subscribe(run_id, after_sequence=after_sequence):
+    async for event in runtime.stream_events(
+        run_id,
+        after_sequence=after_sequence,
+    ):
         yield _format_sse(event)
 
 

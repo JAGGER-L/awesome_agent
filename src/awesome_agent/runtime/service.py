@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections.abc import AsyncGenerator
 from uuid import UUID
 
+from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import ArtifactMetadata, LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
@@ -12,21 +13,22 @@ from awesome_agent.domain.enums import (
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
 from awesome_agent.runtime.events import EventStream
+from awesome_agent.runtime.repository import RuntimeRepository
 
 
 class RuntimeService:
     def __init__(
         self,
         *,
+        repository: RuntimeRepository,
         events: EventStream,
         artifacts: LocalArtifactStore,
+        model_resolver: RoleModelResolver,
     ) -> None:
+        self.repository = repository
         self.events = events
         self.artifacts = artifacts
-        self._runs: dict[UUID, Run] = {}
-        self._agents: dict[UUID, list[Agent]] = defaultdict(list)
-        self._todos: dict[UUID, list[TodoItem]] = defaultdict(list)
-        self._sequences: dict[UUID, int] = defaultdict(int)
+        self.model_resolver = model_resolver
 
     async def create_run(self, goal: str) -> Run:
         run = Run(goal=goal, status=RunStatus.RUNNING)
@@ -34,10 +36,13 @@ class RuntimeService:
             run_id=run.id,
             kind=AgentKind.LEADER,
             profile="leader",
+            model=self.model_resolver.resolve(
+                kind=AgentKind.LEADER,
+                profile="leader",
+            ),
             status=AgentStatus.READY,
         )
-        self._runs[run.id] = run
-        self._agents[run.id].append(leader)
+        await self.repository.create_run(run, leader)
         await self._emit(run.id, EventType.RUN_CREATED, {"goal": goal})
         await self._emit(
             run.id,
@@ -46,17 +51,19 @@ class RuntimeService:
                 "agent_id": str(leader.id),
                 "kind": leader.kind.value,
                 "profile": leader.profile,
+                "model": leader.model,
             },
             agent_id=leader.id,
         )
         return run
 
-    def get_run(self, run_id: UUID) -> Run:
-        return self._runs[run_id]
+    async def get_run(self, run_id: UUID) -> Run:
+        return await self.repository.get_run(run_id)
 
     async def cancel_run(self, run_id: UUID) -> Run:
-        run = self._runs[run_id].model_copy(update={"status": RunStatus.CANCELLED})
-        self._runs[run_id] = run
+        current = await self.repository.get_run(run_id)
+        run = current.model_copy(update={"status": RunStatus.CANCELLED})
+        await self.repository.update_run(run)
         await self._emit(
             run_id,
             EventType.RUN_STATUS_CHANGED,
@@ -65,11 +72,11 @@ class RuntimeService:
         return run
 
     async def resume_run(self, run_id: UUID) -> Run:
-        current = self._runs[run_id]
+        current = await self.repository.get_run(run_id)
         if current.status is RunStatus.COMPLETED:
             raise ValueError("Completed runs cannot be resumed.")
         run = current.model_copy(update={"status": RunStatus.RUNNING})
-        self._runs[run_id] = run
+        await self.repository.update_run(run)
         await self._emit(
             run_id,
             EventType.RUN_STATUS_CHANGED,
@@ -84,7 +91,7 @@ class RuntimeService:
         approval_id: UUID,
         approved: bool,
     ) -> RuntimeEvent:
-        self.get_run(run_id)
+        await self.get_run(run_id)
         return await self._emit(
             run_id,
             EventType.APPROVAL_DECIDED,
@@ -94,11 +101,30 @@ class RuntimeService:
             },
         )
 
-    def list_agents(self, run_id: UUID) -> list[Agent]:
-        return list(self._agents[run_id])
+    async def list_agents(self, run_id: UUID) -> list[Agent]:
+        return await self.repository.list_agents(run_id)
 
-    def list_todos(self, run_id: UUID) -> list[TodoItem]:
-        return list(self._todos[run_id])
+    async def list_todos(self, run_id: UUID) -> list[TodoItem]:
+        return await self.repository.list_todos(run_id)
+
+    async def list_events(
+        self, run_id: UUID, *, after_sequence: int = 0
+    ) -> list[RuntimeEvent]:
+        return await self.repository.list_events(
+            run_id,
+            after_sequence=after_sequence,
+        )
+
+    async def stream_events(
+        self, run_id: UUID, *, after_sequence: int = 0
+    ) -> AsyncGenerator[RuntimeEvent]:
+        history = await self.list_events(run_id, after_sequence=after_sequence)
+        cursor = after_sequence
+        for event in history:
+            cursor = event.sequence
+            yield event
+        async for event in self.events.subscribe(run_id, after_sequence=cursor):
+            yield event
 
     def list_artifacts(self, run_id: UUID) -> list[ArtifactMetadata]:
         return self.artifacts.list_for_run(run_id)
@@ -111,10 +137,8 @@ class RuntimeService:
         *,
         agent_id: UUID | None = None,
     ) -> RuntimeEvent:
-        self._sequences[run_id] += 1
-        event = RuntimeEvent(
+        event = await self.repository.append_event(
             run_id=run_id,
-            sequence=self._sequences[run_id],
             event_type=event_type,
             payload=payload,
             agent_id=agent_id,

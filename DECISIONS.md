@@ -58,3 +58,39 @@ Consequences:
 - Agents receive a short entry point and load detailed context on demand.
 - Active plans become the human-readable source for progress and recovery.
 - Machine-readable plan status supports deterministic WIP control.
+
+## 2026-06-25: Default to DeepSeek with traceable role models
+
+Status: accepted
+
+Context:
+- The first release needs one active provider while preserving a project-owned
+  provider boundary.
+- Model cost and capability should differ by agent responsibility.
+
+Decision:
+- Use DeepSeek Chat Completions as the default provider.
+- Default the Leader to `deepseek-v4-pro`.
+- Default Teammates, the Verifier, and Subagents to `deepseek-v4-flash`.
+- Allow kind defaults and profile-specific overrides.
+- Persist the resolved model on every Agent record.
+
+Consequences:
+- The inspection API can explain which model each Agent used.
+- A future provider can be added without changing orchestration contracts.
+
+## 2026-06-25: Make PostgreSQL authoritative for API projections
+
+Status: accepted
+
+Context:
+- Process-local Run, Agent, Todo, and Event projections disappeared on restart.
+
+Decision:
+- Route runtime state through a repository port backed by PostgreSQL.
+- Keep the in-memory implementation as an explicit test adapter only.
+- Use the live event stream for SSE delivery, not durable history.
+
+Consequences:
+- API reads and event history survive service restarts.
+- Local operation now requires migrated PostgreSQL for the default FastAPI app.

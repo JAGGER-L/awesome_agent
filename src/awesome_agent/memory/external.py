@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Protocol, cast
 
 from mem0 import AsyncMemoryClient
-from mem0.client.types import AddMemoryOptions, SearchMemoryOptions
+from mem0.client.types import SearchMemoryOptions
 
 from awesome_agent.memory.models import MemoryCandidate, MemoryRecord
 
@@ -19,6 +19,10 @@ class ExternalMemory(Protocol):
         self, query: str, *, user_id: str, project_id: str
     ) -> list[MemoryRecord]:
         """Search external memories."""
+        ...
+
+    async def delete(self, memory_id: str) -> bool:
+        """Delete one external memory."""
         ...
 
 
@@ -37,14 +41,13 @@ class Mem0PlatformMemory(ExternalMemory):
         try:
             await self._client.add(
                 [{"role": "user", "content": candidate.content}],
-                options=AddMemoryOptions(
-                    filters={"user_id": user_id, "project_id": project_id},
-                    metadata={
-                        "kind": candidate.kind.value,
-                        "source": candidate.source.value,
-                    },
-                    infer=True,
-                ),
+                user_id=user_id,
+                app_id=project_id,
+                metadata={
+                    "kind": candidate.kind.value,
+                    "source": candidate.source.value,
+                },
+                infer=True,
             )
         except Exception:
             return False
@@ -57,7 +60,7 @@ class Mem0PlatformMemory(ExternalMemory):
             response = await self._client.search(
                 query,
                 options=SearchMemoryOptions(
-                    filters={"user_id": user_id, "project_id": project_id},
+                    filters={"user_id": user_id, "app_id": project_id},
                     top_k=10,
                 ),
             )
@@ -78,3 +81,10 @@ class Mem0PlatformMemory(ExternalMemory):
             )
             for item in raw_results
         ]
+
+    async def delete(self, memory_id: str) -> bool:
+        try:
+            await self._client.delete(memory_id)
+        except Exception:
+            return False
+        return True

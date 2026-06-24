@@ -3,7 +3,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from awesome_agent.agents.profiles import AgentProfile, ProfileRegistry
+from awesome_agent.agents.profiles import (
+    AgentProfile,
+    ProfileRegistry,
+    RoleModelResolver,
+)
 from awesome_agent.domain.enums import AgentKind, TodoStatus
 from awesome_agent.domain.models import Agent, TodoItem
 from awesome_agent.orchestration.tasks import TaskBoard
@@ -31,16 +35,31 @@ class FakeWorkspaces:
         return None
 
 
+def _models() -> RoleModelResolver:
+    return RoleModelResolver(
+        leader_model="deepseek-v4-pro",
+        teammate_model="deepseek-v4-flash",
+        verifier_model="deepseek-v4-flash",
+        subagent_model="deepseek-v4-flash",
+    )
+
+
 @pytest.mark.asyncio
 async def test_team_subagents_rejection_rework_and_completion(
     tmp_path: Path,
 ) -> None:
     run_id = uuid4()
-    leader = Agent(run_id=run_id, kind=AgentKind.LEADER, profile="leader")
+    leader = Agent(
+        run_id=run_id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="deepseek-v4-pro",
+    )
     team = TeamRuntime(
         run_id=run_id,
         leader=leader,
         profiles=ProfileRegistry(),
+        model_resolver=_models(),
         workspace_provisioner=FakeWorkspaces(tmp_path),
     )
     await team.activate(["frontend-engineer", "backend-engineer"])

@@ -11,6 +11,7 @@ Generated from SQLAlchemy metadata.
 | `parent_agent_id` | `UUID` | yes |
 | `kind` | `VARCHAR(32)` | no |
 | `profile` | `VARCHAR(128)` | no |
+| `model` | `VARCHAR(128)` | no |
 | `status` | `VARCHAR(32)` | no |
 | `created_at` | `DATETIME` | no |
 

@@ -28,6 +28,7 @@ work.
 - Use Docker for untrusted execution. Host execution requires explicit
   `--trusted-local` consent.
 - Team-mode work requires an independent Verifier before the Leader may finish.
+- Update `README.md` and `README.zh-CN.md` together in the same change.
 
 ## Validation Order
 

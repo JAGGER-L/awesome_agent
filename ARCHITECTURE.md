@@ -66,6 +66,7 @@ Rules:
 - `domain` does not import infrastructure or framework modules.
 - `orchestration` owns workflows but not concrete storage or provider details.
 - provider-specific message types do not cross provider boundaries.
+- every Agent records its resolved model for API and event traceability.
 - tool execution always passes through approval and sandbox policies.
 - runtime events are immutable and all state changes emit an event.
 - implementation agents cannot approve their own team-mode work.
@@ -74,10 +75,15 @@ These rules must be enforced with structural tests once source modules exist.
 
 ## Persistence
 
-PostgreSQL stores LangGraph checkpoints and project-owned runtime records.
-Checkpoint semantics remain owned by LangGraph. Project tables store runs,
-agents, tasks, messages, tool calls, artifacts, approvals, verification, and
-memory audit data.
+PostgreSQL is authoritative for LangGraph checkpoints and project-owned runtime
+records. Checkpoint semantics remain owned by LangGraph. The API reads runs,
+agents, tasks, and event history through a runtime repository instead of
+process-local dictionaries. The in-memory repository is an explicit test
+adapter only. `EventStream` carries live SSE delivery but is not durable state.
+
+Project tables store runs, agents, tasks, messages, tool calls, artifacts,
+approvals, verification, and memory audit data. Agent records include the
+resolved model assignment.
 
 Large outputs live in external artifact storage. PostgreSQL stores metadata,
 hashes, ownership, and paths.

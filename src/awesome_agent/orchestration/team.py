@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from awesome_agent.agents.profiles import AgentProfile, ProfileRegistry
+from awesome_agent.agents.profiles import (
+    AgentProfile,
+    ProfileRegistry,
+    RoleModelResolver,
+)
 from awesome_agent.domain.enums import AgentKind, AgentStatus
 from awesome_agent.domain.models import Agent
 from awesome_agent.orchestration.mailbox import TeamMailbox
@@ -38,11 +42,13 @@ class TeammateHandle:
         *,
         run_id: UUID,
         profiles: ProfileRegistry,
+        model_resolver: RoleModelResolver,
         max_subagents: int,
     ) -> None:
         self.session = session
         self._run_id = run_id
         self._profiles = profiles
+        self._model_resolver = model_resolver
         self._max_subagents = max_subagents
 
     def create_subagent(self, *, profile_name: str) -> AgentSession:
@@ -55,6 +61,10 @@ class TeammateHandle:
                 parent_agent_id=self.session.agent.id,
                 kind=AgentKind.SUBAGENT,
                 profile=profile.name,
+                model=self._model_resolver.resolve(
+                    kind=AgentKind.SUBAGENT,
+                    profile=profile.name,
+                ),
                 status=AgentStatus.READY,
             ),
             workspace=self.session.workspace,
@@ -76,6 +86,7 @@ class TeamRuntime:
         run_id: UUID,
         leader: Agent,
         profiles: ProfileRegistry,
+        model_resolver: RoleModelResolver,
         workspace_provisioner: WorkspaceProvisioner,
         max_teammates: int = 6,
         max_subagents_per_teammate: int = 3,
@@ -86,6 +97,7 @@ class TeamRuntime:
         self.run_id = run_id
         self.leader = leader
         self.profiles = profiles
+        self.model_resolver = model_resolver
         self.workspace_provisioner = workspace_provisioner
         self.max_teammates = max_teammates
         self.max_subagents_per_teammate = max_subagents_per_teammate
@@ -109,6 +121,10 @@ class TeamRuntime:
             parent_agent_id=self.leader.id,
             kind=kind,
             profile=profile.name,
+            model=self.model_resolver.resolve(
+                kind=kind,
+                profile=profile.name,
+            ),
             status=AgentStatus.READY,
         )
         workspace = await self.workspace_provisioner.provision(agent.id, profile)
@@ -121,6 +137,7 @@ class TeamRuntime:
             session,
             run_id=self.run_id,
             profiles=self.profiles,
+            model_resolver=self.model_resolver,
             max_subagents=self.max_subagents_per_teammate,
         )
         self.teammates[agent.id] = handle

@@ -11,4 +11,6 @@
 - Secrets are redacted before persistence, telemetry, artifacts, and memory.
 - Mem0 content is untrusted external context.
 - Full source, full conversations, and raw tool output are excluded from memory.
-
+- DeepSeek and Mem0 credentials are read from the ignored local `.env` or the
+  process environment and are never committed, logged, or persisted in memory.
+- `.env.example` contains names and non-secret defaults only.
