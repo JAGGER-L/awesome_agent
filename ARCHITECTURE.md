@@ -6,16 +6,116 @@ The system is a local-first coding agent runtime. It separates orchestration,
 side effects, persistence, observation, and model providers so each can evolve
 without coupling the whole application to one vendor.
 
-## Runtime Topology
+## Component Topology
 
 ```text
-User
-  |
-Leader
-  |-- Teammate (persistent for the run)
-  |     `-- Subagent (isolated, bounded, depth 1)
-  |-- Teammate
-  `-- Verifier (mandatory in team mode)
+                         ┌──────────────────┐
+                         │  Browser / User  │
+                         └────────┬─────────┘
+                                  │ HTTP / SSE
+                                  ▼
+┌──────────────────┐     ┌──────────────────┐
+│    Typer CLI     │────►│     FastAPI      │
+└────────┬─────────┘     │ Inspection API   │
+         │               └────────┬─────────┘
+         │ local command          │ runtime commands / queries
+         └──────────────┬─────────┘
+                        ▼
+                 ┌──────────────────┐
+                 │ Runtime Service  │
+                 │ runs/events/API  │
+                 └────────┬─────────┘
+                          │
+                          ▼
+                 ┌──────────────────┐
+                 │ Leader Runtime   │
+                 │ LangGraph plan   │
+                 └───┬──────┬───────┘
+                     │      │
+          team tasks │      │ model requests
+                     ▼      ▼
+          ┌──────────────┐  ┌──────────────────┐
+          │ Team Runtime │  │ Provider Adapter │
+          │ + Verifier   │  │ DeepSeek default │
+          └──────┬───────┘  └────────┬─────────┘
+                 │                   │ HTTPS
+                 │ tools             ▼
+                 ▼          ┌──────────────────┐
+          ┌──────────────┐  │  Model Provider  │
+          │ Tool Registry│  └──────────────────┘
+          │ + Approval   │
+          └──────┬───────┘
+                 │ approved execution
+                 ▼
+          ┌──────────────┐
+          │ Sandbox      │
+          │ Docker/local │
+          └──────┬───────┘
+                 │
+                 ▼
+          ┌──────────────┐
+          │ User Project │
+          │ + worktrees  │
+          └──────────────┘
+
+        ┌────────────────────────────────────────────────────┐
+        │                 State and Evidence                 │
+        │                                                    │
+        │  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
+        │  │ PostgreSQL   │  │ Artifacts    │  │ OTel /   │ │
+        │  │ runs/events/ │  │ filesystem   │  │ events   │ │
+        │  │ checkpoints  │  └──────────────┘  └──────────┘ │
+        │  └──────────────┘                                 │
+        │                                                    │
+        │  ┌──────────────┐  ┌──────────────┐               │
+        │  │ USER.md /    │  │ Mem0         │               │
+        │  │ MEMORY.md    │  │ Platform     │               │
+        │  └──────────────┘  └──────────────┘               │
+        └────────────────────────────────────────────────────┘
+```
+
+The CLI is the primary local execution surface. FastAPI exposes durable runs,
+agents, Todos, event history, approvals, artifacts, and live SSE updates for a
+future frontend. Both surfaces call application services rather than accessing
+provider, database, or sandbox implementations directly.
+
+## Agent Orchestration Topology
+
+```text
+                         ┌──────────────────┐
+                         │       User       │
+                         └────────┬─────────┘
+                                  │ task / approval
+                                  ▼
+                         ┌──────────────────┐
+                         │      Leader      │
+                         │ plan + final say │
+                         └───┬──────────┬───┘
+                             │ creates  │ observes all
+                   ┌─────────┘          └─────────┐
+                   ▼                              ▼
+          ┌──────────────────┐           ┌──────────────────┐
+          │    Teammate A    │◄─────────►│    Teammate B    │
+          │ durable context  │  mailbox  │ durable context  │
+          └───────┬──────────┘           └───────┬──────────┘
+                  │ creates without approval      │ creates without approval
+          ┌───────┴────────┐              ┌───────┴────────┐
+          ▼                ▼              ▼                ▼
+ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+ │  Subagent A1 │ │  Subagent A2 │ │  Subagent B1 │ │  Subagent B2 │
+ │ isolated ctx │ │ isolated ctx │ │ isolated ctx │ │ isolated ctx │
+ └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
+
+                         ┌──────────────────┐
+                         │     Verifier     │
+                         │ independent gate │
+                         └────────┬─────────┘
+                                  │ pass / reject evidence
+                                  ▼
+                         ┌──────────────────┐
+                         │      Leader      │
+                         │ completion choice│
+                         └──────────────────┘
 ```
 
 The Leader is the only agent present initially. It decides between solo and team
@@ -26,6 +126,33 @@ Teammates own durable responsibilities and may communicate through an auditable
 mailbox. Each Teammate may independently create up to three Subagents.
 Subagents do not participate in team conversation and report only to their
 creator.
+
+The Verifier is a specialized Teammate created whenever team mode starts.
+Teammate output reaches the Leader only after verification passes or after
+rejected work is revised and re-verified.
+
+## Harness and State Boundaries
+
+```text
+tracked repository governance
+  AGENTS.md
+  docs/engineering/
+  scripts/ and GitHub Actions
+
+ignored development-agent state
+  .codex/exec-plans/
+
+tracked product runtime configuration
+  .agents/
+
+ignored or durable product runtime state
+  .awesome-agent/
+  PostgreSQL
+```
+
+The four locations are intentionally distinct. Development-agent plans never
+become product runtime plans. Runtime Leader plans and Todos are domain data,
+not repository-maintenance Markdown.
 
 ## Source Layout
 
@@ -97,3 +224,6 @@ Writing Teammates use isolated Git worktrees.
 ## Detailed Designs
 
 See [docs/design-docs/index.md](docs/design-docs/index.md).
+
+Repository engineering rules are under
+[docs/engineering](docs/engineering/engineering-harness.md).

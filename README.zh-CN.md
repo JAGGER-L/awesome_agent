@@ -17,10 +17,6 @@ Agent Team 架构：
 和 API 投影、沙箱后端、Team/Subagent/Verifier 生命周期、记忆适配器、
 可追溯事件、产物、CLI 和 FastAPI 查询接口。
 
-当前执行计划：
-
-[DeepSeek、记忆与持久化 API 投影](docs/exec-plans/completed/deepseek-memory-persistence.md)
-
 ## 技术栈
 
 - Python 3.12 和 `uv`
@@ -82,7 +78,9 @@ container port: 5432
 - [Agent 指令](AGENTS.md)
 - [架构](ARCHITECTURE.md)
 - [设计文档](docs/design-docs/index.md)
-- [执行计划](docs/PLANS.md)
+- [工程 Harness](docs/engineering/engineering-harness.md)
+- [运行时 Agent Harness](docs/design-docs/runtime-agent-harness.md)
+- [项目治理](docs/project-governance/README.md)
 - [产品规格](docs/product-specs/local-coding-agent.md)
 - [质量](docs/QUALITY_SCORE.md)
 - [可靠性](docs/RELIABILITY.md)

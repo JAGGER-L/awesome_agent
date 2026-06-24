@@ -1,6 +1,7 @@
 # Technical Debt Tracker
 
-Record deferred work that is outside the active milestone.
+Record durable project debt that remains after a development task ends.
+Task-specific notes and handoffs belong in ignored `.codex/exec-plans/`.
 
 | ID | Status | Area | Description | Evidence | Priority | Exit condition |
 | --- | --- | --- | --- | --- | --- | --- |

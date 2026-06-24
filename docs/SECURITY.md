@@ -14,3 +14,8 @@
 - DeepSeek and Mem0 credentials are read from the ignored local `.env` or the
   process environment and are never committed, logged, or persisted in memory.
 - `.env.example` contains names and non-secret defaults only.
+- `.codex/` contains local development-agent plans and is ignored.
+- `.agents/` contains tracked runtime-agent configuration only; secrets and
+  generated run state are forbidden there.
+- `.awesome-agent/` contains ignored local runtime data. Durable runtime state
+  belongs in PostgreSQL.

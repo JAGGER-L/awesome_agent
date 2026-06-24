@@ -19,10 +19,6 @@ PostgreSQL checkpoints and API projections, sandbox backends,
 Team/Subagent/Verifier lifecycle, memory adapters, traceable events, artifacts,
 CLI, and FastAPI inspection APIs.
 
-The active implementation plan is:
-
-[DeepSeek, Memory, and Durable API Projections](docs/exec-plans/completed/deepseek-memory-persistence.md)
-
 ## Stack
 
 - Python 3.12 and `uv`
@@ -84,7 +80,9 @@ container port: 5432
 - [Agent instructions](AGENTS.md)
 - [Architecture](ARCHITECTURE.md)
 - [Design documents](docs/design-docs/index.md)
-- [Execution plans](docs/PLANS.md)
+- [Engineering harness](docs/engineering/engineering-harness.md)
+- [Runtime agent harness](docs/design-docs/runtime-agent-harness.md)
+- [Project governance](docs/project-governance/README.md)
 - [Product specification](docs/product-specs/local-coding-agent.md)
 - [Quality](docs/QUALITY_SCORE.md)
 - [Reliability](docs/RELIABILITY.md)

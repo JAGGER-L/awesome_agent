@@ -26,6 +26,9 @@ build/
 .idea/
 .vscode/
 
+# Local development-agent state
+.codex/
+
 # OS
 .DS_Store
 Thumbs.db

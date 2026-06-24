@@ -11,3 +11,5 @@ Design changes must identify:
 - validation changes
 - security and reliability consequences
 
+Repository-agent process rules live under [engineering](engineering/), not in
+product design documents.

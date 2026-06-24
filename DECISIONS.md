@@ -59,6 +59,8 @@ Consequences:
 - Active plans become the human-readable source for progress and recovery.
 - Machine-readable plan status supports deterministic WIP control.
 
+Superseded in part by the 2026-06-25 harness-state separation decision.
+
 ## 2026-06-25: Default to DeepSeek with traceable role models
 
 Status: accepted
@@ -94,3 +96,22 @@ Decision:
 Consequences:
 - API reads and event history survive service restarts.
 - Local operation now requires migrated PostgreSQL for the default FastAPI app.
+
+## 2026-06-25: Separate development-agent and runtime-agent state
+
+Status: accepted
+
+Context:
+- Repository-maintenance plans were stored beside product documentation and
+  could be mistaken for plans created by the `awesome_agent` runtime.
+
+Decision:
+- Store Codex and other development-agent plans under ignored `.codex/`.
+- Keep reusable repository rules under `docs/engineering/`.
+- Keep product runtime harness behavior under `docs/design-docs/`.
+- Reserve `.agents/` for product runtime configuration.
+- Store generated runtime state in PostgreSQL or ignored `.awesome-agent/`.
+
+Consequences:
+- Development history no longer appears as product runtime state.
+- Durable conclusions must be extracted from local plans before completion.

@@ -1,12 +1,11 @@
 # Design Documents
 
-Design documents describe durable system behavior and boundaries. Active work,
-evidence, and handoff belong in execution plans rather than design documents.
+Design documents describe durable `awesome_agent` product behavior and
+boundaries. Development-agent plans and handoffs belong in ignored `.codex/`.
 
 - [Core beliefs](core-beliefs.md)
-- [Harness engineering](harness-engineering.md)
+- [Runtime agent harness](runtime-agent-harness.md)
 - [Agent team and subagents](agent-team-and-subagents.md)
 - [Task and verification model](task-and-verification-model.md)
 - [Memory architecture](memory-architecture.md)
 - [Observability](observability.md)
-
