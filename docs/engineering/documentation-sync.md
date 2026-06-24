@@ -39,5 +39,12 @@ Reason: <why behavior, interfaces, operations, and contracts are unchanged>
 `scripts/check.ps1` runs it locally. GitHub Actions runs it against the pull
 request or push diff.
 
+The `documentation-sync` GitHub check is intended to be required on `main`.
+GitHub rejected branch-protection configuration for the current private
+repository because the account does not have GitHub Pro. Until the repository
+becomes public or the account is upgraded, the check runs on every PR and push
+but cannot prevent an administrator from bypassing it. This limitation is
+tracked as TD-005.
+
 The checker is deliberately conservative. Passing it does not prove that prose
 is correct; review must still compare documentation claims with implementation.

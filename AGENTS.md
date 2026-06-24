@@ -38,6 +38,8 @@ work.
   record `Documentation Impact: none` with a concrete reason in the local plan.
 - Run `scripts/check_docs_sync.py` before completion. Do not bypass the check by
   making unrelated documentation edits.
+- Treat the local documentation check as mandatory even when GitHub branch
+  protection is unavailable for the repository plan.
 
 ## Validation Order
 

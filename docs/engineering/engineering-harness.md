@@ -77,3 +77,6 @@ Recurring review findings should become executable checks rather than longer
 instructions. Remove duplicate, obsolete, unmeasured, or conflicting rules.
 Track unresolved repository-level gaps in
 `docs/project-governance/tech-debt-tracker.md`.
+
+Local gates remain mandatory regardless of whether the GitHub account can make
+the corresponding Actions check a protected-branch requirement.
