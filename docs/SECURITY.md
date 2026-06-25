@@ -30,6 +30,11 @@
 - Read-only and modifying Runs use isolated named worktrees from an exact clean
   Git base. Trusted-local changes the execution backend but never authorizes
   direct edits to the user's checkout.
+- Protected worker writes require the current worker UUID and fencing token.
+  Stale or expired owners cannot heartbeat, append protected events, or change
+  dispatch state.
+- Claim and heartbeat are internal PostgreSQL operations, not public FastAPI
+  endpoints.
 - Worktree cleanup validates resolved ownership, active leases, and unexported
   diffs before deletion.
 - V1 approvals bind to one exact tool invocation, canonical arguments,

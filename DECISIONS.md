@@ -185,6 +185,28 @@ Consequences:
 - Users must explicitly clean retained worktrees; uncommitted-change snapshots
   are deferred.
 
+## 2026-06-25: Keep the current Run lease on the Run row
+
+Status: accepted
+
+Context:
+- Each Run has at most one current execution owner.
+- Task 03 needs atomic claim, fencing, state, and event updates without another
+  local service.
+
+Decision:
+- Store current lease and retry fields directly on `runs`.
+- Claim with `FOR UPDATE SKIP LOCKED`.
+- Identify an owner with process-scoped worker UUID plus fencing token.
+- Use PostgreSQL time, a 60-second lease, 15-second heartbeat interval, and
+  three maximum claims by default.
+- Keep claim/release history in ordered runtime events.
+
+Consequences:
+- Queue operations lock one authoritative row and require no Redis.
+- Heartbeat writes do not represent business-state updates.
+- Task 04 can add a worker without changing the queue protocol.
+
 ## 2026-06-25: Bind approvals and validation to explicit contracts
 
 Status: accepted

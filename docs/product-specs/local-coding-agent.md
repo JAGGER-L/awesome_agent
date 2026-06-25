@@ -24,6 +24,8 @@ team output.
 - local allowed-root configuration and PostgreSQL repository registry
 - clean-base read-only/modifying Run intake into stable named worktrees
 - durable `created + queued` intake with crash reconciliation
+- PostgreSQL claim, lease, heartbeat, fencing, retry, and expiry recovery
+- read-only dispatch inspection API
 
 ## Non-Goals
 

@@ -115,6 +115,26 @@ repository UUID and exposes repository list/get for a future frontend. Both
 read-only and modifying intents use a stable worktree; intent later controls
 tool capabilities. Task 02 queues the Run but does not claim or execute it.
 
+### PostgreSQL Dispatch Protocol
+
+```text
+queued / retry_scheduled
+          |
+          | FOR UPDATE SKIP LOCKED
+          v
+       claimed ----- heartbeat -----> PostgreSQL lease extension
+          |                                  |
+          | fenced transition                | lease expires
+          v                                  v
+   retry / release / terminal        queued or recovery_required
+```
+
+The current lease lives on the Run row. A claim records a process-scoped
+worker UUID, diagnostic name, attempt, expiry, and monotonically increasing
+fencing token. PostgreSQL time decides lease validity. State changes and their
+dispatch events share one transaction. Task 03 provides this repository
+protocol but does not start a worker or execute LangGraph.
+
 ## Agent Orchestration Topology
 
 ```text
@@ -297,6 +317,8 @@ State ownership:
   context.
 - PostgreSQL domain tables own user-visible business projections.
 - Separate `DispatchStatus` owns queue and worker scheduling state.
+- PostgreSQL row locking and `SKIP LOCKED` serialize claims without a separate
+  broker.
 - Runtime events are ordered audit records, not a replay-complete event store.
 - Stable transition IDs reconcile checkpoint-ahead and projection-ahead
   partial failures.

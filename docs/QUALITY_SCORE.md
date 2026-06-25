@@ -1,7 +1,7 @@
 # Quality Score
 
-Current phase: repository-aware durable Run intake complete; worker dispatch is
-not yet implemented.
+Current phase: PostgreSQL queue and lease protocol complete; worker and
+LangGraph execution are not yet implemented.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

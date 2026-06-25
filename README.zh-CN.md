@@ -17,6 +17,9 @@ Agent Team 架构：
 和 API 投影、沙箱后端、Team/Subagent/Verifier 生命周期、记忆适配器、
 可追溯事件、产物、CLI、FastAPI 查询接口、仓库身份注册、允许根目录策略，
 以及可在崩溃后恢复的具名 Git worktree Run intake。
+PostgreSQL 队列现已支持事务 claim、lease、heartbeat、fencing token、延迟
+retry 和过期 lease 恢复。当前仍没有 worker 进程执行 queued Run；该能力属于
+Task 04。
 
 ## 技术栈
 
@@ -71,6 +74,10 @@ CLI 只向 FastAPI 发送 repository UUID，API 不接受文件系统路径。re
 和 modifying Run 都要求原 checkout 干净，并基于捕获的 base commit 创建稳定
 worktree。Task 02 仅完成持久化的 `created + queued` intake；worker 执行属于
 后续路线图任务。
+
+可以通过 `GET /runs/{run_id}/dispatch` 查看调度状态。queued 和
+retry-scheduled Run 可以立即取消；claimed 或 executing Run 在实现持久化取消
+传播前返回 `409`。
 
 真实模型调用前，需要在被 Git 忽略的本地 `.env` 中配置
 `AWESOME_AGENT_DEEPSEEK_API_KEY`。仓库配置默认关闭内置记忆和 Mem0；

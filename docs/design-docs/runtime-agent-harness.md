@@ -36,6 +36,10 @@ load user task and project policy
 - Run business state and worker dispatch state remain separate.
 - A worker may commit protected transitions only with the current fencing
   token.
+- Workers heartbeat directly to PostgreSQL. API availability does not control
+  lease validity.
+- Expired leases requeue until the maximum claim count, then enter
+  `recovery_required`.
 - Every Run uses an isolated integration worktree from a clean captured base;
   read-only intent controls tools rather than bypassing isolation, and
   trusted-local does not permit direct edits to the user's checkout.

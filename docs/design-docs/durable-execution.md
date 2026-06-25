@@ -69,9 +69,10 @@ Examples:
 The API exposes both values. Product UI may present a combined label but cannot
 discard either state.
 
-Current implementation note: Task 02 persists only `queued` and `terminal`.
-Claim, lease, heartbeat, fencing, retry, and worker execution remain target
-behavior for Task 03 and later.
+Current implementation note: Task 03 implements claim, lease, heartbeat,
+fencing, retry, and expired-lease recovery. Only `queued`, `claimed`,
+`retry_scheduled`, and `terminal` are exercised without a worker. Worker
+execution remains Task 04.
 
 ## Dispatch, Lease, and Fencing
 
@@ -90,6 +91,14 @@ V1 uses PostgreSQL as the queue.
 
 Lease safety must not depend on exactly synchronized clocks. PostgreSQL time is
 the authority for lease acquisition and expiry decisions.
+
+Defaults are a 60-second lease, 15-second heartbeat interval, and three maximum
+claims. Heartbeat is a direct conditional Worker-to-PostgreSQL update; FastAPI
+and Agents do not relay it. Expired ownership cannot be revived.
+
+Task 03 exposes dispatch inspection but no public claim or heartbeat API.
+Queued and retry-scheduled Runs cancel atomically. Claimed and executing Runs
+reject cancellation until Task 09 adds propagation to active execution.
 
 ## Transition Identity and Reconciliation
 

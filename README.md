@@ -19,6 +19,9 @@ PostgreSQL checkpoints and API projections, sandbox backends,
 Team/Subagent/Verifier lifecycle, memory adapters, traceable events, artifacts,
 CLI, FastAPI inspection APIs, registered repository identities, allowed-root
 policy, and crash-recoverable Run intake into named Git worktrees.
+The PostgreSQL queue supports transactional claims, leases, heartbeats,
+fencing tokens, delayed retry, and expired-lease recovery. No worker process
+executes queued Runs yet; that is Task 04.
 
 ## Stack
 
@@ -75,6 +78,10 @@ not accept filesystem paths. Both read-only and modifying Runs require a clean
 checkout and receive a stable worktree at the captured base commit. Task 02
 stops after durable `created + queued` intake; worker execution is a later
 roadmap task.
+
+Dispatch state is available at `GET /runs/{run_id}/dispatch`. Queued and
+retry-scheduled Runs can be cancelled immediately. Claimed or executing Runs
+return `409` until durable cancellation propagation is implemented.
 
 Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the ignored local `.env` before real
 model calls. Built-in memory and Mem0 are disabled in committed defaults. Enable

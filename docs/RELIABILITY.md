@@ -20,6 +20,11 @@ forbidden.
   describes queue and worker scheduling.
 - PostgreSQL time is authoritative for lease acquisition and expiry.
 - Every worker claim receives a monotonically increasing fencing token.
+- Claims use `FOR UPDATE SKIP LOCKED`; two workers cannot validly claim one Run.
+- Heartbeat extends a lease only when Run, worker UUID, fencing token, and
+  unexpired lease all match.
+- Defaults are a 60-second lease, 15-second heartbeat interval, and three
+  maximum claims.
 - A stale worker cannot commit protected projections, events, or side effects
   after lease loss.
 - Graph transitions that may replay have stable transition IDs.
@@ -42,6 +47,8 @@ forbidden.
 - Startup reconciliation rolls back incomplete owned intake side effects.
   Accepted Run worktrees remain retained; automatic accepted-run cleanup is not
   implemented.
+- Expired leases requeue before the attempt limit. At the limit, the Run enters
+  `recovery_required + terminal` and preserves its workspace.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active
