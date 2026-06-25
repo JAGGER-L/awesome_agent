@@ -6,8 +6,13 @@ from uuid import UUID
 
 from langgraph.graph import END, START, StateGraph
 
+from awesome_agent.modeling import (
+    ModelProvider,
+    ModelRequest,
+    SystemMessage,
+    UserMessage,
+)
 from awesome_agent.orchestration.plans import LeaderPlan, PlanHistory
-from awesome_agent.providers.base import ModelProvider, ModelRequest
 
 _PLAN_SYSTEM_PROMPT = """You are the Leader of a coding-agent runtime.
 Return only JSON matching this schema:
@@ -41,13 +46,15 @@ class SoloLeaderRuntime:
         self._provider = provider
 
     async def _create_plan(self, state: LeaderState) -> LeaderState:
-        result = await self._provider.generate(
+        turn = await self._provider.complete(
             ModelRequest(
-                system_prompt=_PLAN_SYSTEM_PROMPT,
-                user_prompt=state["goal"],
+                messages=[
+                    SystemMessage(content=_PLAN_SYSTEM_PROMPT),
+                    UserMessage(content=state["goal"]),
+                ],
             )
         )
-        plan = LeaderPlan.model_validate_json(result.text)
+        plan = LeaderPlan.model_validate_json(turn.assistant.content)
         return {"plan": plan.model_dump(mode="json")}
 
     async def _complete(self, state: LeaderState) -> LeaderState:

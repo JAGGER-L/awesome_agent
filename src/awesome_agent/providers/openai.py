@@ -41,7 +41,6 @@ from awesome_agent.modeling.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from awesome_agent.providers.base import ModelRequest, ModelResult, ModelUsage
 from awesome_agent.providers.errors import classify_openai_error
 
 
@@ -55,27 +54,6 @@ class OpenAIProvider(StructuredModelProvider):
     ) -> None:
         self._model = model
         self._client = client or AsyncOpenAI(api_key=api_key)
-
-    async def generate(self, request: ModelRequest) -> ModelResult:
-        turn = await self.complete(
-            StructuredModelRequest(
-                messages=[
-                    SystemMessage(content=request.system_prompt),
-                    UserMessage(content=request.user_prompt),
-                ],
-                max_output_tokens=request.max_output_tokens,
-            )
-        )
-        return ModelResult(
-            text=turn.assistant.content,
-            model=turn.model,
-            provider=turn.provider,
-            response_id=turn.response_id,
-            usage=ModelUsage(
-                input_tokens=turn.usage.input_tokens or 0,
-                output_tokens=turn.usage.output_tokens or 0,
-            ),
-        )
 
     async def stream(
         self,

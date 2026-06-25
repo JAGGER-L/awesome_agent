@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from tests.fakes import FakeModelProvider
 
+from awesome_agent.modeling import UserMessage
 from awesome_agent.orchestration.leader import SoloLeaderRuntime
 from awesome_agent.orchestration.plans import PlanHistory
 
@@ -35,7 +36,9 @@ async def test_solo_leader_creates_plan() -> None:
 
     assert result["plan"]["use_team"] is False
     assert result["final_report"] == "Solo plan created with 1 task(s)."
-    assert provider.requests[0].user_prompt == "Make a small change"
+    user_message = provider.requests[0].messages[-1]
+    assert isinstance(user_message, UserMessage)
+    assert user_message.content == "Make a small change"
 
 
 @pytest.mark.asyncio

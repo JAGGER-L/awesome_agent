@@ -1,5 +1,10 @@
 from awesome_agent.memory.models import ContextItem, ContextSummary
-from awesome_agent.providers.base import ModelProvider, ModelRequest
+from awesome_agent.modeling import (
+    ModelProvider,
+    ModelRequest,
+    SystemMessage,
+    UserMessage,
+)
 
 
 class ContextCompressor:
@@ -8,18 +13,22 @@ class ContextCompressor:
 
     async def compress(self, items: list[ContextItem]) -> ContextSummary:
         source = "\n\n".join(f"[{item.event_id}] {item.content}" for item in items)
-        result = await self._provider.generate(
+        turn = await self._provider.complete(
             ModelRequest(
-                system_prompt=(
-                    "Summarize the execution context without inventing facts. "
-                    "Preserve decisions, failures, evidence, blockers, and "
-                    "next actions."
-                ),
-                user_prompt=source,
+                messages=[
+                    SystemMessage(
+                        content=(
+                            "Summarize the execution context without inventing "
+                            "facts. Preserve decisions, failures, evidence, "
+                            "blockers, and next actions."
+                        )
+                    ),
+                    UserMessage(content=source),
+                ],
                 max_output_tokens=1200,
             )
         )
         return ContextSummary(
-            text=result.text,
+            text=turn.assistant.content,
             source_event_ids=[item.event_id for item in items],
         )
