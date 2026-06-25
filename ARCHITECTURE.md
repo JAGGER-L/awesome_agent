@@ -238,6 +238,7 @@ not repository-maintenance Markdown.
 src/
 `-- awesome_agent/
     |-- agents/
+    |-- modeling/
     |-- orchestration/
     |-- domain/
     |-- providers/
@@ -262,6 +263,7 @@ loading repository files.
 ```text
 api / cli
     -> orchestration
+        -> modeling
         -> domain
 
 providers / tools / sandbox / memory / persistence / observability / artifacts
@@ -273,12 +275,38 @@ Rules:
 - `domain` does not import infrastructure or framework modules.
 - `orchestration` owns workflows but not concrete storage or provider details.
 - provider-specific message types do not cross provider boundaries.
+- `modeling` owns provider-neutral messages, tools, turns, reasoning,
+  continuation, usage, streaming events, and failure categories.
 - every Agent records its resolved model for API and event traceability.
 - tool execution always passes through approval and sandbox policies.
 - runtime events are immutable and all state changes emit an event.
 - implementation agents cannot approve their own team-mode work.
 
 These rules must be enforced with structural tests once source modules exist.
+
+## Structured Model Boundary
+
+```text
+orchestration / memory
+        |
+        | ModelRequest(messages, tools, continuation)
+        v
+provider-neutral modeling protocol
+        |
+        +---- DeepSeek adapter ---- Chat Completions stream
+        |
+        +---- OpenAI adapter ------ Responses stream
+        |
+        v
+reasoning/text/tool deltas -> completed ModelTurn
+```
+
+Visible reasoning is a frontend-capable trace. Private continuation is a
+separate opaque JSON value used only by the matching adapter and LangGraph
+checkpoint. SDK objects, encrypted continuation data, and provider-specific
+message types never enter orchestration, events, logs, memory, or public APIs.
+The current Worker still executes only `runtime_probe`; Task 05 does not connect
+model turns to Coding Runs.
 
 ## Persistence
 

@@ -229,3 +229,32 @@ Consequences:
 - Approval recovery is narrowly auditable.
 - Validation remains useful for unconfigured repositories without treating
   arbitrary project scripts as trusted.
+
+## 2026-06-25: Separate visible reasoning from private continuation
+
+Status: accepted
+
+Context:
+- DeepSeek exposes reasoning content that must be replayed with tool calls.
+- OpenAI exposes display summaries and opaque or encrypted reasoning items for
+  continuation.
+- The frontend needs a generic collapsible thinking experience without
+  exposing provider internals.
+
+Decision:
+- Use one provider-neutral streaming protocol for reasoning, text, tool calls,
+  completion, and failure.
+- Store displayable reasoning in `ReasoningTrace`.
+- Store provider continuation separately as opaque JSON in
+  `ContinuationState`.
+- Allow continuation only in checkpoints and matching provider adapters.
+- Exclude continuation from public serialization, APIs, events, logs,
+  artifacts, and memory.
+- Present reasoning in the future frontend as generic `thinking`, without
+  provider-source labels.
+
+Consequences:
+- Orchestration can switch providers without importing SDK types.
+- The UI can show available reasoning without misrepresenting opaque
+  continuation as readable model thought.
+- Task 06 can build the model/tool loop on a stable native tool-call contract.

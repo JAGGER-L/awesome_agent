@@ -23,6 +23,10 @@ The PostgreSQL queue supports transactional claims, leases, heartbeats,
 fencing tokens, delayed retry, and expired-lease recovery. A durable Worker now
 executes checkpointed `runtime_probe` Runs and resumes them after process
 failure. Normal Coding Runs remain queued until the model/tool loop is added.
+The provider boundary supports structured messages, native tool calls,
+streamed reasoning/text deltas, stop reasons, detailed usage, and private
+checkpoint continuation for DeepSeek and OpenAI. It is not connected to Coding
+Runs yet.
 
 ## Stack
 

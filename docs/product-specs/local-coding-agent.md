@@ -29,6 +29,8 @@ team output.
 - one-Run-per-process durable Worker for diagnostic runtime probes
 - LangGraph checkpoint resume after Worker process failure
 - local API/Worker supervisor and PostgreSQL-backed cross-process SSE
+- provider-neutral streamed messages, native tool calls, reasoning, stop
+  reasons, usage, continuation, and classified model failures
 
 ## Non-Goals
 

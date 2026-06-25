@@ -27,5 +27,14 @@ messages, model calls, tool progress/results, task revisions, approvals,
 artifacts, verification loops, memory operations, token usage, latency, and
 errors.
 
+Model providers now expose generic reasoning-started and reasoning-delta events.
+The future frontend displays only a generic `thinking` state and collapsible
+reasoning content; it does not label the provider source. DeepSeek reasoning
+content and OpenAI reasoning summaries share presentation but are not treated
+as semantically identical.
+
+Private continuation state, including encrypted provider continuation payloads,
+is never an observability field.
+
 Secrets, protected environment variables, and authorization headers are
 redacted before logs, traces, database writes, or artifacts.

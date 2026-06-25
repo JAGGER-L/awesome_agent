@@ -1,7 +1,7 @@
 # Quality Score
 
-Current phase: durable Worker and minimal LangGraph probe execution complete;
-Coding Runs remain queued pending the structured model/tool loop.
+Current phase: durable Worker plus structured streaming model protocol complete;
+Coding Runs remain queued pending the read-only model/tool loop.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

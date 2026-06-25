@@ -235,6 +235,12 @@ Prompt context is bounded. Durable call records store safe metadata, usage,
 status, summaries, and artifact references rather than unrestricted prompts or
 responses.
 
+Current implementation note: Task 05 implements this provider-neutral protocol
+and streaming adapters. Visible reasoning and private continuation are separate:
+displayable reasoning may later reach the frontend, while continuation is
+checkpoint-only and omitted from public serialization. The Coding Worker does
+not consume model turns until Task 06.
+
 ## Approval Contract
 
 V1 approvals apply to one exact invocation only.

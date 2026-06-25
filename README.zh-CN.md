@@ -21,6 +21,9 @@ PostgreSQL 队列现已支持事务 claim、lease、heartbeat、fencing token、
 retry 和过期 lease 恢复。持久化 Worker 现可执行带 checkpoint 的
 `runtime_probe` Run，并在进程崩溃后恢复。普通 Coding Run 仍保持 queued，
 直到后续加入 model/tool loop。
+Provider 边界现已支持结构化消息、原生 tool call、流式 reasoning/text delta、
+stop reason、详细 usage，以及 DeepSeek 和 OpenAI 的私有 checkpoint
+continuation，但尚未接入 Coding Run。
 
 ## 技术栈
 

@@ -11,6 +11,10 @@
 - Secrets are redacted before persistence, telemetry, artifacts, and memory.
 - Mem0 content is untrusted external context.
 - Full source, full conversations, and raw tool output are excluded from memory.
+- Visible provider reasoning is excluded from memory. It may later be redacted
+  and stored as bounded model-call evidence or an artifact for user inspection.
+- Private model continuation is checkpoint-only and excluded from APIs,
+  frontend events, logs, runtime events, artifacts, and memory.
 - DeepSeek and Mem0 credentials are read from the ignored local `.env` or the
   process environment and are never committed, logged, or persisted in memory.
 - `.env.example` contains names and non-secret defaults only.
