@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,6 +40,9 @@ class Settings(BaseSettings):
         default_factory=lambda: Path.home() / ".awesome-agent" / "config.toml"
     )
     workspace_root: Path | None = None
+    lease_duration_seconds: int = Field(default=60, ge=15, le=600)
+    heartbeat_interval_seconds: int = Field(default=15, ge=1)
+    max_claim_attempts: int = Field(default=3, ge=1, le=100)
     builtin_memory_enabled: bool = False
     mem0_enabled: bool = False
     max_teammates: int = Field(default=6, ge=1)
@@ -47,3 +50,9 @@ class Settings(BaseSettings):
     max_model_concurrency: int = Field(default=8, ge=1)
     max_tool_concurrency: int = Field(default=12, ge=1)
     max_sandbox_concurrency: int = Field(default=6, ge=1)
+
+    @model_validator(mode="after")
+    def validate_heartbeat_interval(self) -> "Settings":
+        if self.heartbeat_interval_seconds >= self.lease_duration_seconds:
+            raise ValueError("Heartbeat interval must be shorter than lease duration.")
+        return self

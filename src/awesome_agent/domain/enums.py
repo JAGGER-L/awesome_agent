@@ -13,6 +13,10 @@ class RunIntent(StrEnum):
 
 class DispatchStatus(StrEnum):
     QUEUED = "queued"
+    CLAIMED = "claimed"
+    EXECUTING = "executing"
+    WAITING = "waiting"
+    RETRY_SCHEDULED = "retry_scheduled"
     TERMINAL = "terminal"
 
 
@@ -87,6 +91,11 @@ class EventType(StrEnum):
     ARTIFACT_CREATED = "artifact.created"
     VERIFICATION_CREATED = "verification.created"
     MEMORY_OPERATION_CREATED = "memory_operation.created"
+    DISPATCH_CLAIMED = "dispatch.claimed"
+    DISPATCH_RELEASED = "dispatch.released"
+    DISPATCH_RETRY_SCHEDULED = "dispatch.retry_scheduled"
+    DISPATCH_LEASE_EXPIRED = "dispatch.lease_expired"
+    DISPATCH_RECOVERY_REQUIRED = "dispatch.recovery_required"
 
 
 class RiskLevel(StrEnum):

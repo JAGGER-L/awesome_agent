@@ -82,6 +82,16 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.base_commit = run.base_commit
             record.intent = run.intent.value
             record.dispatch_status = run.dispatch_status.value
+            record.available_at = run.available_at
+            record.current_worker_id = run.current_worker_id
+            record.current_worker_name = run.current_worker_name
+            record.fencing_token = run.fencing_token
+            record.attempt = run.attempt
+            record.lease_acquired_at = run.lease_acquired_at
+            record.lease_expires_at = run.lease_expires_at
+            record.heartbeat_at = run.heartbeat_at
+            record.last_release_reason = run.last_release_reason
+            record.last_dispatch_error = run.last_dispatch_error
             record.workspace_path = (
                 str(run.workspace_path) if run.workspace_path is not None else None
             )
@@ -170,6 +180,16 @@ def _run_from_record(record: RunRecord) -> Run:
         base_commit=record.base_commit,
         intent=RunIntent(record.intent),
         dispatch_status=DispatchStatus(record.dispatch_status),
+        available_at=record.available_at,
+        current_worker_id=record.current_worker_id,
+        current_worker_name=record.current_worker_name,
+        fencing_token=record.fencing_token,
+        attempt=record.attempt,
+        lease_acquired_at=record.lease_acquired_at,
+        lease_expires_at=record.lease_expires_at,
+        heartbeat_at=record.heartbeat_at,
+        last_release_reason=record.last_release_reason,
+        last_dispatch_error=record.last_dispatch_error,
         workspace_path=(
             Path(record.workspace_path) if record.workspace_path is not None else None
         ),
@@ -196,6 +216,16 @@ def _run_to_record(run: Run) -> RunRecord:
         base_commit=run.base_commit,
         intent=run.intent.value,
         dispatch_status=run.dispatch_status.value,
+        available_at=run.available_at,
+        current_worker_id=run.current_worker_id,
+        current_worker_name=run.current_worker_name,
+        fencing_token=run.fencing_token,
+        attempt=run.attempt,
+        lease_acquired_at=run.lease_acquired_at,
+        lease_expires_at=run.lease_expires_at,
+        heartbeat_at=run.heartbeat_at,
+        last_release_reason=run.last_release_reason,
+        last_dispatch_error=run.last_dispatch_error,
         workspace_path=(
             str(run.workspace_path) if run.workspace_path is not None else None
         ),

@@ -43,6 +43,20 @@ class RunRecord(Base):
     base_commit: Mapped[str | None] = mapped_column(String(64))
     intent: Mapped[str] = mapped_column(String(32))
     dispatch_status: Mapped[str] = mapped_column(String(32), index=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    current_worker_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), index=True
+    )
+    current_worker_name: Mapped[str | None] = mapped_column(String(255))
+    fencing_token: Mapped[int] = mapped_column(Integer, default=0)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    lease_acquired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_release_reason: Mapped[str | None] = mapped_column(Text)
+    last_dispatch_error: Mapped[str | None] = mapped_column(Text)
     workspace_path: Mapped[str | None] = mapped_column(Text)
     integration_branch: Mapped[str | None] = mapped_column(String(255))
     workspace_state: Mapped[str | None] = mapped_column(String(32))

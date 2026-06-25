@@ -57,6 +57,16 @@ Generated from SQLAlchemy metadata.
 | `base_commit` | `VARCHAR(64)` | yes |
 | `intent` | `VARCHAR(32)` | no |
 | `dispatch_status` | `VARCHAR(32)` | no |
+| `available_at` | `DATETIME` | no |
+| `current_worker_id` | `UUID` | yes |
+| `current_worker_name` | `VARCHAR(255)` | yes |
+| `fencing_token` | `INTEGER` | no |
+| `attempt` | `INTEGER` | no |
+| `lease_acquired_at` | `DATETIME` | yes |
+| `lease_expires_at` | `DATETIME` | yes |
+| `heartbeat_at` | `DATETIME` | yes |
+| `last_release_reason` | `TEXT` | yes |
+| `last_dispatch_error` | `TEXT` | yes |
 | `workspace_path` | `TEXT` | yes |
 | `integration_branch` | `VARCHAR(255)` | yes |
 | `workspace_state` | `VARCHAR(32)` | yes |

@@ -34,6 +34,16 @@ class Run(BaseModel):
     base_commit: str | None = None
     intent: RunIntent = RunIntent.MODIFYING
     dispatch_status: DispatchStatus = DispatchStatus.TERMINAL
+    available_at: datetime = Field(default_factory=utc_now)
+    current_worker_id: UUID | None = None
+    current_worker_name: str | None = None
+    fencing_token: int = Field(default=0, ge=0)
+    attempt: int = Field(default=0, ge=0)
+    lease_acquired_at: datetime | None = None
+    lease_expires_at: datetime | None = None
+    heartbeat_at: datetime | None = None
+    last_release_reason: str | None = None
+    last_dispatch_error: str | None = None
     workspace_path: Path | None = None
     integration_branch: str | None = None
     workspace_state: WorkspaceState | None = None
@@ -64,6 +74,17 @@ class RunWorkspace(BaseModel):
     integration_branch: str
     workspace_state: WorkspaceState = WorkspaceState.READY
     graph_thread_id: str
+
+
+class RunLease(BaseModel):
+    run_id: UUID
+    worker_id: UUID
+    worker_name: str
+    fencing_token: int = Field(ge=1)
+    attempt: int = Field(ge=1)
+    lease_acquired_at: datetime
+    lease_expires_at: datetime
+    heartbeat_at: datetime
 
 
 class IntakeReservation(BaseModel):
