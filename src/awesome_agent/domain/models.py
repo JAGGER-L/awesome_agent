@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -9,10 +10,13 @@ from pydantic import BaseModel, Field
 from awesome_agent.domain.enums import (
     AgentKind,
     AgentStatus,
+    DispatchStatus,
     EventType,
+    RunIntent,
     RunMode,
     RunStatus,
     TodoStatus,
+    WorkspaceState,
 )
 
 
@@ -27,6 +31,29 @@ class Run(BaseModel):
     status: RunStatus = RunStatus.CREATED
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Repository(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    root: Path
+    display_name: str
+    git_common_dir: Path
+    default_branch: str | None = None
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    last_seen_at: datetime = Field(default_factory=utc_now)
+
+
+class RunWorkspace(BaseModel):
+    repository_id: UUID
+    base_commit: str
+    intent: RunIntent
+    dispatch_status: DispatchStatus = DispatchStatus.QUEUED
+    workspace_path: Path
+    integration_branch: str
+    workspace_state: WorkspaceState = WorkspaceState.READY
+    graph_thread_id: str
 
 
 class Agent(BaseModel):

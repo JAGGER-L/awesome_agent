@@ -6,6 +6,22 @@ class RunMode(StrEnum):
     TEAM = "team"
 
 
+class RunIntent(StrEnum):
+    READ_ONLY = "read_only"
+    MODIFYING = "modifying"
+
+
+class DispatchStatus(StrEnum):
+    QUEUED = "queued"
+    TERMINAL = "terminal"
+
+
+class WorkspaceState(StrEnum):
+    READY = "ready"
+    RETAINED = "retained"
+    CLEANUP_BLOCKED = "cleanup_blocked"
+
+
 class RunStatus(StrEnum):
     CREATED = "created"
     RUNNING = "running"
@@ -13,6 +29,7 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    RECOVERY_REQUIRED = "recovery_required"
 
 
 class AgentKind(StrEnum):
