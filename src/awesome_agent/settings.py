@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     worker_shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
     worker_retry_delay_seconds: float = Field(default=5.0, ge=0, le=3600)
     event_poll_interval_seconds: float = Field(default=0.5, gt=0, le=60)
+    max_model_turns: int = Field(default=60, ge=2, le=500)
+    max_tool_calls_per_run: int = Field(default=120, ge=1, le=2000)
+    max_parallel_read_tools: int = Field(default=4, ge=1, le=32)
+    agent_graph_recursion_limit: int = Field(default=256, ge=16, le=4096)
+    no_progress_turns: int = Field(default=8, ge=2, le=100)
     builtin_memory_enabled: bool = False
     mem0_enabled: bool = False
     max_teammates: int = Field(default=6, ge=1)
