@@ -87,3 +87,30 @@ async def test_managed_worktree_rejects_target_collision(tmp_path: Path) -> None
             run_id=run_id,
             base_commit=base_commit,
         )
+
+
+@pytest.mark.asyncio
+async def test_managed_worktree_preserves_preexisting_branch(tmp_path: Path) -> None:
+    repository, base_commit = await _repository(tmp_path)
+    repository_id = uuid4()
+    run_id = uuid4()
+    manager = ManagedRunWorktreeManager(tmp_path / "worktrees")
+    branch = manager.branch_for(run_id)
+    await _git(repository, "branch", branch, base_commit)
+
+    with pytest.raises(ManagedWorktreeError, match="already exists"):
+        await manager.provision(
+            repository=repository,
+            repository_id=repository_id,
+            run_id=run_id,
+            base_commit=base_commit,
+        )
+
+    assert await _git(repository, "rev-parse", branch) == base_commit
+    assert not await manager.rollback(
+        repository=repository,
+        repository_id=repository_id,
+        run_id=run_id,
+        base_commit=base_commit,
+    )
+    assert await _git(repository, "rev-parse", branch) == base_commit

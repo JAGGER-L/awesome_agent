@@ -73,6 +73,12 @@ class ManagedRunWorktreeManager:
             )
 
         target.parent.mkdir(parents=True, exist_ok=True)
+        self._write_owner(
+            repository_id=repository_id,
+            run_id=run_id,
+            branch=branch,
+            base_commit=base_commit,
+        )
         result = await run_process(
             [
                 "git",
@@ -89,12 +95,6 @@ class ManagedRunWorktreeManager:
         )
         if result.exit_code != 0:
             raise ManagedWorktreeError(result.stderr or result.stdout)
-        self._write_owner(
-            repository_id=repository_id,
-            run_id=run_id,
-            branch=branch,
-            base_commit=base_commit,
-        )
         return target
 
     async def rollback(
