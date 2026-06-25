@@ -4,7 +4,12 @@ from collections import defaultdict
 from typing import Protocol
 from uuid import UUID
 
-from awesome_agent.domain.enums import EventType, IntakeReservationStatus
+from awesome_agent.domain.enums import (
+    DispatchStatus,
+    EventType,
+    IntakeReservationStatus,
+    RunStatus,
+)
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
 from awesome_agent.repositories.reservations import IntakeReservationStore
 
@@ -31,6 +36,10 @@ class RuntimeRepository(Protocol):
 
     async def update_run(self, run: Run) -> None:
         """Persist mutable run state."""
+        ...
+
+    async def cancel_run(self, run_id: UUID) -> tuple[Run, RuntimeEvent | None]:
+        """Atomically cancel unclaimed work and append its event."""
         ...
 
     async def list_agents(self, run_id: UUID) -> list[Agent]:
@@ -98,6 +107,36 @@ class InMemoryRuntimeRepository(RuntimeRepository):
 
     async def update_run(self, run: Run) -> None:
         self._runs[run.id] = run
+
+    async def cancel_run(self, run_id: UUID) -> tuple[Run, RuntimeEvent | None]:
+        from awesome_agent.runtime.dispatch import DispatchConflict
+
+        current = self._runs[run_id]
+        if current.dispatch_status in {
+            DispatchStatus.CLAIMED,
+            DispatchStatus.EXECUTING,
+        }:
+            raise DispatchConflict("Claimed or executing Runs cannot be cancelled yet.")
+        if current.status is RunStatus.CANCELLED:
+            return current, None
+        run = current.model_copy(
+            update={
+                "status": RunStatus.CANCELLED,
+                "dispatch_status": DispatchStatus.TERMINAL,
+            }
+        )
+        event = RuntimeEvent(
+            run_id=run_id,
+            sequence=len(self._events[run_id]) + 1,
+            event_type=EventType.RUN_STATUS_CHANGED,
+            payload={
+                "status": RunStatus.CANCELLED.value,
+                "dispatch_status": DispatchStatus.TERMINAL.value,
+            },
+        )
+        self._runs[run_id] = run
+        self._events[run_id].append(event)
+        return run, event
 
     async def list_agents(self, run_id: UUID) -> list[Agent]:
         return list(self._agents[run_id])

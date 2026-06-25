@@ -97,6 +97,10 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     assert run["status"] == "created"
     assert run["dispatch_status"] == "queued"
     assert run["intent"] == "read_only"
+    dispatch = client.get(f"/runs/{run_id}/dispatch").json()
+    assert dispatch["status"] == "queued"
+    assert dispatch["worker_id"] is None
+    assert dispatch["fencing_token"] == 0
     agents = client.get(f"/runs/{run_id}/agents").json()
     assert len(agents) == 1
     assert agents[0]["model"] == "deepseek-v4-pro"

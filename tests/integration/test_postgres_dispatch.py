@@ -14,7 +14,7 @@ from awesome_agent.persistence.database import create_engine, create_session_fac
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.models import RunRecord
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
-from awesome_agent.runtime.dispatch import LeaseLost
+from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost
 
 pytestmark = pytest.mark.integration
 
@@ -197,6 +197,41 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
     assert terminal.status is RunStatus.RECOVERY_REQUIRED
     assert terminal.dispatch_status is DispatchStatus.TERMINAL
     await _delete_run(sessions, run_id)
+    await engine.dispose()
+
+
+@pytest.mark.skipif(
+    "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ,
+    reason="Integration database is not configured.",
+)
+async def test_cancellation_is_atomic_and_rejects_claimed_run() -> None:
+    engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
+    sessions = create_session_factory(engine)
+    runtime = PostgresRuntimeRepository(sessions)
+    dispatcher = PostgresRunDispatcher(sessions)
+    queued_id = await _insert_queued_run(sessions)
+
+    cancelled, event = await runtime.cancel_run(queued_id)
+    assert cancelled.status is RunStatus.CANCELLED
+    assert cancelled.dispatch_status is DispatchStatus.TERMINAL
+    assert event is not None
+    repeated, repeated_event = await runtime.cancel_run(queued_id)
+    assert repeated.status is RunStatus.CANCELLED
+    assert repeated_event is None
+
+    claimed_id = await _insert_queued_run(sessions)
+    lease = await dispatcher.claim_next(
+        worker_id=uuid4(),
+        worker_name="worker",
+        lease_duration=timedelta(seconds=60),
+        max_attempts=3,
+    )
+    assert lease is not None and lease.run_id == claimed_id
+    with pytest.raises(DispatchConflict):
+        await runtime.cancel_run(claimed_id)
+
+    await _delete_run(sessions, queued_id)
+    await _delete_run(sessions, claimed_id)
     await engine.dispose()
 
 

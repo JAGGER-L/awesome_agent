@@ -8,7 +8,6 @@ from awesome_agent.artifacts.store import ArtifactMetadata, LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
     AgentStatus,
-    DispatchStatus,
     EventType,
     RunStatus,
 )
@@ -62,19 +61,9 @@ class RuntimeService:
         return await self.repository.get_run(run_id)
 
     async def cancel_run(self, run_id: UUID) -> Run:
-        current = await self.repository.get_run(run_id)
-        run = current.model_copy(
-            update={
-                "status": RunStatus.CANCELLED,
-                "dispatch_status": DispatchStatus.TERMINAL,
-            }
-        )
-        await self.repository.update_run(run)
-        await self._emit(
-            run_id,
-            EventType.RUN_STATUS_CHANGED,
-            {"status": run.status.value},
-        )
+        run, event = await self.repository.cancel_run(run_id)
+        if event is not None:
+            await self.events.publish(event)
         return run
 
     async def resume_run(self, run_id: UUID) -> Run:

@@ -12,6 +12,10 @@ class LeaseLost(RuntimeError):
     pass
 
 
+class DispatchConflict(RuntimeError):
+    pass
+
+
 class RunDispatcher(Protocol):
     async def claim_next(
         self,

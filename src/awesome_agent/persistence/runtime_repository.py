@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -26,6 +28,7 @@ from awesome_agent.persistence.models import (
     RuntimeEventRecord,
     TodoRecord,
 )
+from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.repository import RuntimeRepository
 
 
@@ -102,6 +105,39 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.graph_thread_id = run.graph_thread_id
             record.legacy = run.legacy
             record.updated_at = run.updated_at
+
+    async def cancel_run(self, run_id: UUID) -> tuple[Run, RuntimeEvent | None]:
+        async with self._sessions.begin() as session:
+            record = await session.scalar(
+                select(RunRecord).where(RunRecord.id == run_id).with_for_update()
+            )
+            if record is None:
+                raise KeyError(run_id)
+            if record.dispatch_status in {
+                DispatchStatus.CLAIMED.value,
+                DispatchStatus.EXECUTING.value,
+            }:
+                raise DispatchConflict(
+                    "Claimed or executing Runs cannot be cancelled yet."
+                )
+            if record.status == RunStatus.CANCELLED.value:
+                return _run_from_record(record), None
+            record.status = RunStatus.CANCELLED.value
+            record.dispatch_status = DispatchStatus.TERMINAL.value
+            record.updated_at = cast(
+                datetime,
+                await session.scalar(select(func.clock_timestamp())),
+            )
+            event = await _append_locked_event(
+                session,
+                run_id,
+                EventType.RUN_STATUS_CHANGED,
+                {
+                    "status": RunStatus.CANCELLED.value,
+                    "dispatch_status": DispatchStatus.TERMINAL.value,
+                },
+            )
+            return _run_from_record(record), event
 
     async def list_agents(self, run_id: UUID) -> list[Agent]:
         async with self._sessions() as session:
@@ -316,3 +352,24 @@ def _event_from_record(record: RuntimeEventRecord) -> RuntimeEvent:
         span_id=record.span_id,
         created_at=record.created_at,
     )
+
+
+async def _append_locked_event(
+    session: AsyncSession,
+    run_id: UUID,
+    event_type: EventType,
+    payload: dict[str, object],
+) -> RuntimeEvent:
+    current = await session.scalar(
+        select(func.max(RuntimeEventRecord.sequence)).where(
+            RuntimeEventRecord.run_id == run_id
+        )
+    )
+    event = RuntimeEvent(
+        run_id=run_id,
+        sequence=(current or 0) + 1,
+        event_type=event_type,
+        payload=payload,
+    )
+    session.add(_event_to_record(event))
+    return event

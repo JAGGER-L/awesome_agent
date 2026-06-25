@@ -11,7 +11,11 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from awesome_agent.agents.profiles import RoleModelResolver
-from awesome_agent.api.schemas import ApprovalDecisionRequest, CreateRunRequest
+from awesome_agent.api.schemas import (
+    ApprovalDecisionRequest,
+    CreateRunRequest,
+    DispatchResponse,
+)
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.persistence.database import (
@@ -28,6 +32,7 @@ from awesome_agent.persistence.runtime_repository import PostgresRuntimeReposito
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
+from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
 from awesome_agent.runtime.service import RuntimeService
@@ -145,12 +150,34 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found.") from error
 
+    @app.get("/runs/{run_id}/dispatch")
+    async def get_dispatch(run_id: UUID) -> DispatchResponse:
+        try:
+            run = await runtime().get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found.") from error
+        return DispatchResponse(
+            status=run.dispatch_status.value,
+            available_at=run.available_at,
+            worker_id=run.current_worker_id,
+            worker_name=run.current_worker_name,
+            fencing_token=run.fencing_token,
+            attempt=run.attempt,
+            lease_acquired_at=run.lease_acquired_at,
+            lease_expires_at=run.lease_expires_at,
+            heartbeat_at=run.heartbeat_at,
+            last_release_reason=run.last_release_reason,
+            last_error=run.last_dispatch_error,
+        )
+
     @app.post("/runs/{run_id}/cancel")
     async def cancel_run(run_id: UUID) -> dict[str, object]:
         try:
             run = await runtime().cancel_run(run_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found.") from error
+        except DispatchConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         return run.model_dump(mode="json")
 
     @app.post("/runs/{run_id}/resume")
