@@ -278,4 +278,3 @@ Later roadmap tasks must cover:
 | cancellation | model, subprocess, Docker, and approval wait |
 | validation | detection, configured gates, order, short-circuit, restart |
 | workspace | clean-base requirement, retained diff, explicit safe cleanup |
-
