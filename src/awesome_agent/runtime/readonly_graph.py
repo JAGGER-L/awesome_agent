@@ -78,6 +78,7 @@ EventSink = Callable[
     Awaitable[None],
 ]
 ProviderResolver = Callable[[str], ModelProvider]
+FaultHook = Callable[[str, ReadOnlyAgentState], Awaitable[None]]
 
 
 class AgentLoopFailed(PermanentExecutionError):
@@ -96,6 +97,7 @@ class ReadOnlyCodingGraph:
         max_parallel_tools: int = 4,
         recursion_limit: int = 256,
         no_progress_turns: int = 8,
+        fault_hook: FaultHook | None = None,
     ) -> None:
         self.saver = saver
         self.provider_resolver = provider_resolver
@@ -105,6 +107,7 @@ class ReadOnlyCodingGraph:
         self.max_parallel_tools = max_parallel_tools
         self.recursion_limit = recursion_limit
         self.no_progress_turns = no_progress_turns
+        self.fault_hook = fault_hook
         self._run: Run | None = None
         self._agent: Agent | None = None
         self._event_sink: EventSink | None = None
@@ -357,7 +360,7 @@ class ReadOnlyCodingGraph:
                     )
                 ).model_dump(mode="json")
             )
-        return {
+        updated: ReadOnlyAgentState = {
             **state,
             "messages": messages,
             "tool_call_count": state["tool_call_count"] + len(calls),
@@ -370,6 +373,9 @@ class ReadOnlyCodingGraph:
             "stagnant_turns": stagnant,
             "phase": "tools_completed",
         }
+        if self.fault_hook is not None:
+            await self.fault_hook("execute_tools", updated)
+        return updated
 
     async def _feedback(
         self,
