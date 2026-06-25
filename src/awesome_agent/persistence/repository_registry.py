@@ -60,6 +60,33 @@ class PostgresRepositoryRegistry(RepositoryRegistry):
             await session.flush()
             return _from_record(record)
 
+    async def relocate(
+        self,
+        repository_id: UUID,
+        repository: Repository,
+    ) -> Repository:
+        async with self._sessions.begin() as session:
+            record = await session.get(RepositoryRecord, repository_id)
+            if record is None:
+                raise KeyError(repository_id)
+            duplicate = await session.scalar(
+                select(RepositoryRecord).where(
+                    RepositoryRecord.git_common_dir == str(repository.git_common_dir),
+                    RepositoryRecord.id != repository_id,
+                )
+            )
+            if duplicate is not None:
+                raise ValueError("Git checkout is already registered.")
+            record.root = str(repository.root)
+            record.display_name = repository.display_name
+            record.git_common_dir = str(repository.git_common_dir)
+            record.default_branch = repository.default_branch
+            record.enabled = repository.enabled
+            record.updated_at = repository.updated_at
+            record.last_seen_at = repository.last_seen_at
+            await session.flush()
+            return _from_record(record)
+
 
 def _to_record(repository: Repository) -> RepositoryRecord:
     return RepositoryRecord(

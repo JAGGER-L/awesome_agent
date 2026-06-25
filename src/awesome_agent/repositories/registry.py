@@ -23,6 +23,14 @@ class RepositoryRegistry(Protocol):
         """Disable a repository without deleting its historical identity."""
         ...
 
+    async def relocate(
+        self,
+        repository_id: UUID,
+        repository: Repository,
+    ) -> Repository:
+        """Move an existing identity to an explicitly validated checkout."""
+        ...
+
 
 class InMemoryRepositoryRegistry(RepositoryRegistry):
     def __init__(self) -> None:
@@ -38,7 +46,12 @@ class InMemoryRepositoryRegistry(RepositoryRegistry):
             None,
         )
         if duplicate is not None:
-            refreshed = repository.model_copy(update={"id": duplicate.id})
+            refreshed = repository.model_copy(
+                update={
+                    "id": duplicate.id,
+                    "created_at": duplicate.created_at,
+                }
+            )
             self._repositories[duplicate.id] = refreshed
             return refreshed
         self._repositories[repository.id] = repository
@@ -61,3 +74,24 @@ class InMemoryRepositoryRegistry(RepositoryRegistry):
         disabled = repository.model_copy(update={"enabled": False})
         self._repositories[repository_id] = disabled
         return disabled
+
+    async def relocate(
+        self,
+        repository_id: UUID,
+        repository: Repository,
+    ) -> Repository:
+        current = await self.get(repository_id)
+        if any(
+            candidate.id != repository_id
+            and candidate.git_common_dir == repository.git_common_dir
+            for candidate in self._repositories.values()
+        ):
+            raise ValueError("Git checkout is already registered.")
+        relocated = repository.model_copy(
+            update={
+                "id": repository_id,
+                "created_at": current.created_at,
+            }
+        )
+        self._repositories[repository_id] = relocated
+        return relocated

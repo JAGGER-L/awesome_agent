@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     artifact_root: Path = Field(
         default_factory=lambda: Path.home() / ".awesome-agent" / "artifacts"
     )
+    local_config_path: Path = Field(
+        default_factory=lambda: Path.home() / ".awesome-agent" / "config.toml"
+    )
+    workspace_root: Path | None = None
     builtin_memory_enabled: bool = False
     mem0_enabled: bool = False
     max_teammates: int = Field(default=6, ge=1)
