@@ -4,7 +4,7 @@ from datetime import timedelta
 from typing import Protocol
 from uuid import UUID
 
-from awesome_agent.domain.enums import EventType, ExecutionKind
+from awesome_agent.domain.enums import EventType, ExecutionKind, RunIntent
 from awesome_agent.domain.models import RunLease, RuntimeEvent
 
 
@@ -41,6 +41,8 @@ class RunDispatcher(Protocol):
         lease_duration: timedelta,
         max_attempts: int,
         execution_kinds: frozenset[ExecutionKind] | None = None,
+        run_intents: frozenset[RunIntent] | None = None,
+        graph_identities: frozenset[tuple[str, int]] | None = None,
     ) -> RunLease | None:
         """Claim the next eligible Run without waiting on competing claims."""
         ...

@@ -31,6 +31,10 @@ from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.reservations import IntakeReservationStore
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
+from awesome_agent.runtime.graphs import (
+    READ_ONLY_CODING_GRAPH,
+    READ_ONLY_CODING_VERSION,
+)
 from awesome_agent.runtime.repository import RuntimeRepository
 
 
@@ -68,6 +72,13 @@ class RunIntakeService:
         graph_name: str | None = None,
         graph_version: int | None = None,
     ) -> Run:
+        if (
+            execution_kind is ExecutionKind.CODING
+            and intent is RunIntent.READ_ONLY
+            and graph_name is None
+        ):
+            graph_name = READ_ONLY_CODING_GRAPH
+            graph_version = READ_ONLY_CODING_VERSION
         await self.reconcile_incomplete()
         repository = await self.registry.get(repository_id)
         if not repository.enabled:

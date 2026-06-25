@@ -18,6 +18,10 @@ from awesome_agent.repositories.reservations import (
 )
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
+from awesome_agent.runtime.graphs import (
+    READ_ONLY_CODING_GRAPH,
+    READ_ONLY_CODING_VERSION,
+)
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.sandbox.process import run_process
@@ -101,6 +105,8 @@ async def test_intake_publishes_queued_run_after_worktree_is_ready(
 
     assert run.status is RunStatus.CREATED
     assert run.dispatch_status is DispatchStatus.QUEUED
+    assert run.graph_name == READ_ONLY_CODING_GRAPH
+    assert run.graph_version == READ_ONLY_CODING_VERSION
     assert run.workspace_path is not None and run.workspace_path.is_dir()
     assert await _git(run.workspace_path, "rev-parse", "HEAD") == run.base_commit
     assert len(await runtime.list_agents(run.id)) == 1

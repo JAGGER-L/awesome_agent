@@ -4,13 +4,14 @@ from datetime import datetime, timedelta
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.domain.enums import (
     DispatchStatus,
     EventType,
     ExecutionKind,
+    RunIntent,
     RunStatus,
 )
 from awesome_agent.domain.models import RunLease, RuntimeEvent
@@ -30,6 +31,8 @@ class PostgresRunDispatcher(RunDispatcher):
         lease_duration: timedelta,
         max_attempts: int,
         execution_kinds: frozenset[ExecutionKind] | None = None,
+        run_intents: frozenset[RunIntent] | None = None,
+        graph_identities: frozenset[tuple[str, int]] | None = None,
     ) -> RunLease | None:
         if max_attempts < 1:
             raise ValueError("Maximum attempts must be positive.")
@@ -50,6 +53,22 @@ class PostgresRunDispatcher(RunDispatcher):
                 query = query.where(
                     RunRecord.execution_kind.in_(
                         [kind.value for kind in execution_kinds]
+                    )
+                )
+            if run_intents is not None:
+                query = query.where(
+                    RunRecord.intent.in_([intent.value for intent in run_intents])
+                )
+            if graph_identities is not None:
+                query = query.where(
+                    or_(
+                        *[
+                            and_(
+                                RunRecord.graph_name == name,
+                                RunRecord.graph_version == version,
+                            )
+                            for name, version in graph_identities
+                        ]
                     )
                 )
             record = await session.scalar(

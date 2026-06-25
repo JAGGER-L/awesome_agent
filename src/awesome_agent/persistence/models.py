@@ -60,6 +60,7 @@ class RunRecord(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_release_reason: Mapped[str | None] = mapped_column(Text)
     last_dispatch_error: Mapped[str | None] = mapped_column(Text)
+    result_text: Mapped[str | None] = mapped_column(Text)
     workspace_path: Mapped[str | None] = mapped_column(Text)
     integration_branch: Mapped[str | None] = mapped_column(String(255))
     workspace_state: Mapped[str | None] = mapped_column(String(32))
@@ -151,6 +152,7 @@ class RuntimeEventRecord(Base):
         PGUUID(as_uuid=True), ForeignKey("runs.id", ondelete="CASCADE"), index=True
     )
     sequence: Mapped[int] = mapped_column(Integer)
+    transition_id: Mapped[str | None] = mapped_column(String(255))
     event_type: Mapped[str] = mapped_column(String(128), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     team_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))

@@ -99,6 +99,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.heartbeat_at = run.heartbeat_at
             record.last_release_reason = run.last_release_reason
             record.last_dispatch_error = run.last_dispatch_error
+            record.result_text = run.result_text
             record.workspace_path = (
                 str(run.workspace_path) if run.workspace_path is not None else None
             )
@@ -233,6 +234,7 @@ def _run_from_record(record: RunRecord) -> Run:
         heartbeat_at=record.heartbeat_at,
         last_release_reason=record.last_release_reason,
         last_dispatch_error=record.last_dispatch_error,
+        result_text=record.result_text,
         workspace_path=(
             Path(record.workspace_path) if record.workspace_path is not None else None
         ),
@@ -272,6 +274,7 @@ def _run_to_record(run: Run) -> RunRecord:
         heartbeat_at=run.heartbeat_at,
         last_release_reason=run.last_release_reason,
         last_dispatch_error=run.last_dispatch_error,
+        result_text=run.result_text,
         workspace_path=(
             str(run.workspace_path) if run.workspace_path is not None else None
         ),
@@ -335,6 +338,7 @@ def _event_to_record(event: RuntimeEvent) -> RuntimeEventRecord:
         id=event.id,
         run_id=event.run_id,
         sequence=event.sequence,
+        transition_id=event.transition_id,
         event_type=event.event_type.value,
         payload=event.payload,
         team_id=event.team_id,
@@ -352,6 +356,7 @@ def _event_from_record(record: RuntimeEventRecord) -> RuntimeEvent:
         id=record.id,
         run_id=record.run_id,
         sequence=record.sequence,
+        transition_id=record.transition_id,
         event_type=EventType(record.event_type),
         payload={str(key): value for key, value in record.payload.items()},
         team_id=record.team_id,

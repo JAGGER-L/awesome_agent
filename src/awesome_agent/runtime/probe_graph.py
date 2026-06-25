@@ -12,9 +12,14 @@ from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
     IncompatibleGraphError,
 )
+from awesome_agent.runtime.graphs import RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION
 
-RUNTIME_PROBE_GRAPH = "runtime-probe"
-RUNTIME_PROBE_VERSION = 1
+__all__ = [
+    "RUNTIME_PROBE_GRAPH",
+    "RUNTIME_PROBE_VERSION",
+    "RuntimeProbeGraph",
+    "RuntimeProbeState",
+]
 
 
 class RuntimeProbeState(TypedDict):

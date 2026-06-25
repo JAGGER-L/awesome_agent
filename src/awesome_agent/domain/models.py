@@ -48,6 +48,7 @@ class Run(BaseModel):
     heartbeat_at: datetime | None = None
     last_release_reason: str | None = None
     last_dispatch_error: str | None = None
+    result_text: str | None = Field(default=None, max_length=32768)
     workspace_path: Path | None = None
     integration_branch: str | None = None
     workspace_state: WorkspaceState | None = None
@@ -136,6 +137,7 @@ class RuntimeEvent(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     run_id: UUID
     sequence: int = Field(ge=1)
+    transition_id: str | None = Field(default=None, max_length=255)
     event_type: EventType
     payload: dict[str, Any] = Field(default_factory=dict)
     team_id: UUID | None = None
