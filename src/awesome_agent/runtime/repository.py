@@ -4,13 +4,25 @@ from collections import defaultdict
 from typing import Protocol
 from uuid import UUID
 
-from awesome_agent.domain.enums import EventType
+from awesome_agent.domain.enums import EventType, IntakeReservationStatus
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
+from awesome_agent.repositories.reservations import IntakeReservationStore
 
 
 class RuntimeRepository(Protocol):
     async def create_run(self, run: Run, leader: Agent) -> None:
         """Persist a new run and its initial Leader."""
+        ...
+
+    async def publish_intake(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        events: list[RuntimeEvent],
+        reservation_id: UUID,
+    ) -> None:
+        """Atomically publish a prepared Run and complete its reservation."""
         ...
 
     async def get_run(self, run_id: UUID) -> Run:
@@ -48,15 +60,38 @@ class RuntimeRepository(Protocol):
 
 
 class InMemoryRuntimeRepository(RuntimeRepository):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        reservations: IntakeReservationStore | None = None,
+    ) -> None:
         self._runs: dict[UUID, Run] = {}
         self._agents: dict[UUID, list[Agent]] = defaultdict(list)
         self._todos: dict[UUID, list[TodoItem]] = defaultdict(list)
         self._events: dict[UUID, list[RuntimeEvent]] = defaultdict(list)
+        self._reservations = reservations
 
     async def create_run(self, run: Run, leader: Agent) -> None:
         self._runs[run.id] = run
         self._agents[run.id].append(leader)
+
+    async def publish_intake(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        events: list[RuntimeEvent],
+        reservation_id: UUID,
+    ) -> None:
+        if self._reservations is None:
+            raise RuntimeError("Intake reservation store is not configured.")
+        reservation = await self._reservations.get(reservation_id)
+        published = reservation.model_copy(
+            update={"status": IntakeReservationStatus.PUBLISHED}
+        )
+        self._runs[run.id] = run
+        self._agents[run.id].append(leader)
+        self._events[run.id].extend(events)
+        await self._reservations.update(published)
 
     async def get_run(self, run_id: UUID) -> Run:
         return self._runs[run_id]

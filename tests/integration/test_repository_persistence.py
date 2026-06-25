@@ -10,11 +10,17 @@ from sqlalchemy import delete
 from awesome_agent.domain.enums import (
     AgentKind,
     DispatchStatus,
-    IntakeReservationStatus,
+    EventType,
     RunIntent,
     WorkspaceState,
 )
-from awesome_agent.domain.models import Agent, IntakeReservation, Repository, Run
+from awesome_agent.domain.models import (
+    Agent,
+    IntakeReservation,
+    Repository,
+    Run,
+    RuntimeEvent,
+)
 from awesome_agent.persistence.database import (
     create_engine,
     create_session_factory,
@@ -84,13 +90,31 @@ async def test_repository_reservation_and_run_round_trip(tmp_path: Path) -> None
         profile="leader",
         model="deepseek-v4-pro",
     )
-    await runtime.create_run(run, leader)
-    await reservations.update(
-        reservation.model_copy(update={"status": IntakeReservationStatus.PUBLISHED})
+    events = [
+        RuntimeEvent(
+            run_id=run.id,
+            sequence=1,
+            event_type=EventType.RUN_CREATED,
+            payload={"goal": run.goal},
+        ),
+        RuntimeEvent(
+            run_id=run.id,
+            sequence=2,
+            event_type=EventType.AGENT_CREATED,
+            payload={"agent_id": str(leader.id)},
+            agent_id=leader.id,
+        ),
+    ]
+    await runtime.publish_intake(
+        run=run,
+        leader=leader,
+        events=events,
+        reservation_id=reservation.id,
     )
 
     assert await registry.get(repository.id) == repository
     assert await runtime.get_run(run.id) == run
+    assert await runtime.list_events(run.id) == events
     assert await reservations.list_incomplete() == []
 
     async with sessions.begin() as session:

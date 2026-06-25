@@ -11,6 +11,7 @@ from awesome_agent.domain.enums import (
     AgentStatus,
     DispatchStatus,
     EventType,
+    IntakeReservationStatus,
     RunIntent,
     RunMode,
     RunStatus,
@@ -20,6 +21,7 @@ from awesome_agent.domain.enums import (
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
 from awesome_agent.persistence.models import (
     AgentRecord,
+    IntakeReservationRecord,
     RunRecord,
     RuntimeEventRecord,
     TodoRecord,
@@ -33,46 +35,33 @@ class PostgresRuntimeRepository(RuntimeRepository):
 
     async def create_run(self, run: Run, leader: Agent) -> None:
         async with self._sessions.begin() as session:
-            session.add(
-                RunRecord(
-                    id=run.id,
-                    goal=run.goal,
-                    mode=run.mode.value,
-                    status=run.status.value,
-                    repository_id=run.repository_id,
-                    base_commit=run.base_commit,
-                    intent=run.intent.value,
-                    dispatch_status=run.dispatch_status.value,
-                    workspace_path=(
-                        str(run.workspace_path)
-                        if run.workspace_path is not None
-                        else None
-                    ),
-                    integration_branch=run.integration_branch,
-                    workspace_state=(
-                        run.workspace_state.value
-                        if run.workspace_state is not None
-                        else None
-                    ),
-                    graph_thread_id=run.graph_thread_id,
-                    legacy=run.legacy,
-                    created_at=run.created_at,
-                    updated_at=run.updated_at,
-                )
-            )
+            session.add(_run_to_record(run))
             await session.flush()
-            session.add(
-                AgentRecord(
-                    id=leader.id,
-                    run_id=leader.run_id,
-                    parent_agent_id=leader.parent_agent_id,
-                    kind=leader.kind.value,
-                    profile=leader.profile,
-                    model=leader.model,
-                    status=leader.status.value,
-                    created_at=leader.created_at,
-                )
+            session.add(_agent_to_record(leader))
+
+    async def publish_intake(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        events: list[RuntimeEvent],
+        reservation_id: UUID,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            reservation = await session.get(
+                IntakeReservationRecord,
+                reservation_id,
             )
+            if reservation is None:
+                raise KeyError(reservation_id)
+            if reservation.run_id != run.id:
+                raise ValueError("Reservation does not belong to this Run.")
+            session.add(_run_to_record(run))
+            await session.flush()
+            session.add(_agent_to_record(leader))
+            session.add_all([_event_to_record(event) for event in events])
+            reservation.status = IntakeReservationStatus.PUBLISHED.value
+            reservation.updated_at = run.updated_at
 
     async def get_run(self, run_id: UUID) -> Run:
         async with self._sessions() as session:
@@ -194,6 +183,43 @@ def _run_from_record(record: RunRecord) -> Run:
         legacy=record.legacy,
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _run_to_record(run: Run) -> RunRecord:
+    return RunRecord(
+        id=run.id,
+        goal=run.goal,
+        mode=run.mode.value,
+        status=run.status.value,
+        repository_id=run.repository_id,
+        base_commit=run.base_commit,
+        intent=run.intent.value,
+        dispatch_status=run.dispatch_status.value,
+        workspace_path=(
+            str(run.workspace_path) if run.workspace_path is not None else None
+        ),
+        integration_branch=run.integration_branch,
+        workspace_state=(
+            run.workspace_state.value if run.workspace_state is not None else None
+        ),
+        graph_thread_id=run.graph_thread_id,
+        legacy=run.legacy,
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+    )
+
+
+def _agent_to_record(agent: Agent) -> AgentRecord:
+    return AgentRecord(
+        id=agent.id,
+        run_id=agent.run_id,
+        parent_agent_id=agent.parent_agent_id,
+        kind=agent.kind.value,
+        profile=agent.profile,
+        model=agent.model,
+        status=agent.status.value,
+        created_at=agent.created_at,
     )
 
 

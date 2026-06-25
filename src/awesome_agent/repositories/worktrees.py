@@ -109,15 +109,17 @@ class ManagedRunWorktreeManager:
         target = self.target_for(repository_id, run_id)
         branch = self.branch_for(run_id)
         self._require_managed_target(target)
-        if not self._owner_matches(
+        owner_matches = self._owner_matches(
             repository_id=repository_id,
             run_id=run_id,
             branch=branch,
             base_commit=base_commit,
-        ):
-            return False
+        )
 
         existing = await self._worktree_entry(source, target)
+        branch_commit = await self._branch_commit(source, branch)
+        if not owner_matches:
+            return existing is None and branch_commit is None and not target.exists()
         if existing is not None:
             head, existing_branch = existing
             if head != base_commit or existing_branch != branch:
@@ -131,7 +133,6 @@ class ManagedRunWorktreeManager:
             if result.exit_code != 0:
                 return False
 
-        branch_commit = await self._branch_commit(source, branch)
         if branch_commit is not None:
             if branch_commit != base_commit:
                 return False
