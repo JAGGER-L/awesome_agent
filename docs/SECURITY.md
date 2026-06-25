@@ -43,6 +43,11 @@
   tool, shell, sandbox, or repository-content capability.
 - `POST /runtime/probes` selects the fixed supported probe graph on the server;
   callers cannot supply arbitrary graph names or versions.
+- `solo-readonly@1` exposes only bounded `status`, `list`, literal `search`,
+  `read`, and instruction-discovery tools against the managed Run worktree.
+- Read tools reject absolute/parent paths, `.git`, symlink or junction
+  traversal, binary files, and common credential/private-key files.
+- Workers without a configured model API key do not claim Coding Runs.
 - Worktree cleanup validates resolved ownership, active leases, and unexported
   diffs before deletion.
 - V1 approvals bind to one exact tool invocation, canonical arguments,

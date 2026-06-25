@@ -70,6 +70,7 @@ Generated from SQLAlchemy metadata.
 | `heartbeat_at` | `DATETIME` | yes |
 | `last_release_reason` | `TEXT` | yes |
 | `last_dispatch_error` | `TEXT` | yes |
+| `result_text` | `TEXT` | yes |
 | `workspace_path` | `TEXT` | yes |
 | `integration_branch` | `VARCHAR(255)` | yes |
 | `workspace_state` | `VARCHAR(32)` | yes |
@@ -85,6 +86,7 @@ Generated from SQLAlchemy metadata.
 | `id` | `UUID` | no |
 | `run_id` | `UUID` | no |
 | `sequence` | `INTEGER` | no |
+| `transition_id` | `VARCHAR(255)` | yes |
 | `event_type` | `VARCHAR(128)` | no |
 | `payload` | `JSONB` | no |
 | `team_id` | `UUID` | yes |

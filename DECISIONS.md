@@ -258,3 +258,30 @@ Consequences:
 - The UI can show available reasoning without misrepresenting opaque
   continuation as readable model thought.
 - Task 06 can build the model/tool loop on a stable native tool-call contract.
+
+## 2026-06-26: Use an explicit looping graph for read-only Coding Runs
+
+Status: accepted
+
+Context:
+- A fixed inspection workflow cannot adapt tool selection to repository
+  evidence or correct model/tool mistakes.
+- An unbounded loop can repeat reads indefinitely and consume uncontrolled
+  context and cost.
+
+Decision:
+- Route read-only Coding Runs to `solo-readonly@1`.
+- Use explicit `execute_tools -> model_turn` and `feedback -> model_turn` graph
+  back edges.
+- Return correctable tool failures to the model and require one successful
+  repository inspection before completion.
+- Apply configurable 60-turn/120-call safety boundaries, convergence reminders,
+  a final no-tool turn, and no-progress detection.
+- Keep realtime reasoning deltas out of PostgreSQL until throttled Task 11
+  observability exists.
+
+Consequences:
+- Repository exploration is dynamic but bounded and checkpointable.
+- Read-only replay is safe, while stable transition IDs prevent duplicate audit
+  events.
+- Modifying tools and validation remain separate roadmap tasks.

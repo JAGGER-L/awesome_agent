@@ -22,11 +22,14 @@ policy, and crash-recoverable Run intake into named Git worktrees.
 The PostgreSQL queue supports transactional claims, leases, heartbeats,
 fencing tokens, delayed retry, and expired-lease recovery. A durable Worker now
 executes checkpointed `runtime_probe` Runs and resumes them after process
-failure. Normal Coding Runs remain queued until the model/tool loop is added.
+failure.
 The provider boundary supports structured messages, native tool calls,
 streamed reasoning/text deltas, stop reasons, detailed usage, and private
-checkpoint continuation for DeepSeek and OpenAI. It is not connected to Coding
-Runs yet.
+checkpoint continuation for DeepSeek and OpenAI.
+Read-only Coding Runs now execute through the checkpointed
+`solo-readonly@1` Agent loop with bounded repository tools, correction
+feedback, stable audit events, and a durable final result. Modifying Runs remain
+queued for the next roadmap task.
 
 ## Stack
 

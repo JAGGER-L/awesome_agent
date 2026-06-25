@@ -58,6 +58,12 @@ forbidden.
   not occur.
 - SSE consumers poll ordered PostgreSQL events, so API restarts and separate
   Worker processes do not lose durable history.
+- Read-only model/tool execution uses synchronous checkpoints and explicit
+  graph back edges. Read tools are replay-safe, and stable transition IDs
+  deduplicate audit events after replay.
+- Correctable tool failures return to the model loop. Retryable provider
+  failures release the lease for delayed retry; understood permanent failures
+  use `failed`, not `recovery_required`.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

@@ -241,6 +241,12 @@ displayable reasoning may later reach the frontend, while continuation is
 checkpoint-only and omitted from public serialization. The Coding Worker does
 not consume model turns until Task 06.
 
+Task 06 adds `solo-readonly@1`, a checkpointed model-tool-model loop with
+explicit tool and feedback back edges. Read-only tool failures return to the
+model as structured observations; retryable infrastructure failures release
+the Worker for durable retry; normal permanent execution failures become
+`failed`, while corrupt state remains `recovery_required`.
+
 ## Approval Contract
 
 V1 approvals apply to one exact invocation only.

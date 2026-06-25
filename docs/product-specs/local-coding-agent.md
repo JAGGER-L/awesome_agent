@@ -31,6 +31,8 @@ team output.
 - local API/Worker supervisor and PostgreSQL-backed cross-process SSE
 - provider-neutral streamed messages, native tool calls, reasoning, stop
   reasons, usage, continuation, and classified model failures
+- checkpointed Solo read-only model/tool loop with bounded repository
+  inspection, correction feedback, final result projection, and minimal Todo
 
 ## Non-Goals
 

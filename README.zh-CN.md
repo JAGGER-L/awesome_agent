@@ -19,11 +19,13 @@ Agent Team 架构：
 以及可在崩溃后恢复的具名 Git worktree Run intake。
 PostgreSQL 队列现已支持事务 claim、lease、heartbeat、fencing token、延迟
 retry 和过期 lease 恢复。持久化 Worker 现可执行带 checkpoint 的
-`runtime_probe` Run，并在进程崩溃后恢复。普通 Coding Run 仍保持 queued，
-直到后续加入 model/tool loop。
+`runtime_probe` Run，并在进程崩溃后恢复。
 Provider 边界现已支持结构化消息、原生 tool call、流式 reasoning/text delta、
 stop reason、详细 usage，以及 DeepSeek 和 OpenAI 的私有 checkpoint
-continuation，但尚未接入 Coding Run。
+continuation。
+Read-only Coding Run 现已通过带 checkpoint 的 `solo-readonly@1` Agent loop
+执行，支持受限仓库工具、错误纠正回环、稳定审计事件和持久化最终结果。
+Modifying Run 仍保持 queued，等待下一项路线图任务。
 
 ## 技术栈
 

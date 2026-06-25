@@ -308,6 +308,17 @@ message types never enter orchestration, events, logs, memory, or public APIs.
 The current Worker still executes only `runtime_probe`; Task 05 does not connect
 model turns to Coding Runs.
 
+## Read-Only Coding Loop
+
+Workers with a configured model provider also advertise the versioned
+`coding + read_only + solo-readonly@1` route. The graph contains explicit
+`execute_tools -> model_turn` and `feedback -> model_turn` back edges, so tool
+selection and iteration count are model-driven rather than a fixed workflow.
+Only evidence-backed final answers terminate successfully.
+
+See [Read-only agent loop](docs/design-docs/read-only-agent-loop.md) for the
+complete node, loop, budget, tool, failure, and recovery contract.
+
 ## Persistence
 
 PostgreSQL is authoritative for LangGraph checkpoints and project-owned runtime

@@ -1,7 +1,7 @@
 # Quality Score
 
-Current phase: durable Worker plus structured streaming model protocol complete;
-Coding Runs remain queued pending the read-only model/tool loop.
+Current phase: durable read-only Coding loop complete; modifying Runs remain
+queued pending isolated mutation and sandbox shell tools.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |
