@@ -15,6 +15,36 @@ Generated from SQLAlchemy metadata.
 | `status` | `VARCHAR(32)` | no |
 | `created_at` | `DATETIME` | no |
 
+## `intake_reservations`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `repository_id` | `UUID` | no |
+| `base_commit` | `VARCHAR(64)` | no |
+| `intent` | `VARCHAR(32)` | no |
+| `workspace_path` | `TEXT` | no |
+| `integration_branch` | `VARCHAR(255)` | no |
+| `status` | `VARCHAR(32)` | no |
+| `error` | `TEXT` | yes |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+
+## `repositories`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `root` | `TEXT` | no |
+| `display_name` | `VARCHAR(255)` | no |
+| `git_common_dir` | `TEXT` | no |
+| `default_branch` | `VARCHAR(255)` | yes |
+| `enabled` | `BOOLEAN` | no |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+| `last_seen_at` | `DATETIME` | no |
+
 ## `runs`
 
 | Column | Type | Nullable |
@@ -23,6 +53,15 @@ Generated from SQLAlchemy metadata.
 | `goal` | `TEXT` | no |
 | `mode` | `VARCHAR(32)` | no |
 | `status` | `VARCHAR(32)` | no |
+| `repository_id` | `UUID` | yes |
+| `base_commit` | `VARCHAR(64)` | yes |
+| `intent` | `VARCHAR(32)` | no |
+| `dispatch_status` | `VARCHAR(32)` | no |
+| `workspace_path` | `TEXT` | yes |
+| `integration_branch` | `VARCHAR(255)` | yes |
+| `workspace_state` | `VARCHAR(32)` | yes |
+| `graph_thread_id` | `VARCHAR(128)` | yes |
+| `legacy` | `BOOLEAN` | no |
 | `created_at` | `DATETIME` | no |
 | `updated_at` | `DATETIME` | no |
 

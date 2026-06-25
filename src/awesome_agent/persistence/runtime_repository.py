@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -8,10 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from awesome_agent.domain.enums import (
     AgentKind,
     AgentStatus,
+    DispatchStatus,
     EventType,
+    RunIntent,
     RunMode,
     RunStatus,
     TodoStatus,
+    WorkspaceState,
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
 from awesome_agent.persistence.models import (
@@ -35,6 +39,23 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     goal=run.goal,
                     mode=run.mode.value,
                     status=run.status.value,
+                    repository_id=run.repository_id,
+                    base_commit=run.base_commit,
+                    intent=run.intent.value,
+                    dispatch_status=run.dispatch_status.value,
+                    workspace_path=(
+                        str(run.workspace_path)
+                        if run.workspace_path is not None
+                        else None
+                    ),
+                    integration_branch=run.integration_branch,
+                    workspace_state=(
+                        run.workspace_state.value
+                        if run.workspace_state is not None
+                        else None
+                    ),
+                    graph_thread_id=run.graph_thread_id,
+                    legacy=run.legacy,
                     created_at=run.created_at,
                     updated_at=run.updated_at,
                 )
@@ -68,6 +89,19 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.goal = run.goal
             record.mode = run.mode.value
             record.status = run.status.value
+            record.repository_id = run.repository_id
+            record.base_commit = run.base_commit
+            record.intent = run.intent.value
+            record.dispatch_status = run.dispatch_status.value
+            record.workspace_path = (
+                str(run.workspace_path) if run.workspace_path is not None else None
+            )
+            record.integration_branch = run.integration_branch
+            record.workspace_state = (
+                run.workspace_state.value if run.workspace_state is not None else None
+            )
+            record.graph_thread_id = run.graph_thread_id
+            record.legacy = run.legacy
             record.updated_at = run.updated_at
 
     async def list_agents(self, run_id: UUID) -> list[Agent]:
@@ -143,6 +177,21 @@ def _run_from_record(record: RunRecord) -> Run:
         goal=record.goal,
         mode=RunMode(record.mode),
         status=RunStatus(record.status),
+        repository_id=record.repository_id,
+        base_commit=record.base_commit,
+        intent=RunIntent(record.intent),
+        dispatch_status=DispatchStatus(record.dispatch_status),
+        workspace_path=(
+            Path(record.workspace_path) if record.workspace_path is not None else None
+        ),
+        integration_branch=record.integration_branch,
+        workspace_state=(
+            WorkspaceState(record.workspace_state)
+            if record.workspace_state is not None
+            else None
+        ),
+        graph_thread_id=record.graph_thread_id,
+        legacy=record.legacy,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

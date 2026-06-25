@@ -12,6 +12,7 @@ from awesome_agent.domain.enums import (
     AgentStatus,
     DispatchStatus,
     EventType,
+    IntakeReservationStatus,
     RunIntent,
     RunMode,
     RunStatus,
@@ -29,6 +30,15 @@ class Run(BaseModel):
     goal: str
     mode: RunMode = RunMode.SOLO
     status: RunStatus = RunStatus.CREATED
+    repository_id: UUID | None = None
+    base_commit: str | None = None
+    intent: RunIntent = RunIntent.MODIFYING
+    dispatch_status: DispatchStatus = DispatchStatus.TERMINAL
+    workspace_path: Path | None = None
+    integration_branch: str | None = None
+    workspace_state: WorkspaceState | None = None
+    graph_thread_id: str | None = None
+    legacy: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -54,6 +64,20 @@ class RunWorkspace(BaseModel):
     integration_branch: str
     workspace_state: WorkspaceState = WorkspaceState.READY
     graph_thread_id: str
+
+
+class IntakeReservation(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    run_id: UUID
+    repository_id: UUID
+    base_commit: str
+    intent: RunIntent
+    workspace_path: Path
+    integration_branch: str
+    status: IntakeReservationStatus = IntakeReservationStatus.PREPARING
+    error: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class Agent(BaseModel):

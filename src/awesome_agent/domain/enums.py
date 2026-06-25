@@ -22,6 +22,13 @@ class WorkspaceState(StrEnum):
     CLEANUP_BLOCKED = "cleanup_blocked"
 
 
+class IntakeReservationStatus(StrEnum):
+    PREPARING = "preparing"
+    PUBLISHED = "published"
+    ROLLBACK_REQUIRED = "rollback_required"
+    ROLLED_BACK = "rolled_back"
+
+
 class RunStatus(StrEnum):
     CREATED = "created"
     RUNNING = "running"
