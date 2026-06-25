@@ -151,3 +151,18 @@ def test_repository_endpoints_and_path_injection_rejection(
     assert fetched.status_code == 200
     assert fetched.json()["root"] == str(repository.root)
     assert injected.status_code == 422
+
+
+def test_runtime_probe_has_explicit_execution_identity(tmp_path: Path) -> None:
+    client, repository = _client(tmp_path)
+
+    response = client.post(
+        "/runtime/probes",
+        json={"repository_id": str(repository.id)},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["execution_kind"] == "runtime_probe"
+    assert body["graph_name"] == "runtime-probe"
+    assert body["graph_version"] == 1

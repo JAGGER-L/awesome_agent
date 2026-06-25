@@ -14,6 +14,13 @@ class CreateRunRequest(BaseModel):
     intent: RunIntent = RunIntent.MODIFYING
 
 
+class CreateProbeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    repository_id: UUID
+    goal: str = Field(default="Verify durable runtime", min_length=1)
+
+
 class ApprovalDecisionRequest(BaseModel):
     approved: bool
 

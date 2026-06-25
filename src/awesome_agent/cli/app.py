@@ -17,6 +17,8 @@ from awesome_agent.persistence.repository_registry import (
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.service import RepositoryService
 from awesome_agent.runtime.asyncio import configure_event_loop_policy
+from awesome_agent.runtime.supervisor import run_supervisor
+from awesome_agent.runtime.worker_app import run_worker
 from awesome_agent.settings import Settings
 
 configure_event_loop_policy()
@@ -187,6 +189,38 @@ def serve(
 
 
 @app.command()
+def worker(
+    once: Annotated[
+        bool,
+        typer.Option("--once", help="Process at most one runtime probe."),
+    ] = False,
+) -> None:
+    """Run one durable background Worker."""
+    processed = asyncio.run(run_worker(once=once))
+    if once and not processed:
+        typer.echo("no eligible runtime probe")
+
+
+@app.command()
+def start(
+    host: Annotated[str, typer.Option()] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8000,
+) -> None:
+    """Start independent local API and Worker child processes."""
+    result = run_supervisor(
+        host=host,
+        port=port,
+        shutdown_timeout=Settings().worker_shutdown_grace_seconds,
+    )
+    if result.return_code != 0:
+        typer.echo(
+            f"{result.service} exited with code {result.return_code}",
+            err=True,
+        )
+        raise typer.Exit(result.return_code)
+
+
+@app.command()
 def run(
     goal: Annotated[str, typer.Argument(help="Coding task goal.")],
     repo: Annotated[
@@ -214,6 +248,31 @@ def run(
             "goal": goal,
             "intent": "read_only" if read_only else "modifying",
         },
+        timeout=30,
+    )
+    response.raise_for_status()
+    typer.echo(response.json()["id"])
+
+
+@app.command()
+def probe(
+    repo: Annotated[
+        Path,
+        typer.Option(
+            "--repo",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+            help="Registered Git repository path.",
+        ),
+    ],
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Create a diagnostic durable-runtime probe Run."""
+    repository = _run_with_repository_service(lambda service: service.register(repo))
+    response = httpx.post(
+        f"{api_url}/runtime/probes",
+        json={"repository_id": str(repository.id)},
         timeout=30,
     )
     response.raise_for_status()

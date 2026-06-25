@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     lease_duration_seconds: int = Field(default=60, ge=15, le=600)
     heartbeat_interval_seconds: int = Field(default=15, ge=1)
     max_claim_attempts: int = Field(default=3, ge=1, le=100)
+    worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
+    worker_recovery_interval_seconds: float = Field(default=15.0, gt=0, le=600)
+    worker_shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
+    worker_retry_delay_seconds: float = Field(default=5.0, ge=0, le=3600)
+    event_poll_interval_seconds: float = Field(default=0.5, gt=0, le=60)
     builtin_memory_enabled: bool = False
     mem0_enabled: bool = False
     max_teammates: int = Field(default=6, ge=1)

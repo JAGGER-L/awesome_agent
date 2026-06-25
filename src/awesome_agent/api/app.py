@@ -13,10 +13,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.schemas import (
     ApprovalDecisionRequest,
+    CreateProbeRequest,
     CreateRunRequest,
     DispatchResponse,
 )
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.persistence.database import (
     create_engine,
@@ -35,6 +37,10 @@ from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
+from awesome_agent.runtime.probe_graph import (
+    RUNTIME_PROBE_GRAPH,
+    RUNTIME_PROBE_VERSION,
+)
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.settings import Settings
 
@@ -68,6 +74,7 @@ def create_app(
             events=event_stream,
             artifacts=LocalArtifactStore(settings.artifact_root),
             model_resolver=RoleModelResolver.from_settings(settings),
+            event_poll_interval=settings.event_poll_interval_seconds,
         )
         app.state.registry = repository_registry
         app.state.intake = RunIntakeService(
@@ -115,6 +122,26 @@ def create_app(
                 repository_id=request.repository_id,
                 goal=request.goal,
                 intent=request.intent,
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404,
+                detail="Repository not found.",
+            ) from error
+        except (RunIntakeError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return run.model_dump(mode="json")
+
+    @app.post("/runtime/probes", status_code=201)
+    async def create_probe(request: CreateProbeRequest) -> dict[str, object]:
+        try:
+            run = await run_intake().create_run(
+                repository_id=request.repository_id,
+                goal=request.goal,
+                intent=RunIntent.READ_ONLY,
+                execution_kind=ExecutionKind.RUNTIME_PROBE,
+                graph_name=RUNTIME_PROBE_GRAPH,
+                graph_version=RUNTIME_PROBE_VERSION,
             )
         except KeyError as error:
             raise HTTPException(

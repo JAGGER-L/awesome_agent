@@ -96,3 +96,46 @@ def test_run_registers_path_locally_and_sends_repository_id(
         "goal": "Inspect code",
         "intent": "read_only",
     }
+
+
+def test_probe_sends_diagnostic_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_path = tmp_path / "repository"
+    repository_path.mkdir()
+    repository = Repository(
+        id=uuid4(),
+        root=repository_path,
+        display_name="repository",
+        git_common_dir=repository_path / ".git",
+    )
+    request: dict[str, Any] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, str]:
+            return {"id": "probe-id"}
+
+    def post(url: str, **kwargs: Any) -> Response:
+        request["url"] = url
+        request.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(
+        cli_module,
+        "_run_with_repository_service",
+        lambda operation: repository,
+    )
+    monkeypatch.setattr(httpx, "post", post)
+
+    result = runner.invoke(
+        app,
+        ["probe", "--repo", str(repository_path)],
+    )
+
+    assert result.exit_code == 0
+    assert request["url"].endswith("/runtime/probes")
+    assert request["json"] == {"repository_id": str(repository.id)}
