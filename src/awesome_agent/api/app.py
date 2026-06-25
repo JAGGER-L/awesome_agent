@@ -18,29 +18,65 @@ from awesome_agent.persistence.database import (
     create_engine,
     create_session_factory,
 )
+from awesome_agent.persistence.intake_reservations import (
+    PostgresIntakeReservationStore,
+)
+from awesome_agent.persistence.repository_registry import (
+    PostgresRepositoryRegistry,
+)
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
+from awesome_agent.repositories.config import LocalRepositoryConfigStore
+from awesome_agent.repositories.registry import RepositoryRegistry
+from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
+from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.settings import Settings
 
 
-def create_app(service: RuntimeService | None = None) -> FastAPI:
+def create_app(
+    service: RuntimeService | None = None,
+    *,
+    intake: RunIntakeService | None = None,
+    registry: RepositoryRegistry | None = None,
+) -> FastAPI:
     settings = Settings()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if service is not None:
+        if service is not None and intake is not None and registry is not None:
             app.state.runtime = service
+            app.state.intake = intake
+            app.state.registry = registry
             yield
             return
 
         engine = create_engine(settings.database_url)
+        sessions = create_session_factory(engine)
+        event_stream = EventStream()
+        repository_registry = PostgresRepositoryRegistry(sessions)
+        reservations = PostgresIntakeReservationStore(sessions)
+        runtime_repository = PostgresRuntimeRepository(sessions)
+        local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
         app.state.runtime = RuntimeService(
-            repository=PostgresRuntimeRepository(create_session_factory(engine)),
-            events=EventStream(),
+            repository=runtime_repository,
+            events=event_stream,
             artifacts=LocalArtifactStore(settings.artifact_root),
             model_resolver=RoleModelResolver.from_settings(settings),
         )
+        app.state.registry = repository_registry
+        app.state.intake = RunIntakeService(
+            registry=repository_registry,
+            reservations=reservations,
+            runtime=runtime_repository,
+            events=event_stream,
+            worktrees=ManagedRunWorktreeManager(
+                settings.workspace_root or local_config.workspace_root
+            ),
+            allowed_roots=local_config.allowed_roots,
+            model_resolver=RoleModelResolver.from_settings(settings),
+        )
+        await app.state.intake.reconcile_incomplete()
         try:
             yield
         finally:
@@ -49,9 +85,19 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
     app = FastAPI(title="awesome_agent", version="0.1.0", lifespan=lifespan)
     if service is not None:
         app.state.runtime = service
+    if intake is not None:
+        app.state.intake = intake
+    if registry is not None:
+        app.state.registry = registry
 
     def runtime() -> RuntimeService:
         return cast(RuntimeService, app.state.runtime)
+
+    def run_intake() -> RunIntakeService:
+        return cast(RunIntakeService, app.state.intake)
+
+    def repositories() -> RepositoryRegistry:
+        return cast(RepositoryRegistry, app.state.registry)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -59,8 +105,38 @@ def create_app(service: RuntimeService | None = None) -> FastAPI:
 
     @app.post("/runs", status_code=201)
     async def create_run(request: CreateRunRequest) -> dict[str, object]:
-        run = await runtime().create_run(request.goal)
+        try:
+            run = await run_intake().create_run(
+                repository_id=request.repository_id,
+                goal=request.goal,
+                intent=request.intent,
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404,
+                detail="Repository not found.",
+            ) from error
+        except (RunIntakeError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         return run.model_dump(mode="json")
+
+    @app.get("/repositories")
+    async def list_repositories() -> list[dict[str, object]]:
+        return [
+            repository.model_dump(mode="json")
+            for repository in await repositories().list()
+        ]
+
+    @app.get("/repositories/{repository_id}")
+    async def get_repository(repository_id: UUID) -> dict[str, object]:
+        try:
+            repository = await repositories().get(repository_id)
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404,
+                detail="Repository not found.",
+            ) from error
+        return repository.model_dump(mode="json")
 
     @app.get("/runs/{run_id}")
     async def get_run(run_id: UUID) -> dict[str, object]:

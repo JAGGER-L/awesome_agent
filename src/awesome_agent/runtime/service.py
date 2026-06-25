@@ -8,6 +8,7 @@ from awesome_agent.artifacts.store import ArtifactMetadata, LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
     AgentStatus,
+    DispatchStatus,
     EventType,
     RunStatus,
 )
@@ -62,7 +63,12 @@ class RuntimeService:
 
     async def cancel_run(self, run_id: UUID) -> Run:
         current = await self.repository.get_run(run_id)
-        run = current.model_copy(update={"status": RunStatus.CANCELLED})
+        run = current.model_copy(
+            update={
+                "status": RunStatus.CANCELLED,
+                "dispatch_status": DispatchStatus.TERMINAL,
+            }
+        )
         await self.repository.update_run(run)
         await self._emit(
             run_id,
@@ -73,8 +79,15 @@ class RuntimeService:
 
     async def resume_run(self, run_id: UUID) -> Run:
         current = await self.repository.get_run(run_id)
-        if current.status is RunStatus.COMPLETED:
-            raise ValueError("Completed runs cannot be resumed.")
+        if current.repository_id is not None:
+            raise ValueError(
+                "Durable Run resume is unavailable before dispatch recovery."
+            )
+        if current.status in {
+            RunStatus.COMPLETED,
+            RunStatus.RECOVERY_REQUIRED,
+        }:
+            raise ValueError("Run cannot be resumed.")
         run = current.model_copy(update={"status": RunStatus.RUNNING})
         await self.repository.update_run(run)
         await self._emit(

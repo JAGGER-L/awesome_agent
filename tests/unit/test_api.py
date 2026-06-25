@@ -1,3 +1,5 @@
+import asyncio
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -6,7 +8,14 @@ from fastapi.testclient import TestClient
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.domain.models import Repository
+from awesome_agent.repositories.registry import InMemoryRepositoryRegistry
+from awesome_agent.repositories.reservations import (
+    InMemoryIntakeReservationStore,
+)
+from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
+from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
 
@@ -20,24 +29,74 @@ def _models() -> RoleModelResolver:
     )
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _git(path: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=path,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _client(tmp_path: Path) -> tuple[TestClient, Repository]:
+    projects = tmp_path / "projects"
+    repository_path = projects / "repository"
+    repository_path.mkdir(parents=True)
+    _git(repository_path, "init")
+    _git(repository_path, "config", "user.email", "test@example.com")
+    _git(repository_path, "config", "user.name", "Test")
+    (repository_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(repository_path, "add", "README.md")
+    _git(repository_path, "commit", "-m", "Initial")
+    repository = Repository(
+        root=repository_path.resolve(),
+        display_name="repository",
+        git_common_dir=(repository_path / ".git").resolve(),
+        default_branch=_git(repository_path, "branch", "--show-current"),
+    )
+    registry = InMemoryRepositoryRegistry()
+    asyncio.run(registry.upsert(repository))
+    reservations = InMemoryIntakeReservationStore()
+    runtime_repository = InMemoryRuntimeRepository(reservations)
+    event_stream = EventStream()
     service = RuntimeService(
-        repository=InMemoryRuntimeRepository(),
-        events=EventStream(),
+        repository=runtime_repository,
+        events=event_stream,
         artifacts=LocalArtifactStore(tmp_path),
         model_resolver=_models(),
     )
-    return TestClient(create_app(service))
+    intake = RunIntakeService(
+        registry=registry,
+        reservations=reservations,
+        runtime=runtime_repository,
+        events=event_stream,
+        worktrees=ManagedRunWorktreeManager(tmp_path / "worktrees"),
+        allowed_roots=[projects],
+        model_resolver=_models(),
+    )
+    return TestClient(create_app(service, intake=intake, registry=registry)), repository
 
 
 def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
-    client = _client(tmp_path)
+    client, repository = _client(tmp_path)
 
-    created = client.post("/runs", json={"goal": "Implement feature"})
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Implement feature",
+            "intent": "read_only",
+        },
+    )
     assert created.status_code == 201
     run_id = created.json()["id"]
 
-    assert client.get(f"/runs/{run_id}").json()["status"] == "running"
+    run = client.get(f"/runs/{run_id}").json()
+    assert run["status"] == "created"
+    assert run["dispatch_status"] == "queued"
+    assert run["intent"] == "read_only"
     agents = client.get(f"/runs/{run_id}/agents").json()
     assert len(agents) == 1
     assert agents[0]["model"] == "deepseek-v4-pro"
@@ -45,9 +104,10 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
 
     cancelled = client.post(f"/runs/{run_id}/cancel")
     assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["dispatch_status"] == "terminal"
 
     resumed = client.post(f"/runs/{run_id}/resume")
-    assert resumed.json()["status"] == "running"
+    assert resumed.status_code == 409
 
     approval_id = uuid4()
     decided = client.post(
@@ -59,8 +119,31 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
 
 
 def test_missing_run_returns_404(tmp_path: Path) -> None:
-    client = _client(tmp_path)
+    client, _ = _client(tmp_path)
 
     response = client.get("/runs/00000000-0000-0000-0000-000000000000")
 
     assert response.status_code == 404
+
+
+def test_repository_endpoints_and_path_injection_rejection(
+    tmp_path: Path,
+) -> None:
+    client, repository = _client(tmp_path)
+
+    listed = client.get("/repositories")
+    fetched = client.get(f"/repositories/{repository.id}")
+    injected = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "repository_path": str(repository.root),
+            "goal": "Injected path",
+        },
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == str(repository.id)
+    assert fetched.status_code == 200
+    assert fetched.json()["root"] == str(repository.root)
+    assert injected.status_code == 422

@@ -189,10 +189,33 @@ def serve(
 @app.command()
 def run(
     goal: Annotated[str, typer.Argument(help="Coding task goal.")],
+    repo: Annotated[
+        Path,
+        typer.Option(
+            "--repo",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+            help="Registered Git repository path.",
+        ),
+    ],
+    read_only: Annotated[
+        bool,
+        typer.Option("--read-only", help="Deny repository mutation tools."),
+    ] = False,
     api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
 ) -> None:
     """Create a run through the local API."""
-    response = httpx.post(f"{api_url}/runs", json={"goal": goal}, timeout=30)
+    repository = _run_with_repository_service(lambda service: service.register(repo))
+    response = httpx.post(
+        f"{api_url}/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": goal,
+            "intent": "read_only" if read_only else "modifying",
+        },
+        timeout=30,
+    )
     response.raise_for_status()
     typer.echo(response.json()["id"])
 
