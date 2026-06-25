@@ -15,7 +15,8 @@ Agent Team 架构：
 
 首版框架已经可以在本地运行，包含编排基础设施、PostgreSQL checkpoint
 和 API 投影、沙箱后端、Team/Subagent/Verifier 生命周期、记忆适配器、
-可追溯事件、产物、CLI 和 FastAPI 查询接口。
+可追溯事件、产物、CLI、FastAPI 查询接口、仓库身份注册、允许根目录策略，
+以及可在崩溃后恢复的具名 Git worktree Run intake。
 
 ## 技术栈
 
@@ -56,6 +57,20 @@ docker compose up -d postgres
 .\.venv\Scripts\awesome-agent.exe doctor
 .\.venv\Scripts\awesome-agent.exe serve
 ```
+
+创建 Run 前，需要先授权本地父目录，并注册一个干净的主 Git checkout：
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe config root add E:\projects
+.\.venv\Scripts\awesome-agent.exe repo add E:\projects\example
+.\.venv\Scripts\awesome-agent.exe run "检查 parser" --repo E:\projects\example --read-only
+```
+
+只有仓库已经位于 allowed root 下时，`run --repo` 才能隐式注册或刷新仓库。
+CLI 只向 FastAPI 发送 repository UUID，API 不接受文件系统路径。read-only
+和 modifying Run 都要求原 checkout 干净，并基于捕获的 base commit 创建稳定
+worktree。Task 02 仅完成持久化的 `created + queued` intake；worker 执行属于
+后续路线图任务。
 
 真实模型调用前，需要在被 Git 忽略的本地 `.env` 中配置
 `AWESOME_AGENT_DEEPSEEK_API_KEY`。仓库配置默认关闭内置记忆和 Mem0；

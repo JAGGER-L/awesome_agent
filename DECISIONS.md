@@ -156,7 +156,7 @@ Consequences:
 - Recovery uses each store for the responsibility it can represent reliably.
 - Side effects require idempotency or an explicit non-retry policy.
 
-## 2026-06-25: Register repositories and isolate modifying runs
+## 2026-06-25: Register repositories and isolate every run
 
 Status: accepted
 
@@ -169,13 +169,19 @@ Decision:
   stores allowed filesystem roots.
 - CLI paths resolve to registered repositories; API runs accept
   `repository_id`.
-- Every modifying run uses a dedicated integration worktree from a clean base
-  commit.
+- V1 accepts only clean primary Git checkouts and rejects linked-worktree
+  registration.
+- Every read-only or modifying run uses a dedicated named integration worktree
+  from an exact base commit; intent controls later tool capabilities.
+- A private durable reservation precedes Git side effects. Run, Leader, initial
+  events, and reservation publication commit atomically after workspace
+  readiness.
 - V1 never modifies the user's checkout directly and never auto-deletes a
-  worktree.
+  published Run worktree.
 
 Consequences:
 - Repository access has both identity and local authorization checks.
+- Interrupted intake can be reconciled without exposing a half-created Run.
 - Users must explicitly clean retained worktrees; uncommitted-change snapshots
   are deferred.
 

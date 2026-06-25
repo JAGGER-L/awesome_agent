@@ -79,6 +79,42 @@ agents, Todos, event history, approvals, artifacts, and live SSE updates for a
 future frontend. Both surfaces call application services rather than accessing
 provider, database, or sandbox implementations directly.
 
+### Repository-Aware Run Intake
+
+```text
+┌──────────────────┐      local path       ┌────────────────────┐
+│    Typer CLI     │──────────────────────►│ Allowed-root policy│
+└────────┬─────────┘                       └─────────┬──────────┘
+         │ repository UUID                           │ validated path
+         ▼                                           ▼
+┌──────────────────┐      repository ID    ┌────────────────────┐
+│     FastAPI      │──────────────────────►│ Repository registry│
+│ POST /runs       │                       │ PostgreSQL         │
+└────────┬─────────┘                       └─────────┬──────────┘
+         │                                           │ clean Git identity
+         ▼                                           ▼
+┌──────────────────┐      reserve first    ┌────────────────────┐
+│  Intake Service  │──────────────────────►│ Intake reservation │
+└────────┬─────────┘                       │ PostgreSQL         │
+         │ exact base commit               └────────────────────┘
+         ▼
+┌──────────────────┐      named branch     ┌────────────────────┐
+│ Managed worktree │──────────────────────►│ User Git repository│
+│ per Run          │                       │ original unchanged │
+└────────┬─────────┘                       └────────────────────┘
+         │ ready
+         ▼
+┌───────────────────────────────────────────────────────────────┐
+│ One transaction: Run(created/queued) + Leader + initial       │
+│ events + reservation(published)                              │
+└───────────────────────────────────────────────────────────────┘
+```
+
+Filesystem paths enter only through the local CLI. FastAPI accepts a registered
+repository UUID and exposes repository list/get for a future frontend. Both
+read-only and modifying intents use a stable worktree; intent later controls
+tool capabilities. Task 02 queues the Run but does not claim or execute it.
+
 ## Agent Orchestration Topology
 
 ```text
@@ -169,6 +205,8 @@ src/
     |-- persistence/
     |-- observability/
     |-- artifacts/
+    |-- repositories/
+    |-- runtime/
     |-- api/
     `-- cli/
 ```
@@ -210,7 +248,13 @@ adapter only. `EventStream` carries live SSE delivery but is not durable state.
 
 Project tables store runs, agents, tasks, messages, tool calls, artifacts,
 approvals, verification, and memory audit data. Agent records include the
-resolved model assignment.
+resolved model assignment. Repository identities and private intake
+reservations are also PostgreSQL records. Existing prototype Runs are preserved
+as legacy rows; unsafe non-terminal legacy rows become `recovery_required`.
+
+Local `~/.awesome-agent/config.toml` stores allowed roots and the managed
+worktree root. This local authorization is intentionally separate from the
+PostgreSQL repository registry.
 
 Large outputs live in external artifact storage. PostgreSQL stores metadata,
 hashes, ownership, and paths.

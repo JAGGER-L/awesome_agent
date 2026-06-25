@@ -17,7 +17,8 @@ Agent Team:
 The initial framework is locally runnable. It includes orchestration primitives,
 PostgreSQL checkpoints and API projections, sandbox backends,
 Team/Subagent/Verifier lifecycle, memory adapters, traceable events, artifacts,
-CLI, and FastAPI inspection APIs.
+CLI, FastAPI inspection APIs, registered repository identities, allowed-root
+policy, and crash-recoverable Run intake into named Git worktrees.
 
 ## Stack
 
@@ -58,6 +59,22 @@ docker compose up -d postgres
 .\.venv\Scripts\awesome-agent.exe doctor
 .\.venv\Scripts\awesome-agent.exe serve
 ```
+
+Before creating a Run, authorize a local parent directory and register a clean
+primary Git checkout:
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe config root add E:\projects
+.\.venv\Scripts\awesome-agent.exe repo add E:\projects\example
+.\.venv\Scripts\awesome-agent.exe run "Inspect the parser" --repo E:\projects\example --read-only
+```
+
+`run --repo` may register or refresh the repository only when it is already
+under an allowed root. The CLI sends a repository UUID to FastAPI; the API does
+not accept filesystem paths. Both read-only and modifying Runs require a clean
+checkout and receive a stable worktree at the captured base commit. Task 02
+stops after durable `created + queued` intake; worker execution is a later
+roadmap task.
 
 Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the ignored local `.env` before real
 model calls. Built-in memory and Mem0 are disabled in committed defaults. Enable

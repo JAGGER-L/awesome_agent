@@ -36,6 +36,12 @@ forbidden.
 - Approval waits checkpoint before releasing the worker lease.
 - Worktree cleanup is explicit in V1 and never deletes a user-owned or
   unconfirmed path.
+- Run intake writes a private reservation before creating a branch or
+  worktree. The public Run, Leader, initial events, and reservation publication
+  commit atomically only after the workspace is ready.
+- Startup reconciliation rolls back incomplete owned intake side effects.
+  Accepted Run worktrees remain retained; automatic accepted-run cleanup is not
+  implemented.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

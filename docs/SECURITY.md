@@ -23,9 +23,13 @@
   path.
 - PostgreSQL repository registration does not grant access by itself; resolved
   roots must also be contained by locally configured allowed roots.
-- Modifying Runs use isolated worktrees from a clean Git base. Trusted-local
-  changes the execution backend but never authorizes direct edits to the user's
-  checkout.
+- Allowed roots default to an empty deny-all list and are changed only by local
+  CLI/configuration, not FastAPI.
+- Registration rejects bare repositories and linked worktrees. Run intake
+  rejects dirty repositories, untracked files, and in-progress Git operations.
+- Read-only and modifying Runs use isolated named worktrees from an exact clean
+  Git base. Trusted-local changes the execution backend but never authorizes
+  direct edits to the user's checkout.
 - Worktree cleanup validates resolved ownership, active leases, and unexported
   diffs before deletion.
 - V1 approvals bind to one exact tool invocation, canonical arguments,

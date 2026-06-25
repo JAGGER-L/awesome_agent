@@ -21,6 +21,9 @@ team output.
 - configurable per-role model assignments, exposed for inspection
 - optional built-in and Mem0 memory
 - Typer CLI and local FastAPI inspection API
+- local allowed-root configuration and PostgreSQL repository registry
+- clean-base read-only/modifying Run intake into stable named worktrees
+- durable `created + queued` intake with crash reconciliation
 
 ## Non-Goals
 
@@ -30,3 +33,4 @@ team output.
 - multiple active model providers
 - recursive delegation
 - LangSmith or LangGraph Agent Server
+- durable worker claim, lease, and coding execution until later roadmap tasks

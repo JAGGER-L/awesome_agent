@@ -69,6 +69,10 @@ Examples:
 The API exposes both values. Product UI may present a combined label but cannot
 discard either state.
 
+Current implementation note: Task 02 persists only `queued` and `terminal`.
+Claim, lease, heartbeat, fencing, retry, and worker execution remain target
+behavior for Task 03 and later.
+
 ## Dispatch, Lease, and Fencing
 
 V1 uses PostgreSQL as the queue.
@@ -141,19 +145,28 @@ must:
 3. require a Git repository for modifying runs;
 4. record the selected base commit.
 
-The CLI accepts `--repo PATH`, defaulting to the current directory, and resolves
-or registers it. API run creation accepts `repository_id`, never an arbitrary
-filesystem path.
+The CLI requires `--repo PATH` and resolves or registers it only after local
+allowed-root validation. API run creation accepts `repository_id`, never an
+arbitrary filesystem path. Registration, listing, disabling, and explicit
+relocation are local CLI operations; FastAPI exposes repository list/get only.
+
+Task 02 creates a private durable intake reservation before Git side effects.
+The Run, Leader, initial events, and reservation publication share one
+PostgreSQL transaction after workspace readiness. Startup reconciliation rolls
+back incomplete owned worktrees. A half-provisioned intake is never exposed as
+a public Run.
 
 ## Workspace Contract
 
-- A modifying Run starts only from a clean Git repository in V1.
-- Every modifying Run receives a dedicated integration branch and worktree.
+- Every new Run starts only from a clean primary Git checkout in V1, including
+  untracked files and in-progress Git operations.
+- Both read-only and modifying Runs receive a dedicated integration branch and
+  worktree from the captured full base commit.
 - The original checkout is never modified automatically.
 - `trusted-local` selects the command backend; it does not permit direct edits
   to the original checkout.
-- Read-only operations may inspect the registered root without creating a
-  worktree when policy permits.
+- Intent controls later tool capabilities; read-only does not bypass workspace
+  isolation.
 - Team worktrees later branch from the Run integration branch.
 - V1 retains all Run worktrees until explicit cleanup.
 

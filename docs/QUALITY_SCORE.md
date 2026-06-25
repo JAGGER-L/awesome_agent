@@ -1,6 +1,7 @@
 # Quality Score
 
-Current phase: DeepSeek defaults and durable runtime projections complete.
+Current phase: repository-aware durable Run intake complete; worker dispatch is
+not yet implemented.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |
@@ -11,6 +12,6 @@ Current phase: DeepSeek defaults and durable runtime projections complete.
 | Behavioral tests | 4/5 | Unit, structural, integration, and E2E gates |
 | System tests | 4/5 | PostgreSQL restart, sandbox, worktree, API and Team E2E tests |
 | Observability | 3/5 | OTel, structured events, SSE and query APIs |
-| Security | 3/5 | Docker default, trusted-local gate, approval and memory filters |
+| Security | 4/5 | Deny-all allowed roots, UUID-only API intake, clean-base named worktrees |
 
 Scores increase only with executable evidence.

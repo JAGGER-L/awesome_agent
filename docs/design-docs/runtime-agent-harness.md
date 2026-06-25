@@ -36,8 +36,9 @@ load user task and project policy
 - Run business state and worker dispatch state remain separate.
 - A worker may commit protected transitions only with the current fencing
   token.
-- Every modifying Run uses an isolated integration worktree; trusted-local does
-  not permit direct edits to the user's checkout.
+- Every Run uses an isolated integration worktree from a clean captured base;
+  read-only intent controls tools rather than bypassing isolation, and
+  trusted-local does not permit direct edits to the user's checkout.
 - API runs select a registered repository identity rather than an arbitrary
   filesystem path.
 - Approval applies to one exact canonical tool invocation and expires.
@@ -69,8 +70,9 @@ An irreconcilable checkpoint/projection mismatch places the Run in
 
 ## Repository and Validation Policy
 
-Modifying Runs require a clean Git base and execute in a retained Run worktree.
-V1 does not modify the current checkout or automatically delete worktrees.
+All Runs require a clean primary Git base and execute in a retained Run
+worktree. V1 rejects linked-worktree registration, does not modify the current
+checkout, and does not automatically delete accepted Run worktrees.
 
 The target repository may define ordered checks in
 `.agents/validation.toml`. Without configuration, the runtime may infer only
