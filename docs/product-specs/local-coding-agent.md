@@ -26,6 +26,9 @@ team output.
 - durable `created + queued` intake with crash reconciliation
 - PostgreSQL claim, lease, heartbeat, fencing, retry, and expiry recovery
 - read-only dispatch inspection API
+- one-Run-per-process durable Worker for diagnostic runtime probes
+- LangGraph checkpoint resume after Worker process failure
+- local API/Worker supervisor and PostgreSQL-backed cross-process SSE
 
 ## Non-Goals
 
@@ -35,4 +38,4 @@ team output.
 - multiple active model providers
 - recursive delegation
 - LangSmith or LangGraph Agent Server
-- durable worker claim, lease, and coding execution until later roadmap tasks
+- Coding Run execution until the model/tool loop is implemented

@@ -132,8 +132,30 @@ queued / retry_scheduled
 The current lease lives on the Run row. A claim records a process-scoped
 worker UUID, diagnostic name, attempt, expiry, and monotonically increasing
 fencing token. PostgreSQL time decides lease validity. State changes and their
-dispatch events share one transaction. Task 03 provides this repository
-protocol but does not start a worker or execute LangGraph.
+dispatch events share one transaction.
+
+### Durable Worker and Probe Graph
+
+```text
+awesome-agent start
+        |
+        +---- API process ---- PostgreSQL events ---- SSE polling
+        |
+        +---- Worker process
+                 |
+                 +---- claim runtime_probe only
+                 +---- heartbeat lease
+                 +---- LangGraph sync checkpoint
+                 +---- fenced projection update
+```
+
+Each Worker process executes at most one Run. The current graph is the
+diagnostic `initialize -> checkpoint_probe -> finalize` flow and never reads or
+modifies repository content. A crashed Worker leaves its checkpoint and lease;
+after lease expiry, a replacement Worker claims with a new fencing token and
+resumes from the checkpoint. Unsupported graph versions enter
+`recovery_required`. Coding Runs are deliberately ineligible until the real
+model/tool graph exists.
 
 ## Agent Orchestration Topology
 
@@ -264,7 +286,9 @@ PostgreSQL is authoritative for LangGraph checkpoints and project-owned runtime
 records. Checkpoint semantics remain owned by LangGraph. The API reads runs,
 agents, tasks, and event history through a runtime repository instead of
 process-local dictionaries. The in-memory repository is an explicit test
-adapter only. `EventStream` carries live SSE delivery but is not durable state.
+adapter only. SSE reads ordered events from PostgreSQL so API and Worker
+processes share one durable event history. `EventStream` remains a local
+notification adapter, not durable state.
 
 Project tables store runs, agents, tasks, messages, tool calls, artifacts,
 approvals, verification, and memory audit data. Agent records include the

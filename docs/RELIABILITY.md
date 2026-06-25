@@ -49,6 +49,15 @@ forbidden.
   implemented.
 - Expired leases requeue before the attempt limit. At the limit, the Run enters
   `recovery_required + terminal` and preserves its workspace.
+- Each Worker process executes at most one Run and currently claims only
+  `runtime_probe`.
+- Probe checkpoints use synchronous LangGraph durability. Process-crash tests
+  prove lease expiry, fencing-token increment, and checkpoint resume.
+- Graceful Worker shutdown stops new claims, retains heartbeat during a
+  bounded grace period, and leaves ownership to expire if safe completion does
+  not occur.
+- SSE consumers poll ordered PostgreSQL events, so API restarts and separate
+  Worker processes do not lose durable history.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

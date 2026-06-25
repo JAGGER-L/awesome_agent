@@ -35,6 +35,10 @@
   dispatch state.
 - Claim and heartbeat are internal PostgreSQL operations, not public FastAPI
   endpoints.
+- The Task 04 Worker accepts only `runtime_probe`; the probe graph has no model,
+  tool, shell, sandbox, or repository-content capability.
+- `POST /runtime/probes` selects the fixed supported probe graph on the server;
+  callers cannot supply arbitrary graph names or versions.
 - Worktree cleanup validates resolved ownership, active leases, and unexported
   diffs before deletion.
 - V1 approvals bind to one exact tool invocation, canonical arguments,

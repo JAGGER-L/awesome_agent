@@ -18,8 +18,9 @@ Agent Team 架构：
 可追溯事件、产物、CLI、FastAPI 查询接口、仓库身份注册、允许根目录策略，
 以及可在崩溃后恢复的具名 Git worktree Run intake。
 PostgreSQL 队列现已支持事务 claim、lease、heartbeat、fencing token、延迟
-retry 和过期 lease 恢复。当前仍没有 worker 进程执行 queued Run；该能力属于
-Task 04。
+retry 和过期 lease 恢复。持久化 Worker 现可执行带 checkpoint 的
+`runtime_probe` Run，并在进程崩溃后恢复。普通 Coding Run 仍保持 queued，
+直到后续加入 model/tool loop。
 
 ## 技术栈
 
@@ -58,7 +59,7 @@ docker compose up -d postgres
 .\scripts\check.ps1
 .\scripts\system-test.ps1
 .\.venv\Scripts\awesome-agent.exe doctor
-.\.venv\Scripts\awesome-agent.exe serve
+.\.venv\Scripts\awesome-agent.exe start
 ```
 
 创建 Run 前，需要先授权本地父目录，并注册一个干净的主 Git checkout：
@@ -72,8 +73,17 @@ docker compose up -d postgres
 只有仓库已经位于 allowed root 下时，`run --repo` 才能隐式注册或刷新仓库。
 CLI 只向 FastAPI 发送 repository UUID，API 不接受文件系统路径。read-only
 和 modifying Run 都要求原 checkout 干净，并基于捕获的 base commit 创建稳定
-worktree。Task 02 仅完成持久化的 `created + queued` intake；worker 执行属于
-后续路线图任务。
+worktree。当前普通 `run` 命令创建的 Coding Run 仍保持 queued。
+
+可以创建诊断 Probe 来验证 Worker、lease、LangGraph checkpoint 和跨进程事件
+链路，而不会执行 Coding 目标：
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe probe --repo E:\projects\example
+```
+
+`awesome-agent start` 会监督相互独立的 API 和 Worker 子进程。需要分别管理
+进程时仍可使用 `serve` 和 `worker`。
 
 可以通过 `GET /runs/{run_id}/dispatch` 查看调度状态。queued 和
 retry-scheduled Run 可以立即取消；claimed 或 executing Run 在实现持久化取消

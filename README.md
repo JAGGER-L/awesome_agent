@@ -20,8 +20,9 @@ Team/Subagent/Verifier lifecycle, memory adapters, traceable events, artifacts,
 CLI, FastAPI inspection APIs, registered repository identities, allowed-root
 policy, and crash-recoverable Run intake into named Git worktrees.
 The PostgreSQL queue supports transactional claims, leases, heartbeats,
-fencing tokens, delayed retry, and expired-lease recovery. No worker process
-executes queued Runs yet; that is Task 04.
+fencing tokens, delayed retry, and expired-lease recovery. A durable Worker now
+executes checkpointed `runtime_probe` Runs and resumes them after process
+failure. Normal Coding Runs remain queued until the model/tool loop is added.
 
 ## Stack
 
@@ -60,7 +61,7 @@ docker compose up -d postgres
 .\scripts\check.ps1
 .\scripts\system-test.ps1
 .\.venv\Scripts\awesome-agent.exe doctor
-.\.venv\Scripts\awesome-agent.exe serve
+.\.venv\Scripts\awesome-agent.exe start
 ```
 
 Before creating a Run, authorize a local parent directory and register a clean
@@ -75,9 +76,19 @@ primary Git checkout:
 `run --repo` may register or refresh the repository only when it is already
 under an allowed root. The CLI sends a repository UUID to FastAPI; the API does
 not accept filesystem paths. Both read-only and modifying Runs require a clean
-checkout and receive a stable worktree at the captured base commit. Task 02
-stops after durable `created + queued` intake; worker execution is a later
-roadmap task.
+checkout and receive a stable worktree at the captured base commit. Normal
+`run` commands create Coding Runs that remain queued in the current phase.
+
+Use a diagnostic probe to verify the Worker, lease, LangGraph checkpoint, and
+cross-process event path without executing a coding goal:
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe probe --repo E:\projects\example
+```
+
+`awesome-agent start` supervises independent API and Worker child processes.
+`serve` and `worker` remain available when the processes should be managed
+separately.
 
 Dispatch state is available at `GET /runs/{run_id}/dispatch`. Queued and
 retry-scheduled Runs can be cancelled immediately. Claimed or executing Runs

@@ -69,10 +69,10 @@ Examples:
 The API exposes both values. Product UI may present a combined label but cannot
 discard either state.
 
-Current implementation note: Task 03 implements claim, lease, heartbeat,
-fencing, retry, and expired-lease recovery. Only `queued`, `claimed`,
-`retry_scheduled`, and `terminal` are exercised without a worker. Worker
-execution remains Task 04.
+Current implementation note: Task 04 adds a real Worker for diagnostic
+`runtime_probe` Runs. It exercises `queued`, `claimed`, `executing`, retry,
+recovery, and terminal projection changes. Coding Runs remain queued until the
+structured model/tool loop exists.
 
 ## Dispatch, Lease, and Fencing
 
@@ -96,9 +96,25 @@ Defaults are a 60-second lease, 15-second heartbeat interval, and three maximum
 claims. Heartbeat is a direct conditional Worker-to-PostgreSQL update; FastAPI
 and Agents do not relay it. Expired ownership cannot be revived.
 
-Task 03 exposes dispatch inspection but no public claim or heartbeat API.
+Claim and heartbeat remain internal and have no public API.
 Queued and retry-scheduled Runs cancel atomically. Claimed and executing Runs
 reject cancellation until Task 09 adds propagation to active execution.
+
+## Current Probe Graph
+
+Task 04 persists `execution_kind`, `graph_name`, and `graph_version`. The Worker
+claims only `runtime_probe` and executes:
+
+```text
+initialize -> checkpoint_probe -> finalize
+```
+
+The graph uses `AsyncPostgresSaver` with `durability="sync"` and a stable
+Run-scoped thread ID. A replacement process resumes an incomplete checkpoint.
+If the graph checkpoint is complete but the terminal projection is missing,
+the Worker reconciles the fenced projection without replaying graph nodes.
+Unsupported graph identity or corrupt runtime state enters
+`recovery_required`; `/resume` does not bypass that state.
 
 ## Transition Identity and Reconciliation
 
@@ -194,7 +210,9 @@ awesome-agent start   # local supervisor for API plus one worker
 ```
 
 API request handling never owns the lifetime of a coding run. The supervisor is
-a convenience process, not a different execution architecture.
+a convenience process, not a different execution architecture. If either child
+exits, the supervisor stops its sibling. During Worker shutdown, claiming stops
+while the active Run retains heartbeat for a bounded grace period.
 
 ## Structured Model and Tool Turns
 
