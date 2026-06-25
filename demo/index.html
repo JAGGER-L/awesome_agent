@@ -1,0 +1,1651 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2324221f'/%3E%3Ctext x='6' y='21' fill='white' font-family='monospace' font-size='13'%3EA_%3C/text%3E%3C/svg%3E"
+    />
+    <title>awesome_agent · Runtime Workspace Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #f7f6f2;
+        --surface: #fffefa;
+        --surface-strong: #ffffff;
+        --ink: #24221f;
+        --muted: #706d66;
+        --faint: #9c978d;
+        --line: #dedbd3;
+        --line-soft: #ebe8e1;
+        --accent: #c76542;
+        --accent-soft: #f4e7df;
+        --accent-ink: #7f341f;
+        --green: #39715b;
+        --green-soft: #e8f1ec;
+        --yellow: #8b6729;
+        --yellow-soft: #f7efd9;
+        --red: #a8483f;
+        --red-soft: #f7e9e7;
+        --blue: #426c8a;
+        --blue-soft: #e8f0f5;
+        --shadow: 0 12px 34px rgba(45, 38, 28, 0.07);
+        --radius: 8px;
+        --sidebar: 248px;
+        --detail: 340px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        font-size: 14px;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        border-right: 1px solid var(--line);
+        background: #f1f0eb;
+        padding: 18px 14px;
+        display: flex;
+        flex-direction: column;
+        overflow: auto;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 3px 6px 18px;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 19px;
+        font-weight: 600;
+      }
+
+      .brand-mark {
+        width: 27px;
+        height: 27px;
+        border-radius: 7px;
+        display: grid;
+        place-items: center;
+        background: var(--ink);
+        color: white;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+      }
+
+      .sidebar-label {
+        margin: 6px 8px;
+        color: var(--faint);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .new-run {
+        width: 100%;
+        height: 38px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        cursor: pointer;
+        box-shadow: 0 1px 1px rgba(40, 34, 25, 0.03);
+      }
+
+      .new-run:hover,
+      .icon-btn:hover,
+      .ghost-btn:hover {
+        background: white;
+        border-color: #c9c5bc;
+      }
+
+      .run-list {
+        display: grid;
+        gap: 4px;
+      }
+
+      .run-item {
+        width: 100%;
+        padding: 10px 9px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .run-item:hover {
+        background: rgba(255, 255, 255, 0.6);
+      }
+
+      .run-item.active {
+        background: var(--surface-strong);
+        box-shadow: 0 1px 2px rgba(44, 39, 30, 0.08);
+      }
+
+      .run-title {
+        display: block;
+        margin-bottom: 5px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+        font-size: 13px;
+      }
+
+      .run-meta {
+        display: flex;
+        justify-content: space-between;
+        color: var(--faint);
+        font-size: 11px;
+      }
+
+      .sidebar-footer {
+        margin-top: auto;
+        border-top: 1px solid var(--line);
+        padding: 14px 6px 0;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+      }
+
+      .avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: #dfddd5;
+        color: #4e4a44;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .main {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto 1fr;
+      }
+
+      .topbar {
+        height: 62px;
+        padding: 0 22px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(247, 246, 242, 0.94);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        backdrop-filter: blur(10px);
+      }
+
+      .topbar > div:first-child {
+        min-width: 0;
+        flex: 1 1 auto;
+        overflow: hidden;
+      }
+
+      .run-heading {
+        min-width: 0;
+      }
+
+      .run-heading h1 {
+        margin: 0 0 3px;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 18px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .run-subtitle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--green);
+        box-shadow: 0 0 0 3px var(--green-soft);
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+      }
+
+      .icon-btn,
+      .ghost-btn,
+      .primary-btn,
+      .danger-btn {
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .icon-btn {
+        width: 34px;
+        padding: 0;
+      }
+
+      .ghost-btn {
+        padding: 0 11px;
+      }
+
+      .primary-btn {
+        padding: 0 13px;
+        border-color: var(--ink);
+        background: var(--ink);
+        color: white;
+      }
+
+      .danger-btn {
+        padding: 0 13px;
+        border-color: #cf928a;
+        background: var(--red-soft);
+        color: var(--red);
+      }
+
+      .workspace {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) var(--detail);
+      }
+
+      .content {
+        min-width: 0;
+        padding: 22px;
+        overflow: auto;
+      }
+
+      .detail-panel {
+        border-left: 1px solid var(--line);
+        background: var(--surface);
+        padding: 18px;
+        overflow: auto;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(120px, 0.6fr));
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .summary-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        padding: 14px;
+      }
+
+      .goal-card {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+      }
+
+      .goal-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: var(--accent-soft);
+        color: var(--accent);
+        flex: 0 0 auto;
+      }
+
+      .summary-label {
+        color: var(--faint);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .goal-text {
+        margin-top: 5px;
+        font-weight: 600;
+        line-height: 1.45;
+      }
+
+      .metric-value {
+        margin-top: 7px;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 23px;
+      }
+
+      .metric-note {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .section {
+        margin-bottom: 18px;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 9px;
+        gap: 12px;
+      }
+
+      .section-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 16px;
+      }
+
+      .section-note {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .team-board {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        padding: 16px;
+        overflow-x: auto;
+      }
+
+      .team-flow {
+        min-width: 680px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .team-row {
+        display: flex;
+        justify-content: center;
+        gap: 12px;
+      }
+
+      .connector {
+        width: 1px;
+        height: 13px;
+        margin: -1px auto;
+        background: var(--line);
+      }
+
+      .agent-card {
+        width: 205px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-strong);
+        padding: 11px;
+        cursor: pointer;
+        text-align: left;
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease,
+          transform 0.15s ease;
+      }
+
+      .agent-card:hover {
+        transform: translateY(-1px);
+        border-color: #c9c5bc;
+      }
+
+      .agent-card.selected {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px var(--accent-soft);
+      }
+
+      .agent-card.subagent {
+        width: 156px;
+        background: #faf9f5;
+      }
+
+      .agent-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .agent-name {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        font-weight: 700;
+      }
+
+      .agent-symbol {
+        width: 27px;
+        height: 27px;
+        border-radius: 7px;
+        display: grid;
+        place-items: center;
+        background: #ece9e2;
+        color: #5c574f;
+        flex: 0 0 auto;
+        font-size: 11px;
+      }
+
+      .leader .agent-symbol {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .verifier .agent-symbol {
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .status-pill,
+      .tag,
+      .event-type {
+        border-radius: 999px;
+        padding: 3px 7px;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .status-pill.running {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .status-pill.waiting {
+        color: var(--yellow);
+        background: var(--yellow-soft);
+      }
+
+      .status-pill.verifying {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .agent-role {
+        margin: 8px 0 6px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .agent-foot {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--faint);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+      }
+
+      .lower-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+        gap: 18px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .panel-toolbar {
+        min-height: 44px;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--line-soft);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .tabs {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+      }
+
+      .tab {
+        height: 29px;
+        padding: 0 9px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .tab.active {
+        background: #efede7;
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      .todo-list {
+        display: grid;
+      }
+
+      .todo-item {
+        min-height: 61px;
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--line-soft);
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: start;
+        gap: 10px;
+      }
+
+      .todo-item:last-child {
+        border-bottom: 0;
+      }
+
+      .todo-check {
+        width: 18px;
+        height: 18px;
+        margin-top: 1px;
+        border-radius: 5px;
+        border: 1px solid #bbb7ae;
+        display: grid;
+        place-items: center;
+        color: white;
+        font-size: 11px;
+      }
+
+      .todo-check.done {
+        border-color: var(--green);
+        background: var(--green);
+      }
+
+      .todo-check.active {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 4px var(--accent-soft);
+      }
+
+      .todo-title {
+        font-weight: 600;
+        line-height: 1.35;
+      }
+
+      .todo-meta {
+        margin-top: 5px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--faint);
+        font-size: 11px;
+      }
+
+      .tag {
+        color: var(--muted);
+        background: #efede8;
+      }
+
+      .tag.verification {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .event-list {
+        max-height: 348px;
+        overflow: auto;
+      }
+
+      .event {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line-soft);
+        display: grid;
+        grid-template-columns: 45px minmax(0, 1fr);
+        gap: 8px;
+      }
+
+      .event:last-child {
+        border-bottom: 0;
+      }
+
+      .event-time {
+        color: var(--faint);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        padding-top: 2px;
+      }
+
+      .event-line {
+        line-height: 1.4;
+      }
+
+      .event-line strong {
+        font-size: 12px;
+      }
+
+      .event-detail {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .event-type {
+        display: inline-block;
+        margin-right: 5px;
+        color: var(--accent-ink);
+        background: var(--accent-soft);
+      }
+
+      .detail-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .detail-heading h2 {
+        margin: 0 0 4px;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 18px;
+      }
+
+      .detail-heading p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .detail-section {
+        padding: 15px 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .detail-section:last-child {
+        border-bottom: 0;
+      }
+
+      .detail-title {
+        margin: 0 0 10px;
+        color: var(--faint);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .kv {
+        display: grid;
+        grid-template-columns: 82px minmax(0, 1fr);
+        gap: 8px;
+        margin-bottom: 8px;
+        font-size: 12px;
+      }
+
+      .kv span:first-child {
+        color: var(--faint);
+      }
+
+      .conversation {
+        display: grid;
+        gap: 9px;
+      }
+
+      .message {
+        padding: 9px 10px;
+        border: 1px solid var(--line-soft);
+        border-radius: 7px;
+        background: #faf9f6;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .message strong {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+
+      .tool-call {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        overflow: hidden;
+      }
+
+      .tool-head {
+        padding: 8px 9px;
+        background: #f4f2ed;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+      }
+
+      .tool-body {
+        padding: 9px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 10px;
+        line-height: 1.55;
+      }
+
+      .approval-banner {
+        margin-top: 12px;
+        padding: 11px;
+        border: 1px solid #dfc88a;
+        border-radius: 7px;
+        background: var(--yellow-soft);
+      }
+
+      .approval-banner strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--yellow);
+      }
+
+      .approval-actions {
+        display: flex;
+        gap: 7px;
+        margin-top: 10px;
+      }
+
+      .progress {
+        height: 5px;
+        border-radius: 999px;
+        background: #e4e1d9;
+        overflow: hidden;
+      }
+
+      .progress > span {
+        display: block;
+        width: 64%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--accent);
+        transition: width 0.4s ease;
+      }
+
+      .mobile-menu {
+        display: none;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 22px;
+        z-index: 60;
+        transform: translate(-50%, 18px);
+        padding: 9px 13px;
+        border-radius: 7px;
+        background: var(--ink);
+        color: white;
+        box-shadow: var(--shadow);
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 0.2s ease,
+          transform 0.2s ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: none;
+        place-items: center;
+        padding: 20px;
+        background: rgba(32, 29, 25, 0.34);
+        backdrop-filter: blur(3px);
+      }
+
+      .modal-backdrop.open {
+        display: grid;
+      }
+
+      .modal {
+        width: min(520px, 100%);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--surface-strong);
+        box-shadow: var(--shadow);
+        padding: 18px;
+      }
+
+      .modal h2 {
+        margin: 0 0 7px;
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 19px;
+      }
+
+      .modal p {
+        margin: 0 0 14px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .command {
+        padding: 11px;
+        border-radius: 7px;
+        background: #282621;
+        color: #f4f2ec;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .modal-actions {
+        margin-top: 16px;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      @media (max-width: 1180px) {
+        :root {
+          --sidebar: 220px;
+          --detail: 310px;
+        }
+
+        .summary-grid {
+          grid-template-columns: 1.3fr repeat(3, 0.7fr);
+        }
+      }
+
+      @media (max-width: 980px) {
+        .workspace {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .detail-panel {
+          display: none;
+        }
+
+        .summary-grid {
+          grid-template-columns: repeat(3, 1fr);
+        }
+
+        .goal-card {
+          grid-column: 1 / -1;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: fixed;
+          inset: 0 auto 0 0;
+          z-index: 40;
+          width: min(290px, 86vw);
+          transform: translateX(-100%);
+          transition: transform 0.2s ease;
+          box-shadow: var(--shadow);
+        }
+
+        .sidebar.open {
+          transform: translateX(0);
+        }
+
+        .mobile-menu {
+          display: inline-flex;
+        }
+
+        .topbar {
+          padding: 0 14px;
+        }
+
+        .top-actions .ghost-btn {
+          display: none;
+        }
+
+        .content {
+          padding: 14px;
+        }
+
+        .summary-grid {
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+        }
+
+        .summary-card {
+          padding: 11px;
+        }
+
+        .metric-value {
+          font-size: 19px;
+        }
+
+        .lower-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .section-note {
+          display: none;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .run-heading h1 {
+          font-size: 16px;
+        }
+
+        .summary-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .goal-card {
+          grid-column: auto;
+        }
+
+        .run-subtitle span:last-child {
+          display: none;
+        }
+
+        .event {
+          grid-template-columns: 39px minmax(0, 1fr);
+        }
+
+        .team-flow {
+          min-width: 0;
+        }
+
+        .team-row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .agent-card,
+        .agent-card.subagent {
+          width: 100%;
+        }
+
+        .connector {
+          height: 9px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <span class="brand-mark">A_</span>
+          <span>awesome_agent</span>
+        </div>
+
+        <button class="new-run" id="new-run">
+          <span aria-hidden="true">＋</span>
+          新建任务
+        </button>
+
+        <div class="sidebar-label" style="margin-top: 22px">最近运行</div>
+        <div class="run-list">
+          <button class="run-item active" data-run="dashboard">
+            <span class="run-title">构建 Agent 运行监控页面</span>
+            <span class="run-meta"><span>Team · 运行中</span><span>2m</span></span>
+          </button>
+          <button class="run-item" data-run="auth">
+            <span class="run-title">重构 OAuth 登录流程</span>
+            <span class="run-meta"><span>Team · 已完成</span><span>1h</span></span>
+          </button>
+          <button class="run-item" data-run="tests">
+            <span class="run-title">补充数据库集成测试</span>
+            <span class="run-meta"><span>Solo · 已完成</span><span>昨日</span></span>
+          </button>
+          <button class="run-item" data-run="docs">
+            <span class="run-title">同步 API 与架构文档</span>
+            <span class="run-meta"><span>Solo · 已暂停</span><span>昨日</span></span>
+          </button>
+        </div>
+
+        <div class="sidebar-label" style="margin-top: 22px">工作区</div>
+        <div class="run-list">
+          <button class="run-item">
+            <span class="run-title">E:\awesome_agent</span>
+            <span class="run-meta"><span>main</span><span>clean</span></span>
+          </button>
+        </div>
+
+        <div class="sidebar-footer">
+          <span class="avatar">JL</span>
+          <div>
+            <strong style="display: block; font-size: 12px">JAGGER-L</strong>
+            <span style="font-size: 11px">Local workspace</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div style="display: flex; align-items: center; gap: 10px; min-width: 0">
+            <button
+              class="icon-btn mobile-menu"
+              id="mobile-menu"
+              aria-label="打开导航"
+              title="打开导航"
+            >
+              ☰
+            </button>
+            <div class="run-heading">
+              <h1>构建 Agent 运行监控页面</h1>
+              <div class="run-subtitle">
+                <span class="dot"></span>
+                <span id="run-state">运行中 · Team mode</span>
+                <span>run_8f3a · 2m 14s</span>
+              </div>
+            </div>
+          </div>
+          <div class="top-actions">
+            <button class="ghost-btn" id="export-btn">导出记录</button>
+            <button class="icon-btn" title="更多操作" aria-label="更多操作">•••</button>
+            <button class="danger-btn" id="pause-btn">暂停运行</button>
+          </div>
+        </header>
+
+        <div class="workspace">
+          <div class="content">
+            <section class="summary-grid">
+              <div class="summary-card goal-card">
+                <div class="goal-icon">◎</div>
+                <div>
+                  <div class="summary-label">当前目标</div>
+                  <div class="goal-text">
+                    完成可观察、可追溯的 Agent Team 前端工作台演示
+                  </div>
+                </div>
+              </div>
+              <div class="summary-card">
+                <div class="summary-label">任务进度</div>
+                <div class="metric-value"><span id="done-count">5</span>/8</div>
+                <div class="metric-note">1 项正在验收</div>
+              </div>
+              <div class="summary-card">
+                <div class="summary-label">模型调用</div>
+                <div class="metric-value">18</div>
+                <div class="metric-note">42.6k tokens</div>
+              </div>
+              <div class="summary-card">
+                <div class="summary-label">预估成本</div>
+                <div class="metric-value">$0.84</div>
+                <div class="metric-note">本次运行</div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-header">
+                <h2 class="section-title">Agent Team</h2>
+                <span class="section-note">点击 Agent 查看完整上下文与工具调用</span>
+              </div>
+              <div class="team-board">
+                <div class="team-flow">
+                  <div class="team-row">
+                    <button class="agent-card leader selected" data-agent="leader">
+                      <div class="agent-top">
+                        <div class="agent-name">
+                          <span class="agent-symbol">L</span>
+                          <span>Leader</span>
+                        </div>
+                        <span class="status-pill running">运行中</span>
+                      </div>
+                      <div class="agent-role">规划、协调与最终决策</div>
+                      <div class="agent-foot">
+                        <span>deepseek-v4-pro</span><span>12.4k</span>
+                      </div>
+                    </button>
+                  </div>
+                  <div class="connector"></div>
+                  <div class="team-row">
+                    <button class="agent-card" data-agent="frontend">
+                      <div class="agent-top">
+                        <div class="agent-name">
+                          <span class="agent-symbol">FE</span>
+                          <span>Frontend</span>
+                        </div>
+                        <span class="status-pill running">运行中</span>
+                      </div>
+                      <div class="agent-role">实现界面与交互状态</div>
+                      <div class="agent-foot">
+                        <span>deepseek-v4-flash</span><span>8.1k</span>
+                      </div>
+                    </button>
+                    <button class="agent-card" data-agent="backend">
+                      <div class="agent-top">
+                        <div class="agent-name">
+                          <span class="agent-symbol">BE</span>
+                          <span>Backend</span>
+                        </div>
+                        <span class="status-pill waiting">等待中</span>
+                      </div>
+                      <div class="agent-role">核对 API 与事件契约</div>
+                      <div class="agent-foot">
+                        <span>deepseek-v4-flash</span><span>6.7k</span>
+                      </div>
+                    </button>
+                    <button class="agent-card verifier" data-agent="verifier">
+                      <div class="agent-top">
+                        <div class="agent-name">
+                          <span class="agent-symbol">V</span>
+                          <span>Verifier</span>
+                        </div>
+                        <span class="status-pill verifying">验收中</span>
+                      </div>
+                      <div class="agent-role">独立检查响应式与可追溯性</div>
+                      <div class="agent-foot">
+                        <span>deepseek-v4-flash</span><span>5.2k</span>
+                      </div>
+                    </button>
+                  </div>
+                  <div class="connector"></div>
+                  <div class="team-row">
+                    <button class="agent-card subagent" data-agent="explorer">
+                      <div class="agent-top">
+                        <div class="agent-name">
+                          <span class="agent-symbol">S1</span>
+                          <span>Repo Explorer</span>
+                        </div>
+                      </div>
+                      <div class="agent-role">分析前端信息架构</div>
+                      <div class="agent-foot"><span>独立上下文</span><span>完成</span></div>
+                    </button>
+                    <button class="agent-card subagent" data-agent="a11y">
+                      <div class="agent-top">
+                        <div class="agent-name">
+                          <span class="agent-symbol">S2</span>
+                          <span>Accessibility</span>
+                        </div>
+                      </div>
+                      <div class="agent-role">检查键盘与语义结构</div>
+                      <div class="agent-foot"><span>独立上下文</span><span>完成</span></div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div class="lower-grid">
+              <section class="section">
+                <div class="section-header">
+                  <h2 class="section-title">动态任务</h2>
+                  <span class="section-note">Leader 持有全局 Todo tree</span>
+                </div>
+                <div class="panel">
+                  <div class="panel-toolbar">
+                    <div class="tabs" id="todo-tabs">
+                      <button class="tab active" data-filter="all">全部 8</button>
+                      <button class="tab" data-filter="active">进行中 2</button>
+                      <button class="tab" data-filter="done">已完成 5</button>
+                    </div>
+                    <button class="icon-btn" title="添加任务" aria-label="添加任务">＋</button>
+                  </div>
+                  <div class="todo-list" id="todo-list">
+                    <div class="todo-item" data-state="done">
+                      <span class="todo-check done">✓</span>
+                      <div>
+                        <div class="todo-title">梳理前端展示信息与运行时事件</div>
+                        <div class="todo-meta"><span>Leader</span><span>·</span><span>12m</span></div>
+                      </div>
+                      <span class="tag">已完成</span>
+                    </div>
+                    <div class="todo-item" data-state="done">
+                      <span class="todo-check done">✓</span>
+                      <div>
+                        <div class="todo-title">设计 Agent Team 拓扑与详情面板</div>
+                        <div class="todo-meta"><span>Frontend</span><span>·</span><span>9m</span></div>
+                      </div>
+                      <span class="tag">已完成</span>
+                    </div>
+                    <div class="todo-item" data-state="active">
+                      <span class="todo-check active"></span>
+                      <div>
+                        <div class="todo-title">实现响应式工作台与交互状态</div>
+                        <div class="todo-meta">
+                          <span>Frontend</span><span>·</span><span>64%</span>
+                        </div>
+                        <div class="progress" style="margin-top: 8px"><span></span></div>
+                      </div>
+                      <span class="tag">进行中</span>
+                    </div>
+                    <div class="todo-item" data-state="done">
+                      <span class="todo-check done">✓</span>
+                      <div>
+                        <div class="todo-title">核对 API 字段与事件类型</div>
+                        <div class="todo-meta"><span>Backend</span><span>·</span><span>6m</span></div>
+                      </div>
+                      <span class="tag">已完成</span>
+                    </div>
+                    <div class="todo-item" data-state="active">
+                      <span class="todo-check active"></span>
+                      <div>
+                        <div class="todo-title">验证桌面与移动端布局</div>
+                        <div class="todo-meta"><span>Verifier</span><span>·</span><span>执行中</span></div>
+                      </div>
+                      <span class="tag verification">验收中</span>
+                    </div>
+                    <div class="todo-item" data-state="done">
+                      <span class="todo-check done">✓</span>
+                      <div>
+                        <div class="todo-title">检查危险命令审批流程</div>
+                        <div class="todo-meta"><span>Verifier</span><span>·</span><span>通过</span></div>
+                      </div>
+                      <span class="tag">已完成</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section">
+                <div class="section-header">
+                  <h2 class="section-title">实时追踪</h2>
+                  <span class="section-note">按序列持久化</span>
+                </div>
+                <div class="panel">
+                  <div class="panel-toolbar">
+                    <div class="tabs" id="event-tabs">
+                      <button class="tab active" data-event="all">全部</button>
+                      <button class="tab" data-event="tool">工具</button>
+                      <button class="tab" data-event="message">消息</button>
+                    </div>
+                    <span style="color: var(--faint); font-size: 11px">SSE live</span>
+                  </div>
+                  <div class="event-list" id="event-list">
+                    <div class="event" data-type="message">
+                      <span class="event-time">14:28</span>
+                      <div class="event-line">
+                        <span class="event-type">message</span>
+                        <strong>Verifier → Leader</strong>
+                        <div class="event-detail">桌面布局通过，正在检查 390px 视口。</div>
+                      </div>
+                    </div>
+                    <div class="event" data-type="tool">
+                      <span class="event-time">14:27</span>
+                      <div class="event-line">
+                        <span class="event-type">tool</span>
+                        <strong>Frontend · browser.screenshot</strong>
+                        <div class="event-detail">已生成 desktop-workspace.png</div>
+                      </div>
+                    </div>
+                    <div class="event" data-type="message">
+                      <span class="event-time">14:26</span>
+                      <div class="event-line">
+                        <span class="event-type">message</span>
+                        <strong>Backend → Frontend</strong>
+                        <div class="event-detail">Agent 模型字段为 model，事件游标使用 sequence。</div>
+                      </div>
+                    </div>
+                    <div class="event" data-type="tool">
+                      <span class="event-time">14:24</span>
+                      <div class="event-line">
+                        <span class="event-type">approval</span>
+                        <strong>等待命令批准</strong>
+                        <div class="event-detail">npm install 被策略分类为 ASK。</div>
+                      </div>
+                    </div>
+                    <div class="event" data-type="message">
+                      <span class="event-time">14:22</span>
+                      <div class="event-line">
+                        <span class="event-type">agent</span>
+                        <strong>Leader 创建 Verifier</strong>
+                        <div class="event-detail">profile=verifier · model=deepseek-v4-flash</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <aside class="detail-panel">
+            <div class="detail-heading">
+              <div>
+                <h2 id="detail-name">Leader</h2>
+                <p id="detail-role">规划、协调与最终决策</p>
+              </div>
+              <span class="status-pill running" id="detail-status">运行中</span>
+            </div>
+
+            <section class="detail-section">
+              <h3 class="detail-title">Agent 信息</h3>
+              <div class="kv"><span>类型</span><strong id="detail-kind">Leader</strong></div>
+              <div class="kv"><span>模型</span><strong id="detail-model">deepseek-v4-pro</strong></div>
+              <div class="kv"><span>上下文</span><strong id="detail-context">12.4k / 64k</strong></div>
+              <div class="kv"><span>工作区</span><strong id="detail-workspace">main</strong></div>
+            </section>
+
+            <section class="detail-section">
+              <h3 class="detail-title">最近对话</h3>
+              <div class="conversation" id="conversation">
+                <div class="message">
+                  <strong>User</strong>
+                  生成一个不连接后端的 Agent Team 前端演示。
+                </div>
+                <div class="message">
+                  <strong>Leader</strong>
+                  任务具备 UI、契约核对和独立验收三个工作流，启用 Team mode。
+                </div>
+              </div>
+            </section>
+
+            <section class="detail-section">
+              <h3 class="detail-title">当前工具</h3>
+              <div class="tool-call">
+                <div class="tool-head">
+                  <span>exec_command</span>
+                  <span style="color: var(--yellow)">ASK</span>
+                </div>
+                <div class="tool-body">
+                  npm install lucide<br />
+                  workspace: E:\awesome_agent
+                </div>
+              </div>
+              <div class="approval-banner" id="approval-banner">
+                <strong>需要你的批准</strong>
+                该命令将修改依赖文件。演示模式不会执行真实命令。
+                <div class="approval-actions">
+                  <button class="primary-btn" id="approve-btn">批准一次</button>
+                  <button class="ghost-btn" id="deny-btn">拒绝</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="detail-section">
+              <h3 class="detail-title">产物</h3>
+              <div class="kv"><span>HTML</span><strong>demo/index.html</strong></div>
+              <div class="kv"><span>截图</span><strong>desktop-workspace.png</strong></div>
+              <div class="kv"><span>验证</span><strong>7 checks passed</strong></div>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="modal">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <h2 id="modal-title">批准命令执行</h2>
+        <p>
+          Frontend Agent 请求在隔离工作区中运行以下命令。此页面仅演示审批交互，
+          不会执行任何真实操作。
+        </p>
+        <div class="command">npm install lucide</div>
+        <div class="modal-actions">
+          <button class="ghost-btn" data-close-modal>取消</button>
+          <button class="danger-btn" id="confirm-approval">批准一次</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+
+    <script>
+      const agents = {
+        leader: {
+          name: "Leader",
+          role: "规划、协调与最终决策",
+          kind: "Leader",
+          model: "deepseek-v4-pro",
+          context: "12.4k / 64k",
+          workspace: "main",
+          status: "运行中",
+          statusClass: "running",
+          messages: [
+            ["User", "生成一个不连接后端的 Agent Team 前端演示。"],
+            ["Leader", "任务具备 UI、契约核对和独立验收三个工作流，启用 Team mode。"],
+          ],
+        },
+        frontend: {
+          name: "Frontend",
+          role: "实现界面与交互状态",
+          kind: "Teammate",
+          model: "deepseek-v4-flash",
+          context: "8.1k / 64k",
+          workspace: "worktree/fe-214",
+          status: "运行中",
+          statusClass: "running",
+          messages: [
+            ["Leader", "实现高密度运行工作台，保持移动端可用。"],
+            ["Frontend", "已完成 Team 拓扑和 Todo 面板，正在处理审批交互。"],
+          ],
+        },
+        backend: {
+          name: "Backend",
+          role: "核对 API 与事件契约",
+          kind: "Teammate",
+          model: "deepseek-v4-flash",
+          context: "6.7k / 64k",
+          workspace: "worktree/be-182",
+          status: "等待中",
+          statusClass: "waiting",
+          messages: [
+            ["Leader", "核对前端模拟数据是否符合现有 Pydantic 模型。"],
+            ["Backend", "字段已核对。Agent.model 和 RuntimeEvent.sequence 应直接展示。"],
+          ],
+        },
+        verifier: {
+          name: "Verifier",
+          role: "独立检查响应式与可追溯性",
+          kind: "Verifier",
+          model: "deepseek-v4-flash",
+          context: "5.2k / 64k",
+          workspace: "read-only",
+          status: "验收中",
+          statusClass: "verifying",
+          messages: [
+            ["Leader", "独立验证桌面和移动端，并检查审批流程。"],
+            ["Verifier", "桌面布局通过。移动端导航和溢出检查进行中。"],
+          ],
+        },
+        explorer: {
+          name: "Repo Explorer",
+          role: "分析前端信息架构",
+          kind: "Subagent",
+          model: "deepseek-v4-flash",
+          context: "2.9k / 64k",
+          workspace: "shared read-only",
+          status: "已完成",
+          statusClass: "running",
+          messages: [
+            ["Frontend", "整理运行时最重要的可视化信息。"],
+            ["Repo Explorer", "建议首屏展示目标、Team 拓扑、Todo 和事件流。"],
+          ],
+        },
+        a11y: {
+          name: "Accessibility",
+          role: "检查键盘与语义结构",
+          kind: "Subagent",
+          model: "deepseek-v4-flash",
+          context: "2.1k / 64k",
+          workspace: "shared read-only",
+          status: "已完成",
+          statusClass: "running",
+          messages: [
+            ["Frontend", "检查按钮语义、焦点和移动端导航。"],
+            ["Accessibility", "交互控件均使用 button，关键图标已提供 aria-label。"],
+          ],
+        },
+      };
+
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+      const toast = $("#toast");
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("show");
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => toast.classList.remove("show"), 2200);
+      }
+
+      function selectAgent(id) {
+        const agent = agents[id];
+        if (!agent) return;
+        $$(".agent-card").forEach((card) =>
+          card.classList.toggle("selected", card.dataset.agent === id),
+        );
+        $("#detail-name").textContent = agent.name;
+        $("#detail-role").textContent = agent.role;
+        $("#detail-kind").textContent = agent.kind;
+        $("#detail-model").textContent = agent.model;
+        $("#detail-context").textContent = agent.context;
+        $("#detail-workspace").textContent = agent.workspace;
+        const status = $("#detail-status");
+        status.textContent = agent.status;
+        status.className = `status-pill ${agent.statusClass}`;
+        $("#conversation").innerHTML = agent.messages
+          .map(
+            ([author, message]) =>
+              `<div class="message"><strong>${author}</strong>${message}</div>`,
+          )
+          .join("");
+      }
+
+      $$(".agent-card").forEach((card) =>
+        card.addEventListener("click", () => selectAgent(card.dataset.agent)),
+      );
+
+      $$("#todo-tabs .tab").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          $$("#todo-tabs .tab").forEach((item) => item.classList.remove("active"));
+          tab.classList.add("active");
+          const filter = tab.dataset.filter;
+          $$("#todo-list .todo-item").forEach((item) => {
+            item.hidden = filter !== "all" && item.dataset.state !== filter;
+          });
+        });
+      });
+
+      $$("#event-tabs .tab").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          $$("#event-tabs .tab").forEach((item) => item.classList.remove("active"));
+          tab.classList.add("active");
+          const filter = tab.dataset.event;
+          $$("#event-list .event").forEach((item) => {
+            item.hidden = filter !== "all" && item.dataset.type !== filter;
+          });
+        });
+      });
+
+      const modal = $("#modal");
+      $("#approve-btn").addEventListener("click", () => modal.classList.add("open"));
+      $$("[data-close-modal]").forEach((button) =>
+        button.addEventListener("click", () => modal.classList.remove("open")),
+      );
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) modal.classList.remove("open");
+      });
+      $("#confirm-approval").addEventListener("click", () => {
+        modal.classList.remove("open");
+        $("#approval-banner").innerHTML =
+          "<strong style='color: var(--green)'>已批准</strong>命令已加入隔离执行队列。";
+        showToast("已批准本次命令");
+      });
+      $("#deny-btn").addEventListener("click", () => {
+        $("#approval-banner").innerHTML =
+          "<strong style='color: var(--red)'>已拒绝</strong>Agent 将调整实现方案。";
+        showToast("已拒绝命令");
+      });
+
+      let paused = false;
+      $("#pause-btn").addEventListener("click", (event) => {
+        paused = !paused;
+        event.currentTarget.textContent = paused ? "继续运行" : "暂停运行";
+        event.currentTarget.className = paused ? "primary-btn" : "danger-btn";
+        $("#run-state").textContent = paused ? "已暂停 · Team mode" : "运行中 · Team mode";
+        $(".dot").style.background = paused ? "var(--yellow)" : "var(--green)";
+        showToast(paused ? "运行已暂停" : "运行已继续");
+      });
+
+      $("#export-btn").addEventListener("click", () =>
+        showToast("演示记录已导出为 JSON"),
+      );
+      $("#new-run").addEventListener("click", () =>
+        showToast("演示模式：新建任务面板"),
+      );
+
+      $$(".run-item[data-run]").forEach((item) => {
+        item.addEventListener("click", () => {
+          $$(".run-item[data-run]").forEach((run) => run.classList.remove("active"));
+          item.classList.add("active");
+          showToast(`已切换到：${$(".run-title", item).textContent}`);
+          if (window.innerWidth <= 760) $("#sidebar").classList.remove("open");
+        });
+      });
+
+      $("#mobile-menu").addEventListener("click", () =>
+        $("#sidebar").classList.toggle("open"),
+      );
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          modal.classList.remove("open");
+          $("#sidebar").classList.remove("open");
+        }
+      });
+    </script>
+  </body>
+</html>

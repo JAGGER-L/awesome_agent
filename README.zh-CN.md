@@ -63,6 +63,17 @@ docker compose up -d postgres
 `AWESOME_AGENT_MEM0_ENABLED=true` 开启，Mem0 还需要
 `AWESOME_AGENT_MEM0_API_KEY`。
 
+## 前端演示
+
+静态演示页面不连接后端：
+
+```powershell
+.\.venv\Scripts\python.exe -m http.server 4173 -d demo
+```
+
+打开 `http://127.0.0.1:4173`。页面包含模拟的 Agent 拓扑、Todo、事件追踪、
+Agent 上下文、命令审批、产物和移动端导航。
+
 本地 PostgreSQL 默认配置：
 
 ```text
@@ -80,6 +91,7 @@ container port: 5432
 - [设计文档](docs/design-docs/index.md)
 - [工程 Harness](docs/engineering/engineering-harness.md)
 - [运行时 Agent Harness](docs/design-docs/runtime-agent-harness.md)
+- [前端演示规范](docs/FRONTEND.md)
 - [项目治理](docs/project-governance/README.md)
 - [产品规格](docs/product-specs/local-coding-agent.md)
 - [质量](docs/QUALITY_SCORE.md)

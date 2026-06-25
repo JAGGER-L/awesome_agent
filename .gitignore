@@ -37,3 +37,7 @@ Thumbs.db
 .awesome-agent/
 USER.md
 MEMORY.md
+
+# Local verification artifacts
+output/
+.playwright-cli/

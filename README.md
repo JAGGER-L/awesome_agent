@@ -65,6 +65,18 @@ them locally with `AWESOME_AGENT_BUILTIN_MEMORY_ENABLED=true` and
 `AWESOME_AGENT_MEM0_ENABLED=true`; Mem0 also requires
 `AWESOME_AGENT_MEM0_API_KEY`.
 
+## Frontend Demo
+
+The standalone interface demonstration does not connect to the backend:
+
+```powershell
+.\.venv\Scripts\python.exe -m http.server 4173 -d demo
+```
+
+Open `http://127.0.0.1:4173`. The demo includes mock Agent topology, Todos,
+event trace, per-Agent context, command approval, artifacts, and responsive
+mobile navigation.
+
 Local PostgreSQL defaults:
 
 ```text
@@ -82,6 +94,7 @@ container port: 5432
 - [Design documents](docs/design-docs/index.md)
 - [Engineering harness](docs/engineering/engineering-harness.md)
 - [Runtime agent harness](docs/design-docs/runtime-agent-harness.md)
+- [Frontend demo specification](docs/FRONTEND.md)
 - [Project governance](docs/project-governance/README.md)
 - [Product specification](docs/product-specs/local-coding-agent.md)
 - [Quality](docs/QUALITY_SCORE.md)
