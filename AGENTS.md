@@ -24,6 +24,9 @@ work.
 - Keep development-agent plans, handoffs, and session state under `.codex/`;
   never commit them.
 - Default to `WIP = 1`: finish and verify one plan milestone at a time.
+- Commit each completed logical change as its own minimal, reviewable commit.
+  A conversation may contain multiple commits; do not wait for the conversation
+  to end when an independent change is already complete and verified.
 - Keep changes within the active milestone's scope and exclusions.
 - Do not weaken acceptance criteria to make work pass.
 - Do not mark implementation complete without recorded verification evidence.
@@ -33,13 +36,10 @@ work.
   `--trusted-local` consent.
 - Team-mode work requires an independent Verifier before the Leader may finish.
 - Update `README.md` and `README.zh-CN.md` together in the same change.
-- Every code, schema, configuration, or feature change must update the
-  documentation identified by `docs/engineering/documentation-sync.md`, or
-  record `Documentation Impact: none` with a concrete reason in the local plan.
-- Run `scripts/check_docs_sync.py` before completion. Do not bypass the check by
-  making unrelated documentation edits.
-- Treat the local documentation check as mandatory even when GitHub branch
-  protection is unavailable for the repository plan.
+- After changing code, consider whether behavior, interfaces, configuration, or
+  architecture described in the docs also changed. Update the relevant docs
+  when needed; bug fixes and internal refactors do not require artificial
+  documentation edits.
 
 ## Validation Order
 
@@ -74,7 +74,6 @@ Before ending:
 - `docs/engineering/execution-plans.md`: local execution-plan rules.
 - `docs/engineering/engineering-harness.md`: rules for repository agents.
 - `docs/design-docs/runtime-agent-harness.md`: product runtime harness.
-- `docs/engineering/documentation-sync.md`: documentation impact matrix.
 - `docs/QUALITY_SCORE.md`: quality gates and current score.
 - `docs/RELIABILITY.md`: failure and recovery requirements.
 - `docs/SECURITY.md`: sandbox, approval, and data-safety rules.

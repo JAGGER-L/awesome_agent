@@ -51,6 +51,5 @@ state.
 
 When the product modifies a user's project, it should detect the target
 project's documentation conventions and include documentation work in its Todo
-tree. This repository's own mapping in
-`docs/engineering/documentation-sync.md` is an engineering-harness rule and is
-not automatically imposed on unrelated user repositories.
+tree when the implementation changes documented behavior. This repository's
+Codex rules are not automatically imposed on unrelated user repositories.

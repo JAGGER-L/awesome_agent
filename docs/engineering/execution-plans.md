@@ -19,7 +19,6 @@ sessions. Every active plan records:
 - scope and explicit non-goals
 - milestones and WIP status
 - validation commands and evidence
-- documentation impact
 - risks, blockers, handoff, and next action
 
 Only one milestone may be in progress. Completed plans move from `active/` to

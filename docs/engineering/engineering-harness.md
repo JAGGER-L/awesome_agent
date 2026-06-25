@@ -17,7 +17,7 @@ read repository rules and local state
 -> verify environment and baseline
 -> select one scoped milestone
 -> implement the minimum coherent change
--> update affected documentation
+-> update documentation when behavior or architecture changed
 -> run layered validation
 -> repair from evidence
 -> persist durable decisions
@@ -33,7 +33,7 @@ read repository rules and local state
 | State | Git history, durable decisions | `.codex/exec-plans/` |
 | Scope | plan format, WIP=1 rule | active local milestone |
 | Feedback | lint, types, tests, startup, E2E | raw command output |
-| Documentation | impact matrix, sync checker | impact declaration |
+| Documentation | architecture and topic documents | agent judgment |
 
 ## Mandatory Protocol
 
@@ -43,22 +43,24 @@ read repository rules and local state
 2. Inspect Git status and recent history.
 3. Run health and baseline checks.
 4. Record baseline failures before feature work.
-5. Confirm scope, exclusions, validation, and documentation impact.
+5. Confirm scope, exclusions, and validation.
 
 ### Execute
 
 1. Keep WIP at one milestone.
 2. Make the minimum coherent change.
-3. Update required documentation in the same change.
+3. Update documentation when implementation changes make existing descriptions
+   inaccurate or incomplete.
 4. Run targeted checks after each logical unit.
-5. Record out-of-scope findings instead of expanding scope silently.
-6. Isolate parallel writes with worktrees or equivalent boundaries.
+5. Commit each completed logical unit separately once its checks pass.
+6. Record out-of-scope findings instead of expanding scope silently.
+7. Isolate parallel writes with worktrees or equivalent boundaries.
 
 ### Verify
 
 1. Run formatting and lint.
 2. Run type checking.
-3. Run unit and structural checks, including documentation synchronization.
+3. Run unit and structural checks.
 4. Run integration, startup, and E2E checks when applicable.
 5. Persist commands, results, and unverified paths in the local plan.
 6. Never report an unexecuted check as passing.
@@ -77,6 +79,3 @@ Recurring review findings should become executable checks rather than longer
 instructions. Remove duplicate, obsolete, unmeasured, or conflicting rules.
 Track unresolved repository-level gaps in
 `docs/project-governance/tech-debt-tracker.md`.
-
-Local gates remain mandatory regardless of whether the GitHub account can make
-the corresponding Actions check a protected-branch requirement.
