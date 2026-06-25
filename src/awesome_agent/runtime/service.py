@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
@@ -24,11 +25,13 @@ class RuntimeService:
         events: EventStream,
         artifacts: LocalArtifactStore,
         model_resolver: RoleModelResolver,
+        event_poll_interval: float = 0.5,
     ) -> None:
         self.repository = repository
         self.events = events
         self.artifacts = artifacts
         self.model_resolver = model_resolver
+        self.event_poll_interval = event_poll_interval
 
     async def create_run(self, goal: str) -> Run:
         run = Run(goal=goal, status=RunStatus.RUNNING)
@@ -125,8 +128,14 @@ class RuntimeService:
         for event in history:
             cursor = event.sequence
             yield event
-        async for event in self.events.subscribe(run_id, after_sequence=cursor):
-            yield event
+        while True:
+            pending = await self.list_events(run_id, after_sequence=cursor)
+            if pending:
+                for event in pending:
+                    cursor = event.sequence
+                    yield event
+                continue
+            await asyncio.sleep(self.event_poll_interval)
 
     def list_artifacts(self, run_id: UUID) -> list[ArtifactMetadata]:
         return self.artifacts.list_for_run(run_id)
