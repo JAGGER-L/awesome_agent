@@ -12,6 +12,7 @@ from awesome_agent.modeling import (
     AssistantMessage,
     ContinuationState,
     ModelRequest,
+    ProviderProtocolError,
     StopReason,
     ToolCall,
     ToolResultMessage,
@@ -170,3 +171,18 @@ async def test_openai_inserts_reasoning_items_before_assistant_tool_call() -> No
     input_items = call.kwargs["input"]
     assert input_items[1]["type"] == "reasoning"
     assert input_items[2]["type"] == "function_call"
+
+
+@pytest.mark.asyncio
+async def test_openai_complete_raises_classified_protocol_error() -> None:
+    create = AsyncMock(side_effect=RuntimeError("malformed provider response"))
+    client = cast(
+        AsyncOpenAI,
+        cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create))),
+    )
+    provider = OpenAIProvider(api_key="test", model="test-model", client=client)
+
+    with pytest.raises(ProviderProtocolError) as captured:
+        await provider.complete(ModelRequest(messages=[UserMessage(content="inspect")]))
+
+    assert captured.value.info.provider == "openai"
