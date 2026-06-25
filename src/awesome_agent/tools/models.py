@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,6 +19,7 @@ class ToolSpec(BaseModel):
     required_capabilities: set[str] = Field(default_factory=set)
     sandbox_required: bool = True
     timeout_seconds: float = Field(default=60, gt=0)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolProgress(BaseModel):
@@ -34,6 +36,7 @@ class ToolInvocation(BaseModel):
     profile: str
     capabilities: set[str] = Field(default_factory=set)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    workspace: Path | None = None
     approval_granted: bool = False
 
 
