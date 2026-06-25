@@ -21,6 +21,9 @@ class FakeRepository:
     async def get_run(self, _: UUID) -> Run:
         return self.run
 
+    async def list_agents(self, _: UUID) -> list[Any]:
+        return []
+
 
 class FakeDispatcher:
     def __init__(self, lease: RunLease | None) -> None:
@@ -47,6 +50,9 @@ class FakeDispatcher:
 
     async def mark_recovery_required(self, lease: RunLease, **kwargs: object) -> None:
         self.calls.append(("recovery", kwargs))
+
+    async def fail_execution(self, lease: RunLease, **kwargs: object) -> None:
+        self.calls.append(("failed", kwargs))
 
     async def recover_expired(self, **kwargs: object) -> int:
         self.calls.append(("recover_expired", kwargs))

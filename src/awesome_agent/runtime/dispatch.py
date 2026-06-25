@@ -62,6 +62,7 @@ class RunDispatcher(Protocol):
         *,
         event_type: EventType,
         payload: dict[str, object],
+        transition_id: str | None = None,
     ) -> RuntimeEvent:
         """Append an event only while the supplied lease is current."""
         ...
@@ -113,8 +114,20 @@ class RunDispatcher(Protocol):
         *,
         result_summary: str,
         recovered: bool = False,
+        completion_kind: str = "runtime_probe",
+        goal_executed: bool = False,
+        result_text: str | None = None,
     ) -> None:
         """Commit successful terminal projection and release ownership."""
+        ...
+
+    async def fail_execution(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        """Commit a normal permanent execution failure."""
         ...
 
     async def mark_recovery_required(

@@ -24,6 +24,7 @@ class RuntimeRepository(Protocol):
         *,
         run: Run,
         leader: Agent,
+        todo: TodoItem | None,
         events: list[RuntimeEvent],
         reservation_id: UUID,
     ) -> None:
@@ -88,6 +89,7 @@ class InMemoryRuntimeRepository(RuntimeRepository):
         *,
         run: Run,
         leader: Agent,
+        todo: TodoItem | None,
         events: list[RuntimeEvent],
         reservation_id: UUID,
     ) -> None:
@@ -99,6 +101,8 @@ class InMemoryRuntimeRepository(RuntimeRepository):
         )
         self._runs[run.id] = run
         self._agents[run.id].append(leader)
+        if todo is not None:
+            self._todos[run.id].append(todo)
         self._events[run.id].extend(events)
         await self._reservations.update(published)
 

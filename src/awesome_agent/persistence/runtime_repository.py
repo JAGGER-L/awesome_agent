@@ -48,6 +48,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
         *,
         run: Run,
         leader: Agent,
+        todo: TodoItem | None,
         events: list[RuntimeEvent],
         reservation_id: UUID,
     ) -> None:
@@ -63,6 +64,8 @@ class PostgresRuntimeRepository(RuntimeRepository):
             session.add(_run_to_record(run))
             await session.flush()
             session.add(_agent_to_record(leader))
+            if todo is not None:
+                session.add(_todo_to_record(todo))
             session.add_all([_event_to_record(event) for event in events])
             reservation.status = IntakeReservationStatus.PUBLISHED.value
             reservation.updated_at = run.updated_at
@@ -330,6 +333,24 @@ def _todo_from_record(record: TodoRecord) -> TodoItem:
         revision=record.revision,
         created_at=record.created_at,
         updated_at=record.updated_at,
+    )
+
+
+def _todo_to_record(todo: TodoItem) -> TodoRecord:
+    return TodoRecord(
+        id=todo.id,
+        run_id=todo.run_id,
+        parent_id=todo.parent_id,
+        title=todo.title,
+        description=todo.description,
+        status=todo.status.value,
+        primary_owner_id=todo.primary_owner_id,
+        collaborator_ids=[str(value) for value in todo.collaborator_ids],
+        acceptance_criteria=todo.acceptance_criteria,
+        blocker=todo.blocker,
+        revision=todo.revision,
+        created_at=todo.created_at,
+        updated_at=todo.updated_at,
     )
 
 

@@ -10,15 +10,23 @@ from datetime import timedelta
 from time import monotonic
 from uuid import UUID, uuid4
 
-from awesome_agent.domain.enums import ExecutionKind
+from awesome_agent.domain.enums import EventType, ExecutionKind
 from awesome_agent.domain.models import Run, RunLease
 from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
     IncompatibleGraphError,
     LeaseLost,
+    PermanentExecutionError,
     RunDispatcher,
 )
+from awesome_agent.runtime.graphs import (
+    READ_ONLY_CODING_GRAPH,
+    READ_ONLY_CODING_VERSION,
+    RUNTIME_PROBE_GRAPH,
+    RUNTIME_PROBE_VERSION,
+)
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph, RuntimeProbeState
+from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCodingGraph
 from awesome_agent.runtime.repository import RuntimeRepository
 
 
@@ -40,6 +48,7 @@ class DurableWorker:
         dispatcher: RunDispatcher,
         repository: RuntimeRepository,
         probe_graph: RuntimeProbeGraph,
+        coding_graph: ReadOnlyCodingGraph | None = None,
         config: WorkerConfig,
         worker_id: UUID | None = None,
         worker_name: str | None = None,
@@ -48,6 +57,7 @@ class DurableWorker:
         self.dispatcher = dispatcher
         self.repository = repository
         self.probe_graph = probe_graph
+        self.coding_graph = coding_graph
         self.config = config
         self.worker_id = worker_id or uuid4()
         self.worker_name = worker_name or default_worker_name()
@@ -70,12 +80,20 @@ class DurableWorker:
                 await self.sleep(self.config.poll_interval)
 
     async def run_once(self) -> bool:
+        graph_identities = {
+            (RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION),
+        }
+        execution_kinds = {ExecutionKind.RUNTIME_PROBE}
+        if self.coding_graph is not None:
+            graph_identities.add((READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION))
+            execution_kinds.add(ExecutionKind.CODING)
         lease = await self.dispatcher.claim_next(
             worker_id=self.worker_id,
             worker_name=self.worker_name,
             lease_duration=self.config.lease_duration,
             max_attempts=self.config.max_attempts,
-            execution_kinds=frozenset({ExecutionKind.RUNTIME_PROBE}),
+            execution_kinds=frozenset(execution_kinds),
+            graph_identities=frozenset(graph_identities),
         )
         if lease is None:
             return False
@@ -85,25 +103,32 @@ class DurableWorker:
     async def _execute_claim(self, lease: RunLease) -> None:
         run = await self.repository.get_run(lease.run_id)
         try:
-            self._validate_probe_run(run)
+            self._validate_run(run)
             await self.dispatcher.start_execution(
                 lease,
                 graph_name=run.graph_name or "",
                 graph_version=run.graph_version or 0,
             )
             state, recovered = await self._execute_with_heartbeat(run, lease)
+            is_coding = run.execution_kind is ExecutionKind.CODING
+            final_answer = state.get("final_answer") if is_coding else None
             await self.dispatcher.complete_execution(
                 lease,
                 result_summary=state.get(
                     "result_summary",
-                    "Durable runtime probe completed.",
+                    "Execution completed.",
                 ),
                 recovered=recovered,
+                completion_kind=("read_only_coding" if is_coding else "runtime_probe"),
+                goal_executed=is_coding,
+                result_text=(final_answer if isinstance(final_answer, str) else None),
             )
         except LeaseLost:
             return
         except (IncompatibleGraphError, CorruptRuntimeStateError) as error:
             await self._mark_recovery_if_owned(lease, str(error))
+        except PermanentExecutionError as error:
+            await self._fail_if_owned(lease, str(error))
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -113,14 +138,14 @@ class DurableWorker:
         self,
         run: Run,
         lease: RunLease,
-    ) -> tuple[RuntimeProbeState, bool]:
+    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState, bool]:
         lease_lost = asyncio.Event()
         heartbeat = asyncio.create_task(
             self._heartbeat_loop(lease, lease_lost),
             name=f"heartbeat:{lease.run_id}",
         )
         graph_task = asyncio.create_task(
-            self.probe_graph.execute(run),
+            self._execute_graph(run, lease),
             name=f"graph:{lease.run_id}",
         )
         stop_task = asyncio.create_task(
@@ -211,12 +236,52 @@ class DurableWorker:
         except LeaseLost:
             return
 
-    @staticmethod
-    def _validate_probe_run(run: Run) -> None:
-        if run.execution_kind is not ExecutionKind.RUNTIME_PROBE:
-            raise IncompatibleGraphError(
-                f"Worker cannot execute kind {run.execution_kind.value}."
+    async def _fail_if_owned(self, lease: RunLease, reason: str) -> None:
+        try:
+            await self.dispatcher.fail_execution(lease, reason=reason)
+        except LeaseLost:
+            return
+
+    def _validate_run(self, run: Run) -> None:
+        if run.execution_kind is ExecutionKind.CODING and self.coding_graph is None:
+            raise IncompatibleGraphError("Worker has no Coding graph configured.")
+
+    async def _execute_graph(
+        self,
+        run: Run,
+        lease: RunLease,
+    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState, bool]:
+        if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
+            return await self.probe_graph.execute(run)
+        if run.execution_kind is ExecutionKind.CODING and self.coding_graph is not None:
+            agents = await self.repository.list_agents(run.id)
+            leader = next(
+                (agent for agent in agents if agent.parent_agent_id is None),
+                None,
             )
+            if leader is None:
+                raise CorruptRuntimeStateError("Coding Run has no Leader.")
+
+            async def emit(
+                event_type: EventType,
+                payload: dict[str, object],
+                transition_id: str,
+            ) -> None:
+                await self.dispatcher.append_fenced_event(
+                    lease,
+                    event_type=event_type,
+                    payload=payload,
+                    transition_id=transition_id,
+                )
+
+            return await self.coding_graph.execute(
+                run,
+                leader,
+                event_sink=emit,
+            )
+        raise IncompatibleGraphError(
+            f"Worker cannot execute kind {run.execution_kind.value}."
+        )
 
 
 async def _consume_cancel(task: asyncio.Task[object]) -> None:

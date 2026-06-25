@@ -10,7 +10,9 @@ from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
+from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
+from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.settings import Settings
 
@@ -19,12 +21,27 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     configured = settings or Settings()
     engine = create_engine(configured.database_url)
     sessions = create_session_factory(engine)
+    providers = ModelProviderFactory(configured)
     async with checkpoint_saver(configured.checkpoint_database_url) as saver:
         await saver.setup()
+        coding_graph = (
+            ReadOnlyCodingGraph(
+                saver,
+                provider_resolver=providers.create,
+                max_model_turns=configured.max_model_turns,
+                max_tool_calls=configured.max_tool_calls_per_run,
+                max_parallel_tools=configured.max_parallel_read_tools,
+                recursion_limit=configured.agent_graph_recursion_limit,
+                no_progress_turns=configured.no_progress_turns,
+            )
+            if providers.coding_available
+            else None
+        )
         worker = DurableWorker(
             dispatcher=PostgresRunDispatcher(sessions),
             repository=PostgresRuntimeRepository(sessions),
             probe_graph=RuntimeProbeGraph(saver),
+            coding_graph=coding_graph,
             config=WorkerConfig(
                 lease_duration=timedelta(seconds=configured.lease_duration_seconds),
                 heartbeat_interval=timedelta(

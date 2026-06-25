@@ -108,6 +108,7 @@ async def test_repository_reservation_and_run_round_trip(tmp_path: Path) -> None
     await runtime.publish_intake(
         run=run,
         leader=leader,
+        todo=None,
         events=events,
         reservation_id=reservation.id,
     )

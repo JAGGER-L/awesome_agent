@@ -110,7 +110,8 @@ async def test_intake_publishes_queued_run_after_worktree_is_ready(
     assert run.workspace_path is not None and run.workspace_path.is_dir()
     assert await _git(run.workspace_path, "rev-parse", "HEAD") == run.base_commit
     assert len(await runtime.list_agents(run.id)) == 1
-    assert [event.sequence for event in await runtime.list_events(run.id)] == [1, 2]
+    assert [event.sequence for event in await runtime.list_events(run.id)] == [1, 2, 3]
+    assert len(await runtime.list_todos(run.id)) == 1
     assert event_stream.history(run.id) == await runtime.list_events(run.id)
     assert await reservations.list_incomplete() == []
 

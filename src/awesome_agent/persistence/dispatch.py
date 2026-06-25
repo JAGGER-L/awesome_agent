@@ -15,7 +15,7 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import RunLease, RuntimeEvent
-from awesome_agent.persistence.models import RunRecord, RuntimeEventRecord
+from awesome_agent.persistence.models import RunRecord, RuntimeEventRecord, TodoRecord
 from awesome_agent.runtime.dispatch import LeaseLost, RunDispatcher
 
 
@@ -124,10 +124,17 @@ class PostgresRunDispatcher(RunDispatcher):
         *,
         event_type: EventType,
         payload: dict[str, object],
+        transition_id: str | None = None,
     ) -> RuntimeEvent:
         async with self._sessions.begin() as session:
             record, _ = await _locked_live_lease(session, lease)
-            return await _append_event(session, record, event_type, payload)
+            return await _append_event(
+                session,
+                record,
+                event_type,
+                payload,
+                transition_id=transition_id,
+            )
 
     async def release_to_queue(
         self,
@@ -281,12 +288,22 @@ class PostgresRunDispatcher(RunDispatcher):
         *,
         result_summary: str,
         recovered: bool = False,
+        completion_kind: str = "runtime_probe",
+        goal_executed: bool = False,
+        result_text: str | None = None,
     ) -> None:
         async with self._sessions.begin() as session:
             record, _ = await _locked_live_lease(session, lease)
             record.status = RunStatus.COMPLETED.value
             record.dispatch_status = DispatchStatus.TERMINAL.value
             record.last_release_reason = "graph completed"
+            record.result_text = result_text
+            if completion_kind == "read_only_coding":
+                for todo in await session.scalars(
+                    select(TodoRecord).where(TodoRecord.run_id == record.id)
+                ):
+                    todo.status = "done"
+                    todo.updated_at = record.updated_at
             _clear_lease(record)
             await _append_event(
                 session,
@@ -294,8 +311,37 @@ class PostgresRunDispatcher(RunDispatcher):
                 (EventType.GRAPH_RECOVERED if recovered else EventType.GRAPH_COMPLETED),
                 {
                     "result_summary": result_summary,
-                    "completion_kind": "runtime_probe",
-                    "goal_executed": False,
+                    "completion_kind": completion_kind,
+                    "goal_executed": goal_executed,
+                },
+            )
+
+    async def fail_execution(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            record, _ = await _locked_live_lease(session, lease)
+            record.status = RunStatus.FAILED.value
+            record.dispatch_status = DispatchStatus.TERMINAL.value
+            record.last_release_reason = reason
+            record.last_dispatch_error = reason
+            for todo in await session.scalars(
+                select(TodoRecord).where(TodoRecord.run_id == record.id)
+            ):
+                todo.status = "blocked"
+                todo.blocker = reason
+            _clear_lease(record)
+            await _append_event(
+                session,
+                record,
+                EventType.RUN_STATUS_CHANGED,
+                {
+                    "status": RunStatus.FAILED.value,
+                    "dispatch_status": DispatchStatus.TERMINAL.value,
+                    "reason": reason,
                 },
             )
 
@@ -356,7 +402,18 @@ async def _append_event(
     record: RunRecord,
     event_type: EventType,
     payload: dict[str, object],
+    *,
+    transition_id: str | None = None,
 ) -> RuntimeEvent:
+    if transition_id is not None:
+        existing = await session.scalar(
+            select(RuntimeEventRecord).where(
+                RuntimeEventRecord.run_id == record.id,
+                RuntimeEventRecord.transition_id == transition_id,
+            )
+        )
+        if existing is not None:
+            return _event_from_record(existing)
     current = await session.scalar(
         select(func.max(RuntimeEventRecord.sequence)).where(
             RuntimeEventRecord.run_id == record.id
@@ -365,6 +422,7 @@ async def _append_event(
     event = RuntimeEvent(
         run_id=record.id,
         sequence=(current or 0) + 1,
+        transition_id=transition_id,
         event_type=event_type,
         payload=payload,
     )
@@ -373,6 +431,7 @@ async def _append_event(
             id=event.id,
             run_id=event.run_id,
             sequence=event.sequence,
+            transition_id=event.transition_id,
             event_type=event.event_type.value,
             payload=event.payload,
             team_id=None,
@@ -385,6 +444,24 @@ async def _append_event(
         )
     )
     return event
+
+
+def _event_from_record(record: RuntimeEventRecord) -> RuntimeEvent:
+    return RuntimeEvent(
+        id=record.id,
+        run_id=record.run_id,
+        sequence=record.sequence,
+        transition_id=record.transition_id,
+        event_type=EventType(record.event_type),
+        payload={str(key): value for key, value in record.payload.items()},
+        team_id=record.team_id,
+        agent_id=record.agent_id,
+        parent_agent_id=record.parent_agent_id,
+        task_id=record.task_id,
+        trace_id=record.trace_id,
+        span_id=record.span_id,
+        created_at=record.created_at,
+    )
 
 
 def _clear_lease(record: RunRecord) -> None:

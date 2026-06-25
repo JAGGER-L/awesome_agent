@@ -14,6 +14,7 @@ from awesome_agent.domain.enums import (
     IntakeReservationStatus,
     RunIntent,
     RunStatus,
+    TodoStatus,
     WorkspaceState,
 )
 from awesome_agent.domain.models import (
@@ -21,6 +22,7 @@ from awesome_agent.domain.models import (
     IntakeReservation,
     Run,
     RuntimeEvent,
+    TodoItem,
 )
 from awesome_agent.repositories.git import (
     InvalidRepository,
@@ -110,7 +112,7 @@ class RunIntakeService:
                 run_id=run_id,
                 base_commit=snapshot.head_commit,
             )
-            run, leader, initial_events = self._build_public_run(
+            run, leader, todo, initial_events = self._build_public_run(
                 reservation=reservation,
                 goal=goal,
                 execution_kind=execution_kind,
@@ -120,6 +122,7 @@ class RunIntakeService:
             await self.runtime.publish_intake(
                 run=run,
                 leader=leader,
+                todo=todo,
                 events=initial_events,
                 reservation_id=reservation.id,
             )
@@ -173,7 +176,7 @@ class RunIntakeService:
         execution_kind: ExecutionKind,
         graph_name: str | None,
         graph_version: int | None,
-    ) -> tuple[Run, Agent, list[RuntimeEvent]]:
+    ) -> tuple[Run, Agent, TodoItem | None, list[RuntimeEvent]]:
         run = Run(
             id=reservation.run_id,
             goal=goal,
@@ -199,6 +202,22 @@ class RunIntakeService:
                 profile="leader",
             ),
             status=AgentStatus.READY,
+        )
+        todo = (
+            TodoItem(
+                run_id=run.id,
+                title="Inspect repository and answer the user goal",
+                description=goal,
+                status=TodoStatus.IN_PROGRESS,
+                primary_owner_id=leader.id,
+                acceptance_criteria=[
+                    "Inspect repository evidence using read-only tools.",
+                    "Return a bounded answer with remaining uncertainty.",
+                ],
+            )
+            if execution_kind is ExecutionKind.CODING
+            and reservation.intent is RunIntent.READ_ONLY
+            else None
         )
         events = [
             RuntimeEvent(
@@ -227,4 +246,19 @@ class RunIntakeService:
                 agent_id=leader.id,
             ),
         ]
-        return run, leader, events
+        if todo is not None:
+            events.append(
+                RuntimeEvent(
+                    run_id=run.id,
+                    sequence=3,
+                    event_type=EventType.TODO_CREATED,
+                    payload={
+                        "todo_id": str(todo.id),
+                        "title": todo.title,
+                        "status": todo.status.value,
+                    },
+                    agent_id=leader.id,
+                    task_id=todo.id,
+                )
+            )
+        return run, leader, todo, events
