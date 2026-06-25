@@ -11,6 +11,11 @@ class RunIntent(StrEnum):
     MODIFYING = "modifying"
 
 
+class ExecutionKind(StrEnum):
+    CODING = "coding"
+    RUNTIME_PROBE = "runtime_probe"
+
+
 class DispatchStatus(StrEnum):
     QUEUED = "queued"
     CLAIMED = "claimed"
@@ -96,6 +101,9 @@ class EventType(StrEnum):
     DISPATCH_RETRY_SCHEDULED = "dispatch.retry_scheduled"
     DISPATCH_LEASE_EXPIRED = "dispatch.lease_expired"
     DISPATCH_RECOVERY_REQUIRED = "dispatch.recovery_required"
+    GRAPH_STARTED = "graph.started"
+    GRAPH_COMPLETED = "graph.completed"
+    GRAPH_RECOVERED = "graph.recovered"
 
 
 class RiskLevel(StrEnum):

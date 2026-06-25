@@ -56,6 +56,9 @@ Generated from SQLAlchemy metadata.
 | `repository_id` | `UUID` | yes |
 | `base_commit` | `VARCHAR(64)` | yes |
 | `intent` | `VARCHAR(32)` | no |
+| `execution_kind` | `VARCHAR(32)` | no |
+| `graph_name` | `VARCHAR(128)` | yes |
+| `graph_version` | `INTEGER` | yes |
 | `dispatch_status` | `VARCHAR(32)` | no |
 | `available_at` | `DATETIME` | no |
 | `current_worker_id` | `UUID` | yes |

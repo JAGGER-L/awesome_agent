@@ -7,7 +7,12 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
+from awesome_agent.domain.enums import (
+    DispatchStatus,
+    EventType,
+    ExecutionKind,
+    RunStatus,
+)
 from awesome_agent.domain.models import RunLease, RuntimeEvent
 from awesome_agent.persistence.models import RunRecord, RuntimeEventRecord
 from awesome_agent.runtime.dispatch import LeaseLost, RunDispatcher
@@ -24,25 +29,31 @@ class PostgresRunDispatcher(RunDispatcher):
         worker_name: str,
         lease_duration: timedelta,
         max_attempts: int,
+        execution_kinds: frozenset[ExecutionKind] | None = None,
     ) -> RunLease | None:
         if max_attempts < 1:
             raise ValueError("Maximum attempts must be positive.")
         async with self._sessions.begin() as session:
             now = await _database_now(session)
-            record = await session.scalar(
-                select(RunRecord)
-                .where(
-                    RunRecord.dispatch_status.in_(
-                        [
-                            DispatchStatus.QUEUED.value,
-                            DispatchStatus.RETRY_SCHEDULED.value,
-                        ]
-                    ),
-                    RunRecord.available_at <= now,
-                    RunRecord.attempt < max_attempts,
-                    RunRecord.legacy.is_(False),
+            query = select(RunRecord).where(
+                RunRecord.dispatch_status.in_(
+                    [
+                        DispatchStatus.QUEUED.value,
+                        DispatchStatus.RETRY_SCHEDULED.value,
+                    ]
+                ),
+                RunRecord.available_at <= now,
+                RunRecord.attempt < max_attempts,
+                RunRecord.legacy.is_(False),
+            )
+            if execution_kinds is not None:
+                query = query.where(
+                    RunRecord.execution_kind.in_(
+                        [kind.value for kind in execution_kinds]
+                    )
                 )
-                .order_by(
+            record = await session.scalar(
+                query.order_by(
                     RunRecord.available_at,
                     RunRecord.created_at,
                     RunRecord.id,

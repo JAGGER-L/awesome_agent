@@ -12,6 +12,7 @@ from awesome_agent.domain.enums import (
     AgentStatus,
     DispatchStatus,
     EventType,
+    ExecutionKind,
     IntakeReservationStatus,
     RunIntent,
     RunMode,
@@ -33,6 +34,9 @@ class Run(BaseModel):
     repository_id: UUID | None = None
     base_commit: str | None = None
     intent: RunIntent = RunIntent.MODIFYING
+    execution_kind: ExecutionKind = ExecutionKind.CODING
+    graph_name: str | None = None
+    graph_version: int | None = Field(default=None, ge=1)
     dispatch_status: DispatchStatus = DispatchStatus.TERMINAL
     available_at: datetime = Field(default_factory=utc_now)
     current_worker_id: UUID | None = None
