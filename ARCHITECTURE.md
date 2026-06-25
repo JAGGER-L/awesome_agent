@@ -137,7 +137,7 @@ rejected work is revised and re-verified.
 tracked repository governance
   AGENTS.md
   docs/engineering/
-  scripts/ and GitHub Actions
+  scripts/ and structural tests
 
 ignored development-agent state
   .codex/exec-plans/
@@ -215,11 +215,71 @@ resolved model assignment.
 Large outputs live in external artifact storage. PostgreSQL stores metadata,
 hashes, ownership, and paths.
 
+## Durable Execution Target
+
+The durable coding roadmap separates execution concerns instead of treating one
+status field or one store as authoritative for everything.
+
+```text
+CLI / API
+   |
+   | create Run(repository_id, base commit, policy)
+   v
+PostgreSQL dispatch state
+   | queued -> claimed -> executing -> waiting / retry -> terminal
+   | lease + heartbeat + fencing token
+   v
+Worker
+   |
+   | start/resume stable LangGraph thread
+   v
+LangGraph checkpoint ----------------------+
+   | next graph position and agent context |
+   |                                       |
+   +--> model/tool/approval/validation -----+
+                  |
+                  | fenced projection transition
+                  v
+PostgreSQL domain projections + ordered events
+                  |
+                  +--> API / SSE / future frontend
+
+Large output, patches, and evidence -> artifact storage
+```
+
+State ownership:
+
+- LangGraph checkpoints own the next executable position and resumable agent
+  context.
+- PostgreSQL domain tables own user-visible business projections.
+- Separate `DispatchStatus` owns queue and worker scheduling state.
+- Runtime events are ordered audit records, not a replay-complete event store.
+- Stable transition IDs reconcile checkpoint-ahead and projection-ahead
+  partial failures.
+- An ambiguous mismatch enters `recovery_required`; it is never guessed
+  through automatically.
+
+Repository access also has two layers:
+
+- PostgreSQL stores stable registered repository identities.
+- local configuration stores allowed filesystem roots.
+
+Every modifying Run uses a dedicated integration worktree from a clean base
+commit. The user's checkout is never modified automatically, including when
+trusted-local command execution is selected.
+
+See [Durable execution](docs/design-docs/durable-execution.md) for the complete
+target contract.
+
 ## Security Boundary
 
 Docker is the default command execution boundary. CLI users may explicitly opt
 into trusted local execution. FastAPI runs cannot use trusted-local mode.
 Writing Teammates use isolated Git worktrees.
+
+Approval is scoped to one exact canonical tool invocation. Repository
+validation configuration and inferred project commands are untrusted input;
+only strongly evidenced check-only commands may run automatically.
 
 ## Detailed Designs
 

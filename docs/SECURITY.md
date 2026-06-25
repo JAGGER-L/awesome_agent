@@ -19,3 +19,18 @@
   generated run state are forbidden there.
 - `.awesome-agent/` contains ignored local runtime data. Durable runtime state
   belongs in PostgreSQL.
+- API run creation accepts a registered repository ID, not an arbitrary local
+  path.
+- PostgreSQL repository registration does not grant access by itself; resolved
+  roots must also be contained by locally configured allowed roots.
+- Modifying Runs use isolated worktrees from a clean Git base. Trusted-local
+  changes the execution backend but never authorizes direct edits to the user's
+  checkout.
+- Worktree cleanup validates resolved ownership, active leases, and unexported
+  diffs before deletion.
+- V1 approvals bind to one exact tool invocation, canonical arguments,
+  workspace, capabilities, risk, and expiry. Default expiry is 60 minutes and
+  configurable up to 24 hours.
+- `.agents/validation.toml` and project metadata are untrusted repository input.
+  Only strongly evidenced check-only commands may run automatically; ambiguous
+  or side-effecting commands require approval.

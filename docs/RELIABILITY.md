@@ -14,3 +14,29 @@ V1 reliability requirements:
 Retries must be bounded and evidence-driven. Silent infinite retries are
 forbidden.
 
+## Durable Execution Contract
+
+- `RunStatus` describes product lifecycle; `DispatchStatus` separately
+  describes queue and worker scheduling.
+- PostgreSQL time is authoritative for lease acquisition and expiry.
+- Every worker claim receives a monotonically increasing fencing token.
+- A stale worker cannot commit protected projections, events, or side effects
+  after lease loss.
+- Graph transitions that may replay have stable transition IDs.
+- Tool side effects use stable invocation/idempotency IDs or are explicitly
+  non-retryable.
+- Checkpoint-ahead recovery replays only idempotent projection updates.
+- Projection-ahead recovery reuses the recorded result and skips the completed
+  external side effect.
+- Ambiguous state enters `recovery_required` and preserves the workspace,
+  diff, artifacts, and failure evidence.
+- Cancellation is durable and checked before graph, model, and tool boundaries.
+- Active subprocess and Docker process trees must terminate within a bounded
+  interval.
+- Approval waits checkpoint before releasing the worker lease.
+- Worktree cleanup is explicit in V1 and never deletes a user-owned or
+  unconfirmed path.
+
+Deterministic fault-injection tests must cover worker death around checkpoint
+and projection commits, lease expiry, stale fencing, approval wait, active
+sandbox execution, and validation.
