@@ -104,7 +104,10 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     agents = client.get(f"/runs/{run_id}/agents").json()
     assert len(agents) == 1
     assert agents[0]["model"] == "deepseek-v4-pro"
-    assert len(client.get(f"/runs/{run_id}/events/history").json()) == 2
+    assert len(client.get(f"/runs/{run_id}/events/history").json()) == 3
+    todos = client.get(f"/runs/{run_id}/todos").json()
+    assert len(todos) == 1
+    assert todos[0]["status"] == "in_progress"
 
     cancelled = client.post(f"/runs/{run_id}/cancel")
     assert cancelled.json()["status"] == "cancelled"
