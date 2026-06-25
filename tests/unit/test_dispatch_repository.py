@@ -210,6 +210,66 @@ async def test_invalid_or_expired_lease_is_rejected() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_graph_projection_transitions_are_fenced() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.CLAIMED, attempt=1)
+    record.current_worker_id = uuid4()
+    record.current_worker_name = "worker"
+    record.fencing_token = 1
+    record.lease_acquired_at = now
+    record.lease_expires_at = now + timedelta(seconds=60)
+    record.heartbeat_at = now
+    record.graph_name = "runtime-probe"
+    record.graph_version = 1
+    factory = FakeFactory(
+        [
+            FakeSession(scalar_results=[now, record, 0]),
+            FakeSession(scalar_results=[now, record, 1]),
+        ]
+    )
+    dispatcher = PostgresRunDispatcher(factory)  # type: ignore[arg-type]
+    lease = _lease_from(record)
+
+    await dispatcher.start_execution(
+        lease,
+        graph_name="runtime-probe",
+        graph_version=1,
+    )
+    assert record.status == RunStatus.RUNNING.value
+    assert record.dispatch_status == DispatchStatus.EXECUTING.value
+    await dispatcher.complete_execution(
+        lease,
+        result_summary="probe complete",
+    )
+    assert record.status == RunStatus.COMPLETED.value
+    assert record.dispatch_status == DispatchStatus.TERMINAL.value
+    assert record.current_worker_id is None
+
+
+@pytest.mark.asyncio
+async def test_permanent_execution_failure_requires_recovery() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.EXECUTING, attempt=1)
+    record.current_worker_id = uuid4()
+    record.current_worker_name = "worker"
+    record.fencing_token = 1
+    record.lease_acquired_at = now
+    record.lease_expires_at = now + timedelta(seconds=60)
+    record.heartbeat_at = now
+    dispatcher = PostgresRunDispatcher(
+        FakeFactory([FakeSession(scalar_results=[now, record, 0])])  # type: ignore[arg-type]
+    )
+
+    await dispatcher.mark_recovery_required(
+        _lease_from(record),
+        reason="unsupported graph",
+    )
+
+    assert record.status == RunStatus.RECOVERY_REQUIRED.value
+    assert record.dispatch_status == DispatchStatus.TERMINAL.value
+
+
 def _lease_from(record: RunRecord) -> RunLease:
     assert record.current_worker_id is not None
     assert record.current_worker_name is not None

@@ -10,6 +10,7 @@ from awesome_agent.domain.enums import (
     AgentStatus,
     DispatchStatus,
     EventType,
+    ExecutionKind,
     IntakeReservationStatus,
     RunIntent,
     RunStatus,
@@ -63,6 +64,9 @@ class RunIntakeService:
         repository_id: UUID,
         goal: str,
         intent: RunIntent,
+        execution_kind: ExecutionKind = ExecutionKind.CODING,
+        graph_name: str | None = None,
+        graph_version: int | None = None,
     ) -> Run:
         await self.reconcile_incomplete()
         repository = await self.registry.get(repository_id)
@@ -98,6 +102,9 @@ class RunIntakeService:
             run, leader, initial_events = self._build_public_run(
                 reservation=reservation,
                 goal=goal,
+                execution_kind=execution_kind,
+                graph_name=graph_name,
+                graph_version=graph_version,
             )
             await self.runtime.publish_intake(
                 run=run,
@@ -152,6 +159,9 @@ class RunIntakeService:
         *,
         reservation: IntakeReservation,
         goal: str,
+        execution_kind: ExecutionKind,
+        graph_name: str | None,
+        graph_version: int | None,
     ) -> tuple[Run, Agent, list[RuntimeEvent]]:
         run = Run(
             id=reservation.run_id,
@@ -160,6 +170,9 @@ class RunIntakeService:
             repository_id=reservation.repository_id,
             base_commit=reservation.base_commit,
             intent=reservation.intent,
+            execution_kind=execution_kind,
+            graph_name=graph_name,
+            graph_version=graph_version,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=reservation.workspace_path,
             integration_branch=reservation.integration_branch,

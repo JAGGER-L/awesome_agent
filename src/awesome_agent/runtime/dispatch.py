@@ -16,6 +16,22 @@ class DispatchConflict(RuntimeError):
     pass
 
 
+class TransientExecutionError(RuntimeError):
+    pass
+
+
+class PermanentExecutionError(RuntimeError):
+    pass
+
+
+class IncompatibleGraphError(PermanentExecutionError):
+    pass
+
+
+class CorruptRuntimeStateError(PermanentExecutionError):
+    pass
+
+
 class RunDispatcher(Protocol):
     async def claim_next(
         self,
@@ -77,4 +93,33 @@ class RunDispatcher(Protocol):
         batch_size: int = 100,
     ) -> int:
         """Recover expired leases and return the number processed."""
+        ...
+
+    async def start_execution(
+        self,
+        lease: RunLease,
+        *,
+        graph_name: str,
+        graph_version: int,
+    ) -> None:
+        """Move a claimed Run into fenced graph execution."""
+        ...
+
+    async def complete_execution(
+        self,
+        lease: RunLease,
+        *,
+        result_summary: str,
+        recovered: bool = False,
+    ) -> None:
+        """Commit successful terminal projection and release ownership."""
+        ...
+
+    async def mark_recovery_required(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        """Stop automatic execution for a permanently unsafe Run."""
         ...

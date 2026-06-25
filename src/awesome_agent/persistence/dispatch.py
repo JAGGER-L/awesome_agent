@@ -232,6 +232,74 @@ class PostgresRunDispatcher(RunDispatcher):
                     )
             return len(records)
 
+    async def start_execution(
+        self,
+        lease: RunLease,
+        *,
+        graph_name: str,
+        graph_version: int,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            record, _ = await _locked_live_lease(session, lease)
+            if record.graph_name != graph_name or record.graph_version != graph_version:
+                raise ValueError("Run graph identity does not match the executor.")
+            record.status = RunStatus.RUNNING.value
+            record.dispatch_status = DispatchStatus.EXECUTING.value
+            await _append_event(
+                session,
+                record,
+                EventType.GRAPH_STARTED,
+                {
+                    "graph_name": graph_name,
+                    "graph_version": graph_version,
+                    "fencing_token": lease.fencing_token,
+                },
+            )
+
+    async def complete_execution(
+        self,
+        lease: RunLease,
+        *,
+        result_summary: str,
+        recovered: bool = False,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            record, _ = await _locked_live_lease(session, lease)
+            record.status = RunStatus.COMPLETED.value
+            record.dispatch_status = DispatchStatus.TERMINAL.value
+            record.last_release_reason = "graph completed"
+            _clear_lease(record)
+            await _append_event(
+                session,
+                record,
+                (EventType.GRAPH_RECOVERED if recovered else EventType.GRAPH_COMPLETED),
+                {
+                    "result_summary": result_summary,
+                    "completion_kind": "runtime_probe",
+                    "goal_executed": False,
+                },
+            )
+
+    async def mark_recovery_required(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            record, _ = await _locked_live_lease(session, lease)
+            record.status = RunStatus.RECOVERY_REQUIRED.value
+            record.dispatch_status = DispatchStatus.TERMINAL.value
+            record.last_release_reason = reason
+            record.last_dispatch_error = reason
+            _clear_lease(record)
+            await _append_event(
+                session,
+                record,
+                EventType.DISPATCH_RECOVERY_REQUIRED,
+                {"reason": reason},
+            )
+
 
 async def _database_now(session: AsyncSession) -> datetime:
     value = await session.scalar(select(func.clock_timestamp()))
