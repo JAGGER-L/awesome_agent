@@ -304,14 +304,25 @@ Clearly read-only detected checks may execute automatically in Docker. Custom,
 ambiguous, networked, installation, migration, deployment, or write-capable
 commands require approval.
 
+Task 10 implements this contract for `solo-modifying@1`. The graph resolves a
+configured or conservatively detected validation plan after the final diff,
+executes gates through the central shell/tool boundary, persists validation
+reports and gate results, and only finalizes after required gates pass. If no
+validation gates exist, the Run fails with `no_validation_gates`.
+
+Required gate command failures are reworkable and feed bounded evidence back
+to the model. Approval denial or expiry, policy denial, timeout, command not
+found, Docker unavailable, invalid configuration, no gates, cancellation, or
+corrupt state are terminal validation failures rather than rework prompts.
+
 Formatting checks and formatting fixes are separate operations. A Verifier may
 run check-only validation but cannot modify implementation.
 
 Solo completion requires:
 
 - no pending approval or active tool call;
-- an accepted diff or an explicit, justified no-change result;
-- every required gate passed or explicitly recorded as not applicable;
+- an accepted diff from at least one applied patch;
+- every required gate passed;
 - no unrecorded uncertainty that invalidates the result.
 
 ## Retry, Cancellation, and Failure

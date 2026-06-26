@@ -46,9 +46,10 @@ PostgreSQL:
   `repo.diff`, Docker-backed `shell.execute`, and `artifact.read`, execute
   writes sequentially, offload oversized tool output to artifact storage, and
   persist side-effecting tool invocations with idempotency metadata. Completion
-  requires at least one applied patch and a `repo.diff` after the last write,
-  and is reported as `modifying_unvalidated` — deterministic validation and
-  rework are planned (Task 10), not claimed today.
+  requires at least one applied patch, a `repo.diff` after the last write, and
+  passing required validation gates from `.agents/validation.toml` or
+  conservative project detection. Failed required gates feed a bounded rework
+  loop; exhausted or non-reworkable validation failure marks the Run failed.
 
 ### Approval (implemented for solo modifying runs)
 
@@ -133,8 +134,7 @@ under an allowed root. The CLI sends a repository UUID to FastAPI; the API does
 not accept filesystem paths. Both read-only and modifying Runs require a clean
 checkout and receive a stable worktree at the captured base commit. Normal
 `run` commands create modifying Coding Runs; use `--read-only` to deny mutation
-tools. Modifying completion is not validation: deterministic checks and rework
-remain planned for Task 10.
+tools. Modifying Runs complete only after required validation gates pass.
 
 Use a diagnostic probe to verify the Worker, lease, LangGraph checkpoint, and
 cross-process event path without executing a coding goal:
@@ -189,7 +189,6 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- deterministic validation and rework for modifying output (Task 10);
 - lifecycle projection consistency (Task 11);
 - real run/model/tool/sandbox spans, metrics, cost, and latency (Task 12);
 - real team-runtime end-to-end execution (Task 13);

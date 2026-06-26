@@ -11,7 +11,7 @@ import pytest
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import DispatchStatus, RunIntent, RunStatus, TodoStatus
-from awesome_agent.domain.models import Repository
+from awesome_agent.domain.models import Agent, Repository, Run
 from awesome_agent.modeling import (
     AssistantMessage,
     ModelRequest,
@@ -32,6 +32,12 @@ from awesome_agent.persistence.intake_reservations import (
 from awesome_agent.persistence.repository_registry import PostgresRepositoryRegistry
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.tool_invocations import PostgresToolInvocationRepository
+from awesome_agent.persistence.validation import (
+    DurableValidationGateResult,
+    DurableValidationReport,
+    PostgresValidationRepository,
+    ValidationReportWithGates,
+)
 from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
@@ -39,6 +45,7 @@ from awesome_agent.runtime.graphs import MODIFYING_CODING_GRAPH
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
+from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.sandbox.process import run_process
 
@@ -155,7 +162,7 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
             ),
             ModelTurn(
                 assistant=AssistantMessage(
-                    content="Changed README.md. Validation has not been run."
+                    content="Changed README.md. Validation passed."
                 ),
                 stop_reason=StopReason.COMPLETED,
                 model="fake-model",
@@ -164,7 +171,34 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
         ]
     )
     tool_repository = PostgresToolInvocationRepository(sessions)
+    validation_repository = PostgresValidationRepository(sessions)
     faulted = False
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        run: Run,
+        agent: Agent,
+    ) -> ValidationReportWithGates:
+        report = DurableValidationReport(
+            run_id=run.id,
+            agent_id=agent.id,
+            attempt=0,
+            status="passed",
+            summary="fake validation passed",
+        )
+        gate = DurableValidationGateResult(
+            report_id=report.id,
+            run_id=run.id,
+            gate_id="pytest",
+            name="Pytest",
+            command=["pytest", "-q"],
+            required=True,
+            status="passed",
+            exit_code=0,
+            stdout_summary="passed",
+        )
+        await validation_repository.record_report(report, gates=[gate])
+        return ValidationReportWithGates(report=report, gates=[gate])
 
     async def fail_after_patch(node: str, state: object) -> None:
         nonlocal faulted
@@ -191,6 +225,9 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
                 artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
                 artifact_repository=PostgresArtifactMetadataRepository(sessions),
                 tool_repository=tool_repository,
+                validation_repository=validation_repository,
+                validation_plan_resolver=lambda _: _validation_plan(),
+                validation_runner=validation_runner,
                 fault_hook=fail_after_patch,
             ),
             config=_worker_config(),
@@ -201,6 +238,7 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
     restored = await runtime.get_run(run.id)
     todos = await runtime.list_todos(run.id)
     invocations = await tool_repository.list_for_run(run.id)
+    validation_reports = await validation_repository.list_for_run(run.id)
     workspace = Path(restored.workspace_path or "")
 
     assert restored.status is RunStatus.COMPLETED
@@ -218,6 +256,8 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
     assert patch_invocation.result_content is not None
     assert "postimage_hashes" in patch_invocation.result_content
     assert len({invocation.idempotency_key for invocation in invocations}) == 3
+    assert validation_reports[0].report.status == "passed"
+    assert validation_reports[0].gates[0].gate_id == "pytest"
     await engine.dispose()
 
 
@@ -241,6 +281,21 @@ def _worker_config() -> WorkerConfig:
         shutdown_grace=1,
         retry_delay=timedelta(seconds=0),
         max_attempts=3,
+    )
+
+
+def _validation_plan() -> ValidationPlan:
+    return ValidationPlan(
+        gates=[
+            ValidationGate(
+                id="pytest",
+                name="Pytest",
+                command=["pytest", "-q"],
+                required=True,
+                timeout_seconds=30,
+            )
+        ],
+        source="detected",
     )
 
 

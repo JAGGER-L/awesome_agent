@@ -73,9 +73,11 @@ forbidden.
 - Correctable tool failures return to the model loop. Retryable provider
   failures release the lease for delayed retry; understood permanent failures
   use `failed`, not `recovery_required`.
-- Modifying completion is explicitly unvalidated. The graph must apply at least
-  one patch and inspect the final diff after the last write before reporting
-  `modifying_unvalidated`.
+- Modifying completion is validation-gated. The graph must apply at least one
+  patch, inspect the final diff after the last write, and pass required
+  validation gates before reporting completed. Required gate failure feeds a
+  bounded rework loop; exhausted or non-reworkable failure marks the Run
+  failed.
 - Approval decisions are compare-and-set, idempotent for already-decided
   records, and requeue waiting Runs. Expired pending approvals are marked
   expired by the worker recovery cadence and resume as structured tool errors.

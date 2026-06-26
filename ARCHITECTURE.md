@@ -331,9 +331,11 @@ idempotency keys before execution. Completed tool results are reused after
 checkpoint replay; ambiguous patch state and unknown shell completion enter
 `recovery_required` rather than replaying an unsafe side effect.
 
-Successful completion requires at least one applied patch and a `repo.diff`
-after the last write. The completion kind is `modifying_unvalidated`;
-deterministic validation and rework remain Task 10.
+Successful completion requires at least one applied patch, a `repo.diff` after
+the last write, and passing required validation gates from configuration or
+conservative project detection. Failed required check commands feed bounded
+evidence back to the model for rework; exhausted or non-reworkable validation
+failure marks the Run failed.
 
 ## Persistence
 

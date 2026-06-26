@@ -36,8 +36,10 @@ Leader/Teammate/Subagent 加独立 Verifier 组成的**多 Agent**组织。
 - **Modifying Coding Run** 路由到 `solo-modifying@1`，新增 `repo.apply_patch`、
   `repo.diff`、Docker 后端的 `shell.execute` 和 `artifact.read`，顺序执行写操作，
   将超大工具输出卸载到 artifact 存储，并用幂等元数据持久化有副作用的工具调用。
-  完成要求至少应用一个 patch 且最后一次写之后调用 `repo.diff`，完成状态记为
-  `modifying_unvalidated`——确定性验证和返工属于 Task 10 规划，当前不声称已实现。
+  完成要求至少应用一个 patch、最后一次写之后调用 `repo.diff`，并通过
+  `.agents/validation.toml` 或保守项目检测得到的 required validation gates。
+  required gate 失败会进入有界 rework；rework 用尽或不可返工的验证失败会使 Run
+  标记为 failed。
 
 ### 审批（已在 solo modifying run 中实现）
 
@@ -113,7 +115,7 @@ docker compose up -d postgres
 CLI 只向 FastAPI 发送 repository UUID，API 不接受文件系统路径。read-only
 和 modifying Run 都要求原 checkout 干净，并基于捕获的 base commit 创建稳定
 worktree。当前普通 `run` 命令会创建 modifying Coding Run；使用 `--read-only`
-可禁用修改工具。Modifying 完成不等于验证通过，确定性检查和 rework 仍属于 Task 10。
+可禁用修改工具。Modifying Run 只有在 required validation gates 通过后才会完成。
 
 可以创建诊断 Probe 来验证 Worker、lease、LangGraph checkpoint 和跨进程事件
 链路，而不会执行 Coding 目标：
@@ -166,7 +168,6 @@ container port: 5432
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。
 尚未实现的重点项：
 
-- 变更输出的确定性验证与返工（Task 10）；
 - 生命周期投影一致性（Task 11）；
 - 真实的 run/model/tool/sandbox span、metrics、cost 和 latency（Task 12）；
 - 真实 team 运行时端到端执行（Task 13）；

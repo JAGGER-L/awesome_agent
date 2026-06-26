@@ -31,8 +31,8 @@ team output.
 - checkpointed Solo read-only model/tool loop with bounded repository
   inspection, correction feedback, final result projection, and minimal Todo
 - checkpointed Solo modifying model/tool loop with patch application, final
-  diff inspection, Docker-only allowed shell commands, and unvalidated
-  completion projection
+  diff inspection, Docker-only allowed shell commands, validation gates, and
+  bounded rework before validated completion or terminal failure
 - durable exact-invocation approval interrupt/resume for ambiguous modifying
   shell commands, with CLI/API list and decide support
 - durable active cancellation for queued, waiting, claimed, and executing solo
