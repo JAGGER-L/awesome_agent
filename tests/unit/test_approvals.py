@@ -96,3 +96,54 @@ async def test_approval_repository_rejects_decision_after_expiry() -> None:
         )
 
     assert (await repository.get(approval.id)).status is ApprovalStatus.EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_approval_repository_get_by_call() -> None:
+    repository = InMemoryApprovalRepository()
+    approval = await repository.upsert(_approval())
+
+    found = await repository.get_by_call(approval.run_id, approval.tool_call_id)
+
+    assert found is not None
+    assert found.id == approval.id
+
+    missing = await repository.get_by_call(uuid4(), "no-such-call")
+    assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_approval_repository_list_for_run_with_status_filter() -> None:
+    repository = InMemoryApprovalRepository()
+    run_id = uuid4()
+    approved = await repository.upsert(
+        DurableApproval(
+            run_id=run_id,
+            tool_invocation_id=uuid4(),
+            tool_call_id="call-approved",
+            tool_name="shell.execute",
+            tool_version="1",
+            canonical_arguments={"argv": ["pytest"]},
+            arguments_hash="a" * 64,
+            workspace_path="E:/workspace",
+            workspace_fingerprint="b" * 64,
+            capabilities=["shell:execute"],
+            risk_level="low",
+            expires_at=datetime.now(UTC) + timedelta(minutes=60),
+            status=ApprovalStatus.APPROVED,
+        )
+    )
+    pending = await repository.upsert(
+        _approval(expires_at=datetime.now(UTC) + timedelta(minutes=30))
+    )
+
+    all_for_approved = await repository.list_for_run(
+        run_id, status=ApprovalStatus.APPROVED
+    )
+    assert [item.id for item in all_for_approved] == [approved.id]
+
+    all_for_run = await repository.list_for_run(pending.run_id)
+    assert pending.id in [item.id for item in all_for_run]
+
+    empty = await repository.list_for_run(uuid4())
+    assert empty == []

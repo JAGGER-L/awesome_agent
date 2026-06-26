@@ -15,7 +15,10 @@ from awesome_agent.domain.enums import (
 from awesome_agent.domain.models import RunLease
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.models import ApprovalRecord, RunRecord
-from awesome_agent.runtime.dispatch import LeaseLost
+from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
+    LeaseLost,
+)
 
 
 class ScalarRows:
@@ -374,6 +377,17 @@ async def test_permanent_execution_failure_requires_recovery() -> None:
 
     assert record.status == RunStatus.RECOVERY_REQUIRED.value
     assert record.dispatch_status == DispatchStatus.TERMINAL.value
+
+
+def test_approval_interrupt_preserves_approval_id() -> None:
+    """Verify ApprovalInterrupt carries the correct approval id."""
+
+    approval_id = uuid4()
+    exc = ApprovalInterrupt(approval_id)
+
+    assert exc.approval_id == approval_id
+    assert "approval" in str(exc).lower()
+    assert isinstance(exc, RuntimeError)
 
 
 def _lease_from(record: RunRecord) -> RunLease:
