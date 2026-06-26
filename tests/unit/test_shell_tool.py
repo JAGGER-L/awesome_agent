@@ -15,6 +15,16 @@ def test_shell_policy_classifies_allow_ask_and_deny() -> None:
     assert classify_command(["pytest"]) == "allow"
     assert classify_command(["git", "diff"]) == "allow"
     assert classify_command(["git", "push"]) == "deny"
+    assert classify_command(["git", "status"]) == "allow"
+    assert classify_command(["git", "reset", "--hard"]) == "deny"
+    assert classify_command(["ruff", "check", "."]) == "allow"
+    assert classify_command(["mypy", "src"]) == "allow"
+    assert classify_command(["npm", "publish"]) == "deny"
+    assert classify_command(["npm", "run", "lint"]) == "allow"
+    assert classify_command(["npm", "test"]) == "allow"
+    assert classify_command(["cargo", "test"]) == "allow"
+    assert classify_command(["go", "test", "./..."]) == "allow"
+    assert classify_command(["pwsh", "-Command", "Remove-Item"]) == "deny"
     assert classify_command(["python", "script.py"]) == "ask"
 
 
@@ -103,6 +113,66 @@ async def test_shell_execute_denies_dangerous_command(tmp_path: Path) -> None:
                 capabilities={"shell:execute"},
                 arguments={"argv": ["git", "push"]},
                 workspace=tmp_path,
+            ),
+            None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_reports_failed_and_truncated_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_process(
+        arguments: list[str],
+        *,
+        command_label: str,
+        workspace: Path,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        return CommandResult(
+            command=command_label,
+            exit_code=1,
+            stdout="x" * 1_100,
+            stderr="y" * 1_200,
+            timed_out=True,
+        )
+
+    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
+
+    result = await _execute(
+        ToolInvocation(
+            tool_name="shell.execute",
+            agent_id=uuid4(),
+            profile="leader",
+            capabilities={"shell:execute"},
+            arguments={
+                "argv": ["pytest"],
+                "max_output_chars": 1_000,
+            },
+            workspace=tmp_path,
+        ),
+        None,
+    )
+
+    assert result.output["status"] == "failed"
+    assert result.output["timed_out"] is True
+    assert result.output["stdout_truncated"] is True
+    assert result.output["stderr_truncated"] is True
+    assert result.output["stdout"] == "x" * 1_000
+    assert result.output["stderr"] == "y" * 1_000
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_requires_workspace() -> None:
+    with pytest.raises(RuntimeError, match="workspace"):
+        await _execute(
+            ToolInvocation(
+                tool_name="shell.execute",
+                agent_id=uuid4(),
+                profile="leader",
+                capabilities={"shell:execute"},
+                arguments={"argv": ["pytest"]},
             ),
             None,
         )

@@ -12,7 +12,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, RunIntent
+from awesome_agent.domain.enums import AgentKind, ExecutionKind, RunIntent
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -23,6 +23,10 @@ from awesome_agent.modeling import (
     StructuredModelProvider,
     ToolCall,
     TurnCompleted,
+)
+from awesome_agent.runtime.dispatch import (
+    CorruptRuntimeStateError,
+    IncompatibleGraphError,
 )
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
@@ -166,3 +170,61 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
         if message.get("role") == "tool" and message.get("artifact_refs")
     ]
     assert tool_messages
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_rejects_incompatible_run(tmp_path: Path) -> None:
+    provider = SequenceProvider([])
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+    )
+    run, agent = _run(tmp_path)
+    incompatible = Run(
+        id=run.id,
+        goal=run.goal,
+        intent=RunIntent.READ_ONLY,
+        execution_kind=ExecutionKind.CODING,
+        graph_name="other",
+        graph_version=999,
+        graph_thread_id=run.graph_thread_id,
+        workspace_path=tmp_path,
+    )
+
+    with pytest.raises(IncompatibleGraphError):
+        await graph.execute(incompatible, agent)
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_requires_thread_and_workspace(tmp_path: Path) -> None:
+    provider = SequenceProvider([])
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+    )
+    run, agent = _run(tmp_path)
+
+    missing_thread = Run(
+        id=run.id,
+        goal=run.goal,
+        intent=run.intent,
+        execution_kind=ExecutionKind.CODING,
+        graph_name=run.graph_name,
+        graph_version=run.graph_version,
+        workspace_path=tmp_path,
+    )
+    with pytest.raises(CorruptRuntimeStateError, match="graph_thread_id"):
+        await graph.execute(missing_thread, agent)
+
+    missing_workspace = Run(
+        id=run.id,
+        goal=run.goal,
+        intent=run.intent,
+        execution_kind=ExecutionKind.CODING,
+        graph_name=run.graph_name,
+        graph_version=run.graph_version,
+        graph_thread_id=run.graph_thread_id,
+        workspace_path=tmp_path / "missing",
+    )
+    with pytest.raises(CorruptRuntimeStateError, match="workspace"):
+        await graph.execute(missing_workspace, agent)

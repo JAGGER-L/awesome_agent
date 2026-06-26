@@ -236,3 +236,65 @@ async def test_apply_patch_requires_write_capability(tmp_path: Path) -> None:
 
     assert result.is_error
     assert "ToolDenied" in result.content
+
+
+@pytest.mark.asyncio
+async def test_status_and_instructions_tools_report_repository_context(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("readme\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("agent instructions\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md", "AGENTS.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+
+    status = await _call(tmp_path, "repo.status", {})
+    instructions = await _call(tmp_path, "repo.instructions", {"path": "README.md"})
+
+    assert '"clean": true' in status.content
+    assert "agent instructions" in instructions.content
+    assert "README.md" in instructions.content
+
+
+@pytest.mark.asyncio
+async def test_diff_truncates_large_output(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "large.txt").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "large.txt")
+    _git(tmp_path, "commit", "-m", "Initial")
+    (tmp_path / "large.txt").write_text("new\n" * 200, encoding="utf-8")
+
+    diff = await _modifying_call(
+        tmp_path,
+        "repo.diff",
+        {"max_chars": 1_000, "context_lines": 20},
+    )
+
+    assert not diff.is_error
+    assert '"truncated": true' in diff.content
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_reports_check_failure(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("actual\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-expected
++new
+"""
+
+    result = await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
+
+    assert result.is_error
+    assert "RepositoryToolError" in result.content

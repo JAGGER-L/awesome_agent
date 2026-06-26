@@ -7,9 +7,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from awesome_agent.domain.enums import ExecutionKind
-from awesome_agent.domain.models import Run, RunLease
-from awesome_agent.runtime.dispatch import CorruptRuntimeStateError
+from awesome_agent.domain.enums import AgentKind, ExecutionKind, RunIntent
+from awesome_agent.domain.models import Agent, Run, RunLease
+from awesome_agent.runtime.dispatch import (
+    CorruptRuntimeStateError,
+    PermanentExecutionError,
+)
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
     MODIFYING_CODING_VERSION,
@@ -19,14 +22,15 @@ from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 
 
 class FakeRepository:
-    def __init__(self, run: Run) -> None:
+    def __init__(self, run: Run, agents: list[Agent] | None = None) -> None:
         self.run = run
+        self.agents = agents or []
 
     async def get_run(self, _: UUID) -> Run:
         return self.run
 
     async def list_agents(self, _: UUID) -> list[Any]:
-        return []
+        return self.agents
 
 
 class FakeDispatcher:
@@ -89,6 +93,33 @@ class FakeGraph:
         )
 
 
+class FakeModifyingGraph:
+    async def execute(
+        self,
+        _: Run,
+        __: Agent,
+        *,
+        event_sink: object | None = None,
+    ) -> tuple[dict[str, object], bool]:
+        return (
+            {
+                "run_id": "run",
+                "agent_id": "agent",
+                "graph_name": MODIFYING_CODING_GRAPH,
+                "graph_version": MODIFYING_CODING_VERSION,
+                "messages": [],
+                "model_turn_count": 1,
+                "tool_call_count": 2,
+                "successful_writes": 1,
+                "final_diff_after_write": True,
+                "phase": "completed",
+                "final_answer": "Changed README.md; validation not run.",
+                "result_summary": "modifying done",
+            },
+            False,
+        )
+
+
 def _lease() -> RunLease:
     now = datetime.now(UTC)
     return RunLease(
@@ -110,6 +141,18 @@ def _run(lease: RunLease) -> Run:
         execution_kind=ExecutionKind.RUNTIME_PROBE,
         graph_name="runtime-probe",
         graph_version=1,
+        graph_thread_id=f"run:{lease.run_id}",
+    )
+
+
+def _modifying_run(lease: RunLease) -> Run:
+    return Run(
+        id=lease.run_id,
+        goal="modify",
+        intent=RunIntent.MODIFYING,
+        execution_kind=ExecutionKind.CODING,
+        graph_name=MODIFYING_CODING_GRAPH,
+        graph_version=MODIFYING_CODING_VERSION,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -178,6 +221,22 @@ async def test_worker_marks_corrupt_state_for_recovery() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_fails_permanent_graph_error() -> None:
+    lease = _lease()
+    dispatcher = FakeDispatcher(lease)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(_run(lease)),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(PermanentExecutionError("permanent")),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    await worker.run_once()
+
+    assert dispatcher.calls[-1][0] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_worker_forever_recovers_and_stops() -> None:
     dispatcher = FakeDispatcher(None)
 
@@ -220,3 +279,64 @@ async def test_worker_claims_modifying_graph_when_configured() -> None:
         MODIFYING_CODING_GRAPH,
         MODIFYING_CODING_VERSION,
     ) in claim["graph_identities"]
+
+
+@pytest.mark.asyncio
+async def test_worker_executes_modifying_graph_with_unvalidated_completion() -> None:
+    lease = _lease()
+    run = _modifying_run(lease)
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=FakeModifyingGraph(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    assert await worker.run_once()
+    complete = dispatcher.calls[-1]
+
+    assert complete[0] == "complete"
+    assert isinstance(complete[1], dict)
+    assert complete[1]["completion_kind"] == "modifying_unvalidated"
+    assert complete[1]["result_text"] == "Changed README.md; validation not run."
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_coding_run_without_leader_for_recovery() -> None:
+    lease = _lease()
+    dispatcher = FakeDispatcher(lease)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(_modifying_run(lease)),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=FakeModifyingGraph(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    await worker.run_once()
+
+    assert dispatcher.calls[-1][0] == "recovery"
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_unconfigured_coding_graph() -> None:
+    lease = _lease()
+    dispatcher = FakeDispatcher(lease)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(_modifying_run(lease)),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    await worker.run_once()
+
+    assert dispatcher.calls[-1][0] == "recovery"
