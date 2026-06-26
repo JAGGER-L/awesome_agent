@@ -1,10 +1,12 @@
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import DispatchStatus, RunStatus
+from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
+from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
@@ -18,6 +20,26 @@ def _models() -> RoleModelResolver:
         verifier_model="deepseek-v4-flash",
         subagent_model="deepseek-v4-flash",
     )
+
+
+class FakeCancellationDispatcher:
+    def __init__(self) -> None:
+        self.cancelled: list[UUID] = []
+
+    async def request_cancellation(
+        self,
+        *,
+        run_id: UUID,
+        requested_by: str | None,
+        reason: str | None,
+    ) -> RuntimeEvent:
+        self.cancelled.append(run_id)
+        return RuntimeEvent(
+            run_id=run_id,
+            sequence=99,
+            event_type=EventType.CANCELLATION_REQUESTED,
+            payload={"requested_by": requested_by, "reason": reason},
+        )
 
 
 @pytest.mark.asyncio
@@ -78,3 +100,27 @@ async def test_claimed_run_cancellation_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(DispatchConflict):
         await service.cancel_run(run.id)
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_backed_cancellation_accepts_claimed_run(
+    tmp_path: Path,
+) -> None:
+    repository = InMemoryRuntimeRepository()
+    dispatcher = FakeCancellationDispatcher()
+    service = RuntimeService(
+        repository=repository,
+        events=EventStream(),
+        artifacts=LocalArtifactStore(tmp_path),
+        model_resolver=_models(),
+        dispatcher=dispatcher,  # type: ignore[arg-type]
+    )
+    run = await service.create_run("Goal")
+    await repository.update_run(
+        run.model_copy(update={"dispatch_status": DispatchStatus.CLAIMED})
+    )
+
+    current = await service.cancel_run(run.id)
+
+    assert current.dispatch_status is DispatchStatus.CLAIMED
+    assert dispatcher.cancelled == [run.id]
