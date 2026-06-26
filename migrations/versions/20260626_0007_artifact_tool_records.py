@@ -117,9 +117,30 @@ def upgrade() -> None:
         ["run_id", "idempotency_key"],
         unique=True,
     )
+    op.execute(
+        """
+        UPDATE runs
+        SET graph_name = 'solo-modifying', graph_version = 1
+        WHERE execution_kind = 'coding'
+          AND intent = 'modifying'
+          AND dispatch_status IN ('queued', 'retry_scheduled')
+          AND graph_name IS NULL
+          AND graph_version IS NULL
+        """
+    )
 
 
 def downgrade() -> None:
+    op.execute(
+        """
+        UPDATE runs
+        SET graph_name = NULL, graph_version = NULL
+        WHERE execution_kind = 'coding'
+          AND intent = 'modifying'
+          AND graph_name = 'solo-modifying'
+          AND graph_version = 1
+        """
+    )
     op.drop_index("uq_tool_invocations_run_idempotency", table_name="tool_invocations")
     op.drop_index("ix_tool_invocations_created_at", table_name="tool_invocations")
     op.drop_index("ix_tool_invocations_status", table_name="tool_invocations")

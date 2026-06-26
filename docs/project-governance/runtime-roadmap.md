@@ -86,9 +86,9 @@ Task 07 does not include:
 
 | Gap | Disposition |
 | --- | --- |
-| Modifying Runs can be created but never claimed | Task 07 |
-| `scripts/check.ps1` cannot independently reproduce PostgreSQL test settings | Task 07 |
-| Read-only tools bypass the central `ToolExecutor` | Task 07 |
+| Modifying Runs can be created but never claimed | Resolved in Task 07 |
+| `scripts/check.ps1` cannot independently reproduce PostgreSQL test settings | Resolved in Task 07 |
+| Read-only tools bypass the central `ToolExecutor` | Resolved in Task 07 |
 | Approval API is still a placeholder | Task 08 |
 | Running Runs cannot be cancelled | Task 09 |
 | Deterministic validation and rework do not exist | Task 10 |
@@ -100,8 +100,8 @@ Task 07 does not include:
 | Team E2E is not real end-to-end execution | Task 13 |
 | Worktrees and branches accumulate permanently | Task 14 |
 | API health and doctor are too optimistic | Task 15 |
-| Local API can bind non-loopback without authentication | Task 07 minimum block/unsafe gate; production auth remains out of scope |
-| Current capability docs drift from implementation | Task 07 documentation synchronization |
+| Local API can bind non-loopback without authentication | Resolved in Task 07 with explicit unsafe gate; production auth remains out of scope |
+| Current capability docs drift from implementation | Resolved for Task 07 solo execution claims; future drift remains tracked by harness |
 
 ## Sequencing Rules
 

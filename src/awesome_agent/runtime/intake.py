@@ -34,6 +34,8 @@ from awesome_agent.repositories.reservations import IntakeReservationStore
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.graphs import (
+    MODIFYING_CODING_GRAPH,
+    MODIFYING_CODING_VERSION,
     READ_ONLY_CODING_GRAPH,
     READ_ONLY_CODING_VERSION,
 )
@@ -81,6 +83,13 @@ class RunIntakeService:
         ):
             graph_name = READ_ONLY_CODING_GRAPH
             graph_version = READ_ONLY_CODING_VERSION
+        if (
+            execution_kind is ExecutionKind.CODING
+            and intent is RunIntent.MODIFYING
+            and graph_name is None
+        ):
+            graph_name = MODIFYING_CODING_GRAPH
+            graph_version = MODIFYING_CODING_VERSION
         await self.reconcile_incomplete()
         repository = await self.registry.get(repository_id)
         if not repository.enabled:
@@ -203,22 +212,33 @@ class RunIntakeService:
             ),
             status=AgentStatus.READY,
         )
-        todo = (
-            TodoItem(
-                run_id=run.id,
-                title="Inspect repository and answer the user goal",
-                description=goal,
-                status=TodoStatus.IN_PROGRESS,
-                primary_owner_id=leader.id,
-                acceptance_criteria=[
-                    "Inspect repository evidence using read-only tools.",
-                    "Return a bounded answer with remaining uncertainty.",
-                ],
-            )
-            if execution_kind is ExecutionKind.CODING
-            and reservation.intent is RunIntent.READ_ONLY
-            else None
-        )
+        todo = None
+        if execution_kind is ExecutionKind.CODING:
+            if reservation.intent is RunIntent.READ_ONLY:
+                todo = TodoItem(
+                    run_id=run.id,
+                    title="Inspect repository and answer the user goal",
+                    description=goal,
+                    status=TodoStatus.IN_PROGRESS,
+                    primary_owner_id=leader.id,
+                    acceptance_criteria=[
+                        "Inspect repository evidence using read-only tools.",
+                        "Return a bounded answer with remaining uncertainty.",
+                    ],
+                )
+            elif reservation.intent is RunIntent.MODIFYING:
+                todo = TodoItem(
+                    run_id=run.id,
+                    title="Modify the repository and report unvalidated changes",
+                    description=goal,
+                    status=TodoStatus.IN_PROGRESS,
+                    primary_owner_id=leader.id,
+                    acceptance_criteria=[
+                        "Apply changes only in the managed Run worktree.",
+                        "Inspect the final diff after the last write.",
+                        "Report changed files, commands, and unverified work.",
+                    ],
+                )
         events = [
             RuntimeEvent(
                 run_id=run.id,

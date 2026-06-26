@@ -25,7 +25,8 @@ stop reason、详细 usage，以及 DeepSeek 和 OpenAI 的私有 checkpoint
 continuation。
 Read-only Coding Run 现已通过带 checkpoint 的 `solo-readonly@1` Agent loop
 执行，支持受限仓库工具、错误纠正回环、稳定审计事件和持久化最终结果。
-Modifying Run 仍保持 queued，等待下一项路线图任务。
+Modifying Coding Run 现已路由到 `solo-modifying@1`，可以应用 patch 并运行允许的
+Docker sandbox 命令，但完成结果只表示未验证的修改输出。
 
 ## 技术栈
 
@@ -78,7 +79,8 @@ docker compose up -d postgres
 只有仓库已经位于 allowed root 下时，`run --repo` 才能隐式注册或刷新仓库。
 CLI 只向 FastAPI 发送 repository UUID，API 不接受文件系统路径。read-only
 和 modifying Run 都要求原 checkout 干净，并基于捕获的 base commit 创建稳定
-worktree。当前普通 `run` 命令创建的 Coding Run 仍保持 queued。
+worktree。当前普通 `run` 命令会创建 modifying Coding Run；使用 `--read-only`
+可禁用修改工具。Modifying 完成不等于验证通过，确定性检查和 rework 仍属于 Task 10。
 
 可以创建诊断 Probe 来验证 Worker、lease、LangGraph checkpoint 和跨进程事件
 链路，而不会执行 Coding 目标：

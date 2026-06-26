@@ -10,6 +10,10 @@ import pytest
 from awesome_agent.domain.enums import ExecutionKind
 from awesome_agent.domain.models import Run, RunLease
 from awesome_agent.runtime.dispatch import CorruptRuntimeStateError
+from awesome_agent.runtime.graphs import (
+    MODIFYING_CODING_GRAPH,
+    MODIFYING_CODING_VERSION,
+)
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 
@@ -195,3 +199,24 @@ async def test_worker_forever_recovers_and_stops() -> None:
         "recover_expired",
         "claim",
     ]
+
+
+@pytest.mark.asyncio
+async def test_worker_claims_modifying_graph_when_configured() -> None:
+    dispatcher = FakeDispatcher(None)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(Run(goal="unused")),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=object(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    assert not await worker.run_once()
+    claim = dispatcher.calls[0][1]
+
+    assert isinstance(claim, dict)
+    assert (
+        MODIFYING_CODING_GRAPH,
+        MODIFYING_CODING_VERSION,
+    ) in claim["graph_identities"]

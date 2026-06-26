@@ -49,8 +49,9 @@ forbidden.
   implemented.
 - Expired leases requeue before the attempt limit. At the limit, the Run enters
   `recovery_required + terminal` and preserves its workspace.
-- Each Worker process executes at most one Run and currently claims only
-  `runtime_probe`.
+- Each Worker process executes at most one Run. Workers always claim
+  `runtime_probe`; when a model provider is configured, they also claim
+  `solo-readonly@1` and `solo-modifying@1`.
 - Probe checkpoints use synchronous LangGraph durability. Process-crash tests
   prove lease expiry, fencing-token increment, and checkpoint resume.
 - Graceful Worker shutdown stops new claims, retains heartbeat during a
@@ -64,6 +65,9 @@ forbidden.
 - Correctable tool failures return to the model loop. Retryable provider
   failures release the lease for delayed retry; understood permanent failures
   use `failed`, not `recovery_required`.
+- Modifying completion is explicitly unvalidated. The graph must apply at least
+  one patch and inspect the final diff after the last write before reporting
+  `modifying_unvalidated`.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

@@ -28,8 +28,9 @@ streamed reasoning/text deltas, stop reasons, detailed usage, and private
 checkpoint continuation for DeepSeek and OpenAI.
 Read-only Coding Runs now execute through the checkpointed
 `solo-readonly@1` Agent loop with bounded repository tools, correction
-feedback, stable audit events, and a durable final result. Modifying Runs remain
-queued for the next roadmap task.
+feedback, stable audit events, and a durable final result. Modifying Coding
+Runs now route to `solo-modifying@1`, can apply patches and run allowed Docker
+sandbox commands, and complete only as unvalidated modifying output.
 
 ## Stack
 
@@ -84,7 +85,9 @@ primary Git checkout:
 under an allowed root. The CLI sends a repository UUID to FastAPI; the API does
 not accept filesystem paths. Both read-only and modifying Runs require a clean
 checkout and receive a stable worktree at the captured base commit. Normal
-`run` commands create Coding Runs that remain queued in the current phase.
+`run` commands create modifying Coding Runs; use `--read-only` to deny mutation
+tools. Modifying completion is not validation: deterministic checks and rework
+remain planned for Task 10.
 
 Use a diagnostic probe to verify the Worker, lease, LangGraph checkpoint, and
 cross-process event path without executing a coding goal:

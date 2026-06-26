@@ -33,6 +33,9 @@ team output.
   reasons, usage, continuation, and classified model failures
 - checkpointed Solo read-only model/tool loop with bounded repository
   inspection, correction feedback, final result projection, and minimal Todo
+- checkpointed Solo modifying model/tool loop with patch application, final
+  diff inspection, Docker-only allowed shell commands, and unvalidated
+  completion projection
 
 ## Non-Goals
 
@@ -42,4 +45,4 @@ team output.
 - multiple active model providers
 - recursive delegation
 - LangSmith or LangGraph Agent Server
-- Coding Run execution until the model/tool loop is implemented
+- validated modifying completion before deterministic validation and rework

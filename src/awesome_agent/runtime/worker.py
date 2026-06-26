@@ -20,10 +20,16 @@ from awesome_agent.runtime.dispatch import (
     RunDispatcher,
 )
 from awesome_agent.runtime.graphs import (
+    MODIFYING_CODING_GRAPH,
+    MODIFYING_CODING_VERSION,
     READ_ONLY_CODING_GRAPH,
     READ_ONLY_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
     RUNTIME_PROBE_VERSION,
+)
+from awesome_agent.runtime.modifying_graph import (
+    ModifyingAgentState,
+    ModifyingCodingGraph,
 )
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph, RuntimeProbeState
 from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCodingGraph
@@ -49,6 +55,7 @@ class DurableWorker:
         repository: RuntimeRepository,
         probe_graph: RuntimeProbeGraph,
         coding_graph: ReadOnlyCodingGraph | None = None,
+        modifying_graph: ModifyingCodingGraph | None = None,
         config: WorkerConfig,
         worker_id: UUID | None = None,
         worker_name: str | None = None,
@@ -58,6 +65,7 @@ class DurableWorker:
         self.repository = repository
         self.probe_graph = probe_graph
         self.coding_graph = coding_graph
+        self.modifying_graph = modifying_graph
         self.config = config
         self.worker_id = worker_id or uuid4()
         self.worker_name = worker_name or default_worker_name()
@@ -87,6 +95,9 @@ class DurableWorker:
         if self.coding_graph is not None:
             graph_identities.add((READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION))
             execution_kinds.add(ExecutionKind.CODING)
+        if self.modifying_graph is not None:
+            graph_identities.add((MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION))
+            execution_kinds.add(ExecutionKind.CODING)
         lease = await self.dispatcher.claim_next(
             worker_id=self.worker_id,
             worker_name=self.worker_name,
@@ -112,6 +123,7 @@ class DurableWorker:
             state, recovered = await self._execute_with_heartbeat(run, lease)
             is_coding = run.execution_kind is ExecutionKind.CODING
             final_answer = state.get("final_answer") if is_coding else None
+            completion_kind = self._completion_kind(run)
             await self.dispatcher.complete_execution(
                 lease,
                 result_summary=state.get(
@@ -119,7 +131,7 @@ class DurableWorker:
                     "Execution completed.",
                 ),
                 recovered=recovered,
-                completion_kind=("read_only_coding" if is_coding else "runtime_probe"),
+                completion_kind=completion_kind,
                 goal_executed=is_coding,
                 result_text=(final_answer if isinstance(final_answer, str) else None),
             )
@@ -138,7 +150,7 @@ class DurableWorker:
         self,
         run: Run,
         lease: RunLease,
-    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState, bool]:
+    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState, bool]:
         lease_lost = asyncio.Event()
         heartbeat = asyncio.create_task(
             self._heartbeat_loop(lease, lease_lost),
@@ -243,17 +255,27 @@ class DurableWorker:
             return
 
     def _validate_run(self, run: Run) -> None:
-        if run.execution_kind is ExecutionKind.CODING and self.coding_graph is None:
-            raise IncompatibleGraphError("Worker has no Coding graph configured.")
+        if run.execution_kind is not ExecutionKind.CODING:
+            return
+        if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph is not None:
+            return
+        if (
+            run.graph_name == MODIFYING_CODING_GRAPH
+            and self.modifying_graph is not None
+        ):
+            return
+        raise IncompatibleGraphError(
+            "Worker has no compatible Coding graph configured."
+        )
 
     async def _execute_graph(
         self,
         run: Run,
         lease: RunLease,
-    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState, bool]:
+    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState, bool]:
         if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
             return await self.probe_graph.execute(run)
-        if run.execution_kind is ExecutionKind.CODING and self.coding_graph is not None:
+        if run.execution_kind is ExecutionKind.CODING:
             agents = await self.repository.list_agents(run.id)
             leader = next(
                 (agent for agent in agents if agent.parent_agent_id is None),
@@ -274,14 +296,28 @@ class DurableWorker:
                     transition_id=transition_id,
                 )
 
-            return await self.coding_graph.execute(
-                run,
-                leader,
-                event_sink=emit,
-            )
+            if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph:
+                return await self.coding_graph.execute(
+                    run,
+                    leader,
+                    event_sink=emit,
+                )
+            if run.graph_name == MODIFYING_CODING_GRAPH and self.modifying_graph:
+                return await self.modifying_graph.execute(
+                    run,
+                    leader,
+                    event_sink=emit,
+                )
         raise IncompatibleGraphError(
             f"Worker cannot execute kind {run.execution_kind.value}."
         )
+
+    def _completion_kind(self, run: Run) -> str:
+        if run.execution_kind is not ExecutionKind.CODING:
+            return "runtime_probe"
+        if run.graph_name == MODIFYING_CODING_GRAPH:
+            return "modifying_unvalidated"
+        return "read_only_coding"
 
 
 async def _consume_cancel(task: asyncio.Task[object]) -> None:

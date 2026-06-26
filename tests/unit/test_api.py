@@ -169,3 +169,22 @@ def test_runtime_probe_has_explicit_execution_identity(tmp_path: Path) -> None:
     assert body["execution_kind"] == "runtime_probe"
     assert body["graph_name"] == "runtime-probe"
     assert body["graph_version"] == 1
+
+
+def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:
+    client, repository = _client(tmp_path)
+
+    response = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Fix bug",
+            "intent": "modifying",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["graph_name"] == "solo-modifying"
+    assert body["graph_version"] == 1
+    assert body["dispatch_status"] == "queued"

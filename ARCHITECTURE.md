@@ -305,8 +305,8 @@ Visible reasoning is a frontend-capable trace. Private continuation is a
 separate opaque JSON value used only by the matching adapter and LangGraph
 checkpoint. SDK objects, encrypted continuation data, and provider-specific
 message types never enter orchestration, events, logs, memory, or public APIs.
-The current Worker still executes only `runtime_probe`; Task 05 does not connect
-model turns to Coding Runs.
+The Worker connects provider-neutral model turns to solo read-only and solo
+modifying Coding graphs when a model provider is configured.
 
 ## Read-Only Coding Loop
 
@@ -318,6 +318,17 @@ Only evidence-backed final answers terminate successfully.
 
 See [Read-only agent loop](docs/design-docs/read-only-agent-loop.md) for the
 complete node, loop, budget, tool, failure, and recovery contract.
+
+## Modifying Coding Loop
+
+Workers with a configured model provider also advertise the versioned
+`coding + modifying + solo-modifying@1` route. The graph loops through model
+turns and sequential tool execution. It exposes read tools, `repo.apply_patch`,
+`repo.diff`, `artifact.read`, and Docker-backed `shell.execute`.
+
+Successful completion requires at least one applied patch and a `repo.diff`
+after the last write. The completion kind is `modifying_unvalidated`;
+deterministic validation and rework remain Task 10.
 
 ## Persistence
 
