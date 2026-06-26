@@ -183,3 +183,35 @@ Generated from SQLAlchemy metadata.
 | `completed_at` | `DATETIME` | yes |
 | `created_at` | `DATETIME` | no |
 | `updated_at` | `DATETIME` | no |
+
+## `validation_gate_results`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `report_id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `gate_id` | `VARCHAR(128)` | no |
+| `name` | `VARCHAR(255)` | no |
+| `command` | `JSONB` | no |
+| `required` | `BOOLEAN` | no |
+| `status` | `VARCHAR(32)` | no |
+| `exit_code` | `INTEGER` | yes |
+| `duration_ms` | `INTEGER` | yes |
+| `stdout_summary` | `TEXT` | no |
+| `stderr_summary` | `TEXT` | no |
+| `artifact_refs` | `JSONB` | no |
+| `failure_kind` | `VARCHAR(64)` | yes |
+| `created_at` | `DATETIME` | no |
+
+## `validation_reports`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `agent_id` | `UUID` | yes |
+| `attempt` | `INTEGER` | no |
+| `status` | `VARCHAR(32)` | no |
+| `summary` | `TEXT` | no |
+| `created_at` | `DATETIME` | no |

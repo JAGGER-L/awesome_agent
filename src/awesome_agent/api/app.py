@@ -33,6 +33,11 @@ from awesome_agent.persistence.repository_registry import (
     PostgresRepositoryRegistry,
 )
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
+from awesome_agent.persistence.validation import (
+    PostgresValidationRepository,
+    ValidationReportWithGates,
+    ValidationRepository,
+)
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
@@ -52,6 +57,7 @@ def create_app(
     *,
     intake: RunIntakeService | None = None,
     registry: RepositoryRegistry | None = None,
+    validation_repository: ValidationRepository | None = None,
 ) -> FastAPI:
     settings = Settings()
 
@@ -61,6 +67,8 @@ def create_app(
             app.state.runtime = service
             app.state.intake = intake
             app.state.registry = registry
+            if validation_repository is not None:
+                app.state.validation_repository = validation_repository
             yield
             return
 
@@ -71,6 +79,7 @@ def create_app(
         reservations = PostgresIntakeReservationStore(sessions)
         runtime_repository = PostgresRuntimeRepository(sessions)
         dispatcher = PostgresRunDispatcher(sessions)
+        validation = PostgresValidationRepository(sessions)
         local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
         app.state.runtime = RuntimeService(
             repository=runtime_repository,
@@ -82,6 +91,7 @@ def create_app(
             event_poll_interval=settings.event_poll_interval_seconds,
         )
         app.state.registry = repository_registry
+        app.state.validation_repository = validation
         app.state.intake = RunIntakeService(
             registry=repository_registry,
             reservations=reservations,
@@ -106,6 +116,8 @@ def create_app(
         app.state.intake = intake
     if registry is not None:
         app.state.registry = registry
+    if validation_repository is not None:
+        app.state.validation_repository = validation_repository
 
     def runtime() -> RuntimeService:
         return cast(RuntimeService, app.state.runtime)
@@ -115,6 +127,12 @@ def create_app(
 
     def repositories() -> RepositoryRegistry:
         return cast(RepositoryRegistry, app.state.registry)
+
+    def validation_reports() -> ValidationRepository | None:
+        return cast(
+            ValidationRepository | None,
+            getattr(app.state, "validation_repository", None),
+        )
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -313,7 +331,13 @@ def create_app(
 
     @app.get("/runs/{run_id}/verification")
     async def list_verification(run_id: UUID) -> list[dict[str, object]]:
-        return []
+        repository = validation_reports()
+        if repository is None:
+            return []
+        return [
+            _verification_report_response(report)
+            for report in await repository.list_for_run(run_id)
+        ]
 
     return app
 
@@ -334,6 +358,40 @@ async def _sse(
 def _format_sse(event: RuntimeEvent) -> str:
     data = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
     return f"id: {event.sequence}\nevent: {event.event_type.value}\ndata: {data}\n\n"
+
+
+def _verification_report_response(
+    item: ValidationReportWithGates,
+) -> dict[str, object]:
+    return {
+        "id": str(item.report.id),
+        "run_id": str(item.report.run_id),
+        "agent_id": str(item.report.agent_id) if item.report.agent_id else None,
+        "attempt": item.report.attempt,
+        "status": item.report.status,
+        "summary": item.report.summary,
+        "created_at": item.report.created_at.isoformat(),
+        "gates": [
+            {
+                "id": str(gate.id),
+                "report_id": str(gate.report_id),
+                "run_id": str(gate.run_id),
+                "gate_id": gate.gate_id,
+                "name": gate.name,
+                "command": gate.command,
+                "required": gate.required,
+                "status": gate.status,
+                "exit_code": gate.exit_code,
+                "duration_ms": gate.duration_ms,
+                "stdout_summary": gate.stdout_summary,
+                "stderr_summary": gate.stderr_summary,
+                "artifact_refs": gate.artifact_refs,
+                "failure_kind": gate.failure_kind,
+                "created_at": gate.created_at.isoformat(),
+            }
+            for gate in item.gates
+        ],
+    }
 
 
 app = create_app()

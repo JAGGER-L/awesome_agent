@@ -1,7 +1,7 @@
 import asyncio
 import subprocess
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +9,12 @@ from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.models import Repository
+from awesome_agent.persistence.validation import (
+    DurableValidationGateResult,
+    DurableValidationReport,
+    InMemoryValidationRepository,
+    ValidationRepository,
+)
 from awesome_agent.repositories.registry import InMemoryRepositoryRegistry
 from awesome_agent.repositories.reservations import (
     InMemoryIntakeReservationStore,
@@ -40,7 +46,11 @@ def _git(path: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _client(tmp_path: Path) -> tuple[TestClient, Repository]:
+def _client(
+    tmp_path: Path,
+    *,
+    validation_repository: ValidationRepository | None = None,
+) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
     repository_path = projects / "repository"
     repository_path.mkdir(parents=True)
@@ -76,7 +86,17 @@ def _client(tmp_path: Path) -> tuple[TestClient, Repository]:
         allowed_roots=[projects],
         model_resolver=_models(),
     )
-    return TestClient(create_app(service, intake=intake, registry=registry)), repository
+    return (
+        TestClient(
+            create_app(
+                service,
+                intake=intake,
+                registry=registry,
+                validation_repository=validation_repository,
+            )
+        ),
+        repository,
+    )
 
 
 def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
@@ -188,3 +208,52 @@ def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:
     assert body["graph_name"] == "solo-modifying"
     assert body["graph_version"] == 1
     assert body["dispatch_status"] == "queued"
+
+
+def test_verification_endpoint_returns_durable_validation_reports(
+    tmp_path: Path,
+) -> None:
+    validation = InMemoryValidationRepository()
+    client, repository = _client(tmp_path, validation_repository=validation)
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Fix bug",
+            "intent": "modifying",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+    report = DurableValidationReport(
+        run_id=run_id,
+        agent_id=None,
+        attempt=1,
+        status="failed",
+        summary="pytest failed",
+    )
+    stored = asyncio.run(
+        validation.record_report(
+            report,
+            gates=[
+                DurableValidationGateResult(
+                    report_id=report.id,
+                    run_id=run_id,
+                    gate_id="pytest",
+                    name="Pytest",
+                    command=["pytest", "-q"],
+                    required=True,
+                    status="failed",
+                    exit_code=1,
+                    failure_kind="command_failed",
+                    stdout_summary="1 failed",
+                )
+            ],
+        )
+    )
+
+    body = client.get(f"/runs/{run_id}/verification").json()
+
+    assert body[0]["id"] == str(stored.id)
+    assert body[0]["status"] == "failed"
+    assert body[0]["gates"][0]["gate_id"] == "pytest"
+    assert body[0]["gates"][0]["failure_kind"] == "command_failed"
