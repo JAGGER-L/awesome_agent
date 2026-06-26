@@ -10,10 +10,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.modeling import ToolCall, ToolDefinition, ToolResultMessage
 from awesome_agent.sandbox.process import run_process
 from awesome_agent.tools.approval import ApprovalPolicy
+from awesome_agent.tools.artifacts import ArtifactReadArguments, register_artifact_tools
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
@@ -83,6 +85,7 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "repo.diff": DiffArguments,
     "repo.apply_patch": ApplyPatchArguments,
     "shell.execute": ShellExecuteArguments,
+    "artifact.read": ArtifactReadArguments,
 }
 
 
@@ -131,7 +134,9 @@ def build_read_only_registry() -> ToolRegistry:
     return registry
 
 
-def build_modifying_registry() -> ToolRegistry:
+def build_modifying_registry(
+    artifact_repository: ArtifactMetadataRepository | None = None,
+) -> ToolRegistry:
     registry = build_read_only_registry()
     registry.register(
         ToolSpec(
@@ -156,6 +161,8 @@ def build_modifying_registry() -> ToolRegistry:
         _apply_patch,
     )
     register_shell_tools(registry)
+    if artifact_repository is not None:
+        register_artifact_tools(registry, artifact_repository)
     return registry
 
 
