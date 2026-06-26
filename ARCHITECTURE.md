@@ -403,6 +403,9 @@ State ownership:
   partial failures.
 - An ambiguous mismatch enters `recovery_required`; it is never guessed
   through automatically.
+- Active cancellation is a durable PostgreSQL request. The API records it, and
+  only the owning fenced Worker commits active `cancelled + terminal` after the
+  graph and subprocess boundary stops cleanly.
 
 Repository access also has two layers:
 

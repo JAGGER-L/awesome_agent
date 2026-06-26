@@ -95,8 +95,11 @@ claims. Heartbeat is a direct conditional Worker-to-PostgreSQL update; FastAPI
 and Agents do not relay it. Expired ownership cannot be revived.
 
 Claim and heartbeat remain internal and have no public API.
-Queued and retry-scheduled Runs cancel atomically. Claimed and executing Runs
-reject cancellation until Task 09 adds propagation to active execution.
+Queued, retry-scheduled, and waiting Runs cancel atomically. Claimed and
+executing Runs store `cancel_requested_at`, `cancel_requested_by`, and
+`cancel_reason`; the owning Worker observes the request through the dispatcher,
+cancels the graph task, and commits `cancelled + terminal` only after execution
+reaches a safe boundary.
 
 ## Current Probe Graph
 
@@ -316,9 +319,12 @@ Solo completion requires:
 - Retries are bounded and classified.
 - Model calls may retry only before a committed tool side effect.
 - Side-effecting tools require idempotency or an explicit non-retry policy.
-- Cancellation is a durable request checked before every graph, model, and tool
-  boundary.
-- Active subprocess and Docker process trees receive bounded termination.
+- Cancellation is a durable request checked by the Worker during active graph
+  execution. `asyncio.CancelledError` is preserved across model and tool
+  boundaries instead of being classified as retryable failure.
+- Active subprocesses receive bounded termination. Docker-backed shell tools
+  use managed container names and attempt forced container removal on timeout
+  or cancellation.
 - Projection changes and their event append share one transaction when they
   describe the same domain transition.
 - Events contain bounded summaries; large output is stored as an artifact.

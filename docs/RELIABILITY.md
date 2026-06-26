@@ -39,8 +39,10 @@ forbidden.
 - Durable approval waits are implemented for exact tool invocations in
   `solo-modifying@1`: the approval row and LangGraph checkpoint are durable
   before the worker releases the lease as `paused + waiting`.
-- Durable cancellation through active graph, model, tool, subprocess, Docker,
-  and approval-wait boundaries is planned for Task 09.
+- Durable cancellation is implemented for current solo runtime paths. Queued,
+  retry-scheduled, and waiting-approval Runs cancel atomically. Claimed and
+  executing Runs store a durable cancellation request that the owning Worker
+  observes before committing `cancelled + terminal`.
 - Worktree cleanup is explicit in V1 and never deletes a user-owned or
   unconfirmed path.
 - Run intake writes a private reservation before creating a branch or
@@ -59,6 +61,10 @@ forbidden.
 - Graceful Worker shutdown stops new claims, retains heartbeat during a
   bounded grace period, and leaves ownership to expire if safe completion does
   not occur.
+- Active cancellation cancels the graph task, preserves `CancelledError`
+  propagation, and uses a cancellable subprocess runner. Docker shell execution
+  uses managed container names and attempts `docker rm -f` on timeout or
+  cancellation.
 - SSE consumers poll ordered PostgreSQL events, so API restarts and separate
   Worker processes do not lose durable history.
 - Read-only model/tool execution uses synchronous checkpoints and explicit

@@ -76,7 +76,7 @@ Task 07 does not include:
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
 | Task 08 | Durable approval and command policy | Replace placeholder approvals with durable approve/deny/expire flows bound to one exact invocation. | Implemented for solo modifying runs; approval requests, decisions, expiry, worker release, and resume semantics pass unit tests. |
-| Task 09 | Active cancellation | Propagate cancellation through graph boundaries, provider calls, tool calls, Docker, and subprocess trees. | Running and waiting Runs can cancel without corrupting projections, checkpoints, or worktrees. |
+| Task 09 | Active cancellation | Propagate cancellation through graph boundaries, provider calls, tool calls, Docker, and subprocess trees. | Implemented for solo runtime paths; queued, waiting, claimed, and executing solo Runs can cancel without corrupting projections, checkpoints, or worktrees. |
 | Task 10 | Validation and rework loop | Add deterministic validation gates, verifier feedback, and model rework until pass/fail is evidenced. | Modifying Runs cannot report validated success without passing configured or conservatively detected gates, and failed gates feed a bounded correction loop. |
 | Task 11 | Lifecycle projection consistency | Make Run, Agent, Todo, event, revision, and `updated_at` transitions coherent and frontend-ready. | Every visible status transition has a matching durable event, monotonically revised projection, and consistent timestamp. |
 | Task 12 | Observability hardening | Add real run/model/tool/sandbox spans, trace ID injection, metrics, cost, latency, retry, recovery, and exporter isolation. | Observability score is backed by executable span, metric, and query-table evidence. |
@@ -93,7 +93,7 @@ Task 07 does not include:
 | `scripts/check.ps1` cannot independently reproduce PostgreSQL test settings | Resolved in Task 07 |
 | Read-only tools bypass the central `ToolExecutor` | Resolved in Task 07 |
 | Approval API is still a placeholder | Resolved in Task 08 |
-| Running Runs cannot be cancelled | Task 09 |
+| Running Runs cannot be cancelled | Resolved in Task 09 for solo runtime paths |
 | Deterministic validation and rework do not exist | Task 10 |
 | One successful read is not enough proof for answer correctness | Task 10, with read-only completion hardening folded into validation policy |
 | Context and checkpoints can grow quickly | Minimal artifact/prompt guard in Task 07; full budget system in Task 16 |

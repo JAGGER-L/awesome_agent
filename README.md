@@ -149,9 +149,11 @@ separately. The local FastAPI API is unauthenticated and binds to `127.0.0.1`
 by default. Binding `serve` or `start` to a non-loopback host requires the
 explicit `--unsafe-bind-public` flag.
 
-Dispatch state is available at `GET /runs/{run_id}/dispatch`. Queued and
-retry-scheduled Runs can be cancelled immediately. Claimed or executing Runs
-return `409` until durable cancellation propagation is implemented (Task 09).
+Dispatch state is available at `GET /runs/{run_id}/dispatch`. Queued,
+retry-scheduled, waiting-approval, claimed, and executing solo Runs accept
+durable cancellation. Active cancellation is recorded as a request, observed by
+the owning Worker, and committed as `cancelled + terminal` once the graph and
+subprocess boundary stops cleanly.
 
 Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the ignored local `.env` before real
 model calls. Built-in memory and Mem0 are disabled in committed defaults. Enable
@@ -187,7 +189,6 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- active cancellation propagation (Task 09);
 - deterministic validation and rework for modifying output (Task 10);
 - lifecycle projection consistency (Task 11);
 - real run/model/tool/sandbox spans, metrics, cost, and latency (Task 12);

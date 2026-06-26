@@ -35,6 +35,9 @@ team output.
   completion projection
 - durable exact-invocation approval interrupt/resume for ambiguous modifying
   shell commands, with CLI/API list and decide support
+- durable active cancellation for queued, waiting, claimed, and executing solo
+  Runs, including graph-task cancellation and cancellable subprocess/Docker
+  shell boundaries
 
 ## Non-Goals
 

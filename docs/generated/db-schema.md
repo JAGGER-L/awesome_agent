@@ -110,6 +110,9 @@ Generated from SQLAlchemy metadata.
 | `heartbeat_at` | `DATETIME` | yes |
 | `last_release_reason` | `TEXT` | yes |
 | `last_dispatch_error` | `TEXT` | yes |
+| `cancel_requested_at` | `DATETIME` | yes |
+| `cancel_requested_by` | `VARCHAR(255)` | yes |
+| `cancel_reason` | `TEXT` | yes |
 | `result_text` | `TEXT` | yes |
 | `workspace_path` | `TEXT` | yes |
 | `integration_branch` | `VARCHAR(255)` | yes |

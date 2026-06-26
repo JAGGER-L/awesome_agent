@@ -127,9 +127,10 @@ worktree。当前普通 `run` 命令会创建 modifying Coding Run；使用 `--r
 `127.0.0.1`。如果要将 `serve` 或 `start` 绑定到非 loopback host，必须显式传入
 `--unsafe-bind-public`。
 
-可以通过 `GET /runs/{run_id}/dispatch` 查看调度状态。queued 和
-retry-scheduled Run 可以立即取消；claimed 或 executing Run 在实现持久化取消
-传播前返回 `409`（Task 09）。
+可以通过 `GET /runs/{run_id}/dispatch` 查看调度状态。queued、retry-scheduled、
+waiting-approval、claimed 和 executing 的 solo Run 都支持持久化取消。active
+取消会先记录为 durable request，由持有 lease 的 Worker 观察，在 graph 和 subprocess
+边界干净停止后提交为 `cancelled + terminal`。
 
 真实模型调用前，需要在被 Git 忽略的本地 `.env` 中配置
 `AWESOME_AGENT_DEEPSEEK_API_KEY`。仓库配置默认关闭内置记忆和 Mem0；
@@ -165,7 +166,6 @@ container port: 5432
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。
 尚未实现的重点项：
 
-- 主动取消传播（Task 09）；
 - 变更输出的确定性验证与返工（Task 10）；
 - 生命周期投影一致性（Task 11）；
 - 真实的 run/model/tool/sandbox span、metrics、cost 和 latency（Task 12）；
