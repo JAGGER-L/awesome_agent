@@ -43,15 +43,8 @@ async def _execute(invocation: ToolInvocation, _: object) -> ToolResult:
     decision = classify_command(arguments.argv)
     if decision == "deny":
         raise ShellToolError("Command is denied by policy.")
-    if decision == "ask":
-        return ToolResult(
-            invocation_id=invocation.id,
-            output={
-                "status": "approval_required",
-                "reason": "Command requires durable approval before execution.",
-                "argv": arguments.argv,
-            },
-        )
+    if decision == "ask" and not invocation.approval_granted:
+        raise ShellToolError("Command requires durable approval before execution.")
     workspace = _workspace(invocation)
     result = await run_process(
         _docker_argv(arguments.argv, workspace),

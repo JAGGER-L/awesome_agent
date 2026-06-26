@@ -18,6 +18,7 @@ from awesome_agent.tools.models import (
     ToolSpec,
 )
 from awesome_agent.tools.registry import ToolRegistry
+from awesome_agent.tools.shell import register_shell_tools
 
 
 async def _handler(invocation: ToolInvocation, progress: object) -> ToolResult:
@@ -107,6 +108,51 @@ async def test_default_policy_denies_destructive_command() -> None:
 
     with pytest.raises(ToolDenied):
         await executor.execute(invocation)
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_policy_allows_asks_and_denies() -> None:
+    registry = ToolRegistry()
+    register_shell_tools(registry)
+    spec, _ = registry.resolve("shell.execute")
+    assert (
+        ApprovalPolicy()
+        .evaluate(
+            spec,
+            ToolInvocation(
+                tool_name="shell.execute",
+                agent_id=uuid4(),
+                profile="leader",
+                capabilities={"shell:execute"},
+                arguments={"argv": ["pytest"]},
+            ),
+        )
+        .decision
+        is ApprovalDecision.ALLOW
+    )
+    executor = ToolExecutor(registry, ApprovalPolicy())
+
+    with pytest.raises(ApprovalRequired):
+        await executor.execute(
+            ToolInvocation(
+                tool_name="shell.execute",
+                agent_id=uuid4(),
+                profile="leader",
+                capabilities={"shell:execute"},
+                arguments={"argv": ["python", "script.py"]},
+            )
+        )
+
+    with pytest.raises(ToolDenied):
+        await executor.execute(
+            ToolInvocation(
+                tool_name="shell.execute",
+                agent_id=uuid4(),
+                profile="leader",
+                capabilities={"shell:execute"},
+                arguments={"argv": ["bash", "-lc", "echo unsafe"]},
+            )
+        )
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from awesome_agent.domain.enums import ApprovalDecision, RiskLevel
 from awesome_agent.tools.models import ApprovalOutcome, ToolInvocation, ToolSpec
+from awesome_agent.tools.shell import classify_command
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +26,31 @@ class ApprovalPolicy:
         self._command_rules = command_rules or []
 
     def evaluate(self, spec: ToolSpec, invocation: ToolInvocation) -> ApprovalOutcome:
+        if spec.name == "shell.execute":
+            argv = invocation.arguments.get("argv")
+            if not isinstance(argv, list) or not all(
+                isinstance(item, str) for item in argv
+            ):
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason="Shell command argv must be a list of strings.",
+                )
+            decision = classify_command(argv)
+            if decision == "deny":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason="Shell command is denied by policy.",
+                )
+            if decision == "ask":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.ASK,
+                    reason="Shell command requires durable approval.",
+                )
+            return ApprovalOutcome(
+                decision=ApprovalDecision.ALLOW,
+                reason="Shell command is allowed by automatic policy.",
+            )
+
         command = str(invocation.arguments.get("command", ""))
         for rule in self._command_rules:
             if rule.pattern.search(command):

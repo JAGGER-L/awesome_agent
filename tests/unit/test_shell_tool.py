@@ -84,9 +84,44 @@ async def test_shell_execute_runs_allowed_command_in_docker(
 
 
 @pytest.mark.asyncio
-async def test_shell_execute_returns_approval_required_for_ambiguous_command(
+async def test_shell_execute_requires_grant_for_ambiguous_command(
     tmp_path: Path,
 ) -> None:
+    with pytest.raises(RuntimeError, match="approval"):
+        await _execute(
+            ToolInvocation(
+                tool_name="shell.execute",
+                agent_id=uuid4(),
+                profile="leader",
+                capabilities={"shell:execute"},
+                arguments={"argv": ["python", "script.py"]},
+                workspace=tmp_path,
+            ),
+            None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_runs_approved_ambiguous_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_process(
+        arguments: list[str],
+        *,
+        command_label: str,
+        workspace: Path,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        return CommandResult(
+            command=command_label,
+            exit_code=0,
+            stdout="approved",
+            stderr="",
+        )
+
+    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
+
     result = await _execute(
         ToolInvocation(
             tool_name="shell.execute",
@@ -95,11 +130,13 @@ async def test_shell_execute_returns_approval_required_for_ambiguous_command(
             capabilities={"shell:execute"},
             arguments={"argv": ["python", "script.py"]},
             workspace=tmp_path,
+            approval_granted=True,
         ),
         None,
     )
 
-    assert result.output["status"] == "approval_required"
+    assert result.output["status"] == "completed"
+    assert result.output["stdout"] == "approved"
 
 
 @pytest.mark.asyncio
