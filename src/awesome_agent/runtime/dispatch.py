@@ -83,6 +83,20 @@ class RunDispatcher(Protocol):
         """Release current ownership and make the Run immediately claimable."""
         ...
 
+    async def request_cancellation(
+        self,
+        *,
+        run_id: UUID,
+        requested_by: str | None,
+        reason: str | None,
+    ) -> RuntimeEvent | None:
+        """Durably request or complete cancellation for a Run."""
+        ...
+
+    async def is_cancel_requested(self, lease: RunLease) -> bool:
+        """Return whether the leased Run has a pending cancellation request."""
+        ...
+
     async def release_for_approval_wait(
         self,
         lease: RunLease,

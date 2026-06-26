@@ -48,6 +48,9 @@ class Run(BaseModel):
     heartbeat_at: datetime | None = None
     last_release_reason: str | None = None
     last_dispatch_error: str | None = None
+    cancel_requested_at: datetime | None = None
+    cancel_requested_by: str | None = Field(default=None, max_length=255)
+    cancel_reason: str | None = None
     result_text: str | None = Field(default=None, max_length=32768)
     workspace_path: Path | None = None
     integration_branch: str | None = None

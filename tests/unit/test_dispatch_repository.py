@@ -17,6 +17,7 @@ from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.models import ApprovalRecord, RunRecord
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
+    DispatchConflict,
     LeaseLost,
 )
 
@@ -97,6 +98,9 @@ def _record(
         heartbeat_at=None,
         last_release_reason=None,
         last_dispatch_error=None,
+        cancel_requested_at=None,
+        cancel_requested_by=None,
+        cancel_reason=None,
         workspace_path=None,
         integration_branch=None,
         workspace_state=None,
@@ -273,6 +277,102 @@ async def test_expire_pending_approvals_requeues_waiting_run() -> None:
     assert approval.status == ApprovalStatus.EXPIRED.value
     assert record.status == RunStatus.RUNNING.value
     assert record.dispatch_status == DispatchStatus.QUEUED.value
+
+
+@pytest.mark.asyncio
+async def test_request_cancellation_cancels_queued_run() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.QUEUED, attempt=0)
+    dispatcher = PostgresRunDispatcher(
+        FakeFactory([FakeSession(scalar_results=[now, record, None, 0])])  # type: ignore[arg-type]
+    )
+
+    event = await dispatcher.request_cancellation(
+        run_id=record.id,
+        requested_by="api",
+        reason="user requested",
+    )
+
+    assert event is not None
+    assert record.status == RunStatus.CANCELLED.value
+    assert record.dispatch_status == DispatchStatus.TERMINAL.value
+    assert record.cancel_requested_at == now
+    assert record.cancel_requested_by == "api"
+    assert record.cancel_reason == "user requested"
+
+
+@pytest.mark.asyncio
+async def test_request_cancellation_cancels_waiting_approval_run() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.WAITING, attempt=1)
+    record.status = RunStatus.PAUSED.value
+    approval = _approval(record, status=ApprovalStatus.PENDING)
+    dispatcher = PostgresRunDispatcher(
+        FakeFactory(
+            [
+                FakeSession(
+                    scalar_results=[now, record, None, 0, None, 1],
+                    rows=[approval],
+                )
+            ]
+        )  # type: ignore[arg-type]
+    )
+
+    await dispatcher.request_cancellation(
+        run_id=record.id,
+        requested_by="api",
+        reason=None,
+    )
+
+    assert record.status == RunStatus.CANCELLED.value
+    assert record.dispatch_status == DispatchStatus.TERMINAL.value
+    assert approval.status == ApprovalStatus.DENIED.value
+    assert approval.decision_reason == "run_cancelled"
+
+
+@pytest.mark.asyncio
+async def test_request_cancellation_records_active_run_signal() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.EXECUTING, attempt=1)
+    record.status = RunStatus.RUNNING.value
+    record.current_worker_id = uuid4()
+    record.current_worker_name = "worker"
+    record.fencing_token = 1
+    record.lease_acquired_at = now
+    record.lease_expires_at = now + timedelta(seconds=60)
+    record.heartbeat_at = now
+    dispatcher = PostgresRunDispatcher(
+        FakeFactory([FakeSession(scalar_results=[now, record, None, 0])])  # type: ignore[arg-type]
+    )
+
+    event = await dispatcher.request_cancellation(
+        run_id=record.id,
+        requested_by="api",
+        reason="stop",
+    )
+
+    assert event is not None
+    assert event.event_type is EventType.CANCELLATION_REQUESTED
+    assert record.status == RunStatus.RUNNING.value
+    assert record.dispatch_status == DispatchStatus.EXECUTING.value
+    assert record.cancel_requested_at == now
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_cancellation_is_rejected() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.TERMINAL, attempt=1)
+    record.status = RunStatus.COMPLETED.value
+    dispatcher = PostgresRunDispatcher(
+        FakeFactory([FakeSession(scalar_results=[now, record])])  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(DispatchConflict):
+        await dispatcher.request_cancellation(
+            run_id=record.id,
+            requested_by="api",
+            reason=None,
+        )
 
 
 @pytest.mark.asyncio

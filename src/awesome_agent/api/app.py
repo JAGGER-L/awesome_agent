@@ -25,6 +25,7 @@ from awesome_agent.persistence.database import (
     create_engine,
     create_session_factory,
 )
+from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.intake_reservations import (
     PostgresIntakeReservationStore,
 )
@@ -69,12 +70,14 @@ def create_app(
         repository_registry = PostgresRepositoryRegistry(sessions)
         reservations = PostgresIntakeReservationStore(sessions)
         runtime_repository = PostgresRuntimeRepository(sessions)
+        dispatcher = PostgresRunDispatcher(sessions)
         local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
         app.state.runtime = RuntimeService(
             repository=runtime_repository,
             events=event_stream,
             artifacts=LocalArtifactStore(settings.artifact_root),
             artifact_repository=PostgresArtifactMetadataRepository(sessions),
+            dispatcher=dispatcher,
             model_resolver=RoleModelResolver.from_settings(settings),
             event_poll_interval=settings.event_poll_interval_seconds,
         )

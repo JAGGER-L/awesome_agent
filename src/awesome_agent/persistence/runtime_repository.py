@@ -102,6 +102,9 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.heartbeat_at = run.heartbeat_at
             record.last_release_reason = run.last_release_reason
             record.last_dispatch_error = run.last_dispatch_error
+            record.cancel_requested_at = run.cancel_requested_at
+            record.cancel_requested_by = run.cancel_requested_by
+            record.cancel_reason = run.cancel_reason
             record.result_text = run.result_text
             record.workspace_path = (
                 str(run.workspace_path) if run.workspace_path is not None else None
@@ -237,6 +240,9 @@ def _run_from_record(record: RunRecord) -> Run:
         heartbeat_at=record.heartbeat_at,
         last_release_reason=record.last_release_reason,
         last_dispatch_error=record.last_dispatch_error,
+        cancel_requested_at=record.cancel_requested_at,
+        cancel_requested_by=record.cancel_requested_by,
+        cancel_reason=record.cancel_reason,
         result_text=record.result_text,
         workspace_path=(
             Path(record.workspace_path) if record.workspace_path is not None else None
@@ -277,6 +283,9 @@ def _run_to_record(run: Run) -> RunRecord:
         heartbeat_at=run.heartbeat_at,
         last_release_reason=run.last_release_reason,
         last_dispatch_error=run.last_dispatch_error,
+        cancel_requested_at=run.cancel_requested_at,
+        cancel_requested_by=run.cancel_requested_by,
+        cancel_reason=run.cancel_reason,
         result_text=run.result_text,
         workspace_path=(
             str(run.workspace_path) if run.workspace_path is not None else None

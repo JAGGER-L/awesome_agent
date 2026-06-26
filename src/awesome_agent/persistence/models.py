@@ -60,6 +60,11 @@ class RunRecord(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_release_reason: Mapped[str | None] = mapped_column(Text)
     last_dispatch_error: Mapped[str | None] = mapped_column(Text)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    cancel_requested_by: Mapped[str | None] = mapped_column(String(255))
+    cancel_reason: Mapped[str | None] = mapped_column(Text)
     result_text: Mapped[str | None] = mapped_column(Text)
     workspace_path: Mapped[str | None] = mapped_column(Text)
     integration_branch: Mapped[str | None] = mapped_column(String(255))

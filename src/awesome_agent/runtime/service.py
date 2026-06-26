@@ -17,6 +17,7 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
+from awesome_agent.runtime.dispatch import RunDispatcher
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.repository import RuntimeRepository
 
@@ -30,6 +31,7 @@ class RuntimeService:
         artifacts: LocalArtifactStore,
         model_resolver: RoleModelResolver,
         artifact_repository: ArtifactMetadataRepository | None = None,
+        dispatcher: RunDispatcher | None = None,
         event_poll_interval: float = 0.5,
     ) -> None:
         self.repository = repository
@@ -39,6 +41,7 @@ class RuntimeService:
             artifact_repository or InMemoryArtifactMetadataRepository()
         )
         self.model_resolver = model_resolver
+        self.dispatcher = dispatcher
         self.event_poll_interval = event_poll_interval
 
     async def create_run(self, goal: str) -> Run:
@@ -72,7 +75,15 @@ class RuntimeService:
         return await self.repository.get_run(run_id)
 
     async def cancel_run(self, run_id: UUID) -> Run:
-        run, event = await self.repository.cancel_run(run_id)
+        if self.dispatcher is None:
+            run, event = await self.repository.cancel_run(run_id)
+        else:
+            event = await self.dispatcher.request_cancellation(
+                run_id=run_id,
+                requested_by="api",
+                reason=None,
+            )
+            run = await self.repository.get_run(run_id)
         if event is not None:
             await self.events.publish(event)
         return run

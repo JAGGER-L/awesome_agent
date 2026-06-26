@@ -22,7 +22,7 @@ from awesome_agent.persistence.models import (
     RuntimeEventRecord,
     TodoRecord,
 )
-from awesome_agent.runtime.dispatch import LeaseLost, RunDispatcher
+from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
 
 
 class PostgresRunDispatcher(RunDispatcher):
@@ -166,6 +166,74 @@ class PostgresRunDispatcher(RunDispatcher):
                     EventType.DISPATCH_RELEASED,
                     {"reason": reason, "next_status": DispatchStatus.QUEUED.value},
                 )
+
+    async def request_cancellation(
+        self,
+        *,
+        run_id: UUID,
+        requested_by: str | None,
+        reason: str | None,
+    ) -> RuntimeEvent | None:
+        async with self._sessions.begin() as session:
+            now = await _database_now(session)
+            record = await session.scalar(
+                select(RunRecord).where(RunRecord.id == run_id).with_for_update()
+            )
+            if record is None:
+                raise KeyError(run_id)
+            if record.status == RunStatus.CANCELLED.value:
+                return None
+            if record.dispatch_status == DispatchStatus.TERMINAL.value:
+                raise DispatchConflict("Terminal Runs cannot be cancelled.")
+            record.cancel_requested_at = record.cancel_requested_at or now
+            record.cancel_requested_by = requested_by
+            record.cancel_reason = reason
+            if record.dispatch_status in {
+                DispatchStatus.QUEUED.value,
+                DispatchStatus.RETRY_SCHEDULED.value,
+            }:
+                return await _cancel_record(
+                    session,
+                    record,
+                    now=now,
+                    reason=reason,
+                )
+            if record.dispatch_status == DispatchStatus.WAITING.value:
+                await _deny_pending_approvals_for_cancel(
+                    session,
+                    record,
+                    now=now,
+                    requested_by=requested_by,
+                )
+                return await _cancel_record(
+                    session,
+                    record,
+                    now=now,
+                    reason=reason,
+                )
+            if record.dispatch_status in {
+                DispatchStatus.CLAIMED.value,
+                DispatchStatus.EXECUTING.value,
+            }:
+                return await _append_event(
+                    session,
+                    record,
+                    EventType.CANCELLATION_REQUESTED,
+                    {
+                        "requested_by": requested_by,
+                        "reason": reason,
+                        "dispatch_status": record.dispatch_status,
+                    },
+                    transition_id=f"cancel-requested:{record.id}",
+                )
+            raise DispatchConflict(
+                f"Run in dispatch state {record.dispatch_status} cannot be cancelled."
+            )
+
+    async def is_cancel_requested(self, lease: RunLease) -> bool:
+        async with self._sessions.begin() as session:
+            record, _ = await _locked_live_lease(session, lease)
+            return record.cancel_requested_at is not None
 
     async def release_for_approval_wait(
         self,
@@ -640,6 +708,69 @@ async def _mark_attempts_exhausted(
             "reason": reason,
         },
     )
+
+
+async def _cancel_record(
+    session: AsyncSession,
+    record: RunRecord,
+    *,
+    now: datetime,
+    reason: str | None,
+) -> RuntimeEvent:
+    record.status = RunStatus.CANCELLED.value
+    record.dispatch_status = DispatchStatus.TERMINAL.value
+    record.available_at = now
+    record.last_release_reason = "cancelled"
+    record.last_dispatch_error = None
+    record.updated_at = now
+    _clear_lease(record)
+    return await _append_event(
+        session,
+        record,
+        EventType.RUN_STATUS_CHANGED,
+        {
+            "status": RunStatus.CANCELLED.value,
+            "dispatch_status": DispatchStatus.TERMINAL.value,
+            "reason": reason,
+        },
+        transition_id=f"cancelled:{record.id}",
+    )
+
+
+async def _deny_pending_approvals_for_cancel(
+    session: AsyncSession,
+    record: RunRecord,
+    *,
+    now: datetime,
+    requested_by: str | None,
+) -> None:
+    approvals = list(
+        await session.scalars(
+            select(ApprovalRecord)
+            .where(
+                ApprovalRecord.run_id == record.id,
+                ApprovalRecord.status == ApprovalStatus.PENDING.value,
+            )
+            .with_for_update(skip_locked=True)
+        )
+    )
+    for approval in approvals:
+        approval.status = ApprovalStatus.DENIED.value
+        approval.decided_at = now
+        approval.decided_by = requested_by
+        approval.decision_reason = "run_cancelled"
+        approval.updated_at = now
+        await _append_event(
+            session,
+            record,
+            EventType.APPROVAL_DECIDED,
+            {
+                "approval_id": str(approval.id),
+                "status": ApprovalStatus.DENIED.value,
+                "reason": "run_cancelled",
+            },
+            transition_id=f"approval-cancelled:{approval.id}",
+        )
 
 
 def _lease(record: RunRecord) -> RunLease:
