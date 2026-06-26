@@ -214,6 +214,8 @@ class ToolInvocationRecord(Base):
         default=dict,
     )
     result_summary: Mapped[str | None] = mapped_column(Text)
+    result_content: Mapped[str | None] = mapped_column(Text)
+    result_is_error: Mapped[bool] = mapped_column(Boolean, default=False)
     artifact_refs: Mapped[list[str]] = mapped_column(JSONB, default=list)
     error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

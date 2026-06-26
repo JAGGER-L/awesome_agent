@@ -326,6 +326,11 @@ Workers with a configured model provider also advertise the versioned
 turns and sequential tool execution. It exposes read tools, `repo.apply_patch`,
 `repo.diff`, `artifact.read`, and Docker-backed `shell.execute`.
 
+Side-effecting modifying tools are recorded in PostgreSQL with stable
+idempotency keys before execution. Completed tool results are reused after
+checkpoint replay; ambiguous patch state and unknown shell completion enter
+`recovery_required` rather than replaying an unsafe side effect.
+
 Successful completion requires at least one applied patch and a `repo.diff`
 after the last write. The completion kind is `modifying_unvalidated`;
 deterministic validation and rework remain Task 10.

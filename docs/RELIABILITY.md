@@ -31,14 +31,14 @@ forbidden.
 - Tool side effects use stable invocation/idempotency IDs or are explicitly
   non-retryable.
 - Checkpoint-ahead recovery replays only idempotent projection updates.
-- Projection-ahead recovery reuses the recorded result and skips the completed
-  external side effect.
+- Modifying tool recovery reuses completed durable tool results and skips the
+  completed external side effect; ambiguous patch or shell state enters
+  `recovery_required`.
 - Ambiguous state enters `recovery_required` and preserves the workspace,
   diff, artifacts, and failure evidence.
-- Cancellation is durable and checked before graph, model, and tool boundaries.
-- Active subprocess and Docker process trees must terminate within a bounded
-  interval.
-- Approval waits checkpoint before releasing the worker lease.
+- Durable cancellation through active graph, model, tool, subprocess, and Docker
+  boundaries is planned for Task 09.
+- Durable approval waits are planned for Task 08.
 - Worktree cleanup is explicit in V1 and never deletes a user-owned or
   unconfirmed path.
 - Run intake writes a private reservation before creating a branch or

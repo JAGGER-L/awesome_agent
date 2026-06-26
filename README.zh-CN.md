@@ -26,7 +26,8 @@ continuation。
 Read-only Coding Run 现已通过带 checkpoint 的 `solo-readonly@1` Agent loop
 执行，支持受限仓库工具、错误纠正回环、稳定审计事件和持久化最终结果。
 Modifying Coding Run 现已路由到 `solo-modifying@1`，可以应用 patch 并运行允许的
-Docker sandbox 命令，但完成结果只表示未验证的修改输出。
+Docker sandbox 命令，会用幂等元数据持久化记录有副作用的工具调用，但完成结果
+只表示未验证的修改输出。
 
 ## 技术栈
 

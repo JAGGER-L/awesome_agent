@@ -30,7 +30,8 @@ Read-only Coding Runs now execute through the checkpointed
 `solo-readonly@1` Agent loop with bounded repository tools, correction
 feedback, stable audit events, and a durable final result. Modifying Coding
 Runs now route to `solo-modifying@1`, can apply patches and run allowed Docker
-sandbox commands, and complete only as unvalidated modifying output.
+sandbox commands, persist side-effecting tool invocations with idempotency
+metadata, and complete only as unvalidated modifying output.
 
 ## Stack
 

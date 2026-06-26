@@ -40,6 +40,10 @@ class RepositoryToolError(RuntimeError):
     pass
 
 
+class RepositoryRecoveryRequired(Exception):
+    pass
+
+
 class StatusArguments(BaseModel):
     pass
 
@@ -426,13 +430,28 @@ async def _apply_patch(invocation: ToolInvocation, _: object) -> ToolResult:
     preimage_hashes = _file_hashes(workspace, paths)
     checked = await _git_apply(workspace, arguments.patch, check=True)
     if checked.returncode != 0:
-        raise RepositoryToolError(checked.stderr or checked.stdout)
+        reverse = await _git_apply(workspace, arguments.patch, check=True, reverse=True)
+        if reverse.returncode == 0:
+            return ToolResult(
+                invocation_id=invocation.id,
+                output={
+                    "status": "already_applied",
+                    "paths": sorted(path.as_posix() for path in paths),
+                    "preimage_hashes": {},
+                    "postimage_hashes": _file_hashes(workspace, paths),
+                },
+            )
+        raise RepositoryRecoveryRequired(
+            "Patch state is ambiguous. It does not match the preimage and cannot "
+            "be proven to match the postimage."
+        )
     applied = await _git_apply(workspace, arguments.patch, check=False)
     if applied.returncode != 0:
-        raise RepositoryToolError(applied.stderr or applied.stdout)
+        raise RepositoryRecoveryRequired(applied.stderr or applied.stdout)
     return ToolResult(
         invocation_id=invocation.id,
         output={
+            "status": "applied",
             "paths": sorted(path.as_posix() for path in paths),
             "preimage_hashes": preimage_hashes,
             "postimage_hashes": _file_hashes(workspace, paths),
@@ -581,10 +600,13 @@ async def _git_apply(
     patch: str,
     *,
     check: bool,
+    reverse: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     command = ["git", "apply", "--whitespace=nowarn"]
     if check:
         command.append("--check")
+    if reverse:
+        command.append("--reverse")
     return await asyncio.to_thread(
         subprocess.run,
         command,
@@ -622,3 +644,24 @@ def _tool_uuid(call_id: str) -> Any:
     from uuid import NAMESPACE_URL, uuid5
 
     return uuid5(NAMESPACE_URL, f"awesome-agent:tool-call:{call_id}")
+
+
+def parse_tool_call_arguments(call: ToolCall) -> dict[str, Any]:
+    return _parse_arguments(call)
+
+
+def tool_invocation_uuid(call_id: str) -> Any:
+    return _tool_uuid(call_id)
+
+
+def repository_tool_effect_metadata(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    workspace: Path,
+) -> tuple[list[str], dict[str, str]]:
+    if tool_name != "repo.apply_patch":
+        return [], {}
+    parsed = ApplyPatchArguments.model_validate(arguments)
+    paths = _patch_paths(parsed.patch)
+    return sorted(path.as_posix() for path in paths), _file_hashes(workspace, paths)

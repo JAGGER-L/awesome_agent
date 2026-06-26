@@ -24,6 +24,10 @@ from awesome_agent.modeling import (
     ToolCall,
     TurnCompleted,
 )
+from awesome_agent.persistence.tool_invocations import (
+    DurableToolInvocation,
+    InMemoryToolInvocationRepository,
+)
 from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
     IncompatibleGraphError,
@@ -32,7 +36,11 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
     MODIFYING_CODING_VERSION,
 )
-from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
+from awesome_agent.runtime.modifying_graph import (
+    ModifyingCodingGraph,
+    _hash_json,
+    _idempotency_key,
+)
 
 
 class SequenceProvider(StructuredModelProvider):
@@ -228,3 +236,96 @@ async def test_modifying_graph_requires_thread_and_workspace(tmp_path: Path) -> 
     )
     with pytest.raises(CorruptRuntimeStateError, match="workspace"):
         await graph.execute(missing_workspace, agent)
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_reuses_completed_durable_tool_result(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++new
+"""
+    tool_repository = InMemoryToolInvocationRepository()
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: SequenceProvider([]),
+        tool_repository=tool_repository,
+    )
+    run, agent = _run(tmp_path)
+    graph._run = run
+    graph._agent = agent
+    call = ToolCall(
+        call_id="patch",
+        name="repo.apply_patch",
+        arguments_json=json.dumps({"patch": patch}),
+    )
+
+    first = await graph._execute_durable_tool_call(call)
+    second = await graph._execute_durable_tool_call(call)
+    invocations = await tool_repository.list_for_run(run.id)
+
+    assert not first.is_error
+    assert second.content == first.content
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new\n"
+    assert len(invocations) == 1
+    assert invocations[0].status == "completed"
+    assert invocations[0].result_content == first.content
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_marks_started_shell_as_recovery_required(
+    tmp_path: Path,
+) -> None:
+    tool_repository = InMemoryToolInvocationRepository()
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: SequenceProvider([]),
+        tool_repository=tool_repository,
+    )
+    run, agent = _run(tmp_path)
+    graph._run = run
+    graph._agent = agent
+    arguments = {
+        "argv": ["pytest"],
+        "timeout_seconds": 60.0,
+        "max_output_chars": 30_000,
+    }
+    await tool_repository.upsert(
+        DurableToolInvocation(
+            id=uuid4(),
+            run_id=run.id,
+            agent_id=agent.id,
+            tool_name="shell.execute",
+            tool_version="1",
+            status="started",
+            idempotency_key=_idempotency_key(
+                run_id=str(run.id),
+                agent_id=str(agent.id),
+                tool_name="shell.execute",
+                tool_version="1",
+                arguments_hash=_hash_json(arguments),
+                workspace=str(tmp_path),
+            ),
+            arguments_hash=_hash_json(arguments),
+            risk_level="medium",
+        )
+    )
+
+    with pytest.raises(CorruptRuntimeStateError, match="Shell execution"):
+        await graph._execute_durable_tool_call(
+            ToolCall(
+                call_id="shell",
+                name="shell.execute",
+                arguments_json=json.dumps(arguments),
+            )
+        )

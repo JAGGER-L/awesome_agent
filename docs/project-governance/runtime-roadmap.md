@@ -17,8 +17,10 @@ agents; they are not the durable product roadmap.
 
 ## Task 07: Isolated Mutation Sandbox and Shell
 
-Task 07 is the next implementation task. Its goal is to make modifying solo
-Runs executable without weakening the runtime safety model.
+Task 07 makes modifying solo Runs executable without weakening the runtime
+safety model.
+
+Status: completed on 2026-06-26.
 
 Task 07 includes:
 
@@ -47,12 +49,13 @@ Task 07 includes:
   than replaying the command automatically;
 - wire artifact offload into the main agent loop, including persistent artifact
   metadata and `artifact_refs` for oversized tool and shell output;
-- add a minimum prompt budget so large tool output is summarized or referenced
-  instead of being copied repeatedly into checkpoints;
+- add a minimum prompt guard so large single tool outputs are summarized or
+  referenced instead of being copied directly into checkpoints;
 - return a modifying completion state that is explicitly unvalidated until
   Task 10 adds deterministic validation and rework;
-- block or require explicit unsafe configuration for non-loopback FastAPI
-  serving without authentication;
+- block or require explicit unsafe configuration for non-loopback local API
+  serving through the project CLI; direct ASGI hosting remains an operator risk
+  tracked separately;
 - make the standard local check script self-explanatory and reproducible for
   required PostgreSQL test settings;
 - update capability documentation that currently describes coding execution,
@@ -101,6 +104,7 @@ Task 07 does not include:
 | Worktrees and branches accumulate permanently | Task 14 |
 | API health and doctor are too optimistic | Task 15 |
 | Local API can bind non-loopback without authentication | Resolved in Task 07 with explicit unsafe gate; production auth remains out of scope |
+| Direct ASGI hosting can bypass the CLI non-loopback gate | Task 15 |
 | Current capability docs drift from implementation | Resolved for Task 07 solo execution claims; future drift remains tracked by harness |
 
 ## Sequencing Rules

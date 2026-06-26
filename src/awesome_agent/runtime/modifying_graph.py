@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -22,11 +25,16 @@ from awesome_agent.modeling import (
     ModelTurn,
     StopReason,
     SystemMessage,
+    ToolCall,
     ToolChoice,
     ToolChoiceMode,
     ToolResultMessage,
     TransientModelError,
     UserMessage,
+)
+from awesome_agent.persistence.tool_invocations import (
+    DurableToolInvocation,
+    ToolInvocationRepository,
 )
 from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
@@ -39,10 +47,14 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_VERSION,
 )
 from awesome_agent.tools.repository import (
+    RepositoryRecoveryRequired,
     build_modifying_executor,
     build_modifying_registry,
     execute_repository_call,
     model_tool_definitions,
+    parse_tool_call_arguments,
+    repository_tool_effect_metadata,
+    tool_invocation_uuid,
 )
 
 _MESSAGE_ADAPTER: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
@@ -98,6 +110,7 @@ class ModifyingCodingGraph:
         provider_resolver: ProviderResolver,
         artifact_store: LocalArtifactStore | None = None,
         artifact_repository: ArtifactMetadataRepository | None = None,
+        tool_repository: ToolInvocationRepository | None = None,
         max_model_turns: int = 60,
         max_tool_calls: int = 120,
         recursion_limit: int = 256,
@@ -110,6 +123,7 @@ class ModifyingCodingGraph:
         self.executor = build_modifying_executor(self.registry)
         self.artifact_store = artifact_store
         self.artifact_repository = artifact_repository
+        self.tool_repository = tool_repository
         self.max_model_turns = max_model_turns
         self.max_tool_calls = max_tool_calls
         self.recursion_limit = recursion_limit
@@ -287,8 +301,6 @@ class ModifyingCodingGraph:
         self,
         state: ModifyingAgentState,
     ) -> ModifyingAgentState:
-        run = self._require_run()
-        agent = self._require_agent()
         turn = ModelTurn.model_validate(state["last_turn"])
         calls = turn.assistant.tool_calls
         if not calls:
@@ -314,18 +326,10 @@ class ModifyingCodingGraph:
         final_diff_after_write = state["final_diff_after_write"]
         fingerprints: list[str] = []
         for call in calls:
-            result = await execute_repository_call(
-                self.executor,
-                call,
-                workspace=cast(Any, run.workspace_path),
-                agent_id=agent.id,
-                capabilities={
-                    "repository:read",
-                    "repository:write",
-                    "shell:execute",
-                    "artifact:read",
-                },
-            )
+            try:
+                result = await self._execute_durable_tool_call(call)
+            except RepositoryRecoveryRequired as error:
+                raise CorruptRuntimeStateError(str(error)) from error
             result = await self._offload_result_if_needed(call.call_id, result)
             if call.name == "repo.apply_patch" and not result.is_error:
                 successful_writes += 1
@@ -382,6 +386,121 @@ class ModifyingCodingGraph:
         if self.fault_hook is not None:
             await self.fault_hook("execute_tool", updated)
         return updated
+
+    async def _execute_durable_tool_call(self, call: ToolCall) -> ToolResultMessage:
+        if self.tool_repository is None:
+            return await self._execute_tool_call(call)
+        run = self._require_run()
+        agent = self._require_agent()
+        workspace = cast(Any, run.workspace_path)
+        arguments = parse_tool_call_arguments(call)
+        spec, _ = self.registry.resolve(call.name)
+        arguments_fingerprint = _hash_json(arguments)
+        idempotency_key = _idempotency_key(
+            run_id=str(run.id),
+            agent_id=str(agent.id),
+            tool_name=call.name,
+            tool_version=spec.version,
+            arguments_hash=arguments_fingerprint,
+            workspace=str(workspace),
+        )
+        existing = await self.tool_repository.get_by_idempotency_key(
+            run.id,
+            idempotency_key,
+        )
+        if existing is not None:
+            if existing.arguments_hash != arguments_fingerprint:
+                raise CorruptRuntimeStateError(
+                    "Tool invocation idempotency collision changed arguments."
+                )
+            if existing.status in {"completed", "failed"}:
+                if existing.result_content is None:
+                    raise CorruptRuntimeStateError(
+                        "Completed tool invocation has no durable result."
+                    )
+                return ToolResultMessage(
+                    call_id=call.call_id,
+                    content=existing.result_content,
+                    is_error=existing.result_is_error,
+                )
+            if call.name == "shell.execute":
+                raise CorruptRuntimeStateError(
+                    "Shell execution completion is unknown after restart."
+                )
+            if call.name != "repo.apply_patch":
+                raise CorruptRuntimeStateError(
+                    f"Tool invocation {existing.id} stopped before completion."
+                )
+
+        now = datetime.now(UTC)
+        if existing is not None:
+            invocation = _copy_invocation(existing, updated_at=now)
+        else:
+            path_refs, preimage_hashes = repository_tool_effect_metadata(
+                call.name,
+                arguments,
+                workspace=workspace,
+            )
+            invocation = DurableToolInvocation(
+                id=tool_invocation_uuid(call.call_id),
+                run_id=run.id,
+                agent_id=agent.id,
+                tool_name=call.name,
+                tool_version=spec.version,
+                status="started",
+                idempotency_key=idempotency_key,
+                arguments_hash=arguments_fingerprint,
+                risk_level=spec.risk_level.value,
+                path_refs=path_refs,
+                preimage_hashes=preimage_hashes,
+                started_at=now,
+                updated_at=now,
+            )
+        await self.tool_repository.upsert(invocation)
+        try:
+            result = await self._execute_tool_call(call)
+        except RepositoryRecoveryRequired as error:
+            await self.tool_repository.upsert(
+                _copy_invocation(
+                    invocation,
+                    status="recovery_required",
+                    error=str(error),
+                    updated_at=datetime.now(UTC),
+                )
+            )
+            raise
+        completed_at = datetime.now(UTC)
+        expected_postimage_hashes = _extract_postimage_hashes(result.content)
+        await self.tool_repository.upsert(
+            _copy_invocation(
+                invocation,
+                status="failed" if result.is_error else "completed",
+                expected_postimage_hashes=expected_postimage_hashes,
+                result_summary=result.content[:500],
+                result_content=result.content,
+                result_is_error=result.is_error,
+                error=result.content[:500] if result.is_error else None,
+                completed_at=completed_at,
+                updated_at=completed_at,
+            )
+        )
+        return result
+
+    async def _execute_tool_call(self, call: ToolCall) -> ToolResultMessage:
+        run = self._require_run()
+        agent = self._require_agent()
+        return await execute_repository_call(
+            self.executor,
+            call,
+            workspace=cast(Any, run.workspace_path),
+            agent_id=agent.id,
+            capabilities={
+                "repository:read",
+                "repository:write",
+                "shell:execute",
+                "artifact:read",
+            },
+        )
 
     async def _feedback(self, state: ModifyingAgentState) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
@@ -543,3 +662,50 @@ def _state(value: object) -> ModifyingAgentState:
     if not required.issubset(value):
         raise CorruptRuntimeStateError("Modifying graph state is incomplete.")
     return cast(ModifyingAgentState, value)
+
+
+def _hash_json(value: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _idempotency_key(
+    *,
+    run_id: str,
+    agent_id: str,
+    tool_name: str,
+    tool_version: str,
+    arguments_hash: str,
+    workspace: str,
+) -> str:
+    raw = "\0".join(
+        [run_id, agent_id, tool_name, tool_version, arguments_hash, workspace]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _extract_postimage_hashes(content: str) -> dict[str, str]:
+    try:
+        decoded = json.loads(content)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(decoded, dict):
+        return {}
+    postimage_hashes = decoded.get("postimage_hashes")
+    if not isinstance(postimage_hashes, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in postimage_hashes.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def _copy_invocation(
+    invocation: DurableToolInvocation,
+    **updates: object,
+) -> DurableToolInvocation:
+    return replace(invocation, **updates)  # type: ignore[arg-type]

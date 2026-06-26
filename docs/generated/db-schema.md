@@ -15,6 +15,21 @@ Generated from SQLAlchemy metadata.
 | `status` | `VARCHAR(32)` | no |
 | `created_at` | `DATETIME` | no |
 
+## `artifacts`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `agent_id` | `UUID` | yes |
+| `artifact_type` | `VARCHAR(64)` | no |
+| `path` | `TEXT` | no |
+| `sha256` | `VARCHAR(64)` | no |
+| `size` | `INTEGER` | no |
+| `mime_type` | `VARCHAR(255)` | no |
+| `summary` | `TEXT` | no |
+| `created_at` | `DATETIME` | no |
+
 ## `intake_reservations`
 
 | Column | Type | Nullable |
@@ -112,5 +127,31 @@ Generated from SQLAlchemy metadata.
 | `acceptance_criteria` | `JSONB` | no |
 | `blocker` | `TEXT` | yes |
 | `revision` | `INTEGER` | no |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+
+## `tool_invocations`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `agent_id` | `UUID` | yes |
+| `tool_name` | `VARCHAR(128)` | no |
+| `tool_version` | `VARCHAR(32)` | no |
+| `status` | `VARCHAR(32)` | no |
+| `idempotency_key` | `VARCHAR(255)` | no |
+| `arguments_hash` | `VARCHAR(64)` | no |
+| `risk_level` | `VARCHAR(32)` | no |
+| `path_refs` | `JSONB` | no |
+| `preimage_hashes` | `JSONB` | no |
+| `expected_postimage_hashes` | `JSONB` | no |
+| `result_summary` | `TEXT` | yes |
+| `result_content` | `TEXT` | yes |
+| `result_is_error` | `BOOLEAN` | no |
+| `artifact_refs` | `JSONB` | no |
+| `error` | `TEXT` | yes |
+| `started_at` | `DATETIME` | yes |
+| `completed_at` | `DATETIME` | yes |
 | `created_at` | `DATETIME` | no |
 | `updated_at` | `DATETIME` | no |

@@ -12,6 +12,7 @@ from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
+from awesome_agent.persistence.tool_invocations import PostgresToolInvocationRepository
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
@@ -46,6 +47,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 provider_resolver=providers.create,
                 artifact_store=LocalArtifactStore(configured.artifact_root),
                 artifact_repository=PostgresArtifactMetadataRepository(sessions),
+                tool_repository=PostgresToolInvocationRepository(sessions),
                 max_model_turns=configured.max_model_turns,
                 max_tool_calls=configured.max_tool_calls_per_run,
                 recursion_limit=configured.agent_graph_recursion_limit,

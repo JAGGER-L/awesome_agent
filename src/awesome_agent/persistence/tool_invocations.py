@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,12 +26,73 @@ class DurableToolInvocation:
     preimage_hashes: dict[str, str] = field(default_factory=dict)
     expected_postimage_hashes: dict[str, str] = field(default_factory=dict)
     result_summary: str | None = None
+    result_content: str | None = None
+    result_is_error: bool = False
     artifact_refs: list[str] = field(default_factory=list)
     error: str | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+class ToolInvocationRepository(Protocol):
+    async def upsert(self, invocation: DurableToolInvocation) -> DurableToolInvocation:
+        """Create or update a durable tool invocation."""
+        ...
+
+    async def get(self, invocation_id: UUID) -> DurableToolInvocation:
+        """Load one durable tool invocation."""
+        ...
+
+    async def get_by_idempotency_key(
+        self,
+        run_id: UUID,
+        idempotency_key: str,
+    ) -> DurableToolInvocation | None:
+        """Load an invocation by its run-scoped idempotency key."""
+        ...
+
+    async def list_for_run(self, run_id: UUID) -> list[DurableToolInvocation]:
+        """Load invocations for a run in creation order."""
+        ...
+
+
+class InMemoryToolInvocationRepository:
+    def __init__(self) -> None:
+        self._records: dict[UUID, DurableToolInvocation] = {}
+
+    async def upsert(self, invocation: DurableToolInvocation) -> DurableToolInvocation:
+        self._records[invocation.id] = invocation
+        return invocation
+
+    async def get(self, invocation_id: UUID) -> DurableToolInvocation:
+        return self._records[invocation_id]
+
+    async def get_by_idempotency_key(
+        self,
+        run_id: UUID,
+        idempotency_key: str,
+    ) -> DurableToolInvocation | None:
+        return next(
+            (
+                invocation
+                for invocation in self._records.values()
+                if invocation.run_id == run_id
+                and invocation.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    async def list_for_run(self, run_id: UUID) -> list[DurableToolInvocation]:
+        return sorted(
+            (
+                invocation
+                for invocation in self._records.values()
+                if invocation.run_id == run_id
+            ),
+            key=lambda invocation: (invocation.created_at, invocation.id),
+        )
 
 
 class PostgresToolInvocationRepository:
@@ -94,6 +156,8 @@ def _to_record(invocation: DurableToolInvocation) -> ToolInvocationRecord:
         preimage_hashes=invocation.preimage_hashes,
         expected_postimage_hashes=invocation.expected_postimage_hashes,
         result_summary=invocation.result_summary,
+        result_content=invocation.result_content,
+        result_is_error=invocation.result_is_error,
         artifact_refs=invocation.artifact_refs,
         error=invocation.error,
         started_at=invocation.started_at,
@@ -112,6 +176,8 @@ def _update_record(
     record.preimage_hashes = invocation.preimage_hashes
     record.expected_postimage_hashes = invocation.expected_postimage_hashes
     record.result_summary = invocation.result_summary
+    record.result_content = invocation.result_content
+    record.result_is_error = invocation.result_is_error
     record.artifact_refs = invocation.artifact_refs
     record.error = invocation.error
     record.started_at = invocation.started_at
@@ -138,6 +204,8 @@ def _from_record(record: ToolInvocationRecord) -> DurableToolInvocation:
             str(key): value for key, value in record.expected_postimage_hashes.items()
         },
         result_summary=record.result_summary,
+        result_content=record.result_content,
+        result_is_error=record.result_is_error,
         artifact_refs=list(record.artifact_refs),
         error=record.error,
         started_at=record.started_at,

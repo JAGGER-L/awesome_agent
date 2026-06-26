@@ -9,6 +9,7 @@ import pytest
 
 from awesome_agent.modeling import ToolCall, ToolResultMessage
 from awesome_agent.tools.repository import (
+    RepositoryRecoveryRequired,
     build_modifying_executor,
     build_modifying_registry,
     build_read_only_executor,
@@ -294,7 +295,31 @@ async def test_apply_patch_reports_check_failure(tmp_path: Path) -> None:
 +new
 """
 
-    result = await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
+    with pytest.raises(RepositoryRecoveryRequired):
+        await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
 
-    assert result.is_error
-    assert "RepositoryToolError" in result.content
+
+@pytest.mark.asyncio
+async def test_apply_patch_treats_existing_postimage_as_completed(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++new
+"""
+
+    first = await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
+    second = await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
+
+    assert not first.is_error
+    assert not second.is_error
+    assert '"status": "already_applied"' in second.content
