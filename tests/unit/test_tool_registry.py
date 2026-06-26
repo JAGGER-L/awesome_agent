@@ -1,3 +1,4 @@
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -20,6 +21,11 @@ from awesome_agent.tools.registry import ToolRegistry
 
 
 async def _handler(invocation: ToolInvocation, progress: object) -> ToolResult:
+    return ToolResult(invocation_id=invocation.id, output={"ok": True})
+
+
+async def _slow_handler(invocation: ToolInvocation, progress: object) -> ToolResult:
+    await asyncio.sleep(1)
     return ToolResult(invocation_id=invocation.id, output={"ok": True})
 
 
@@ -100,4 +106,23 @@ async def test_default_policy_denies_destructive_command() -> None:
     )
 
     with pytest.raises(ToolDenied):
+        await executor.execute(invocation)
+
+
+@pytest.mark.asyncio
+async def test_executor_applies_tool_timeout() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        _spec().model_copy(update={"timeout_seconds": 0.01}),
+        _slow_handler,
+    )
+    executor = ToolExecutor(registry, ApprovalPolicy())
+    invocation = ToolInvocation(
+        tool_name="shell",
+        agent_id=uuid4(),
+        profile="backend-engineer",
+        capabilities={"shell"},
+    )
+
+    with pytest.raises(TimeoutError):
         await executor.execute(invocation)

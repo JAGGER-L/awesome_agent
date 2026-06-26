@@ -1,3 +1,5 @@
+import asyncio
+
 from awesome_agent.domain.enums import ApprovalDecision
 from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.models import (
@@ -31,4 +33,7 @@ class ToolExecutor:
             raise ToolDenied(invocation.tool_name)
         if outcome.decision is ApprovalDecision.ASK and not invocation.approval_granted:
             raise ApprovalRequired(invocation)
-        return await handler(invocation, progress)
+        return await asyncio.wait_for(
+            handler(invocation, progress),
+            timeout=spec.timeout_seconds,
+        )

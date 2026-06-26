@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field, ValidationError
 from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.modeling import ToolCall, ToolDefinition, ToolResultMessage
 from awesome_agent.sandbox.process import run_process
+from awesome_agent.tools.approval import ApprovalPolicy
+from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 
@@ -126,7 +128,7 @@ def model_tool_definitions(registry: ToolRegistry) -> list[ToolDefinition]:
 
 
 async def execute_repository_call(
-    registry: ToolRegistry,
+    executor: ToolExecutor,
     call: ToolCall,
     *,
     workspace: Path,
@@ -135,8 +137,7 @@ async def execute_repository_call(
 ) -> ToolResultMessage:
     try:
         arguments = _parse_arguments(call)
-        _, handler = registry.resolve(call.name)
-        result = await handler(
+        result = await executor.execute(
             ToolInvocation(
                 id=_tool_uuid(call.call_id),
                 tool_name=call.name,
@@ -146,18 +147,29 @@ async def execute_repository_call(
                 arguments=arguments,
                 workspace=workspace,
             ),
-            None,
+            progress=None,
         )
         return ToolResultMessage(
             call_id=call.call_id,
             content=_bounded_json(result.output),
         )
-    except (RepositoryToolError, ValidationError, ValueError, KeyError) as error:
+    except (
+        RepositoryToolError,
+        ValidationError,
+        ValueError,
+        KeyError,
+        TimeoutError,
+        RuntimeError,
+    ) as error:
         return ToolResultMessage(
             call_id=call.call_id,
             content=f"{type(error).__name__}: {error}",
             is_error=True,
         )
+
+
+def build_read_only_executor(registry: ToolRegistry | None = None) -> ToolExecutor:
+    return ToolExecutor(registry or build_read_only_registry(), ApprovalPolicy())
 
 
 def _parse_arguments(call: ToolCall) -> dict[str, Any]:

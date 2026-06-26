@@ -37,8 +37,10 @@ from awesome_agent.runtime.graphs import (
     READ_ONLY_CODING_GRAPH,
     READ_ONLY_CODING_VERSION,
 )
+from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.repository import (
+    build_read_only_executor,
     build_read_only_registry,
     execute_repository_call,
     model_tool_definitions,
@@ -92,6 +94,7 @@ class ReadOnlyCodingGraph:
         *,
         provider_resolver: ProviderResolver,
         registry: ToolRegistry | None = None,
+        executor: ToolExecutor | None = None,
         max_model_turns: int = 60,
         max_tool_calls: int = 120,
         max_parallel_tools: int = 4,
@@ -102,6 +105,7 @@ class ReadOnlyCodingGraph:
         self.saver = saver
         self.provider_resolver = provider_resolver
         self.registry = registry or build_read_only_registry()
+        self.executor = executor or build_read_only_executor(self.registry)
         self.max_model_turns = max_model_turns
         self.max_tool_calls = max_tool_calls
         self.max_parallel_tools = max_parallel_tools
@@ -316,7 +320,7 @@ class ReadOnlyCodingGraph:
             call = calls[index]
             async with semaphore:
                 result = await execute_repository_call(
-                    self.registry,
+                    self.executor,
                     call,
                     workspace=cast(Any, run.workspace_path),
                     agent_id=agent.id,
