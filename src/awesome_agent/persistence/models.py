@@ -222,3 +222,45 @@ class ToolInvocationRecord(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ApprovalRecord(Base):
+    __tablename__ = "approvals"
+    __table_args__ = (
+        Index(
+            "uq_approvals_run_tool_call",
+            "run_id",
+            "tool_call_id",
+            unique=True,
+        ),
+        Index("ix_approvals_status_expires_at", "status", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("runs.id", ondelete="CASCADE"), index=True
+    )
+    agent_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), index=True
+    )
+    tool_invocation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("tool_invocations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    tool_call_id: Mapped[str] = mapped_column(String(255))
+    tool_name: Mapped[str] = mapped_column(String(128), index=True)
+    tool_version: Mapped[str] = mapped_column(String(32))
+    canonical_arguments: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    arguments_hash: Mapped[str] = mapped_column(String(64))
+    workspace_path: Mapped[str] = mapped_column(Text)
+    workspace_fingerprint: Mapped[str] = mapped_column(String(64))
+    capabilities: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    risk_level: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decided_by: Mapped[str | None] = mapped_column(String(255))
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

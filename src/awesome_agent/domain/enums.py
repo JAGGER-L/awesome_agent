@@ -119,6 +119,13 @@ class ApprovalDecision(StrEnum):
     DENY = "deny"
 
 
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    EXPIRED = "expired"
+
+
 class ExecutionOrigin(StrEnum):
     CLI = "cli"
     API = "api"
