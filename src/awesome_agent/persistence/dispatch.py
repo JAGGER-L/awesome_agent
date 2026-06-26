@@ -235,6 +235,16 @@ class PostgresRunDispatcher(RunDispatcher):
             record, _ = await _locked_live_lease(session, lease)
             return record.cancel_requested_at is not None
 
+    async def mark_cancelled(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            record, now = await _locked_live_lease(session, lease)
+            await _cancel_record(session, record, now=now, reason=reason)
+
     async def release_for_approval_wait(
         self,
         lease: RunLease,

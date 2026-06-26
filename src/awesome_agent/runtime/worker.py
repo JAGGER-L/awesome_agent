@@ -18,6 +18,7 @@ from awesome_agent.runtime.dispatch import (
     IncompatibleGraphError,
     LeaseLost,
     PermanentExecutionError,
+    RunCancelled,
     RunDispatcher,
 )
 from awesome_agent.runtime.graphs import (
@@ -139,6 +140,8 @@ class DurableWorker:
             )
         except LeaseLost:
             return
+        except RunCancelled:
+            return
         except ApprovalInterrupt as interrupt:
             await self._release_for_approval_if_owned(lease, interrupt.approval_id)
         except (IncompatibleGraphError, CorruptRuntimeStateError) as error:
@@ -172,13 +175,32 @@ class DurableWorker:
             lease_lost.wait(),
             name=f"lease-lost:{lease.run_id}",
         )
+        cancel_task = asyncio.create_task(
+            self._cancel_watch_loop(lease),
+            name=f"cancel-watch:{lease.run_id}",
+        )
         try:
             done, _ = await asyncio.wait(
-                {graph_task, stop_task, lost_task},
+                {graph_task, stop_task, lost_task, cancel_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if graph_task in done:
                 return await graph_task
+            if cancel_task in done:
+                graph_task.cancel()
+                try:
+                    await asyncio.wait_for(
+                        _consume_cancel(graph_task),
+                        timeout=self.config.shutdown_grace,
+                    )
+                except TimeoutError as error:
+                    await self._mark_recovery_if_owned(
+                        lease,
+                        "Cancellation did not reach a safe graph boundary.",
+                    )
+                    raise RunCancelled() from error
+                await self._cancel_if_owned(lease, "cancel_requested")
+                raise RunCancelled()
             if lost_task in done and lease_lost.is_set():
                 graph_task.cancel()
                 await _consume_cancel(graph_task)
@@ -198,10 +220,12 @@ class DurableWorker:
             heartbeat.cancel()
             stop_task.cancel()
             lost_task.cancel()
+            cancel_task.cancel()
             await asyncio.gather(
                 heartbeat,
                 stop_task,
                 lost_task,
+                cancel_task,
                 return_exceptions=True,
             )
 
@@ -229,6 +253,15 @@ class DurableWorker:
                     lease_lost.set()
                 else:
                     await self.sleep(1)
+
+    async def _cancel_watch_loop(self, lease: RunLease) -> None:
+        while True:
+            await self.sleep(min(1.0, self.config.poll_interval))
+            try:
+                if await self.dispatcher.is_cancel_requested(lease):
+                    return
+            except LeaseLost:
+                return
 
     async def _retry_if_owned(self, lease: RunLease, error: Exception) -> None:
         try:
@@ -263,6 +296,12 @@ class DurableWorker:
     ) -> None:
         try:
             await self.dispatcher.mark_recovery_required(lease, reason=reason)
+        except LeaseLost:
+            return
+
+    async def _cancel_if_owned(self, lease: RunLease, reason: str) -> None:
+        try:
+            await self.dispatcher.mark_cancelled(lease, reason=reason)
         except LeaseLost:
             return
 

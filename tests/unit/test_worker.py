@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from awesome_agent.domain.enums import AgentKind, ExecutionKind, RunIntent
-from awesome_agent.domain.models import Agent, Run, RunLease
+from awesome_agent.domain.models import Agent, Run, RunLease, RuntimeEvent
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -38,6 +38,7 @@ class FakeDispatcher:
     def __init__(self, lease: RunLease | None) -> None:
         self.lease = lease
         self.calls: list[tuple[str, object]] = []
+        self.cancel_requested = False
 
     async def claim_next(self, **kwargs: object) -> RunLease | None:
         self.calls.append(("claim", kwargs))
@@ -56,6 +57,32 @@ class FakeDispatcher:
 
     async def release_for_retry(self, lease: RunLease, **kwargs: object) -> None:
         self.calls.append(("retry", kwargs))
+
+    async def request_cancellation(
+        self,
+        *,
+        run_id: UUID,
+        requested_by: str | None,
+        reason: str | None,
+    ) -> RuntimeEvent | None:
+        self.calls.append(
+            (
+                "request_cancellation",
+                {
+                    "run_id": run_id,
+                    "requested_by": requested_by,
+                    "reason": reason,
+                },
+            )
+        )
+        return None
+
+    async def is_cancel_requested(self, lease: RunLease) -> bool:
+        self.calls.append(("cancel_check", lease))
+        return self.cancel_requested
+
+    async def mark_cancelled(self, lease: RunLease, **kwargs: object) -> None:
+        self.calls.append(("cancelled", kwargs))
 
     async def release_for_approval_wait(
         self,
@@ -106,6 +133,12 @@ class FakeGraph:
             },
             False,
         )
+
+
+class SlowGraph:
+    async def execute(self, _: Run) -> tuple[RuntimeProbeState, bool]:
+        await asyncio.sleep(60)
+        raise AssertionError("slow graph should be cancelled")
 
 
 class FakeModifyingGraph:
@@ -222,6 +255,26 @@ async def test_worker_retries_transient_graph_error() -> None:
     await worker.run_once()
 
     assert dispatcher.calls[-1][0] == "retry"
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_active_run_cancelled() -> None:
+    lease = _lease()
+    dispatcher = FakeDispatcher(lease)
+    dispatcher.cancel_requested = True
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(_run(lease)),  # type: ignore[arg-type]
+        probe_graph=SlowGraph(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    assert await worker.run_once()
+    calls = [call[0] for call in dispatcher.calls]
+
+    assert "cancelled" in calls
+    assert "complete" not in calls
+    assert "retry" not in calls
 
 
 @pytest.mark.asyncio

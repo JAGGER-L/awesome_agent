@@ -38,6 +38,10 @@ class ApprovalInterrupt(RuntimeError):
         super().__init__(f"Run is waiting for approval {approval_id}.")
 
 
+class RunCancelled(RuntimeError):
+    pass
+
+
 class RunDispatcher(Protocol):
     async def claim_next(
         self,
@@ -95,6 +99,15 @@ class RunDispatcher(Protocol):
 
     async def is_cancel_requested(self, lease: RunLease) -> bool:
         """Return whether the leased Run has a pending cancellation request."""
+        ...
+
+    async def mark_cancelled(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        """Commit a fenced active cancellation terminal projection."""
         ...
 
     async def release_for_approval_wait(
