@@ -89,6 +89,8 @@ worktree。当前普通 `run` 命令创建的 Coding Run 仍保持 queued。
 
 `awesome-agent start` 会监督相互独立的 API 和 Worker 子进程。需要分别管理
 进程时仍可使用 `serve` 和 `worker`。
+本地 FastAPI API 没有认证，默认只绑定 `127.0.0.1`。如果要将 `serve` 或
+`start` 绑定到非 loopback host，必须显式传入 `--unsafe-bind-public`。
 
 可以通过 `GET /runs/{run_id}/dispatch` 查看调度状态。queued 和
 retry-scheduled Run 可以立即取消；claimed 或 executing Run 在实现持久化取消

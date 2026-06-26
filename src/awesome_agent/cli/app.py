@@ -23,6 +23,8 @@ from awesome_agent.settings import Settings
 
 configure_event_loop_policy()
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
 app = typer.Typer(
     name="awesome-agent",
     help="Local-first observable coding agent.",
@@ -172,10 +174,20 @@ def repo_relocate(repository_id: UUID, path: Path) -> None:
 def serve(
     host: Annotated[str, typer.Option()] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8000,
+    unsafe_bind_public: Annotated[
+        bool,
+        typer.Option(
+            "--unsafe-bind-public",
+            help=(
+                "Allow binding the unauthenticated local API to a non-loopback host."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Start the local FastAPI inspection server."""
     import uvicorn
 
+    _reject_public_bind_without_consent(host, unsafe_bind_public)
     try:
         from awesome_agent.observability.setup import configure_observability
 
@@ -205,12 +217,23 @@ def worker(
 def start(
     host: Annotated[str, typer.Option()] = "127.0.0.1",
     port: Annotated[int, typer.Option(min=1, max=65535)] = 8000,
+    unsafe_bind_public: Annotated[
+        bool,
+        typer.Option(
+            "--unsafe-bind-public",
+            help=(
+                "Allow binding the unauthenticated local API to a non-loopback host."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Start independent local API and Worker child processes."""
+    _reject_public_bind_without_consent(host, unsafe_bind_public)
     result = run_supervisor(
         host=host,
         port=port,
         shutdown_timeout=Settings().worker_shutdown_grace_seconds,
+        unsafe_bind_public=unsafe_bind_public,
     )
     if result.return_code != 0:
         typer.echo(
@@ -369,6 +392,18 @@ def _run_with_repository_service[T](
             await engine.dispose()
 
     return asyncio.run(execute())
+
+
+def _reject_public_bind_without_consent(
+    host: str,
+    unsafe_bind_public: bool,
+) -> None:
+    if host in _LOOPBACK_HOSTS or unsafe_bind_public:
+        return
+    raise typer.BadParameter(
+        "The local API is unauthenticated. Use a loopback host such as "
+        "127.0.0.1, or pass --unsafe-bind-public to expose it explicitly."
+    )
 
 
 if __name__ == "__main__":

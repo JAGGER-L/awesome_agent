@@ -20,20 +20,22 @@ def run_supervisor(
     host: str,
     port: int,
     shutdown_timeout: float,
+    unsafe_bind_public: bool = False,
 ) -> SupervisorResult:
+    serve_command = [
+        sys.executable,
+        "-m",
+        "awesome_agent.cli.app",
+        "serve",
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    if unsafe_bind_public:
+        serve_command.append("--unsafe-bind-public")
     children = {
-        "api": _start_child(
-            [
-                sys.executable,
-                "-m",
-                "awesome_agent.cli.app",
-                "serve",
-                "--host",
-                host,
-                "--port",
-                str(port),
-            ]
-        ),
+        "api": _start_child(serve_command),
         "worker": _start_child(
             [
                 sys.executable,

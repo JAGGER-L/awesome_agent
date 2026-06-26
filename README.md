@@ -96,6 +96,9 @@ cross-process event path without executing a coding goal:
 `awesome-agent start` supervises independent API and Worker child processes.
 `serve` and `worker` remain available when the processes should be managed
 separately.
+The local FastAPI API is unauthenticated and binds to `127.0.0.1` by default.
+Binding `serve` or `start` to a non-loopback host requires the explicit
+`--unsafe-bind-public` flag.
 
 Dispatch state is available at `GET /runs/{run_id}/dispatch`. Queued and
 retry-scheduled Runs can be cancelled immediately. Claimed or executing Runs

@@ -39,6 +39,9 @@
   dispatch state.
 - Claim and heartbeat are internal PostgreSQL operations, not public FastAPI
   endpoints.
+- The local FastAPI inspection API is unauthenticated and binds to loopback by
+  default. CLI `serve` and `start` reject non-loopback hosts unless the user
+  passes `--unsafe-bind-public` explicitly.
 - The Task 04 Worker accepts only `runtime_probe`; the probe graph has no model,
   tool, shell, sandbox, or repository-content capability.
 - `POST /runtime/probes` selects the fixed supported probe graph on the server;

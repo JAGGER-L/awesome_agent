@@ -62,6 +62,30 @@ def test_supervisor_reports_child_exit_and_stops_sibling(
     assert api.terminated
 
 
+def test_supervisor_passes_public_bind_consent_to_api_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = FakeProcess(return_code=0)
+    worker = FakeProcess()
+    commands: list[list[str]] = []
+    children = iter([api, worker])
+
+    def start_child(command: list[str]) -> FakeProcess:
+        commands.append(command)
+        return next(children)
+
+    monkeypatch.setattr(supervisor, "_start_child", start_child)
+
+    supervisor.run_supervisor(
+        host="0.0.0.0",
+        port=8000,
+        shutdown_timeout=1,
+        unsafe_bind_public=True,
+    )
+
+    assert "--unsafe-bind-public" in commands[0]
+
+
 def test_stop_children_kills_process_after_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
