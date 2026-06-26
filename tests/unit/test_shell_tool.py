@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import pytest
+
+from awesome_agent.sandbox.base import CommandResult
+from awesome_agent.tools.models import ToolInvocation
+from awesome_agent.tools.shell import _execute, classify_command
+
+
+def test_shell_policy_classifies_allow_ask_and_deny() -> None:
+    assert classify_command(["pytest"]) == "allow"
+    assert classify_command(["git", "diff"]) == "allow"
+    assert classify_command(["git", "push"]) == "deny"
+    assert classify_command(["python", "script.py"]) == "ask"
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_runs_allowed_command_in_docker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_run_process(
+        arguments: list[str],
+        *,
+        command_label: str,
+        workspace: Path,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        calls.append(
+            {
+                "arguments": arguments,
+                "command_label": command_label,
+                "workspace": workspace,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return CommandResult(
+            command=command_label,
+            exit_code=0,
+            stdout="ok",
+            stderr="",
+        )
+
+    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
+
+    result = await _execute(
+        ToolInvocation(
+            tool_name="shell.execute",
+            agent_id=uuid4(),
+            profile="leader",
+            capabilities={"shell:execute"},
+            arguments={"argv": ["pytest"], "timeout_seconds": 5},
+            workspace=tmp_path,
+        ),
+        None,
+    )
+
+    assert result.output["status"] == "completed"
+    assert calls[0]["arguments"][:5] == [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "none",
+    ]
+    assert calls[0]["arguments"][-1] == "pytest"
+    assert calls[0]["timeout_seconds"] == 5
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_returns_approval_required_for_ambiguous_command(
+    tmp_path: Path,
+) -> None:
+    result = await _execute(
+        ToolInvocation(
+            tool_name="shell.execute",
+            agent_id=uuid4(),
+            profile="leader",
+            capabilities={"shell:execute"},
+            arguments={"argv": ["python", "script.py"]},
+            workspace=tmp_path,
+        ),
+        None,
+    )
+
+    assert result.output["status"] == "approval_required"
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_denies_dangerous_command(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="denied"):
+        await _execute(
+            ToolInvocation(
+                tool_name="shell.execute",
+                agent_id=uuid4(),
+                profile="leader",
+                capabilities={"shell:execute"},
+                arguments={"argv": ["git", "push"]},
+                workspace=tmp_path,
+            ),
+            None,
+        )

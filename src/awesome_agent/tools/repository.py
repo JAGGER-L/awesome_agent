@@ -17,6 +17,7 @@ from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
+from awesome_agent.tools.shell import ShellExecuteArguments, register_shell_tools
 
 TOOL_RESULT_MAX_CHARS = 30_000
 _SENSITIVE_NAMES = {
@@ -81,6 +82,7 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "repo.instructions": InstructionsArguments,
     "repo.diff": DiffArguments,
     "repo.apply_patch": ApplyPatchArguments,
+    "shell.execute": ShellExecuteArguments,
 }
 
 
@@ -153,6 +155,7 @@ def build_modifying_registry() -> ToolRegistry:
         ),
         _apply_patch,
     )
+    register_shell_tools(registry)
     return registry
 
 
