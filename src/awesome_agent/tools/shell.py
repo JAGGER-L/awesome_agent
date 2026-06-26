@@ -47,7 +47,11 @@ async def _execute(invocation: ToolInvocation, _: object) -> ToolResult:
         raise ShellToolError("Command requires durable approval before execution.")
     workspace = _workspace(invocation)
     result = await run_process(
-        _docker_argv(arguments.argv, workspace),
+        _docker_argv(
+            arguments.argv,
+            workspace,
+            container_name=f"awesome-agent-{invocation.id.hex}",
+        ),
         command_label=" ".join(arguments.argv),
         workspace=workspace,
         timeout_seconds=arguments.timeout_seconds,
@@ -111,7 +115,12 @@ def classify_command(argv: list[str]) -> Literal["allow", "ask", "deny"]:
     return "ask"
 
 
-def _docker_argv(argv: list[str], workspace: Path) -> list[str]:
+def _docker_argv(
+    argv: list[str],
+    workspace: Path,
+    *,
+    container_name: str,
+) -> list[str]:
     resolved = workspace.resolve()
     return [
         "docker",
@@ -119,6 +128,10 @@ def _docker_argv(argv: list[str], workspace: Path) -> list[str]:
         "--rm",
         "--network",
         "none",
+        "--name",
+        container_name,
+        "--label",
+        "awesome_agent.managed=true",
         "--memory",
         "512m",
         "--cpus",

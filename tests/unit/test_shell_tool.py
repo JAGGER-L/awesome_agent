@@ -79,6 +79,8 @@ async def test_shell_execute_runs_allowed_command_in_docker(
         "--network",
         "none",
     ]
+    assert "--name" in calls[0]["arguments"]
+    assert "--label" in calls[0]["arguments"]
     assert calls[0]["arguments"][-1] == "pytest"
     assert calls[0]["timeout_seconds"] == 5
 
