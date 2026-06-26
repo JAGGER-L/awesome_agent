@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from awesome_agent.artifacts.store import ArtifactMetadata
 from awesome_agent.persistence.approvals import (
     DurableApproval,
@@ -23,6 +25,7 @@ from awesome_agent.persistence.artifacts import (
 )
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
+    InMemoryToolInvocationRepository,
     PostgresToolInvocationRepository,
     _update_record,
 )
@@ -98,6 +101,39 @@ def test_tool_invocation_list_for_run_signature() -> None:
         PostgresToolInvocationRepository
     )
     assert callable(getattr(repository, "list_for_run", None))
+
+
+@pytest.mark.asyncio
+async def test_inmemory_tool_invocation_get_by_idempotency_key() -> None:
+    """Exercise InMemoryToolInvocationRepository.idempotency lookup."""
+    repo = InMemoryToolInvocationRepository()
+    run_id = uuid4()
+    inv = await repo.upsert(
+        DurableToolInvocation(
+            id=uuid4(),
+            run_id=run_id,
+            agent_id=uuid4(),
+            tool_name="repo.apply_patch",
+            tool_version="1",
+            status="started",
+            idempotency_key="key-abc",
+            arguments_hash="h1",
+            risk_level="medium",
+        )
+    )
+    # Hit the idempotency lookup branch (exact match)
+    found = await repo.get_by_idempotency_key(run_id, "key-abc")
+    assert found is not None
+    assert found.id == inv.id
+
+    # Miss branch
+    missing = await repo.get_by_idempotency_key(run_id, "no-such-key")
+    assert missing is None
+
+    # List branch
+    listed = await repo.list_for_run(run_id)
+    assert len(listed) == 1
+    assert listed[0].id == inv.id
 
 
 def test_approval_domain_record_round_trip() -> None:
