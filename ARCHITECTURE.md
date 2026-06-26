@@ -425,6 +425,12 @@ Writing Teammates use isolated Git worktrees.
 Approval is scoped to one exact canonical tool invocation. Repository
 validation configuration and inferred project commands are untrusted input;
 only strongly evidenced check-only commands may run automatically.
+In `solo-modifying@1`, ambiguous shell execution creates a durable
+`approvals` row, checkpoints with LangGraph `interrupt(value)`, releases the
+worker lease as `paused + waiting`, and resumes with `Command(resume=...)`
+after API/CLI decision. Resume revalidates the canonical arguments hash, tool
+version, workspace fingerprint, and requested capabilities before execution.
+Unsafe shell commands are denied without approval.
 
 ## Detailed Designs
 

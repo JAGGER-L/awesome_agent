@@ -9,11 +9,8 @@ team output.
 
 ## V1 Capabilities
 
-- solo and team execution
-- dynamic task tree
-- Teammate mailbox
-- bounded Subagent delegation
-- mandatory team verification
+- solo read-only and solo modifying execution
+- prototype team data structures and task tree
 - Docker command execution
 - PostgreSQL resume
 - durable PostgreSQL API projections across service restarts
@@ -36,6 +33,8 @@ team output.
 - checkpointed Solo modifying model/tool loop with patch application, final
   diff inspection, Docker-only allowed shell commands, and unvalidated
   completion projection
+- durable exact-invocation approval interrupt/resume for ambiguous modifying
+  shell commands, with CLI/API list and decide support
 
 ## Non-Goals
 
@@ -44,5 +43,6 @@ team output.
 - multi-user authentication
 - multiple active model providers
 - recursive delegation
+- durable team/subagent execution before Task 13
 - LangSmith or LangGraph Agent Server
 - validated modifying completion before deterministic validation and rework

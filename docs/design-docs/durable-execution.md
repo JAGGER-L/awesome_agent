@@ -36,7 +36,6 @@ Target `RunStatus` values:
 ```text
 created
 running
-waiting_approval
 paused
 completed
 failed
@@ -61,18 +60,17 @@ Examples:
 | --- | --- | --- |
 | API accepted the run | `created` | `queued` |
 | worker owns execution | `running` | `executing` |
-| approval interrupt persisted | `waiting_approval` | `waiting` |
+| approval interrupt persisted | `paused` | `waiting` |
 | valid approval re-enqueued the run | `running` | `queued` |
 | completed successfully | `completed` | `terminal` |
-| stores cannot be reconciled safely | `recovery_required` | `waiting` |
+| stores cannot be reconciled safely | `recovery_required` | `terminal` |
 
 The API exposes both values. Product UI may present a combined label but cannot
 discard either state.
 
-Current implementation note: Task 04 adds a real Worker for diagnostic
-`runtime_probe` Runs. It exercises `queued`, `claimed`, `executing`, retry,
-recovery, and terminal projection changes. Coding Runs remain queued until the
-structured model/tool loop exists.
+Current implementation note: the Worker executes `runtime_probe`,
+`solo-readonly@1`, and `solo-modifying@1` Runs. Modifying Runs can now pause for
+durable exact-invocation approval and resume from the LangGraph checkpoint.
 
 ## Dispatch, Lease, and Fencing
 
@@ -266,6 +264,18 @@ The approval request, graph checkpoint, and pending state must be durable before
 the worker releases its lease. Decisions use compare-and-set semantics and are
 idempotent. Resume revalidates every binding before executing the same
 invocation.
+
+For `solo-modifying@1`, ambiguous shell commands now follow this path:
+
+1. `ToolExecutor` raises `ApprovalRequired`.
+2. The graph upserts one `approvals` row, emits `approval.requested`, and calls
+   LangGraph `interrupt(value)`.
+3. After the synchronous checkpoint is durable, the worker releases its lease as
+   `RunStatus.PAUSED + DispatchStatus.WAITING`.
+4. API or CLI approval updates the durable row and requeues the Run.
+5. Worker reclaim resumes with `Command(resume=...)`; the graph revalidates
+   arguments hash, tool version, workspace fingerprint, and capabilities before
+   executing.
 
 Denial or expiry becomes a structured tool result. V1 does not support
 run-scoped or persistent command-class approvals.

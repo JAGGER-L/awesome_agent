@@ -36,9 +36,11 @@ forbidden.
   `recovery_required`.
 - Ambiguous state enters `recovery_required` and preserves the workspace,
   diff, artifacts, and failure evidence.
-- Durable cancellation through active graph, model, tool, subprocess, and Docker
-  boundaries is planned for Task 09.
-- Durable approval waits are planned for Task 08.
+- Durable approval waits are implemented for exact tool invocations in
+  `solo-modifying@1`: the approval row and LangGraph checkpoint are durable
+  before the worker releases the lease as `paused + waiting`.
+- Durable cancellation through active graph, model, tool, subprocess, Docker,
+  and approval-wait boundaries is planned for Task 09.
 - Worktree cleanup is explicit in V1 and never deletes a user-owned or
   unconfirmed path.
 - Run intake writes a private reservation before creating a branch or
@@ -68,6 +70,9 @@ forbidden.
 - Modifying completion is explicitly unvalidated. The graph must apply at least
   one patch and inspect the final diff after the last write before reporting
   `modifying_unvalidated`.
+- Approval decisions are compare-and-set, idempotent for already-decided
+  records, and requeue waiting Runs. Expired pending approvals are marked
+  expired by the worker recovery cadence and resume as structured tool errors.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

@@ -15,6 +15,31 @@ Generated from SQLAlchemy metadata.
 | `status` | `VARCHAR(32)` | no |
 | `created_at` | `DATETIME` | no |
 
+## `approvals`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `agent_id` | `UUID` | yes |
+| `tool_invocation_id` | `UUID` | no |
+| `tool_call_id` | `VARCHAR(255)` | no |
+| `tool_name` | `VARCHAR(128)` | no |
+| `tool_version` | `VARCHAR(32)` | no |
+| `canonical_arguments` | `JSONB` | no |
+| `arguments_hash` | `VARCHAR(64)` | no |
+| `workspace_path` | `TEXT` | no |
+| `workspace_fingerprint` | `VARCHAR(64)` | no |
+| `capabilities` | `JSONB` | no |
+| `risk_level` | `VARCHAR(32)` | no |
+| `status` | `VARCHAR(32)` | no |
+| `expires_at` | `DATETIME` | no |
+| `decided_at` | `DATETIME` | yes |
+| `decided_by` | `VARCHAR(255)` | yes |
+| `decision_reason` | `TEXT` | yes |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+
 ## `artifacts`
 
 | Column | Type | Nullable |
