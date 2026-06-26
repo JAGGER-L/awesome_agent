@@ -20,6 +20,7 @@ from awesome_agent.api.schemas import (
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.database import (
     create_engine,
     create_session_factory,
@@ -73,6 +74,7 @@ def create_app(
             repository=runtime_repository,
             events=event_stream,
             artifacts=LocalArtifactStore(settings.artifact_root),
+            artifact_repository=PostgresArtifactMetadataRepository(sessions),
             model_resolver=RoleModelResolver.from_settings(settings),
             event_poll_interval=settings.event_poll_interval_seconds,
         )
@@ -265,13 +267,13 @@ def create_app(
     async def list_artifacts(run_id: UUID) -> list[dict[str, object]]:
         return [
             artifact.model_dump(mode="json")
-            for artifact in runtime().list_artifacts(run_id)
+            for artifact in await runtime().list_artifacts(run_id)
         ]
 
     @app.get("/artifacts/{artifact_id}")
     async def download_artifact(artifact_id: UUID) -> FileResponse:
         try:
-            artifact = runtime().artifacts.get(artifact_id)
+            artifact = await runtime().get_artifact(artifact_id)
         except KeyError as error:
             raise HTTPException(
                 status_code=404, detail="Artifact not found."

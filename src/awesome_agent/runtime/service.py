@@ -5,6 +5,10 @@ from collections.abc import AsyncGenerator
 from uuid import UUID
 
 from awesome_agent.agents.profiles import RoleModelResolver
+from awesome_agent.artifacts.repository import (
+    ArtifactMetadataRepository,
+    InMemoryArtifactMetadataRepository,
+)
 from awesome_agent.artifacts.store import ArtifactMetadata, LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
@@ -25,11 +29,15 @@ class RuntimeService:
         events: EventStream,
         artifacts: LocalArtifactStore,
         model_resolver: RoleModelResolver,
+        artifact_repository: ArtifactMetadataRepository | None = None,
         event_poll_interval: float = 0.5,
     ) -> None:
         self.repository = repository
         self.events = events
         self.artifacts = artifacts
+        self.artifact_repository = (
+            artifact_repository or InMemoryArtifactMetadataRepository()
+        )
         self.model_resolver = model_resolver
         self.event_poll_interval = event_poll_interval
 
@@ -137,8 +145,33 @@ class RuntimeService:
                 continue
             await asyncio.sleep(self.event_poll_interval)
 
-    def list_artifacts(self, run_id: UUID) -> list[ArtifactMetadata]:
-        return self.artifacts.list_for_run(run_id)
+    async def write_artifact(
+        self,
+        *,
+        run_id: UUID,
+        artifact_type: str,
+        filename: str,
+        content: bytes,
+        mime_type: str,
+        summary: str = "",
+        agent_id: UUID | None = None,
+    ) -> ArtifactMetadata:
+        metadata = self.artifacts.write(
+            run_id=run_id,
+            artifact_type=artifact_type,
+            filename=filename,
+            content=content,
+            mime_type=mime_type,
+            summary=summary,
+            agent_id=agent_id,
+        )
+        return await self.artifact_repository.record(metadata)
+
+    async def get_artifact(self, artifact_id: UUID) -> ArtifactMetadata:
+        return await self.artifact_repository.get(artifact_id)
+
+    async def list_artifacts(self, run_id: UUID) -> list[ArtifactMetadata]:
+        return await self.artifact_repository.list_for_run(run_id)
 
     async def _emit(
         self,
