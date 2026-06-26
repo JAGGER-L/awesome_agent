@@ -14,6 +14,7 @@ from awesome_agent.persistence.database import create_engine, create_session_fac
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.tool_invocations import PostgresToolInvocationRepository
+from awesome_agent.persistence.validation import PostgresValidationRepository
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
@@ -50,6 +51,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 artifact_repository=PostgresArtifactMetadataRepository(sessions),
                 tool_repository=PostgresToolInvocationRepository(sessions),
                 approval_repository=PostgresApprovalRepository(sessions),
+                validation_repository=PostgresValidationRepository(sessions),
                 approval_default_expiry=timedelta(
                     seconds=configured.approval_default_expiry_seconds
                 ),

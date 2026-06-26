@@ -356,7 +356,7 @@ async def test_worker_claims_modifying_graph_when_configured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_executes_modifying_graph_with_unvalidated_completion() -> None:
+async def test_worker_executes_modifying_graph_with_validated_completion() -> None:
     lease = _lease()
     run = _modifying_run(lease)
     leader = Agent(
@@ -379,7 +379,7 @@ async def test_worker_executes_modifying_graph_with_unvalidated_completion() -> 
 
     assert complete[0] == "complete"
     assert isinstance(complete[1], dict)
-    assert complete[1]["completion_kind"] == "modifying_unvalidated"
+    assert complete[1]["completion_kind"] == "modifying_validated"
     assert complete[1]["result_text"] == "Changed README.md; validation not run."
 
 

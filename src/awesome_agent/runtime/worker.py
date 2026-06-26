@@ -373,7 +373,7 @@ class DurableWorker:
         if run.execution_kind is not ExecutionKind.CODING:
             return "runtime_probe"
         if run.graph_name == MODIFYING_CODING_GRAPH:
-            return "modifying_unvalidated"
+            return "modifying_validated"
         return "read_only_coding"
 
 

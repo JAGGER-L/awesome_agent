@@ -5,6 +5,7 @@ import subprocess
 from collections import deque
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -34,6 +35,11 @@ from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     InMemoryToolInvocationRepository,
 )
+from awesome_agent.persistence.validation import (
+    DurableValidationGateResult,
+    DurableValidationReport,
+    ValidationReportWithGates,
+)
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -44,9 +50,12 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_VERSION,
 )
 from awesome_agent.runtime.modifying_graph import (
+    ModifyingAgentLoopFailed,
+    ModifyingAgentState,
     ModifyingCodingGraph,
     _idempotency_key,
 )
+from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
 from awesome_agent.sandbox.base import CommandResult
 from awesome_agent.tools.repository import canonical_arguments_hash_from_arguments
 
@@ -170,6 +179,8 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
         provider_resolver=lambda _: provider,
         artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
         artifact_repository=InMemoryArtifactMetadataRepository(),
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=_passing_validation_runner,
     )
     run, agent = _run(tmp_path)
 
@@ -186,6 +197,261 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
         if message.get("role") == "tool" and message.get("artifact_refs")
     ]
     assert tool_messages
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_validates_before_completion(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++new
+"""
+    provider = SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="patch",
+                            name="repo.apply_patch",
+                            arguments_json=json.dumps({"patch": patch}),
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="diff",
+                            name="repo.diff",
+                            arguments_json="{}",
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(content="Changed README.md."),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            ),
+        ]
+    )
+    validation_calls = 0
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        run: Run,
+        agent: Agent,
+    ) -> ValidationReportWithGates:
+        nonlocal validation_calls
+        validation_calls += 1
+        return _validation_result(run, agent, status="passed")
+
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=validation_runner,
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+    run, agent = _run(tmp_path)
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    state, _ = await graph.execute(run, agent, event_sink=emit)
+
+    assert validation_calls == 1
+    assert state["phase"] == "completed"
+    assert state["validation_rework_count"] == 0
+    assert state["validation_reports"][0]["status"] == "passed"
+    assert events[-1][1]["validation_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_reworks_after_validation_failure(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    first_patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++bad
+"""
+    second_patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-bad
++good
+"""
+    provider = SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="patch-1",
+                            name="repo.apply_patch",
+                            arguments_json=json.dumps({"patch": first_patch}),
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="diff-1",
+                            name="repo.diff",
+                            arguments_json="{}",
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(content="Changed README.md."),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="patch-2",
+                            name="repo.apply_patch",
+                            arguments_json=json.dumps({"patch": second_patch}),
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="diff-2",
+                            name="repo.diff",
+                            arguments_json="{}",
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(content="Fixed README.md."),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            ),
+        ]
+    )
+    outcomes = ["failed", "passed"]
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        run: Run,
+        agent: Agent,
+    ) -> ValidationReportWithGates:
+        return _validation_result(run, agent, status=outcomes.pop(0))
+
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+        validation_plan_resolver=lambda _: _validation_plan(max_rework_attempts=2),
+        validation_runner=validation_runner,
+    )
+    run, agent = _run(tmp_path)
+
+    state, _ = await graph.execute(run, agent)
+
+    assert state["phase"] == "completed"
+    assert state["validation_rework_count"] == 1
+    assert [report["status"] for report in state["validation_reports"]] == [
+        "failed",
+        "passed",
+    ]
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "good\n"
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_fails_when_no_validation_gates(
+    tmp_path: Path,
+) -> None:
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: _completion_provider(),
+        validation_plan_resolver=lambda _: None,
+    )
+    run, agent = _run_with_change_ready_state(tmp_path)
+    graph._run = run
+    graph._agent = agent
+
+    with pytest.raises(ModifyingAgentLoopFailed, match="no_validation_gates"):
+        await graph._validate(_change_ready_state(run, agent))
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_fails_when_rework_attempts_are_exhausted(
+    tmp_path: Path,
+) -> None:
+    async def validation_runner(
+        plan: ValidationPlan,
+        run: Run,
+        agent: Agent,
+    ) -> ValidationReportWithGates:
+        return _validation_result(run, agent, status="failed")
+
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: _completion_provider(),
+        validation_plan_resolver=lambda _: _validation_plan(max_rework_attempts=0),
+        validation_runner=validation_runner,
+    )
+    run, agent = _run_with_change_ready_state(tmp_path)
+    graph._run = run
+    graph._agent = agent
+
+    with pytest.raises(ModifyingAgentLoopFailed, match="exhausted"):
+        await graph._validate(_change_ready_state(run, agent))
 
 
 @pytest.mark.asyncio
@@ -286,6 +552,8 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
         provider_resolver=lambda _: provider,
         tool_repository=tools,
         approval_repository=approvals,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=_passing_validation_runner,
     )
     events: list[tuple[object, dict[str, object], str]] = []
     run, agent = _run(tmp_path)
@@ -470,3 +738,102 @@ async def test_modifying_graph_marks_started_shell_as_recovery_required(
                 arguments_json=json.dumps(arguments),
             )
         )
+
+
+def _validation_plan(*, max_rework_attempts: int = 2) -> ValidationPlan:
+    return ValidationPlan(
+        gates=[
+            ValidationGate(
+                id="pytest",
+                name="Pytest",
+                command=["pytest", "-q"],
+                required=True,
+                timeout_seconds=30,
+            )
+        ],
+        source="detected",
+        max_rework_attempts=max_rework_attempts,
+    )
+
+
+def _validation_result(
+    run: Run,
+    agent: Agent,
+    *,
+    status: str,
+) -> ValidationReportWithGates:
+    report = DurableValidationReport(
+        run_id=run.id,
+        agent_id=agent.id,
+        attempt=0,
+        status=status,
+        summary=f"validation {status}",
+    )
+    gate = DurableValidationGateResult(
+        report_id=report.id,
+        run_id=run.id,
+        gate_id="pytest",
+        name="Pytest",
+        command=["pytest", "-q"],
+        required=True,
+        status="passed" if status == "passed" else "failed",
+        exit_code=0 if status == "passed" else 1,
+        stdout_summary="" if status == "passed" else "test failed",
+        failure_kind=None if status == "passed" else "command_failed",
+    )
+    return ValidationReportWithGates(report=report, gates=[gate])
+
+
+async def _passing_validation_runner(
+    plan: ValidationPlan,
+    run: Run,
+    agent: Agent,
+) -> ValidationReportWithGates:
+    return _validation_result(run, agent, status="passed")
+
+
+def _completion_provider() -> SequenceProvider:
+    return SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(content="Changed README.md."),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        ]
+    )
+
+
+def _run_with_change_ready_state(workspace: Path) -> tuple[Run, Agent]:
+    return _run(workspace)
+
+
+def _change_ready_state(run: Run, agent: Agent) -> ModifyingAgentState:
+    return cast(
+        ModifyingAgentState,
+        {
+            "run_id": str(run.id),
+            "agent_id": str(agent.id),
+            "graph_name": MODIFYING_CODING_GRAPH,
+            "graph_version": MODIFYING_CODING_VERSION,
+            "messages": [],
+            "continuation": None,
+            "model_turn_count": 1,
+            "tool_call_count": 2,
+            "successful_writes": 1,
+            "final_diff_after_write": True,
+            "progress_fingerprints": [],
+            "stagnant_turns": 0,
+            "validation_rework_count": 0,
+            "validation_reports": [],
+            "phase": "model_completed",
+            "force_final": False,
+            "last_turn": ModelTurn(
+                assistant=AssistantMessage(content="Changed README.md."),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            ).model_dump(mode="json"),
+        },
+    )

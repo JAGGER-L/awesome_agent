@@ -527,7 +527,11 @@ class PostgresRunDispatcher(RunDispatcher):
             record.dispatch_status = DispatchStatus.TERMINAL.value
             record.last_release_reason = "graph completed"
             record.result_text = result_text
-            if completion_kind in {"read_only_coding", "modifying_unvalidated"}:
+            if completion_kind in {
+                "read_only_coding",
+                "modifying_unvalidated",
+                "modifying_validated",
+            }:
                 for todo in await session.scalars(
                     select(TodoRecord).where(TodoRecord.run_id == record.id)
                 ):

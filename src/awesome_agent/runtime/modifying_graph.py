@@ -5,7 +5,7 @@ import hashlib
 import json
 import subprocess
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict, cast
@@ -42,6 +42,10 @@ from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     ToolInvocationRepository,
 )
+from awesome_agent.persistence.validation import (
+    ValidationReportWithGates,
+    ValidationRepository,
+)
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -53,6 +57,10 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
     MODIFYING_CODING_VERSION,
 )
+from awesome_agent.runtime.validation.config import load_validation_config
+from awesome_agent.runtime.validation.detection import detect_validation_plan
+from awesome_agent.runtime.validation.executor import execute_validation_plan
+from awesome_agent.runtime.validation.models import ValidationPlan
 from awesome_agent.tools.models import ApprovalRequired, ToolDenied
 from awesome_agent.tools.repository import (
     RepositoryRecoveryRequired,
@@ -92,6 +100,8 @@ class ModifyingAgentState(TypedDict):
     final_diff_after_write: bool
     progress_fingerprints: list[str]
     stagnant_turns: int
+    validation_rework_count: int
+    validation_reports: list[dict[str, Any]]
     phase: str
     force_final: bool
     last_turn: NotRequired[dict[str, Any]]
@@ -105,6 +115,11 @@ EventSink = Callable[
 ]
 ProviderResolver = Callable[[str], ModelProvider]
 FaultHook = Callable[[str, ModifyingAgentState], Awaitable[None]]
+ValidationPlanResolver = Callable[[Path], ValidationPlan | None]
+ValidationRunner = Callable[
+    [ValidationPlan, Run, Agent],
+    Awaitable[ValidationReportWithGates],
+]
 
 
 class ModifyingAgentLoopFailed(PermanentExecutionError):
@@ -121,6 +136,9 @@ class ModifyingCodingGraph:
         artifact_repository: ArtifactMetadataRepository | None = None,
         tool_repository: ToolInvocationRepository | None = None,
         approval_repository: ApprovalRepository | None = None,
+        validation_repository: ValidationRepository | None = None,
+        validation_plan_resolver: ValidationPlanResolver | None = None,
+        validation_runner: ValidationRunner | None = None,
         approval_default_expiry: timedelta = timedelta(minutes=60),
         max_model_turns: int = 60,
         max_tool_calls: int = 120,
@@ -136,6 +154,11 @@ class ModifyingCodingGraph:
         self.artifact_repository = artifact_repository
         self.tool_repository = tool_repository
         self.approval_repository = approval_repository
+        self.validation_repository = validation_repository
+        self.validation_plan_resolver = (
+            validation_plan_resolver or _resolve_validation_plan
+        )
+        self.validation_runner = validation_runner or self._run_validation
         self.approval_default_expiry = approval_default_expiry
         self.max_model_turns = max_model_turns
         self.max_tool_calls = max_tool_calls
@@ -151,6 +174,8 @@ class ModifyingCodingGraph:
         builder.add_node("model_turn", self._model_turn)
         builder.add_node("execute_tool", self._execute_tool)
         builder.add_node("feedback", self._feedback)
+        builder.add_node("validate", self._validate)
+        builder.add_node("validation_feedback", self._validation_feedback)
         builder.add_node("finalize", self._finalize)
         builder.add_edge(START, "initialize")
         builder.add_edge("initialize", "model_turn")
@@ -160,20 +185,33 @@ class ModifyingCodingGraph:
             {
                 "tool": "execute_tool",
                 "feedback": "feedback",
-                "finalize": "finalize",
+                "validate": "validate",
             },
         )
         builder.add_edge("execute_tool", "model_turn")
         builder.add_conditional_edges(
             "feedback",
             lambda state: (
-                "finalize" if state["phase"] == "forced_completion" else "model_turn"
+                "validate" if state["phase"] == "forced_completion" else "model_turn"
             ),
             {
-                "finalize": "finalize",
+                "validate": "validate",
                 "model_turn": "model_turn",
             },
         )
+        builder.add_conditional_edges(
+            "validate",
+            lambda state: (
+                "finalize"
+                if state["phase"] == "validation_passed"
+                else "validation_feedback"
+            ),
+            {
+                "finalize": "finalize",
+                "validation_feedback": "validation_feedback",
+            },
+        )
+        builder.add_edge("validation_feedback", "model_turn")
         builder.add_edge("finalize", END)
         self.graph = builder.compile(
             checkpointer=saver,
@@ -298,7 +336,7 @@ class ModifyingCodingGraph:
     def _route_turn(
         self,
         state: ModifyingAgentState,
-    ) -> Literal["tool", "feedback", "finalize"]:
+    ) -> Literal["tool", "feedback", "validate"]:
         turn = ModelTurn.model_validate(state["last_turn"])
         if turn.assistant.tool_calls:
             if state["force_final"]:
@@ -310,7 +348,7 @@ class ModifyingCodingGraph:
             and state["successful_writes"] > 0
             and state["final_diff_after_write"]
         ):
-            return "finalize"
+            return "validate"
         return "feedback"
 
     async def _execute_tool(
@@ -736,6 +774,73 @@ class ModifyingCodingGraph:
             "phase": "completion_rejected",
         }
 
+    async def _validate(self, state: ModifyingAgentState) -> ModifyingAgentState:
+        run = self._require_run()
+        agent = self._require_agent()
+        workspace = cast(Path, run.workspace_path)
+        plan = self.validation_plan_resolver(workspace)
+        if plan is None or not plan.gates:
+            raise ModifyingAgentLoopFailed("no_validation_gates")
+        report = await self.validation_runner(plan, run, agent)
+        reports = [*state["validation_reports"], _validation_report_snapshot(report)]
+        if report.report.status == "passed":
+            await self._emit(
+                EventType.VERIFICATION_CREATED,
+                {
+                    "status": "passed",
+                    "attempt": len(reports),
+                    "summary": report.report.summary,
+                },
+                f"validation:{len(reports)}",
+            )
+            return {
+                **state,
+                "validation_reports": reports,
+                "phase": "validation_passed",
+            }
+        if not _validation_failure_is_reworkable(report):
+            raise ModifyingAgentLoopFailed(report.report.summary)
+        if state["validation_rework_count"] >= plan.max_rework_attempts:
+            raise ModifyingAgentLoopFailed("validation rework attempts exhausted")
+        await self._emit(
+            EventType.VERIFICATION_CREATED,
+            {
+                "status": "failed",
+                "attempt": len(reports),
+                "summary": report.report.summary,
+                "reworkable": True,
+            },
+            f"validation:{len(reports)}",
+        )
+        return {
+            **state,
+            "validation_reports": reports,
+            "phase": "validation_failed_reworkable",
+        }
+
+    async def _validation_feedback(
+        self,
+        state: ModifyingAgentState,
+    ) -> ModifyingAgentState:
+        turn = ModelTurn.model_validate(state["last_turn"])
+        latest = state["validation_reports"][-1]
+        return {
+            **state,
+            "messages": [
+                *state["messages"],
+                turn.assistant.model_dump(mode="json"),
+                SystemMessage(
+                    content=(
+                        "Validation failed. Rework the implementation using this "
+                        f"bounded evidence, then call repo.diff again: {latest}"
+                    )
+                ).model_dump(mode="json"),
+            ],
+            "validation_rework_count": state["validation_rework_count"] + 1,
+            "stagnant_turns": 0,
+            "phase": "validation_feedback",
+        }
+
     async def _finalize(self, state: ModifyingAgentState) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
         answer = turn.assistant.content.strip()
@@ -745,7 +850,7 @@ class ModifyingCodingGraph:
                 "role": "assistant",
                 "content": answer[:32768],
                 "final": True,
-                "validation_complete": False,
+                "validation_complete": True,
             },
             "final-answer",
         )
@@ -754,7 +859,7 @@ class ModifyingCodingGraph:
             "phase": "completed",
             "final_answer": answer[:32768],
             "result_summary": (
-                f"Modifying repository task produced unvalidated changes after "
+                f"Modifying repository task produced validated changes after "
                 f"{state['model_turn_count']} model turn(s), "
                 f"{state['tool_call_count']} tool call(s), and "
                 f"{state['successful_writes']} write(s)."
@@ -820,6 +925,20 @@ class ModifyingCodingGraph:
             raise CorruptRuntimeStateError("Approval repository is not configured.")
         return self.approval_repository
 
+    async def _run_validation(
+        self,
+        plan: ValidationPlan,
+        run: Run,
+        agent: Agent,
+    ) -> ValidationReportWithGates:
+        return await execute_validation_plan(
+            plan,
+            run_id=run.id,
+            agent_id=agent.id,
+            workspace=cast(Path, run.workspace_path),
+            repository=self.validation_repository,
+        )
+
 
 def _initial_state(run: Run, agent: Agent) -> ModifyingAgentState:
     return {
@@ -838,6 +957,8 @@ def _initial_state(run: Run, agent: Agent) -> ModifyingAgentState:
         "final_diff_after_write": False,
         "progress_fingerprints": [],
         "stagnant_turns": 0,
+        "validation_rework_count": 0,
+        "validation_reports": [],
         "phase": "created",
         "force_final": False,
     }
@@ -856,6 +977,8 @@ def _state(value: object) -> ModifyingAgentState:
         "tool_call_count",
         "successful_writes",
         "final_diff_after_write",
+        "validation_rework_count",
+        "validation_reports",
         "phase",
     }
     if not required.issubset(value):
@@ -989,3 +1112,34 @@ def _copy_invocation(
     **updates: object,
 ) -> DurableToolInvocation:
     return replace(invocation, **updates)  # type: ignore[arg-type]
+
+
+def _resolve_validation_plan(workspace: Path) -> ValidationPlan | None:
+    return load_validation_config(workspace) or detect_validation_plan(workspace)
+
+
+def _validation_report_snapshot(report: ValidationReportWithGates) -> dict[str, Any]:
+    return {
+        "id": str(report.report.id),
+        "status": report.report.status,
+        "summary": report.report.summary,
+        "gates": [
+            {
+                **asdict(gate),
+                "id": str(gate.id),
+                "report_id": str(gate.report_id),
+                "run_id": str(gate.run_id),
+                "created_at": gate.created_at.isoformat(),
+            }
+            for gate in report.gates
+        ],
+    }
+
+
+def _validation_failure_is_reworkable(report: ValidationReportWithGates) -> bool:
+    blocking = [
+        gate for gate in report.gates if gate.required and gate.status != "passed"
+    ]
+    return bool(blocking) and all(
+        gate.failure_kind == "command_failed" for gate in blocking
+    )
