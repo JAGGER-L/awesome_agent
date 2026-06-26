@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,11 +9,24 @@ import pytest
 
 from awesome_agent.modeling import ToolCall, ToolResultMessage
 from awesome_agent.tools.repository import (
+    build_modifying_executor,
+    build_modifying_registry,
     build_read_only_executor,
     build_read_only_registry,
     execute_repository_call,
     model_tool_definitions,
 )
+
+
+def _git(path: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=path,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout.strip()
 
 
 async def _call(
@@ -30,6 +44,25 @@ async def _call(
         ),
         workspace=workspace,
         agent_id=uuid4(),
+    )
+
+
+async def _modifying_call(
+    workspace: Path,
+    name: str,
+    arguments: dict[str, object],
+) -> ToolResultMessage:
+    registry = build_modifying_registry()
+    return await execute_repository_call(
+        build_modifying_executor(registry),
+        ToolCall(
+            call_id=f"call-{name}",
+            name=name,
+            arguments_json=json.dumps(arguments),
+        ),
+        workspace=workspace,
+        agent_id=uuid4(),
+        capabilities={"repository:read", "repository:write"},
     )
 
 
@@ -122,3 +155,84 @@ def test_registry_exposes_model_json_schemas() -> None:
         "repo.read",
         "repo.instructions",
     }
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_and_diff_report_changed_file(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+
+    patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++new
+"""
+
+    applied = await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
+    diff = await _modifying_call(tmp_path, "repo.diff", {})
+
+    assert not applied.is_error
+    assert "README.md" in applied.content
+    assert "new" in (tmp_path / "README.md").read_text(encoding="utf-8")
+    assert '"changed": true' in diff.content
+    assert "+new" in diff.content
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_rejects_git_and_parent_paths(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    git_patch = """diff --git a/.git/config b/.git/config
+--- a/.git/config
++++ b/.git/config
+@@ -1 +1 @@
+-old
++new
+"""
+    parent_patch = """diff --git a/../outside.txt b/../outside.txt
+--- a/../outside.txt
++++ b/../outside.txt
+@@ -1 +1 @@
+-old
++new
+"""
+
+    git_result = await _modifying_call(
+        tmp_path,
+        "repo.apply_patch",
+        {"patch": git_patch},
+    )
+    parent_result = await _modifying_call(
+        tmp_path,
+        "repo.apply_patch",
+        {"patch": parent_patch},
+    )
+
+    assert git_result.is_error
+    assert parent_result.is_error
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_requires_write_capability(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    registry = build_modifying_registry()
+
+    result = await execute_repository_call(
+        build_modifying_executor(registry),
+        ToolCall(
+            call_id="write-denied",
+            name="repo.apply_patch",
+            arguments_json='{"patch":"--- a/file.txt\\n+++ b/file.txt\\n"}',
+        ),
+        workspace=tmp_path,
+        agent_id=uuid4(),
+        capabilities={"repository:read"},
+    )
+
+    assert result.is_error
+    assert "ToolDenied" in result.content

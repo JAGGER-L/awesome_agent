@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
@@ -62,12 +64,23 @@ class InstructionsArguments(BaseModel):
     path: str = "."
 
 
+class DiffArguments(BaseModel):
+    context_lines: int = Field(default=3, ge=0, le=20)
+    max_chars: int = Field(default=30_000, ge=1_000, le=200_000)
+
+
+class ApplyPatchArguments(BaseModel):
+    patch: str = Field(min_length=1, max_length=200_000)
+
+
 _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "repo.status": StatusArguments,
     "repo.list": ListArguments,
     "repo.search": SearchArguments,
     "repo.read": ReadArguments,
     "repo.instructions": InstructionsArguments,
+    "repo.diff": DiffArguments,
+    "repo.apply_patch": ApplyPatchArguments,
 }
 
 
@@ -116,6 +129,33 @@ def build_read_only_registry() -> ToolRegistry:
     return registry
 
 
+def build_modifying_registry() -> ToolRegistry:
+    registry = build_read_only_registry()
+    registry.register(
+        ToolSpec(
+            name="repo.diff",
+            description="Inspect the current unstaged and staged worktree diff.",
+            risk_level=RiskLevel.LOW,
+            sandbox_required=False,
+            required_capabilities={"repository:read"},
+            input_schema=DiffArguments.model_json_schema(),
+        ),
+        _diff,
+    )
+    registry.register(
+        ToolSpec(
+            name="repo.apply_patch",
+            description="Apply a unified diff patch to the Run worktree.",
+            risk_level=RiskLevel.MEDIUM,
+            sandbox_required=False,
+            required_capabilities={"repository:write"},
+            input_schema=ApplyPatchArguments.model_json_schema(),
+        ),
+        _apply_patch,
+    )
+    return registry
+
+
 def model_tool_definitions(registry: ToolRegistry) -> list[ToolDefinition]:
     return [
         ToolDefinition(
@@ -134,6 +174,7 @@ async def execute_repository_call(
     workspace: Path,
     agent_id: Any,
     profile: str = "leader",
+    capabilities: set[str] | None = None,
 ) -> ToolResultMessage:
     try:
         arguments = _parse_arguments(call)
@@ -143,7 +184,7 @@ async def execute_repository_call(
                 tool_name=call.name,
                 agent_id=agent_id,
                 profile=profile,
-                capabilities={"repository:read"},
+                capabilities=capabilities or {"repository:read"},
                 arguments=arguments,
                 workspace=workspace,
             ),
@@ -170,6 +211,10 @@ async def execute_repository_call(
 
 def build_read_only_executor(registry: ToolRegistry | None = None) -> ToolExecutor:
     return ToolExecutor(registry or build_read_only_registry(), ApprovalPolicy())
+
+
+def build_modifying_executor(registry: ToolRegistry | None = None) -> ToolExecutor:
+    return ToolExecutor(registry or build_modifying_registry(), ApprovalPolicy())
 
 
 def _parse_arguments(call: ToolCall) -> dict[str, Any]:
@@ -339,6 +384,52 @@ async def _instructions(invocation: ToolInvocation, _: object) -> ToolResult:
     )
 
 
+async def _diff(invocation: ToolInvocation, _: object) -> ToolResult:
+    arguments = DiffArguments.model_validate(invocation.arguments)
+    workspace = _workspace(invocation)
+    result = await run_process(
+        ["git", "diff", f"--unified={arguments.context_lines}", "--", "."],
+        command_label="git diff",
+        workspace=workspace,
+        timeout_seconds=30,
+    )
+    if result.exit_code != 0:
+        raise RepositoryToolError(result.stderr or result.stdout)
+    diff = result.stdout
+    truncated = len(diff) > arguments.max_chars
+    if truncated:
+        diff = diff[: arguments.max_chars]
+    return ToolResult(
+        invocation_id=invocation.id,
+        output={
+            "diff": diff,
+            "changed": bool(result.stdout.strip()),
+            "truncated": truncated,
+        },
+    )
+
+
+async def _apply_patch(invocation: ToolInvocation, _: object) -> ToolResult:
+    arguments = ApplyPatchArguments.model_validate(invocation.arguments)
+    workspace = _workspace(invocation)
+    paths = _patch_paths(arguments.patch)
+    preimage_hashes = _file_hashes(workspace, paths)
+    checked = await _git_apply(workspace, arguments.patch, check=True)
+    if checked.returncode != 0:
+        raise RepositoryToolError(checked.stderr or checked.stdout)
+    applied = await _git_apply(workspace, arguments.patch, check=False)
+    if applied.returncode != 0:
+        raise RepositoryToolError(applied.stderr or applied.stdout)
+    return ToolResult(
+        invocation_id=invocation.id,
+        output={
+            "paths": sorted(path.as_posix() for path in paths),
+            "preimage_hashes": preimage_hashes,
+            "postimage_hashes": _file_hashes(workspace, paths),
+        },
+    )
+
+
 def _safe_path(
     workspace: Path,
     relative: str,
@@ -361,6 +452,63 @@ def _safe_path(
     if expect == "directory" and not candidate.is_dir():
         raise RepositoryToolError("Path is not a directory.")
     return candidate
+
+
+def _patch_paths(patch: str) -> set[Path]:
+    paths: set[Path] = set()
+    for line in patch.splitlines():
+        if not (line.startswith("--- ") or line.startswith("+++ ")):
+            continue
+        raw = line[4:].split("\t", maxsplit=1)[0].strip()
+        if raw == "/dev/null":
+            continue
+        if raw.startswith(("a/", "b/")):
+            raw = raw[2:]
+        path = Path(raw)
+        if path.is_absolute() or ".." in path.parts or ".git" in path.parts:
+            raise RepositoryToolError("Patch paths must remain inside the worktree.")
+        if not path.parts:
+            raise RepositoryToolError("Patch path is empty.")
+        paths.add(path)
+    if not paths:
+        raise RepositoryToolError("Patch contains no file paths.")
+    return paths
+
+
+def _file_hashes(workspace: Path, paths: Iterable[Path]) -> dict[str, str]:
+    hashes: dict[str, str] = {}
+    for relative in paths:
+        path = _safe_existing_or_new_path(workspace, relative)
+        key = relative.as_posix()
+        if path.exists():
+            hashes[key] = _sha256(path.read_bytes())
+        else:
+            hashes[key] = "<missing>"
+    return hashes
+
+
+def _safe_existing_or_new_path(workspace: Path, relative: Path) -> Path:
+    root = workspace.resolve()
+    candidate = (root / relative).resolve()
+    if candidate != root and not candidate.is_relative_to(root):
+        raise RepositoryToolError("Resolved patch path escapes the Run worktree.")
+    parent = candidate.parent
+    if not parent.exists():
+        parent = _nearest_existing_parent(root, parent)
+    if _contains_symlink(root, parent):
+        raise RepositoryToolError("Symlink or junction paths are not allowed.")
+    if candidate.exists() and _contains_symlink(root, candidate):
+        raise RepositoryToolError("Symlink or junction paths are not allowed.")
+    return candidate
+
+
+def _nearest_existing_parent(root: Path, path: Path) -> Path:
+    current = path
+    while not current.exists():
+        if current == root or not current.is_relative_to(root):
+            raise RepositoryToolError("Patch parent escapes the Run worktree.")
+        current = current.parent
+    return current
 
 
 def _contains_symlink(root: Path, candidate: Path) -> bool:
@@ -418,6 +566,27 @@ async def _git(workspace: Path, *arguments: str) -> str:
     return result.stdout
 
 
+async def _git_apply(
+    workspace: Path,
+    patch: str,
+    *,
+    check: bool,
+) -> subprocess.CompletedProcess[str]:
+    command = ["git", "apply", "--whitespace=nowarn"]
+    if check:
+        command.append("--check")
+    return await asyncio.to_thread(
+        subprocess.run,
+        command,
+        cwd=workspace,
+        input=patch,
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=30,
+    )
+
+
 def _workspace(invocation: ToolInvocation) -> Path:
     if invocation.workspace is None:
         raise RepositoryToolError("Tool invocation has no Run workspace.")
@@ -431,6 +600,12 @@ def _bounded_json(value: dict[str, Any]) -> str:
     head = text[:8000]
     tail = text[-3000:]
     return f"{head}\n...[tool output truncated: {len(text)} characters]...\n{tail}"
+
+
+def _sha256(content: bytes) -> str:
+    from hashlib import sha256
+
+    return sha256(content).hexdigest()
 
 
 def _tool_uuid(call_id: str) -> Any:
