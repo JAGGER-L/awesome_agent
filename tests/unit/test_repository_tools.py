@@ -7,13 +7,16 @@ from uuid import uuid4
 
 import pytest
 
+from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.modeling import ToolCall, ToolResultMessage
+from awesome_agent.tools.models import ApprovalRequired, ToolDenied
 from awesome_agent.tools.repository import (
     RepositoryRecoveryRequired,
     build_modifying_executor,
     build_modifying_registry,
     build_read_only_executor,
     build_read_only_registry,
+    canonical_arguments_hash,
     execute_repository_call,
     model_tool_definitions,
 )
@@ -28,6 +31,25 @@ def _git(path: Path, *arguments: str) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def test_canonical_arguments_hash_normalizes_tool_arguments() -> None:
+    left = canonical_arguments_hash(
+        ToolCall(
+            call_id="left",
+            name="shell.execute",
+            arguments_json='{"argv":["pytest"],"timeout_seconds":60}',
+        )
+    )
+    right = canonical_arguments_hash(
+        ToolCall(
+            call_id="right",
+            name="shell.execute",
+            arguments_json='{"timeout_seconds":60.0,"argv":["pytest"]}',
+        )
+    )
+
+    assert left == right
 
 
 async def _call(
@@ -131,19 +153,39 @@ async def test_repository_calls_pass_through_executor_capability_policy(
     read_spec, _ = registry.resolve("repo.read")
     read_spec.required_capabilities = {"repository:write"}
 
-    result = await execute_repository_call(
-        build_read_only_executor(registry),
-        ToolCall(
-            call_id="denied",
-            name="repo.read",
-            arguments_json='{"path":"README.md"}',
-        ),
-        workspace=tmp_path,
-        agent_id=uuid4(),
-    )
+    with pytest.raises(ToolDenied):
+        await execute_repository_call(
+            build_read_only_executor(registry),
+            ToolCall(
+                call_id="denied",
+                name="repo.read",
+                arguments_json='{"path":"README.md"}',
+            ),
+            workspace=tmp_path,
+            agent_id=uuid4(),
+        )
 
-    assert result.is_error
-    assert "ToolDenied" in result.content
+
+@pytest.mark.asyncio
+async def test_repository_calls_preserve_approval_required_signal(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    registry = build_read_only_registry()
+    read_spec, _ = registry.resolve("repo.read")
+    read_spec.risk_level = RiskLevel.HIGH
+
+    with pytest.raises(ApprovalRequired):
+        await execute_repository_call(
+            build_read_only_executor(registry),
+            ToolCall(
+                call_id="approval",
+                name="repo.read",
+                arguments_json='{"path":"README.md"}',
+            ),
+            workspace=tmp_path,
+            agent_id=uuid4(),
+        )
 
 
 def test_registry_exposes_model_json_schemas() -> None:
@@ -223,20 +265,18 @@ async def test_apply_patch_requires_write_capability(tmp_path: Path) -> None:
     _git(tmp_path, "init")
     registry = build_modifying_registry()
 
-    result = await execute_repository_call(
-        build_modifying_executor(registry),
-        ToolCall(
-            call_id="write-denied",
-            name="repo.apply_patch",
-            arguments_json='{"patch":"--- a/file.txt\\n+++ b/file.txt\\n"}',
-        ),
-        workspace=tmp_path,
-        agent_id=uuid4(),
-        capabilities={"repository:read"},
-    )
-
-    assert result.is_error
-    assert "ToolDenied" in result.content
+    with pytest.raises(ToolDenied):
+        await execute_repository_call(
+            build_modifying_executor(registry),
+            ToolCall(
+                call_id="write-denied",
+                name="repo.apply_patch",
+                arguments_json='{"patch":"--- a/file.txt\\n+++ b/file.txt\\n"}',
+            ),
+            workspace=tmp_path,
+            agent_id=uuid4(),
+            capabilities={"repository:read"},
+        )
 
 
 @pytest.mark.asyncio

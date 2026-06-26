@@ -50,6 +50,7 @@ from awesome_agent.tools.repository import (
     RepositoryRecoveryRequired,
     build_modifying_executor,
     build_modifying_registry,
+    canonical_arguments_hash_from_arguments,
     execute_repository_call,
     model_tool_definitions,
     parse_tool_call_arguments,
@@ -395,7 +396,7 @@ class ModifyingCodingGraph:
         workspace = cast(Any, run.workspace_path)
         arguments = parse_tool_call_arguments(call)
         spec, _ = self.registry.resolve(call.name)
-        arguments_fingerprint = _hash_json(arguments)
+        arguments_fingerprint = canonical_arguments_hash_from_arguments(arguments)
         idempotency_key = _idempotency_key(
             run_id=str(run.id),
             agent_id=str(agent.id),
@@ -662,14 +663,6 @@ def _state(value: object) -> ModifyingAgentState:
     if not required.issubset(value):
         raise CorruptRuntimeStateError("Modifying graph state is incomplete.")
     return cast(ModifyingAgentState, value)
-
-
-def _hash_json(value: dict[str, Any]) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    ).hexdigest()
 
 
 def _idempotency_key(

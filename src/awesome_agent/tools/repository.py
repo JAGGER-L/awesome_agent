@@ -214,7 +214,6 @@ async def execute_repository_call(
         ValueError,
         KeyError,
         TimeoutError,
-        RuntimeError,
     ) as error:
         return ToolResultMessage(
             call_id=call.call_id,
@@ -648,6 +647,21 @@ def _tool_uuid(call_id: str) -> Any:
 
 def parse_tool_call_arguments(call: ToolCall) -> dict[str, Any]:
     return _parse_arguments(call)
+
+
+def canonical_arguments_hash(call: ToolCall) -> str:
+    return canonical_arguments_hash_from_arguments(_parse_arguments(call))
+
+
+def canonical_arguments_hash_from_arguments(arguments: dict[str, Any]) -> str:
+    return _sha256(
+        json.dumps(
+            arguments,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
 
 
 def tool_invocation_uuid(call_id: str) -> Any:

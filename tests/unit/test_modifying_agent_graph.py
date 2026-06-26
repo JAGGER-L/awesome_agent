@@ -38,9 +38,9 @@ from awesome_agent.runtime.graphs import (
 )
 from awesome_agent.runtime.modifying_graph import (
     ModifyingCodingGraph,
-    _hash_json,
     _idempotency_key,
 )
+from awesome_agent.tools.repository import canonical_arguments_hash_from_arguments
 
 
 class SequenceProvider(StructuredModelProvider):
@@ -313,10 +313,10 @@ async def test_modifying_graph_marks_started_shell_as_recovery_required(
                 agent_id=str(agent.id),
                 tool_name="shell.execute",
                 tool_version="1",
-                arguments_hash=_hash_json(arguments),
+                arguments_hash=canonical_arguments_hash_from_arguments(arguments),
                 workspace=str(tmp_path),
             ),
-            arguments_hash=_hash_json(arguments),
+            arguments_hash=canonical_arguments_hash_from_arguments(arguments),
             risk_level="medium",
         )
     )
