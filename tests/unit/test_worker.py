@@ -10,6 +10,7 @@ import pytest
 from awesome_agent.domain.enums import AgentKind, ExecutionKind, RunIntent
 from awesome_agent.domain.models import Agent, Run, RunLease
 from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
     CorruptRuntimeStateError,
     PermanentExecutionError,
 )
@@ -56,6 +57,20 @@ class FakeDispatcher:
     async def release_for_retry(self, lease: RunLease, **kwargs: object) -> None:
         self.calls.append(("retry", kwargs))
 
+    async def release_for_approval_wait(
+        self,
+        lease: RunLease,
+        **kwargs: object,
+    ) -> None:
+        self.calls.append(("approval_wait", kwargs))
+
+    async def requeue_after_approval(self, **kwargs: object) -> None:
+        self.calls.append(("approval_requeue", kwargs))
+
+    async def expire_pending_approvals(self, **kwargs: object) -> int:
+        self.calls.append(("expire_approvals", kwargs))
+        return 0
+
     async def mark_recovery_required(self, lease: RunLease, **kwargs: object) -> None:
         self.calls.append(("recovery", kwargs))
 
@@ -94,6 +109,9 @@ class FakeGraph:
 
 
 class FakeModifyingGraph:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+
     async def execute(
         self,
         _: Run,
@@ -101,6 +119,8 @@ class FakeModifyingGraph:
         *,
         event_sink: object | None = None,
     ) -> tuple[dict[str, object], bool]:
+        if self.error is not None:
+            raise self.error
         return (
             {
                 "run_id": "run",
@@ -256,6 +276,7 @@ async def test_worker_forever_recovers_and_stops() -> None:
 
     assert [call[0] for call in dispatcher.calls] == [
         "recover_expired",
+        "expire_approvals",
         "claim",
     ]
 
@@ -307,6 +328,35 @@ async def test_worker_executes_modifying_graph_with_unvalidated_completion() -> 
     assert isinstance(complete[1], dict)
     assert complete[1]["completion_kind"] == "modifying_unvalidated"
     assert complete[1]["result_text"] == "Changed README.md; validation not run."
+
+
+@pytest.mark.asyncio
+async def test_worker_releases_modifying_run_for_approval_wait() -> None:
+    lease = _lease()
+    run = _modifying_run(lease)
+    approval_id = uuid4()
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=FakeModifyingGraph(ApprovalInterrupt(approval_id)),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    assert await worker.run_once()
+    release = dispatcher.calls[-1]
+
+    assert release[0] == "approval_wait"
+    assert isinstance(release[1], dict)
+    assert release[1]["approval_id"] == approval_id
+    assert release[1]["reason"] == "approval_wait"
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ from types import FrameType
 from typing import Any
 
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.database import create_engine, create_session_factory
@@ -48,6 +49,10 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 artifact_store=LocalArtifactStore(configured.artifact_root),
                 artifact_repository=PostgresArtifactMetadataRepository(sessions),
                 tool_repository=PostgresToolInvocationRepository(sessions),
+                approval_repository=PostgresApprovalRepository(sessions),
+                approval_default_expiry=timedelta(
+                    seconds=configured.approval_default_expiry_seconds
+                ),
                 max_model_turns=configured.max_model_turns,
                 max_tool_calls=configured.max_tool_calls_per_run,
                 recursion_limit=configured.agent_graph_recursion_limit,
@@ -80,6 +85,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 await worker.dispatcher.recover_expired(
                     max_attempts=worker.config.max_attempts
                 )
+                await worker.dispatcher.expire_pending_approvals()
                 return await worker.run_once()
             await worker.run_forever()
             return True

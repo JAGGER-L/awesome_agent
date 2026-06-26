@@ -1,20 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict, cast
+from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 from pydantic import TypeAdapter
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import EventType, RunIntent
+from awesome_agent.domain.enums import ApprovalStatus, EventType, RunIntent
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     ContinuationState,
@@ -32,11 +37,13 @@ from awesome_agent.modeling import (
     TransientModelError,
     UserMessage,
 )
+from awesome_agent.persistence.approvals import ApprovalRepository, DurableApproval
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     ToolInvocationRepository,
 )
 from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
     CorruptRuntimeStateError,
     IncompatibleGraphError,
     PermanentExecutionError,
@@ -46,6 +53,7 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
     MODIFYING_CODING_VERSION,
 )
+from awesome_agent.tools.models import ApprovalRequired, ToolDenied
 from awesome_agent.tools.repository import (
     RepositoryRecoveryRequired,
     build_modifying_executor,
@@ -112,6 +120,8 @@ class ModifyingCodingGraph:
         artifact_store: LocalArtifactStore | None = None,
         artifact_repository: ArtifactMetadataRepository | None = None,
         tool_repository: ToolInvocationRepository | None = None,
+        approval_repository: ApprovalRepository | None = None,
+        approval_default_expiry: timedelta = timedelta(minutes=60),
         max_model_turns: int = 60,
         max_tool_calls: int = 120,
         recursion_limit: int = 256,
@@ -125,6 +135,8 @@ class ModifyingCodingGraph:
         self.artifact_store = artifact_store
         self.artifact_repository = artifact_repository
         self.tool_repository = tool_repository
+        self.approval_repository = approval_repository
+        self.approval_default_expiry = approval_default_expiry
         self.max_model_turns = max_model_turns
         self.max_tool_calls = max_tool_calls
         self.recursion_limit = recursion_limit
@@ -194,11 +206,14 @@ class ModifyingCodingGraph:
                     config,
                     durability="sync",
                 )
+                self._raise_if_interrupted(result)
                 return _state(result), False
             snapshot = await self.graph.aget_state(config)
             if not snapshot.next:
                 return _state(snapshot.values), True
-            result = await self.graph.ainvoke(None, config, durability="sync")
+            command = await self._resume_command(snapshot)
+            result = await self.graph.ainvoke(command, config, durability="sync")
+            self._raise_if_interrupted(result)
             return _state(result), True
         finally:
             self._run = None
@@ -331,6 +346,8 @@ class ModifyingCodingGraph:
                 result = await self._execute_durable_tool_call(call)
             except RepositoryRecoveryRequired as error:
                 raise CorruptRuntimeStateError(str(error)) from error
+            except ToolDenied as error:
+                result = _tool_error_result(call, "denied", str(error))
             result = await self._offload_result_if_needed(call.call_id, result)
             if call.name == "repo.apply_patch" and not result.is_error:
                 successful_writes += 1
@@ -424,19 +441,20 @@ class ModifyingCodingGraph:
                     content=existing.result_content,
                     is_error=existing.result_is_error,
                 )
-            if call.name == "shell.execute":
+            if existing.status == "approval_pending":
+                invocation = _copy_invocation(existing, updated_at=datetime.now(UTC))
+            elif call.name == "shell.execute":
                 raise CorruptRuntimeStateError(
                     "Shell execution completion is unknown after restart."
                 )
-            if call.name != "repo.apply_patch":
+            elif call.name != "repo.apply_patch":
                 raise CorruptRuntimeStateError(
                     f"Tool invocation {existing.id} stopped before completion."
                 )
-
-        now = datetime.now(UTC)
-        if existing is not None:
-            invocation = _copy_invocation(existing, updated_at=now)
+            else:
+                invocation = _copy_invocation(existing, updated_at=datetime.now(UTC))
         else:
+            now = datetime.now(UTC)
             path_refs, preimage_hashes = repository_tool_effect_metadata(
                 call.name,
                 arguments,
@@ -460,6 +478,18 @@ class ModifyingCodingGraph:
         await self.tool_repository.upsert(invocation)
         try:
             result = await self._execute_tool_call(call)
+        except ToolDenied as error:
+            result = _tool_error_result(call, "denied", str(error))
+        except ApprovalRequired:
+            result = await self._interrupt_for_approval(
+                call=call,
+                invocation=invocation,
+                arguments=arguments,
+                arguments_hash=arguments_fingerprint,
+                workspace=workspace,
+                tool_version=spec.version,
+                risk_level=spec.risk_level.value,
+            )
         except RepositoryRecoveryRequired as error:
             await self.tool_repository.upsert(
                 _copy_invocation(
@@ -487,7 +517,144 @@ class ModifyingCodingGraph:
         )
         return result
 
-    async def _execute_tool_call(self, call: ToolCall) -> ToolResultMessage:
+    async def _interrupt_for_approval(
+        self,
+        *,
+        call: ToolCall,
+        invocation: DurableToolInvocation,
+        arguments: dict[str, Any],
+        arguments_hash: str,
+        workspace: Path,
+        tool_version: str,
+        risk_level: str,
+    ) -> ToolResultMessage:
+        if self.approval_repository is None:
+            raise CorruptRuntimeStateError("Approval repository is not configured.")
+        approval = await self._upsert_approval(
+            call=call,
+            invocation=invocation,
+            arguments=arguments,
+            arguments_hash=arguments_hash,
+            workspace=workspace,
+            tool_version=tool_version,
+            risk_level=risk_level,
+        )
+        if self.tool_repository is not None:
+            await self.tool_repository.upsert(
+                _copy_invocation(
+                    invocation,
+                    status="approval_pending",
+                    updated_at=datetime.now(UTC),
+                )
+            )
+        payload = _approval_interrupt_payload(approval)
+        await self._emit(
+            EventType.APPROVAL_REQUESTED,
+            {
+                **payload,
+                "reason": "waiting_approval",
+                "agent_id": str(self._require_agent().id),
+            },
+            f"approval:{approval.tool_call_id}",
+        )
+        resume = interrupt(payload)
+        return await self._resume_approved_tool_call(
+            call=call,
+            approval_id=_resume_approval_id(resume),
+            expected_arguments_hash=arguments_hash,
+            expected_tool_version=tool_version,
+            expected_workspace_fingerprint=approval.workspace_fingerprint,
+            expected_capabilities=approval.capabilities,
+        )
+
+    async def _upsert_approval(
+        self,
+        *,
+        call: ToolCall,
+        invocation: DurableToolInvocation,
+        arguments: dict[str, Any],
+        arguments_hash: str,
+        workspace: Path,
+        tool_version: str,
+        risk_level: str,
+    ) -> DurableApproval:
+        repository = self._require_approval_repository()
+        run = self._require_run()
+        agent = self._require_agent()
+        existing = await repository.get_by_call(run.id, call.call_id)
+        now = datetime.now(UTC)
+        approval = DurableApproval(
+            id=(existing.id if existing is not None else invocation.id),
+            run_id=run.id,
+            agent_id=agent.id,
+            tool_invocation_id=invocation.id,
+            tool_call_id=call.call_id,
+            tool_name=call.name,
+            tool_version=tool_version,
+            canonical_arguments=arguments,
+            arguments_hash=arguments_hash,
+            workspace_path=str(workspace),
+            workspace_fingerprint=await _workspace_fingerprint(workspace),
+            capabilities=[
+                "artifact:read",
+                "repository:read",
+                "repository:write",
+                "shell:execute",
+            ],
+            risk_level=risk_level,
+            expires_at=(
+                existing.expires_at
+                if existing is not None
+                else now + self.approval_default_expiry
+            ),
+            status=(
+                existing.status if existing is not None else ApprovalStatus.PENDING
+            ),
+            created_at=(existing.created_at if existing is not None else now),
+            updated_at=now,
+        )
+        return await repository.upsert(approval)
+
+    async def _resume_approved_tool_call(
+        self,
+        *,
+        call: ToolCall,
+        approval_id: UUID,
+        expected_arguments_hash: str,
+        expected_tool_version: str,
+        expected_workspace_fingerprint: str,
+        expected_capabilities: list[str],
+    ) -> ToolResultMessage:
+        approval = await self._require_approval_repository().get(approval_id)
+        if approval.tool_call_id != call.call_id:
+            raise CorruptRuntimeStateError("Approval resume tool call mismatch.")
+        if approval.status in {ApprovalStatus.DENIED, ApprovalStatus.EXPIRED}:
+            return _tool_error_result(
+                call,
+                approval.status.value,
+                f"Tool execution was {approval.status.value} by approval decision.",
+            )
+        if approval.status is not ApprovalStatus.APPROVED:
+            raise ApprovalInterrupt(approval.id)
+        current_fingerprint = await _workspace_fingerprint(
+            Path(approval.workspace_path)
+        )
+        if (
+            approval.arguments_hash != expected_arguments_hash
+            or approval.tool_version != expected_tool_version
+            or approval.workspace_fingerprint != expected_workspace_fingerprint
+            or current_fingerprint != approval.workspace_fingerprint
+            or approval.capabilities != expected_capabilities
+        ):
+            raise CorruptRuntimeStateError("Approval binding changed before resume.")
+        return await self._execute_tool_call(call, approval_granted=True)
+
+    async def _execute_tool_call(
+        self,
+        call: ToolCall,
+        *,
+        approval_granted: bool = False,
+    ) -> ToolResultMessage:
         run = self._require_run()
         agent = self._require_agent()
         return await execute_repository_call(
@@ -501,7 +668,33 @@ class ModifyingCodingGraph:
                 "shell:execute",
                 "artifact:read",
             },
+            approval_granted=approval_granted,
         )
+
+    async def _resume_command(self, snapshot: Any) -> Any:
+        interrupts = getattr(snapshot, "interrupts", ())
+        if not interrupts:
+            return None
+        value = getattr(interrupts[0], "value", None)
+        approval_id = _approval_id_from_interrupt_value(value)
+        approval = await self._require_approval_repository().get(approval_id)
+        if approval.status is ApprovalStatus.PENDING:
+            raise ApprovalInterrupt(approval.id)
+        return Command(
+            resume={
+                "approval_id": str(approval.id),
+                "status": approval.status.value,
+            }
+        )
+
+    def _raise_if_interrupted(self, result: object) -> None:
+        if not isinstance(result, dict):
+            return
+        interrupts = result.get("__interrupt__")
+        if not isinstance(interrupts, list) or not interrupts:
+            return
+        value = getattr(interrupts[0], "value", None)
+        raise ApprovalInterrupt(_approval_id_from_interrupt_value(value))
 
     async def _feedback(self, state: ModifyingAgentState) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
@@ -622,6 +815,11 @@ class ModifyingCodingGraph:
             raise CorruptRuntimeStateError("Graph Agent context is unavailable.")
         return self._agent
 
+    def _require_approval_repository(self) -> ApprovalRepository:
+        if self.approval_repository is None:
+            raise CorruptRuntimeStateError("Approval repository is not configured.")
+        return self.approval_repository
+
 
 def _initial_state(run: Run, agent: Agent) -> ModifyingAgentState:
     return {
@@ -695,6 +893,95 @@ def _extract_postimage_hashes(content: str) -> dict[str, str]:
         for key, value in postimage_hashes.items()
         if isinstance(key, str) and isinstance(value, str)
     }
+
+
+def _approval_interrupt_payload(approval: DurableApproval) -> dict[str, object]:
+    return {
+        "approval_id": str(approval.id),
+        "tool_call_id": approval.tool_call_id,
+        "tool": approval.tool_name,
+        "args_summary": _arguments_summary(approval.canonical_arguments),
+        "risk": approval.risk_level,
+        "expires_at": approval.expires_at.isoformat(),
+    }
+
+
+def _arguments_summary(arguments: dict[str, object]) -> str:
+    if "argv" in arguments and isinstance(arguments["argv"], list):
+        argv = " ".join(str(item) for item in arguments["argv"])
+        return argv[:500]
+    return json.dumps(
+        arguments,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )[:500]
+
+
+def _approval_id_from_interrupt_value(value: object) -> UUID:
+    if not isinstance(value, dict):
+        raise CorruptRuntimeStateError("Approval interrupt payload is invalid.")
+    approval_id = value.get("approval_id")
+    if not isinstance(approval_id, str):
+        raise CorruptRuntimeStateError("Approval interrupt is missing approval_id.")
+    return UUID(approval_id)
+
+
+def _resume_approval_id(value: object) -> UUID:
+    if not isinstance(value, dict):
+        raise CorruptRuntimeStateError("Approval resume payload is invalid.")
+    approval_id = value.get("approval_id")
+    if not isinstance(approval_id, str):
+        raise CorruptRuntimeStateError("Approval resume is missing approval_id.")
+    return UUID(approval_id)
+
+
+def _tool_error_result(
+    call: ToolCall,
+    status: str,
+    message: str,
+) -> ToolResultMessage:
+    return ToolResultMessage(
+        call_id=call.call_id,
+        content=json.dumps(
+            {
+                "status": status,
+                "error": message,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        is_error=True,
+    )
+
+
+async def _workspace_fingerprint(workspace: Path) -> str:
+    resolved = workspace.resolve()
+    parts = [str(resolved)]
+    for args in (
+        ("rev-parse", "HEAD"),
+        ("diff", "--binary"),
+        ("diff", "--cached", "--binary"),
+    ):
+        parts.append(await _git_output(resolved, args))
+    return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
+
+
+async def _git_output(workspace: Path, args: tuple[str, ...]) -> str:
+    try:
+        completed = await asyncio.to_thread(
+            subprocess.run,
+            ["git", *args],
+            cwd=workspace,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except OSError as error:
+        return f"git-unavailable:{type(error).__name__}"
+    if completed.returncode != 0:
+        return f"git-error:{' '.join(args)}:{completed.stderr[:500]}"
+    return completed.stdout
 
 
 def _copy_invocation(

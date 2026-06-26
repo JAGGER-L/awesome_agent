@@ -8,6 +8,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.domain.enums import (
+    ApprovalStatus,
     DispatchStatus,
     EventType,
     ExecutionKind,
@@ -15,7 +16,12 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import RunLease, RuntimeEvent
-from awesome_agent.persistence.models import RunRecord, RuntimeEventRecord, TodoRecord
+from awesome_agent.persistence.models import (
+    ApprovalRecord,
+    RunRecord,
+    RuntimeEventRecord,
+    TodoRecord,
+)
 from awesome_agent.runtime.dispatch import LeaseLost, RunDispatcher
 
 
@@ -160,6 +166,151 @@ class PostgresRunDispatcher(RunDispatcher):
                     EventType.DISPATCH_RELEASED,
                     {"reason": reason, "next_status": DispatchStatus.QUEUED.value},
                 )
+
+    async def release_for_approval_wait(
+        self,
+        lease: RunLease,
+        *,
+        approval_id: UUID,
+        reason: str,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            record, _ = await _locked_live_lease(session, lease)
+            record.status = RunStatus.PAUSED.value
+            record.dispatch_status = DispatchStatus.WAITING.value
+            record.last_release_reason = reason
+            record.last_dispatch_error = None
+            _clear_lease(record)
+            await _append_event(
+                session,
+                record,
+                EventType.DISPATCH_RELEASED,
+                {
+                    "reason": reason,
+                    "next_status": DispatchStatus.WAITING.value,
+                    "approval_id": str(approval_id),
+                },
+            )
+            await _append_event(
+                session,
+                record,
+                EventType.RUN_STATUS_CHANGED,
+                {
+                    "status": RunStatus.PAUSED.value,
+                    "dispatch_status": DispatchStatus.WAITING.value,
+                    "reason": reason,
+                    "approval_id": str(approval_id),
+                },
+            )
+
+    async def requeue_after_approval(
+        self,
+        *,
+        run_id: UUID,
+        approval_id: UUID,
+        reason: str,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            now = await _database_now(session)
+            approval = await session.get(
+                ApprovalRecord,
+                approval_id,
+                with_for_update=True,
+            )
+            if approval is None or approval.run_id != run_id:
+                raise KeyError(approval_id)
+            record = await session.scalar(
+                select(RunRecord).where(RunRecord.id == run_id).with_for_update()
+            )
+            if record is None:
+                raise KeyError(run_id)
+            if record.dispatch_status != DispatchStatus.WAITING.value:
+                return
+            record.status = RunStatus.RUNNING.value
+            record.dispatch_status = DispatchStatus.QUEUED.value
+            record.available_at = now
+            record.last_release_reason = reason
+            record.last_dispatch_error = None
+            await _append_event(
+                session,
+                record,
+                EventType.DISPATCH_RELEASED,
+                {
+                    "reason": reason,
+                    "next_status": DispatchStatus.QUEUED.value,
+                    "approval_id": str(approval_id),
+                },
+            )
+            await _append_event(
+                session,
+                record,
+                EventType.RUN_STATUS_CHANGED,
+                {
+                    "status": RunStatus.RUNNING.value,
+                    "dispatch_status": DispatchStatus.QUEUED.value,
+                    "reason": reason,
+                    "approval_id": str(approval_id),
+                },
+            )
+
+    async def expire_pending_approvals(
+        self,
+        *,
+        batch_size: int = 100,
+    ) -> int:
+        if batch_size < 1:
+            raise ValueError("Batch size must be positive.")
+        async with self._sessions.begin() as session:
+            now = await _database_now(session)
+            approvals = list(
+                await session.scalars(
+                    select(ApprovalRecord)
+                    .where(
+                        ApprovalRecord.status == ApprovalStatus.PENDING.value,
+                        ApprovalRecord.expires_at <= now,
+                    )
+                    .order_by(ApprovalRecord.expires_at, ApprovalRecord.id)
+                    .with_for_update(skip_locked=True)
+                    .limit(batch_size)
+                )
+            )
+            for approval in approvals:
+                approval.status = ApprovalStatus.EXPIRED.value
+                approval.updated_at = now
+                record = await session.scalar(
+                    select(RunRecord)
+                    .where(RunRecord.id == approval.run_id)
+                    .with_for_update()
+                )
+                if record is None:
+                    continue
+                await _append_event(
+                    session,
+                    record,
+                    EventType.APPROVAL_DECIDED,
+                    {
+                        "approval_id": str(approval.id),
+                        "status": ApprovalStatus.EXPIRED.value,
+                    },
+                    transition_id=f"approval-expired:{approval.id}",
+                )
+                if record.dispatch_status == DispatchStatus.WAITING.value:
+                    record.status = RunStatus.RUNNING.value
+                    record.dispatch_status = DispatchStatus.QUEUED.value
+                    record.available_at = now
+                    record.last_release_reason = "approval_expired"
+                    record.last_dispatch_error = None
+                    await _append_event(
+                        session,
+                        record,
+                        EventType.DISPATCH_RELEASED,
+                        {
+                            "reason": "approval_expired",
+                            "next_status": DispatchStatus.QUEUED.value,
+                            "approval_id": str(approval.id),
+                        },
+                    )
+            return len(approvals)
 
     async def release_for_retry(
         self,

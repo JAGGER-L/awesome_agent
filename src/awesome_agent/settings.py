@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     worker_recovery_interval_seconds: float = Field(default=15.0, gt=0, le=600)
     worker_shutdown_grace_seconds: float = Field(default=30.0, ge=0, le=600)
     worker_retry_delay_seconds: float = Field(default=5.0, ge=0, le=3600)
+    approval_default_expiry_seconds: int = Field(default=3600, ge=60, le=86400)
     event_poll_interval_seconds: float = Field(default=0.5, gt=0, le=60)
     max_model_turns: int = Field(default=60, ge=2, le=500)
     max_tool_calls_per_run: int = Field(default=120, ge=1, le=2000)

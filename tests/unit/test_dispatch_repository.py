@@ -6,15 +6,20 @@ from uuid import uuid4
 
 import pytest
 
-from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
+from awesome_agent.domain.enums import (
+    ApprovalStatus,
+    DispatchStatus,
+    EventType,
+    RunStatus,
+)
 from awesome_agent.domain.models import RunLease
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
-from awesome_agent.persistence.models import RunRecord
+from awesome_agent.persistence.models import ApprovalRecord, RunRecord
 from awesome_agent.runtime.dispatch import LeaseLost
 
 
 class ScalarRows:
-    def __init__(self, values: list[RunRecord]) -> None:
+    def __init__(self, values: list[object]) -> None:
         self.values = values
 
     def __iter__(self) -> Any:
@@ -26,7 +31,7 @@ class FakeSession:
         self,
         *,
         scalar_results: list[object],
-        rows: list[RunRecord] | None = None,
+        rows: list[object] | None = None,
     ) -> None:
         self.scalar_results = scalar_results
         self.rows = rows or []
@@ -39,6 +44,14 @@ class FakeSession:
         pass
 
     async def scalar(self, _: object) -> object:
+        return self.scalar_results.pop(0)
+
+    async def get(
+        self,
+        _: object,
+        __: object,
+        **___: object,
+    ) -> object:
         return self.scalar_results.pop(0)
 
     async def scalars(self, _: object) -> ScalarRows:
@@ -86,6 +99,32 @@ def _record(
         workspace_state=None,
         graph_thread_id=None,
         legacy=False,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _approval(record: RunRecord, *, status: ApprovalStatus) -> ApprovalRecord:
+    now = datetime.now(UTC)
+    return ApprovalRecord(
+        id=uuid4(),
+        run_id=record.id,
+        agent_id=None,
+        tool_invocation_id=uuid4(),
+        tool_call_id="call",
+        tool_name="shell.execute",
+        tool_version="1",
+        canonical_arguments={"argv": ["python", "script.py"]},
+        arguments_hash="hash",
+        workspace_path="workspace",
+        workspace_fingerprint="fingerprint",
+        capabilities=["shell:execute"],
+        risk_level="medium",
+        status=status.value,
+        expires_at=now - timedelta(seconds=1),
+        decided_at=None,
+        decided_by=None,
+        decision_reason=None,
         created_at=now,
         updated_at=now,
     )
@@ -164,6 +203,73 @@ async def test_release_retry_and_attempt_exhaustion() -> None:
     )
     assert exhausted.status == RunStatus.RECOVERY_REQUIRED.value
     assert exhausted.dispatch_status == DispatchStatus.TERMINAL.value
+
+
+@pytest.mark.asyncio
+async def test_release_for_approval_wait_pauses_and_clears_lease() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.EXECUTING, attempt=1)
+    record.status = RunStatus.RUNNING.value
+    record.current_worker_id = uuid4()
+    record.current_worker_name = "worker"
+    record.fencing_token = 1
+    record.lease_acquired_at = now
+    record.lease_expires_at = now + timedelta(seconds=60)
+    record.heartbeat_at = now
+    dispatcher = PostgresRunDispatcher(
+        FakeFactory([FakeSession(scalar_results=[now, record, 0, 1])])  # type: ignore[arg-type]
+    )
+
+    await dispatcher.release_for_approval_wait(
+        _lease_from(record),
+        approval_id=uuid4(),
+        reason="approval_wait",
+    )
+
+    assert record.status == RunStatus.PAUSED.value
+    assert record.dispatch_status == DispatchStatus.WAITING.value
+    assert record.current_worker_id is None
+    assert record.attempt == 1
+
+
+@pytest.mark.asyncio
+async def test_requeue_after_approval_makes_waiting_run_claimable() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.WAITING, attempt=1)
+    record.status = RunStatus.PAUSED.value
+    approval = _approval(record, status=ApprovalStatus.APPROVED)
+    dispatcher = PostgresRunDispatcher(
+        FakeFactory([FakeSession(scalar_results=[now, approval, record, 0, 1])])  # type: ignore[arg-type]
+    )
+
+    await dispatcher.requeue_after_approval(
+        run_id=record.id,
+        approval_id=approval.id,
+        reason="approval_decided",
+    )
+
+    assert record.status == RunStatus.RUNNING.value
+    assert record.dispatch_status == DispatchStatus.QUEUED.value
+    assert record.available_at == now
+
+
+@pytest.mark.asyncio
+async def test_expire_pending_approvals_requeues_waiting_run() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.WAITING, attempt=1)
+    record.status = RunStatus.PAUSED.value
+    approval = _approval(record, status=ApprovalStatus.PENDING)
+    session = FakeSession(
+        scalar_results=[now, record, None, 0, 1],
+        rows=[approval],
+    )
+    dispatcher = PostgresRunDispatcher(FakeFactory([session]))  # type: ignore[arg-type]
+
+    assert await dispatcher.expire_pending_approvals() == 1
+
+    assert approval.status == ApprovalStatus.EXPIRED.value
+    assert record.status == RunStatus.RUNNING.value
+    assert record.dispatch_status == DispatchStatus.QUEUED.value
 
 
 @pytest.mark.asyncio

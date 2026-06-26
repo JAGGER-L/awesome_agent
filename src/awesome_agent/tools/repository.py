@@ -189,6 +189,7 @@ async def execute_repository_call(
     agent_id: Any,
     profile: str = "leader",
     capabilities: set[str] | None = None,
+    approval_granted: bool = False,
 ) -> ToolResultMessage:
     try:
         arguments = _parse_arguments(call)
@@ -201,6 +202,7 @@ async def execute_repository_call(
                 capabilities=capabilities or {"repository:read"},
                 arguments=arguments,
                 workspace=workspace,
+                approval_granted=approval_granted,
             ),
             progress=None,
         )

@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from awesome_agent.domain.enums import EventType, ExecutionKind
 from awesome_agent.domain.models import Run, RunLease
 from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
     CorruptRuntimeStateError,
     IncompatibleGraphError,
     LeaseLost,
@@ -82,6 +83,7 @@ class DurableWorker:
                 await self.dispatcher.recover_expired(
                     max_attempts=self.config.max_attempts
                 )
+                await self.dispatcher.expire_pending_approvals()
                 next_recovery = monotonic() + self.config.recovery_interval
             processed = await self.run_once()
             if not processed and not self.stop_requested.is_set():
@@ -137,6 +139,8 @@ class DurableWorker:
             )
         except LeaseLost:
             return
+        except ApprovalInterrupt as interrupt:
+            await self._release_for_approval_if_owned(lease, interrupt.approval_id)
         except (IncompatibleGraphError, CorruptRuntimeStateError) as error:
             await self._mark_recovery_if_owned(lease, str(error))
         except PermanentExecutionError as error:
@@ -234,6 +238,20 @@ class DurableWorker:
                 reason=type(error).__name__,
                 error=str(error),
                 max_attempts=self.config.max_attempts,
+            )
+        except LeaseLost:
+            return
+
+    async def _release_for_approval_if_owned(
+        self,
+        lease: RunLease,
+        approval_id: UUID,
+    ) -> None:
+        try:
+            await self.dispatcher.release_for_approval_wait(
+                lease,
+                approval_id=approval_id,
+                reason="approval_wait",
             )
         except LeaseLost:
             return

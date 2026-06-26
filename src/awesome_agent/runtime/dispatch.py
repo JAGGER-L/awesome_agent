@@ -32,6 +32,12 @@ class CorruptRuntimeStateError(PermanentExecutionError):
     pass
 
 
+class ApprovalInterrupt(RuntimeError):
+    def __init__(self, approval_id: UUID) -> None:
+        self.approval_id = approval_id
+        super().__init__(f"Run is waiting for approval {approval_id}.")
+
+
 class RunDispatcher(Protocol):
     async def claim_next(
         self,
@@ -75,6 +81,34 @@ class RunDispatcher(Protocol):
         max_attempts: int,
     ) -> None:
         """Release current ownership and make the Run immediately claimable."""
+        ...
+
+    async def release_for_approval_wait(
+        self,
+        lease: RunLease,
+        *,
+        approval_id: UUID,
+        reason: str,
+    ) -> None:
+        """Release current ownership while the Run waits for approval."""
+        ...
+
+    async def requeue_after_approval(
+        self,
+        *,
+        run_id: UUID,
+        approval_id: UUID,
+        reason: str,
+    ) -> None:
+        """Make a waiting Run claimable after an approval decision."""
+        ...
+
+    async def expire_pending_approvals(
+        self,
+        *,
+        batch_size: int = 100,
+    ) -> int:
+        """Expire pending approvals and requeue their waiting Runs."""
         ...
 
     async def release_for_retry(

@@ -12,7 +12,12 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, ExecutionKind, RunIntent
+from awesome_agent.domain.enums import (
+    AgentKind,
+    ApprovalStatus,
+    ExecutionKind,
+    RunIntent,
+)
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -24,11 +29,13 @@ from awesome_agent.modeling import (
     ToolCall,
     TurnCompleted,
 )
+from awesome_agent.persistence.approvals import InMemoryApprovalRepository
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     InMemoryToolInvocationRepository,
 )
 from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
     CorruptRuntimeStateError,
     IncompatibleGraphError,
 )
@@ -40,6 +47,7 @@ from awesome_agent.runtime.modifying_graph import (
     ModifyingCodingGraph,
     _idempotency_key,
 )
+from awesome_agent.sandbox.base import CommandResult
 from awesome_agent.tools.repository import canonical_arguments_hash_from_arguments
 
 
@@ -178,6 +186,139 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
         if message.get("role") == "tool" and message.get("artifact_refs")
     ]
     assert tool_messages
+
+
+@pytest.mark.asyncio
+async def test_modifying_graph_interrupts_and_resumes_approved_shell(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    patch = """diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-old
++new
+"""
+    shell_runs = 0
+
+    async def fake_run_process(
+        arguments: list[str],
+        *,
+        command_label: str,
+        workspace: Path,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        nonlocal shell_runs
+        shell_runs += 1
+        return CommandResult(
+            command=command_label,
+            exit_code=0,
+            stdout="approved\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
+    provider = SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="shell",
+                            name="shell.execute",
+                            arguments_json=json.dumps(
+                                {"argv": ["python", "script.py"]}
+                            ),
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="patch",
+                            name="repo.apply_patch",
+                            arguments_json=json.dumps({"patch": patch}),
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="diff",
+                            name="repo.diff",
+                            arguments_json="{}",
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
+            ModelTurn(
+                assistant=AssistantMessage(content="Changed README.md."),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            ),
+        ]
+    )
+    approvals = InMemoryApprovalRepository()
+    tools = InMemoryToolInvocationRepository()
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+        tool_repository=tools,
+        approval_repository=approvals,
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+    run, agent = _run(tmp_path)
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(ApprovalInterrupt) as interrupted:
+        await graph.execute(run, agent, event_sink=emit)
+
+    approval = await approvals.get(interrupted.value.approval_id)
+    invocations = await tools.list_for_run(run.id)
+    assert approval.status is ApprovalStatus.PENDING
+    assert invocations[0].status == "approval_pending"
+    assert events[-1][2] == "approval:shell"
+
+    await approvals.decide(
+        approval.id,
+        approved=True,
+        decided_by="test",
+        reason=None,
+        now=approval.created_at,
+    )
+    state, recovered = await graph.execute(run, agent, event_sink=emit)
+
+    assert recovered
+    assert shell_runs == 1
+    assert state["phase"] == "completed"
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new\n"
 
 
 @pytest.mark.asyncio
