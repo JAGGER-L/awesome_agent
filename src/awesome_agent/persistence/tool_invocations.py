@@ -85,14 +85,11 @@ class InMemoryToolInvocationRepository:
         )
 
     async def list_for_run(self, run_id: UUID) -> list[DurableToolInvocation]:
-        return sorted(
-            (
-                invocation
-                for invocation in self._records.values()
-                if invocation.run_id == run_id
-            ),
-            key=lambda invocation: (invocation.created_at, invocation.id),
-        )
+        return [
+            invocation
+            for invocation in self._records.values()
+            if invocation.run_id == run_id
+        ]
 
 
 class PostgresToolInvocationRepository:
