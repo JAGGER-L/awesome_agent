@@ -300,6 +300,26 @@ def evaluate_workspace_candidate(
     )
 
 
+def parse_workspace_age(value: str | None) -> timedelta | None:
+    if value is None:
+        return None
+    stripped = value.strip().lower()
+    if not stripped:
+        raise ValueError("older_than must not be empty.")
+    unit = stripped[-1]
+    amount_text = stripped[:-1]
+    if unit not in {"d", "h", "m"} or not amount_text.isdigit():
+        raise ValueError("older_than must use a duration like 14d, 12h, or 30m.")
+    amount = int(amount_text)
+    if amount <= 0:
+        raise ValueError("older_than must be greater than zero.")
+    if unit == "d":
+        return timedelta(days=amount)
+    if unit == "h":
+        return timedelta(hours=amount)
+    return timedelta(minutes=amount)
+
+
 def _has_managed_workspace_identity(run: Run) -> bool:
     return (
         run.repository_id is not None

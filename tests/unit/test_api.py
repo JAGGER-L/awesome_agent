@@ -31,6 +31,7 @@ from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
+from awesome_agent.runtime.workspaces import WorkspaceRetentionService
 
 
 def _models() -> RoleModelResolver:
@@ -85,14 +86,20 @@ def _client(
         artifacts=LocalArtifactStore(tmp_path),
         model_resolver=_models(),
     )
+    worktree_manager = ManagedRunWorktreeManager(tmp_path / "worktrees")
     intake = RunIntakeService(
         registry=registry,
         reservations=reservations,
         runtime=runtime_repository,
         events=event_stream,
-        worktrees=ManagedRunWorktreeManager(tmp_path / "worktrees"),
+        worktrees=worktree_manager,
         allowed_roots=[projects],
         model_resolver=_models(),
+    )
+    workspace_service = WorkspaceRetentionService(
+        runtime_repository=runtime_repository,
+        repository_registry=registry,
+        worktrees=worktree_manager,
     )
     return (
         TestClient(
@@ -102,6 +109,7 @@ def _client(
                 registry=registry,
                 validation_repository=validation_repository,
                 observability_repository=observability_repository,
+                workspace_service=workspace_service,
             )
         ),
         repository,
@@ -187,6 +195,38 @@ def test_repository_endpoints_and_path_injection_rejection(
     assert fetched.status_code == 200
     assert fetched.json()["root"] == str(repository.root)
     assert injected.status_code == 422
+
+
+def test_workspace_endpoints_list_preview_and_reject_force_without_reason(
+    tmp_path: Path,
+) -> None:
+    client, repository = _client(tmp_path)
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect project",
+            "intent": "read_only",
+        },
+    )
+    run_id = created.json()["id"]
+
+    listed = client.get("/workspaces")
+    preview = client.post(
+        "/workspaces/cleanup-preview",
+        json={"run_id": run_id},
+    )
+    rejected = client.post(
+        "/workspaces/cleanup",
+        json={"run_id": run_id, "force": True},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["run_id"] == run_id
+    assert preview.status_code == 200
+    assert preview.json()[0]["status"] == "blocked_active_run"
+    assert rejected.status_code == 422
+    assert "reason" in rejected.json()["detail"]
 
 
 def test_runtime_probe_has_explicit_execution_identity(tmp_path: Path) -> None:

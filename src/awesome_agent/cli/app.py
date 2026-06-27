@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import httpx
@@ -33,9 +33,11 @@ app = typer.Typer(
 config_app = typer.Typer(help="Manage local configuration.")
 root_app = typer.Typer(help="Manage allowed repository roots.")
 repo_app = typer.Typer(help="Manage registered Git repositories.")
+workspace_app = typer.Typer(help="Inspect and clean managed run workspaces.")
 config_app.add_typer(root_app, name="root")
 app.add_typer(config_app, name="config")
 app.add_typer(repo_app, name="repo")
+app.add_typer(workspace_app, name="workspace")
 
 
 @app.command()
@@ -168,6 +170,58 @@ def repo_relocate(repository_id: UUID, path: Path) -> None:
     except (KeyError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     typer.echo(f"{repository.id} {repository.root}")
+
+
+@workspace_app.command("list")
+def workspace_list(
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """List managed execution workspaces."""
+    response = httpx.get(f"{api_url}/workspaces", timeout=30)
+    response.raise_for_status()
+    _print_workspace_candidates(response.json())
+
+
+@workspace_app.command("cleanup")
+def workspace_cleanup(
+    run_id: Annotated[
+        UUID | None,
+        typer.Option("--run-id", help="Clean one Run workspace."),
+    ] = None,
+    older_than: Annotated[
+        str | None,
+        typer.Option("--older-than", help="Clean workspaces older than a duration."),
+    ] = None,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Apply cleanup. Without this, only preview."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Allow failed or dirty workspace cleanup."),
+    ] = False,
+    reason: Annotated[
+        str | None,
+        typer.Option("--reason", help="Required when --force is used."),
+    ] = None,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Preview or apply managed workspace cleanup."""
+    if force and not (reason and reason.strip()):
+        raise typer.BadParameter("--force requires --reason.")
+    endpoint = "cleanup" if apply else "cleanup-preview"
+    response = httpx.post(
+        f"{api_url}/workspaces/{endpoint}",
+        json={
+            "run_id": str(run_id) if run_id is not None else None,
+            "older_than": older_than,
+            "force": force,
+            "reason": reason,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    _print_workspace_candidates(response.json())
 
 
 @app.command()
@@ -379,6 +433,18 @@ def approve(
     )
     response.raise_for_status()
     typer.echo("approved" if approved else "denied")
+
+
+def _print_workspace_candidates(candidates: list[dict[str, Any]]) -> None:
+    typer.echo("run_id status can_cleanup dirty reason")
+    for candidate in candidates:
+        typer.echo(
+            f"{candidate['run_id']} "
+            f"{candidate['status']} "
+            f"{candidate['can_cleanup']} "
+            f"{candidate['dirty']} "
+            f"{candidate['reason']}"
+        )
 
 
 def _run_with_repository_service[T](

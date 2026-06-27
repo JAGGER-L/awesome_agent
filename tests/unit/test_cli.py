@@ -242,3 +242,100 @@ def test_probe_sends_diagnostic_request(
     assert result.exit_code == 0
     assert request["url"].endswith("/runtime/probes")
     assert request["json"] == {"repository_id": str(repository.id)}
+
+
+def test_workspace_list_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "run_id": str(uuid4()),
+                    "status": "eligible",
+                    "can_cleanup": True,
+                    "dirty": False,
+                    "reason": "workspace is eligible for cleanup",
+                }
+            ]
+
+    def get(url: str, **kwargs: Any) -> Response:
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    result = runner.invoke(app, ["workspace", "list"])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith("/workspaces")
+    assert "eligible" in result.stdout
+
+
+def test_workspace_cleanup_defaults_to_preview(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = uuid4()
+    request: dict[str, Any] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return []
+
+    def post(url: str, **kwargs: Any) -> Response:
+        request["url"] = url
+        request.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(httpx, "post", post)
+
+    result = runner.invoke(app, ["workspace", "cleanup", "--run-id", str(run_id)])
+
+    assert result.exit_code == 0
+    assert request["url"].endswith("/workspaces/cleanup-preview")
+    assert request["json"] == {
+        "run_id": str(run_id),
+        "older_than": None,
+        "force": False,
+        "reason": None,
+    }
+
+
+def test_workspace_cleanup_apply_uses_cleanup_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request: dict[str, Any] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return []
+
+    def post(url: str, **kwargs: Any) -> Response:
+        request["url"] = url
+        request.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(httpx, "post", post)
+
+    result = runner.invoke(
+        app,
+        ["workspace", "cleanup", "--older-than", "14d", "--apply"],
+    )
+
+    assert result.exit_code == 0
+    assert request["url"].endswith("/workspaces/cleanup")
+    assert request["json"]["older_than"] == "14d"
+
+
+def test_workspace_cleanup_force_requires_reason() -> None:
+    result = runner.invoke(app, ["workspace", "cleanup", "--force"])
+
+    assert result.exit_code != 0
+    assert "reason" in result.output

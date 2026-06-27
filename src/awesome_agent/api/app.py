@@ -17,6 +17,8 @@ from awesome_agent.api.schemas import (
     CreateProbeRequest,
     CreateRunRequest,
     DispatchResponse,
+    WorkspaceCandidateResponse,
+    WorkspaceCleanupRequest,
 )
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
@@ -55,6 +57,14 @@ from awesome_agent.runtime.probe_graph import (
     RUNTIME_PROBE_VERSION,
 )
 from awesome_agent.runtime.service import RuntimeService
+from awesome_agent.runtime.workspaces import (
+    WorkspaceCandidate,
+    WorkspaceRetentionService,
+    parse_workspace_age,
+)
+from awesome_agent.runtime.workspaces import (
+    WorkspaceCleanupRequest as RuntimeWorkspaceCleanupRequest,
+)
 from awesome_agent.settings import Settings
 
 
@@ -65,6 +75,7 @@ def create_app(
     registry: RepositoryRegistry | None = None,
     validation_repository: ValidationRepository | None = None,
     observability_repository: ObservabilityRepository | None = None,
+    workspace_service: WorkspaceRetentionService | None = None,
 ) -> FastAPI:
     settings = Settings()
 
@@ -74,6 +85,8 @@ def create_app(
             app.state.runtime = service
             app.state.intake = intake
             app.state.registry = registry
+            if workspace_service is not None:
+                app.state.workspaces = workspace_service
             if validation_repository is not None:
                 app.state.validation_repository = validation_repository
             app.state.observability_repository = (
@@ -105,16 +118,22 @@ def create_app(
         app.state.observability_repository = observability_repository or (
             PostgresObservabilityRepository(sessions)
         )
+        worktree_manager = ManagedRunWorktreeManager(
+            settings.workspace_root or local_config.workspace_root
+        )
         app.state.intake = RunIntakeService(
             registry=repository_registry,
             reservations=reservations,
             runtime=runtime_repository,
             events=event_stream,
-            worktrees=ManagedRunWorktreeManager(
-                settings.workspace_root or local_config.workspace_root
-            ),
+            worktrees=worktree_manager,
             allowed_roots=local_config.allowed_roots,
             model_resolver=RoleModelResolver.from_settings(settings),
+        )
+        app.state.workspaces = WorkspaceRetentionService(
+            runtime_repository=runtime_repository,
+            repository_registry=repository_registry,
+            worktrees=worktree_manager,
         )
         await app.state.intake.reconcile_incomplete()
         try:
@@ -129,6 +148,8 @@ def create_app(
         app.state.intake = intake
     if registry is not None:
         app.state.registry = registry
+    if workspace_service is not None:
+        app.state.workspaces = workspace_service
     if validation_repository is not None:
         app.state.validation_repository = validation_repository
     app.state.observability_repository = (
@@ -155,6 +176,9 @@ def create_app(
             ObservabilityRepository,
             app.state.observability_repository,
         )
+
+    def workspaces() -> WorkspaceRetentionService:
+        return cast(WorkspaceRetentionService, app.state.workspaces)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -215,6 +239,37 @@ def create_app(
                 detail="Repository not found.",
             ) from error
         return repository.model_dump(mode="json")
+
+    @app.get("/workspaces")
+    async def list_workspaces() -> list[WorkspaceCandidateResponse]:
+        return [
+            _workspace_candidate_response(candidate)
+            for candidate in await workspaces().list_candidates()
+        ]
+
+    @app.post("/workspaces/cleanup-preview")
+    async def cleanup_workspaces_preview(
+        request: WorkspaceCleanupRequest,
+    ) -> list[WorkspaceCandidateResponse]:
+        try:
+            candidates = await workspaces().cleanup_preview(
+                _workspace_cleanup_request(request, apply=False)
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return [_workspace_candidate_response(candidate) for candidate in candidates]
+
+    @app.post("/workspaces/cleanup")
+    async def cleanup_workspaces(
+        request: WorkspaceCleanupRequest,
+    ) -> list[WorkspaceCandidateResponse]:
+        try:
+            candidates = await workspaces().cleanup(
+                _workspace_cleanup_request(request, apply=True)
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return [_workspace_candidate_response(candidate) for candidate in candidates]
 
     @app.get("/runs/{run_id}")
     async def get_run(run_id: UUID) -> dict[str, object]:
@@ -435,6 +490,40 @@ def _verification_report_response(
             for gate in item.gates
         ],
     }
+
+
+def _workspace_cleanup_request(
+    request: WorkspaceCleanupRequest,
+    *,
+    apply: bool,
+) -> RuntimeWorkspaceCleanupRequest:
+    return RuntimeWorkspaceCleanupRequest(
+        run_id=request.run_id,
+        older_than=parse_workspace_age(request.older_than),
+        apply=apply,
+        force=request.force,
+        reason=request.reason,
+    )
+
+
+def _workspace_candidate_response(
+    candidate: WorkspaceCandidate,
+) -> WorkspaceCandidateResponse:
+    return WorkspaceCandidateResponse(
+        run_id=candidate.run_id,
+        repository_id=candidate.repository_id,
+        workspace_path=(
+            str(candidate.workspace_path)
+            if candidate.workspace_path is not None
+            else None
+        ),
+        branch=candidate.branch,
+        status=candidate.status.value,
+        retention_status=candidate.retention_status.value,
+        reason=candidate.reason,
+        dirty=candidate.dirty,
+        can_cleanup=candidate.can_cleanup,
+    )
 
 
 app = create_app()

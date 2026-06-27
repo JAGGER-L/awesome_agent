@@ -38,3 +38,24 @@ class DispatchResponse(BaseModel):
     heartbeat_at: datetime | None
     last_release_reason: str | None
     last_error: str | None
+
+
+class WorkspaceCleanupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID | None = None
+    older_than: str | None = None
+    force: bool = False
+    reason: str | None = None
+
+
+class WorkspaceCandidateResponse(BaseModel):
+    run_id: UUID
+    repository_id: UUID | None
+    workspace_path: str | None
+    branch: str | None
+    status: str
+    retention_status: str
+    reason: str
+    dirty: bool | None
+    can_cleanup: bool
