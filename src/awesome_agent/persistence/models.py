@@ -81,6 +81,7 @@ class RunRecord(Base):
     workspace_retention_status: Mapped[str] = mapped_column(
         String(32),
         default="retained",
+        server_default="retained",
         index=True,
     )
     workspace_cleaned_at: Mapped[datetime | None] = mapped_column(

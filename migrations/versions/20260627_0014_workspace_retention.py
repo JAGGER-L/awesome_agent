@@ -39,7 +39,6 @@ def upgrade() -> None:
         "runs",
         ["workspace_retention_status"],
     )
-    op.alter_column("runs", "workspace_retention_status", server_default=None)
 
 
 def downgrade() -> None:
