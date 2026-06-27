@@ -6,6 +6,7 @@ from datetime import timedelta
 from types import FrameType
 from typing import Any
 
+from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.observability.repository import PostgresObservabilityRepository
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
@@ -20,6 +21,7 @@ from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
+from awesome_agent.runtime.team_graph import TeamCodingGraph
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.settings import Settings
 
@@ -70,6 +72,14 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             probe_graph=RuntimeProbeGraph(saver),
             coding_graph=coding_graph,
             modifying_graph=modifying_graph,
+            team_graph=(
+                TeamCodingGraph(
+                    saver,
+                    model_resolver=RoleModelResolver.from_settings(configured),
+                )
+                if providers.coding_available
+                else None
+            ),
             config=WorkerConfig(
                 lease_duration=timedelta(seconds=configured.lease_duration_seconds),
                 heartbeat_interval=timedelta(

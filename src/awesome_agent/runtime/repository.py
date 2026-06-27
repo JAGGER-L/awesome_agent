@@ -47,8 +47,16 @@ class RuntimeRepository(Protocol):
         """Load all agents in a run."""
         ...
 
+    async def add_agent(self, agent: Agent) -> None:
+        """Append or idempotently preserve an agent projection."""
+        ...
+
     async def list_todos(self, run_id: UUID) -> list[TodoItem]:
         """Load all tasks in a run."""
+        ...
+
+    async def add_todo(self, todo: TodoItem) -> None:
+        """Append or idempotently preserve a task projection."""
         ...
 
     async def append_event(
@@ -146,8 +154,16 @@ class InMemoryRuntimeRepository(RuntimeRepository):
     async def list_agents(self, run_id: UUID) -> list[Agent]:
         return list(self._agents[run_id])
 
+    async def add_agent(self, agent: Agent) -> None:
+        if all(existing.id != agent.id for existing in self._agents[agent.run_id]):
+            self._agents[agent.run_id].append(agent)
+
     async def list_todos(self, run_id: UUID) -> list[TodoItem]:
         return list(self._todos[run_id])
+
+    async def add_todo(self, todo: TodoItem) -> None:
+        if all(existing.id != todo.id for existing in self._todos[todo.run_id]):
+            self._todos[todo.run_id].append(todo)
 
     async def append_event(
         self,

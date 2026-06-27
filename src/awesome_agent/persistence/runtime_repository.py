@@ -161,6 +161,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
             )
         return [_agent_from_record(record) for record in records]
 
+    async def add_agent(self, agent: Agent) -> None:
+        async with self._sessions.begin() as session:
+            existing = await session.get(AgentRecord, agent.id)
+            if existing is None:
+                session.add(_agent_to_record(agent))
+
     async def list_todos(self, run_id: UUID) -> list[TodoItem]:
         async with self._sessions() as session:
             records = list(
@@ -171,6 +177,12 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 )
             )
         return [_todo_from_record(record) for record in records]
+
+    async def add_todo(self, todo: TodoItem) -> None:
+        async with self._sessions.begin() as session:
+            existing = await session.get(TodoRecord, todo.id)
+            if existing is None:
+                session.add(_todo_to_record(todo))
 
     async def append_event(
         self,

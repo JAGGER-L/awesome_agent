@@ -18,6 +18,8 @@ from awesome_agent.runtime.dispatch import (
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
     MODIFYING_CODING_VERSION,
+    TEAM_CODING_GRAPH,
+    TEAM_CODING_VERSION,
 )
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
@@ -190,6 +192,33 @@ class FakeModifyingGraph:
         )
 
 
+class FakeTeamGraph:
+    async def execute(
+        self,
+        _: Run,
+        __: Agent,
+        *,
+        repository: object,
+        event_sink: object | None = None,
+    ) -> tuple[dict[str, object], bool]:
+        if repository is None:
+            raise AssertionError("repository is required")
+        if not callable(event_sink):
+            raise AssertionError("event sink is required")
+        return (
+            {
+                "run_id": "run",
+                "agent_id": "agent",
+                "graph_name": TEAM_CODING_GRAPH,
+                "graph_version": TEAM_CODING_VERSION,
+                "phase": "completed",
+                "final_answer": "Team completed after verification.",
+                "result_summary": "team done",
+            },
+            False,
+        )
+
+
 class EmittingModifyingGraph(FakeModifyingGraph):
     async def execute(
         self,
@@ -262,6 +291,18 @@ def _modifying_run(lease: RunLease) -> Run:
         execution_kind=ExecutionKind.CODING,
         graph_name=MODIFYING_CODING_GRAPH,
         graph_version=MODIFYING_CODING_VERSION,
+        graph_thread_id=f"run:{lease.run_id}",
+    )
+
+
+def _team_run(lease: RunLease) -> Run:
+    return Run(
+        id=lease.run_id,
+        goal="team",
+        intent=RunIntent.MODIFYING,
+        execution_kind=ExecutionKind.CODING,
+        graph_name=TEAM_CODING_GRAPH,
+        graph_version=TEAM_CODING_VERSION,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -412,6 +453,27 @@ async def test_worker_claims_modifying_graph_when_configured() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_claims_team_graph_when_configured() -> None:
+    dispatcher = FakeDispatcher(None)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(Run(goal="unused")),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        team_graph=object(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    assert not await worker.run_once()
+    claim = dispatcher.calls[0][1]
+
+    assert isinstance(claim, dict)
+    assert (
+        TEAM_CODING_GRAPH,
+        TEAM_CODING_VERSION,
+    ) in claim["graph_identities"]
+
+
+@pytest.mark.asyncio
 async def test_worker_executes_modifying_graph_with_validated_completion() -> None:
     lease = _lease()
     run = _modifying_run(lease)
@@ -437,6 +499,34 @@ async def test_worker_executes_modifying_graph_with_validated_completion() -> No
     assert isinstance(complete[1], dict)
     assert complete[1]["completion_kind"] == "modifying_validated"
     assert complete[1]["result_text"] == "Changed README.md; validation not run."
+
+
+@pytest.mark.asyncio
+async def test_worker_executes_team_graph_with_validated_completion() -> None:
+    lease = _lease()
+    run = _team_run(lease)
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        team_graph=FakeTeamGraph(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    assert await worker.run_once()
+    complete = dispatcher.calls[-1]
+
+    assert complete[0] == "complete"
+    assert isinstance(complete[1], dict)
+    assert complete[1]["completion_kind"] == "team_validated"
+    assert complete[1]["result_text"] == "Team completed after verification."
 
 
 @pytest.mark.asyncio

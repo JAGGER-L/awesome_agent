@@ -36,6 +36,8 @@ from awesome_agent.runtime.graphs import (
     READ_ONLY_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
     RUNTIME_PROBE_VERSION,
+    TEAM_CODING_GRAPH,
+    TEAM_CODING_VERSION,
 )
 from awesome_agent.runtime.modifying_graph import (
     ModifyingAgentState,
@@ -44,6 +46,7 @@ from awesome_agent.runtime.modifying_graph import (
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph, RuntimeProbeState
 from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCodingGraph
 from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.runtime.team_graph import TeamCodingGraph, TeamCodingState
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,7 @@ class DurableWorker:
         probe_graph: RuntimeProbeGraph,
         coding_graph: ReadOnlyCodingGraph | None = None,
         modifying_graph: ModifyingCodingGraph | None = None,
+        team_graph: TeamCodingGraph | None = None,
         config: WorkerConfig,
         worker_id: UUID | None = None,
         worker_name: str | None = None,
@@ -79,6 +83,7 @@ class DurableWorker:
         self.probe_graph = probe_graph
         self.coding_graph = coding_graph
         self.modifying_graph = modifying_graph
+        self.team_graph = team_graph
         self.config = config
         self.worker_id = worker_id or uuid4()
         self.worker_name = worker_name or default_worker_name()
@@ -114,6 +119,9 @@ class DurableWorker:
             execution_kinds.add(ExecutionKind.CODING)
         if self.modifying_graph is not None:
             graph_identities.add((MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION))
+            execution_kinds.add(ExecutionKind.CODING)
+        if self.team_graph is not None:
+            graph_identities.add((TEAM_CODING_GRAPH, TEAM_CODING_VERSION))
             execution_kinds.add(ExecutionKind.CODING)
         lease = await self.dispatcher.claim_next(
             worker_id=self.worker_id,
@@ -202,7 +210,10 @@ class DurableWorker:
         self,
         run: Run,
         lease: RunLease,
-    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState, bool]:
+    ) -> tuple[
+        RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState | TeamCodingState,
+        bool,
+    ]:
         lease_lost = asyncio.Event()
         heartbeat = asyncio.create_task(
             self._heartbeat_loop(lease, lease_lost),
@@ -366,6 +377,8 @@ class DurableWorker:
             and self.modifying_graph is not None
         ):
             return
+        if run.graph_name == TEAM_CODING_GRAPH and self.team_graph is not None:
+            return
         raise IncompatibleGraphError(
             "Worker has no compatible Coding graph configured."
         )
@@ -374,7 +387,10 @@ class DurableWorker:
         self,
         run: Run,
         lease: RunLease,
-    ) -> tuple[RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState, bool]:
+    ) -> tuple[
+        RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState | TeamCodingState,
+        bool,
+    ]:
         started_at = datetime.now(UTC)
         started = monotonic()
         status = "completed"
@@ -414,6 +430,13 @@ class DurableWorker:
                     return await self.modifying_graph.execute(
                         run,
                         leader,
+                        event_sink=emit,
+                    )
+                if run.graph_name == TEAM_CODING_GRAPH and self.team_graph:
+                    return await self.team_graph.execute(
+                        run,
+                        leader,
+                        repository=self.repository,
                         event_sink=emit,
                     )
             raise IncompatibleGraphError(
@@ -641,6 +664,8 @@ class DurableWorker:
     def _completion_kind(self, run: Run) -> str:
         if run.execution_kind is not ExecutionKind.CODING:
             return "runtime_probe"
+        if run.graph_name == TEAM_CODING_GRAPH:
+            return "team_validated"
         if run.graph_name == MODIFYING_CODING_GRAPH:
             return "modifying_validated"
         return "read_only_coding"
