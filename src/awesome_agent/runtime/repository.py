@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -9,6 +10,7 @@ from awesome_agent.domain.enums import (
     EventType,
     IntakeReservationStatus,
     RunStatus,
+    WorkspaceRetentionStatus,
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
 from awesome_agent.repositories.reservations import IntakeReservationStore
@@ -37,6 +39,17 @@ class RuntimeRepository(Protocol):
 
     async def update_run(self, run: Run) -> None:
         """Persist mutable run state."""
+        ...
+
+    async def update_workspace_retention(
+        self,
+        run_id: UUID,
+        *,
+        status: WorkspaceRetentionStatus,
+        reason: str | None,
+        cleaned_at: datetime | None = None,
+    ) -> Run:
+        """Persist the current managed workspace retention projection."""
         ...
 
     async def cancel_run(self, run_id: UUID) -> tuple[Run, RuntimeEvent | None]:
@@ -123,6 +136,25 @@ class InMemoryRuntimeRepository(RuntimeRepository):
 
     async def update_run(self, run: Run) -> None:
         self._runs[run.id] = run
+
+    async def update_workspace_retention(
+        self,
+        run_id: UUID,
+        *,
+        status: WorkspaceRetentionStatus,
+        reason: str | None,
+        cleaned_at: datetime | None = None,
+    ) -> Run:
+        current = self._runs[run_id]
+        updated = current.model_copy(
+            update={
+                "workspace_retention_status": status,
+                "workspace_cleanup_reason": reason,
+                "workspace_cleaned_at": cleaned_at,
+            }
+        )
+        self._runs[run_id] = updated
+        return updated
 
     async def cancel_run(self, run_id: UUID) -> tuple[Run, RuntimeEvent | None]:
         from awesome_agent.runtime.dispatch import DispatchConflict

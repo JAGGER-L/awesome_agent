@@ -8,6 +8,8 @@ from uuid import uuid4
 import pytest
 
 from awesome_agent.artifacts.store import ArtifactMetadata
+from awesome_agent.domain.enums import WorkspaceRetentionStatus
+from awesome_agent.domain.models import Run
 from awesome_agent.persistence.approvals import (
     DurableApproval,
     InMemoryApprovalRepository,
@@ -23,6 +25,10 @@ from awesome_agent.persistence.artifacts import (
 from awesome_agent.persistence.artifacts import (
     _to_record as artifact_to_record,
 )
+from awesome_agent.persistence.runtime_repository import (
+    _run_from_record,
+    _run_to_record,
+)
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     InMemoryToolInvocationRepository,
@@ -35,6 +41,22 @@ from awesome_agent.persistence.tool_invocations import (
 from awesome_agent.persistence.tool_invocations import (
     _to_record as invocation_to_record,
 )
+
+
+def test_run_record_round_trips_workspace_retention_projection() -> None:
+    now = datetime.now(UTC)
+    run = Run(
+        goal="Clean up workspace",
+        workspace_retention_status=WorkspaceRetentionStatus.CLEANED,
+        workspace_cleaned_at=now,
+        workspace_cleanup_reason="user requested cleanup",
+    )
+
+    restored = _run_from_record(_run_to_record(run))
+
+    assert restored.workspace_retention_status is WorkspaceRetentionStatus.CLEANED
+    assert restored.workspace_cleaned_at == now
+    assert restored.workspace_cleanup_reason == "user requested cleanup"
 
 
 def test_artifact_record_round_trips_metadata(tmp_path: Path) -> None:

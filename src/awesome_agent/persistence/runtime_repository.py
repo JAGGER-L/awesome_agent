@@ -19,6 +19,7 @@ from awesome_agent.domain.enums import (
     RunMode,
     RunStatus,
     TodoStatus,
+    WorkspaceRetentionStatus,
     WorkspaceState,
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
@@ -113,9 +114,33 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.workspace_state = (
                 run.workspace_state.value if run.workspace_state is not None else None
             )
+            record.workspace_retention_status = run.workspace_retention_status.value
+            record.workspace_cleaned_at = run.workspace_cleaned_at
+            record.workspace_cleanup_reason = run.workspace_cleanup_reason
             record.graph_thread_id = run.graph_thread_id
             record.legacy = run.legacy
             record.updated_at = run.updated_at
+
+    async def update_workspace_retention(
+        self,
+        run_id: UUID,
+        *,
+        status: WorkspaceRetentionStatus,
+        reason: str | None,
+        cleaned_at: datetime | None = None,
+    ) -> Run:
+        async with self._sessions.begin() as session:
+            record = await session.get(RunRecord, run_id)
+            if record is None:
+                raise KeyError(run_id)
+            record.workspace_retention_status = status.value
+            record.workspace_cleaned_at = cleaned_at
+            record.workspace_cleanup_reason = reason
+            record.updated_at = cast(
+                datetime,
+                await session.scalar(select(func.clock_timestamp())),
+            )
+            return _run_from_record(record)
 
     async def cancel_run(self, run_id: UUID) -> tuple[Run, RuntimeEvent | None]:
         async with self._sessions.begin() as session:
@@ -282,6 +307,11 @@ def _run_from_record(record: RunRecord) -> Run:
             if record.workspace_state is not None
             else None
         ),
+        workspace_retention_status=WorkspaceRetentionStatus(
+            record.workspace_retention_status
+        ),
+        workspace_cleaned_at=record.workspace_cleaned_at,
+        workspace_cleanup_reason=record.workspace_cleanup_reason,
         graph_thread_id=record.graph_thread_id,
         legacy=record.legacy,
         created_at=record.created_at,
@@ -323,6 +353,9 @@ def _run_to_record(run: Run) -> RunRecord:
         workspace_state=(
             run.workspace_state.value if run.workspace_state is not None else None
         ),
+        workspace_retention_status=run.workspace_retention_status.value,
+        workspace_cleaned_at=run.workspace_cleaned_at,
+        workspace_cleanup_reason=run.workspace_cleanup_reason,
         graph_thread_id=run.graph_thread_id,
         legacy=run.legacy,
         created_at=run.created_at,

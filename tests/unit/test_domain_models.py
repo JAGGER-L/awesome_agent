@@ -6,6 +6,7 @@ from awesome_agent.domain.enums import (
     DispatchStatus,
     EventType,
     RunIntent,
+    WorkspaceRetentionStatus,
     WorkspaceState,
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent
@@ -59,3 +60,11 @@ def test_run_can_carry_repository_workspace_identity(tmp_path: Path) -> None:
     assert run.intent is RunIntent.READ_ONLY
     assert run.dispatch_status is DispatchStatus.QUEUED
     assert not run.legacy
+
+
+def test_run_defaults_to_retained_workspace_projection() -> None:
+    run = Run(goal="Inspect repository")
+
+    assert run.workspace_retention_status is WorkspaceRetentionStatus.RETAINED
+    assert run.workspace_cleaned_at is None
+    assert run.workspace_cleanup_reason is None

@@ -78,6 +78,15 @@ class RunRecord(Base):
     workspace_path: Mapped[str | None] = mapped_column(Text)
     integration_branch: Mapped[str | None] = mapped_column(String(255))
     workspace_state: Mapped[str | None] = mapped_column(String(32))
+    workspace_retention_status: Mapped[str] = mapped_column(
+        String(32),
+        default="retained",
+        index=True,
+    )
+    workspace_cleaned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    workspace_cleanup_reason: Mapped[str | None] = mapped_column(Text)
     graph_thread_id: Mapped[str | None] = mapped_column(String(128), unique=True)
     legacy: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

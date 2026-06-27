@@ -31,6 +31,14 @@ class WorkspaceState(StrEnum):
     CLEANUP_BLOCKED = "cleanup_blocked"
 
 
+class WorkspaceRetentionStatus(StrEnum):
+    RETAINED = "retained"
+    CLEANUP_ELIGIBLE = "cleanup_eligible"
+    CLEANUP_BLOCKED = "cleanup_blocked"
+    CLEANED = "cleaned"
+    MISSING = "missing"
+
+
 class IntakeReservationStatus(StrEnum):
     PREPARING = "preparing"
     PUBLISHED = "published"

@@ -18,6 +18,7 @@ from awesome_agent.domain.enums import (
     RunMode,
     RunStatus,
     TodoStatus,
+    WorkspaceRetentionStatus,
     WorkspaceState,
 )
 
@@ -55,6 +56,11 @@ class Run(BaseModel):
     workspace_path: Path | None = None
     integration_branch: str | None = None
     workspace_state: WorkspaceState | None = None
+    workspace_retention_status: WorkspaceRetentionStatus = (
+        WorkspaceRetentionStatus.RETAINED
+    )
+    workspace_cleaned_at: datetime | None = None
+    workspace_cleanup_reason: str | None = None
     graph_thread_id: str | None = None
     legacy: bool = False
     created_at: datetime = Field(default_factory=utc_now)
