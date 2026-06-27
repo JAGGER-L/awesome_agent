@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
+
+from pydantic import SecretStr
 
 from awesome_agent.health import (
     CheckSeverity,
     HealthCheck,
     HealthStatus,
+    ReadinessProfile,
     _docker_health,
+    bind_policy_check,
     collect_health,
     is_healthy,
+    model_routes_check,
+    provider_key_check,
     readiness_status,
+    workspace_root_check,
 )
+from awesome_agent.settings import Settings
 
 
 def test_is_healthy_accepts_passing_required_checks() -> None:
@@ -133,3 +142,71 @@ def test_docker_health_reports_server_version() -> None:
 
     assert check.status is HealthStatus.HEALTHY
     assert check.detail == "server 29.2.1"
+
+
+def test_provider_missing_is_degraded_for_api_profile() -> None:
+    settings = Settings(deepseek_api_key=None)
+
+    check = provider_key_check(settings, ReadinessProfile.API)
+
+    assert check.status is HealthStatus.DEGRADED
+    assert check.severity is CheckSeverity.DEGRADED
+
+
+def test_provider_missing_is_unhealthy_for_runtime_profile() -> None:
+    settings = Settings(deepseek_api_key=None)
+
+    check = provider_key_check(settings, ReadinessProfile.RUNTIME)
+
+    assert check.status is HealthStatus.UNHEALTHY
+    assert check.severity is CheckSeverity.REQUIRED
+
+
+def test_model_routes_check_reports_all_runtime_graph_identities() -> None:
+    settings = Settings(deepseek_api_key=SecretStr("key"))
+
+    check = model_routes_check(settings, ReadinessProfile.RUNTIME)
+
+    assert check.status is HealthStatus.HEALTHY
+    assert check.metadata == {
+        "graph_identities": [
+            "runtime-probe@1",
+            "solo-readonly@1",
+            "solo-modifying@1",
+            "team-coding@1",
+        ]
+    }
+
+
+def test_workspace_root_is_healthy_when_it_exists_and_is_writable(
+    tmp_path: Path,
+) -> None:
+    check = workspace_root_check(tmp_path / "workspaces")
+
+    assert check.status is HealthStatus.HEALTHY
+    assert (tmp_path / "workspaces").is_dir()
+
+
+def test_workspace_root_is_unhealthy_when_probe_file_cannot_be_written(
+    tmp_path: Path,
+) -> None:
+    file_parent = tmp_path / "not-a-directory"
+    file_parent.write_text("fixture", encoding="utf-8")
+
+    check = workspace_root_check(file_parent / "workspaces")
+
+    assert check.status is HealthStatus.UNHEALTHY
+    assert "workspace root" in check.detail
+
+
+def test_bind_policy_is_unhealthy_for_public_bind_without_unsafe_consent() -> None:
+    check = bind_policy_check("0.0.0.0", unsafe_bind_public=False)
+
+    assert check.status is HealthStatus.UNHEALTHY
+    assert check.severity is CheckSeverity.REQUIRED
+
+
+def test_bind_policy_accepts_loopback_without_unsafe_consent() -> None:
+    check = bind_policy_check("127.0.0.1", unsafe_bind_public=False)
+
+    assert check.status is HealthStatus.HEALTHY
