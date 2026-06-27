@@ -23,5 +23,16 @@ create verification Subagents but may not repair implementation. Failed work
 returns directly to the responsible Teammate. Only the Leader converts
 `VERIFIED` to `DONE`.
 
-Every task revision is persisted and exported as a `plan.json` artifact.
+Verifier failure is classified before choosing rework or failure:
 
+- verification rejection caused by model output quality returns the Todo to the
+  responsible Teammate for bounded rework;
+- verifier execution or external failures use a smaller retry budget and then
+  fail the Run if the review cannot be completed safely.
+
+Task 13 defaults to 10 verification-rejection reworks and one verifier
+execution retry for `team-coding@1`. These are conservative defaults, not a
+final product policy; tuning by task type, model quality, cost, and risk is
+tracked as technical debt.
+
+Every task revision is persisted and exported as a `plan.json` artifact.

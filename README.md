@@ -36,7 +36,7 @@ PostgreSQL:
   transitions update projection rows, Agent/Todo revisions, timestamps, and
   matching runtime events together.
 
-### Coding execution (implemented, solo only)
+### Coding execution (implemented)
 
 - **Read-only Coding Runs** execute through the checkpointed `solo-readonly@1`
   Agent loop with bounded repository tools (`repo.status`, `repo.list`,
@@ -53,6 +53,14 @@ PostgreSQL:
   passing required validation gates from `.agents/validation.toml` or
   conservative project detection. Failed required gates feed a bounded rework
   loop; exhausted or non-reworkable validation failure marks the Run failed.
+- **Explicit Team Coding Runs** route to `team-coding@1` only when the caller
+  uses CLI `--team` or API `mode: "team"`. Task 13 v1 keeps one Run, one Worker,
+  and one checkpoint thread while the graph creates durable Leader,
+  Teammates, Verifier, and Subagent records internally. Role steps are bounded,
+  Leader assignments scope `allowed_tools`, side-effecting tools are persisted,
+  verification rejection can rework before pass/fail, and the real E2E path
+  covers Worker, PostgreSQL, checkpointing, provider protocol, repository tools,
+  validation records, and observability evidence.
 
 ### Approval (implemented for solo modifying runs)
 
@@ -63,20 +71,21 @@ and resume through `Command(resume=...)` after the API or CLI approves or
 denies the request. Unsafe shell commands are denied without creating an
 approval.
 
-### Multi-agent (prototype, not yet durable)
+### Multi-agent (implemented as scoped v1)
 
-The Leader/Teammate/Subagent/Verifier organization, mailbox, task board, and
-verification coordinator exist as in-memory data structures in
-`src/awesome_agent/orchestration/`, but are **not** wired into the durable
-Worker execution path. There is no team-mode graph; the Worker only claims
-`runtime_probe`, `solo-readonly@1`, and `solo-modifying@1` runs. A Leader may
-report that a task "requires team mode," but team execution does not run
-end-to-end yet. Real team runtime execution is planned (Task 13). The model
-assignment table below reflects the intended team roles, not running teammates.
+The durable team runtime is intentionally explicit and scoped. Intake starts
+with only the Leader. When `--team` or API `mode: "team"` is selected, the
+`team-coding@1` graph creates Teammates, one Verifier, and bounded Subagents
+inside the same Run. Subagents have isolated context and return evidence only
+to their owning Teammate. The Verifier must pass the work before the Leader can
+complete the Run.
 
-### Observability (implemented for solo runtime)
+This v1 is not yet the future distributed architecture where the Leader creates
+Teammate child Runs that independent Workers claim separately.
 
-Solo runtime observability now records durable query-table evidence for
+### Observability (implemented)
+
+Runtime observability now records durable query-table evidence for
 run/graph/model/tool/sandbox spans, model-call summaries, and metrics such as
 run, model, and tool latency. Runtime events receive a stable Run-scoped
 `trace_id`, OpenTelemetry console export is failure-isolated, and FastAPI
@@ -132,6 +141,7 @@ primary Git checkout:
 .\.venv\Scripts\awesome-agent.exe config root add E:\projects
 .\.venv\Scripts\awesome-agent.exe repo add E:\projects\example
 .\.venv\Scripts\awesome-agent.exe run "Inspect the parser" --repo E:\projects\example --read-only
+.\.venv\Scripts\awesome-agent.exe run "Implement the feature with a team" --repo E:\projects\example --team
 ```
 
 `run --repo` may register or refresh the repository only when it is already
@@ -194,10 +204,10 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- real team-runtime end-to-end execution (Task 13);
 - worktree and branch retention and cleanup (Task 14);
 - dependency-aware `/health` and `doctor` (Task 15).
 - full token-window, wall-clock, and cost budget management (Task 16).
+- distributed team child Runs claimed by independent Workers (Task 17).
 
 ## Documentation
 

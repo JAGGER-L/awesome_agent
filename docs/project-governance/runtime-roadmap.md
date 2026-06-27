@@ -15,6 +15,7 @@ agents; they are not the durable product roadmap.
 | Task 05 | Done | Provider-neutral model protocol, streaming reasoning/text/tool events, usage, continuation, and classified model failures. |
 | Task 06 | Done | Checkpointed solo read-only model/tool loop with explicit graph back edges and evidence-backed final answers. |
 | Task 12 | Done | Solo runtime observability with trace IDs, query-table spans, metrics, model calls, latency, and exporter isolation. |
+| Task 13 | Done | Explicit scoped `team-coding@1` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
 
 ## Task 07: Isolated Mutation Sandbox and Shell
 
@@ -80,10 +81,10 @@ Task 07 does not include:
 | Task 09 | Active cancellation | Propagate cancellation through graph boundaries, provider calls, tool calls, Docker, and subprocess trees. | Implemented for solo runtime paths; queued, waiting, claimed, and executing solo Runs can cancel without corrupting projections, checkpoints, or worktrees. |
 | Task 10 | Validation and rework loop | Add deterministic validation gates, verifier feedback, and model rework until pass/fail is evidenced. | Implemented for solo modifying runs; configured or conservatively detected gates gate completion, rework is bounded, validation evidence is durable, and terminal validation failure fails the Run. |
 | Task 11 | Lifecycle projection consistency | Make Run, Agent, Todo, event, revision, and `updated_at` transitions coherent and frontend-ready. | Implemented for solo runtime paths; visible Run, Agent, and Todo lifecycle transitions now update projections, revisions, timestamps, and matching durable events in one transaction. |
-| Task 13 | Real team-runtime E2E | Replace hand-constructed team tests with Worker, model, tools, database, checkpoint, verifier, and patch integration. | A team Run executes through the real runtime, creates Teammates/Subagents, verifies work, and records inspectable evidence. |
 | Task 14 | Worktree and branch retention | Add explicit cleanup, retention policy, and safe branch/worktree pruning for completed Runs. | Owned inactive worktrees can be listed, preserved, or safely removed without touching user-owned paths or unexported diffs. |
 | Task 15 | Health and doctor readiness | Make `/health` and `doctor` report real dependencies instead of optimistic process liveness. | PostgreSQL, migrations, checkpoint store, provider keys, worker heartbeat, workspace root, and model route availability are checked. |
 | Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, wall-clock budget, and cost budget. | Long Runs remain bounded without losing required evidence or replay data. |
+| Task 17 | Distributed team child Runs | Promote graph-internal Teammates into Leader-created child Runs that independent Workers can claim. | Parent/child Run lineage, status propagation, checkpoint coordination, cross-Run cancellation, and result aggregation pass E2E. |
 
 ## Gap Disposition
 
@@ -100,7 +101,7 @@ Task 07 does not include:
 | Lifecycle projections are inconsistent | Resolved in Task 11 for solo runtime paths |
 | Observability score is too high for current evidence | Resolved in Task 12 for solo runtime paths |
 | Artifact references are not connected to the main loop | Task 07 |
-| Team E2E is not real end-to-end execution | Task 13 |
+| Team E2E is not real end-to-end execution | Resolved in Task 13 for scoped single-Run team runtime; distributed child-Run team runtime remains Task 17 |
 | Worktrees and branches accumulate permanently | Task 14 |
 | API health and doctor are too optimistic | Task 15 |
 | Local API can bind non-loopback without authentication | Resolved in Task 07 with explicit unsafe gate; production auth remains out of scope |
@@ -113,6 +114,8 @@ Task 07 does not include:
   tool invocation records.
 - Do not start Task 10 until Task 07 can produce durable diffs and Task 08 can
   gate ambiguous or dangerous commands.
-- Do not claim team-mode runtime capability until Task 13 passes real E2E.
+- Do not claim distributed multi-Worker team runtime capability until Task 17
+  passes real E2E. Current team mode is scoped to one Run, one Worker, and one
+  checkpoint thread.
 - Do not raise quality scores unless executable evidence exists in tests,
   health checks, traces, or durable query APIs.

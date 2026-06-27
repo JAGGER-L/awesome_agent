@@ -10,7 +10,8 @@ team output.
 ## V1 Capabilities
 
 - solo read-only and solo modifying execution
-- prototype team data structures and task tree
+- explicit scoped team runtime with Leader, Teammates, Verifier, Subagent
+  lineage, scoped tools, verification rejection, and rework
 - Docker command execution
 - PostgreSQL resume
 - durable PostgreSQL API projections across service restarts
@@ -40,6 +41,8 @@ team output.
   shell boundaries
 - frontend-ready Run, Agent, and Todo lifecycle projections with matching
   events, revision increments, and timestamps
+- real team-runtime E2E evidence through Worker, PostgreSQL, checkpoint,
+  provider protocol, tools, validation records, and observability records
 
 ## Non-Goals
 
@@ -48,6 +51,6 @@ team output.
 - multi-user authentication
 - multiple active model providers
 - recursive delegation
-- durable team/subagent execution before Task 13
+- automatic solo/team routing
+- distributed Teammate child Runs claimed by independent Workers
 - LangSmith or LangGraph Agent Server
-- validated modifying completion before deterministic validation and rework

@@ -80,8 +80,10 @@ The API exposes both values. Product UI may present a combined label but cannot
 discard either state.
 
 Current implementation note: the Worker executes `runtime_probe`,
-`solo-readonly@1`, and `solo-modifying@1` Runs. Modifying Runs can now pause for
-durable exact-invocation approval and resume from the LangGraph checkpoint.
+`solo-readonly@1`, `solo-modifying@1`, and explicit `team-coding@1` Runs.
+Modifying solo Runs can pause for durable exact-invocation approval and resume
+from the LangGraph checkpoint. Team Runs use one Run, one Worker claim, and one
+checkpoint thread in v1; distributed Teammate child Runs remain future work.
 
 ## Dispatch, Lease, and Fencing
 
@@ -335,6 +337,36 @@ Solo completion requires:
 - an accepted diff from at least one applied patch;
 - every required gate passed;
 - no unrecorded uncertainty that invalidates the result.
+
+## Team Runtime Contract
+
+Team execution is explicit. CLI `--team` or API `mode: "team"` routes a coding
+Run to `team-coding@1`; default read-only and modifying Runs remain solo.
+
+Task 13 implements a scoped v1 team graph:
+
+- intake creates only the Leader;
+- the graph creates durable Teammate, Verifier, and Subagent records inside the
+  same Run;
+- Leader assignments contain `allowed_tools`, `allowed_skills`, write,
+  delegation, and acceptance constraints;
+- Teammates may use only the tools granted by the assignment, and repository
+  tools still pass through the central `ToolExecutor`;
+- Subagents have isolated context, do not join team conversation, and return
+  evidence only to their owning Teammate;
+- model calls, tool invocations, Todo transitions, verification reports,
+  runtime events, and observability records are durable and queryable.
+
+Verifier rejection caused by model output quality can trigger bounded rework by
+the responsible Teammate. Task 13 defaults to 10 verification-rejection reworks.
+Verifier execution or external failures use a separate retry budget and default
+to one retry. These defaults are intentionally conservative and tracked as
+policy-tuning debt.
+
+`team-coding@1` does not yet create Teammate child Runs or allow multiple
+Workers to claim team members independently. That distributed team runtime
+requires parent/child Run lineage, cross-Run cancellation, checkpoint
+coordination, status propagation, and result aggregation.
 
 ## Retry, Cancellation, and Failure
 

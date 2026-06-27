@@ -27,7 +27,7 @@ Verifier 的 Leader/Teammate/Subagent **多 Agent**组织。
 - 面向前端的 Run、Agent、Todo 生命周期投影会同步维护状态、revision、timestamp 和匹配的
   runtime event。
 
-### Coding 执行（已实现，仅 solo）
+### Coding 执行（已实现）
 
 - **Read-only Coding Run** 通过带 checkpoint 的 `solo-readonly@1` Agent loop 执行，支持受限仓库
   工具、最多 4 路并发只读工具、模型驱动的 tool/feedback 回边、收敛反馈、无进展检测，以及
@@ -36,6 +36,11 @@ Verifier 的 Leader/Teammate/Subagent **多 Agent**组织。
   Docker-backed `shell.execute` 和 `artifact.read`，顺序执行写操作，持久化有副作用工具调用，
   并将超大工具输出卸载到 artifact storage。完成需要至少一个 patch、最后一次写后调用
   `repo.diff`，并通过 `.agents/validation.toml` 或保守项目检测得到的 required validation gates。
+- **显式 Team Coding Run** 只有在 CLI 使用 `--team` 或 API 使用 `mode: "team"` 时才会路由到
+  `team-coding@1`。Task 13 v1 保持一个 Run、一个 Worker、一个 checkpoint thread，并在图内部创建
+  持久化的 Leader、Teammate、Verifier 和 Subagent 记录。角色步骤是有界的，Leader assignment 会限定
+  `allowed_tools`，有副作用工具调用会持久化，Verifier 拒绝后可触发 rework，真实 E2E 已覆盖 Worker、
+  PostgreSQL、checkpoint、provider protocol、repository tools、validation records 和 observability 证据。
 
 ### 审批（已在 solo modifying run 中实现）
 
@@ -43,16 +48,17 @@ Verifier 的 Leader/Teammate/Subagent **多 Agent**组织。
 记录，checkpoint graph，释放 worker lease 为 `paused + waiting`，并在 API 或 CLI approve/deny 后
 通过 `Command(resume=...)` 恢复。危险 shell 命令会直接拒绝，不创建 approval。
 
-### 多 Agent（原型，尚未持久化执行）
+### 多 Agent（已实现受限 v1）
 
-Leader/Teammate/Subagent/Verifier 组织、mailbox、task board 和 verification coordinator 目前作为
-内存数据结构存在于 `src/awesome_agent/orchestration/`，但尚未接入持久化 Worker 执行路径。当前没有
-team-mode graph；Worker 只 claim `runtime_probe`、`solo-readonly@1` 和 `solo-modifying@1`。
-真实 team runtime E2E 执行属于 Task 13。
+持久化 team runtime 是显式且受限的。Intake 初始只创建 Leader。选择 `--team` 或 API `mode: "team"` 后，
+`team-coding@1` 图会在同一个 Run 内创建 Teammate、一个 Verifier 和有界 Subagent。Subagent 具有独立上下文，
+只向自己的 Teammate 返回证据。Verifier 必须验收通过后，Leader 才能完成 Run。
 
-### 可观测性（已在 solo runtime 中实现）
+这个 v1 还不是未来的分布式 team 架构；未来 Leader 会创建 Teammate child Runs，并由独立 Worker 分别 claim。
 
-Solo runtime 现在会记录持久化 query-table 证据，包括 run/graph/model/tool/sandbox span、model-call
+### 可观测性（已实现）
+
+Runtime 现在会记录持久化 query-table 证据，包括 run/graph/model/tool/sandbox span、model-call
 摘要，以及 run、model、tool latency 等 metrics。runtime event 会写入稳定的 Run 级 `trace_id`，
 OpenTelemetry console exporter 已做失败隔离，FastAPI 提供 `GET /runs/{run_id}/trace`、
 `GET /runs/{run_id}/metrics` 和 `GET /runs/{run_id}/model-calls` 供前端检查。完整 cost budget、
@@ -104,6 +110,7 @@ docker compose up -d postgres
 .\.venv\Scripts\awesome-agent.exe config root add E:\projects
 .\.venv\Scripts\awesome-agent.exe repo add E:\projects\example
 .\.venv\Scripts\awesome-agent.exe run "检查 parser" --repo E:\projects\example --read-only
+.\.venv\Scripts\awesome-agent.exe run "用 team 实现这个功能" --repo E:\projects\example --team
 ```
 
 `run --repo` 只会在仓库位于 allowed root 下时注册或刷新仓库。CLI 向 FastAPI 发送 repository UUID；
@@ -155,10 +162,10 @@ container port: 5432
 持久化 runtime 工作记录在
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。尚未实现的重点项：
 
-- 真实 team runtime 端到端执行（Task 13）；
 - worktree 和 branch 保留与清理（Task 14）；
 - 依赖感知的 `/health` 和 `doctor`（Task 15）；
-- 完整 token-window、wall-clock 和 cost budget 管理（Task 16）。
+- 完整 token-window、wall-clock 和 cost budget 管理（Task 16）；
+- 由独立 Worker claim 的分布式 Teammate child Runs（Task 17）。
 
 ## 文档
 

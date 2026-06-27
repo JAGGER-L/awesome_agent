@@ -143,7 +143,7 @@ awesome-agent start
         |
         +---- Worker process
                  |
-                 +---- claim runtime_probe only
+                 +---- claim supported graphs
                  +---- heartbeat lease
                  +---- LangGraph sync checkpoint
                  +---- fenced projection update
@@ -151,10 +151,10 @@ awesome-agent start
 
 Each Worker process executes at most one Run. Workers always claim the
 diagnostic `runtime_probe` graph and, when model providers are configured, also
-claim `solo-readonly@1` and `solo-modifying@1`. A crashed Worker leaves its
-checkpoint and lease; after lease expiry, a replacement Worker claims with a
-new fencing token and resumes from the checkpoint. Unsupported graph versions
-enter `recovery_required`.
+claim `solo-readonly@1`, `solo-modifying@1`, and explicit `team-coding@1`
+Runs. A crashed Worker leaves its checkpoint and lease; after lease expiry, a
+replacement Worker claims with a new fencing token and resumes from the
+checkpoint. Unsupported graph versions enter `recovery_required`.
 
 ## Agent Orchestration Topology
 
@@ -195,9 +195,10 @@ enter `recovery_required`.
                          └──────────────────┘
 ```
 
-The Leader is the only agent present initially. It decides between solo and team
-mode, owns the task tree, manages Teammates, integrates accepted work, and makes
-the final completion decision.
+The Leader is the only agent present initially. Team mode is explicit through
+CLI `--team` or API `mode: "team"`; automatic solo/team routing remains future
+work. The Leader owns the task tree, manages Teammates, integrates accepted
+work, and makes the final completion decision.
 
 Teammates own durable responsibilities and may communicate through an auditable
 mailbox. Each Teammate may independently create up to three Subagents.
@@ -207,6 +208,13 @@ creator.
 The Verifier is a specialized Teammate created whenever team mode starts.
 Teammate output reaches the Leader only after verification passes or after
 rejected work is revised and re-verified.
+
+Current `team-coding@1` uses one Run, one Worker claim, and one LangGraph
+checkpoint thread. The graph creates durable internal agent sessions for two
+Teammates, one Verifier, and bounded Subagents, and it records model calls,
+tool invocations, Todo transitions, validation reports, events, and
+observability spans. This is not yet the distributed architecture where a
+Leader Run creates Teammate child Runs that independent Workers claim.
 
 ## Harness and State Boundaries
 
@@ -304,8 +312,8 @@ Visible reasoning is a frontend-capable trace. Private continuation is a
 separate opaque JSON value used only by the matching adapter and LangGraph
 checkpoint. SDK objects, encrypted continuation data, and provider-specific
 message types never enter orchestration, events, logs, memory, or public APIs.
-The Worker connects provider-neutral model turns to solo read-only and solo
-modifying Coding graphs when a model provider is configured.
+The Worker connects provider-neutral model turns to solo read-only, solo
+modifying, and explicit team Coding graphs when a model provider is configured.
 
 ## Read-Only Coding Loop
 
@@ -335,6 +343,27 @@ the last write, and passing required validation gates from configuration or
 conservative project detection. Failed required check commands feed bounded
 evidence back to the model for rework; exhausted or non-reworkable validation
 failure marks the Run failed.
+
+## Team Coding Loop
+
+Workers with a configured model provider also advertise explicit
+`coding + modifying + team-coding@1` routes. The caller must request team mode;
+default modifying Runs stay on the solo modifying graph.
+
+`team-coding@1` is a real but bounded team runtime path. Intake creates only
+the Leader. The graph then creates role assignments with `allowed_tools` and
+`allowed_skills`, a backend Teammate, a repository-explorer Teammate, one
+Verifier, and a backend-owned read-only Subagent. Repository tools still execute
+through the central `ToolExecutor`; tools not granted by the Leader assignment
+are rejected before execution.
+
+Verifier rejection caused by model or quality output can trigger bounded
+same-Teammate rework. Verifier execution or external failures have a separate
+small retry budget. Completion is recorded as `team_validated` only after
+Verifier pass and Leader finalization. Task 13 E2E covers Worker claim,
+PostgreSQL checkpointing, fake provider calls, repository tool execution,
+patch/rework, durable validation records, tool invocation records, events, and
+observability query tables.
 
 ## Persistence
 
