@@ -59,6 +59,10 @@ class RuntimeRepository(Protocol):
         """Append or idempotently preserve a task projection."""
         ...
 
+    async def update_todo(self, todo: TodoItem) -> None:
+        """Persist mutable task state."""
+        ...
+
     async def append_event(
         self,
         *,
@@ -164,6 +168,14 @@ class InMemoryRuntimeRepository(RuntimeRepository):
     async def add_todo(self, todo: TodoItem) -> None:
         if all(existing.id != todo.id for existing in self._todos[todo.run_id]):
             self._todos[todo.run_id].append(todo)
+
+    async def update_todo(self, todo: TodoItem) -> None:
+        items = self._todos[todo.run_id]
+        for index, existing in enumerate(items):
+            if existing.id == todo.id:
+                items[index] = todo
+                return
+        raise KeyError(todo.id)
 
     async def append_event(
         self,

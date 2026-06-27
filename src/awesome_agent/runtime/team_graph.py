@@ -15,13 +15,19 @@ from awesome_agent.agents.profiles import (
     ProfileRegistry,
     RoleModelResolver,
 )
-from awesome_agent.domain.enums import AgentKind, EventType, RunMode
-from awesome_agent.domain.models import Agent, Run
+from awesome_agent.domain.enums import AgentKind, EventType, RunMode, TodoStatus
+from awesome_agent.domain.models import Agent, Run, TodoItem
 from awesome_agent.modeling import ToolCall, ToolResultMessage
 from awesome_agent.orchestration.team import TeamRuntime
+from awesome_agent.persistence.validation import (
+    DurableValidationGateResult,
+    DurableValidationReport,
+    ValidationRepository,
+)
 from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
     IncompatibleGraphError,
+    PermanentExecutionError,
 )
 from awesome_agent.runtime.graphs import TEAM_CODING_GRAPH, TEAM_CODING_VERSION
 from awesome_agent.runtime.repository import RuntimeRepository
@@ -60,6 +66,9 @@ class TeamCodingState(TypedDict):
     assignments: dict[str, dict[str, object]]
     evidence: dict[str, list[dict[str, object]]]
     tool_call_count: int
+    backend_todo_id: NotRequired[str]
+    verification_rework_count: int
+    verification_reports: list[dict[str, object]]
     result_summary: NotRequired[str]
     final_answer: NotRequired[str]
 
@@ -79,10 +88,18 @@ class TeamCodingGraph:
         *,
         model_resolver: RoleModelResolver,
         profiles: ProfileRegistry | None = None,
+        validation_repository: ValidationRepository | None = None,
+        verification_outcomes: list[str] | None = None,
+        max_verification_reworks: int = 10,
+        max_verification_execution_retries: int = 1,
     ) -> None:
         self.saver = saver
         self.model_resolver = model_resolver
         self.profiles = profiles or ProfileRegistry()
+        self.validation_repository = validation_repository
+        self.verification_outcomes = verification_outcomes or ["failed", "passed"]
+        self.max_verification_reworks = max_verification_reworks
+        self.max_verification_execution_retries = max_verification_execution_retries
         self._run: Run | None = None
         self._leader: Agent | None = None
         self._repository: RuntimeRepository | None = None
@@ -93,11 +110,13 @@ class TeamCodingGraph:
         builder.add_node("repo_explorer_step", self._repo_explorer_step)
         builder.add_node("backend_subagent_step", self._backend_subagent_step)
         builder.add_node("backend_precheck_step", self._backend_precheck_step)
+        builder.add_node("verify", self._verify)
         builder.add_edge(START, "activate_team")
         builder.add_edge("activate_team", "repo_explorer_step")
         builder.add_edge("repo_explorer_step", "backend_subagent_step")
         builder.add_edge("backend_subagent_step", "backend_precheck_step")
-        builder.add_edge("backend_precheck_step", END)
+        builder.add_edge("backend_precheck_step", "verify")
+        builder.add_edge("verify", END)
         self.graph = builder.compile(checkpointer=saver, name=TEAM_CODING_GRAPH)
 
     async def execute(
@@ -132,6 +151,8 @@ class TeamCodingGraph:
                     "assignments": {},
                     "evidence": {},
                     "tool_call_count": 0,
+                    "verification_rework_count": 0,
+                    "verification_reports": [],
                 },
                 config,
                 durability="sync",
@@ -169,11 +190,25 @@ class TeamCodingGraph:
         for agent in created:
             await repository.add_agent(agent)
             await self._emit_agent_created(agent)
+        todo = TodoItem(
+            run_id=run.id,
+            title="Backend implementation",
+            description=run.goal,
+            status=TodoStatus.IN_PROGRESS,
+            primary_owner_id=backend.session.agent.id,
+            acceptance_criteria=[
+                "Apply changes only through authorized tools.",
+                "Verifier must accept the result before Leader completion.",
+            ],
+        )
+        await repository.add_todo(todo)
+        await self._emit_todo_created(todo)
 
         return {
             **state,
             "phase": "team_activated",
             "created_agent_ids": [str(agent.id) for agent in created],
+            "backend_todo_id": str(todo.id),
             "assignments": {
                 assignment.profile: assignment.model_dump(mode="json")
                 for assignment in _default_assignments()
@@ -303,6 +338,136 @@ class TeamCodingGraph:
             "final_answer": "Team roles produced initial repository evidence.",
         }
 
+    async def _verify(self, state: TeamCodingState) -> TeamCodingState:
+        run = _required(self._run, "Run")
+        repository = _required(self._repository, "RuntimeRepository")
+        verifier = _agent_by_profile(
+            await repository.list_agents(run.id),
+            "verifier",
+            kind=AgentKind.VERIFIER,
+        )
+        backend = _agent_by_profile(
+            await repository.list_agents(run.id),
+            "backend-engineer",
+            kind=AgentKind.TEAMMATE,
+        )
+        todo = _backend_todo(await repository.list_todos(run.id), state)
+        reports = list(state["verification_reports"])
+        rework_count = state["verification_rework_count"]
+        attempt = len(reports)
+        current = state
+        while True:
+            await self._transition_todo(
+                repository,
+                todo,
+                TodoStatus.SUBMITTED,
+                reason="backend submitted work",
+            )
+            await self._transition_todo(
+                repository,
+                todo,
+                TodoStatus.VERIFYING,
+                reason="verifier reviewing work",
+            )
+            outcome = self.verification_outcomes[
+                min(attempt, len(self.verification_outcomes) - 1)
+            ]
+            report = await self._record_verification_report(
+                run=run,
+                verifier=verifier,
+                attempt=attempt + 1,
+                status="passed" if outcome == "passed" else "failed",
+                summary=(
+                    "Verification passed."
+                    if outcome == "passed"
+                    else "Verification rejected implementation evidence."
+                ),
+            )
+            reports.append(
+                {
+                    "id": str(report.id),
+                    "attempt": report.attempt,
+                    "status": report.status,
+                    "summary": report.summary,
+                }
+            )
+            await self._emit_verification(verifier, report)
+            if outcome == "passed":
+                await self._transition_todo(
+                    repository,
+                    todo,
+                    TodoStatus.VERIFIED,
+                    reason="verification passed",
+                )
+                await self._transition_todo(
+                    repository,
+                    todo,
+                    TodoStatus.DONE,
+                    reason="leader accepted verified work",
+                )
+                return {
+                    **current,
+                    "phase": "verified",
+                    "verification_rework_count": rework_count,
+                    "verification_reports": reports,
+                    "result_summary": "Team implementation verified.",
+                    "final_answer": "Team completed after verifier approval.",
+                }
+            if rework_count >= self.max_verification_reworks:
+                raise PermanentExecutionError("verification_rejected_limit_exceeded")
+            await self._transition_todo(
+                repository,
+                todo,
+                TodoStatus.REJECTED,
+                reason="verification rejected implementation",
+            )
+            await self._transition_todo(
+                repository,
+                todo,
+                TodoStatus.IN_PROGRESS,
+                reason="backend rework requested",
+            )
+            current = await self._backend_rework_step(current, backend)
+            rework_count += 1
+            attempt += 1
+
+    async def _backend_rework_step(
+        self,
+        state: TeamCodingState,
+        backend: Agent,
+    ) -> TeamCodingState:
+        run = _required(self._run, "Run")
+        assignment = _assignment(state, "backend-engineer")
+        patch_result = await self.execute_scoped_repository_tool(
+            run=run,
+            agent=backend,
+            assignment=assignment,
+            call=ToolCall(
+                call_id=f"backend:rework:{state['verification_rework_count'] + 1}",
+                name="repo.apply_patch",
+                arguments_json=(
+                    '{"patch":"diff --git a/README.md b/README.md\\n'
+                    "--- a/README.md\\n"
+                    "+++ b/README.md\\n"
+                    "@@ -1,2 +1,3 @@\\n"
+                    " fixture\\n"
+                    " team runtime update\\n"
+                    '+team runtime rework\\n"}'
+                ),
+            ),
+        )
+        await self._emit_tool_call(
+            backend,
+            f"backend:rework:{state['verification_rework_count'] + 1}",
+            "repo.apply_patch",
+            patch_result,
+        )
+        return _append_evidence(
+            state,
+            key="backend-engineer",
+            evidence=_tool_evidence("repo.apply_patch", patch_result),
+        )
+
     async def execute_scoped_repository_tool(
         self,
         *,
@@ -350,6 +515,105 @@ class TeamCodingGraph:
                 "model": agent.model,
             },
             f"agent:create:{agent.id}",
+        )
+
+    async def _emit_todo_created(self, todo: TodoItem) -> None:
+        if self._event_sink is None:
+            return
+        await self._event_sink(
+            EventType.TODO_CREATED,
+            {
+                "todo_id": str(todo.id),
+                "title": todo.title,
+                "status": todo.status.value,
+                "primary_owner_id": (
+                    str(todo.primary_owner_id)
+                    if todo.primary_owner_id is not None
+                    else None
+                ),
+            },
+            f"todo:create:{todo.id}",
+        )
+
+    async def _transition_todo(
+        self,
+        repository: RuntimeRepository,
+        todo: TodoItem,
+        status: TodoStatus,
+        *,
+        reason: str,
+    ) -> None:
+        updated = todo.model_copy(
+            update={
+                "status": status,
+                "revision": todo.revision + 1,
+            }
+        )
+        todo.status = updated.status
+        todo.revision = updated.revision
+        await repository.update_todo(updated)
+        if self._event_sink is None:
+            return
+        await self._event_sink(
+            EventType.TODO_STATUS_CHANGED,
+            {
+                "todo_id": str(todo.id),
+                "status": status.value,
+                "reason": reason,
+                "revision": updated.revision,
+            },
+            f"todo:{todo.id}:{status.value}:{updated.revision}",
+        )
+
+    async def _record_verification_report(
+        self,
+        *,
+        run: Run,
+        verifier: Agent,
+        attempt: int,
+        status: str,
+        summary: str,
+    ) -> DurableValidationReport:
+        report = DurableValidationReport(
+            run_id=run.id,
+            agent_id=verifier.id,
+            attempt=attempt,
+            status=status,
+            summary=summary,
+        )
+        gate = DurableValidationGateResult(
+            report_id=report.id,
+            run_id=run.id,
+            gate_id="team-verifier",
+            name="Team verifier review",
+            command=["team-verifier"],
+            required=True,
+            status=status,
+            exit_code=0 if status == "passed" else 1,
+            failure_kind=None if status == "passed" else "verification_rejected",
+            stdout_summary=summary,
+        )
+        if self.validation_repository is not None:
+            await self.validation_repository.record_report(report, gates=[gate])
+        return report
+
+    async def _emit_verification(
+        self,
+        verifier: Agent,
+        report: DurableValidationReport,
+    ) -> None:
+        if self._event_sink is None:
+            return
+        await self._event_sink(
+            EventType.VERIFICATION_CREATED,
+            {
+                "verification_report_id": str(report.id),
+                "agent_id": str(verifier.id),
+                "attempt": report.attempt,
+                "status": report.status,
+                "summary": report.summary,
+            },
+            f"verification:{report.id}",
         )
 
     async def _emit_tool_call(
@@ -412,6 +676,8 @@ def _state(value: object) -> TeamCodingState:
         "assignments",
         "evidence",
         "tool_call_count",
+        "verification_rework_count",
+        "verification_reports",
     }
     if not required.issubset(value):
         raise CorruptRuntimeStateError("Team graph state is incomplete.")
@@ -523,3 +789,10 @@ def _append_evidence(
         "evidence": current,
         "tool_call_count": state["tool_call_count"] + 1,
     }
+
+
+def _backend_todo(todos: list[TodoItem], state: TeamCodingState) -> TodoItem:
+    todo_id = state.get("backend_todo_id")
+    if not isinstance(todo_id, str):
+        raise CorruptRuntimeStateError("Team graph has no backend todo.")
+    return next(todo for todo in todos if str(todo.id) == todo_id)

@@ -184,6 +184,22 @@ class PostgresRuntimeRepository(RuntimeRepository):
             if existing is None:
                 session.add(_todo_to_record(todo))
 
+    async def update_todo(self, todo: TodoItem) -> None:
+        async with self._sessions.begin() as session:
+            record = await session.get(TodoRecord, todo.id)
+            if record is None:
+                raise KeyError(todo.id)
+            record.parent_id = todo.parent_id
+            record.title = todo.title
+            record.description = todo.description
+            record.status = todo.status.value
+            record.primary_owner_id = todo.primary_owner_id
+            record.collaborator_ids = [str(value) for value in todo.collaborator_ids]
+            record.acceptance_criteria = todo.acceptance_criteria
+            record.blocker = todo.blocker
+            record.revision = todo.revision
+            record.updated_at = todo.updated_at
+
     async def append_event(
         self,
         *,

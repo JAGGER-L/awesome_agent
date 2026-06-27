@@ -575,6 +575,39 @@ async def test_completion_updates_lifecycle_projections_and_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_team_validated_completion_updates_todos_done() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.EXECUTING, attempt=1)
+    record.status = RunStatus.RUNNING.value
+    record.current_worker_id = uuid4()
+    record.current_worker_name = "worker"
+    record.fencing_token = 1
+    record.lease_acquired_at = now
+    record.lease_expires_at = now + timedelta(seconds=60)
+    record.heartbeat_at = now
+    leader = _leader_record(record.id)
+    todo = _todo_record(record.id, status=TodoStatus.VERIFIED)
+    session = FakeSession(
+        scalar_results=[now, record, 0],
+        rows_by_table={
+            "agents": [leader],
+            "todos": [todo],
+        },
+    )
+    dispatcher = PostgresRunDispatcher(FakeFactory([session]))  # type: ignore[arg-type]
+
+    await dispatcher.complete_execution(
+        _lease_from(record),
+        result_summary="team verified",
+        completion_kind="team_validated",
+        goal_executed=True,
+        result_text="done",
+    )
+
+    assert todo.status == TodoStatus.DONE.value
+
+
+@pytest.mark.asyncio
 async def test_failure_updates_lifecycle_projections_and_events() -> None:
     now = datetime.now(UTC)
     record = _record(status=DispatchStatus.EXECUTING, attempt=1)

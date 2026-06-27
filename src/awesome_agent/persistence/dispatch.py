@@ -570,6 +570,7 @@ class PostgresRunDispatcher(RunDispatcher):
                 "read_only_coding",
                 "modifying_unvalidated",
                 "modifying_validated",
+                "team_validated",
             }:
                 await transition_todos_for_run(
                     session,
