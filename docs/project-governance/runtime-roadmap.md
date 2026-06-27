@@ -14,16 +14,19 @@ agents; they are not the durable product roadmap.
 | Task 04 | Done | One-Run-per-worker execution, LangGraph checkpointed probe graph, and crash recovery. |
 | Task 05 | Done | Provider-neutral model protocol, streaming reasoning/text/tool events, usage, continuation, and classified model failures. |
 | Task 06 | Done | Checkpointed solo read-only model/tool loop with explicit graph back edges and evidence-backed final answers. |
+| Task 07 | Done | Isolated solo modifying runtime with central tool execution, Docker shell, durable side-effect records, artifact offload, prompt guard, and recovery-required handling. |
+| Task 08 | Done | Durable approval requests, decisions, expiry, worker release, and resume semantics for solo modifying runs. |
+| Task 09 | Done | Active cancellation through solo graph, provider, tool, Docker, subprocess, checkpoint, projection, and worktree boundaries. |
+| Task 10 | Done | Deterministic validation gates, verifier feedback, bounded model rework, durable validation evidence, and terminal failure semantics. |
+| Task 11 | Done | Consistent Run, Agent, Todo, event, revision, and `updated_at` lifecycle projections for solo runtime paths. |
 | Task 12 | Done | Solo runtime observability with trace IDs, query-table spans, metrics, model calls, latency, and exporter isolation. |
 | Task 13 | Done | Explicit scoped `team-coding@1` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
 | Task 14 | Done | Explicit managed workspace listing and dry-run-first cleanup with ownership, lease, branch, dirty, force, and recovery evidence protections. |
 
-## Task 07: Isolated Mutation Sandbox and Shell
+## Completed Detail: Task 07 Isolated Mutation Sandbox and Shell
 
-Task 07 makes modifying solo Runs executable without weakening the runtime
-safety model.
-
-Status: completed on 2026-06-26.
+Task 07 made modifying solo Runs executable without weakening the runtime
+safety model. It was completed on 2026-06-26.
 
 Task 07 includes:
 
@@ -78,10 +81,6 @@ Task 07 does not include:
 
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 08 | Durable approval and command policy | Replace placeholder approvals with durable approve/deny/expire flows bound to one exact invocation. | Implemented for solo modifying runs; approval requests, decisions, expiry, worker release, and resume semantics pass unit tests. |
-| Task 09 | Active cancellation | Propagate cancellation through graph boundaries, provider calls, tool calls, Docker, and subprocess trees. | Implemented for solo runtime paths; queued, waiting, claimed, and executing solo Runs can cancel without corrupting projections, checkpoints, or worktrees. |
-| Task 10 | Validation and rework loop | Add deterministic validation gates, verifier feedback, and model rework until pass/fail is evidenced. | Implemented for solo modifying runs; configured or conservatively detected gates gate completion, rework is bounded, validation evidence is durable, and terminal validation failure fails the Run. |
-| Task 11 | Lifecycle projection consistency | Make Run, Agent, Todo, event, revision, and `updated_at` transitions coherent and frontend-ready. | Implemented for solo runtime paths; visible Run, Agent, and Todo lifecycle transitions now update projections, revisions, timestamps, and matching durable events in one transaction. |
 | Task 15 | Health and doctor readiness | Make `/health` and `doctor` report real dependencies instead of optimistic process liveness. | PostgreSQL, migrations, checkpoint store, provider keys, worker heartbeat, workspace root, and model route availability are checked. |
 | Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, wall-clock budget, and cost budget. | Long Runs remain bounded without losing required evidence or replay data. |
 | Task 17 | Distributed team child Runs | Promote graph-internal Teammates into Leader-created child Runs that independent Workers can claim. | Parent/child Run lineage, status propagation, checkpoint coordination, cross-Run cancellation, and result aggregation pass E2E. |
