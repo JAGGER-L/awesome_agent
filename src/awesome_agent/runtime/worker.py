@@ -483,6 +483,7 @@ class DurableWorker:
         latency_ms = _int_payload(payload, "latency_ms")
         span_id = _span_id()
         status = _str_payload(payload, "status", "unknown")
+        agent_id = _uuid_payload(payload, "agent_id") or leader.id
         await self._record_best_effort(
             self.observability_repository.record_span(
                 DurableSpan(
@@ -497,6 +498,7 @@ class DurableWorker:
                     duration_ms=latency_ms,
                     attributes={
                         "turn": _int_payload(payload, "turn"),
+                        "agent_id": str(agent_id),
                         "provider": _str_payload(payload, "provider", "unknown"),
                         "model": _str_payload(payload, "model", leader.model),
                         "stop_reason": _str_payload(payload, "stop_reason", ""),
@@ -509,7 +511,7 @@ class DurableWorker:
             self.observability_repository.record_model_call(
                 DurableModelCall(
                     run_id=run.id,
-                    agent_id=leader.id,
+                    agent_id=agent_id,
                     turn=_int_payload(payload, "turn") or 0,
                     provider=_str_payload(payload, "provider", "unknown"),
                     model=_str_payload(payload, "model", leader.model),
@@ -699,4 +701,16 @@ def _int_payload(payload: dict[str, object], key: str) -> int | None:
         return value
     if isinstance(value, float):
         return int(value)
+    return None
+
+
+def _uuid_payload(payload: dict[str, object], key: str) -> UUID | None:
+    value = payload.get(key)
+    if isinstance(value, UUID):
+        return value
+    if isinstance(value, str):
+        try:
+            return UUID(value)
+        except ValueError:
+            return None
     return None

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -8,7 +10,17 @@ from langgraph.checkpoint.memory import MemorySaver
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.domain.enums import AgentKind, EventType, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
-from awesome_agent.modeling import ToolCall
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelRequest,
+    ModelStreamEvent,
+    ModelTurn,
+    StopReason,
+    StructuredModelProvider,
+    ToolCall,
+    TurnCompleted,
+)
+from awesome_agent.persistence.tool_invocations import InMemoryToolInvocationRepository
 from awesome_agent.persistence.validation import InMemoryValidationRepository
 from awesome_agent.runtime.dispatch import PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_CODING_GRAPH, TEAM_CODING_VERSION
@@ -35,6 +47,28 @@ def _models() -> RoleModelResolver:
         teammate_model="deepseek-v4-flash",
         verifier_model="deepseek-v4-flash",
         subagent_model="deepseek-v4-flash",
+    )
+
+
+class SequenceProvider(StructuredModelProvider):
+    def __init__(self, turns: list[ModelTurn]) -> None:
+        self.turns = deque(turns)
+        self.requests: list[ModelRequest] = []
+
+    async def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
+        yield TurnCompleted(turn=self.turns.popleft())
+
+
+def _turn() -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(content="ack"),
+        stop_reason=StopReason.COMPLETED,
+        model="deepseek-v4-flash",
+        provider="fake",
     )
 
 
@@ -68,6 +102,7 @@ async def test_team_graph_creates_durable_team_agents_with_subagent_lineage(
     _git(tmp_path, "add", "README.md")
     _git(tmp_path, "commit", "-m", "Initial")
     repository = InMemoryRuntimeRepository()
+    tool_repository = InMemoryToolInvocationRepository()
     run, leader = _team_run(tmp_path)
     await repository.create_run(run, leader)
     events: list[tuple[EventType, dict[str, object], str]] = []
@@ -82,6 +117,7 @@ async def test_team_graph_creates_durable_team_agents_with_subagent_lineage(
     graph = TeamCodingGraph(
         MemorySaver(),  # type: ignore[arg-type]
         model_resolver=_models(),
+        tool_repository=tool_repository,
     )
 
     state, recovered = await graph.execute(
@@ -135,6 +171,54 @@ async def test_team_graph_creates_durable_team_agents_with_subagent_lineage(
         "repo.diff",
         "repo.apply_patch",
     }
+    invocations = await tool_repository.list_for_run(run.id)
+    assert [invocation.tool_name for invocation in invocations] == [
+        "repo.status",
+        "repo.read",
+        "repo.apply_patch",
+        "repo.diff",
+        "repo.apply_patch",
+    ]
+    assert invocations[2].status == "completed"
+    assert invocations[2].path_refs == ["README.md"]
+
+
+@pytest.mark.asyncio
+async def test_team_graph_calls_provider_for_bounded_role_steps(tmp_path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    repository = InMemoryRuntimeRepository()
+    run, leader = _team_run(tmp_path)
+    await repository.create_run(run, leader)
+    provider = SequenceProvider([_turn(), _turn(), _turn(), _turn(), _turn()])
+    events: list[tuple[EventType, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: EventType,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    graph = TeamCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        model_resolver=_models(),
+        provider_resolver=lambda _: provider,
+        verification_outcomes=["passed"],
+    )
+
+    await graph.execute(run, leader, repository=repository, event_sink=emit)
+
+    assert provider.requests
+    model_events = [
+        event for event in events if event[0] is EventType.MODEL_CALL_CREATED
+    ]
+    assert len(model_events) == len(provider.requests)
+    assert {event[1]["status"] for event in model_events} == {"completed"}
 
 
 @pytest.mark.asyncio

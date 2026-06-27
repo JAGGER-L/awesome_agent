@@ -76,6 +76,9 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 TeamCodingGraph(
                     saver,
                     model_resolver=RoleModelResolver.from_settings(configured),
+                    provider_resolver=providers.create,
+                    validation_repository=PostgresValidationRepository(sessions),
+                    tool_repository=PostgresToolInvocationRepository(sessions),
                 )
                 if providers.coding_available
                 else None

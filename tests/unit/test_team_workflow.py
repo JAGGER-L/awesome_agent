@@ -17,8 +17,6 @@ from awesome_agent.orchestration.verification import (
     VerificationReport,
 )
 
-pytestmark = pytest.mark.e2e
-
 
 class FakeWorkspaces:
     def __init__(self, root: Path) -> None:

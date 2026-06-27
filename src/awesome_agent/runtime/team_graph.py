@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from time import monotonic
 from typing import NotRequired, TypedDict, cast
 from uuid import UUID
 
@@ -17,8 +18,19 @@ from awesome_agent.agents.profiles import (
 )
 from awesome_agent.domain.enums import AgentKind, EventType, RunMode, TodoStatus
 from awesome_agent.domain.models import Agent, Run, TodoItem
-from awesome_agent.modeling import ToolCall, ToolResultMessage
+from awesome_agent.modeling import (
+    ModelProvider,
+    ModelRequest,
+    SystemMessage,
+    ToolCall,
+    ToolResultMessage,
+    UserMessage,
+)
 from awesome_agent.orchestration.team import TeamRuntime
+from awesome_agent.persistence.tool_invocations import (
+    DurableToolInvocation,
+    ToolInvocationRepository,
+)
 from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
@@ -34,7 +46,10 @@ from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
+    canonical_arguments_hash,
     execute_repository_call,
+    repository_tool_effect_metadata,
+    tool_invocation_uuid,
 )
 
 __all__ = [
@@ -88,7 +103,9 @@ class TeamCodingGraph:
         *,
         model_resolver: RoleModelResolver,
         profiles: ProfileRegistry | None = None,
+        provider_resolver: ProviderResolver | None = None,
         validation_repository: ValidationRepository | None = None,
+        tool_repository: ToolInvocationRepository | None = None,
         verification_outcomes: list[str] | None = None,
         max_verification_reworks: int = 10,
         max_verification_execution_retries: int = 1,
@@ -96,7 +113,9 @@ class TeamCodingGraph:
         self.saver = saver
         self.model_resolver = model_resolver
         self.profiles = profiles or ProfileRegistry()
+        self.provider_resolver = provider_resolver
         self.validation_repository = validation_repository
+        self.tool_repository = tool_repository
         self.verification_outcomes = verification_outcomes or ["failed", "passed"]
         self.max_verification_reworks = max_verification_reworks
         self.max_verification_execution_retries = max_verification_execution_retries
@@ -169,6 +188,11 @@ class TeamCodingGraph:
         run = _required(self._run, "Run")
         leader = _required(self._leader, "Leader")
         repository = _required(self._repository, "RuntimeRepository")
+        await self._model_step(
+            leader,
+            purpose="Plan team assignments and verification responsibilities.",
+            turn=1,
+        )
         team = TeamRuntime(
             run_id=run.id,
             leader=leader,
@@ -228,6 +252,11 @@ class TeamCodingGraph:
             "repo-explorer",
             kind=AgentKind.TEAMMATE,
         )
+        await self._model_step(
+            repo_explorer,
+            purpose="Inspect repository status for the team.",
+            turn=1,
+        )
         result = await self.execute_scoped_repository_tool(
             run=run,
             agent=repo_explorer,
@@ -255,6 +284,11 @@ class TeamCodingGraph:
             agent
             for agent in await repository.list_agents(run.id)
             if agent.kind is AgentKind.SUBAGENT and agent.profile == "repo-explorer"
+        )
+        await self._model_step(
+            subagent,
+            purpose="Gather bounded README evidence for backend-engineer.",
+            turn=1,
         )
         result = await self.execute_scoped_repository_tool(
             run=run,
@@ -285,6 +319,11 @@ class TeamCodingGraph:
             await repository.list_agents(run.id),
             "backend-engineer",
             kind=AgentKind.TEAMMATE,
+        )
+        await self._model_step(
+            backend,
+            purpose="Implement the assigned backend change with scoped tools.",
+            turn=1,
         )
         assignment = _assignment(state, "backend-engineer")
         patch_result = await self.execute_scoped_repository_tool(
@@ -372,6 +411,11 @@ class TeamCodingGraph:
             outcome = self.verification_outcomes[
                 min(attempt, len(self.verification_outcomes) - 1)
             ]
+            await self._model_step(
+                verifier,
+                purpose="Independently verify teammate evidence.",
+                turn=attempt + 1,
+            )
             report = await self._record_verification_report(
                 run=run,
                 verifier=verifier,
@@ -438,6 +482,11 @@ class TeamCodingGraph:
     ) -> TeamCodingState:
         run = _required(self._run, "Run")
         assignment = _assignment(state, "backend-engineer")
+        await self._model_step(
+            backend,
+            purpose="Rework implementation after verifier rejection.",
+            turn=state["verification_rework_count"] + 2,
+        )
         patch_result = await self.execute_scoped_repository_tool(
             run=run,
             agent=backend,
@@ -477,11 +526,13 @@ class TeamCodingGraph:
         call: ToolCall,
     ) -> ToolResultMessage:
         if call.name not in assignment.allowed_tools:
-            return ToolResultMessage(
+            result = ToolResultMessage(
                 call_id=call.call_id,
                 content=f"Tool {call.name} is not allowed for {assignment.profile}.",
                 is_error=True,
             )
+            await self._record_tool_invocation(run, agent, call, result)
+            return result
         if run.workspace_path is None:
             raise CorruptRuntimeStateError("Run workspace is unavailable.")
         capabilities = {"repository:read"}
@@ -489,13 +540,62 @@ class TeamCodingGraph:
             capabilities.add("repository:write")
         registry = build_modifying_registry()
         executor = build_modifying_executor(registry)
-        return await execute_repository_call(
+        result = await execute_repository_call(
             executor,
             call,
             workspace=run.workspace_path,
             agent_id=agent.id,
             profile=agent.profile,
             capabilities=capabilities,
+        )
+        await self._record_tool_invocation(run, agent, call, result)
+        return result
+
+    async def _record_tool_invocation(
+        self,
+        run: Run,
+        agent: Agent,
+        call: ToolCall,
+        result: ToolResultMessage,
+    ) -> None:
+        if self.tool_repository is None:
+            return
+        arguments_hash = canonical_arguments_hash(call)
+        path_refs: list[str] = []
+        preimage_hashes: dict[str, str] = {}
+        if run.workspace_path is not None and call.name == "repo.apply_patch":
+            from awesome_agent.tools.repository import parse_tool_call_arguments
+
+            path_refs, preimage_hashes = repository_tool_effect_metadata(
+                call.name,
+                parse_tool_call_arguments(call),
+                workspace=run.workspace_path,
+            )
+        await self.tool_repository.upsert(
+            DurableToolInvocation(
+                id=tool_invocation_uuid(f"{run.id}:team:{agent.id}:{call.call_id}"),
+                run_id=run.id,
+                agent_id=agent.id,
+                tool_name=call.name,
+                tool_version="1",
+                status=(
+                    "denied"
+                    if "not allowed" in result.content
+                    else "failed"
+                    if result.is_error
+                    else "completed"
+                ),
+                idempotency_key=(
+                    f"team:{run.id}:{agent.id}:{call.name}:{arguments_hash}"
+                ),
+                arguments_hash=arguments_hash,
+                risk_level="medium" if call.name == "repo.apply_patch" else "low",
+                path_refs=path_refs,
+                preimage_hashes=preimage_hashes,
+                result_content=result.content,
+                result_is_error=result.is_error,
+                error=result.content if result.is_error else None,
+            )
         )
 
     async def _emit_agent_created(self, agent: Agent) -> None:
@@ -515,6 +615,50 @@ class TeamCodingGraph:
                 "model": agent.model,
             },
             f"agent:create:{agent.id}",
+        )
+
+    async def _model_step(self, agent: Agent, *, purpose: str, turn: int) -> None:
+        if self.provider_resolver is None:
+            return
+        started = monotonic()
+        provider = self.provider_resolver(agent.model)
+        model_turn = await provider.complete(
+            ModelRequest(
+                messages=[
+                    SystemMessage(
+                        content=(
+                            "You are a bounded role inside a team coding runtime. "
+                            "Acknowledge the assigned step; tool execution is "
+                            "controlled by the runtime."
+                        )
+                    ),
+                    UserMessage(content=purpose),
+                ],
+                max_output_tokens=200,
+            )
+        )
+        if self._event_sink is None:
+            return
+        usage = model_turn.usage
+        await self._event_sink(
+            EventType.MODEL_CALL_CREATED,
+            {
+                "agent_id": str(agent.id),
+                "profile": agent.profile,
+                "kind": agent.kind.value,
+                "turn": turn,
+                "status": "completed",
+                "provider": model_turn.provider,
+                "model": model_turn.model,
+                "stop_reason": model_turn.stop_reason.value,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "reasoning_tokens": usage.reasoning_tokens,
+                "cache_read_tokens": usage.cache_read_tokens,
+                "cache_write_tokens": usage.cache_write_tokens,
+                "latency_ms": int((monotonic() - started) * 1000),
+            },
+            f"model:{agent.id}:{turn}",
         )
 
     async def _emit_todo_created(self, todo: TodoItem) -> None:
@@ -655,6 +799,7 @@ class TeamCodingGraph:
 
 
 type TeamEventSink = Callable[[EventType, dict[str, object], str], Awaitable[None]]
+type ProviderResolver = Callable[[str], ModelProvider]
 
 
 def _required[T](value: T | None, name: str) -> T:
