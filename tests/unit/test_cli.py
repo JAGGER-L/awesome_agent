@@ -1,6 +1,7 @@
 import os
 import sys
 import types
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,6 +13,13 @@ from typer.testing import CliRunner
 import awesome_agent.cli.app as cli_module
 from awesome_agent.cli.app import app
 from awesome_agent.domain.models import Repository
+from awesome_agent.health import (
+    CheckSeverity,
+    HealthCheck,
+    HealthStatus,
+    ReadinessProfile,
+    ReadinessReport,
+)
 
 runner = CliRunner()
 
@@ -23,12 +31,109 @@ def test_version_command() -> None:
     assert result.stdout.strip() == "0.1.0"
 
 
-def test_doctor_can_skip_docker() -> None:
+def test_doctor_can_skip_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def collect_readiness(*args: Any, **kwargs: Any) -> ReadinessReport:
+        assert kwargs["check_docker"] is False
+        return _readiness_report(
+            HealthStatus.HEALTHY,
+            [
+                HealthCheck("python", HealthStatus.HEALTHY, "3.12"),
+                HealthCheck("git", HealthStatus.HEALTHY, "git.exe"),
+            ],
+        )
+
+    monkeypatch.setattr(cli_module, "collect_readiness", collect_readiness)
+
     result = runner.invoke(app, ["doctor", "--no-docker"])
 
     assert result.exit_code == 0
     assert "[PASS] python:" in result.stdout
     assert "[PASS] git:" in result.stdout
+
+
+def test_doctor_degraded_exits_zero_and_prints_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def collect_readiness(*_: Any, **__: Any) -> ReadinessReport:
+        return _readiness_report(
+            HealthStatus.DEGRADED,
+            [
+                HealthCheck(
+                    "provider",
+                    HealthStatus.DEGRADED,
+                    "DeepSeek API key is not configured",
+                    severity=CheckSeverity.DEGRADED,
+                    remediation="Set AWESOME_AGENT_DEEPSEEK_API_KEY.",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(cli_module, "collect_readiness", collect_readiness)
+
+    result = runner.invoke(app, ["doctor", "--profile", "api", "--no-docker"])
+
+    assert result.exit_code == 0
+    assert "[WARN] provider: DeepSeek API key is not configured" in result.stdout
+    assert "fix: Set AWESOME_AGENT_DEEPSEEK_API_KEY." in result.stdout
+
+
+def test_doctor_unhealthy_exits_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def collect_readiness(*_: Any, **__: Any) -> ReadinessReport:
+        return _readiness_report(
+            HealthStatus.UNHEALTHY,
+            [
+                HealthCheck(
+                    "worker_heartbeat",
+                    HealthStatus.UNHEALTHY,
+                    "no fresh worker heartbeat found",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(cli_module, "collect_readiness", collect_readiness)
+
+    result = runner.invoke(app, ["doctor", "--profile", "runtime", "--no-docker"])
+
+    assert result.exit_code == 1
+    assert "[FAIL] worker_heartbeat: no fresh worker heartbeat found" in result.stdout
+
+
+def test_doctor_runtime_includes_worker_and_provider_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    async def collect_readiness(
+        settings: object,
+        profile: ReadinessProfile,
+        **kwargs: Any,
+    ) -> ReadinessReport:
+        seen["profile"] = profile
+        seen["worker_heartbeat_repository"] = kwargs.get(
+            "worker_heartbeat_repository"
+        )
+        return _readiness_report(
+            HealthStatus.UNHEALTHY,
+            [
+                HealthCheck("provider", HealthStatus.HEALTHY, "configured"),
+                HealthCheck(
+                    "worker_heartbeat",
+                    HealthStatus.UNHEALTHY,
+                    "no fresh worker heartbeat found",
+                ),
+            ],
+            profile=profile,
+        )
+
+    monkeypatch.setattr(cli_module, "collect_readiness", collect_readiness)
+
+    result = runner.invoke(app, ["doctor", "--profile", "runtime", "--no-docker"])
+
+    assert result.exit_code == 1
+    assert seen["profile"] is ReadinessProfile.RUNTIME
+    assert seen["worker_heartbeat_repository"] is not None
+    assert "[PASS] provider:" in result.stdout
+    assert "[FAIL] worker_heartbeat:" in result.stdout
 
 
 def test_serve_rejects_public_bind_without_explicit_unsafe(
@@ -363,3 +468,17 @@ def test_workspace_cleanup_force_requires_reason() -> None:
 
     assert result.exit_code != 0
     assert "reason" in result.output
+
+
+def _readiness_report(
+    status: HealthStatus,
+    checks: list[HealthCheck],
+    *,
+    profile: ReadinessProfile = ReadinessProfile.API,
+) -> ReadinessReport:
+    return ReadinessReport(
+        profile=profile,
+        status=status,
+        checks=checks,
+        generated_at=datetime.now(UTC),
+    )

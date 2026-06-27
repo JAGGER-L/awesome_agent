@@ -10,10 +10,19 @@ import typer
 
 from awesome_agent import __version__
 from awesome_agent.domain.models import Repository
-from awesome_agent.health import collect_health, is_healthy
+from awesome_agent.health import (
+    HealthCheck,
+    HealthStatus,
+    ReadinessProfile,
+    ReadinessReport,
+    collect_readiness,
+)
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.repository_registry import (
     PostgresRepositoryRegistry,
+)
+from awesome_agent.persistence.worker_heartbeats import (
+    PostgresWorkerHeartbeatRepository,
 )
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.service import RepositoryService
@@ -49,17 +58,20 @@ def version() -> None:
 
 @app.command()
 def doctor(
+    profile: Annotated[
+        ReadinessProfile,
+        typer.Option("--profile", help="Readiness profile to evaluate."),
+    ] = ReadinessProfile.API,
     docker: Annotated[
         bool,
         typer.Option("--docker/--no-docker", help="Check Docker daemon health."),
     ] = True,
 ) -> None:
-    """Check whether the local development baseline is healthy."""
-    checks = collect_health(check_docker=docker)
-    for check in checks:
-        marker = "PASS" if check.ok else "FAIL"
-        typer.echo(f"[{marker}] {check.name}: {check.detail}")
-    if not is_healthy(checks):
+    """Check whether local API or runtime dependencies are ready."""
+    report = asyncio.run(_collect_doctor_readiness(profile, check_docker=docker))
+    for check in report.checks:
+        _print_health_check(check)
+    if report.status is HealthStatus.UNHEALTHY:
         raise typer.Exit(code=1)
 
 
@@ -478,6 +490,43 @@ def _reject_public_bind_without_consent(
         "The local API is unauthenticated. Use a loopback host such as "
         "127.0.0.1, or pass --unsafe-bind-public to expose it explicitly."
     )
+
+
+async def _collect_doctor_readiness(
+    profile: ReadinessProfile,
+    *,
+    check_docker: bool,
+) -> ReadinessReport:
+    settings = Settings()
+    if profile is not ReadinessProfile.RUNTIME:
+        return await collect_readiness(
+            settings,
+            profile,
+            check_docker=check_docker,
+        )
+
+    engine = create_engine(settings.database_url)
+    sessions = create_session_factory(engine)
+    try:
+        return await collect_readiness(
+            settings,
+            profile,
+            check_docker=check_docker,
+            worker_heartbeat_repository=PostgresWorkerHeartbeatRepository(sessions),
+        )
+    finally:
+        await engine.dispose()
+
+
+def _print_health_check(check: HealthCheck) -> None:
+    marker = {
+        HealthStatus.HEALTHY: "PASS",
+        HealthStatus.DEGRADED: "WARN",
+        HealthStatus.UNHEALTHY: "FAIL",
+    }[check.status]
+    typer.echo(f"[{marker}] {check.name}: {check.detail}")
+    if check.remediation:
+        typer.echo(f"       fix: {check.remediation}")
 
 
 def _set_api_bind_environment(host: str, unsafe_bind_public: bool) -> None:
