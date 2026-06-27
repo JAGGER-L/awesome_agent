@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import AsyncIterator
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -28,7 +29,7 @@ from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_graph import AgentAssignment, TeamCodingGraph
 
 
-def _git(path, *arguments: str) -> None:
+def _git(path: Path, *arguments: str) -> None:
     import subprocess
 
     result = subprocess.run(
@@ -72,7 +73,7 @@ def _turn() -> ModelTurn:
     )
 
 
-def _team_run(tmp_path):
+def _team_run(tmp_path: Path) -> tuple[Run, Agent]:
     run = Run(
         goal="Implement backend and verify it",
         mode=RunMode.TEAM,
@@ -93,7 +94,7 @@ def _team_run(tmp_path):
 
 @pytest.mark.asyncio
 async def test_team_graph_creates_durable_team_agents_with_subagent_lineage(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "test@example.com")
@@ -184,7 +185,7 @@ async def test_team_graph_creates_durable_team_agents_with_subagent_lineage(
 
 
 @pytest.mark.asyncio
-async def test_team_graph_calls_provider_for_bounded_role_steps(tmp_path) -> None:
+async def test_team_graph_calls_provider_for_bounded_role_steps(tmp_path: Path) -> None:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
@@ -223,7 +224,7 @@ async def test_team_graph_calls_provider_for_bounded_role_steps(tmp_path) -> Non
 
 @pytest.mark.asyncio
 async def test_team_graph_rejects_reworks_and_passes_verification(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "test@example.com")
@@ -256,7 +257,7 @@ async def test_team_graph_rejects_reworks_and_passes_verification(
 
 @pytest.mark.asyncio
 async def test_team_graph_fails_after_verification_rejection_limit(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "test@example.com")
@@ -280,7 +281,7 @@ async def test_team_graph_fails_after_verification_rejection_limit(
 
 @pytest.mark.asyncio
 async def test_team_graph_rejects_tools_outside_leader_assignment_scope(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "test@example.com")
