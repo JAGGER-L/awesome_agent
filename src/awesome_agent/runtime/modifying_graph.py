@@ -39,6 +39,11 @@ from awesome_agent.modeling import (
     UserMessage,
 )
 from awesome_agent.persistence.approvals import ApprovalRepository, DurableApproval
+from awesome_agent.persistence.budget import (
+    BudgetRepository,
+    ContextCompactionRecord,
+    RunBudgetLedgerRecord,
+)
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     ToolInvocationRepository,
@@ -47,6 +52,15 @@ from awesome_agent.persistence.validation import (
     ValidationReportWithGates,
     ValidationRepository,
 )
+from awesome_agent.runtime.budget import (
+    BudgetDecision,
+    BudgetLedger,
+    BudgetPolicy,
+    TokenUsageDelta,
+    estimate_messages_tokens,
+    evaluate_budget,
+)
+from awesome_agent.runtime.context import ContextManager, ContextPolicy, PreparedContext
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -105,6 +119,9 @@ class ModifyingAgentState(TypedDict):
     validation_reports: list[dict[str, Any]]
     phase: str
     force_final: bool
+    rolling_summary: NotRequired[str]
+    budget_ledger: NotRequired[dict[str, Any]]
+    context_artifact_refs: NotRequired[list[str]]
     last_turn: NotRequired[dict[str, Any]]
     final_answer: NotRequired[str]
     result_summary: NotRequired[str]
@@ -146,6 +163,9 @@ class ModifyingCodingGraph:
         recursion_limit: int = 256,
         no_progress_turns: int = 8,
         fault_hook: FaultHook | None = None,
+        context_manager: ContextManager | None = None,
+        budget_repository: BudgetRepository | None = None,
+        budget_policy: BudgetPolicy | None = None,
     ) -> None:
         self.saver = saver
         self.provider_resolver = provider_resolver
@@ -166,6 +186,9 @@ class ModifyingCodingGraph:
         self.recursion_limit = recursion_limit
         self.no_progress_turns = no_progress_turns
         self.fault_hook = fault_hook
+        self.context_manager = context_manager
+        self.budget_repository = budget_repository
+        self.budget_policy = budget_policy
         self._run: Run | None = None
         self._agent: Agent | None = None
         self._event_sink: EventSink | None = None
@@ -280,12 +303,57 @@ class ModifyingCodingGraph:
     async def _model_turn(self, state: ModifyingAgentState) -> ModifyingAgentState:
         if state["model_turn_count"] >= self.max_model_turns:
             raise ModifyingAgentLoopFailed("Model turn budget exhausted.")
+        run = self._require_run()
         agent = self._require_agent()
         messages = [
             _MESSAGE_ADAPTER.validate_python(item) for item in state["messages"]
         ]
         next_count = state["model_turn_count"] + 1
-        force_final = next_count >= self.max_model_turns
+        force_final = state["force_final"] or next_count >= self.max_model_turns
+        ledger = await self._load_budget_ledger(run.id, state)
+        prepared = await self._prepare_context(
+            run=run,
+            agent=agent,
+            messages=messages,
+            rolling_summary=state.get("rolling_summary", ""),
+        )
+        checkpoint_messages = prepared.request_messages if prepared else messages
+        request_messages = list(checkpoint_messages)
+        if prepared is not None and prepared.compacted:
+            await self._record_context_compaction(run, agent, prepared)
+            await self._emit(
+                EventType.CONTEXT_COMPACTED,
+                {
+                    "before_estimated_tokens": prepared.before_estimated_tokens,
+                    "after_estimated_tokens": prepared.after_estimated_tokens,
+                    "removed_message_count": prepared.removed_message_count,
+                    "artifact_refs": prepared.artifact_refs,
+                },
+                f"context:{next_count}",
+            )
+        if prepared is not None and prepared.hard_limit_exceeded:
+            force_final = True
+            request_messages.append(
+                SystemMessage(
+                    content=(
+                        "The prompt is at the hard context limit. Do not request "
+                        "tools. If a final diff is already present, summarize the "
+                        "completed changes for validation; otherwise provide a "
+                        "bounded status of incomplete work and remaining risk."
+                    )
+                )
+            )
+        ledger = await self._evaluate_budget_before_model_call(
+            run_id=run.id,
+            ledger=ledger,
+            request_messages=request_messages,
+            before_estimated_tokens=(
+                prepared.before_estimated_tokens
+                if prepared is not None
+                else estimate_messages_tokens(messages)
+            ),
+            turn=next_count,
+        )
         continuation = (
             ContinuationState.model_validate(state["continuation"])
             if state["continuation"] is not None
@@ -296,8 +364,8 @@ class ModifyingCodingGraph:
         try:
             turn = await provider.complete(
                 ModelRequest(
-                    messages=messages,
-                    tools=model_tool_definitions(self.registry),
+                    messages=request_messages,
+                    tools=[] if force_final else model_tool_definitions(self.registry),
                     tool_choice=ToolChoice(
                         mode=(
                             ToolChoiceMode.NONE if force_final else ToolChoiceMode.AUTO
@@ -334,6 +402,14 @@ class ModifyingCodingGraph:
                 f"model-turn:{next_count}",
             )
             raise ModifyingAgentLoopFailed(str(error)) from error
+        ledger = ledger.add_usage(
+            TokenUsageDelta(
+                input_tokens=turn.usage.input_tokens or 0,
+                output_tokens=turn.usage.output_tokens or 0,
+                reasoning_tokens=turn.usage.reasoning_tokens or 0,
+            )
+        )
+        await self._persist_budget_ledger(run.id, ledger)
         await self._emit(
             EventType.MODEL_CALL_CREATED,
             {
@@ -354,8 +430,21 @@ class ModifyingCodingGraph:
         return {
             **state,
             "phase": "model_completed",
+            "messages": [
+                message.model_dump(mode="json") for message in checkpoint_messages
+            ],
             "model_turn_count": next_count,
             "force_final": force_final,
+            "rolling_summary": (
+                prepared.rolling_summary
+                if prepared is not None
+                else state.get("rolling_summary", "")
+            ),
+            "budget_ledger": _ledger_to_state(ledger),
+            "context_artifact_refs": [
+                *state.get("context_artifact_refs", []),
+                *(prepared.artifact_refs if prepared is not None else []),
+            ],
             "last_turn": turn.model_dump(mode="json"),
             "continuation": (
                 turn.continuation.model_dump(mode="json")
@@ -901,6 +990,147 @@ class ModifyingCodingGraph:
             ),
         }
 
+    async def _prepare_context(
+        self,
+        *,
+        run: Run,
+        agent: Agent,
+        messages: list[ModelMessage],
+        rolling_summary: str,
+    ) -> PreparedContext | None:
+        if self.context_manager is None or self.budget_policy is None:
+            return None
+        return await self.context_manager.prepare_request(
+            run_id=run.id,
+            agent_id=agent.id,
+            graph_name=MODIFYING_CODING_GRAPH,
+            graph_version=MODIFYING_CODING_VERSION,
+            messages=messages,
+            rolling_summary=rolling_summary,
+            policy=ContextPolicy(
+                soft_context_tokens=self.budget_policy.soft_context_tokens,
+                hard_context_tokens=self.budget_policy.hard_context_tokens,
+                recent_context_tokens=self.budget_policy.recent_context_tokens,
+            ),
+        )
+
+    async def _record_context_compaction(
+        self,
+        run: Run,
+        agent: Agent,
+        prepared: PreparedContext,
+    ) -> None:
+        if self.budget_repository is None:
+            return
+        await self.budget_repository.record_compaction(
+            ContextCompactionRecord(
+                run_id=run.id,
+                agent_id=agent.id,
+                graph_name=MODIFYING_CODING_GRAPH,
+                graph_version=MODIFYING_CODING_VERSION,
+                before_estimated_tokens=prepared.before_estimated_tokens,
+                after_estimated_tokens=prepared.after_estimated_tokens,
+                summary=prepared.rolling_summary,
+                artifact_refs=_uuid_artifact_refs(prepared.artifact_refs),
+            )
+        )
+
+    async def _load_budget_ledger(
+        self,
+        run_id: UUID,
+        state: ModifyingAgentState,
+    ) -> BudgetLedger:
+        if self.budget_repository is not None:
+            record = await self.budget_repository.get_ledger(run_id)
+            return _ledger_from_record(record)
+        return _ledger_from_state(state.get("budget_ledger", {}))
+
+    async def _persist_budget_ledger(
+        self,
+        run_id: UUID,
+        ledger: BudgetLedger,
+    ) -> None:
+        if self.budget_repository is not None:
+            await self.budget_repository.upsert_ledger(
+                _record_from_ledger(run_id, ledger)
+            )
+
+    async def _evaluate_budget_before_model_call(
+        self,
+        *,
+        run_id: UUID,
+        ledger: BudgetLedger,
+        request_messages: list[ModelMessage],
+        before_estimated_tokens: int,
+        turn: int,
+    ) -> BudgetLedger:
+        if self.budget_policy is None:
+            return ledger
+        now = datetime.now(UTC)
+        before_decision = evaluate_budget(
+            ledger,
+            self.budget_policy,
+            estimated_prompt_tokens=before_estimated_tokens,
+            now=now,
+        )
+        estimated_prompt_tokens = estimate_messages_tokens(request_messages)
+        decision = evaluate_budget(
+            ledger,
+            self.budget_policy,
+            estimated_prompt_tokens=estimated_prompt_tokens,
+            now=now,
+        )
+        threshold_status = decision.value
+        if decision is BudgetDecision.WITHIN_BUDGET and before_decision in {
+            BudgetDecision.COMPACT,
+            BudgetDecision.FINAL_ANSWER,
+        }:
+            threshold_status = before_decision.value
+            await self._emit(
+                EventType.BUDGET_THRESHOLD_REACHED,
+                {
+                    "turn": turn,
+                    "decision": before_decision.value,
+                    "before_estimated_tokens": before_estimated_tokens,
+                    "estimated_prompt_tokens": estimated_prompt_tokens,
+                },
+                f"budget-threshold:{turn}",
+            )
+        elif decision in {BudgetDecision.COMPACT, BudgetDecision.FINAL_ANSWER}:
+            await self._emit(
+                EventType.BUDGET_THRESHOLD_REACHED,
+                {
+                    "turn": turn,
+                    "decision": decision.value,
+                    "before_estimated_tokens": before_estimated_tokens,
+                    "estimated_prompt_tokens": estimated_prompt_tokens,
+                },
+                f"budget-threshold:{turn}",
+            )
+        updated = replace(ledger, threshold_status=threshold_status)
+        await self._persist_budget_ledger(run_id, updated)
+        if decision is BudgetDecision.EXHAUSTED:
+            exhausted = replace(
+                updated,
+                threshold_status=BudgetDecision.EXHAUSTED.value,
+            )
+            await self._persist_budget_ledger(run_id, exhausted)
+            await self._emit(
+                EventType.BUDGET_EXHAUSTED,
+                {
+                    "turn": turn,
+                    "estimated_prompt_tokens": estimated_prompt_tokens,
+                    "total_tokens": exhausted.total_tokens,
+                    "reasoning_tokens": exhausted.total_reasoning_tokens,
+                    "active_seconds": exhausted.active_seconds_at(now),
+                },
+                f"budget-exhausted:{turn}",
+            )
+            raise ModifyingAgentLoopFailed(
+                "budget_exhausted: token or wall-clock budget exhausted"
+            )
+        return updated
+
     async def _offload_result_if_needed(
         self,
         call_id: str,
@@ -996,6 +1226,9 @@ def _initial_state(run: Run, agent: Agent) -> ModifyingAgentState:
         "validation_reports": [],
         "phase": "created",
         "force_final": False,
+        "rolling_summary": "",
+        "budget_ledger": {},
+        "context_artifact_refs": [],
     }
 
 
@@ -1019,6 +1252,73 @@ def _state(value: object) -> ModifyingAgentState:
     if not required.issubset(value):
         raise CorruptRuntimeStateError("Modifying graph state is incomplete.")
     return cast(ModifyingAgentState, value)
+
+
+def _ledger_from_state(payload: dict[str, Any]) -> BudgetLedger:
+    return BudgetLedger(
+        total_input_tokens=int(payload.get("total_input_tokens", 0)),
+        total_output_tokens=int(payload.get("total_output_tokens", 0)),
+        total_reasoning_tokens=int(payload.get("total_reasoning_tokens", 0)),
+        active_seconds=int(payload.get("active_seconds", 0)),
+        model_call_count=int(payload.get("model_call_count", 0)),
+        threshold_status=str(
+            payload.get("threshold_status", BudgetDecision.WITHIN_BUDGET.value)
+        ),
+    )
+
+
+def _ledger_from_record(record: RunBudgetLedgerRecord) -> BudgetLedger:
+    return BudgetLedger(
+        total_input_tokens=record.total_input_tokens,
+        total_output_tokens=record.total_output_tokens,
+        total_reasoning_tokens=record.total_reasoning_tokens,
+        active_seconds=record.active_seconds,
+        model_call_count=record.model_call_count,
+        threshold_status=record.threshold_status,
+        active_window_started_at=record.active_window_started_at,
+    )
+
+
+def _record_from_ledger(
+    run_id: UUID,
+    ledger: BudgetLedger,
+) -> RunBudgetLedgerRecord:
+    return RunBudgetLedgerRecord(
+        run_id=run_id,
+        total_input_tokens=ledger.total_input_tokens,
+        total_output_tokens=ledger.total_output_tokens,
+        total_reasoning_tokens=ledger.total_reasoning_tokens,
+        active_seconds=ledger.active_seconds,
+        model_call_count=ledger.model_call_count,
+        threshold_status=ledger.threshold_status,
+        active_window_started_at=ledger.active_window_started_at,
+    )
+
+
+def _ledger_to_state(ledger: BudgetLedger) -> dict[str, Any]:
+    return {
+        "total_input_tokens": ledger.total_input_tokens,
+        "total_output_tokens": ledger.total_output_tokens,
+        "total_reasoning_tokens": ledger.total_reasoning_tokens,
+        "active_seconds": ledger.active_seconds,
+        "model_call_count": ledger.model_call_count,
+        "threshold_status": ledger.threshold_status,
+        "active_window_started_at": (
+            ledger.active_window_started_at.isoformat()
+            if ledger.active_window_started_at is not None
+            else None
+        ),
+    }
+
+
+def _uuid_artifact_refs(artifact_refs: list[str]) -> list[UUID]:
+    refs: list[UUID] = []
+    for artifact_ref in artifact_refs:
+        try:
+            refs.append(UUID(artifact_ref))
+        except ValueError:
+            continue
+    return refs
 
 
 def _idempotency_key(

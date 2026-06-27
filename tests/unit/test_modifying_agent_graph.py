@@ -25,12 +25,18 @@ from awesome_agent.modeling import (
     ModelRequest,
     ModelStreamEvent,
     ModelTurn,
+    ModelUsage,
     StopReason,
     StructuredModelProvider,
+    SystemMessage,
     ToolCall,
+    ToolChoiceMode,
+    ToolResultMessage,
     TurnCompleted,
+    UserMessage,
 )
 from awesome_agent.persistence.approvals import InMemoryApprovalRepository
+from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     InMemoryToolInvocationRepository,
@@ -39,6 +45,11 @@ from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
     ValidationReportWithGates,
+)
+from awesome_agent.runtime.budget import BudgetDecision, BudgetPolicy
+from awesome_agent.runtime.context import (
+    ContextManager,
+    DeterministicSummaryProvider,
 )
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
@@ -98,6 +109,59 @@ def _run(workspace: Path) -> tuple[Run, Agent]:
         kind=AgentKind.LEADER,
         profile="leader",
         model="fake-model",
+    )
+
+
+def _budget_policy(
+    *,
+    soft_context_tokens: int = 10_000,
+    hard_context_tokens: int = 20_000,
+    recent_context_tokens: int = 5_000,
+    max_total_tokens_per_run: int = 100_000,
+    max_reasoning_tokens_per_run: int = 100_000,
+    max_active_seconds_per_run: int = 3600,
+) -> BudgetPolicy:
+    return BudgetPolicy(
+        soft_context_tokens=soft_context_tokens,
+        hard_context_tokens=hard_context_tokens,
+        recent_context_tokens=recent_context_tokens,
+        max_total_tokens_per_run=max_total_tokens_per_run,
+        max_reasoning_tokens_per_run=max_reasoning_tokens_per_run,
+        max_active_seconds_per_run=max_active_seconds_per_run,
+    )
+
+
+def _node_state(
+    run: Run,
+    agent: Agent,
+    messages: list[dict[str, object]],
+    *,
+    successful_writes: int = 0,
+    final_diff_after_write: bool = False,
+) -> ModifyingAgentState:
+    return cast(
+        ModifyingAgentState,
+        {
+            "run_id": str(run.id),
+            "agent_id": str(agent.id),
+            "graph_name": MODIFYING_CODING_GRAPH,
+            "graph_version": MODIFYING_CODING_VERSION,
+            "messages": messages,
+            "continuation": None,
+            "model_turn_count": 0,
+            "tool_call_count": 0,
+            "successful_writes": successful_writes,
+            "final_diff_after_write": final_diff_after_write,
+            "progress_fingerprints": [],
+            "stagnant_turns": 0,
+            "validation_rework_count": 0,
+            "validation_reports": [],
+            "phase": "tools_completed",
+            "force_final": False,
+            "rolling_summary": "",
+            "budget_ledger": {},
+            "context_artifact_refs": [],
+        },
     )
 
 
@@ -197,6 +261,222 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
         if message.get("role") == "tool" and message.get("artifact_refs")
     ]
     assert tool_messages
+
+
+@pytest.mark.asyncio
+async def test_modifying_model_turn_compacts_context_before_provider_call(
+    tmp_path: Path,
+) -> None:
+    provider = SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(content="bounded modifying summary"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        ]
+    )
+    artifact_repository = InMemoryArtifactMetadataRepository()
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifact_repository,
+        context_manager=ContextManager(
+            summary_provider=DeterministicSummaryProvider(),
+            artifact_store=LocalArtifactStore(tmp_path / "context-artifacts"),
+            artifact_repository=artifact_repository,
+        ),
+        budget_repository=InMemoryBudgetRepository(),
+        budget_policy=_budget_policy(
+            soft_context_tokens=100,
+            hard_context_tokens=2_000,
+            recent_context_tokens=80,
+        ),
+    )
+    run, agent = _run(tmp_path)
+    graph._run = run
+    graph._agent = agent
+    tool_call = ToolCall(
+        call_id="diff",
+        name="repo.diff",
+        arguments_json="{}",
+    )
+
+    updated = await graph._model_turn(
+        _node_state(
+            run,
+            agent,
+            [
+                SystemMessage(content="system").model_dump(mode="json"),
+                UserMessage(content="goal").model_dump(mode="json"),
+                UserMessage(content="old context " * 1000).model_dump(mode="json"),
+                AssistantMessage(tool_calls=[tool_call]).model_dump(mode="json"),
+                ToolResultMessage(
+                    call_id=tool_call.call_id,
+                    content="diff -- README.md",
+                ).model_dump(mode="json"),
+            ],
+            successful_writes=1,
+            final_diff_after_write=True,
+        )
+    )
+
+    request = provider.requests[0]
+    assert all(
+        "old context " * 20 not in getattr(message, "content", "")
+        for message in request.messages
+    )
+    assert request.messages[1].content.startswith("Prior context summary:")
+    assert updated["rolling_summary"]
+    assert updated["context_artifact_refs"]
+    assert await artifact_repository.list_for_run(run.id)
+
+
+@pytest.mark.asyncio
+async def test_modifying_model_turn_records_budget_usage(tmp_path: Path) -> None:
+    provider = SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(content="answer"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+                usage=ModelUsage(
+                    input_tokens=10,
+                    output_tokens=20,
+                    reasoning_tokens=5,
+                ),
+            )
+        ]
+    )
+    budget_repository = InMemoryBudgetRepository()
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+        budget_repository=budget_repository,
+        budget_policy=_budget_policy(),
+    )
+    run, agent = _run(tmp_path)
+    graph._run = run
+    graph._agent = agent
+
+    await graph._model_turn(
+        _node_state(
+            run,
+            agent,
+            [
+                SystemMessage(content="system").model_dump(mode="json"),
+                UserMessage(content="goal").model_dump(mode="json"),
+            ],
+        )
+    )
+
+    ledger = await budget_repository.get_ledger(run.id)
+    assert ledger.total_input_tokens == 10
+    assert ledger.total_output_tokens == 20
+    assert ledger.total_reasoning_tokens == 5
+    assert ledger.model_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_modifying_hard_context_limit_disables_tools_and_routes_validation(
+    tmp_path: Path,
+) -> None:
+    provider = SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(content="bounded final"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        ]
+    )
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=InMemoryArtifactMetadataRepository(),
+        context_manager=ContextManager(
+            summary_provider=DeterministicSummaryProvider(),
+            artifact_store=LocalArtifactStore(tmp_path / "context-artifacts"),
+            artifact_repository=InMemoryArtifactMetadataRepository(),
+        ),
+        budget_repository=InMemoryBudgetRepository(),
+        budget_policy=_budget_policy(
+            soft_context_tokens=10,
+            hard_context_tokens=20,
+            recent_context_tokens=5,
+        ),
+    )
+    run, agent = _run(tmp_path)
+    graph._run = run
+    graph._agent = agent
+
+    updated = await graph._model_turn(
+        _node_state(
+            run,
+            agent,
+            [
+                SystemMessage(content="system " * 200).model_dump(mode="json"),
+                UserMessage(content="goal").model_dump(mode="json"),
+            ],
+            successful_writes=1,
+            final_diff_after_write=True,
+        )
+    )
+
+    request = provider.requests[0]
+    assert request.tool_choice.mode is ToolChoiceMode.NONE
+    assert request.tools == []
+    assert updated["force_final"]
+    assert graph._route_turn(updated) == "validate"
+
+
+@pytest.mark.asyncio
+async def test_modifying_budget_exhaustion_fails_without_recovery_required(
+    tmp_path: Path,
+) -> None:
+    provider = SequenceProvider(
+        [
+            ModelTurn(
+                assistant=AssistantMessage(content="should not run"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        ]
+    )
+    budget_repository = InMemoryBudgetRepository()
+    graph = ModifyingCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        provider_resolver=lambda _: provider,
+        budget_repository=budget_repository,
+        budget_policy=_budget_policy(max_total_tokens_per_run=3),
+    )
+    run, agent = _run(tmp_path)
+    graph._run = run
+    graph._agent = agent
+
+    with pytest.raises(ModifyingAgentLoopFailed, match="budget_exhausted"):
+        await graph._model_turn(
+            _node_state(
+                run,
+                agent,
+                [
+                    SystemMessage(content="system prompt").model_dump(mode="json"),
+                    UserMessage(content="goal").model_dump(mode="json"),
+                ],
+                successful_writes=1,
+                final_diff_after_write=False,
+            )
+        )
+
+    assert provider.requests == []
+    ledger = await budget_repository.get_ledger(run.id)
+    assert ledger.threshold_status == BudgetDecision.EXHAUSTED.value
 
 
 @pytest.mark.asyncio
