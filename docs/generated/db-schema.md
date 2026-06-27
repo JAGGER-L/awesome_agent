@@ -13,7 +13,9 @@ Generated from SQLAlchemy metadata.
 | `profile` | `VARCHAR(128)` | no |
 | `model` | `VARCHAR(128)` | no |
 | `status` | `VARCHAR(32)` | no |
+| `revision` | `INTEGER` | no |
 | `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
 
 ## `approvals`
 

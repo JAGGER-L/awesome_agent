@@ -124,6 +124,8 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     agents = client.get(f"/runs/{run_id}/agents").json()
     assert len(agents) == 1
     assert agents[0]["model"] == "deepseek-v4-pro"
+    assert agents[0]["revision"] == 1
+    assert agents[0]["updated_at"] is not None
     assert len(client.get(f"/runs/{run_id}/events/history").json()) == 3
     todos = client.get(f"/runs/{run_id}/todos").json()
     assert len(todos) == 1
