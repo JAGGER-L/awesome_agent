@@ -95,6 +95,43 @@ class ManagedRunWorktreeManager:
             raise ManagedWorktreeError(result.stderr or result.stdout)
         return bool(result.stdout.strip())
 
+    async def remove_worktree(
+        self,
+        *,
+        repository: Path,
+        target: Path,
+        force: bool = False,
+    ) -> None:
+        source = normalize_path(repository)
+        workspace = normalize_path(target)
+        self._require_managed_target(workspace)
+        command = ["git", "worktree", "remove"]
+        if force:
+            command.append("--force")
+        command.append(str(workspace))
+        result = await run_process(
+            command,
+            command_label="git worktree remove",
+            workspace=source,
+            timeout_seconds=60,
+        )
+        if result.exit_code != 0:
+            raise ManagedWorktreeError(result.stderr or result.stdout)
+
+    async def delete_branch(self, *, repository: Path, branch: str) -> None:
+        source = normalize_path(repository)
+        result = await run_process(
+            ["git", "branch", "-D", branch],
+            command_label=f"git branch delete {branch}",
+            workspace=source,
+            timeout_seconds=30,
+        )
+        if result.exit_code != 0:
+            raise ManagedWorktreeError(result.stderr or result.stdout)
+
+    def remove_owner(self, repository_id: UUID, run_id: UUID) -> None:
+        self._owner_path(repository_id, run_id).unlink(missing_ok=True)
+
     async def provision(
         self,
         *,

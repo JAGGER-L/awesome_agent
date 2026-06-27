@@ -12,6 +12,7 @@ from awesome_agent.domain.models import Run
 from awesome_agent.runtime.workspaces import (
     WorkspaceCandidateStatus,
     WorkspaceInspection,
+    WorkspaceRetentionService,
     evaluate_workspace_candidate,
 )
 
@@ -147,3 +148,14 @@ def test_path_escape_is_a_hard_block() -> None:
 
     assert candidate.status is WorkspaceCandidateStatus.BLOCKED_PATH_ESCAPE
     assert not candidate.can_cleanup
+
+
+def test_force_cleanup_requires_reason() -> None:
+    service = WorkspaceRetentionService.__new__(WorkspaceRetentionService)
+
+    try:
+        service.validate_cleanup_options(force=True, reason=None)
+    except ValueError as error:
+        assert "reason" in str(error)
+    else:
+        raise AssertionError("force cleanup without reason should fail")

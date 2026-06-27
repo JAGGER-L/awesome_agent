@@ -113,6 +113,7 @@ class EventType(StrEnum):
     GRAPH_STARTED = "graph.started"
     GRAPH_COMPLETED = "graph.completed"
     GRAPH_RECOVERED = "graph.recovered"
+    WORKSPACE_CLEANED = "workspace.cleaned"
 
 
 class RiskLevel(StrEnum):

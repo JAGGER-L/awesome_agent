@@ -78,6 +78,15 @@ class PostgresRuntimeRepository(RuntimeRepository):
             raise KeyError(run_id)
         return _run_from_record(record)
 
+    async def list_runs(self) -> list[Run]:
+        async with self._sessions() as session:
+            records = list(
+                await session.scalars(
+                    select(RunRecord).order_by(RunRecord.created_at, RunRecord.id)
+                )
+            )
+        return [_run_from_record(record) for record in records]
+
     async def update_run(self, run: Run) -> None:
         async with self._sessions.begin() as session:
             record = await session.get(RunRecord, run.id)

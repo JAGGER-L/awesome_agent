@@ -37,6 +37,10 @@ class RuntimeRepository(Protocol):
         """Load one run."""
         ...
 
+    async def list_runs(self) -> list[Run]:
+        """Load known runs for inspection views."""
+        ...
+
     async def update_run(self, run: Run) -> None:
         """Persist mutable run state."""
         ...
@@ -133,6 +137,9 @@ class InMemoryRuntimeRepository(RuntimeRepository):
 
     async def get_run(self, run_id: UUID) -> Run:
         return self._runs[run_id]
+
+    async def list_runs(self) -> list[Run]:
+        return sorted(self._runs.values(), key=lambda run: (run.created_at, run.id.hex))
 
     async def update_run(self, run: Run) -> None:
         self._runs[run.id] = run
