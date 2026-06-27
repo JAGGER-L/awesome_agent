@@ -299,6 +299,35 @@ def resolve_workspace_root(settings: Settings) -> Path:
     return LocalRepositoryConfigStore(settings.local_config_path).load().workspace_root
 
 
+async def collect_readiness(
+    settings: Settings,
+    profile: ReadinessProfile,
+    *,
+    check_docker: bool = True,
+    worker_heartbeat_repository: Any | None = None,
+) -> ReadinessReport:
+    checks = collect_health(check_docker=check_docker)
+    checks.extend(
+        [
+            bind_policy_check(settings.api_host, settings.unsafe_bind_public),
+            workspace_root_check(resolve_workspace_root(settings)),
+            provider_key_check(settings, profile),
+            model_routes_check(settings, profile),
+            await database_check(settings.database_url),
+            await migration_check(settings.database_url),
+            await checkpoint_check(settings.checkpoint_database_url),
+        ]
+    )
+    if profile is ReadinessProfile.RUNTIME:
+        checks.append(
+            await _runtime_worker_heartbeat_check(
+                settings,
+                worker_heartbeat_repository=worker_heartbeat_repository,
+            )
+        )
+    return readiness_report(profile=profile, checks=checks)
+
+
 def collect_health(*, check_docker: bool = True) -> list[HealthCheck]:
     checks = [python_check(), git_check()]
     if check_docker:
@@ -359,3 +388,33 @@ def _project_root() -> Path:
     if (candidate / "alembic.ini").exists():
         return candidate
     return Path.cwd()
+
+
+async def _runtime_worker_heartbeat_check(
+    settings: Settings,
+    *,
+    worker_heartbeat_repository: Any | None,
+) -> HealthCheck:
+    if worker_heartbeat_repository is None:
+        return HealthCheck(
+            "worker_heartbeat",
+            HealthStatus.UNHEALTHY,
+            "worker heartbeat repository is not configured",
+            remediation="Start the API with PostgreSQL persistence configured.",
+        )
+
+    from awesome_agent.runtime.worker_heartbeats import (
+        GraphIdentity,
+        worker_heartbeat_check,
+    )
+
+    return await worker_heartbeat_check(
+        worker_heartbeat_repository,
+        settings,
+        required_graphs=[
+            GraphIdentity(RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION),
+            GraphIdentity(READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION),
+            GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION),
+            GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION),
+        ],
+    )

@@ -61,6 +61,30 @@ def test_serve_allows_public_bind_with_explicit_unsafe(
 
     assert result.exit_code == 0
     assert calls[0]["kwargs"]["host"] == "0.0.0.0"
+    assert os.environ["AWESOME_AGENT_API_HOST"] == "0.0.0.0"
+    assert os.environ["AWESOME_AGENT_UNSAFE_BIND_PUBLIC"] == "true"
+
+
+def test_start_sets_api_bind_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def run_supervisor(**kwargs: Any) -> types.SimpleNamespace:
+        calls.append(kwargs)
+        return types.SimpleNamespace(return_code=0, service="api")
+
+    monkeypatch.setattr(cli_module, "run_supervisor", run_supervisor)
+
+    result = runner.invoke(
+        app,
+        ["start", "--host", "127.0.0.1"],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0]["host"] == "127.0.0.1"
+    assert os.environ["AWESOME_AGENT_API_HOST"] == "127.0.0.1"
+    assert os.environ["AWESOME_AGENT_UNSAFE_BIND_PUBLIC"] == "false"
 
 
 def test_start_rejects_public_bind_without_explicit_unsafe(

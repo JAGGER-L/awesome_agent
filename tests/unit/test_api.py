@@ -32,6 +32,7 @@ from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.runtime.workspaces import WorkspaceRetentionService
+from awesome_agent.settings import Settings
 
 
 def _models() -> RoleModelResolver:
@@ -164,6 +165,53 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     )
     assert decided.status_code == 200
     assert len(client.get(f"/runs/{run_id}/approvals").json()) == 1
+
+
+def test_health_endpoint_is_liveness_only(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_ready_api_returns_structured_report(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    response = client.get("/ready?profile=api")
+
+    assert response.status_code in {200, 503}
+    body = response.json()
+    assert body["profile"] == "api"
+    assert body["status"] in {"healthy", "degraded", "unhealthy"}
+    assert all("name" in check for check in body["checks"])
+
+
+def test_ready_runtime_returns_503_without_fresh_worker(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    response = client.get("/ready?profile=runtime")
+
+    assert response.status_code == 503
+    assert response.json()["status"] == "unhealthy"
+
+
+def test_ready_rejects_invalid_profile(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    response = client.get("/ready?profile=invalid")
+
+    assert response.status_code == 422
+
+
+def test_create_app_rejects_public_bind_without_unsafe_consent() -> None:
+    try:
+        create_app(settings=Settings(api_host="0.0.0.0"))
+    except RuntimeError as error:
+        assert "non-loopback" in str(error)
+    else:
+        raise AssertionError("public bind should be rejected")
 
 
 def test_missing_run_returns_404(tmp_path: Path) -> None:

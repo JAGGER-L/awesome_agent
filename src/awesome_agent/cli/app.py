@@ -1,4 +1,5 @@
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -242,6 +243,7 @@ def serve(
     import uvicorn
 
     _reject_public_bind_without_consent(host, unsafe_bind_public)
+    _set_api_bind_environment(host, unsafe_bind_public)
     try:
         from awesome_agent.observability.setup import configure_observability
 
@@ -283,6 +285,7 @@ def start(
 ) -> None:
     """Start independent local API and Worker child processes."""
     _reject_public_bind_without_consent(host, unsafe_bind_public)
+    _set_api_bind_environment(host, unsafe_bind_public)
     result = run_supervisor(
         host=host,
         port=port,
@@ -474,6 +477,13 @@ def _reject_public_bind_without_consent(
     raise typer.BadParameter(
         "The local API is unauthenticated. Use a loopback host such as "
         "127.0.0.1, or pass --unsafe-bind-public to expose it explicitly."
+    )
+
+
+def _set_api_bind_environment(host: str, unsafe_bind_public: bool) -> None:
+    os.environ["AWESOME_AGENT_API_HOST"] = host
+    os.environ["AWESOME_AGENT_UNSAFE_BIND_PUBLIC"] = (
+        "true" if unsafe_bind_public else "false"
     )
 
 

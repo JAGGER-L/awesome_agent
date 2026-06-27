@@ -26,6 +26,22 @@ class ApprovalDecisionRequest(BaseModel):
     approved: bool
 
 
+class HealthCheckResponse(BaseModel):
+    name: str
+    status: str
+    severity: str
+    detail: str
+    remediation: str | None
+    metadata: dict[str, object] | None
+
+
+class ReadinessReportResponse(BaseModel):
+    profile: str
+    status: str
+    generated_at: datetime
+    checks: list[HealthCheckResponse]
+
+
 class DispatchResponse(BaseModel):
     status: str
     available_at: datetime

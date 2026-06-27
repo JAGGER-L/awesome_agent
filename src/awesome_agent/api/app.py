@@ -5,10 +5,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import cast
+from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from awesome_agent.agents.profiles import RoleModelResolver
@@ -17,12 +17,22 @@ from awesome_agent.api.schemas import (
     CreateProbeRequest,
     CreateRunRequest,
     DispatchResponse,
+    HealthCheckResponse,
+    ReadinessReportResponse,
     WorkspaceCandidateResponse,
     WorkspaceCleanupRequest,
 )
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.health import (
+    HealthCheck,
+    HealthStatus,
+    ReadinessProfile,
+    ReadinessReport,
+    bind_policy_check,
+    collect_readiness,
+)
 from awesome_agent.observability.repository import (
     NoopObservabilityRepository,
     ObservabilityRepository,
@@ -45,6 +55,9 @@ from awesome_agent.persistence.validation import (
     PostgresValidationRepository,
     ValidationReportWithGates,
     ValidationRepository,
+)
+from awesome_agent.persistence.worker_heartbeats import (
+    PostgresWorkerHeartbeatRepository,
 )
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
@@ -71,13 +84,18 @@ from awesome_agent.settings import Settings
 def create_app(
     service: RuntimeService | None = None,
     *,
+    settings: Settings | None = None,
     intake: RunIntakeService | None = None,
     registry: RepositoryRegistry | None = None,
     validation_repository: ValidationRepository | None = None,
     observability_repository: ObservabilityRepository | None = None,
     workspace_service: WorkspaceRetentionService | None = None,
+    worker_heartbeat_repository: object | None = None,
 ) -> FastAPI:
-    settings = Settings()
+    settings = settings or Settings()
+    bind_check = bind_policy_check(settings.api_host, settings.unsafe_bind_public)
+    if bind_check.status is HealthStatus.UNHEALTHY:
+        raise RuntimeError(bind_check.detail)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -92,6 +110,8 @@ def create_app(
             app.state.observability_repository = (
                 observability_repository or NoopObservabilityRepository()
             )
+            if worker_heartbeat_repository is not None:
+                app.state.worker_heartbeats = worker_heartbeat_repository
             yield
             return
 
@@ -103,6 +123,7 @@ def create_app(
         runtime_repository = PostgresRuntimeRepository(sessions)
         dispatcher = PostgresRunDispatcher(sessions)
         validation = PostgresValidationRepository(sessions)
+        worker_heartbeats = PostgresWorkerHeartbeatRepository(sessions)
         local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
         app.state.runtime = RuntimeService(
             repository=runtime_repository,
@@ -115,6 +136,7 @@ def create_app(
         )
         app.state.registry = repository_registry
         app.state.validation_repository = validation
+        app.state.worker_heartbeats = worker_heartbeats
         app.state.observability_repository = observability_repository or (
             PostgresObservabilityRepository(sessions)
         )
@@ -152,6 +174,8 @@ def create_app(
         app.state.workspaces = workspace_service
     if validation_repository is not None:
         app.state.validation_repository = validation_repository
+    if worker_heartbeat_repository is not None:
+        app.state.worker_heartbeats = worker_heartbeat_repository
     app.state.observability_repository = (
         observability_repository or NoopObservabilityRepository()
     )
@@ -183,6 +207,24 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/ready")
+    async def ready(
+        response: Response,
+        profile: Annotated[ReadinessProfile, Query()] = ReadinessProfile.API,
+    ) -> ReadinessReportResponse:
+        report = await collect_readiness(
+            settings,
+            profile,
+            worker_heartbeat_repository=getattr(
+                app.state,
+                "worker_heartbeats",
+                None,
+            ),
+        )
+        if report.status is HealthStatus.UNHEALTHY:
+            response.status_code = 503
+        return _readiness_report_response(report)
 
     @app.post("/runs", status_code=201)
     async def create_run(request: CreateRunRequest) -> dict[str, object]:
@@ -456,6 +498,26 @@ async def _sse(
 def _format_sse(event: RuntimeEvent) -> str:
     data = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
     return f"id: {event.sequence}\nevent: {event.event_type.value}\ndata: {data}\n\n"
+
+
+def _readiness_report_response(report: ReadinessReport) -> ReadinessReportResponse:
+    return ReadinessReportResponse(
+        profile=report.profile.value,
+        status=report.status.value,
+        generated_at=report.generated_at,
+        checks=[_health_check_response(check) for check in report.checks],
+    )
+
+
+def _health_check_response(check: HealthCheck) -> HealthCheckResponse:
+    return HealthCheckResponse(
+        name=check.name,
+        status=check.status.value,
+        severity=check.severity.value,
+        detail=check.detail,
+        remediation=check.remediation,
+        metadata=check.metadata,
+    )
 
 
 def _verification_report_response(
