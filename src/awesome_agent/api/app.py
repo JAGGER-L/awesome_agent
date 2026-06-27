@@ -167,6 +167,7 @@ def create_app(
                 repository_id=request.repository_id,
                 goal=request.goal,
                 intent=request.intent,
+                mode=request.mode,
             )
         except KeyError as error:
             raise HTTPException(

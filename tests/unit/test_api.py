@@ -292,6 +292,34 @@ def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:
     assert body["dispatch_status"] == "queued"
 
 
+def test_team_run_uses_team_graph_and_starts_with_leader_only(
+    tmp_path: Path,
+) -> None:
+    client, repository = _client(tmp_path)
+
+    response = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Implement backend and verify it",
+            "intent": "modifying",
+            "mode": "team",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    run_id = body["id"]
+    assert body["mode"] == "team"
+    assert body["graph_name"] == "team-coding"
+    assert body["graph_version"] == 1
+    agents = client.get(f"/runs/{run_id}/agents").json()
+    assert len(agents) == 1
+    assert agents[0]["kind"] == "leader"
+    todos = client.get(f"/runs/{run_id}/todos").json()
+    assert todos == []
+
+
 def test_verification_endpoint_returns_durable_validation_reports(
     tmp_path: Path,
 ) -> None:

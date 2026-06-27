@@ -13,6 +13,7 @@ from awesome_agent.domain.enums import (
     ExecutionKind,
     IntakeReservationStatus,
     RunIntent,
+    RunMode,
     RunStatus,
     TodoStatus,
     WorkspaceState,
@@ -38,6 +39,8 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_VERSION,
     READ_ONLY_CODING_GRAPH,
     READ_ONLY_CODING_VERSION,
+    TEAM_CODING_GRAPH,
+    TEAM_CODING_VERSION,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 
@@ -72,19 +75,29 @@ class RunIntakeService:
         repository_id: UUID,
         goal: str,
         intent: RunIntent,
+        mode: RunMode = RunMode.SOLO,
         execution_kind: ExecutionKind = ExecutionKind.CODING,
         graph_name: str | None = None,
         graph_version: int | None = None,
     ) -> Run:
         if (
-            execution_kind is ExecutionKind.CODING
+            mode is RunMode.TEAM
+            and execution_kind is ExecutionKind.CODING
+            and graph_name is None
+        ):
+            graph_name = TEAM_CODING_GRAPH
+            graph_version = TEAM_CODING_VERSION
+        if (
+            mode is RunMode.SOLO
+            and execution_kind is ExecutionKind.CODING
             and intent is RunIntent.READ_ONLY
             and graph_name is None
         ):
             graph_name = READ_ONLY_CODING_GRAPH
             graph_version = READ_ONLY_CODING_VERSION
         if (
-            execution_kind is ExecutionKind.CODING
+            mode is RunMode.SOLO
+            and execution_kind is ExecutionKind.CODING
             and intent is RunIntent.MODIFYING
             and graph_name is None
         ):
@@ -127,6 +140,7 @@ class RunIntakeService:
                 execution_kind=execution_kind,
                 graph_name=graph_name,
                 graph_version=graph_version,
+                mode=mode,
             )
             await self.runtime.publish_intake(
                 run=run,
@@ -185,10 +199,12 @@ class RunIntakeService:
         execution_kind: ExecutionKind,
         graph_name: str | None,
         graph_version: int | None,
+        mode: RunMode,
     ) -> tuple[Run, Agent, TodoItem | None, list[RuntimeEvent]]:
         run = Run(
             id=reservation.run_id,
             goal=goal,
+            mode=mode,
             status=RunStatus.CREATED,
             repository_id=reservation.repository_id,
             base_commit=reservation.base_commit,
@@ -213,7 +229,7 @@ class RunIntakeService:
             status=AgentStatus.READY,
         )
         todo = None
-        if execution_kind is ExecutionKind.CODING:
+        if execution_kind is ExecutionKind.CODING and mode is RunMode.SOLO:
             if reservation.intent is RunIntent.READ_ONLY:
                 todo = TodoItem(
                     run_id=run.id,
@@ -249,6 +265,7 @@ class RunIntakeService:
                     "repository_id": str(run.repository_id),
                     "base_commit": run.base_commit,
                     "intent": run.intent.value,
+                    "mode": run.mode.value,
                     "dispatch_status": run.dispatch_status.value,
                     "integration_branch": run.integration_branch,
                 },

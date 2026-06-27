@@ -260,6 +260,10 @@ def run(
         bool,
         typer.Option("--read-only", help="Deny repository mutation tools."),
     ] = False,
+    team: Annotated[
+        bool,
+        typer.Option("--team", help="Run through the explicit team runtime."),
+    ] = False,
     api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
 ) -> None:
     """Create a run through the local API."""
@@ -270,6 +274,7 @@ def run(
             "repository_id": str(repository.id),
             "goal": goal,
             "intent": "read_only" if read_only else "modifying",
+            "mode": "team" if team else "solo",
         },
         timeout=30,
     )

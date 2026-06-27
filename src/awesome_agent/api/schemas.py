@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from awesome_agent.domain.enums import RunIntent
+from awesome_agent.domain.enums import RunIntent, RunMode
 
 
 class CreateRunRequest(BaseModel):
@@ -12,6 +12,7 @@ class CreateRunRequest(BaseModel):
     repository_id: UUID
     goal: str = Field(min_length=1)
     intent: RunIntent = RunIntent.MODIFYING
+    mode: RunMode = RunMode.SOLO
 
 
 class CreateProbeRequest(BaseModel):

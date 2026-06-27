@@ -8,6 +8,7 @@ from awesome_agent.domain.enums import (
     DispatchStatus,
     IntakeReservationStatus,
     RunIntent,
+    RunMode,
     RunStatus,
 )
 from awesome_agent.domain.models import IntakeReservation, Repository
@@ -21,6 +22,8 @@ from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.graphs import (
     READ_ONLY_CODING_GRAPH,
     READ_ONLY_CODING_VERSION,
+    TEAM_CODING_GRAPH,
+    TEAM_CODING_VERSION,
 )
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
@@ -114,6 +117,41 @@ async def test_intake_publishes_queued_run_after_worktree_is_ready(
     assert len(await runtime.list_todos(run.id)) == 1
     assert event_stream.history(run.id) == await runtime.list_events(run.id)
     assert await reservations.list_incomplete() == []
+
+
+@pytest.mark.asyncio
+async def test_team_intake_routes_to_team_graph_without_precreating_teammates(
+    tmp_path: Path,
+) -> None:
+    repository, registry = await _registered_repository(tmp_path)
+    reservations = InMemoryIntakeReservationStore()
+    runtime = InMemoryRuntimeRepository(reservations)
+    event_stream = EventStream()
+    service = RunIntakeService(
+        registry=registry,
+        reservations=reservations,
+        runtime=runtime,
+        events=event_stream,
+        worktrees=ManagedRunWorktreeManager(tmp_path / "worktrees"),
+        allowed_roots=[tmp_path / "projects"],
+        model_resolver=_models(),
+    )
+
+    run = await service.create_run(
+        repository_id=repository.id,
+        goal="Implement backend and verify it",
+        intent=RunIntent.MODIFYING,
+        mode=RunMode.TEAM,
+    )
+
+    assert run.mode is RunMode.TEAM
+    assert run.graph_name == TEAM_CODING_GRAPH
+    assert run.graph_version == TEAM_CODING_VERSION
+    agents = await runtime.list_agents(run.id)
+    assert len(agents) == 1
+    assert agents[0].kind.value == "leader"
+    assert await runtime.list_todos(run.id) == []
+    assert [event.sequence for event in await runtime.list_events(run.id)] == [1, 2]
 
 
 @pytest.mark.asyncio
