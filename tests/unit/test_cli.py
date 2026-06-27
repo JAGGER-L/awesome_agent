@@ -109,9 +109,7 @@ def test_doctor_runtime_includes_worker_and_provider_checks(
         **kwargs: Any,
     ) -> ReadinessReport:
         seen["profile"] = profile
-        seen["worker_heartbeat_repository"] = kwargs.get(
-            "worker_heartbeat_repository"
-        )
+        seen["worker_heartbeat_repository"] = kwargs.get("worker_heartbeat_repository")
         return _readiness_report(
             HealthStatus.UNHEALTHY,
             [

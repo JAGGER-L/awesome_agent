@@ -101,9 +101,7 @@ async def worker_heartbeat_check(
         if worker.status is WorkerHeartbeatStatus.ONLINE
     ]
     supported = {
-        graph
-        for worker in online_workers
-        for graph in worker.supported_graphs
+        graph for worker in online_workers for graph in worker.supported_graphs
     }
     missing = [graph for graph in required_graphs if graph not in supported]
     metadata = {

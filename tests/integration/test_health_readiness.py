@@ -143,7 +143,9 @@ async def test_runtime_readiness_is_healthy_with_fresh_worker_heartbeat(
 def _settings(tmp_path: Path, *, deepseek_api_key: SecretStr | None) -> Settings:
     return Settings(
         database_url=os.environ["AWESOME_AGENT_TEST_DATABASE_URL"],
-        checkpoint_database_url=os.environ["AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL"],
+        checkpoint_database_url=os.environ[
+            "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL"
+        ],
         deepseek_api_key=deepseek_api_key,
         workspace_root=tmp_path / "workspaces",
         worker_heartbeat_stale_seconds=120,

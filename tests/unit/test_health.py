@@ -43,9 +43,7 @@ def test_is_healthy_accepts_passing_required_checks() -> None:
 
 
 def test_is_healthy_rejects_failed_required_check() -> None:
-    assert not is_healthy(
-        [HealthCheck("required", HealthStatus.UNHEALTHY, "failed")]
-    )
+    assert not is_healthy([HealthCheck("required", HealthStatus.UNHEALTHY, "failed")])
 
 
 def test_readiness_status_reports_healthy_when_all_required_pass() -> None:
