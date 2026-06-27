@@ -38,6 +38,8 @@ team output.
 - durable active cancellation for queued, waiting, claimed, and executing solo
   Runs, including graph-task cancellation and cancellable subprocess/Docker
   shell boundaries
+- frontend-ready Run, Agent, and Todo lifecycle projections with matching
+  events, revision increments, and timestamps
 
 ## Non-Goals
 

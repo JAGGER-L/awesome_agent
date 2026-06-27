@@ -18,6 +18,11 @@ forbidden.
 
 - `RunStatus` describes product lifecycle; `DispatchStatus` separately
   describes queue and worker scheduling.
+- Visible Run, Agent, and Todo lifecycle changes update projections and append
+  matching events in one transaction.
+- Agent and Todo lifecycle changes increment `revision` and maintain
+  `updated_at`; heartbeat remains lease liveness and does not imply product
+  state change.
 - PostgreSQL time is authoritative for lease acquisition and expiry.
 - Every worker claim receives a monotonically increasing fencing token.
 - Claims use `FOR UPDATE SKIP LOCKED`; two workers cannot validly claim one Run.

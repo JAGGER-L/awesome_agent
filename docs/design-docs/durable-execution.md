@@ -27,6 +27,13 @@ Runtime events are not a replay-complete event-sourcing system. Reconstructing a
 Run uses domain projections and checkpoints; events explain how it reached the
 current state.
 
+Visible Run, Agent, and Todo lifecycle changes are committed through
+transaction-scoped projection helpers. A status transition updates the
+projection row, maintains `updated_at`, increments Agent/Todo `revision` when a
+visible field changes, and appends the matching runtime event in the same
+transaction. Worker heartbeat updates `heartbeat_at`; it does not by itself
+change the product `updated_at`.
+
 ## Product and Dispatch State
 
 `RunStatus` and `DispatchStatus` are independent.
@@ -337,7 +344,9 @@ Solo completion requires:
   use managed container names and attempt forced container removal on timeout
   or cancellation.
 - Projection changes and their event append share one transaction when they
-  describe the same domain transition.
+  describe the same domain transition. Run status events include previous and
+  next product/dispatch status; Agent and Todo status events include revision
+  and updated timestamp.
 - Events contain bounded summaries; large output is stored as an artifact.
 - Terminal failure preserves workspace, diff, evidence, and recovery reason.
 

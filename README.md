@@ -32,6 +32,9 @@ PostgreSQL:
   Responses; provider SDK objects never cross adapter boundaries;
 - cross-process SSE backed by ordered PostgreSQL event polling, not process-local
   state.
+- frontend-ready Run, Agent, and Todo lifecycle projections: visible status
+  transitions update projection rows, Agent/Todo revisions, timestamps, and
+  matching runtime events together.
 
 ### Coding execution (implemented, solo only)
 
@@ -189,7 +192,6 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- lifecycle projection consistency (Task 11);
 - real run/model/tool/sandbox spans, metrics, cost, and latency (Task 12);
 - real team-runtime end-to-end execution (Task 13);
 - worktree and branch retention and cleanup (Task 14);

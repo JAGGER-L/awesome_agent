@@ -78,7 +78,7 @@ Task 07 does not include:
 | Task 08 | Durable approval and command policy | Replace placeholder approvals with durable approve/deny/expire flows bound to one exact invocation. | Implemented for solo modifying runs; approval requests, decisions, expiry, worker release, and resume semantics pass unit tests. |
 | Task 09 | Active cancellation | Propagate cancellation through graph boundaries, provider calls, tool calls, Docker, and subprocess trees. | Implemented for solo runtime paths; queued, waiting, claimed, and executing solo Runs can cancel without corrupting projections, checkpoints, or worktrees. |
 | Task 10 | Validation and rework loop | Add deterministic validation gates, verifier feedback, and model rework until pass/fail is evidenced. | Implemented for solo modifying runs; configured or conservatively detected gates gate completion, rework is bounded, validation evidence is durable, and terminal validation failure fails the Run. |
-| Task 11 | Lifecycle projection consistency | Make Run, Agent, Todo, event, revision, and `updated_at` transitions coherent and frontend-ready. | Every visible status transition has a matching durable event, monotonically revised projection, and consistent timestamp. |
+| Task 11 | Lifecycle projection consistency | Make Run, Agent, Todo, event, revision, and `updated_at` transitions coherent and frontend-ready. | Implemented for solo runtime paths; visible Run, Agent, and Todo lifecycle transitions now update projections, revisions, timestamps, and matching durable events in one transaction. |
 | Task 12 | Observability hardening | Add real run/model/tool/sandbox spans, trace ID injection, metrics, cost, latency, retry, recovery, and exporter isolation. | Observability score is backed by executable span, metric, and query-table evidence. |
 | Task 13 | Real team-runtime E2E | Replace hand-constructed team tests with Worker, model, tools, database, checkpoint, verifier, and patch integration. | A team Run executes through the real runtime, creates Teammates/Subagents, verifies work, and records inspectable evidence. |
 | Task 14 | Worktree and branch retention | Add explicit cleanup, retention policy, and safe branch/worktree pruning for completed Runs. | Owned inactive worktrees can be listed, preserved, or safely removed without touching user-owned paths or unexported diffs. |
@@ -97,7 +97,7 @@ Task 07 does not include:
 | Deterministic validation and rework do not exist | Resolved in Task 10 for solo modifying runs |
 | One successful read is not enough proof for answer correctness | Future read-only answer validation hardening; Task 10 covers modifying validation only |
 | Context and checkpoints can grow quickly | Minimal artifact/prompt guard in Task 07; full budget system in Task 16 |
-| Lifecycle projections are inconsistent | Task 11 |
+| Lifecycle projections are inconsistent | Resolved in Task 11 for solo runtime paths |
 | Observability score is too high for current evidence | Task 12, with current score corrected immediately |
 | Artifact references are not connected to the main loop | Task 07 |
 | Team E2E is not real end-to-end execution | Task 13 |

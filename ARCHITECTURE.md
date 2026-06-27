@@ -397,6 +397,9 @@ State ownership:
 - LangGraph checkpoints own the next executable position and resumable agent
   context.
 - PostgreSQL domain tables own user-visible business projections.
+- Run, Agent, and Todo visible lifecycle transitions use a transaction-scoped
+  projection helper so projection rows, `updated_at`, Agent/Todo revisions, and
+  matching runtime events are committed together.
 - Separate `DispatchStatus` owns queue and worker scheduling state.
 - PostgreSQL row locking and `SKIP LOCKED` serialize claims without a separate
   broker.

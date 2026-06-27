@@ -25,6 +25,8 @@ Leader/Teammate/Subagent 加独立 Verifier 组成的**多 Agent**组织。
   已为 DeepSeek Chat Completions 和 OpenAI Responses 做映射；Provider SDK 对象不跨
   适配器边界；
 - 跨进程 SSE 基于有序 PostgreSQL 事件轮询，而非进程本地状态。
+- 面向前端的 Run、Agent 和 Todo 生命周期投影：可见状态变化会同步更新投影行、
+  Agent/Todo revision、时间戳和匹配的运行时事件。
 
 ### Coding 执行（已实现，仅 solo）
 
@@ -168,7 +170,6 @@ container port: 5432
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。
 尚未实现的重点项：
 
-- 生命周期投影一致性（Task 11）；
 - 真实的 run/model/tool/sandbox span、metrics、cost 和 latency（Task 12）；
 - 真实 team 运行时端到端执行（Task 13）；
 - worktree 和 branch 保留与清理（Task 14）；
