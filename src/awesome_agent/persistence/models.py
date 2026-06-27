@@ -105,6 +105,38 @@ class WorkerHeartbeatRecord(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
 
 
+class RunBudgetLedgerRecord(Base):
+    __tablename__ = "run_budget_ledgers"
+
+    run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    total_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_reasoning_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    active_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    model_call_count: Mapped[int] = mapped_column(Integer, default=0)
+    threshold_status: Mapped[str] = mapped_column(String(64), index=True)
+    active_window_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ContextCompactionRecord(Base):
+    __tablename__ = "context_compactions"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    agent_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), index=True)
+    graph_name: Mapped[str] = mapped_column(String(128), index=True)
+    graph_version: Mapped[int] = mapped_column(Integer)
+    before_estimated_tokens: Mapped[int] = mapped_column(Integer)
+    after_estimated_tokens: Mapped[int] = mapped_column(Integer)
+    summary: Mapped[str] = mapped_column(Text)
+    artifact_refs: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class IntakeReservationRecord(Base):
     __tablename__ = "intake_reservations"
     __table_args__ = (

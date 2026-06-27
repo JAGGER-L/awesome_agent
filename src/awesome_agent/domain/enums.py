@@ -113,6 +113,9 @@ class EventType(StrEnum):
     GRAPH_STARTED = "graph.started"
     GRAPH_COMPLETED = "graph.completed"
     GRAPH_RECOVERED = "graph.recovered"
+    CONTEXT_COMPACTED = "context.compacted"
+    BUDGET_THRESHOLD_REACHED = "budget.threshold_reached"
+    BUDGET_EXHAUSTED = "budget.exhausted"
     WORKSPACE_CLEANED = "workspace.cleaned"
 
 
