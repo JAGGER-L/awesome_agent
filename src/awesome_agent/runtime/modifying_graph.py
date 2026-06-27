@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any, Literal, NotRequired, TypedDict, cast
 from uuid import UUID
 
@@ -291,6 +292,7 @@ class ModifyingCodingGraph:
             else None
         )
         provider = self.provider_resolver(agent.model)
+        started = monotonic()
         try:
             turn = await provider.complete(
                 ModelRequest(
@@ -305,8 +307,32 @@ class ModifyingCodingGraph:
                 )
             )
         except TransientModelError as error:
+            await self._emit(
+                EventType.MODEL_CALL_CREATED,
+                {
+                    "turn": next_count,
+                    "status": "failed",
+                    "provider": "unknown",
+                    "model": agent.model,
+                    "latency_ms": _elapsed_ms(started),
+                    "error": str(error),
+                },
+                f"model-turn:{next_count}",
+            )
             raise TransientExecutionError(str(error)) from error
         except ModelProviderError as error:
+            await self._emit(
+                EventType.MODEL_CALL_CREATED,
+                {
+                    "turn": next_count,
+                    "status": "failed",
+                    "provider": "unknown",
+                    "model": agent.model,
+                    "latency_ms": _elapsed_ms(started),
+                    "error": str(error),
+                },
+                f"model-turn:{next_count}",
+            )
             raise ModifyingAgentLoopFailed(str(error)) from error
         await self._emit(
             EventType.MODEL_CALL_CREATED,
@@ -314,9 +340,14 @@ class ModifyingCodingGraph:
                 "turn": next_count,
                 "status": "completed",
                 "stop_reason": turn.stop_reason.value,
+                "provider": turn.provider,
                 "model": turn.model,
                 "input_tokens": turn.usage.input_tokens,
                 "output_tokens": turn.usage.output_tokens,
+                "reasoning_tokens": turn.usage.reasoning_tokens,
+                "cache_read_tokens": turn.usage.cache_read_tokens,
+                "cache_write_tokens": turn.usage.cache_write_tokens,
+                "latency_ms": _elapsed_ms(started),
             },
             f"model-turn:{next_count}",
         )
@@ -380,12 +411,14 @@ class ModifyingCodingGraph:
         final_diff_after_write = state["final_diff_after_write"]
         fingerprints: list[str] = []
         for call in calls:
+            started = monotonic()
             try:
                 result = await self._execute_durable_tool_call(call)
             except RepositoryRecoveryRequired as error:
                 raise CorruptRuntimeStateError(str(error)) from error
             except ToolDenied as error:
                 result = _tool_error_result(call, "denied", str(error))
+            latency_ms = _elapsed_ms(started)
             result = await self._offload_result_if_needed(call.call_id, result)
             if call.name == "repo.apply_patch" and not result.is_error:
                 successful_writes += 1
@@ -404,6 +437,8 @@ class ModifyingCodingGraph:
                     "tool": call.name,
                     "status": "failed" if result.is_error else "completed",
                     "result_summary": result.content[:500],
+                    "sandbox": "docker" if call.name == "shell.execute" else "",
+                    "latency_ms": latency_ms,
                 },
                 f"tool:{state['model_turn_count']}:{call.call_id}",
             )
@@ -499,7 +534,7 @@ class ModifyingCodingGraph:
                 workspace=workspace,
             )
             invocation = DurableToolInvocation(
-                id=tool_invocation_uuid(call.call_id),
+                id=tool_invocation_uuid(f"{run.id}:{call.call_id}"),
                 run_id=run.id,
                 agent_id=agent.id,
                 tool_name=call.name,
@@ -1143,3 +1178,7 @@ def _validation_failure_is_reworkable(report: ValidationReportWithGates) -> bool
     return bool(blocking) and all(
         gate.failure_kind == "command_failed" for gate in blocking
     )
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((monotonic() - started) * 1000))

@@ -74,13 +74,15 @@ report that a task "requires team mode," but team execution does not run
 end-to-end yet. Real team runtime execution is planned (Task 13). The model
 assignment table below reflects the intended team roles, not running teammates.
 
-### Observability (scaffold, not yet real)
+### Observability (implemented for solo runtime)
 
-OpenTelemetry is configured (console exporter) and immutable runtime events
-with SSE and REST inspection exist, but no spans or metrics are emitted yet,
-`trace_id`/`span_id` are not populated, cost and latency are not tracked, and
-`/health` returns a static liveness response. Full observability is planned
-(Task 12).
+Solo runtime observability now records durable query-table evidence for
+run/graph/model/tool/sandbox spans, model-call summaries, and metrics such as
+run, model, and tool latency. Runtime events receive a stable Run-scoped
+`trace_id`, OpenTelemetry console export is failure-isolated, and FastAPI
+exposes `GET /runs/{run_id}/trace`, `GET /runs/{run_id}/metrics`, and
+`GET /runs/{run_id}/model-calls` for frontend inspection. Full cost budgeting,
+dashboards, and dependency-aware `/health` remain later work.
 
 ## Stack
 
@@ -192,10 +194,10 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- real run/model/tool/sandbox spans, metrics, cost, and latency (Task 12);
 - real team-runtime end-to-end execution (Task 13);
 - worktree and branch retention and cleanup (Task 14);
 - dependency-aware `/health` and `doctor` (Task 15).
+- full token-window, wall-clock, and cost budget management (Task 16).
 
 ## Documentation
 

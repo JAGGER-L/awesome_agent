@@ -149,13 +149,12 @@ awesome-agent start
                  +---- fenced projection update
 ```
 
-Each Worker process executes at most one Run. The current graph is the
-diagnostic `initialize -> checkpoint_probe -> finalize` flow and never reads or
-modifies repository content. A crashed Worker leaves its checkpoint and lease;
-after lease expiry, a replacement Worker claims with a new fencing token and
-resumes from the checkpoint. Unsupported graph versions enter
-`recovery_required`. Coding Runs are deliberately ineligible until the real
-model/tool graph exists.
+Each Worker process executes at most one Run. Workers always claim the
+diagnostic `runtime_probe` graph and, when model providers are configured, also
+claim `solo-readonly@1` and `solo-modifying@1`. A crashed Worker leaves its
+checkpoint and lease; after lease expiry, a replacement Worker claims with a
+new fencing token and resumes from the checkpoint. Unsupported graph versions
+enter `recovery_required`.
 
 ## Agent Orchestration Topology
 
@@ -359,6 +358,25 @@ PostgreSQL repository registry.
 
 Large outputs live in external artifact storage. PostgreSQL stores metadata,
 hashes, ownership, and paths.
+
+## Observability
+
+Runtime observability has three layers:
+
+- durable evidence in PostgreSQL query tables: `observability_spans`,
+  `observability_metrics`, and `model_calls`;
+- ordered runtime events with a stable Run-scoped `trace_id`;
+- best-effort OpenTelemetry export and structured logs.
+
+The Worker records run, graph, model, tool, and sandbox spans without letting
+observability write or exporter failures affect Run execution. Model-call
+records store provider, model, status, stop reason, token usage, latency, and
+trace/span IDs. FastAPI exposes `GET /runs/{run_id}/trace`,
+`GET /runs/{run_id}/metrics`, and `GET /runs/{run_id}/model-calls` for the
+future frontend.
+
+Cost budgeting, dashboards, and dependency-aware health checks remain separate
+roadmap work.
 
 ## Durable Execution Target
 

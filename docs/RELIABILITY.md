@@ -9,6 +9,7 @@ V1 reliability requirements:
 - sandbox termination does not corrupt the target repository
 - task and agent state transitions are validated
 - SSE clients can reconnect from an event cursor
+- run/model/tool/sandbox observability records are queryable by Run
 - failures record cause, retry target, and remaining uncertainty
 
 Retries must be bounded and evidence-driven. Silent infinite retries are
@@ -86,6 +87,10 @@ forbidden.
 - Approval decisions are compare-and-set, idempotent for already-decided
   records, and requeue waiting Runs. Expired pending approvals are marked
   expired by the worker recovery cadence and resume as structured tool errors.
+- Runtime observability writes are failure-isolated from Run execution.
+  PostgreSQL query tables store run, graph, model, tool, and sandbox spans,
+  model-call summaries, latency metrics, and trace/span IDs. OpenTelemetry
+  exporter failures are logged and never change Run status.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

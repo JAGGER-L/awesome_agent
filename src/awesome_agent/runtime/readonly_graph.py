@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
+from time import monotonic
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -231,6 +232,7 @@ class ReadOnlyCodingGraph:
             else None
         )
         provider = self.provider_resolver(agent.model)
+        started = monotonic()
         try:
             turn = await provider.complete(
                 ModelRequest(
@@ -245,8 +247,32 @@ class ReadOnlyCodingGraph:
                 )
             )
         except TransientModelError as error:
+            await self._emit(
+                EventType.MODEL_CALL_CREATED,
+                {
+                    "turn": next_count,
+                    "status": "failed",
+                    "provider": "unknown",
+                    "model": agent.model,
+                    "latency_ms": _elapsed_ms(started),
+                    "error": str(error),
+                },
+                f"model-turn:{next_count}",
+            )
             raise TransientExecutionError(str(error)) from error
         except ModelProviderError as error:
+            await self._emit(
+                EventType.MODEL_CALL_CREATED,
+                {
+                    "turn": next_count,
+                    "status": "failed",
+                    "provider": "unknown",
+                    "model": agent.model,
+                    "latency_ms": _elapsed_ms(started),
+                    "error": str(error),
+                },
+                f"model-turn:{next_count}",
+            )
             raise AgentLoopFailed(str(error)) from error
         await self._emit(
             EventType.MODEL_CALL_CREATED,
@@ -254,9 +280,14 @@ class ReadOnlyCodingGraph:
                 "turn": next_count,
                 "status": "completed",
                 "stop_reason": turn.stop_reason.value,
+                "provider": turn.provider,
                 "model": turn.model,
                 "input_tokens": turn.usage.input_tokens,
                 "output_tokens": turn.usage.output_tokens,
+                "reasoning_tokens": turn.usage.reasoning_tokens,
+                "cache_read_tokens": turn.usage.cache_read_tokens,
+                "cache_write_tokens": turn.usage.cache_write_tokens,
+                "latency_ms": _elapsed_ms(started),
             },
             f"model-turn:{next_count}",
         )
@@ -319,12 +350,14 @@ class ReadOnlyCodingGraph:
         async def execute(index: int) -> tuple[int, ToolResultMessage, str]:
             call = calls[index]
             async with semaphore:
+                started = monotonic()
                 result = await execute_repository_call(
                     self.executor,
                     call,
                     workspace=cast(Any, run.workspace_path),
                     agent_id=agent.id,
                 )
+                latency_ms = _elapsed_ms(started)
             fingerprint = hashlib.sha256(
                 f"{call.name}\0{call.arguments_json}\0{result.content}".encode()
             ).hexdigest()
@@ -336,6 +369,7 @@ class ReadOnlyCodingGraph:
                     "tool": call.name,
                     "status": "failed" if result.is_error else "completed",
                     "result_summary": result.content[:500],
+                    "latency_ms": latency_ms,
                 },
                 f"tool:{state['model_turn_count']}:{call.call_id}",
             )
@@ -511,3 +545,7 @@ def _state(value: object) -> ReadOnlyAgentState:
     if not required.issubset(value):
         raise CorruptRuntimeStateError("Read-only graph state is incomplete.")
     return cast(ReadOnlyAgentState, value)
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((monotonic() - started) * 1000))

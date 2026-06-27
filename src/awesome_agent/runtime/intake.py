@@ -252,6 +252,7 @@ class RunIntakeService:
                     "dispatch_status": run.dispatch_status.value,
                     "integration_branch": run.integration_branch,
                 },
+                trace_id=run.id.hex,
             ),
             RuntimeEvent(
                 run_id=run.id,
@@ -264,6 +265,7 @@ class RunIntakeService:
                     "model": leader.model,
                 },
                 agent_id=leader.id,
+                trace_id=run.id.hex,
             ),
         ]
         if todo is not None:
@@ -279,6 +281,7 @@ class RunIntakeService:
                     },
                     agent_id=leader.id,
                     task_id=todo.id,
+                    trace_id=run.id.hex,
                 )
             )
         return run, leader, todo, events

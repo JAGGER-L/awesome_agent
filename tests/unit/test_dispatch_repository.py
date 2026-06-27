@@ -233,6 +233,7 @@ async def test_claim_heartbeat_and_fenced_event() -> None:
         payload={"status": "created"},
     )
     assert event.sequence == 4
+    assert event.trace_id == record.id.hex
 
 
 @pytest.mark.asyncio

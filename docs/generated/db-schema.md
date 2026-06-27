@@ -73,6 +73,60 @@ Generated from SQLAlchemy metadata.
 | `created_at` | `DATETIME` | no |
 | `updated_at` | `DATETIME` | no |
 
+## `model_calls`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `agent_id` | `UUID` | yes |
+| `turn` | `INTEGER` | no |
+| `provider` | `VARCHAR(64)` | no |
+| `model` | `VARCHAR(128)` | no |
+| `status` | `VARCHAR(64)` | no |
+| `stop_reason` | `VARCHAR(64)` | yes |
+| `input_tokens` | `INTEGER` | yes |
+| `output_tokens` | `INTEGER` | yes |
+| `reasoning_tokens` | `INTEGER` | yes |
+| `cache_read_tokens` | `INTEGER` | yes |
+| `cache_write_tokens` | `INTEGER` | yes |
+| `latency_ms` | `INTEGER` | yes |
+| `estimated_cost_usd` | `FLOAT` | yes |
+| `trace_id` | `VARCHAR(64)` | yes |
+| `span_id` | `VARCHAR(32)` | yes |
+| `error` | `TEXT` | yes |
+| `created_at` | `DATETIME` | no |
+
+## `observability_metrics`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | yes |
+| `name` | `VARCHAR(255)` | no |
+| `value` | `FLOAT` | no |
+| `unit` | `VARCHAR(32)` | no |
+| `attributes` | `JSONB` | no |
+| `created_at` | `DATETIME` | no |
+
+## `observability_spans`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `trace_id` | `VARCHAR(64)` | no |
+| `span_id` | `VARCHAR(32)` | no |
+| `parent_span_id` | `VARCHAR(32)` | yes |
+| `name` | `VARCHAR(255)` | no |
+| `category` | `VARCHAR(64)` | no |
+| `status` | `VARCHAR(64)` | no |
+| `started_at` | `DATETIME` | no |
+| `ended_at` | `DATETIME` | yes |
+| `duration_ms` | `INTEGER` | yes |
+| `attributes` | `JSONB` | no |
+| `error` | `TEXT` | yes |
+
 ## `repositories`
 
 | Column | Type | Nullable |

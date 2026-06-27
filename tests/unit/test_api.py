@@ -9,6 +9,13 @@ from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.models import Repository
+from awesome_agent.observability.repository import (
+    DurableMetric,
+    DurableModelCall,
+    DurableSpan,
+    InMemoryObservabilityRepository,
+    ObservabilityRepository,
+)
 from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
@@ -50,6 +57,7 @@ def _client(
     tmp_path: Path,
     *,
     validation_repository: ValidationRepository | None = None,
+    observability_repository: ObservabilityRepository | None = None,
 ) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
     repository_path = projects / "repository"
@@ -93,6 +101,7 @@ def _client(
                 intake=intake,
                 registry=registry,
                 validation_repository=validation_repository,
+                observability_repository=observability_repository,
             )
         ),
         repository,
@@ -126,7 +135,9 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     assert agents[0]["model"] == "deepseek-v4-pro"
     assert agents[0]["revision"] == 1
     assert agents[0]["updated_at"] is not None
-    assert len(client.get(f"/runs/{run_id}/events/history").json()) == 3
+    events = client.get(f"/runs/{run_id}/events/history").json()
+    assert len(events) == 3
+    assert all(event["trace_id"] == UUID(run_id).hex for event in events)
     todos = client.get(f"/runs/{run_id}/todos").json()
     assert len(todos) == 1
     assert todos[0]["status"] == "in_progress"
@@ -191,6 +202,75 @@ def test_runtime_probe_has_explicit_execution_identity(tmp_path: Path) -> None:
     assert body["execution_kind"] == "runtime_probe"
     assert body["graph_name"] == "runtime-probe"
     assert body["graph_version"] == 1
+
+
+def test_observability_endpoints_return_run_trace_metrics_and_model_calls(
+    tmp_path: Path,
+) -> None:
+    observability = InMemoryObservabilityRepository()
+    client, repository = _client(
+        tmp_path,
+        observability_repository=observability,
+    )
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect project",
+            "intent": "read_only",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+
+    async def record() -> None:
+        await observability.record_span(
+            DurableSpan(
+                run_id=run_id,
+                trace_id=run_id.hex,
+                span_id="0000000000000001",
+                parent_span_id=None,
+                name="run.execute",
+                category="run",
+                status="completed",
+            )
+        )
+        await observability.record_metric(
+            DurableMetric(
+                run_id=run_id,
+                name="run.duration_ms",
+                value=42,
+                unit="ms",
+            )
+        )
+        await observability.record_model_call(
+            DurableModelCall(
+                run_id=run_id,
+                agent_id=None,
+                turn=1,
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                status="completed",
+                stop_reason="completed",
+                input_tokens=5,
+                output_tokens=7,
+                latency_ms=42,
+                trace_id=run_id.hex,
+                span_id="0000000000000002",
+            )
+        )
+
+    asyncio.run(record())
+
+    trace = client.get(f"/runs/{run_id}/trace")
+    metrics = client.get(f"/runs/{run_id}/metrics")
+    model_calls = client.get(f"/runs/{run_id}/model-calls")
+
+    assert trace.status_code == 200
+    assert trace.json()[0]["name"] == "run.execute"
+    assert metrics.status_code == 200
+    assert metrics.json()[0]["name"] == "run.duration_ms"
+    assert model_calls.status_code == 200
+    assert model_calls.json()[0]["model"] == "deepseek-v4-flash"
 
 
 def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:

@@ -21,11 +21,15 @@ responsibilities.
 | business projection | project PostgreSQL tables | user-visible Run, Agent, Todo, ToolCall, Approval, and Verification state |
 | dispatch state | project PostgreSQL tables | queue eligibility, lease, heartbeat, attempt, and fencing token |
 | event history | ordered runtime events | bounded audit and frontend history |
+| observability query tables | project PostgreSQL tables | trace, metric, and model-call inspection by Run |
 | large evidence | artifact storage | raw or oversized safe outputs, patches, reports, and logs |
 
 Runtime events are not a replay-complete event-sourcing system. Reconstructing a
 Run uses domain projections and checkpoints; events explain how it reached the
-current state.
+current state. Observability query tables are also not execution authorities:
+they make run/model/tool/sandbox behavior inspectable, while checkpoints,
+dispatch rows, projection rows, and durable side-effect records remain the
+execution source of truth.
 
 Visible Run, Agent, and Todo lifecycle changes are committed through
 transaction-scoped projection helpers. A status transition updates the

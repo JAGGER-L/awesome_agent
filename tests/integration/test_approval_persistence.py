@@ -38,9 +38,9 @@ INSERT INTO runs (
 
 _AGENT_SQL = """
 INSERT INTO agents (
-    id, run_id, kind, profile, model, status, created_at
+    id, run_id, kind, profile, model, status, revision, created_at, updated_at
 ) VALUES (
-    :id, :run_id, 'leader', 'leader', 'fake-model', 'ready', now()
+    :id, :run_id, 'leader', 'leader', 'fake-model', 'ready', 1, now(), now()
 )
 """
 

@@ -196,6 +196,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 event_type=event_type,
                 payload=payload,
                 agent_id=agent_id,
+                trace_id=run_id.hex,
             )
             session.add(_event_to_record(event))
         return event
@@ -419,6 +420,7 @@ async def _append_locked_event(
         sequence=(current or 0) + 1,
         event_type=event_type,
         payload=payload,
+        trace_id=run_id.hex,
     )
     session.add(_event_to_record(event))
     return event

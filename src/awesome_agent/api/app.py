@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 from uuid import UUID
@@ -20,6 +21,11 @@ from awesome_agent.api.schemas import (
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.observability.repository import (
+    NoopObservabilityRepository,
+    ObservabilityRepository,
+    PostgresObservabilityRepository,
+)
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.database import (
     create_engine,
@@ -58,6 +64,7 @@ def create_app(
     intake: RunIntakeService | None = None,
     registry: RepositoryRegistry | None = None,
     validation_repository: ValidationRepository | None = None,
+    observability_repository: ObservabilityRepository | None = None,
 ) -> FastAPI:
     settings = Settings()
 
@@ -69,6 +76,9 @@ def create_app(
             app.state.registry = registry
             if validation_repository is not None:
                 app.state.validation_repository = validation_repository
+            app.state.observability_repository = (
+                observability_repository or NoopObservabilityRepository()
+            )
             yield
             return
 
@@ -92,6 +102,9 @@ def create_app(
         )
         app.state.registry = repository_registry
         app.state.validation_repository = validation
+        app.state.observability_repository = observability_repository or (
+            PostgresObservabilityRepository(sessions)
+        )
         app.state.intake = RunIntakeService(
             registry=repository_registry,
             reservations=reservations,
@@ -118,6 +131,9 @@ def create_app(
         app.state.registry = registry
     if validation_repository is not None:
         app.state.validation_repository = validation_repository
+    app.state.observability_repository = (
+        observability_repository or NoopObservabilityRepository()
+    )
 
     def runtime() -> RuntimeService:
         return cast(RuntimeService, app.state.runtime)
@@ -132,6 +148,12 @@ def create_app(
         return cast(
             ValidationRepository | None,
             getattr(app.state, "validation_repository", None),
+        )
+
+    def observability() -> ObservabilityRepository:
+        return cast(
+            ObservabilityRepository,
+            app.state.observability_repository,
         )
 
     @app.get("/health")
@@ -337,6 +359,26 @@ def create_app(
         return [
             _verification_report_response(report)
             for report in await repository.list_for_run(run_id)
+        ]
+
+    @app.get("/runs/{run_id}/trace")
+    async def list_trace(run_id: UUID) -> list[dict[str, object]]:
+        return [
+            asdict(span) for span in await observability().list_spans_for_run(run_id)
+        ]
+
+    @app.get("/runs/{run_id}/metrics")
+    async def list_metrics(run_id: UUID) -> list[dict[str, object]]:
+        return [
+            asdict(metric)
+            for metric in await observability().list_metrics_for_run(run_id)
+        ]
+
+    @app.get("/runs/{run_id}/model-calls")
+    async def list_model_calls(run_id: UUID) -> list[dict[str, object]]:
+        return [
+            asdict(call)
+            for call in await observability().list_model_calls_for_run(run_id)
         ]
 
     return app

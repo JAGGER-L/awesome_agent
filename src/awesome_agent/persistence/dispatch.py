@@ -719,6 +719,7 @@ async def _append_event(
         transition_id=transition_id,
         event_type=event_type,
         payload=payload,
+        trace_id=record.id.hex,
     )
     session.add(
         RuntimeEventRecord(
@@ -732,7 +733,7 @@ async def _append_event(
             agent_id=None,
             parent_agent_id=None,
             task_id=None,
-            trace_id=None,
+            trace_id=event.trace_id,
             span_id=None,
             created_at=event.created_at,
         )

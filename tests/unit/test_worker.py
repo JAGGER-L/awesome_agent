@@ -7,8 +7,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from awesome_agent.domain.enums import AgentKind, ExecutionKind, RunIntent
+from awesome_agent.domain.enums import AgentKind, EventType, ExecutionKind, RunIntent
 from awesome_agent.domain.models import Agent, Run, RunLease, RuntimeEvent
+from awesome_agent.observability.repository import InMemoryObservabilityRepository
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -108,8 +109,24 @@ class FakeDispatcher:
         self.calls.append(("recover_expired", kwargs))
         return 0
 
-    async def append_fenced_event(self, *_: object, **__: object) -> Any:
-        raise NotImplementedError
+    async def append_fenced_event(
+        self,
+        lease: RunLease,
+        *,
+        event_type: EventType,
+        payload: dict[str, object],
+        transition_id: str | None = None,
+    ) -> RuntimeEvent:
+        event = RuntimeEvent(
+            run_id=lease.run_id,
+            sequence=sum(call[0] == "event" for call in self.calls) + 1,
+            event_type=event_type,
+            payload=payload,
+            transition_id=transition_id,
+            trace_id=lease.run_id.hex,
+        )
+        self.calls.append(("event", event))
+        return event
 
     async def release_to_queue(self, *_: object, **__: object) -> None:
         raise NotImplementedError
@@ -171,6 +188,45 @@ class FakeModifyingGraph:
             },
             False,
         )
+
+
+class EmittingModifyingGraph(FakeModifyingGraph):
+    async def execute(
+        self,
+        run: Run,
+        agent: Agent,
+        *,
+        event_sink: object | None = None,
+    ) -> tuple[dict[str, object], bool]:
+        if not callable(event_sink):
+            raise AssertionError("event sink is required")
+        await event_sink(
+            EventType.MODEL_CALL_CREATED,
+            {
+                "turn": 1,
+                "status": "completed",
+                "stop_reason": "completed",
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "latency_ms": 31,
+            },
+            "model-turn:1",
+        )
+        await event_sink(
+            EventType.TOOL_CALL_CREATED,
+            {
+                "turn": 1,
+                "call_id": "call-1",
+                "tool": "repo.diff",
+                "status": "completed",
+                "latency_ms": 7,
+                "sandbox": "docker",
+            },
+            "tool:1:call-1",
+        )
+        return await super().execute(run, agent, event_sink=event_sink)
 
 
 def _lease() -> RunLease:
@@ -381,6 +437,43 @@ async def test_worker_executes_modifying_graph_with_validated_completion() -> No
     assert isinstance(complete[1], dict)
     assert complete[1]["completion_kind"] == "modifying_validated"
     assert complete[1]["result_text"] == "Changed README.md; validation not run."
+
+
+@pytest.mark.asyncio
+async def test_worker_records_run_model_and_tool_observability() -> None:
+    lease = _lease()
+    run = _modifying_run(lease)
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    observability = InMemoryObservabilityRepository()
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=EmittingModifyingGraph(),  # type: ignore[arg-type]
+        config=_config(),
+        observability_repository=observability,
+    )
+
+    assert await worker.run_once()
+
+    spans = await observability.list_spans_for_run(run.id)
+    metrics = await observability.list_metrics_for_run(run.id)
+    model_calls = await observability.list_model_calls_for_run(run.id)
+
+    assert {span.name for span in spans} >= {
+        "run.execute",
+        "model.call",
+        "tool.call",
+    }
+    assert any(metric.name == "run.duration_ms" for metric in metrics)
+    assert model_calls[0].model == "deepseek-v4-flash"
+    assert model_calls[0].latency_ms == 31
 
 
 @pytest.mark.asyncio

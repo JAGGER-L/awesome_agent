@@ -7,6 +7,7 @@ from types import FrameType
 from typing import Any
 
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.observability.repository import PostgresObservabilityRepository
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
@@ -80,6 +81,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 retry_delay=timedelta(seconds=configured.worker_retry_delay_seconds),
                 max_attempts=configured.max_claim_attempts,
             ),
+            observability_repository=PostgresObservabilityRepository(sessions),
         )
         restore = _install_signal_handlers(worker)
         try:

@@ -137,6 +137,7 @@ class InMemoryRuntimeRepository(RuntimeRepository):
                 "status": RunStatus.CANCELLED.value,
                 "dispatch_status": DispatchStatus.TERMINAL.value,
             },
+            trace_id=run_id.hex,
         )
         self._runs[run_id] = run
         self._events[run_id].append(event)
@@ -162,6 +163,7 @@ class InMemoryRuntimeRepository(RuntimeRepository):
             event_type=event_type,
             payload=payload,
             agent_id=agent_id,
+            trace_id=run_id.hex,
         )
         self._events[run_id].append(event)
         return event

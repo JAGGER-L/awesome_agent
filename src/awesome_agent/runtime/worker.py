@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import socket
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from uuid import UUID, uuid4
 
 from awesome_agent.domain.enums import EventType, ExecutionKind
-from awesome_agent.domain.models import Run, RunLease
+from awesome_agent.domain.models import Agent, Run, RunLease, RuntimeEvent
+from awesome_agent.observability.repository import (
+    DurableMetric,
+    DurableModelCall,
+    DurableSpan,
+    NoopObservabilityRepository,
+    ObservabilityRepository,
+)
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -36,6 +44,8 @@ from awesome_agent.runtime.modifying_graph import (
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph, RuntimeProbeState
 from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCodingGraph
 from awesome_agent.runtime.repository import RuntimeRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +72,7 @@ class DurableWorker:
         worker_id: UUID | None = None,
         worker_name: str | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        observability_repository: ObservabilityRepository | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.repository = repository
@@ -73,6 +84,9 @@ class DurableWorker:
         self.worker_name = worker_name or default_worker_name()
         self.sleep = sleep
         self.stop_requested = asyncio.Event()
+        self.observability_repository = (
+            observability_repository or NoopObservabilityRepository()
+        )
 
     def request_stop(self) -> None:
         self.stop_requested.set()
@@ -115,6 +129,10 @@ class DurableWorker:
         return True
 
     async def _execute_claim(self, lease: RunLease) -> None:
+        started_at = datetime.now(UTC)
+        started = monotonic()
+        status = "completed"
+        error_text: str | None = None
         run = await self.repository.get_run(lease.run_id)
         try:
             self._validate_run(run)
@@ -139,19 +157,46 @@ class DurableWorker:
                 result_text=(final_answer if isinstance(final_answer, str) else None),
             )
         except LeaseLost:
+            status = "lease_lost"
             return
         except RunCancelled:
+            status = "cancelled"
             return
         except ApprovalInterrupt as interrupt:
+            status = "waiting_approval"
+            error_text = str(interrupt)
             await self._release_for_approval_if_owned(lease, interrupt.approval_id)
         except (IncompatibleGraphError, CorruptRuntimeStateError) as error:
+            status = "recovery_required"
+            error_text = str(error)
             await self._mark_recovery_if_owned(lease, str(error))
         except PermanentExecutionError as error:
+            status = "failed"
+            error_text = str(error)
             await self._fail_if_owned(lease, str(error))
         except asyncio.CancelledError:
+            status = "cancelled"
+            error_text = "Worker task was cancelled."
             raise
         except Exception as error:
+            status = "retry_scheduled"
+            error_text = str(error)
             await self._retry_if_owned(lease, error)
+        finally:
+            await self._record_span_and_metric(
+                run_id=lease.run_id,
+                name="run.execute",
+                category="run",
+                status=status,
+                started_at=started_at,
+                started=started,
+                attributes={
+                    "worker_id": str(self.worker_id),
+                    "worker_name": self.worker_name,
+                    "attempt": lease.attempt,
+                },
+                error=error_text,
+            )
 
     async def _execute_with_heartbeat(
         self,
@@ -330,44 +375,268 @@ class DurableWorker:
         run: Run,
         lease: RunLease,
     ) -> tuple[RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState, bool]:
-        if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
-            return await self.probe_graph.execute(run)
-        if run.execution_kind is ExecutionKind.CODING:
-            agents = await self.repository.list_agents(run.id)
-            leader = next(
-                (agent for agent in agents if agent.parent_agent_id is None),
-                None,
+        started_at = datetime.now(UTC)
+        started = monotonic()
+        status = "completed"
+        error_text: str | None = None
+        try:
+            if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
+                return await self.probe_graph.execute(run)
+            if run.execution_kind is ExecutionKind.CODING:
+                agents = await self.repository.list_agents(run.id)
+                leader = next(
+                    (agent for agent in agents if agent.parent_agent_id is None),
+                    None,
+                )
+                if leader is None:
+                    raise CorruptRuntimeStateError("Coding Run has no Leader.")
+
+                async def emit(
+                    event_type: EventType,
+                    payload: dict[str, object],
+                    transition_id: str,
+                ) -> None:
+                    event = await self.dispatcher.append_fenced_event(
+                        lease,
+                        event_type=event_type,
+                        payload=payload,
+                        transition_id=transition_id,
+                    )
+                    await self._record_event_observability(run, leader, event)
+
+                if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph:
+                    return await self.coding_graph.execute(
+                        run,
+                        leader,
+                        event_sink=emit,
+                    )
+                if run.graph_name == MODIFYING_CODING_GRAPH and self.modifying_graph:
+                    return await self.modifying_graph.execute(
+                        run,
+                        leader,
+                        event_sink=emit,
+                    )
+            raise IncompatibleGraphError(
+                f"Worker cannot execute kind {run.execution_kind.value}."
             )
-            if leader is None:
-                raise CorruptRuntimeStateError("Coding Run has no Leader.")
+        except Exception as error:
+            status = "failed"
+            error_text = str(error)
+            raise
+        finally:
+            await self._record_span_and_metric(
+                run_id=run.id,
+                name="graph.execute",
+                category="graph",
+                status=status,
+                started_at=started_at,
+                started=started,
+                attributes={
+                    "graph_name": run.graph_name,
+                    "graph_version": run.graph_version,
+                    "execution_kind": run.execution_kind.value,
+                },
+                error=error_text,
+            )
 
-            async def emit(
-                event_type: EventType,
-                payload: dict[str, object],
-                transition_id: str,
-            ) -> None:
-                await self.dispatcher.append_fenced_event(
-                    lease,
-                    event_type=event_type,
-                    payload=payload,
-                    transition_id=transition_id,
-                )
+    async def _record_event_observability(
+        self,
+        run: Run,
+        leader: Agent,
+        event: RuntimeEvent,
+    ) -> None:
+        if event.event_type is EventType.MODEL_CALL_CREATED:
+            await self._record_model_call_event(run, leader, event)
+        elif event.event_type is EventType.TOOL_CALL_CREATED:
+            await self._record_tool_call_event(run, event)
 
-            if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph:
-                return await self.coding_graph.execute(
-                    run,
-                    leader,
-                    event_sink=emit,
+    async def _record_model_call_event(
+        self,
+        run: Run,
+        leader: Agent,
+        event: RuntimeEvent,
+    ) -> None:
+        payload = event.payload
+        latency_ms = _int_payload(payload, "latency_ms")
+        span_id = _span_id()
+        status = _str_payload(payload, "status", "unknown")
+        await self._record_best_effort(
+            self.observability_repository.record_span(
+                DurableSpan(
+                    run_id=run.id,
+                    trace_id=event.trace_id or run.id.hex,
+                    span_id=span_id,
+                    parent_span_id=None,
+                    name="model.call",
+                    category="model",
+                    status=status,
+                    ended_at=event.created_at,
+                    duration_ms=latency_ms,
+                    attributes={
+                        "turn": _int_payload(payload, "turn"),
+                        "provider": _str_payload(payload, "provider", "unknown"),
+                        "model": _str_payload(payload, "model", leader.model),
+                        "stop_reason": _str_payload(payload, "stop_reason", ""),
+                    },
+                    error=_str_payload(payload, "error", "") or None,
                 )
-            if run.graph_name == MODIFYING_CODING_GRAPH and self.modifying_graph:
-                return await self.modifying_graph.execute(
-                    run,
-                    leader,
-                    event_sink=emit,
-                )
-        raise IncompatibleGraphError(
-            f"Worker cannot execute kind {run.execution_kind.value}."
+            )
         )
+        await self._record_best_effort(
+            self.observability_repository.record_model_call(
+                DurableModelCall(
+                    run_id=run.id,
+                    agent_id=leader.id,
+                    turn=_int_payload(payload, "turn") or 0,
+                    provider=_str_payload(payload, "provider", "unknown"),
+                    model=_str_payload(payload, "model", leader.model),
+                    status=status,
+                    stop_reason=_str_payload(payload, "stop_reason", "") or None,
+                    input_tokens=_int_payload(payload, "input_tokens"),
+                    output_tokens=_int_payload(payload, "output_tokens"),
+                    reasoning_tokens=_int_payload(payload, "reasoning_tokens"),
+                    cache_read_tokens=_int_payload(payload, "cache_read_tokens"),
+                    cache_write_tokens=_int_payload(payload, "cache_write_tokens"),
+                    latency_ms=latency_ms,
+                    trace_id=event.trace_id or run.id.hex,
+                    span_id=span_id,
+                    error=_str_payload(payload, "error", "") or None,
+                )
+            )
+        )
+        if latency_ms is not None:
+            await self._record_metric(
+                run.id,
+                "model.latency_ms",
+                latency_ms,
+                "ms",
+                {"status": status, "model": _str_payload(payload, "model", "")},
+            )
+
+    async def _record_tool_call_event(
+        self,
+        run: Run,
+        event: RuntimeEvent,
+    ) -> None:
+        payload = event.payload
+        latency_ms = _int_payload(payload, "latency_ms")
+        status = _str_payload(payload, "status", "unknown")
+        attributes = {
+            "turn": _int_payload(payload, "turn"),
+            "tool": _str_payload(payload, "tool", "unknown"),
+            "call_id": _str_payload(payload, "call_id", ""),
+            "sandbox": _str_payload(payload, "sandbox", ""),
+        }
+        await self._record_best_effort(
+            self.observability_repository.record_span(
+                DurableSpan(
+                    run_id=run.id,
+                    trace_id=event.trace_id or run.id.hex,
+                    span_id=_span_id(),
+                    parent_span_id=None,
+                    name="tool.call",
+                    category="tool",
+                    status=status,
+                    ended_at=event.created_at,
+                    duration_ms=latency_ms,
+                    attributes=attributes,
+                    error=_str_payload(payload, "error", "") or None,
+                )
+            )
+        )
+        sandbox = attributes["sandbox"]
+        if sandbox:
+            await self._record_best_effort(
+                self.observability_repository.record_span(
+                    DurableSpan(
+                        run_id=run.id,
+                        trace_id=event.trace_id or run.id.hex,
+                        span_id=_span_id(),
+                        parent_span_id=None,
+                        name="sandbox.execute",
+                        category="sandbox",
+                        status=status,
+                        ended_at=event.created_at,
+                        duration_ms=latency_ms,
+                        attributes=attributes,
+                        error=_str_payload(payload, "error", "") or None,
+                    )
+                )
+            )
+        if latency_ms is not None:
+            await self._record_metric(
+                run.id,
+                "tool.duration_ms",
+                latency_ms,
+                "ms",
+                {"status": status, "tool": attributes["tool"]},
+            )
+
+    async def _record_span_and_metric(
+        self,
+        *,
+        run_id: UUID,
+        name: str,
+        category: str,
+        status: str,
+        started_at: datetime,
+        started: float,
+        attributes: dict[str, object],
+        error: str | None,
+    ) -> None:
+        ended_at = datetime.now(UTC)
+        duration_ms = max(0, int((monotonic() - started) * 1000))
+        await self._record_best_effort(
+            self.observability_repository.record_span(
+                DurableSpan(
+                    run_id=run_id,
+                    trace_id=run_id.hex,
+                    span_id=_span_id(),
+                    parent_span_id=None,
+                    name=name,
+                    category=category,
+                    status=status,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    duration_ms=duration_ms,
+                    attributes=attributes,
+                    error=error,
+                )
+            )
+        )
+        await self._record_metric(
+            run_id,
+            f"{category}.duration_ms",
+            duration_ms,
+            "ms",
+            {"status": status, **attributes},
+        )
+
+    async def _record_metric(
+        self,
+        run_id: UUID,
+        name: str,
+        value: float,
+        unit: str,
+        attributes: dict[str, object],
+    ) -> None:
+        await self._record_best_effort(
+            self.observability_repository.record_metric(
+                DurableMetric(
+                    run_id=run_id,
+                    name=name,
+                    value=value,
+                    unit=unit,
+                    attributes=attributes,
+                )
+            )
+        )
+
+    async def _record_best_effort(self, action: Awaitable[object]) -> None:
+        try:
+            await action
+        except Exception:
+            logger.exception("Observability write failed.")
 
     def _completion_kind(self, run: Run) -> str:
         if run.execution_kind is not ExecutionKind.CODING:
@@ -384,3 +653,25 @@ async def _consume_cancel(task: asyncio.Task[object]) -> None:
 
 def default_worker_name() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def _span_id() -> str:
+    return uuid4().hex[:16]
+
+
+def _str_payload(
+    payload: dict[str, object],
+    key: str,
+    default: str,
+) -> str:
+    value = payload.get(key)
+    return value if isinstance(value, str) else default
+
+
+def _int_payload(payload: dict[str, object], key: str) -> int | None:
+    value = payload.get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
