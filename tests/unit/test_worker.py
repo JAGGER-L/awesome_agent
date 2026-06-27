@@ -18,11 +18,14 @@ from awesome_agent.runtime.dispatch import (
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
     MODIFYING_CODING_VERSION,
+    RUNTIME_PROBE_GRAPH,
+    RUNTIME_PROBE_VERSION,
     TEAM_CODING_GRAPH,
     TEAM_CODING_VERSION,
 )
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
+from awesome_agent.runtime.worker_heartbeats import GraphIdentity, WorkerHeartbeat
 
 
 class FakeRepository:
@@ -132,6 +135,24 @@ class FakeDispatcher:
 
     async def release_to_queue(self, *_: object, **__: object) -> None:
         raise NotImplementedError
+
+
+class FakeWorkerHeartbeatRepository:
+    def __init__(self) -> None:
+        self.heartbeats: list[WorkerHeartbeat] = []
+
+    async def upsert(self, heartbeat: WorkerHeartbeat) -> None:
+        self.heartbeats.append(heartbeat)
+
+    async def list_recent(self, *, stale_after: datetime) -> list[WorkerHeartbeat]:
+        return [
+            heartbeat
+            for heartbeat in self.heartbeats
+            if heartbeat.heartbeat_at >= stale_after
+        ]
+
+    async def mark_stopping(self, worker_id: UUID) -> None:
+        return None
 
 
 class FakeGraph:
@@ -471,6 +492,26 @@ async def test_worker_claims_team_graph_when_configured() -> None:
         TEAM_CODING_GRAPH,
         TEAM_CODING_VERSION,
     ) in claim["graph_identities"]
+
+
+@pytest.mark.asyncio
+async def test_worker_upserts_heartbeat_before_claiming() -> None:
+    dispatcher = FakeDispatcher(None)
+    heartbeats = FakeWorkerHeartbeatRepository()
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(Run(goal="unused")),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        config=_config(),
+        heartbeat_repository=heartbeats,
+    )
+
+    assert not await worker.run_once()
+
+    assert heartbeats.heartbeats[0].worker_id == worker.worker_id
+    assert heartbeats.heartbeats[0].supported_graphs == [
+        GraphIdentity(RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION)
+    ]
 
 
 @pytest.mark.asyncio

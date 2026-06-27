@@ -17,6 +17,9 @@ from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.tool_invocations import PostgresToolInvocationRepository
 from awesome_agent.persistence.validation import PostgresValidationRepository
+from awesome_agent.persistence.worker_heartbeats import (
+    PostgresWorkerHeartbeatRepository,
+)
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
@@ -95,6 +98,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 max_attempts=configured.max_claim_attempts,
             ),
             observability_repository=PostgresObservabilityRepository(sessions),
+            heartbeat_repository=PostgresWorkerHeartbeatRepository(sessions),
         )
         restore = _install_signal_handlers(worker)
         try:
@@ -107,6 +111,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             await worker.run_forever()
             return True
         finally:
+            await worker.mark_stopping()
             restore()
             await engine.dispose()
 

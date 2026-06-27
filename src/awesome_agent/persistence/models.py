@@ -94,6 +94,17 @@ class RunRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class WorkerHeartbeatRecord(Base):
+    __tablename__ = "worker_heartbeats"
+
+    worker_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    worker_name: Mapped[str] = mapped_column(String(255))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    supported_graphs: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+
+
 class IntakeReservationRecord(Base):
     __tablename__ = "intake_reservations"
     __table_args__ = (

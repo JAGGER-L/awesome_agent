@@ -47,6 +47,12 @@ from awesome_agent.runtime.probe_graph import RuntimeProbeGraph, RuntimeProbeSta
 from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCodingGraph
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_graph import TeamCodingGraph, TeamCodingState
+from awesome_agent.runtime.worker_heartbeats import (
+    GraphIdentity,
+    WorkerHeartbeat,
+    WorkerHeartbeatRepository,
+    WorkerHeartbeatStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,7 @@ class DurableWorker:
         worker_name: str | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         observability_repository: ObservabilityRepository | None = None,
+        heartbeat_repository: WorkerHeartbeatRepository | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.repository = repository
@@ -92,26 +99,32 @@ class DurableWorker:
         self.observability_repository = (
             observability_repository or NoopObservabilityRepository()
         )
+        self.heartbeat_repository = heartbeat_repository
+        self.started_at = datetime.now(UTC)
 
     def request_stop(self) -> None:
         self.stop_requested.set()
 
     async def run_forever(self) -> None:
         next_recovery = 0.0
-        while not self.stop_requested.is_set():
-            if monotonic() >= next_recovery:
-                await self.dispatcher.recover_expired(
-                    max_attempts=self.config.max_attempts
-                )
-                await self.dispatcher.expire_pending_approvals()
-                next_recovery = monotonic() + self.config.recovery_interval
-            processed = await self.run_once()
-            if not processed and not self.stop_requested.is_set():
-                await self.sleep(self.config.poll_interval)
+        try:
+            while not self.stop_requested.is_set():
+                if monotonic() >= next_recovery:
+                    await self.dispatcher.recover_expired(
+                        max_attempts=self.config.max_attempts
+                    )
+                    await self.dispatcher.expire_pending_approvals()
+                    next_recovery = monotonic() + self.config.recovery_interval
+                processed = await self.run_once()
+                if not processed and not self.stop_requested.is_set():
+                    await self.sleep(self.config.poll_interval)
+        finally:
+            await self._mark_worker_stopping()
 
     async def run_once(self) -> bool:
+        await self._upsert_worker_heartbeat()
         graph_identities = {
-            (RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION),
+            (graph.name, graph.version) for graph in self._supported_graph_identities()
         }
         execution_kinds = {ExecutionKind.RUNTIME_PROBE}
         if self.coding_graph is not None:
@@ -135,6 +148,48 @@ class DurableWorker:
             return False
         await self._execute_claim(lease)
         return True
+
+    async def mark_stopping(self) -> None:
+        await self._mark_worker_stopping()
+
+    def _supported_graph_identities(self) -> list[GraphIdentity]:
+        identities = [GraphIdentity(RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION)]
+        if self.coding_graph is not None:
+            identities.append(
+                GraphIdentity(READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION)
+            )
+        if self.modifying_graph is not None:
+            identities.append(
+                GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION)
+            )
+        if self.team_graph is not None:
+            identities.append(GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION))
+        return identities
+
+    async def _upsert_worker_heartbeat(self) -> None:
+        if self.heartbeat_repository is None:
+            return
+        try:
+            await self.heartbeat_repository.upsert(
+                WorkerHeartbeat(
+                    worker_id=self.worker_id,
+                    worker_name=self.worker_name,
+                    started_at=self.started_at,
+                    heartbeat_at=datetime.now(UTC),
+                    supported_graphs=self._supported_graph_identities(),
+                    status=WorkerHeartbeatStatus.ONLINE,
+                )
+            )
+        except Exception:
+            logger.exception("Worker heartbeat write failed.")
+
+    async def _mark_worker_stopping(self) -> None:
+        if self.heartbeat_repository is None:
+            return
+        try:
+            await self.heartbeat_repository.mark_stopping(self.worker_id)
+        except Exception:
+            logger.exception("Worker heartbeat stopping update failed.")
 
     async def _execute_claim(self, lease: RunLease) -> None:
         started_at = datetime.now(UTC)
