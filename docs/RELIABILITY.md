@@ -55,8 +55,12 @@ forbidden.
   worktree. The public Run, Leader, initial events, and reservation publication
   commit atomically only after the workspace is ready.
 - Startup reconciliation rolls back incomplete owned intake side effects.
-  Accepted Run worktrees remain retained; automatic accepted-run cleanup is not
-  implemented.
+  Accepted Run workspaces remain retained until an explicit workspace cleanup
+  preview/apply request. Background automatic cleanup is not implemented.
+- Workspace cleanup re-evaluates ownership and Git state immediately before
+  deletion. Normal cleanup removes only clean managed workspaces for terminal
+  completed or cancelled Runs. Failed or dirty workspaces require force with a
+  reason; `recovery_required` workspaces are retained as recovery evidence.
 - Expired leases requeue before the attempt limit. At the limit, the Run enters
   `recovery_required + terminal` and preserves its workspace.
 - Each Worker process executes at most one Run. Workers always claim

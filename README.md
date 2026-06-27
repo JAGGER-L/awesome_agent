@@ -35,6 +35,9 @@ PostgreSQL:
 - frontend-ready Run, Agent, and Todo lifecycle projections: visible status
   transitions update projection rows, Agent/Todo revisions, timestamps, and
   matching runtime events together.
+- managed execution workspace retention: `workspace list` and explicit
+  dry-run-first `workspace cleanup` inspect and safely remove owned inactive
+  worktrees and integration branches.
 
 ### Coding execution (implemented)
 
@@ -170,6 +173,20 @@ durable cancellation. Active cancellation is recorded as a request, observed by
 the owning Worker, and committed as `cancelled + terminal` once the graph and
 subprocess boundary stops cleanly.
 
+Managed execution workspaces can be inspected and cleaned explicitly:
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe workspace list
+.\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id>
+.\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id> --apply
+.\.venv\Scripts\awesome-agent.exe workspace cleanup --older-than 14d --apply
+```
+
+Cleanup defaults to preview. Normal cleanup removes only clean managed
+workspaces for terminal completed or cancelled Runs. Failed or dirty workspaces
+require `--force --reason`; `recovery_required` workspaces are retained as
+recovery evidence.
+
 Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the ignored local `.env` before real
 model calls. Built-in memory and Mem0 are disabled in committed defaults. Enable
 them locally with `AWESOME_AGENT_BUILTIN_MEMORY_ENABLED=true` and
@@ -204,7 +221,6 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- worktree and branch retention and cleanup (Task 14);
 - dependency-aware `/health` and `doctor` (Task 15).
 - full token-window, wall-clock, and cost budget management (Task 16).
 - distributed team child Runs claimed by independent Workers (Task 17).

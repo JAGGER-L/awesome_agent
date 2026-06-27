@@ -51,8 +51,11 @@
 - Read tools reject absolute/parent paths, `.git`, symlink or junction
   traversal, binary files, and common credential/private-key files.
 - Workers without a configured model API key do not claim Coding Runs.
-- Worktree cleanup validates resolved ownership, active leases, and unexported
-  diffs before deletion.
+- Workspace cleanup validates resolved ownership markers, managed-root
+  containment, active leases, branch identity, and unexported diffs before
+  deletion. It defaults to preview and requires explicit apply.
+- Failed or dirty workspace cleanup requires force with a reason.
+  `recovery_required` workspaces cannot be removed by ordinary force.
 - V1 approvals bind to one exact tool invocation, canonical arguments,
   workspace, capabilities, risk, and expiry. Default expiry is 60 minutes and
   configurable up to 24 hours.

@@ -26,6 +26,8 @@ Verifier 的 Leader/Teammate/Subagent **多 Agent**组织。
 - 跨进程 SSE 基于有序 PostgreSQL event polling，而不是进程本地状态；
 - 面向前端的 Run、Agent、Todo 生命周期投影会同步维护状态、revision、timestamp 和匹配的
   runtime event。
+- managed execution workspace retention：`workspace list` 和默认 dry-run 的
+  `workspace cleanup` 可以检查并安全删除 awesome_agent 拥有的 inactive worktree 和 integration branch。
 
 ### Coding 执行（已实现）
 
@@ -132,6 +134,18 @@ base commit 创建稳定 worktree。普通 `run` 命令会创建 modifying Codin
 claimed 和 executing 的 solo Run 都支持持久化取消。active cancellation 会先记录 durable request，
 由持有 lease 的 Worker 观察，并在 graph 和 subprocess 边界干净停止后提交为 `cancelled + terminal`。
 
+可以显式检查和清理 managed execution workspace：
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe workspace list
+.\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id>
+.\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id> --apply
+.\.venv\Scripts\awesome-agent.exe workspace cleanup --older-than 14d --apply
+```
+
+cleanup 默认只是 preview。普通 cleanup 只会删除 terminal completed 或 cancelled Run 的干净 managed
+workspace。failed 或 dirty workspace 需要 `--force --reason`；`recovery_required` workspace 会作为恢复证据保留。
+
 真实模型调用前，需要在被 Git 忽略的本地 `.env` 中配置 `AWESOME_AGENT_DEEPSEEK_API_KEY`。内置记忆和
 Mem0 在提交默认配置中关闭；本地可设置 `AWESOME_AGENT_BUILTIN_MEMORY_ENABLED=true` 和
 `AWESOME_AGENT_MEM0_ENABLED=true` 开启，Mem0 还需要 `AWESOME_AGENT_MEM0_API_KEY`。
@@ -162,7 +176,6 @@ container port: 5432
 持久化 runtime 工作记录在
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。尚未实现的重点项：
 
-- worktree 和 branch 保留与清理（Task 14）；
 - 依赖感知的 `/health` 和 `doctor`（Task 15）；
 - 完整 token-window、wall-clock 和 cost budget 管理（Task 16）；
 - 由独立 Worker claim 的分布式 Teammate child Runs（Task 17）。

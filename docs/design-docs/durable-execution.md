@@ -207,11 +207,15 @@ a public Run.
 - Intent controls later tool capabilities; read-only does not bypass workspace
   isolation.
 - Team worktrees later branch from the Run integration branch.
-- V1 retains all Run worktrees until explicit cleanup.
+- V1 retains Run worktrees until explicit workspace cleanup.
 
-Cleanup must resolve and verify the target, confirm runtime ownership, reject
-active leases, and preserve unexported diffs. Automatic retention deletion and
-snapshots of uncommitted user changes are deferred.
+Workspace cleanup is dry-run-first. It resolves and verifies the target,
+confirms runtime ownership, rejects active leases, checks branch identity, and
+preserves unexported diffs unless the caller uses force with a reason. Normal
+cleanup deletes only clean managed workspaces for terminal completed or
+cancelled Runs. Failed or dirty workspaces require force; `recovery_required`
+workspaces are retained as recovery evidence. Background automatic retention
+deletion and snapshots of uncommitted user changes are deferred.
 
 ## Local Process Topology
 

@@ -468,6 +468,14 @@ Every modifying Run uses a dedicated integration worktree from a clean base
 commit. The user's checkout is never modified automatically, including when
 trusted-local command execution is selected.
 
+Managed execution workspaces remain explicit runtime evidence until the user
+requests cleanup. `workspace list` and the workspace cleanup API evaluate
+PostgreSQL Run state, ownership markers, managed-root containment, Git worktree
+state, branch identity, and dirty status before deletion. Cleanup defaults to
+preview; apply removes only owned inactive workspaces and matching
+`awesome-agent/run/<run_id>` branches. Failed or dirty workspaces require force
+with a reason, while `recovery_required` workspaces are retained.
+
 See [Durable execution](docs/design-docs/durable-execution.md) for the complete
 target contract.
 

@@ -43,6 +43,8 @@ team output.
   events, revision increments, and timestamps
 - real team-runtime E2E evidence through Worker, PostgreSQL, checkpoint,
   provider protocol, tools, validation records, and observability records
+- explicit managed workspace listing and dry-run-first cleanup for owned
+  inactive worktrees and integration branches
 
 ## Non-Goals
 
@@ -52,5 +54,7 @@ team output.
 - multiple active model providers
 - recursive delegation
 - automatic solo/team routing
+- background automatic workspace cleanup
+- ordinary force cleanup for `recovery_required` workspaces
 - distributed Teammate child Runs claimed by independent Workers
 - LangSmith or LangGraph Agent Server

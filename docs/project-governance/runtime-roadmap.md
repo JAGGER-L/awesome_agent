@@ -16,6 +16,7 @@ agents; they are not the durable product roadmap.
 | Task 06 | Done | Checkpointed solo read-only model/tool loop with explicit graph back edges and evidence-backed final answers. |
 | Task 12 | Done | Solo runtime observability with trace IDs, query-table spans, metrics, model calls, latency, and exporter isolation. |
 | Task 13 | Done | Explicit scoped `team-coding@1` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
+| Task 14 | Done | Explicit managed workspace listing and dry-run-first cleanup with ownership, lease, branch, dirty, force, and recovery evidence protections. |
 
 ## Task 07: Isolated Mutation Sandbox and Shell
 
@@ -81,7 +82,6 @@ Task 07 does not include:
 | Task 09 | Active cancellation | Propagate cancellation through graph boundaries, provider calls, tool calls, Docker, and subprocess trees. | Implemented for solo runtime paths; queued, waiting, claimed, and executing solo Runs can cancel without corrupting projections, checkpoints, or worktrees. |
 | Task 10 | Validation and rework loop | Add deterministic validation gates, verifier feedback, and model rework until pass/fail is evidenced. | Implemented for solo modifying runs; configured or conservatively detected gates gate completion, rework is bounded, validation evidence is durable, and terminal validation failure fails the Run. |
 | Task 11 | Lifecycle projection consistency | Make Run, Agent, Todo, event, revision, and `updated_at` transitions coherent and frontend-ready. | Implemented for solo runtime paths; visible Run, Agent, and Todo lifecycle transitions now update projections, revisions, timestamps, and matching durable events in one transaction. |
-| Task 14 | Worktree and branch retention | Add explicit cleanup, retention policy, and safe branch/worktree pruning for completed Runs. | Owned inactive worktrees can be listed, preserved, or safely removed without touching user-owned paths or unexported diffs. |
 | Task 15 | Health and doctor readiness | Make `/health` and `doctor` report real dependencies instead of optimistic process liveness. | PostgreSQL, migrations, checkpoint store, provider keys, worker heartbeat, workspace root, and model route availability are checked. |
 | Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, wall-clock budget, and cost budget. | Long Runs remain bounded without losing required evidence or replay data. |
 | Task 17 | Distributed team child Runs | Promote graph-internal Teammates into Leader-created child Runs that independent Workers can claim. | Parent/child Run lineage, status propagation, checkpoint coordination, cross-Run cancellation, and result aggregation pass E2E. |
@@ -102,7 +102,7 @@ Task 07 does not include:
 | Observability score is too high for current evidence | Resolved in Task 12 for solo runtime paths |
 | Artifact references are not connected to the main loop | Task 07 |
 | Team E2E is not real end-to-end execution | Resolved in Task 13 for scoped single-Run team runtime; distributed child-Run team runtime remains Task 17 |
-| Worktrees and branches accumulate permanently | Task 14 |
+| Worktrees and branches accumulate permanently | Resolved in Task 14 for explicit managed workspace cleanup; background automatic cleanup remains out of scope |
 | API health and doctor are too optimistic | Task 15 |
 | Local API can bind non-loopback without authentication | Resolved in Task 07 with explicit unsafe gate; production auth remains out of scope |
 | Direct ASGI hosting can bypass the CLI non-loopback gate | Task 15 |
