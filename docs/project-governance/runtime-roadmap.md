@@ -83,7 +83,7 @@ Task 07 does not include:
 | --- | --- | --- | --- |
 | Task 15 | Health and doctor readiness | Make `/health` and `doctor` report real dependencies instead of optimistic process liveness. | PostgreSQL, migrations, checkpoint store, provider keys, worker heartbeat, workspace root, and model route availability are checked. |
 | Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, token ledgers, and active wall-clock budgets for solo runtime paths. | Solo long Runs remain bounded without losing required evidence or replay data; money cost budgeting remains deferred. |
-| Task 17 | Distributed team child Runs | Promote graph-internal Teammates into Leader-created child Runs that independent Workers can claim. | Parent/child Run lineage, status propagation, checkpoint coordination, cross-Run cancellation, and result aggregation pass E2E. |
+| Task 17 | Distributed team child Runs | Promote graph-internal team execution into Leader-created Teammate, Verifier, and depth-2 Subagent child Runs that independent Workers can claim. | Run lineage, durable assignments, structured mailbox, patch artifact aggregation, verifier gating, recursive cancellation, and real distributed team E2E pass. |
 | Task 18 | Team context and budget hardening | Extend context compaction and budget accounting across Leader, Teammates, Verifier, Subagents, team mailbox, and team evidence. | Team Runs have per-agent context budgets, team evidence compaction, verifier/rework history compression, and parent/child budget coordination. |
 
 ## Gap Disposition
@@ -101,7 +101,7 @@ Task 07 does not include:
 | Lifecycle projections are inconsistent | Resolved in Task 11 for solo runtime paths |
 | Observability score is too high for current evidence | Resolved in Task 12 for solo runtime paths |
 | Artifact references are not connected to the main loop | Task 07 |
-| Team E2E is not real end-to-end execution | Resolved in Task 13 for scoped single-Run team runtime; distributed child-Run team runtime remains Task 17 |
+| Team E2E is not real end-to-end execution | Resolved in Task 13 for scoped single-Run team runtime; distributed Teammate/Verifier/Subagent child-Run runtime remains Task 17 |
 | Worktrees and branches accumulate permanently | Resolved in Task 14 for explicit managed workspace cleanup; background automatic cleanup remains out of scope |
 | API health and doctor are too optimistic | Task 15 |
 | Local API can bind non-loopback without authentication | Resolved in Task 07 with explicit unsafe gate; production auth remains out of scope |
@@ -115,8 +115,9 @@ Task 07 does not include:
 - Do not start Task 10 until Task 07 can produce durable diffs and Task 08 can
   gate ambiguous or dangerous commands.
 - Do not claim distributed multi-Worker team runtime capability until Task 17
-  passes real E2E. Current team mode is scoped to one Run, one Worker, and one
-  checkpoint thread.
+  passes real E2E with Leader, Teammate, Verifier, and depth-2 Subagent child
+  Runs, independent Worker claims, patch aggregation, mailbox evidence, and
+  recursive cancellation.
 - Do not claim complete team context budgeting until Task 18 passes evidence
   across Leader, Teammate, Verifier, Subagent, mailbox, and team evidence paths.
 - Do not raise quality scores unless executable evidence exists in tests,
