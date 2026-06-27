@@ -31,6 +31,8 @@ async def test_postgres_worker_heartbeat_repository_round_trip() -> None:
     repository = PostgresWorkerHeartbeatRepository(sessions)
     worker_id = uuid4()
     now = datetime.now(UTC)
+    async with sessions.begin() as session:
+        await session.execute(delete(WorkerHeartbeatRecord))
 
     await repository.upsert(
         WorkerHeartbeat(
