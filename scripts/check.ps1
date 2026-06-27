@@ -35,8 +35,18 @@ if (-not $env:AWESOME_AGENT_CHECKPOINT_DATABASE_URL) {
     $env:AWESOME_AGENT_CHECKPOINT_DATABASE_URL = $DefaultCheckpointDatabaseUrl
 }
 
+if (-not $env:AWESOME_AGENT_TEST_DATABASE_URL) {
+    $env:AWESOME_AGENT_TEST_DATABASE_URL = $DefaultDatabaseUrl
+}
+
+if (-not $env:AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL) {
+    $env:AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL = $DefaultCheckpointDatabaseUrl
+}
+
 Write-Host "Using AWESOME_AGENT_DATABASE_URL=$($env:AWESOME_AGENT_DATABASE_URL)"
 Write-Host "Using AWESOME_AGENT_CHECKPOINT_DATABASE_URL=$($env:AWESOME_AGENT_CHECKPOINT_DATABASE_URL)"
+Write-Host "Using AWESOME_AGENT_TEST_DATABASE_URL=$($env:AWESOME_AGENT_TEST_DATABASE_URL)"
+Write-Host "Using AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL=$($env:AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL)"
 Write-Host "PostgreSQL tests require a reachable database. Run scripts\migrate.ps1 first if migrations are not current."
 
 Invoke-Checked -Command $Ruff -Arguments @("format", "--no-cache", "--check", ".")
