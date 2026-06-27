@@ -45,6 +45,9 @@ team output.
   provider protocol, tools, validation records, and observability records
 - explicit managed workspace listing and dry-run-first cleanup for owned
   inactive worktrees and integration branches
+- dependency-aware `/ready` and `doctor --profile` checks for PostgreSQL,
+  migrations, checkpoint store, workspace writability, provider configuration,
+  model routes, API bind policy, and fresh Worker heartbeat evidence
 
 ## Non-Goals
 

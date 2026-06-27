@@ -79,6 +79,41 @@ agents, Todos, event history, approvals, artifacts, and live SSE updates for a
 future frontend. Both surfaces call application services rather than accessing
 provider, database, or sandbox implementations directly.
 
+### Health and Readiness
+
+```text
+CLI doctor --profile api/runtime
+        |
+        v
+shared readiness collector
+        |
+        +--> Python/Git/Docker checks
+        +--> PostgreSQL database check
+        +--> Alembic migration head check
+        +--> LangGraph checkpoint store check
+        +--> workspace-root write probe
+        +--> provider key and model-route checks
+        +--> API bind policy check
+        +--> worker_heartbeats table (runtime profile)
+
+FastAPI
+  GET /health                -> process liveness only
+  GET /ready?profile=api     -> API dependency readiness
+  GET /ready?profile=runtime -> API readiness plus Worker/provider readiness
+```
+
+`/health` is intentionally cheap and returns 200 when the API process can
+respond. `/ready` and `doctor` share the structured readiness model with
+`healthy`, `degraded`, and `unhealthy` statuses. `healthy` and `degraded`
+readiness return HTTP 200; `unhealthy` returns HTTP 503. CLI `doctor` exits 0
+for `healthy` and `degraded`, and exits 1 for `unhealthy`.
+
+Worker liveness is not inferred from active Run leases. Workers upsert a
+process-scoped row in `worker_heartbeats` with worker id, worker name,
+supported graph identities, status, start time, and heartbeat time. The runtime
+readiness profile requires a fresh online heartbeat that covers the required
+graph identities.
+
 ### Repository-Aware Run Intake
 
 ```text
@@ -152,7 +187,9 @@ awesome-agent start
 Each Worker process executes at most one Run. Workers always claim the
 diagnostic `runtime_probe` graph and, when model providers are configured, also
 claim `solo-readonly@1`, `solo-modifying@1`, and explicit `team-coding@1`
-Runs. A crashed Worker leaves its checkpoint and lease; after lease expiry, a
+Runs. Workers also publish process heartbeat rows for readiness; Run lease
+heartbeat remains a separate fencing mechanism. A crashed Worker leaves its
+checkpoint and lease; after lease expiry, a
 replacement Worker claims with a new fencing token and resumes from the
 checkpoint. Unsupported graph versions enter `recovery_required`.
 

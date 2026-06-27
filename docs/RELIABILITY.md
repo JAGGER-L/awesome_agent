@@ -10,6 +10,8 @@ V1 reliability requirements:
 - task and agent state transitions are validated
 - SSE clients can reconnect from an event cursor
 - run/model/tool/sandbox observability records are queryable by Run
+- readiness checks expose dependency status without being confused with cheap
+  process liveness
 - failures record cause, retry target, and remaining uncertainty
 
 Retries must be bounded and evidence-driven. Silent infinite retries are
@@ -29,6 +31,10 @@ forbidden.
 - Claims use `FOR UPDATE SKIP LOCKED`; two workers cannot validly claim one Run.
 - Heartbeat extends a lease only when Run, worker UUID, fencing token, and
   unexpired lease all match.
+- Worker process liveness is recorded separately in `worker_heartbeats`.
+  Runtime readiness requires a fresh online Worker heartbeat covering the
+  required graph identities; a stale or missing Worker heartbeat makes runtime
+  readiness `unhealthy` even when `/health` liveness still returns 200.
 - Defaults are a 60-second lease, 15-second heartbeat interval, and three
   maximum claims.
 - A stale worker cannot commit protected projections, events, or side effects
@@ -65,7 +71,7 @@ forbidden.
   `recovery_required + terminal` and preserves its workspace.
 - Each Worker process executes at most one Run. Workers always claim
   `runtime_probe`; when a model provider is configured, they also claim
-  `solo-readonly@1` and `solo-modifying@1`.
+  `solo-readonly@1`, `solo-modifying@1`, and `team-coding@1`.
 - Probe checkpoints use synchronous LangGraph durability. Process-crash tests
   prove lease expiry, fencing-token increment, and checkpoint resume.
 - Graceful Worker shutdown stops new claims, retains heartbeat during a
@@ -95,6 +101,11 @@ forbidden.
   PostgreSQL query tables store run, graph, model, tool, and sandbox spans,
   model-call summaries, latency metrics, and trace/span IDs. OpenTelemetry
   exporter failures are logged and never change Run status.
+- Readiness exposes `healthy`, `degraded`, and `unhealthy`. Required dependency
+  failures make readiness `unhealthy`; optional or advisory failures make it
+  `degraded`. `/health` remains process liveness only. `/ready` returns 200 for
+  `healthy` and `degraded`, and 503 for `unhealthy`; `doctor` exits 0 for
+  `healthy` and `degraded`, and 1 for `unhealthy`.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

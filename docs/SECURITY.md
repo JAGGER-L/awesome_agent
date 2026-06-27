@@ -41,9 +41,18 @@
   endpoints.
 - The local FastAPI inspection API is unauthenticated and binds to loopback by
   default. CLI `serve` and `start` reject non-loopback hosts unless the user
-  passes `--unsafe-bind-public` explicitly.
-- The Task 04 Worker accepts only `runtime_probe`; the probe graph has no model,
-  tool, shell, sandbox, or repository-content capability.
+  passes `--unsafe-bind-public` explicitly. The CLI also propagates
+  `AWESOME_AGENT_API_HOST` and `AWESOME_AGENT_UNSAFE_BIND_PUBLIC` into the API
+  process environment.
+- Direct ASGI hosting uses the same settings-driven bind policy. Setting
+  `AWESOME_AGENT_API_HOST` to a non-loopback host without
+  `AWESOME_AGENT_UNSAFE_BIND_PUBLIC=true` rejects API startup. Public binding
+  remains unauthenticated and is intentionally labeled unsafe.
+- `/health` and `/ready` expose dependency state only; they do not grant tool,
+  repository, or worker control. Operators should still keep the local API on
+  loopback unless they add an external authentication boundary.
+- The `runtime_probe` graph has no model, tool, shell, sandbox, or
+  repository-content capability.
 - `POST /runtime/probes` selects the fixed supported probe graph on the server;
   callers cannot supply arbitrary graph names or versions.
 - `solo-readonly@1` exposes only bounded `status`, `list`, literal `search`,

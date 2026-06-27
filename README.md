@@ -38,6 +38,11 @@ PostgreSQL:
 - managed execution workspace retention: `workspace list` and explicit
   dry-run-first `workspace cleanup` inspect and safely remove owned inactive
   worktrees and integration branches.
+- dependency-aware readiness: `/health` remains cheap process liveness, while
+  `/ready?profile=api`, `/ready?profile=runtime`, and `doctor --profile`
+  verify PostgreSQL, Alembic migrations, LangGraph checkpointing, workspace
+  writability, provider configuration, model routes, API bind policy, and fresh
+  Worker heartbeat evidence.
 
 ### Coding execution (implemented)
 
@@ -94,7 +99,7 @@ run, model, and tool latency. Runtime events receive a stable Run-scoped
 `trace_id`, OpenTelemetry console export is failure-isolated, and FastAPI
 exposes `GET /runs/{run_id}/trace`, `GET /runs/{run_id}/metrics`, and
 `GET /runs/{run_id}/model-calls` for frontend inspection. Full cost budgeting,
-dashboards, and dependency-aware `/health` remain later work.
+and dashboards remain later work.
 
 ## Stack
 
@@ -133,7 +138,7 @@ docker compose up -d postgres
 .\scripts\migrate.ps1
 .\scripts\check.ps1
 .\scripts\system-test.ps1
-.\.venv\Scripts\awesome-agent.exe doctor
+.\.venv\Scripts\awesome-agent.exe doctor --profile api
 .\.venv\Scripts\awesome-agent.exe start
 ```
 
@@ -165,7 +170,28 @@ cross-process event path without executing a coding goal:
 `serve` and `worker` remain available when the processes should be managed
 separately. The local FastAPI API is unauthenticated and binds to `127.0.0.1`
 by default. Binding `serve` or `start` to a non-loopback host requires the
-explicit `--unsafe-bind-public` flag.
+explicit `--unsafe-bind-public` flag. The same bind policy is also checked by
+the API settings path, so direct ASGI hosting must set
+`AWESOME_AGENT_API_HOST` and `AWESOME_AGENT_UNSAFE_BIND_PUBLIC=true` before
+binding publicly.
+
+Health and readiness endpoints are split deliberately:
+
+```text
+GET /health                  # process liveness, 200 when the API responds
+GET /ready?profile=api       # API dependency readiness
+GET /ready?profile=runtime   # API readiness plus provider/model/Worker checks
+```
+
+`healthy` and `degraded` readiness return HTTP 200. `unhealthy` readiness
+returns HTTP 503. CLI diagnostics use the same checks:
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe doctor --profile api --no-docker
+.\.venv\Scripts\awesome-agent.exe doctor --profile runtime
+```
+
+`doctor` exits 0 for `healthy` and `degraded`, and exits 1 for `unhealthy`.
 
 Dispatch state is available at `GET /runs/{run_id}/dispatch`. Queued,
 retry-scheduled, waiting-approval, claimed, and executing solo Runs accept
@@ -221,7 +247,6 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- dependency-aware `/health` and `doctor` (Task 15).
 - full token-window, wall-clock, and cost budget management (Task 16).
 - distributed team child Runs claimed by independent Workers (Task 17).
 

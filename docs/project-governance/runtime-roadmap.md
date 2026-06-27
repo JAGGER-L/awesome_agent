@@ -22,6 +22,7 @@ agents; they are not the durable product roadmap.
 | Task 12 | Done | Solo runtime observability with trace IDs, query-table spans, metrics, model calls, latency, and exporter isolation. |
 | Task 13 | Done | Explicit scoped `team-coding@1` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
 | Task 14 | Done | Explicit managed workspace listing and dry-run-first cleanup with ownership, lease, branch, dirty, force, and recovery evidence protections. |
+| Task 15 | Done | Split `/health` liveness from structured `/ready` and `doctor --profile` readiness; checks PostgreSQL, migrations, checkpoint store, workspace root, provider keys, model routes, API bind policy, and Worker heartbeat registry. |
 
 ## Completed Detail: Task 07 Isolated Mutation Sandbox and Shell
 
@@ -81,7 +82,6 @@ Task 07 does not include:
 
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 15 | Health and doctor readiness | Make `/health` and `doctor` report real dependencies instead of optimistic process liveness. | PostgreSQL, migrations, checkpoint store, provider keys, worker heartbeat, workspace root, and model route availability are checked. |
 | Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, token ledgers, and active wall-clock budgets for solo runtime paths. | Solo long Runs remain bounded without losing required evidence or replay data; money cost budgeting remains deferred. |
 | Task 17 | Distributed team child Runs | Promote graph-internal team execution into Leader-created Teammate, Verifier, and depth-2 Subagent child Runs that independent Workers can claim. | Run lineage, durable assignments, structured mailbox, patch artifact aggregation, verifier gating, recursive cancellation, and real distributed team E2E pass. |
 | Task 18 | Team context and budget hardening | Extend context compaction and budget accounting across Leader, Teammates, Verifier, Subagents, team mailbox, and team evidence. | Team Runs have per-agent context budgets, team evidence compaction, verifier/rework history compression, and parent/child budget coordination. |
@@ -103,9 +103,9 @@ Task 07 does not include:
 | Artifact references are not connected to the main loop | Task 07 |
 | Team E2E is not real end-to-end execution | Resolved in Task 13 for scoped single-Run team runtime; distributed Teammate/Verifier/Subagent child-Run runtime remains Task 17 |
 | Worktrees and branches accumulate permanently | Resolved in Task 14 for explicit managed workspace cleanup; background automatic cleanup remains out of scope |
-| API health and doctor are too optimistic | Task 15 |
+| API health and doctor are too optimistic | Resolved in Task 15 |
 | Local API can bind non-loopback without authentication | Resolved in Task 07 with explicit unsafe gate; production auth remains out of scope |
-| Direct ASGI hosting can bypass the CLI non-loopback gate | Task 15 |
+| Direct ASGI hosting can bypass the CLI non-loopback gate | Resolved in Task 15 |
 | Current capability docs drift from implementation | Resolved for Task 07 solo execution claims; future drift remains tracked by harness |
 
 ## Sequencing Rules
