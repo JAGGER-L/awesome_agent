@@ -35,6 +35,66 @@ class ManagedRunWorktreeManager:
     def branch_for(self, run_id: UUID) -> str:
         return f"awesome-agent/run/{run_id}"
 
+    def read_owner(
+        self,
+        repository_id: UUID,
+        run_id: UUID,
+    ) -> WorktreeOwnership | None:
+        path = self._owner_path(repository_id, run_id)
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        try:
+            return WorktreeOwnership(
+                run_id=str(data["run_id"]),
+                repository_id=str(data["repository_id"]),
+                integration_branch=str(data["integration_branch"]),
+                base_commit=str(data["base_commit"]),
+                created_at=str(data["created_at"]),
+            )
+        except KeyError:
+            return None
+
+    async def worktree_entry(
+        self,
+        repository: Path,
+        target: Path,
+    ) -> tuple[str, str] | None:
+        return await self._worktree_entry(repository, target)
+
+    async def branch_commit(self, repository: Path, branch: str) -> str | None:
+        return await self._branch_commit(repository, branch)
+
+    async def worktree_entries(self, repository: Path) -> dict[Path, tuple[str, str]]:
+        source = normalize_path(repository)
+        result = await run_process(
+            ["git", "worktree", "list", "--porcelain"],
+            command_label="git worktree list",
+            workspace=source,
+            timeout_seconds=30,
+        )
+        if result.exit_code != 0:
+            raise ManagedWorktreeError(result.stderr or result.stdout)
+        return _parse_worktrees(result.stdout)
+
+    async def is_dirty(self, target: Path) -> bool:
+        workspace = normalize_path(target)
+        self._require_managed_target(workspace)
+        result = await run_process(
+            ["git", "status", "--porcelain"],
+            command_label="git status --porcelain",
+            workspace=workspace,
+            timeout_seconds=30,
+        )
+        if result.exit_code != 0:
+            raise ManagedWorktreeError(result.stderr or result.stdout)
+        return bool(result.stdout.strip())
+
     async def provision(
         self,
         *,

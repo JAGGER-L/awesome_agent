@@ -72,6 +72,39 @@ async def test_managed_worktree_is_named_idempotent_and_reversible(
 
 
 @pytest.mark.asyncio
+async def test_managed_worktree_inspection_reports_owner_branch_and_dirty(
+    tmp_path: Path,
+) -> None:
+    repository, base_commit = await _repository(tmp_path)
+    repository_id = uuid4()
+    run_id = uuid4()
+    manager = ManagedRunWorktreeManager(tmp_path / "worktrees")
+    target = await manager.provision(
+        repository=repository,
+        repository_id=repository_id,
+        run_id=run_id,
+        base_commit=base_commit,
+    )
+
+    owner = manager.read_owner(repository_id, run_id)
+    entry = await manager.worktree_entry(repository, target)
+    branch_commit = await manager.branch_commit(
+        repository,
+        manager.branch_for(run_id),
+    )
+    clean = await manager.is_dirty(target)
+    (target / "README.md").write_text("changed\n", encoding="utf-8")
+    dirty = await manager.is_dirty(target)
+
+    assert owner is not None
+    assert owner.run_id == str(run_id)
+    assert entry == (base_commit, manager.branch_for(run_id))
+    assert branch_commit == base_commit
+    assert not clean
+    assert dirty
+
+
+@pytest.mark.asyncio
 async def test_managed_worktree_rejects_target_collision(tmp_path: Path) -> None:
     repository, base_commit = await _repository(tmp_path)
     repository_id = uuid4()
