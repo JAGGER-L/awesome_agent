@@ -7,14 +7,23 @@ from uuid import uuid4
 import pytest
 
 from awesome_agent.domain.enums import (
+    AgentKind,
+    AgentStatus,
     ApprovalStatus,
     DispatchStatus,
     EventType,
     RunStatus,
+    TodoStatus,
 )
 from awesome_agent.domain.models import RunLease
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
-from awesome_agent.persistence.models import ApprovalRecord, RunRecord
+from awesome_agent.persistence.models import (
+    AgentRecord,
+    ApprovalRecord,
+    RunRecord,
+    RuntimeEventRecord,
+    TodoRecord,
+)
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     DispatchConflict,
@@ -36,9 +45,11 @@ class FakeSession:
         *,
         scalar_results: list[object],
         rows: list[object] | None = None,
+        rows_by_table: dict[str, list[object]] | None = None,
     ) -> None:
         self.scalar_results = scalar_results
         self.rows = rows or []
+        self.rows_by_table = rows_by_table or {}
         self.added: list[object] = []
 
     async def __aenter__(self) -> FakeSession:
@@ -47,8 +58,16 @@ class FakeSession:
     async def __aexit__(self, *_: object) -> None:
         pass
 
-    async def scalar(self, _: object) -> object:
-        return self.scalar_results.pop(0)
+    async def scalar(self, statement: object) -> object:
+        if self.scalar_results:
+            return self.scalar_results.pop(0)
+        rendered = str(statement)
+        if "max(runtime_events.sequence)" in rendered:
+            events = _added_events(self)
+            return max((event.sequence for event in events), default=0)
+        if "runtime_events.transition_id" in rendered:
+            return None
+        return None
 
     async def get(
         self,
@@ -58,7 +77,13 @@ class FakeSession:
     ) -> object:
         return self.scalar_results.pop(0)
 
-    async def scalars(self, _: object) -> ScalarRows:
+    async def scalars(self, statement: object) -> ScalarRows:
+        rendered = str(statement)
+        for table, rows in self.rows_by_table.items():
+            if f"FROM {table}" in rendered:
+                return ScalarRows(rows)
+        if "FROM agents" in rendered or "FROM todos" in rendered:
+            return ScalarRows([])
         return ScalarRows(self.rows)
 
     def add(self, value: object) -> None:
@@ -135,6 +160,45 @@ def _approval(record: RunRecord, *, status: ApprovalStatus) -> ApprovalRecord:
         created_at=now,
         updated_at=now,
     )
+
+
+def _leader_record(run_id: object) -> AgentRecord:
+    now = datetime.now(UTC)
+    return AgentRecord(
+        id=uuid4(),
+        run_id=run_id,
+        parent_agent_id=None,
+        kind=AgentKind.LEADER.value,
+        profile="leader",
+        model="fake",
+        status=AgentStatus.RUNNING.value,
+        revision=1,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _todo_record(run_id: object, *, status: TodoStatus) -> TodoRecord:
+    now = datetime.now(UTC)
+    return TodoRecord(
+        id=uuid4(),
+        run_id=run_id,
+        parent_id=None,
+        title="Task",
+        description="",
+        status=status.value,
+        primary_owner_id=None,
+        collaborator_ids=[],
+        acceptance_criteria=[],
+        blocker=None,
+        revision=1,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _added_events(session: FakeSession) -> list[RuntimeEventRecord]:
+    return [item for item in session.added if isinstance(item, RuntimeEventRecord)]
 
 
 @pytest.mark.asyncio
@@ -454,6 +518,107 @@ async def test_graph_projection_transitions_are_fenced() -> None:
     assert record.status == RunStatus.COMPLETED.value
     assert record.dispatch_status == DispatchStatus.TERMINAL.value
     assert record.current_worker_id is None
+
+
+@pytest.mark.asyncio
+async def test_completion_updates_lifecycle_projections_and_events() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.EXECUTING, attempt=1)
+    record.status = RunStatus.RUNNING.value
+    record.current_worker_id = uuid4()
+    record.current_worker_name = "worker"
+    record.fencing_token = 1
+    record.lease_acquired_at = now
+    record.lease_expires_at = now + timedelta(seconds=60)
+    record.heartbeat_at = now
+    leader = _leader_record(record.id)
+    todo = _todo_record(record.id, status=TodoStatus.IN_PROGRESS)
+    session = FakeSession(
+        scalar_results=[now, record, 0],
+        rows_by_table={
+            "agents": [leader],
+            "todos": [todo],
+        },
+    )
+    dispatcher = PostgresRunDispatcher(FakeFactory([session]))  # type: ignore[arg-type]
+
+    await dispatcher.complete_execution(
+        _lease_from(record),
+        result_summary="validated",
+        completion_kind="modifying_validated",
+        goal_executed=True,
+        result_text="done",
+    )
+
+    assert record.status == RunStatus.COMPLETED.value
+    assert record.dispatch_status == DispatchStatus.TERMINAL.value
+    assert record.updated_at == now
+    assert leader.status == AgentStatus.COMPLETED.value
+    assert leader.updated_at == now
+    assert leader.revision == 2
+    assert todo.status == TodoStatus.DONE.value
+    assert todo.updated_at == now
+    assert todo.revision == 2
+    events = _added_events(session)
+    event_types = [event.event_type for event in events]
+    assert EventType.RUN_STATUS_CHANGED.value in event_types
+    assert EventType.AGENT_STATUS_CHANGED.value in event_types
+    assert EventType.TODO_STATUS_CHANGED.value in event_types
+    todo_event = next(
+        event for event in events if event.event_type == EventType.TODO_STATUS_CHANGED
+    )
+    assert todo_event.task_id == todo.id
+    assert todo_event.payload["previous_status"] == TodoStatus.IN_PROGRESS.value
+    assert todo_event.payload["status"] == TodoStatus.DONE.value
+    assert todo_event.payload["revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_failure_updates_lifecycle_projections_and_events() -> None:
+    now = datetime.now(UTC)
+    record = _record(status=DispatchStatus.EXECUTING, attempt=1)
+    record.status = RunStatus.RUNNING.value
+    record.current_worker_id = uuid4()
+    record.current_worker_name = "worker"
+    record.fencing_token = 1
+    record.lease_acquired_at = now
+    record.lease_expires_at = now + timedelta(seconds=60)
+    record.heartbeat_at = now
+    leader = _leader_record(record.id)
+    todo = _todo_record(record.id, status=TodoStatus.IN_PROGRESS)
+    session = FakeSession(
+        scalar_results=[now, record, 0],
+        rows_by_table={
+            "agents": [leader],
+            "todos": [todo],
+        },
+    )
+    dispatcher = PostgresRunDispatcher(FakeFactory([session]))  # type: ignore[arg-type]
+
+    await dispatcher.fail_execution(
+        _lease_from(record),
+        reason="validation failed",
+    )
+
+    assert record.status == RunStatus.FAILED.value
+    assert record.dispatch_status == DispatchStatus.TERMINAL.value
+    assert record.updated_at == now
+    assert leader.status == AgentStatus.FAILED.value
+    assert leader.updated_at == now
+    assert leader.revision == 2
+    assert todo.status == TodoStatus.BLOCKED.value
+    assert todo.blocker == "validation failed"
+    assert todo.updated_at == now
+    assert todo.revision == 2
+    events = _added_events(session)
+    event_types = [event.event_type for event in events]
+    assert EventType.RUN_STATUS_CHANGED.value in event_types
+    assert EventType.AGENT_STATUS_CHANGED.value in event_types
+    assert EventType.TODO_STATUS_CHANGED.value in event_types
+    todo_event = next(
+        event for event in events if event.event_type == EventType.TODO_STATUS_CHANGED
+    )
+    assert todo_event.payload["blocker"] == "validation failed"
 
 
 @pytest.mark.asyncio

@@ -8,19 +8,25 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.domain.enums import (
+    AgentStatus,
     ApprovalStatus,
     DispatchStatus,
     EventType,
     ExecutionKind,
     RunIntent,
     RunStatus,
+    TodoStatus,
 )
 from awesome_agent.domain.models import RunLease, RuntimeEvent
+from awesome_agent.persistence.lifecycle import (
+    transition_agents_for_run,
+    transition_run_status,
+    transition_todos_for_run,
+)
 from awesome_agent.persistence.models import (
     ApprovalRecord,
     RunRecord,
     RuntimeEventRecord,
-    TodoRecord,
 )
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
 
@@ -96,6 +102,7 @@ class PostgresRunDispatcher(RunDispatcher):
             record.lease_acquired_at = now
             record.lease_expires_at = now + lease_duration
             record.heartbeat_at = now
+            record.updated_at = now
             record.last_release_reason = None
             record.last_dispatch_error = None
             await _append_event(
@@ -156,10 +163,11 @@ class PostgresRunDispatcher(RunDispatcher):
             _clear_lease(record)
             record.last_release_reason = reason
             if record.attempt >= max_attempts:
-                await _mark_attempts_exhausted(session, record, reason)
+                await _mark_attempts_exhausted(session, record, now=now, reason=reason)
             else:
                 record.dispatch_status = DispatchStatus.QUEUED.value
                 record.available_at = now
+                record.updated_at = now
                 await _append_event(
                     session,
                     record,
@@ -188,6 +196,7 @@ class PostgresRunDispatcher(RunDispatcher):
             record.cancel_requested_at = record.cancel_requested_at or now
             record.cancel_requested_by = requested_by
             record.cancel_reason = reason
+            record.updated_at = now
             if record.dispatch_status in {
                 DispatchStatus.QUEUED.value,
                 DispatchStatus.RETRY_SCHEDULED.value,
@@ -253,9 +262,7 @@ class PostgresRunDispatcher(RunDispatcher):
         reason: str,
     ) -> None:
         async with self._sessions.begin() as session:
-            record, _ = await _locked_live_lease(session, lease)
-            record.status = RunStatus.PAUSED.value
-            record.dispatch_status = DispatchStatus.WAITING.value
+            record, now = await _locked_live_lease(session, lease)
             record.last_release_reason = reason
             record.last_dispatch_error = None
             _clear_lease(record)
@@ -269,14 +276,14 @@ class PostgresRunDispatcher(RunDispatcher):
                     "approval_id": str(approval_id),
                 },
             )
-            await _append_event(
+            await transition_run_status(
                 session,
                 record,
-                EventType.RUN_STATUS_CHANGED,
-                {
-                    "status": RunStatus.PAUSED.value,
-                    "dispatch_status": DispatchStatus.WAITING.value,
-                    "reason": reason,
+                status=RunStatus.PAUSED,
+                dispatch_status=DispatchStatus.WAITING.value,
+                now=now,
+                reason=reason,
+                extra_payload={
                     "approval_id": str(approval_id),
                 },
             )
@@ -304,8 +311,6 @@ class PostgresRunDispatcher(RunDispatcher):
                 raise KeyError(run_id)
             if record.dispatch_status != DispatchStatus.WAITING.value:
                 return
-            record.status = RunStatus.RUNNING.value
-            record.dispatch_status = DispatchStatus.QUEUED.value
             record.available_at = now
             record.last_release_reason = reason
             record.last_dispatch_error = None
@@ -319,14 +324,14 @@ class PostgresRunDispatcher(RunDispatcher):
                     "approval_id": str(approval_id),
                 },
             )
-            await _append_event(
+            await transition_run_status(
                 session,
                 record,
-                EventType.RUN_STATUS_CHANGED,
-                {
-                    "status": RunStatus.RUNNING.value,
-                    "dispatch_status": DispatchStatus.QUEUED.value,
-                    "reason": reason,
+                status=RunStatus.RUNNING,
+                dispatch_status=DispatchStatus.QUEUED.value,
+                now=now,
+                reason=reason,
+                extra_payload={
                     "approval_id": str(approval_id),
                 },
             )
@@ -373,8 +378,6 @@ class PostgresRunDispatcher(RunDispatcher):
                     transition_id=f"approval-expired:{approval.id}",
                 )
                 if record.dispatch_status == DispatchStatus.WAITING.value:
-                    record.status = RunStatus.RUNNING.value
-                    record.dispatch_status = DispatchStatus.QUEUED.value
                     record.available_at = now
                     record.last_release_reason = "approval_expired"
                     record.last_dispatch_error = None
@@ -387,6 +390,15 @@ class PostgresRunDispatcher(RunDispatcher):
                             "next_status": DispatchStatus.QUEUED.value,
                             "approval_id": str(approval.id),
                         },
+                    )
+                    await transition_run_status(
+                        session,
+                        record,
+                        status=RunStatus.RUNNING,
+                        dispatch_status=DispatchStatus.QUEUED.value,
+                        now=now,
+                        reason="approval_expired",
+                        extra_payload={"approval_id": str(approval.id)},
                     )
             return len(approvals)
 
@@ -409,10 +421,11 @@ class PostgresRunDispatcher(RunDispatcher):
             record.last_release_reason = reason
             record.last_dispatch_error = error
             if record.attempt >= max_attempts:
-                await _mark_attempts_exhausted(session, record, reason)
+                await _mark_attempts_exhausted(session, record, now=now, reason=reason)
             else:
                 record.dispatch_status = DispatchStatus.RETRY_SCHEDULED.value
                 record.available_at = now + delay
+                record.updated_at = now
                 await _append_event(
                     session,
                     record,
@@ -458,9 +471,15 @@ class PostgresRunDispatcher(RunDispatcher):
                 expired_token = record.fencing_token
                 _clear_lease(record)
                 if record.attempt >= max_attempts:
-                    record.status = RunStatus.RECOVERY_REQUIRED.value
-                    record.dispatch_status = DispatchStatus.TERMINAL.value
                     record.last_release_reason = "maximum attempts exceeded"
+                    await transition_run_status(
+                        session,
+                        record,
+                        status=RunStatus.RECOVERY_REQUIRED,
+                        dispatch_status=DispatchStatus.TERMINAL.value,
+                        now=now,
+                        reason="maximum attempts exceeded",
+                    )
                     await _append_event(
                         session,
                         record,
@@ -474,6 +493,7 @@ class PostgresRunDispatcher(RunDispatcher):
                 else:
                     record.dispatch_status = DispatchStatus.QUEUED.value
                     record.available_at = now
+                    record.updated_at = now
                     record.last_release_reason = "lease expired"
                     await _append_event(
                         session,
@@ -495,11 +515,17 @@ class PostgresRunDispatcher(RunDispatcher):
         graph_version: int,
     ) -> None:
         async with self._sessions.begin() as session:
-            record, _ = await _locked_live_lease(session, lease)
+            record, now = await _locked_live_lease(session, lease)
             if record.graph_name != graph_name or record.graph_version != graph_version:
                 raise ValueError("Run graph identity does not match the executor.")
-            record.status = RunStatus.RUNNING.value
-            record.dispatch_status = DispatchStatus.EXECUTING.value
+            await transition_run_status(
+                session,
+                record,
+                status=RunStatus.RUNNING,
+                dispatch_status=DispatchStatus.EXECUTING.value,
+                now=now,
+                reason="graph_started",
+            )
             await _append_event(
                 session,
                 record,
@@ -522,21 +548,36 @@ class PostgresRunDispatcher(RunDispatcher):
         result_text: str | None = None,
     ) -> None:
         async with self._sessions.begin() as session:
-            record, _ = await _locked_live_lease(session, lease)
-            record.status = RunStatus.COMPLETED.value
-            record.dispatch_status = DispatchStatus.TERMINAL.value
+            record, now = await _locked_live_lease(session, lease)
             record.last_release_reason = "graph completed"
             record.result_text = result_text
+            await transition_run_status(
+                session,
+                record,
+                status=RunStatus.COMPLETED,
+                dispatch_status=DispatchStatus.TERMINAL.value,
+                now=now,
+                reason="graph completed",
+            )
+            await transition_agents_for_run(
+                session,
+                run_id=record.id,
+                status=AgentStatus.COMPLETED,
+                now=now,
+                reason="graph completed",
+            )
             if completion_kind in {
                 "read_only_coding",
                 "modifying_unvalidated",
                 "modifying_validated",
             }:
-                for todo in await session.scalars(
-                    select(TodoRecord).where(TodoRecord.run_id == record.id)
-                ):
-                    todo.status = "done"
-                    todo.updated_at = record.updated_at
+                await transition_todos_for_run(
+                    session,
+                    run_id=record.id,
+                    status=TodoStatus.DONE,
+                    now=now,
+                    reason="graph completed",
+                )
             _clear_lease(record)
             await _append_event(
                 session,
@@ -557,27 +598,33 @@ class PostgresRunDispatcher(RunDispatcher):
         reason: str,
     ) -> None:
         async with self._sessions.begin() as session:
-            record, _ = await _locked_live_lease(session, lease)
-            record.status = RunStatus.FAILED.value
-            record.dispatch_status = DispatchStatus.TERMINAL.value
+            record, now = await _locked_live_lease(session, lease)
             record.last_release_reason = reason
             record.last_dispatch_error = reason
-            for todo in await session.scalars(
-                select(TodoRecord).where(TodoRecord.run_id == record.id)
-            ):
-                todo.status = "blocked"
-                todo.blocker = reason
-            _clear_lease(record)
-            await _append_event(
+            await transition_run_status(
                 session,
                 record,
-                EventType.RUN_STATUS_CHANGED,
-                {
-                    "status": RunStatus.FAILED.value,
-                    "dispatch_status": DispatchStatus.TERMINAL.value,
-                    "reason": reason,
-                },
+                status=RunStatus.FAILED,
+                dispatch_status=DispatchStatus.TERMINAL.value,
+                now=now,
+                reason=reason,
             )
+            await transition_agents_for_run(
+                session,
+                run_id=record.id,
+                status=AgentStatus.FAILED,
+                now=now,
+                reason=reason,
+            )
+            await transition_todos_for_run(
+                session,
+                run_id=record.id,
+                status=TodoStatus.BLOCKED,
+                now=now,
+                reason=reason,
+                blocker=reason,
+            )
+            _clear_lease(record)
 
     async def mark_recovery_required(
         self,
@@ -586,11 +633,24 @@ class PostgresRunDispatcher(RunDispatcher):
         reason: str,
     ) -> None:
         async with self._sessions.begin() as session:
-            record, _ = await _locked_live_lease(session, lease)
-            record.status = RunStatus.RECOVERY_REQUIRED.value
-            record.dispatch_status = DispatchStatus.TERMINAL.value
+            record, now = await _locked_live_lease(session, lease)
             record.last_release_reason = reason
             record.last_dispatch_error = reason
+            await transition_run_status(
+                session,
+                record,
+                status=RunStatus.RECOVERY_REQUIRED,
+                dispatch_status=DispatchStatus.TERMINAL.value,
+                now=now,
+                reason=reason,
+            )
+            await transition_agents_for_run(
+                session,
+                run_id=record.id,
+                status=AgentStatus.FAILED,
+                now=now,
+                reason=reason,
+            )
             _clear_lease(record)
             await _append_event(
                 session,
@@ -709,10 +769,25 @@ def _clear_lease(record: RunRecord) -> None:
 async def _mark_attempts_exhausted(
     session: AsyncSession,
     record: RunRecord,
+    *,
+    now: datetime,
     reason: str,
 ) -> None:
-    record.status = RunStatus.RECOVERY_REQUIRED.value
-    record.dispatch_status = DispatchStatus.TERMINAL.value
+    await transition_run_status(
+        session,
+        record,
+        status=RunStatus.RECOVERY_REQUIRED,
+        dispatch_status=DispatchStatus.TERMINAL.value,
+        now=now,
+        reason=reason,
+    )
+    await transition_agents_for_run(
+        session,
+        run_id=record.id,
+        status=AgentStatus.FAILED,
+        now=now,
+        reason=reason,
+    )
     await _append_event(
         session,
         record,
@@ -731,24 +806,34 @@ async def _cancel_record(
     now: datetime,
     reason: str | None,
 ) -> RuntimeEvent:
-    record.status = RunStatus.CANCELLED.value
-    record.dispatch_status = DispatchStatus.TERMINAL.value
     record.available_at = now
     record.last_release_reason = "cancelled"
     record.last_dispatch_error = None
-    record.updated_at = now
-    _clear_lease(record)
-    return await _append_event(
+    event = await transition_run_status(
         session,
         record,
-        EventType.RUN_STATUS_CHANGED,
-        {
-            "status": RunStatus.CANCELLED.value,
-            "dispatch_status": DispatchStatus.TERMINAL.value,
-            "reason": reason,
-        },
+        status=RunStatus.CANCELLED,
+        dispatch_status=DispatchStatus.TERMINAL.value,
+        now=now,
+        reason=reason,
         transition_id=f"cancelled:{record.id}",
     )
+    await transition_agents_for_run(
+        session,
+        run_id=record.id,
+        status=AgentStatus.CANCELLED,
+        now=now,
+        reason=reason,
+    )
+    await transition_todos_for_run(
+        session,
+        run_id=record.id,
+        status=TodoStatus.CANCELLED,
+        now=now,
+        reason=reason,
+    )
+    _clear_lease(record)
+    return event
 
 
 async def _deny_pending_approvals_for_cancel(

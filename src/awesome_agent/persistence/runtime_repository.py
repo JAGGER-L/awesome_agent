@@ -310,7 +310,9 @@ def _agent_to_record(agent: Agent) -> AgentRecord:
         profile=agent.profile,
         model=agent.model,
         status=agent.status.value,
+        revision=agent.revision,
         created_at=agent.created_at,
+        updated_at=agent.updated_at,
     )
 
 
@@ -323,7 +325,9 @@ def _agent_from_record(record: AgentRecord) -> Agent:
         profile=record.profile,
         model=record.model,
         status=AgentStatus(record.status),
+        revision=record.revision,
         created_at=record.created_at,
+        updated_at=record.updated_at,
     )
 
 

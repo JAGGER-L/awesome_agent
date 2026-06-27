@@ -117,7 +117,9 @@ class AgentRecord(Base):
     profile: Mapped[str] = mapped_column(String(128))
     model: Mapped[str] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class TodoRecord(Base):

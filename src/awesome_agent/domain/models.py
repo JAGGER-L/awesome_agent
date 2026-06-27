@@ -117,7 +117,9 @@ class Agent(BaseModel):
     profile: str
     model: str
     status: AgentStatus = AgentStatus.CREATED
+    revision: int = 1
     created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class TodoItem(BaseModel):
