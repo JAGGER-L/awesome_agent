@@ -82,8 +82,9 @@ Task 07 does not include:
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
 | Task 15 | Health and doctor readiness | Make `/health` and `doctor` report real dependencies instead of optimistic process liveness. | PostgreSQL, migrations, checkpoint store, provider keys, worker heartbeat, workspace root, and model route availability are checked. |
-| Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, wall-clock budget, and cost budget. | Long Runs remain bounded without losing required evidence or replay data. |
+| Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, token ledgers, and active wall-clock budgets for solo runtime paths. | Solo long Runs remain bounded without losing required evidence or replay data; money cost budgeting remains deferred. |
 | Task 17 | Distributed team child Runs | Promote graph-internal Teammates into Leader-created child Runs that independent Workers can claim. | Parent/child Run lineage, status propagation, checkpoint coordination, cross-Run cancellation, and result aggregation pass E2E. |
+| Task 18 | Team context and budget hardening | Extend context compaction and budget accounting across Leader, Teammates, Verifier, Subagents, team mailbox, and team evidence. | Team Runs have per-agent context budgets, team evidence compaction, verifier/rework history compression, and parent/child budget coordination. |
 
 ## Gap Disposition
 
@@ -96,7 +97,7 @@ Task 07 does not include:
 | Running Runs cannot be cancelled | Resolved in Task 09 for solo runtime paths |
 | Deterministic validation and rework do not exist | Resolved in Task 10 for solo modifying runs |
 | One successful read is not enough proof for answer correctness | Future read-only answer validation hardening; Task 10 covers modifying validation only |
-| Context and checkpoints can grow quickly | Minimal artifact/prompt guard in Task 07; full budget system in Task 16 |
+| Context and checkpoints can grow quickly | Minimal artifact/prompt guard in Task 07; solo context/token/wall-clock budget system in Task 16; team hardening in Task 18 |
 | Lifecycle projections are inconsistent | Resolved in Task 11 for solo runtime paths |
 | Observability score is too high for current evidence | Resolved in Task 12 for solo runtime paths |
 | Artifact references are not connected to the main loop | Task 07 |
@@ -116,5 +117,7 @@ Task 07 does not include:
 - Do not claim distributed multi-Worker team runtime capability until Task 17
   passes real E2E. Current team mode is scoped to one Run, one Worker, and one
   checkpoint thread.
+- Do not claim complete team context budgeting until Task 18 passes evidence
+  across Leader, Teammate, Verifier, Subagent, mailbox, and team evidence paths.
 - Do not raise quality scores unless executable evidence exists in tests,
   health checks, traces, or durable query APIs.
