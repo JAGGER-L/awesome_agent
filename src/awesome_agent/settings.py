@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     max_parallel_read_tools: int = Field(default=4, ge=1, le=32)
     agent_graph_recursion_limit: int = Field(default=256, ge=16, le=4096)
     no_progress_turns: int = Field(default=8, ge=2, le=100)
+    soft_context_tokens: int = Field(default=60_000, ge=1_000)
+    hard_context_tokens: int = Field(default=90_000, ge=1_000)
+    recent_context_tokens: int = Field(default=24_000, ge=1_000)
+    max_total_tokens_per_run: int = Field(default=500_000, ge=1_000)
+    max_reasoning_tokens_per_run: int = Field(default=250_000, ge=0)
+    max_active_seconds_per_run: int = Field(default=3600, ge=60)
     builtin_memory_enabled: bool = False
     mem0_enabled: bool = False
     max_teammates: int = Field(default=6, ge=1)
@@ -69,4 +75,8 @@ class Settings(BaseSettings):
     def validate_heartbeat_interval(self) -> "Settings":
         if self.heartbeat_interval_seconds >= self.lease_duration_seconds:
             raise ValueError("Heartbeat interval must be shorter than lease duration.")
+        if self.soft_context_tokens >= self.hard_context_tokens:
+            raise ValueError("Soft context token limit must be below hard limit.")
+        if self.recent_context_tokens >= self.hard_context_tokens:
+            raise ValueError("Recent context token limit must be below hard limit.")
         return self
