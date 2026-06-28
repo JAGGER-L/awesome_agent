@@ -1,4 +1,4 @@
-# Runtime Agent Harness
+﻿# Runtime Agent Harness
 
 ## Scope
 
@@ -65,7 +65,7 @@ of each for normal local use. API request handling never owns the lifetime of a
 coding Run.
 
 The Worker claims diagnostic `runtime_probe` Runs and read-only Coding Runs
-routed to `solo-readonly@1`. Modifying Coding Runs remain queued. The read-only
+routed to `solo-readonly`. Modifying Coding Runs remain queued. The read-only
 graph must loop through the centralized tool registry and may finish only after
 successful repository inspection.
 

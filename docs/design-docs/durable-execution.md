@@ -1,4 +1,4 @@
-# Durable Execution
+﻿# Durable Execution
 
 ## Purpose
 
@@ -80,9 +80,9 @@ The API exposes both values. Product UI may present a combined label but cannot
 discard either state.
 
 Current implementation note: the Worker executes `runtime_probe`, distributed
-team graphs `team-coding@2`, `team-role@1`, and `team-verifier@1`. When a model
-provider is configured, it also executes `solo-readonly@1`,
-`solo-modifying@1`, and scoped `team-coding@1`. Modifying solo Runs can pause
+team graphs `team-coding`, `team-role`, and `team-verifier`. When a model
+provider is configured, it also executes `solo-readonly`,
+`solo-modifying`, and scoped `team-coding-scoped`. Modifying solo Runs can pause
 for durable exact-invocation approval and resume from the LangGraph checkpoint.
 Distributed team parent Runs release to child-wait states; child Runs commit
 terminal assignment state and requeue the waiting parent.
@@ -118,8 +118,8 @@ reaches a safe boundary.
 
 ## Current Probe Graph
 
-Task 04 persists `execution_kind`, `graph_name`, and `graph_version`. The Worker
-claims only `runtime_probe` and executes:
+Task 04 persists `execution_kind` and `graph_name`. The Worker claims only
+`runtime-probe` and executes:
 
 ```text
 initialize -> checkpoint_probe -> finalize
@@ -279,7 +279,7 @@ displayable reasoning may later reach the frontend, while continuation is
 checkpoint-only and omitted from public serialization. The Coding Worker does
 not consume model turns until Task 06.
 
-Task 06 adds `solo-readonly@1`, a checkpointed model-tool-model loop with
+Task 06 adds `solo-readonly`, a checkpointed model-tool-model loop with
 explicit tool and feedback back edges. Read-only tool failures return to the
 model as structured observations; retryable infrastructure failures release
 the Worker for durable retry; normal permanent execution failures become
@@ -305,7 +305,7 @@ the worker releases its lease. Decisions use compare-and-set semantics and are
 idempotent. Resume revalidates every binding before executing the same
 invocation.
 
-For `solo-modifying@1`, ambiguous shell commands now follow this path:
+For `solo-modifying`, ambiguous shell commands now follow this path:
 
 1. `ToolExecutor` raises `ApprovalRequired`.
 2. The graph upserts one `approvals` row, emits `approval.requested`, and calls
@@ -341,7 +341,7 @@ Clearly read-only detected checks may execute automatically in Docker. Custom,
 ambiguous, networked, installation, migration, deployment, or write-capable
 commands require approval.
 
-Task 10 implements this contract for `solo-modifying@1`. The graph resolves a
+Task 10 implements this contract for `solo-modifying`. The graph resolves a
 configured or conservatively detected validation plan after the final diff,
 executes gates through the central shell/tool boundary, persists validation
 reports and gate results, and only finalizes after required gates pass. If no
@@ -365,7 +365,7 @@ Solo completion requires:
 ## Team Runtime Contract
 
 Team execution is explicit. CLI `--team` or API `mode: "team"` routes a coding
-Run to distributed `team-coding@2`; default read-only and modifying Runs remain
+Run to distributed `team-coding`; default read-only and modifying Runs remain
 solo.
 
 Task 13 implements a scoped v1 team graph:
@@ -388,7 +388,7 @@ Verifier execution or external failures use a separate retry budget and default
 to one retry. These defaults are intentionally conservative and tracked as
 policy-tuning debt.
 
-Task 17 adds distributed `team-coding@2`:
+Task 17 adds distributed `team-coding`:
 
 - the root Leader Run creates durable Teammate child Runs;
 - each Teammate can create bounded depth-one Subagent child Runs;

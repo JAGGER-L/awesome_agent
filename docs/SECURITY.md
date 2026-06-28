@@ -1,4 +1,4 @@
-# Security
+﻿# Security
 
 - Docker is the default execution boundary.
 - Host execution requires explicit CLI `--trusted-local` consent.
@@ -59,7 +59,7 @@
   repository-content capability.
 - `POST /runtime/probes` selects the fixed supported probe graph on the server;
   callers cannot supply arbitrary graph names or versions.
-- `solo-readonly@1` exposes only bounded `status`, `list`, literal `search`,
+- `solo-readonly` exposes only bounded `status`, `list`, literal `search`,
   `read`, and instruction-discovery tools against the managed Run worktree.
 - Read tools reject absolute/parent paths, `.git`, symlink or junction
   traversal, binary files, and common credential/private-key files.

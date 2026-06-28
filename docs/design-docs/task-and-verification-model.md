@@ -1,4 +1,4 @@
-# Task and Verification Model
+﻿# Task and Verification Model
 
 The Leader owns a dynamic task tree. Every task has one primary owner, optional
 collaborators, acceptance criteria, dependencies, blockers, evidence, and full
@@ -31,7 +31,7 @@ Verifier failure is classified before choosing rework or failure:
   fail the Run if the review cannot be completed safely.
 
 Task 13 defaults to 10 verification-rejection reworks and one verifier
-execution retry for `team-coding@1`. These are conservative defaults, not a
+execution retry for `team-coding-scoped`. These are conservative defaults, not a
 final product policy; tuning by task type, model quality, cost, and risk is
 tracked as technical debt.
 

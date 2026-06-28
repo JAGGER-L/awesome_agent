@@ -1,4 +1,4 @@
-# Reliability
+﻿# Reliability
 
 V1 reliability requirements:
 
@@ -49,7 +49,7 @@ forbidden.
 - Ambiguous state enters `recovery_required` and preserves the workspace,
   diff, artifacts, and failure evidence.
 - Durable approval waits are implemented for exact tool invocations in
-  `solo-modifying@1`: the approval row and LangGraph checkpoint are durable
+  `solo-modifying`: the approval row and LangGraph checkpoint are durable
   before the worker releases the lease as `paused + waiting`.
 - Durable cancellation is implemented for current solo runtime paths. Queued,
   retry-scheduled, and waiting-approval Runs cancel atomically. Claimed and
@@ -70,9 +70,9 @@ forbidden.
 - Expired leases requeue before the attempt limit. At the limit, the Run enters
   `recovery_required + terminal` and preserves its workspace.
 - Each Worker process executes at most one Run. Workers always claim
-  `runtime_probe` and distributed team graphs `team-coding@2`, `team-role@1`,
-  and `team-verifier@1`. When a model provider is configured, they also claim
-  `solo-readonly@1`, `solo-modifying@1`, and scoped `team-coding@1`.
+  `runtime_probe` and distributed team graphs `team-coding`, `team-role`,
+  and `team-verifier`. When a model provider is configured, they also claim
+  `solo-readonly`, `solo-modifying`, and scoped `team-coding-scoped`.
 - Probe checkpoints use synchronous LangGraph durability. Process-crash tests
   prove lease expiry, fencing-token increment, and checkpoint resume.
 - Graceful Worker shutdown stops new claims, retains heartbeat during a

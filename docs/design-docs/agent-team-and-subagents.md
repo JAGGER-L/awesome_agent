@@ -1,4 +1,4 @@
-# Agent Team and Subagents
+﻿# Agent Team and Subagents
 
 ## Leader
 
@@ -18,7 +18,7 @@ A team contains at most six Teammates, including exactly one primary Verifier.
 
 Team mode is explicit. It is selected with CLI `--team` or API `mode: "team"`.
 Intake still creates only the Leader. Current default routing uses distributed
-`team-coding@2`, where the Leader Run creates child Runs for Teammates and the
+`team-coding`, where the Leader Run creates child Runs for Teammates and the
 Verifier, and each Teammate may create bounded Subagent child Runs.
 
 ## Teammates
@@ -35,8 +35,8 @@ Each Teammate receives a Leader assignment containing `allowed_tools`,
 delegation permission, Subagent limits, acceptance criteria, and handoff
 context. Effective tools are `allowed_tools - (deferred_tools -
 promoted_tools)`, so the Leader can grant a tool but defer exposing it until a
-later promotion step. In scoped `team-coding@1`, tools are executed inside one
-Run. In distributed `team-coding@2`, the assignment is durable data for the
+later promotion step. In scoped `team-coding-scoped`, tools are executed inside one
+Run. In distributed `team-coding`, the assignment is durable data for the
 Teammate child Run; the first distributed skeleton records permissions and
 results but does not yet execute model-driven team tools.
 
@@ -70,7 +70,7 @@ The current implementation persists agents, Todos, runtime events, model-call
 records, side-effecting tool invocations, validation reports, and observability
 spans for frontend inspection.
 
-`team-coding@1` is kept as a scoped runtime and regression target. It proves
+`team-coding-scoped` is kept as a scoped runtime and regression target. It proves
 team lifecycle, tool, verifier, and validation behavior inside one durable Run,
 but it is not the forward production architecture for independently scheduled
 Teammates or Subagents.
@@ -101,7 +101,7 @@ large handoff, child-result, and verifier evidence payloads. Rich model-driven
 role planning, team tool execution, and verifier rework loops remain later
 work.
 
-This boundary is intentional. In `team-coding@2`, Leader, role, and Verifier
+This boundary is intentional. In `team-coding`, Leader, role, and Verifier
 graphs are production-wired for dispatch and persistence, but the child role
 graphs currently execute deterministic assignments instead of autonomous
 model/tool loops. Leader patch aggregation can apply child patch artifacts when

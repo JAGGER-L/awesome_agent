@@ -1,4 +1,4 @@
-# Architecture
+﻿# Architecture
 
 ## System Intent
 
@@ -186,12 +186,12 @@ awesome-agent start
 
 Each Worker process executes at most one Run. Workers always claim the
 diagnostic `runtime_probe` graph and, when model providers are configured, also
-claim `solo-readonly@1`, `solo-modifying@1`, and explicit `team-coding@1`
+claim `solo-readonly`, `solo-modifying`, and explicit `team-coding-scoped`
 Runs. Workers also publish process heartbeat rows for readiness; Run lease
 heartbeat remains a separate fencing mechanism. A crashed Worker leaves its
 checkpoint and lease; after lease expiry, a
 replacement Worker claims with a new fencing token and resumes from the
-checkpoint. Unsupported graph versions enter `recovery_required`.
+checkpoint. Unsupported graph names enter `recovery_required`.
 
 ## Agent Orchestration Topology
 
@@ -246,13 +246,13 @@ The Verifier is a specialized Teammate created whenever team mode starts.
 Teammate output reaches the Leader only after verification passes or after
 rejected work is revised and re-verified.
 
-Scoped `team-coding@1` uses one Run, one Worker claim, and one LangGraph
+Scoped `team-coding-scoped` uses one Run, one Worker claim, and one LangGraph
 checkpoint thread. The graph creates durable internal agent sessions for two
 Teammates, one Verifier, and bounded Subagents, and it records model calls,
 tool invocations, Todo transitions, validation reports, events, and
 observability spans.
 
-Distributed `team-coding@2` is the forward architecture. The root Leader Run
+Distributed `team-coding` is the forward architecture. The root Leader Run
 creates child Runs with durable lineage. Independent Workers can claim
 Teammate, Subagent, and Verifier child Runs through the same PostgreSQL
 dispatch protocol. Parent Runs release their lease while waiting for child
@@ -261,14 +261,14 @@ work and are requeued when child assignments become terminal.
 ```text
                          +----------------------+
                          | Root Run             |
-                         | Leader team-coding@2 |
+                         | Leader team-coding |
                          +----------+-----------+
                                     |
                                     | creates assignment + child Run
                                     v
                          +----------------------+
                          | Child Run            |
-                         | Teammate team-role@1 |
+                         | Teammate team-role |
                          +----------+-----------+
                                     |
                       creates bounded Subagent child Runs
@@ -276,7 +276,7 @@ work and are requeued when child assignments become terminal.
                                     v
                          +----------------------+
                          | Grandchild Run       |
-                         | Subagent team-role@1 |
+                         | Subagent team-role |
                          +----------+-----------+
                                     |
                          terminal result wakes Teammate
@@ -284,7 +284,7 @@ work and are requeued when child assignments become terminal.
                                     v
                          +----------------------+
                          | Child Run            |
-                         | Verifier team-verifier@1 |
+                         | Verifier team-verifier |
                          +----------+-----------+
                                     |
                          pass/fail mailbox message wakes Leader
@@ -402,8 +402,8 @@ modifying, and explicit team Coding graphs when a model provider is configured.
 
 ## Read-Only Coding Loop
 
-Workers with a configured model provider also advertise the versioned
-`coding + read_only + solo-readonly@1` route. The graph contains explicit
+Workers with a configured model provider also advertise the
+`coding + read_only + solo-readonly` route. The graph contains explicit
 `execute_tools -> model_turn` and `feedback -> model_turn` back edges, so tool
 selection and iteration count are model-driven rather than a fixed workflow.
 Only evidence-backed final answers terminate successfully.
@@ -413,8 +413,8 @@ complete node, loop, budget, tool, failure, and recovery contract.
 
 ## Modifying Coding Loop
 
-Workers with a configured model provider also advertise the versioned
-`coding + modifying + solo-modifying@1` route. The graph loops through model
+Workers with a configured model provider also advertise the
+`coding + modifying + solo-modifying` route. The graph loops through model
 turns and sequential tool execution. It exposes read tools, `repo.apply_patch`,
 `repo.diff`, `artifact.read`, and Docker-backed `shell.execute`.
 
@@ -432,10 +432,10 @@ failure marks the Run failed.
 ## Team Coding Loop
 
 Workers with a configured model provider also advertise explicit
-`coding + modifying + team-coding@1` routes. The caller must request team mode;
+`coding + modifying + team-coding-scoped` routes. The caller must request team mode;
 default modifying Runs stay on the solo modifying graph.
 
-`team-coding@1` is a real but bounded team runtime path. Intake creates only
+`team-coding-scoped` is a real but bounded team runtime path. Intake creates only
 the Leader. The graph then creates role assignments with `allowed_tools` and
 `allowed_skills`, a backend Teammate, a repository-explorer Teammate, one
 Verifier, and a backend-owned read-only Subagent. Repository tools still execute
@@ -567,7 +567,7 @@ target contract.
 ## Context And Budget Boundaries
 
 Task 16 adds a shared context manager and per-Run budget ledger. Solo
-`solo-readonly@1` and `solo-modifying@1` model turns compact context before
+`solo-readonly` and `solo-modifying` model turns compact context before
 provider calls when the soft context limit is crossed. Removed messages and
 oversized tool observations are written to artifact storage; checkpoints retain
 a deterministic rolling summary plus recent evidence. Compactions are visible
@@ -577,7 +577,7 @@ through `context.compacted` events, `context_compactions` rows,
 The budget ledger records input, output, reasoning tokens, model-call count,
 threshold status, and active Worker execution seconds. Worker active time is
 opened only while graph work is executing and is closed before approval wait,
-pause, retry, completion, or failure is projected. `team-coding@1` currently
+pause, retry, completion, or failure is projected. `team-coding-scoped` currently
 gets global token and active wall-clock guards only; per-agent team context
 compaction remains Task 18. Money cost budgeting is not implemented yet.
 
@@ -590,7 +590,7 @@ Writing Teammates use isolated Git worktrees.
 Approval is scoped to one exact canonical tool invocation. Repository
 validation configuration and inferred project commands are untrusted input;
 only strongly evidenced check-only commands may run automatically.
-In `solo-modifying@1`, ambiguous shell execution creates a durable
+In `solo-modifying`, ambiguous shell execution creates a durable
 `approvals` row, checkpoints with LangGraph `interrupt(value)`, releases the
 worker lease as `paused + waiting`, and resumes with `Command(resume=...)`
 after API/CLI decision. Resume revalidates the canonical arguments hash, tool

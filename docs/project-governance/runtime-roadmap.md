@@ -1,4 +1,4 @@
-# Runtime Roadmap
+﻿# Runtime Roadmap
 
 This roadmap tracks durable `awesome_agent` product work. Local execution
 plans under `.codex/exec-plans/` are implementation notes for repository
@@ -20,12 +20,13 @@ agents; they are not the durable product roadmap.
 | Task 10 | Done | Deterministic validation gates, verifier feedback, bounded model rework, durable validation evidence, and terminal failure semantics. |
 | Task 11 | Done | Consistent Run, Agent, Todo, event, revision, and `updated_at` lifecycle projections for solo runtime paths. |
 | Task 12 | Done | Solo runtime observability with trace IDs, query-table spans, metrics, model calls, latency, and exporter isolation. |
-| Task 13 | Done | Explicit scoped `team-coding@1` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
+| Task 13 | Done | Explicit scoped `team-coding-scoped` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
 | Task 14 | Done | Explicit managed workspace listing and dry-run-first cleanup with ownership, lease, branch, dirty, force, and recovery evidence protections. |
 | Task 15 | Done | Split `/health` liveness from structured `/ready` and `doctor --profile` readiness; checks PostgreSQL, migrations, checkpoint store, workspace root, provider keys, model routes, API bind policy, and Worker heartbeat registry. |
 | Task 16 | Done | Artifact-backed solo context compaction, durable token ledgers, active Worker execution budgets, budget/compaction APIs and CLI, and team global budget guards; money cost budget remains deferred. |
 | Task 17 | Done | Distributed team child-run skeleton with durable lineage, assignments, mailbox, child results, recursive cancellation, inspection APIs/CLI, production Worker wiring, and PostgreSQL integration/E2E evidence. |
 | Task 18 | Done | Root-aware distributed team budget checks, deferred assignment tool exposure, and artifact-backed compaction for large handoff, child-result, verifier evidence, and mailbox payloads. |
+| Task 19 | Done | Pre-production graph-version removal, baseline migration squash, and ThinGraph, AgentLoop, middleware, and checkpoint-boundary contracts. |
 
 ## Completed Detail: Task 07 Isolated Mutation Sandbox and Shell
 
@@ -34,7 +35,7 @@ safety model. It was completed on 2026-06-26.
 
 Task 07 includes:
 
-- route `coding + modifying` Runs to `solo-modifying@1` and make Workers claim
+- route `coding + modifying` Runs to `solo-modifying` and make Workers claim
   that graph so `awesome-agent run "fix bug" --repo ...` cannot remain queued
   forever solely because no route exists;
 - move read-only and modifying graph tool calls through the centralized tool
@@ -85,11 +86,9 @@ Task 07 does not include:
 
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 17 | Distributed team child Runs | Promote graph-internal team execution into Leader-created Teammate, Verifier, and depth-2 Subagent child Runs that independent Workers can claim. | Run lineage, durable assignments, structured mailbox, patch artifact aggregation, verifier gating, recursive cancellation, and real distributed team E2E pass. |
-| Task 19 | Agent loop and middleware contracts | Introduce ThinGraph, AgentLoop, ordered middleware stages, and durable/non-durable checkpoint boundaries without migrating existing graphs yet. | Interfaces, ordering rules, budget/error/interrupt contracts, and focused tests prove the new runtime shell can host a model-tool loop. |
 | Task 20 | Solo read-only middleware migration | Move solo read-only cross-cutting behavior into the AgentLoop/middleware stack. | `solo-readonly` behavior and tests remain equivalent while graph code owns only durable routing and terminal state. |
 | Task 21 | Solo modifying middleware migration | Move modifying approval, tool execution, sandbox, validation, rework, artifact, and context behavior behind middleware boundaries. | `solo-modifying` keeps existing safety/evidence guarantees with smaller graph responsibility and regression tests. |
-| Task 22 | Model-driven distributed team runtime | Replace deterministic `team-coding@2` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
+| Task 22 | Model-driven distributed team runtime | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
 | Task 23 | OpenTelemetry runtime instrumentation | Add real OTel spans/metrics on API and Worker production paths while preserving durable query tables. | Worker/model/tool/sandbox/API spans are created, exporter failures are isolated, and trace IDs remain queryable through durable events. |
 | Task 24 | Graph file size reduction | Split remaining oversized graph files after middleware migration makes stable extraction points clear. | Large graph modules are reduced to durable orchestration with focused unit tests for extracted components. |
 

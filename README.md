@@ -1,4 +1,4 @@
-# awesome_agent
+﻿# awesome_agent
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -46,14 +46,14 @@ PostgreSQL:
 
 ### Coding execution (implemented)
 
-- **Read-only Coding Runs** execute through the checkpointed `solo-readonly@1`
+- **Read-only Coding Runs** execute through the checkpointed `solo-readonly`
   Agent loop with bounded repository tools (`repo.status`, `repo.list`,
   `repo.search`, `repo.read`, `repo.instructions`), up to four concurrent
   read-only calls with deterministic order, model-driven tool/feedback back
   edges, convergence feedback, no-progress detection, and evidence-gated
   completion. A deterministic PostgreSQL + fake-provider E2E test covers the
   full loop.
-- **Modifying Coding Runs** route to `solo-modifying@1`, add `repo.apply_patch`,
+- **Modifying Coding Runs** route to `solo-modifying`, add `repo.apply_patch`,
   `repo.diff`, Docker-backed `shell.execute`, and `artifact.read`, execute
   writes sequentially, offload oversized tool output to artifact storage, and
   persist side-effecting tool invocations with idempotency metadata. Completion
@@ -62,9 +62,9 @@ PostgreSQL:
   conservative project detection. Failed required gates feed a bounded rework
   loop; exhausted or non-reworkable validation failure marks the Run failed.
 - **Explicit Team Coding Runs** are selected with CLI `--team` or API
-  `mode: "team"`. Two team runtimes exist today: scoped `team-coding@1` keeps
+  `mode: "team"`. Two team runtimes exist today: scoped `team-coding-scoped` keeps
   one Run and one checkpoint thread while creating internal durable role
-  records; distributed `team-coding@2` creates Teammate, Subagent, and Verifier
+  records; distributed `team-coding` creates Teammate, Subagent, and Verifier
   child Runs that independent Workers can claim through PostgreSQL dispatch.
   The distributed path persists lineage, assignments, mailbox messages, child
   results, cancellation propagation, and inspection APIs/CLI. Its first E2E is
@@ -73,7 +73,7 @@ PostgreSQL:
 
 ### Approval (implemented for solo modifying runs)
 
-Durable approval interrupt and resume is wired into `solo-modifying@1` for one
+Durable approval interrupt and resume is wired into `solo-modifying` for one
 exact invocation at a time. Ambiguous shell commands create an `approvals`
 record, checkpoint the graph, release the worker lease as `paused + waiting`,
 and resume through `Command(resume=...)` after the API or CLI approves or
@@ -84,13 +84,13 @@ approval.
 
 The durable team runtime is explicit. Intake starts with only the Leader. When
 `--team` or API `mode: "team"` is selected, current intake routes to
-distributed `team-coding@2`. The Leader creates Teammate child Runs; Teammates
+distributed `team-coding`. The Leader creates Teammate child Runs; Teammates
 may create bounded Subagent child Runs; and the Leader creates an independent
 Verifier child Run before finalization. Subagents have isolated context and
 return evidence only to their owning Teammate. The Verifier must pass the work
 before the Leader can complete the root Run.
 
-The older scoped `team-coding@1` runtime remains documented and tested, but the
+The older scoped `team-coding-scoped` runtime remains documented and tested, but the
 new distributed path is the forward architecture. Rich model-driven
 specialization and team tool execution remain later work. Distributed team
 assignments now support deferred tool exposure, root-aware token/active-time
@@ -274,7 +274,7 @@ Durable runtime work is tracked in
 Highlights of what is planned but not yet implemented:
 
 - model-driven distributed team planning, team tool execution, and verifier
-  rework on the `team-coding@2` path.
+  rework on the `team-coding` path.
 - richer model-driven distributed team planning, team tool use, and mailbox
   collaboration policy.
 

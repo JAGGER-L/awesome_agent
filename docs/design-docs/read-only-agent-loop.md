@@ -1,8 +1,8 @@
-# Read-Only Agent Loop
+﻿# Read-Only Agent Loop
 
 ## Purpose
 
-`solo-readonly@1` is the first graph that executes a real Coding Run. It answers
+`solo-readonly` is the first graph that executes a real Coding Run. It answers
 a repository question by repeatedly alternating between a model turn and
 bounded read-only repository tools. It never modifies the Run worktree.
 
@@ -19,13 +19,12 @@ A Worker may execute the graph only when all route fields match:
 execution_kind = coding
 intent = read_only
 graph_name = solo-readonly
-graph_version = 1
 ```
 
 Modifying Runs remain queued for Task 07. Workers without a configured
 DeepSeek API key advertise only the runtime-probe route and never claim Coding
 Runs. Existing queued read-only Coding Runs without a graph identity are
-backfilled to `solo-readonly@1`.
+backfilled to `solo-readonly`.
 
 ## Graph Topology
 
