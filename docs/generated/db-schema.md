@@ -248,6 +248,8 @@ Generated from SQLAlchemy metadata.
 | `graph_version` | `INTEGER` | no |
 | `goal` | `TEXT` | no |
 | `allowed_tools` | `JSONB` | no |
+| `deferred_tools` | `JSONB` | no |
+| `promoted_tools` | `JSONB` | no |
 | `allowed_skills` | `JSONB` | no |
 | `can_write` | `BOOLEAN` | no |
 | `can_delegate` | `BOOLEAN` | no |

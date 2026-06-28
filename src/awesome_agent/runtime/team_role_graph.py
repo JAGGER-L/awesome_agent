@@ -18,6 +18,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentKind,
     TeamAssignmentStatus,
     TeamChildResult,
+    effective_assignment_tools,
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
@@ -71,6 +72,7 @@ class TeamRoleGraph:
             assignment=assignment,
             agent_id=agent.id,
         )
+        allowed_tools = effective_assignment_tools(assignment)
         subagent_goals = _subagent_goals(assignment)
         if (
             assignment.kind is TeamAssignmentKind.TEAMMATE
@@ -92,6 +94,7 @@ class TeamRoleGraph:
                     agent,
                     assignment=assignment,
                     goals=subagent_goals,
+                    allowed_tools=allowed_tools,
                     repository=repository,
                     event_sink=event_sink,
                 )
@@ -107,7 +110,7 @@ class TeamRoleGraph:
                 graph_version=run.graph_version or TEAM_ROLE_VERSION,
                 phase="completed",
                 result_summary=f"{assignment.kind.value} assignment completed.",
-                allowed_tools=assignment.allowed_tools,
+                allowed_tools=allowed_tools,
                 allowed_skills=assignment.allowed_skills,
                 final_answer=f"{assignment.kind.value} assignment completed.",
             ),
@@ -166,6 +169,7 @@ class TeamRoleGraph:
         *,
         assignment: TeamAssignment,
         goals: list[str],
+        allowed_tools: list[str],
         repository: RuntimeRepository,
         event_sink: object | None,
     ) -> None:
@@ -211,7 +215,7 @@ class TeamRoleGraph:
                 graph_name=TEAM_ROLE_GRAPH,
                 graph_version=TEAM_ROLE_VERSION,
                 goal=goal,
-                allowed_tools=assignment.allowed_tools,
+                allowed_tools=allowed_tools,
                 allowed_skills=assignment.allowed_skills,
                 can_write=False,
                 can_delegate=False,

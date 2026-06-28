@@ -36,6 +36,8 @@ class TeamAssignment(BaseModel):
     graph_version: int = Field(ge=1)
     goal: str
     allowed_tools: list[str] = Field(default_factory=list)
+    deferred_tools: list[str] = Field(default_factory=list)
+    promoted_tools: list[str] = Field(default_factory=list)
     allowed_skills: list[str] = Field(default_factory=list)
     can_write: bool = False
     can_delegate: bool = False
@@ -96,3 +98,10 @@ def validate_assignment_graph(assignment: TeamAssignment) -> bool:
     if assignment.can_delegate and assignment.max_subagents < 1:
         raise ValueError("delegating assignments require at least one subagent slot")
     return True
+
+
+def effective_assignment_tools(assignment: TeamAssignment) -> list[str]:
+    deferred = set(assignment.deferred_tools)
+    promoted = set(assignment.promoted_tools)
+    hidden = deferred - promoted
+    return [tool for tool in assignment.allowed_tools if tool not in hidden]

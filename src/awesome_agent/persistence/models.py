@@ -168,6 +168,8 @@ class TeamAssignmentRecord(Base):
     graph_version: Mapped[int] = mapped_column(Integer)
     goal: Mapped[str] = mapped_column(Text)
     allowed_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    deferred_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    promoted_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)
     allowed_skills: Mapped[list[str]] = mapped_column(JSONB, default=list)
     can_write: Mapped[bool] = mapped_column(Boolean, default=False)
     can_delegate: Mapped[bool] = mapped_column(Boolean, default=False)

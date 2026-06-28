@@ -29,7 +29,9 @@ async def test_teammate_loads_assignment_permissions() -> None:
         _assignment(
             run,
             kind=TeamAssignmentKind.TEAMMATE,
-            allowed_tools=["repo.read"],
+            allowed_tools=["repo.read", "repo.apply_patch", "shell.execute"],
+            deferred_tools=["repo.apply_patch", "shell.execute"],
+            promoted_tools=["repo.apply_patch"],
             allowed_skills=["repository-inspection"],
         )
     )
@@ -37,7 +39,7 @@ async def test_teammate_loads_assignment_permissions() -> None:
     state, recovered = await graph.execute(run, agent, repository=runtime)
 
     assert not recovered
-    assert state["allowed_tools"] == ["repo.read"]
+    assert state["allowed_tools"] == ["repo.read", "repo.apply_patch"]
     assert state["allowed_skills"] == ["repository-inspection"]
 
 
@@ -52,6 +54,8 @@ async def test_teammate_can_create_limited_subagents() -> None:
         _assignment(
             run,
             kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read", "shell.execute"],
+            deferred_tools=["shell.execute"],
             can_delegate=True,
             max_subagents=3,
             handoff_context={"subagent_goals": ["Read README", "Inspect tests"]},
@@ -63,13 +67,17 @@ async def test_teammate_can_create_limited_subagents() -> None:
 
     subagents = await runtime.list_child_runs(run.id)
     assignments = await teams.list_assignments(run.root_run_id or run.id)
+    subagent_assignments = [
+        item for item in assignments if item.parent_run_id == run.id
+    ]
 
     assert len(subagents) == 2
     assert all(child.depth == 2 for child in subagents)
-    assert [item.kind for item in assignments if item.parent_run_id == run.id] == [
+    assert [item.kind for item in subagent_assignments] == [
         TeamAssignmentKind.SUBAGENT,
         TeamAssignmentKind.SUBAGENT,
     ]
+    assert all(item.allowed_tools == ["repo.read"] for item in subagent_assignments)
 
 
 @pytest.mark.asyncio
@@ -186,6 +194,8 @@ def _assignment(
     *,
     kind: TeamAssignmentKind,
     allowed_tools: list[str] | None = None,
+    deferred_tools: list[str] | None = None,
+    promoted_tools: list[str] | None = None,
     allowed_skills: list[str] | None = None,
     can_delegate: bool = False,
     max_subagents: int = 0,
@@ -201,6 +211,8 @@ def _assignment(
         graph_version=TEAM_ROLE_VERSION,
         goal=run.goal,
         allowed_tools=allowed_tools or [],
+        deferred_tools=deferred_tools or [],
+        promoted_tools=promoted_tools or [],
         allowed_skills=allowed_skills or [],
         can_delegate=can_delegate,
         max_subagents=max_subagents,
