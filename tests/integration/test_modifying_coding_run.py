@@ -83,7 +83,7 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
     await _git(repository_path, "config", "user.name", "Test")
     (repository_path / "README.md").write_text("old\n", encoding="utf-8")
     (repository_path / "large.txt").write_text("x" * 20_000, encoding="utf-8")
-    await _git(repository_path, "add", "README.md")
+    await _git(repository_path, "add", "README.md", "large.txt")
     await _git(repository_path, "commit", "-m", "Initial")
     snapshot = await require_primary_clean_repository(repository_path)
 

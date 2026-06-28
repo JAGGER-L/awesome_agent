@@ -58,8 +58,6 @@ def test_hard_total_token_limit_fails_run() -> None:
 def test_active_wall_clock_excludes_paused_time() -> None:
     ledger = BudgetLedger(active_seconds=55)
     opened = ledger.open_active_window(datetime(2026, 1, 1, tzinfo=UTC))
-    closed = opened.close_active_window(
-        datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)
-    )
+    closed = opened.close_active_window(datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC))
 
     assert closed.active_seconds == 65

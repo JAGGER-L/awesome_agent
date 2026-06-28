@@ -107,10 +107,7 @@ def evaluate_budget(
     estimated_prompt_tokens: int,
     now: datetime,
 ) -> BudgetDecision:
-    if (
-        ledger.total_tokens + estimated_prompt_tokens
-        > policy.max_total_tokens_per_run
-    ):
+    if ledger.total_tokens + estimated_prompt_tokens > policy.max_total_tokens_per_run:
         return BudgetDecision.EXHAUSTED
     if ledger.total_reasoning_tokens > policy.max_reasoning_tokens_per_run:
         return BudgetDecision.EXHAUSTED
