@@ -49,6 +49,7 @@ async def append_lifecycle_event(
         payload=payload,
         agent_id=agent_id,
         task_id=task_id,
+        trace_id=run_id.hex,
         created_at=created_at,
     )
     session.add(
@@ -63,7 +64,7 @@ async def append_lifecycle_event(
             agent_id=event.agent_id,
             parent_agent_id=None,
             task_id=event.task_id,
-            trace_id=None,
+            trace_id=event.trace_id,
             span_id=None,
             created_at=event.created_at,
         )

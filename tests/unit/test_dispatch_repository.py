@@ -565,6 +565,7 @@ async def test_completion_updates_lifecycle_projections_and_events() -> None:
     assert EventType.RUN_STATUS_CHANGED.value in event_types
     assert EventType.AGENT_STATUS_CHANGED.value in event_types
     assert EventType.TODO_STATUS_CHANGED.value in event_types
+    assert all(event.trace_id == record.id.hex for event in events)
     todo_event = next(
         event for event in events if event.event_type == EventType.TODO_STATUS_CHANGED
     )
@@ -649,6 +650,7 @@ async def test_failure_updates_lifecycle_projections_and_events() -> None:
     assert EventType.RUN_STATUS_CHANGED.value in event_types
     assert EventType.AGENT_STATUS_CHANGED.value in event_types
     assert EventType.TODO_STATUS_CHANGED.value in event_types
+    assert all(event.trace_id == record.id.hex for event in events)
     todo_event = next(
         event for event in events if event.event_type == EventType.TODO_STATUS_CHANGED
     )
