@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
@@ -8,7 +9,8 @@ from fastapi.testclient import TestClient
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.models import Repository
+from awesome_agent.domain.enums import AgentKind, RunMode
+from awesome_agent.domain.models import Agent, Repository, Run
 from awesome_agent.observability.repository import (
     DurableMetric,
     DurableModelCall,
@@ -21,6 +23,7 @@ from awesome_agent.persistence.budget import (
     InMemoryBudgetRepository,
     RunBudgetLedgerRecord,
 )
+from awesome_agent.persistence.team import InMemoryTeamRepository
 from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
@@ -36,6 +39,12 @@ from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
+from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
+from awesome_agent.runtime.team_mailbox import (
+    MailboxMessage,
+    MailboxMessageType,
+    MailboxRoute,
+)
 from awesome_agent.runtime.workspaces import WorkspaceRetentionService
 from awesome_agent.settings import Settings
 
@@ -86,6 +95,7 @@ def _client(
     asyncio.run(registry.upsert(repository))
     reservations = InMemoryIntakeReservationStore()
     runtime_repository = InMemoryRuntimeRepository(reservations)
+    team_repository = InMemoryTeamRepository()
     event_stream = EventStream()
     service = RuntimeService(
         repository=runtime_repository,
@@ -117,6 +127,7 @@ def _client(
                 validation_repository=validation_repository,
                 observability_repository=observability_repository,
                 budget_repository=budget_repository,
+                team_repository=team_repository,
                 workspace_service=workspace_service,
             )
         ),
@@ -468,6 +479,86 @@ def test_team_run_uses_team_graph_and_starts_with_leader_only(
     assert agents[0]["kind"] == "leader"
     todos = client.get(f"/runs/{run_id}/todos").json()
     assert todos == []
+
+
+def test_team_inspection_endpoints_return_lineage_assignments_and_mailbox(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    app = cast(Any, client.app)
+    runtime = app.state.runtime.repository
+    teams = app.state.team_repository
+    root = Run(goal="team", mode=RunMode.TEAM)
+    child = Run(
+        goal="child",
+        mode=RunMode.TEAM,
+        parent_run_id=root.id,
+        root_run_id=root.id,
+        depth=1,
+        child_role="teammate",
+    )
+    leader = Agent(
+        run_id=root.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    asyncio.run(runtime.create_run(root, leader))
+    asyncio.run(
+        runtime.create_run(
+            child,
+            leader.model_copy(update={"run_id": child.id}),
+        )
+    )
+    assignment = asyncio.run(
+        teams.create_assignment(
+            TeamAssignment(
+                root_run_id=root.id,
+                parent_run_id=root.id,
+                child_run_id=child.id,
+                kind=TeamAssignmentKind.TEAMMATE,
+                role_profile="teammate",
+                graph_name="team-role",
+                graph_version=1,
+                goal="child",
+            )
+        )
+    )
+    asyncio.run(
+        teams.create_mailbox_message(
+            MailboxMessage(
+                team_root_run_id=root.id,
+                sender_run_id=root.id,
+                recipient_run_id=child.id,
+                route=MailboxRoute.LEADER_TO_TEAMMATE,
+                message_type=MailboxMessageType.ASSIGNMENT,
+                subject="Task",
+                body_summary="Do it.",
+            )
+        )
+    )
+
+    children = client.get(f"/runs/{root.id}/children").json()
+    descendants = client.get(f"/runs/{root.id}/descendants").json()
+    assignments = client.get(f"/runs/{root.id}/team/assignments").json()
+    mailbox = client.get(f"/runs/{child.id}/team/mailbox").json()
+    retired = client.post(
+        f"/runs/{root.id}/team/assignments/{assignment.id}/retire",
+        params={"reason": "superseded"},
+    )
+    active_after_retire = client.get(f"/runs/{root.id}/team/assignments").json()
+    all_after_retire = client.get(
+        f"/runs/{root.id}/team/assignments",
+        params={"all": "true"},
+    ).json()
+
+    assert children[0]["id"] == str(child.id)
+    assert descendants[0]["id"] == str(child.id)
+    assert assignments[0]["id"] == str(assignment.id)
+    assert mailbox[0]["route"] == "leader_to_teammate"
+    assert retired.json()["status"] == "retired"
+    assert active_after_retire == []
+    assert all_after_retire[0]["status"] == "retired"
 
 
 def test_verification_endpoint_returns_durable_validation_reports(

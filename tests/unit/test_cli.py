@@ -543,6 +543,107 @@ def test_context_compactions_command_reads_api(
     assert str(artifact_id) in result.stdout
 
 
+def test_children_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = uuid4()
+    child_id = uuid4()
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": str(child_id),
+                    "depth": 1,
+                    "child_role": "teammate",
+                    "status": "created",
+                }
+            ]
+
+    def get(url: str, **kwargs: Any) -> Response:
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    result = runner.invoke(app, ["children", str(run_id)])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(f"/runs/{run_id}/children")
+    assert "role=teammate" in result.stdout
+
+
+def test_team_assignments_command_reads_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    assignment_id = uuid4()
+    child_id = uuid4()
+    request: dict[str, Any] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": str(assignment_id),
+                    "kind": "teammate",
+                    "status": "active",
+                    "child_run_id": str(child_id),
+                }
+            ]
+
+    def get(url: str, **kwargs: Any) -> Response:
+        request["url"] = url
+        request.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    result = runner.invoke(app, ["team-assignments", str(run_id), "--all"])
+
+    assert result.exit_code == 0
+    assert request["url"].endswith(f"/runs/{run_id}/team/assignments")
+    assert request["params"] == {"all": True}
+    assert "teammate active" in result.stdout
+
+
+def test_team_mailbox_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = uuid4()
+    message_id = uuid4()
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": str(message_id),
+                    "route": "leader_to_teammate",
+                    "status": "unread",
+                    "subject": "Task",
+                }
+            ]
+
+    def get(url: str, **kwargs: Any) -> Response:
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    result = runner.invoke(app, ["team-mailbox", str(run_id)])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(f"/runs/{run_id}/team/mailbox")
+    assert "leader_to_teammate unread Task" in result.stdout
+
+
 def _readiness_report(
     status: HealthStatus,
     checks: list[HealthCheck],

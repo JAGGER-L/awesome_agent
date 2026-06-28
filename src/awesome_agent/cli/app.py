@@ -463,6 +463,56 @@ def todos(
 
 
 @app.command()
+def children(
+    run_id: UUID,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """List direct child runs."""
+    response = httpx.get(f"{api_url}/runs/{run_id}/children", timeout=30)
+    response.raise_for_status()
+    for child in response.json():
+        typer.echo(
+            f"{child['id']} depth={child['depth']} "
+            f"role={child['child_role']} status={child['status']}"
+        )
+
+
+@app.command("team-assignments")
+def team_assignments(
+    run_id: UUID,
+    include_all: Annotated[bool, typer.Option("--all")] = False,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """List team assignments for a root run."""
+    response = httpx.get(
+        f"{api_url}/runs/{run_id}/team/assignments",
+        params={"all": include_all},
+        timeout=30,
+    )
+    response.raise_for_status()
+    for assignment in response.json():
+        typer.echo(
+            f"{assignment['id']} {assignment['kind']} "
+            f"{assignment['status']} child={assignment['child_run_id']}"
+        )
+
+
+@app.command("team-mailbox")
+def team_mailbox(
+    run_id: UUID,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """List team mailbox messages for a run."""
+    response = httpx.get(f"{api_url}/runs/{run_id}/team/mailbox", timeout=30)
+    response.raise_for_status()
+    for message in response.json():
+        typer.echo(
+            f"{message['id']} {message['route']} "
+            f"{message['status']} {message['subject']}"
+        )
+
+
+@app.command()
 def cancel(
     run_id: UUID,
     api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",

@@ -54,6 +54,7 @@ from awesome_agent.persistence.repository_registry import (
     PostgresRepositoryRegistry,
 )
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
+from awesome_agent.persistence.team import PostgresTeamRepository, TeamRepository
 from awesome_agent.persistence.validation import (
     PostgresValidationRepository,
     ValidationReportWithGates,
@@ -93,6 +94,7 @@ def create_app(
     validation_repository: ValidationRepository | None = None,
     observability_repository: ObservabilityRepository | None = None,
     budget_repository: BudgetRepository | None = None,
+    team_repository: TeamRepository | None = None,
     workspace_service: WorkspaceRetentionService | None = None,
     worker_heartbeat_repository: object | None = None,
 ) -> FastAPI:
@@ -116,6 +118,8 @@ def create_app(
             )
             if budget_repository is not None:
                 app.state.budget_repository = budget_repository
+            if team_repository is not None:
+                app.state.team_repository = team_repository
             if worker_heartbeat_repository is not None:
                 app.state.worker_heartbeats = worker_heartbeat_repository
             yield
@@ -131,6 +135,7 @@ def create_app(
         validation = PostgresValidationRepository(sessions)
         worker_heartbeats = PostgresWorkerHeartbeatRepository(sessions)
         budgets = PostgresBudgetRepository(sessions)
+        teams = PostgresTeamRepository(sessions)
         local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
         app.state.runtime = RuntimeService(
             repository=runtime_repository,
@@ -148,6 +153,7 @@ def create_app(
             PostgresObservabilityRepository(sessions)
         )
         app.state.budget_repository = budget_repository or budgets
+        app.state.team_repository = team_repository or teams
         worktree_manager = ManagedRunWorktreeManager(
             settings.workspace_root or local_config.workspace_root
         )
@@ -189,6 +195,8 @@ def create_app(
     )
     if budget_repository is not None:
         app.state.budget_repository = budget_repository
+    if team_repository is not None:
+        app.state.team_repository = team_repository
 
     def runtime() -> RuntimeService:
         return cast(RuntimeService, app.state.runtime)
@@ -198,6 +206,9 @@ def create_app(
 
     def repositories() -> RepositoryRegistry:
         return cast(RepositoryRegistry, app.state.registry)
+
+    def team_repository_state() -> TeamRepository:
+        return cast(TeamRepository, app.state.team_repository)
 
     def validation_reports() -> ValidationRepository | None:
         return cast(
@@ -401,6 +412,46 @@ def create_app(
                 after_sequence=after_sequence,
             )
         ]
+
+    @app.get("/runs/{run_id}/children")
+    async def list_children(run_id: UUID) -> list[dict[str, object]]:
+        children = await runtime().repository.list_child_runs(run_id)
+        return [child.model_dump(mode="json") for child in children]
+
+    @app.get("/runs/{run_id}/descendants")
+    async def list_descendants(run_id: UUID) -> list[dict[str, object]]:
+        descendants = await runtime().repository.list_descendant_runs(run_id)
+        return [descendant.model_dump(mode="json") for descendant in descendants]
+
+    @app.get("/runs/{run_id}/team/assignments")
+    async def list_team_assignments(
+        run_id: UUID,
+        all: bool = Query(default=False),
+    ) -> list[dict[str, object]]:
+        assignments = await team_repository_state().list_assignments(
+            run_id,
+            include_inactive=all,
+        )
+        return [assignment.model_dump(mode="json") for assignment in assignments]
+
+    @app.get("/runs/{run_id}/team/mailbox")
+    async def list_team_mailbox(run_id: UUID) -> list[dict[str, object]]:
+        messages = await team_repository_state().list_mailbox_messages(run_id)
+        return [message.model_dump(mode="json") for message in messages]
+
+    @app.post("/runs/{run_id}/team/assignments/{assignment_id}/retire")
+    async def retire_team_assignment(
+        run_id: UUID,
+        assignment_id: UUID,
+        reason: str = Query(default="retired_by_api"),
+    ) -> dict[str, object]:
+        assignment = await team_repository_state().retire_assignment(
+            assignment_id,
+            reason=reason,
+        )
+        if assignment.root_run_id != run_id:
+            raise HTTPException(status_code=404, detail="Assignment not found.")
+        return assignment.model_dump(mode="json")
 
     @app.get("/runs/{run_id}/events")
     async def stream_events(
