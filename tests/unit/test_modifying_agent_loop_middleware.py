@@ -14,7 +14,16 @@ from awesome_agent.runtime.agent_loop.contracts import (
     MiddlewareStage,
 )
 from awesome_agent.runtime.agent_loop.middleware import MiddlewareStack
-from awesome_agent.runtime.agent_loop.modifying import ModifyingAgentLoop
+from awesome_agent.runtime.agent_loop.modifying import (
+    ModifyingAgentLoop,
+)
+from awesome_agent.runtime.agent_loop.modifying_middleware import (
+    ModifyingBudgetExhausted,
+    ModifyingBudgetMiddleware,
+    ModifyingContextMiddleware,
+    modifying_ledger_to_state,
+)
+from awesome_agent.runtime.budget import BudgetLedger, BudgetPolicy
 
 
 class RecordingMiddleware:
@@ -96,3 +105,99 @@ async def test_modifying_agent_loop_runs_stage_before_handler(
     assert middleware.contexts[0].runtime_route == "solo-modifying"
     assert middleware.contexts[0].messages == messages
     assert middleware.contexts[0].metadata == {"stage": stage.value}
+
+
+@pytest.mark.asyncio
+async def test_modifying_context_middleware_returns_none_without_context_manager() -> (
+    None
+):
+    run = _run()
+    agent = _agent(run)
+    middleware = ModifyingContextMiddleware(
+        context_manager=None,
+        budget_repository=None,
+        budget_policy=None,
+        runtime_route="solo-modifying",
+    )
+
+    prepared = await middleware.prepare_context(
+        run=run,
+        agent=agent,
+        messages=[SystemMessage(content="system")],
+        rolling_summary="",
+    )
+
+    assert prepared is None
+
+
+@pytest.mark.asyncio
+async def test_modifying_budget_middleware_loads_ledger_from_state() -> None:
+    middleware = ModifyingBudgetMiddleware(
+        budget_repository=None,
+        budget_policy=None,
+        emit=_unused_emit,
+    )
+
+    ledger = await middleware.load_ledger(
+        _run().id,
+        {
+            "total_input_tokens": 3,
+            "total_output_tokens": 4,
+            "total_reasoning_tokens": 5,
+            "active_seconds": 6,
+            "model_call_count": 7,
+            "threshold_status": "compact",
+        },
+    )
+
+    assert ledger.total_input_tokens == 3
+    assert ledger.total_output_tokens == 4
+    assert ledger.total_reasoning_tokens == 5
+    assert ledger.active_seconds == 6
+    assert ledger.model_call_count == 7
+    assert ledger.threshold_status == "compact"
+    assert modifying_ledger_to_state(ledger)["model_call_count"] == 7
+
+
+@pytest.mark.asyncio
+async def test_modifying_budget_middleware_raises_when_exhausted() -> None:
+    events: list[tuple[str, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((str(event_type), payload, transition_id))
+
+    middleware = ModifyingBudgetMiddleware(
+        budget_repository=None,
+        budget_policy=BudgetPolicy(
+            soft_context_tokens=100,
+            hard_context_tokens=200,
+            recent_context_tokens=50,
+            max_total_tokens_per_run=10,
+            max_reasoning_tokens_per_run=100,
+            max_active_seconds_per_run=100,
+        ),
+        emit=emit,
+    )
+
+    with pytest.raises(ModifyingBudgetExhausted):
+        await middleware.evaluate_before_model_call(
+            run_id=_run().id,
+            ledger=BudgetLedger(total_input_tokens=10),
+            request_messages=[SystemMessage(content="more tokens")],
+            before_estimated_tokens=1,
+            turn=1,
+        )
+
+    assert events[-1][2] == "budget-exhausted:1"
+
+
+async def _unused_emit(
+    event_type: object,
+    payload: dict[str, object],
+    transition_id: str,
+) -> None:
+    raise AssertionError("emit should not be called")
