@@ -54,6 +54,9 @@ team output.
   model routes, API bind policy, and fresh Worker heartbeat evidence
 - artifact-backed context compaction, durable token ledgers, active Worker
   execution budgets, and API/CLI budget inspection for solo Runs
+- root-aware distributed team budget checks, deferred assignment tool exposure,
+  and artifact-backed compaction for large handoff, child-result, verifier
+  evidence, and mailbox payloads
 - distributed team inspection APIs and CLI for child Runs, assignments, and
   mailbox messages
 
@@ -68,6 +71,5 @@ team output.
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
 - model-driven distributed team planning and team tool execution
-- complete per-agent team context and mailbox compaction
 - money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server

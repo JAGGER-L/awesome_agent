@@ -25,6 +25,7 @@ agents; they are not the durable product roadmap.
 | Task 15 | Done | Split `/health` liveness from structured `/ready` and `doctor --profile` readiness; checks PostgreSQL, migrations, checkpoint store, workspace root, provider keys, model routes, API bind policy, and Worker heartbeat registry. |
 | Task 16 | Done | Artifact-backed solo context compaction, durable token ledgers, active Worker execution budgets, budget/compaction APIs and CLI, and team global budget guards; money cost budget remains deferred. |
 | Task 17 | Done | Distributed team child-run skeleton with durable lineage, assignments, mailbox, child results, recursive cancellation, inspection APIs/CLI, production Worker wiring, and PostgreSQL integration/E2E evidence. |
+| Task 18 | Done | Root-aware distributed team budget checks, deferred assignment tool exposure, and artifact-backed compaction for large handoff, child-result, verifier evidence, and mailbox payloads. |
 
 ## Completed Detail: Task 07 Isolated Mutation Sandbox and Shell
 
@@ -85,7 +86,6 @@ Task 07 does not include:
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
 | Task 17 | Distributed team child Runs | Promote graph-internal team execution into Leader-created Teammate, Verifier, and depth-2 Subagent child Runs that independent Workers can claim. | Run lineage, durable assignments, structured mailbox, patch artifact aggregation, verifier gating, recursive cancellation, and real distributed team E2E pass. |
-| Task 18 | Team context and budget hardening | Extend context compaction and budget accounting across Leader, Teammates, Verifier, Subagents, team mailbox, and team evidence. | Team Runs have per-agent context budgets, team evidence compaction, verifier/rework history compression, and parent/child budget coordination. |
 | Task 19 | Agent loop and middleware contracts | Introduce ThinGraph, AgentLoop, ordered middleware stages, and durable/non-durable checkpoint boundaries without migrating existing graphs yet. | Interfaces, ordering rules, budget/error/interrupt contracts, and focused tests prove the new runtime shell can host a model-tool loop. |
 | Task 20 | Solo read-only middleware migration | Move solo read-only cross-cutting behavior into the AgentLoop/middleware stack. | `solo-readonly` behavior and tests remain equivalent while graph code owns only durable routing and terminal state. |
 | Task 21 | Solo modifying middleware migration | Move modifying approval, tool execution, sandbox, validation, rework, artifact, and context behavior behind middleware boundaries. | `solo-modifying` keeps existing safety/evidence guarantees with smaller graph responsibility and regression tests. |
@@ -104,7 +104,7 @@ Task 07 does not include:
 | Running Runs cannot be cancelled | Resolved in Task 09 for solo runtime paths |
 | Deterministic validation and rework do not exist | Resolved in Task 10 for solo modifying runs |
 | One successful read is not enough proof for answer correctness | Future read-only answer validation hardening; Task 10 covers modifying validation only |
-| Context and checkpoints can grow quickly | Resolved for solo read-only and modifying paths in Task 16; complete team hardening remains Task 18 |
+| Context and checkpoints can grow quickly | Resolved for solo read-only and modifying paths in Task 16; distributed team payload hardening resolved in Task 18; model-driven team loops need new budget integration when Task 22 lands |
 | Lifecycle projections are inconsistent | Resolved in Task 11 for solo runtime paths |
 | Observability score is too high for current evidence | Resolved in Task 12 for solo runtime paths |
 | Artifact references are not connected to the main loop | Task 07 |
@@ -125,8 +125,6 @@ Task 07 does not include:
   passes real E2E with Leader, Teammate, Verifier, and depth-2 Subagent child
   Runs, independent Worker claims, patch aggregation, mailbox evidence, and
   recursive cancellation.
-- Do not claim complete team context budgeting until Task 18 passes evidence
-  across Leader, Teammate, Verifier, Subagent, mailbox, and team evidence paths.
 - Do not claim middleware-based runtime architecture until Task 19 defines the
   AgentLoop contract, middleware ordering, and checkpoint boundary semantics.
 - Do not claim model-driven distributed team autonomy until Task 22 replaces

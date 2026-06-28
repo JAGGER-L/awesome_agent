@@ -100,8 +100,9 @@ forbidden.
   expired by the worker recovery cadence and resume as structured tool errors.
 - Runtime observability writes are failure-isolated from Run execution.
   PostgreSQL query tables store run, graph, model, tool, and sandbox spans,
-  model-call summaries, latency metrics, and trace/span IDs. OpenTelemetry
-  exporter failures are logged and never change Run status.
+  model-call summaries, latency metrics, and trace/span IDs. Full
+  OpenTelemetry span instrumentation is future work and must not be claimed
+  until Worker/API production paths create real OTel spans.
 - Readiness exposes `healthy`, `degraded`, and `unhealthy`. Required dependency
   failures make readiness `unhealthy`; optional or advisory failures make it
   `degraded`. `/health` remains process liveness only. `/ready` returns 200 for
@@ -131,3 +132,13 @@ sandbox execution, and validation.
   projected.
 - Token estimation is heuristic in Task 16; provider/tokenizer-specific
   accounting remains tracked as technical debt.
+- Distributed team graph boundaries evaluate root-aware budget snapshots across
+  the root Run and all descendants before creating child work, recording child
+  results, or verifying results.
+- Large distributed team handoff, child-result, verifier evidence, and mailbox
+  payloads are written to artifacts before inline payloads are reduced.
+  Compaction records keep before/after token estimates and artifact refs for
+  frontend inspection.
+- Assignment tool exposure is filtered as
+  `allowed_tools - (deferred_tools - promoted_tools)` so hidden tools are not
+  presented to Teammates or inherited by Subagents before promotion.

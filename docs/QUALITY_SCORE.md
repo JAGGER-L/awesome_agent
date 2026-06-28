@@ -5,9 +5,10 @@ Coding, and deterministic distributed team child-run loops execute locally.
 Solo paths have exact-invocation approvals, active cancellation,
 validation-gated modifying completion, coherent lifecycle projections, and
 queryable runtime observability. Distributed team child Runs now have durable
-lineage, assignments, mailbox, recursive cancellation, inspection APIs/CLI, and
-PostgreSQL E2E evidence. Model-driven distributed team planning, team tool
-execution, and per-agent context/budget hardening remain roadmap work.
+lineage, assignments, mailbox, recursive cancellation, inspection APIs/CLI,
+root-aware budgets, deferred tool exposure, team payload compaction, and
+PostgreSQL E2E evidence. Model-driven distributed team planning and team tool
+execution remain roadmap work.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

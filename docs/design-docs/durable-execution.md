@@ -267,9 +267,11 @@ The raw evidence remains inspectable through artifact refs and
 Each Run has a durable token ledger for input, output, reasoning tokens,
 model-call count, threshold status, and active Worker execution seconds. Active
 time is counted only while a Worker is inside graph execution; queued, paused,
-and approval-wait time is excluded. Team v1 receives only global token and
-active wall-clock guards in Task 16. Full per-agent team compaction is Task 18,
-and money cost budgeting is deferred.
+and approval-wait time is excluded. Task 18 extends the same ledger model to
+distributed team roots by aggregating the root Run and descendants at team graph
+boundaries. Large team handoff, child-result, verifier evidence, and mailbox
+payloads are compacted into artifacts and recorded through
+`context_compactions`. Money cost budgeting is deferred.
 
 Current implementation note: Task 05 implements this provider-neutral protocol
 and streaming adapters. Visible reasoning and private continuation are separate:
@@ -394,16 +396,18 @@ Task 17 adds distributed `team-coding@2`:
 - child Runs are independently claimable through the normal PostgreSQL
   dispatch queue;
 - `team_assignments` stores role, graph identity, permissions, status, and
-  handoff context;
+  handoff context, including deferred and promoted tool exposure;
 - `team_mailbox_messages` stores route-restricted communication;
 - `team_child_results` stores summaries, patch artifact references, changed
   files, aggregation status, and failure classification;
 - child terminal state requeues waiting parents;
 - parent cancellation recursively propagates to nonterminal descendants.
 
-The current distributed graph is deterministic. Model-driven distributed team
-planning, central tool execution in team child Runs, durable verifier rework,
-and full per-agent context/budget management remain later work.
+Task 18 adds root-aware team budget checks, deferred assignment tool filtering,
+and artifact-backed compaction for large team payloads. The current distributed
+graph remains deterministic. Model-driven distributed team planning, central
+tool execution in team child Runs, and durable verifier rework remain later
+work.
 
 ## Retry, Cancellation, and Failure
 

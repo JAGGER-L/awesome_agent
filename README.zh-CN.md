@@ -30,19 +30,19 @@
 
 Intake 初始只创建 Leader。选择 `--team` 或 API `mode: "team"` 后，当前默认路由到 distributed `team-coding@2`：Leader 创建 Teammate child Runs，Teammate 可以创建有限 Subagent child Runs，Leader 在最终完成前创建独立 Verifier child Run。Subagent 有独立上下文，只向自己的 Teammate 返回证据。Verifier 必须验收通过后，Leader 才能完成 root Run。
 
-旧的 scoped `team-coding@1` runtime 仍保留文档和测试，但新的 distributed path 是后续架构方向。更丰富的模型驱动分工、team tool execution 和 per-agent context compaction 仍是后续任务。
+旧的 scoped `team-coding@1` runtime 仍保留文档和测试，但新的 distributed path 是后续架构方向。更丰富的模型驱动分工和 team tool execution 仍是后续任务。分布式 team assignment 现在支持 deferred tool exposure、跨 Leader/Teammate/Verifier/Subagent 的 root-aware token/active-time budget 检查，以及对大型 handoff、child result、verifier evidence payload 的 artifact-backed compaction。
 
 ### 可观测性（已实现）
 
 Runtime 会记录持久化 query-table 证据，包括 run/graph/model/tool/sandbox span、model-call 摘要，以及 run/model/tool latency 等 metrics。Runtime event 会写入稳定的 Run 级 `trace_id`。FastAPI 提供 `GET /runs/{run_id}/trace`、`GET /runs/{run_id}/metrics` 和 `GET /runs/{run_id}/model-calls`。当前生产 Worker 路径使用项目自有的持久化记录，而不是完整 OpenTelemetry span instrumentation；完整 OTel 覆盖、cost budget 和 dashboard 仍是后续工作。
 
-### 上下文与预算管理（已在 solo run 中实现）
+### 上下文与预算管理（已实现）
 
 Solo read-only 和 modifying 图现在会限制 prompt/checkpoint 增长。超过 soft context limit 后，旧消息和超大工具观察会写入 artifact，checkpoint 中只保留确定性摘要和最近证据，并记录 `context.compacted` 事件。Hard context pressure 会强制进入 bounded final no-tool answer。
 
 每个 Run 都有 token ledger，记录 input/output/reasoning tokens、model call count 和 Worker active execution seconds。FastAPI 提供 `GET /runs/{run_id}/budget` 与 `GET /runs/{run_id}/context-compactions`；CLI 提供 `awesome-agent budget <run-id>` 与 `awesome-agent context-compactions <run-id>`。
 
-Team Run 当前只接入全局 token 和 active wall-clock guard；Leader/Teammate/Verifier/Subagent/mailbox 的完整 context compaction 延后到 Task 18。Money cost budget 也延后实现。
+Distributed Team Run 会在 root 范围内聚合 Leader、Teammate、Verifier 和 Subagent 的预算账本，并在图边界执行 token/active-time budget 检查。大型 team handoff、child result 和 verifier evidence payload 会卸载到 artifact，并通过 `context_compactions` 记录。Money cost budget 仍延后实现。
 
 ## 技术栈
 
@@ -122,8 +122,7 @@ container port: 5432
 
 持久化 runtime 工作记录在 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。尚未实现的重点项：
 
-- Team Run 的完整 per-agent context/budget hardening（Task 18）。
-- 更丰富的模型驱动分布式 team planning、team tool use 和 mailbox 协作策略。
+- 更丰富的模型驱动分布式 team planning、team tool use、verifier rework 和 mailbox 协作策略。
 - Money cost budget 和 dashboard。
 
 ## 文档

@@ -31,11 +31,14 @@ Leader approval.
 Teammates and the Verifier default to `deepseek-v4-flash`.
 
 Each Teammate receives a Leader assignment containing `allowed_tools`,
-`allowed_skills`, write permission, delegation permission, Subagent limits,
-acceptance criteria, and handoff context. In scoped `team-coding@1`, tools are
-executed inside one Run. In distributed `team-coding@2`, the assignment is
-durable data for the Teammate child Run; the first distributed skeleton records
-permissions and results but does not yet execute model-driven team tools.
+`deferred_tools`, `promoted_tools`, `allowed_skills`, write permission,
+delegation permission, Subagent limits, acceptance criteria, and handoff
+context. Effective tools are `allowed_tools - (deferred_tools -
+promoted_tools)`, so the Leader can grant a tool but defer exposing it until a
+later promotion step. In scoped `team-coding@1`, tools are executed inside one
+Run. In distributed `team-coding@2`, the assignment is durable data for the
+Teammate child Run; the first distributed skeleton records permissions and
+results but does not yet execute model-driven team tools.
 
 ## Subagents
 
@@ -92,9 +95,11 @@ Distributed team state is stored in:
 
 The current distributed graph is a deterministic skeleton with real durable
 lineage, mailbox, cancellation propagation, API/CLI inspection, and
-PostgreSQL-backed integration/E2E evidence. Rich model-driven role planning,
-team tool execution, verifier rework loops, and per-agent/team context
-compaction remain later work.
+PostgreSQL-backed integration/E2E evidence. Task 18 adds root-aware team budget
+checks, deferred assignment tool exposure, and artifact-backed compaction for
+large handoff, child-result, and verifier evidence payloads. Rich model-driven
+role planning, team tool execution, and verifier rework loops remain later
+work.
 
 This boundary is intentional. In `team-coding@2`, Leader, role, and Verifier
 graphs are production-wired for dispatch and persistence, but the child role

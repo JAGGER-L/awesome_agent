@@ -92,8 +92,10 @@ before the Leader can complete the root Run.
 
 The older scoped `team-coding@1` runtime remains documented and tested, but the
 new distributed path is the forward architecture. Rich model-driven
-specialization, team tool execution, and per-agent context compaction remain
-later work.
+specialization and team tool execution remain later work. Distributed team
+assignments now support deferred tool exposure, root-aware token/active-time
+budget checks, and artifact-backed compaction for large handoff, child-result,
+and verifier evidence payloads.
 
 ### Observability (implemented)
 
@@ -106,7 +108,7 @@ inspection. The current production Worker path uses project-owned durable
 records rather than full OpenTelemetry span instrumentation; full OTel coverage,
 cost budgeting, and dashboards remain later work.
 
-### Context and budget management (implemented for solo runs)
+### Context and budget management (implemented)
 
 Solo read-only and modifying graphs now bound prompt/checkpoint growth with a
 deterministic context manager. When the soft context limit is crossed, older
@@ -120,9 +122,10 @@ model-call count, and active Worker execution seconds. FastAPI exposes
 `awesome-agent budget <run-id>` and
 `awesome-agent context-compactions <run-id>`.
 
-Team Runs currently receive only global token and active wall-clock guards.
-Full per-agent/team-mailbox compaction is deferred to Task 18. Money cost
-budgeting is also deferred.
+Distributed Team Runs add root-aware budget checks across the Leader,
+Teammates, Verifier, and Subagents. Large team handoff, child-result, and
+verifier evidence payloads are offloaded to artifacts and recorded through
+`context_compactions`. Money cost budgeting is still deferred.
 
 ## Stack
 
@@ -270,8 +273,8 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- full team context and budget hardening across Leader, Teammates, Verifier,
-  Subagents, and mailbox evidence (Task 18).
+- model-driven distributed team planning, team tool execution, and verifier
+  rework on the `team-coding@2` path.
 - richer model-driven distributed team planning, team tool use, and mailbox
   collaboration policy.
 
