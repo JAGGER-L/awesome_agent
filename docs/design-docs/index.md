@@ -8,6 +8,7 @@ boundaries. Development-agent plans and handoffs belong in ignored `.codex/`.
 - [Durable execution](durable-execution.md)
 - [Structured model protocol](structured-model-protocol.md)
 - [Read-only agent loop](read-only-agent-loop.md)
+- [Modifying agent loop](modifying-agent-loop.md)
 - [Agent team and subagents](agent-team-and-subagents.md)
 - [Task and verification model](task-and-verification-model.md)
 - [Memory architecture](memory-architecture.md)

@@ -87,7 +87,7 @@ Task 07 does not include:
 
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 21 | Solo modifying middleware migration | Move modifying approval, tool execution, sandbox, validation, rework, artifact, and context behavior behind middleware boundaries. | `solo-modifying` keeps existing safety/evidence guarantees with smaller graph responsibility and regression tests. |
+| Task 21 | Done | `solo-modifying` now enters AgentLoop middleware stages, with context, budget, tool execution, approval, artifact offload, evidence, validation, rework, and finalization policy extracted from the graph. |
 | Task 22 | Model-driven distributed team runtime | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
 | Task 23 | OpenTelemetry runtime instrumentation | Add real OTel spans/metrics on API and Worker production paths while preserving durable query tables. | Worker/model/tool/sandbox/API spans are created, exporter failures are isolated, and trace IDs remain queryable through durable events. |
 | Task 24 | Graph file size reduction | Split remaining oversized graph files after middleware migration makes stable extraction points clear. | Large graph modules are reduced to durable orchestration with focused unit tests for extracted components. |
