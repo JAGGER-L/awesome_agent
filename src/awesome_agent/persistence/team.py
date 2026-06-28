@@ -1,0 +1,334 @@
+from __future__ import annotations
+
+from typing import Protocol
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from awesome_agent.persistence.models import (
+    TeamAssignmentRecord,
+    TeamMailboxMessageRecord,
+)
+from awesome_agent.runtime.team_assignments import (
+    TeamAssignment,
+    TeamAssignmentKind,
+    TeamAssignmentStatus,
+)
+from awesome_agent.runtime.team_mailbox import (
+    MailboxMessage,
+    MailboxMessageStatus,
+    MailboxMessageType,
+    MailboxRoute,
+)
+
+
+class TeamRepository(Protocol):
+    async def create_assignment(self, assignment: TeamAssignment) -> TeamAssignment:
+        ...
+
+    async def get_assignment(self, assignment_id: UUID) -> TeamAssignment:
+        ...
+
+    async def get_assignment_for_child_run(self, child_run_id: UUID) -> TeamAssignment:
+        ...
+
+    async def list_assignments(
+        self,
+        root_run_id: UUID,
+        *,
+        include_inactive: bool = False,
+    ) -> list[TeamAssignment]:
+        ...
+
+    async def retire_assignment(
+        self,
+        assignment_id: UUID,
+        *,
+        reason: str,
+    ) -> TeamAssignment:
+        ...
+
+    async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
+        ...
+
+    async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage:
+        ...
+
+    async def list_mailbox_messages(
+        self,
+        run_id: UUID,
+        *,
+        include_archived: bool = False,
+    ) -> list[MailboxMessage]:
+        ...
+
+
+class InMemoryTeamRepository(TeamRepository):
+    def __init__(self) -> None:
+        self._assignments: dict[UUID, TeamAssignment] = {}
+        self._mailbox: dict[UUID, MailboxMessage] = {}
+
+    async def create_assignment(self, assignment: TeamAssignment) -> TeamAssignment:
+        self._assignments[assignment.id] = assignment
+        return assignment
+
+    async def get_assignment(self, assignment_id: UUID) -> TeamAssignment:
+        return self._assignments[assignment_id]
+
+    async def get_assignment_for_child_run(self, child_run_id: UUID) -> TeamAssignment:
+        for assignment in self._assignments.values():
+            if assignment.child_run_id == child_run_id:
+                return assignment
+        raise KeyError(child_run_id)
+
+    async def list_assignments(
+        self,
+        root_run_id: UUID,
+        *,
+        include_inactive: bool = False,
+    ) -> list[TeamAssignment]:
+        assignments = [
+            assignment
+            for assignment in self._assignments.values()
+            if assignment.root_run_id == root_run_id
+        ]
+        if not include_inactive:
+            assignments = [
+                assignment
+                for assignment in assignments
+                if assignment.status is TeamAssignmentStatus.ACTIVE
+            ]
+        return sorted(assignments, key=lambda item: (item.created_at, item.id.hex))
+
+    async def retire_assignment(
+        self,
+        assignment_id: UUID,
+        *,
+        reason: str,
+    ) -> TeamAssignment:
+        assignment = self._assignments[assignment_id].model_copy(
+            update={
+                "status": TeamAssignmentStatus.RETIRED,
+                "retire_reason": reason,
+            }
+        )
+        self._assignments[assignment_id] = assignment
+        return assignment
+
+    async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
+        self._mailbox[message.id] = message
+        return message
+
+    async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage:
+        return self._mailbox[message_id]
+
+    async def list_mailbox_messages(
+        self,
+        run_id: UUID,
+        *,
+        include_archived: bool = False,
+    ) -> list[MailboxMessage]:
+        messages = [
+            message
+            for message in self._mailbox.values()
+            if message.sender_run_id == run_id or message.recipient_run_id == run_id
+        ]
+        if not include_archived:
+            messages = [
+                message
+                for message in messages
+                if message.status is not MailboxMessageStatus.ARCHIVED
+            ]
+        return sorted(messages, key=lambda item: (item.created_at, item.id.hex))
+
+
+class PostgresTeamRepository(TeamRepository):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = session_factory
+
+    async def create_assignment(self, assignment: TeamAssignment) -> TeamAssignment:
+        async with self._sessions.begin() as session:
+            session.add(_assignment_to_record(assignment))
+        return assignment
+
+    async def get_assignment(self, assignment_id: UUID) -> TeamAssignment:
+        async with self._sessions() as session:
+            record = await session.get(TeamAssignmentRecord, assignment_id)
+        if record is None:
+            raise KeyError(assignment_id)
+        return _assignment_from_record(record)
+
+    async def get_assignment_for_child_run(self, child_run_id: UUID) -> TeamAssignment:
+        async with self._sessions() as session:
+            record = await session.scalar(
+                select(TeamAssignmentRecord).where(
+                    TeamAssignmentRecord.child_run_id == child_run_id
+                )
+            )
+        if record is None:
+            raise KeyError(child_run_id)
+        return _assignment_from_record(record)
+
+    async def list_assignments(
+        self,
+        root_run_id: UUID,
+        *,
+        include_inactive: bool = False,
+    ) -> list[TeamAssignment]:
+        statement = select(TeamAssignmentRecord).where(
+            TeamAssignmentRecord.root_run_id == root_run_id
+        )
+        if not include_inactive:
+            statement = statement.where(
+                TeamAssignmentRecord.status == TeamAssignmentStatus.ACTIVE.value
+            )
+        statement = statement.order_by(
+            TeamAssignmentRecord.created_at,
+            TeamAssignmentRecord.id,
+        )
+        async with self._sessions() as session:
+            records = list(await session.scalars(statement))
+        return [_assignment_from_record(record) for record in records]
+
+    async def retire_assignment(
+        self,
+        assignment_id: UUID,
+        *,
+        reason: str,
+    ) -> TeamAssignment:
+        async with self._sessions.begin() as session:
+            record = await session.get(TeamAssignmentRecord, assignment_id)
+            if record is None:
+                raise KeyError(assignment_id)
+            record.status = TeamAssignmentStatus.RETIRED.value
+            record.retire_reason = reason
+            return _assignment_from_record(record)
+
+    async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
+        async with self._sessions.begin() as session:
+            session.add(_mailbox_to_record(message))
+        return message
+
+    async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage:
+        async with self._sessions() as session:
+            record = await session.get(TeamMailboxMessageRecord, message_id)
+        if record is None:
+            raise KeyError(message_id)
+        return _mailbox_from_record(record)
+
+    async def list_mailbox_messages(
+        self,
+        run_id: UUID,
+        *,
+        include_archived: bool = False,
+    ) -> list[MailboxMessage]:
+        statement = select(TeamMailboxMessageRecord).where(
+            (TeamMailboxMessageRecord.sender_run_id == run_id)
+            | (TeamMailboxMessageRecord.recipient_run_id == run_id)
+        )
+        if not include_archived:
+            statement = statement.where(
+                TeamMailboxMessageRecord.status != MailboxMessageStatus.ARCHIVED.value
+            )
+        statement = statement.order_by(
+            TeamMailboxMessageRecord.created_at,
+            TeamMailboxMessageRecord.id,
+        )
+        async with self._sessions() as session:
+            records = list(await session.scalars(statement))
+        return [_mailbox_from_record(record) for record in records]
+
+
+def _assignment_to_record(assignment: TeamAssignment) -> TeamAssignmentRecord:
+    return TeamAssignmentRecord(
+        id=assignment.id,
+        root_run_id=assignment.root_run_id,
+        parent_run_id=assignment.parent_run_id,
+        child_run_id=assignment.child_run_id,
+        kind=assignment.kind.value,
+        status=assignment.status.value,
+        role_profile=assignment.role_profile,
+        graph_name=assignment.graph_name,
+        graph_version=assignment.graph_version,
+        goal=assignment.goal,
+        allowed_tools=assignment.allowed_tools,
+        allowed_skills=assignment.allowed_skills,
+        can_write=assignment.can_write,
+        can_delegate=assignment.can_delegate,
+        max_subagents=assignment.max_subagents,
+        acceptance_criteria=assignment.acceptance_criteria,
+        handoff_context=assignment.handoff_context,
+        retire_reason=assignment.retire_reason,
+        created_at=assignment.created_at,
+        updated_at=assignment.updated_at,
+    )
+
+
+def _assignment_from_record(record: TeamAssignmentRecord) -> TeamAssignment:
+    return TeamAssignment(
+        id=record.id,
+        root_run_id=record.root_run_id,
+        parent_run_id=record.parent_run_id,
+        child_run_id=record.child_run_id,
+        kind=TeamAssignmentKind(record.kind),
+        status=TeamAssignmentStatus(record.status),
+        role_profile=record.role_profile,
+        graph_name=record.graph_name,
+        graph_version=record.graph_version,
+        goal=record.goal,
+        allowed_tools=list(record.allowed_tools),
+        allowed_skills=list(record.allowed_skills),
+        can_write=record.can_write,
+        can_delegate=record.can_delegate,
+        max_subagents=record.max_subagents,
+        acceptance_criteria=list(record.acceptance_criteria),
+        handoff_context=dict(record.handoff_context),
+        retire_reason=record.retire_reason,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _mailbox_to_record(message: MailboxMessage) -> TeamMailboxMessageRecord:
+    return TeamMailboxMessageRecord(
+        id=message.id,
+        team_root_run_id=message.team_root_run_id,
+        sender_run_id=message.sender_run_id,
+        sender_agent_id=message.sender_agent_id,
+        recipient_run_id=message.recipient_run_id,
+        recipient_agent_id=message.recipient_agent_id,
+        route=message.route.value,
+        message_type=message.message_type.value,
+        status=message.status.value,
+        subject=message.subject,
+        body_summary=message.body_summary,
+        artifact_refs=[str(value) for value in message.artifact_refs],
+        requires_response=message.requires_response,
+        response_to_message_id=message.response_to_message_id,
+        created_at=message.created_at,
+        read_at=message.read_at,
+        responded_at=message.responded_at,
+    )
+
+
+def _mailbox_from_record(record: TeamMailboxMessageRecord) -> MailboxMessage:
+    return MailboxMessage(
+        id=record.id,
+        team_root_run_id=record.team_root_run_id,
+        sender_run_id=record.sender_run_id,
+        sender_agent_id=record.sender_agent_id,
+        recipient_run_id=record.recipient_run_id,
+        recipient_agent_id=record.recipient_agent_id,
+        route=MailboxRoute(record.route),
+        message_type=MailboxMessageType(record.message_type),
+        status=MailboxMessageStatus(record.status),
+        subject=record.subject,
+        body_summary=record.body_summary,
+        artifact_refs=[UUID(value) for value in record.artifact_refs],
+        requires_response=record.requires_response,
+        response_to_message_id=record.response_to_message_id,
+        created_at=record.created_at,
+        read_at=record.read_at,
+        responded_at=record.responded_at,
+    )

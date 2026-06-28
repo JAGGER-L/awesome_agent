@@ -41,8 +41,20 @@ class RuntimeRepository(Protocol):
         """Load known runs for inspection views."""
         ...
 
+    async def list_child_runs(self, parent_run_id: UUID) -> list[Run]:
+        """Load direct child Runs for a parent Run."""
+        ...
+
+    async def list_descendant_runs(self, root_run_id: UUID) -> list[Run]:
+        """Load descendant Runs for a root Run."""
+        ...
+
     async def update_run(self, run: Run) -> None:
         """Persist mutable run state."""
+        ...
+
+    async def requeue_waiting_run(self, run_id: UUID, *, reason: str) -> Run:
+        """Move a waiting Run back to queued dispatch when child work wakes it."""
         ...
 
     async def update_workspace_retention(
@@ -141,8 +153,50 @@ class InMemoryRuntimeRepository(RuntimeRepository):
     async def list_runs(self) -> list[Run]:
         return sorted(self._runs.values(), key=lambda run: (run.created_at, run.id.hex))
 
+    async def list_child_runs(self, parent_run_id: UUID) -> list[Run]:
+        return sorted(
+            [run for run in self._runs.values() if run.parent_run_id == parent_run_id],
+            key=lambda run: (run.created_at, run.id.hex),
+        )
+
+    async def list_descendant_runs(self, root_run_id: UUID) -> list[Run]:
+        return sorted(
+            [
+                run
+                for run in self._runs.values()
+                if run.root_run_id == root_run_id and run.id != root_run_id
+            ],
+            key=lambda run: (run.depth, run.created_at, run.id.hex),
+        )
+
     async def update_run(self, run: Run) -> None:
         self._runs[run.id] = run
+
+    async def requeue_waiting_run(self, run_id: UUID, *, reason: str) -> Run:
+        current = self._runs[run_id]
+        if current.status is not RunStatus.WAITING:
+            return current
+        run = current.model_copy(
+            update={
+                "status": RunStatus.RUNNING,
+                "dispatch_status": DispatchStatus.QUEUED,
+                "last_release_reason": reason,
+            }
+        )
+        event = RuntimeEvent(
+            run_id=run_id,
+            sequence=len(self._events[run_id]) + 1,
+            event_type=EventType.RUN_STATUS_CHANGED,
+            payload={
+                "status": RunStatus.RUNNING.value,
+                "dispatch_status": DispatchStatus.QUEUED.value,
+                "reason": reason,
+            },
+            trace_id=run_id.hex,
+        )
+        self._runs[run_id] = run
+        self._events[run_id].append(event)
+        return run
 
     async def update_workspace_retention(
         self,

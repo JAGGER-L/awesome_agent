@@ -87,6 +87,31 @@ class PostgresRuntimeRepository(RuntimeRepository):
             )
         return [_run_from_record(record) for record in records]
 
+    async def list_child_runs(self, parent_run_id: UUID) -> list[Run]:
+        async with self._sessions() as session:
+            records = list(
+                await session.scalars(
+                    select(RunRecord)
+                    .where(RunRecord.parent_run_id == parent_run_id)
+                    .order_by(RunRecord.created_at, RunRecord.id)
+                )
+            )
+        return [_run_from_record(record) for record in records]
+
+    async def list_descendant_runs(self, root_run_id: UUID) -> list[Run]:
+        async with self._sessions() as session:
+            records = list(
+                await session.scalars(
+                    select(RunRecord)
+                    .where(
+                        RunRecord.root_run_id == root_run_id,
+                        RunRecord.id != root_run_id,
+                    )
+                    .order_by(RunRecord.depth, RunRecord.created_at, RunRecord.id)
+                )
+            )
+        return [_run_from_record(record) for record in records]
+
     async def update_run(self, run: Run) -> None:
         async with self._sessions.begin() as session:
             record = await session.get(RunRecord, run.id)
@@ -133,6 +158,34 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.graph_thread_id = run.graph_thread_id
             record.legacy = run.legacy
             record.updated_at = run.updated_at
+
+    async def requeue_waiting_run(self, run_id: UUID, *, reason: str) -> Run:
+        async with self._sessions.begin() as session:
+            record = await session.scalar(
+                select(RunRecord).where(RunRecord.id == run_id).with_for_update()
+            )
+            if record is None:
+                raise KeyError(run_id)
+            if record.status != RunStatus.WAITING.value:
+                return _run_from_record(record)
+            record.status = RunStatus.RUNNING.value
+            record.dispatch_status = DispatchStatus.QUEUED.value
+            record.last_release_reason = reason
+            record.updated_at = cast(
+                datetime,
+                await session.scalar(select(func.clock_timestamp())),
+            )
+            await _append_locked_event(
+                session,
+                run_id,
+                EventType.RUN_STATUS_CHANGED,
+                {
+                    "status": RunStatus.RUNNING.value,
+                    "dispatch_status": DispatchStatus.QUEUED.value,
+                    "reason": reason,
+                },
+            )
+            return _run_from_record(record)
 
     async def update_workspace_retention(
         self,
