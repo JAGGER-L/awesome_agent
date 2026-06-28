@@ -52,7 +52,10 @@ from awesome_agent.runtime.dispatch import (
     IncompatibleGraphError,
     PermanentExecutionError,
 )
-from awesome_agent.runtime.graphs import TEAM_CODING_GRAPH, TEAM_CODING_VERSION
+from awesome_agent.runtime.graphs import (
+    SCOPED_TEAM_CODING_VERSION,
+    TEAM_CODING_GRAPH,
+)
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.tools.repository import (
     build_modifying_executor,
@@ -62,6 +65,8 @@ from awesome_agent.tools.repository import (
     repository_tool_effect_metadata,
     tool_invocation_uuid,
 )
+
+TEAM_CODING_VERSION = SCOPED_TEAM_CODING_VERSION
 
 __all__ = [
     "TEAM_CODING_GRAPH",

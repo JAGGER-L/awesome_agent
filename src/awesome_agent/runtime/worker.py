@@ -37,8 +37,13 @@ from awesome_agent.runtime.graphs import (
     READ_ONLY_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
     RUNTIME_PROBE_VERSION,
+    SCOPED_TEAM_CODING_VERSION,
     TEAM_CODING_GRAPH,
     TEAM_CODING_VERSION,
+    TEAM_ROLE_GRAPH,
+    TEAM_ROLE_VERSION,
+    TEAM_VERIFIER_GRAPH,
+    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.modifying_graph import (
     ModifyingAgentState,
@@ -79,6 +84,9 @@ class DurableWorker:
         coding_graph: ReadOnlyCodingGraph | None = None,
         modifying_graph: ModifyingCodingGraph | None = None,
         team_graph: TeamCodingGraph | None = None,
+        team_leader_graph: object | None = None,
+        team_role_graph: object | None = None,
+        team_verifier_graph: object | None = None,
         config: WorkerConfig,
         worker_id: UUID | None = None,
         worker_name: str | None = None,
@@ -93,6 +101,9 @@ class DurableWorker:
         self.coding_graph = coding_graph
         self.modifying_graph = modifying_graph
         self.team_graph = team_graph
+        self.team_leader_graph = team_leader_graph
+        self.team_role_graph = team_role_graph
+        self.team_verifier_graph = team_verifier_graph
         self.config = config
         self.worker_id = worker_id or uuid4()
         self.worker_name = worker_name or default_worker_name()
@@ -137,7 +148,16 @@ class DurableWorker:
             graph_identities.add((MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION))
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_graph is not None:
+            graph_identities.add((TEAM_CODING_GRAPH, SCOPED_TEAM_CODING_VERSION))
+            execution_kinds.add(ExecutionKind.CODING)
+        if self.team_leader_graph is not None:
             graph_identities.add((TEAM_CODING_GRAPH, TEAM_CODING_VERSION))
+            execution_kinds.add(ExecutionKind.CODING)
+        if self.team_role_graph is not None:
+            graph_identities.add((TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION))
+            execution_kinds.add(ExecutionKind.CODING)
+        if self.team_verifier_graph is not None:
+            graph_identities.add((TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION))
             execution_kinds.add(ExecutionKind.CODING)
         lease = await self.dispatcher.claim_next(
             worker_id=self.worker_id,
@@ -166,7 +186,15 @@ class DurableWorker:
                 GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION)
             )
         if self.team_graph is not None:
+            identities.append(
+                GraphIdentity(TEAM_CODING_GRAPH, SCOPED_TEAM_CODING_VERSION)
+            )
+        if self.team_leader_graph is not None:
             identities.append(GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION))
+        if self.team_role_graph is not None:
+            identities.append(GraphIdentity(TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION))
+        if self.team_verifier_graph is not None:
+            identities.append(GraphIdentity(TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION))
         return identities
 
     async def _upsert_worker_heartbeat(self) -> None:
@@ -428,14 +456,41 @@ class DurableWorker:
     def _validate_run(self, run: Run) -> None:
         if run.execution_kind is not ExecutionKind.CODING:
             return
-        if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph is not None:
+        if (
+            run.graph_name == READ_ONLY_CODING_GRAPH
+            and run.graph_version == READ_ONLY_CODING_VERSION
+            and self.coding_graph is not None
+        ):
             return
         if (
             run.graph_name == MODIFYING_CODING_GRAPH
+            and run.graph_version == MODIFYING_CODING_VERSION
             and self.modifying_graph is not None
         ):
             return
-        if run.graph_name == TEAM_CODING_GRAPH and self.team_graph is not None:
+        if (
+            run.graph_name == TEAM_CODING_GRAPH
+            and run.graph_version == SCOPED_TEAM_CODING_VERSION
+            and self.team_graph is not None
+        ):
+            return
+        if (
+            run.graph_name == TEAM_CODING_GRAPH
+            and run.graph_version == TEAM_CODING_VERSION
+            and self.team_leader_graph is not None
+        ):
+            return
+        if (
+            run.graph_name == TEAM_ROLE_GRAPH
+            and run.graph_version == TEAM_ROLE_VERSION
+            and self.team_role_graph is not None
+        ):
+            return
+        if (
+            run.graph_name == TEAM_VERIFIER_GRAPH
+            and run.graph_version == TEAM_VERIFIER_VERSION
+            and self.team_verifier_graph is not None
+        ):
             return
         raise IncompatibleGraphError(
             "Worker has no compatible Coding graph configured."
@@ -478,7 +533,11 @@ class DurableWorker:
                     )
                     await self._record_event_observability(run, leader, event)
 
-                if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph:
+                if (
+                    run.graph_name == READ_ONLY_CODING_GRAPH
+                    and run.graph_version == READ_ONLY_CODING_VERSION
+                    and self.coding_graph
+                ):
                     coding_graph = self.coding_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -488,7 +547,11 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.graph_name == MODIFYING_CODING_GRAPH and self.modifying_graph:
+                if (
+                    run.graph_name == MODIFYING_CODING_GRAPH
+                    and run.graph_version == MODIFYING_CODING_VERSION
+                    and self.modifying_graph
+                ):
                     modifying_graph = self.modifying_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -498,7 +561,11 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.graph_name == TEAM_CODING_GRAPH and self.team_graph:
+                if (
+                    run.graph_name == TEAM_CODING_GRAPH
+                    and run.graph_version == SCOPED_TEAM_CODING_VERSION
+                    and self.team_graph
+                ):
                     team_graph = self.team_graph
                     return await self._execute_with_active_budget(
                         run,

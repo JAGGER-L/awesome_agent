@@ -34,6 +34,10 @@ from awesome_agent.runtime.graphs import (
     RUNTIME_PROBE_VERSION,
     TEAM_CODING_GRAPH,
     TEAM_CODING_VERSION,
+    TEAM_ROLE_GRAPH,
+    TEAM_ROLE_VERSION,
+    TEAM_VERIFIER_GRAPH,
+    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.worker_heartbeats import (
     GraphIdentity,
@@ -122,6 +126,8 @@ async def test_runtime_readiness_is_healthy_with_fresh_worker_heartbeat(
                 GraphIdentity(READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION),
                 GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION),
                 GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION),
+                GraphIdentity(TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION),
+                GraphIdentity(TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION),
             ],
             status=WorkerHeartbeatStatus.ONLINE,
         )

@@ -24,8 +24,13 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
     RUNTIME_PROBE_VERSION,
+    SCOPED_TEAM_CODING_VERSION,
     TEAM_CODING_GRAPH,
     TEAM_CODING_VERSION,
+    TEAM_ROLE_GRAPH,
+    TEAM_ROLE_VERSION,
+    TEAM_VERIFIER_GRAPH,
+    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
@@ -274,7 +279,7 @@ class FakeTeamGraph:
                 "run_id": "run",
                 "agent_id": "agent",
                 "graph_name": TEAM_CODING_GRAPH,
-                "graph_version": TEAM_CODING_VERSION,
+                "graph_version": SCOPED_TEAM_CODING_VERSION,
                 "phase": "completed",
                 "final_answer": "Team completed after verification.",
                 "result_summary": "team done",
@@ -366,7 +371,7 @@ def _team_run(lease: RunLease) -> Run:
         intent=RunIntent.MODIFYING,
         execution_kind=ExecutionKind.CODING,
         graph_name=TEAM_CODING_GRAPH,
-        graph_version=TEAM_CODING_VERSION,
+        graph_version=SCOPED_TEAM_CODING_VERSION,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -517,7 +522,7 @@ async def test_worker_claims_modifying_graph_when_configured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_claims_team_graph_when_configured() -> None:
+async def test_worker_claims_scoped_team_graph_when_configured() -> None:
     dispatcher = FakeDispatcher(None)
     worker = DurableWorker(
         dispatcher=dispatcher,
@@ -533,8 +538,51 @@ async def test_worker_claims_team_graph_when_configured() -> None:
     assert isinstance(claim, dict)
     assert (
         TEAM_CODING_GRAPH,
+        SCOPED_TEAM_CODING_VERSION,
+    ) in claim["graph_identities"]
+
+
+@pytest.mark.asyncio
+async def test_worker_advertises_distributed_team_graphs_when_configured() -> None:
+    dispatcher = FakeDispatcher(None)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(Run(goal="unused")),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        team_leader_graph=object(),
+        team_role_graph=object(),
+        team_verifier_graph=object(),
+        config=_config(),
+    )
+
+    assert not await worker.run_once()
+    claim = dispatcher.calls[0][1]
+
+    assert isinstance(claim, dict)
+    assert (
+        TEAM_CODING_GRAPH,
         TEAM_CODING_VERSION,
     ) in claim["graph_identities"]
+    assert (TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION) in claim["graph_identities"]
+    assert (TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION) in claim["graph_identities"]
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_graph_version_mismatch_for_recovery() -> None:
+    lease = _lease()
+    run = _team_run(lease).model_copy(update={"graph_version": TEAM_CODING_VERSION})
+    dispatcher = FakeDispatcher(lease)
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        team_graph=FakeTeamGraph(),  # type: ignore[arg-type]
+        config=_config(),
+    )
+
+    await worker.run_once()
+
+    assert dispatcher.calls[-1][0] == "recovery"
 
 
 @pytest.mark.asyncio

@@ -171,7 +171,9 @@ def test_model_routes_check_reports_all_runtime_graph_identities() -> None:
             "runtime-probe@1",
             "solo-readonly@1",
             "solo-modifying@1",
-            "team-coding@1",
+            "team-coding@2",
+            "team-role@1",
+            "team-verifier@1",
         ]
     }
 

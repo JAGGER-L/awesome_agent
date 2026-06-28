@@ -33,7 +33,10 @@ from awesome_agent.persistence.validation import PostgresValidationRepository
 from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
-from awesome_agent.runtime.graphs import TEAM_CODING_GRAPH
+from awesome_agent.runtime.graphs import (
+    SCOPED_TEAM_CODING_VERSION,
+    TEAM_CODING_GRAPH,
+)
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.team_graph import TeamCodingGraph
@@ -103,6 +106,8 @@ async def test_team_run_executes_through_worker_with_verifier_rework(
         goal="Implement backend and verify it",
         intent=RunIntent.MODIFYING,
         mode=RunMode.TEAM,
+        graph_name=TEAM_CODING_GRAPH,
+        graph_version=SCOPED_TEAM_CODING_VERSION,
     )
     provider = SequenceProvider([_turn() for _ in range(7)])
 

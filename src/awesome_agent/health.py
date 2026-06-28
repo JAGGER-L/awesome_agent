@@ -26,6 +26,10 @@ from awesome_agent.runtime.graphs import (
     RUNTIME_PROBE_VERSION,
     TEAM_CODING_GRAPH,
     TEAM_CODING_VERSION,
+    TEAM_ROLE_GRAPH,
+    TEAM_ROLE_VERSION,
+    TEAM_VERIFIER_GRAPH,
+    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.settings import Settings
 
@@ -370,6 +374,8 @@ def _graph_identities() -> list[str]:
         f"{READ_ONLY_CODING_GRAPH}@{READ_ONLY_CODING_VERSION}",
         f"{MODIFYING_CODING_GRAPH}@{MODIFYING_CODING_VERSION}",
         f"{TEAM_CODING_GRAPH}@{TEAM_CODING_VERSION}",
+        f"{TEAM_ROLE_GRAPH}@{TEAM_ROLE_VERSION}",
+        f"{TEAM_VERIFIER_GRAPH}@{TEAM_VERIFIER_VERSION}",
     ]
 
 
@@ -416,5 +422,7 @@ async def _runtime_worker_heartbeat_check(
             GraphIdentity(READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION),
             GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION),
             GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION),
+            GraphIdentity(TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION),
+            GraphIdentity(TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION),
         ],
     )

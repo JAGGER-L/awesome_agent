@@ -27,9 +27,14 @@ from awesome_agent.persistence.tool_invocations import InMemoryToolInvocationRep
 from awesome_agent.persistence.validation import InMemoryValidationRepository
 from awesome_agent.runtime.budget import BudgetDecision, BudgetPolicy
 from awesome_agent.runtime.dispatch import PermanentExecutionError
-from awesome_agent.runtime.graphs import TEAM_CODING_GRAPH, TEAM_CODING_VERSION
+from awesome_agent.runtime.graphs import (
+    SCOPED_TEAM_CODING_VERSION,
+    TEAM_CODING_GRAPH,
+)
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_graph import AgentAssignment, TeamCodingGraph
+
+TEAM_CODING_VERSION = SCOPED_TEAM_CODING_VERSION
 
 
 def _git(path: Path, *arguments: str) -> None:
