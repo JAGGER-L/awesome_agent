@@ -16,6 +16,7 @@ from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
+from awesome_agent.persistence.team import PostgresTeamRepository
 from awesome_agent.persistence.tool_invocations import PostgresToolInvocationRepository
 from awesome_agent.persistence.validation import PostgresValidationRepository
 from awesome_agent.persistence.worker_heartbeats import (
@@ -28,6 +29,9 @@ from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
 from awesome_agent.runtime.team_graph import TeamCodingGraph
+from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
+from awesome_agent.runtime.team_role_graph import TeamRoleGraph
+from awesome_agent.runtime.team_verifier_graph import TeamVerifierGraph
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.settings import Settings
 
@@ -39,6 +43,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     providers = ModelProviderFactory(configured)
     artifact_store = LocalArtifactStore(configured.artifact_root)
     artifact_repository = PostgresArtifactMetadataRepository(sessions)
+    team_repository = PostgresTeamRepository(sessions)
     budget_repository = PostgresBudgetRepository(sessions)
     budget_policy = BudgetPolicy(
         soft_context_tokens=configured.soft_context_tokens,
@@ -113,6 +118,16 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 if providers.coding_available
                 else None
             ),
+            team_leader_graph=TeamLeaderGraph(
+                team_repository=team_repository,
+                artifact_repository=artifact_repository,
+            ),
+            team_role_graph=TeamRoleGraph(
+                team_repository=team_repository,
+                artifact_store=artifact_store,
+                artifact_repository=artifact_repository,
+            ),
+            team_verifier_graph=TeamVerifierGraph(team_repository=team_repository),
             config=WorkerConfig(
                 lease_duration=timedelta(seconds=configured.lease_duration_seconds),
                 heartbeat_interval=timedelta(
@@ -127,6 +142,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             observability_repository=PostgresObservabilityRepository(sessions),
             heartbeat_repository=PostgresWorkerHeartbeatRepository(sessions),
             budget_repository=budget_repository,
+            team_repository=team_repository,
         )
         restore = _install_signal_handlers(worker)
         try:

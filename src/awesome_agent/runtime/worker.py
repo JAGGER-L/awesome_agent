@@ -571,12 +571,14 @@ class DurableWorker:
                 return await self.probe_graph.execute(run)
             if run.execution_kind is ExecutionKind.CODING:
                 agents = await self.repository.list_agents(run.id)
-                leader = next(
+                primary_agent = next(
                     (agent for agent in agents if agent.parent_agent_id is None),
                     None,
                 )
-                if leader is None:
-                    raise CorruptRuntimeStateError("Coding Run has no Leader.")
+                if primary_agent is None and len(agents) == 1:
+                    primary_agent = agents[0]
+                if primary_agent is None:
+                    raise CorruptRuntimeStateError("Coding Run has no primary Agent.")
 
                 async def emit(
                     event_type: EventType,
@@ -589,7 +591,7 @@ class DurableWorker:
                         payload=payload,
                         transition_id=transition_id,
                     )
-                    await self._record_event_observability(run, leader, event)
+                    await self._record_event_observability(run, primary_agent, event)
 
                 if (
                     run.graph_name == READ_ONLY_CODING_GRAPH
@@ -601,7 +603,7 @@ class DurableWorker:
                         run,
                         lambda: coding_graph.execute(
                             run,
-                            leader,
+                            primary_agent,
                             event_sink=emit,
                         ),
                     )
@@ -615,7 +617,7 @@ class DurableWorker:
                         run,
                         lambda: modifying_graph.execute(
                             run,
-                            leader,
+                            primary_agent,
                             event_sink=emit,
                         ),
                     )
@@ -629,7 +631,7 @@ class DurableWorker:
                         run,
                         lambda: team_graph.execute(
                             run,
-                            leader,
+                            primary_agent,
                             repository=self.repository,
                             event_sink=emit,
                         ),
@@ -644,7 +646,7 @@ class DurableWorker:
                         run,
                         lambda: team_leader_graph.execute(
                             run,
-                            leader,
+                            primary_agent,
                             repository=self.repository,
                             event_sink=emit,
                         ),
@@ -659,7 +661,7 @@ class DurableWorker:
                         run,
                         lambda: team_role_graph.execute(
                             run,
-                            leader,
+                            primary_agent,
                             repository=self.repository,
                             event_sink=emit,
                         ),
@@ -674,7 +676,7 @@ class DurableWorker:
                         run,
                         lambda: team_verifier_graph.execute(
                             run,
-                            leader,
+                            primary_agent,
                             repository=self.repository,
                             event_sink=emit,
                         ),

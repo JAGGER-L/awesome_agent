@@ -161,6 +161,11 @@ class TeamLeaderGraph:
             can_delegate=True,
             max_subagents=3,
             acceptance_criteria=["Return evidence and changed patch artifacts."],
+            handoff_context={
+                "subagent_goals": [
+                    "Inspect supporting context and return focused evidence."
+                ]
+            },
         )
         validate_assignment_graph(assignment)
         await repository.create_run(child, teammate)
