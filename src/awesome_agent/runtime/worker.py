@@ -34,18 +34,12 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
-    MODIFYING_CODING_VERSION,
     READ_ONLY_CODING_GRAPH,
-    READ_ONLY_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
-    SCOPED_TEAM_CODING_VERSION,
+    SCOPED_TEAM_CODING_GRAPH,
     TEAM_CODING_GRAPH,
-    TEAM_CODING_VERSION,
     TEAM_ROLE_GRAPH,
-    TEAM_ROLE_VERSION,
     TEAM_VERIFIER_GRAPH,
-    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.modifying_graph import (
     ModifyingAgentState,
@@ -147,27 +141,25 @@ class DurableWorker:
 
     async def run_once(self) -> bool:
         await self._upsert_worker_heartbeat()
-        graph_identities = {
-            (graph.name, graph.version) for graph in self._supported_graph_identities()
-        }
+        graph_names = {graph.name for graph in self._supported_graph_identities()}
         execution_kinds = {ExecutionKind.RUNTIME_PROBE}
         if self.coding_graph is not None:
-            graph_identities.add((READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION))
+            graph_names.add(READ_ONLY_CODING_GRAPH)
             execution_kinds.add(ExecutionKind.CODING)
         if self.modifying_graph is not None:
-            graph_identities.add((MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION))
+            graph_names.add(MODIFYING_CODING_GRAPH)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_graph is not None:
-            graph_identities.add((TEAM_CODING_GRAPH, SCOPED_TEAM_CODING_VERSION))
+            graph_names.add(SCOPED_TEAM_CODING_GRAPH)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_leader_graph is not None:
-            graph_identities.add((TEAM_CODING_GRAPH, TEAM_CODING_VERSION))
+            graph_names.add(TEAM_CODING_GRAPH)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_role_graph is not None:
-            graph_identities.add((TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION))
+            graph_names.add(TEAM_ROLE_GRAPH)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_verifier_graph is not None:
-            graph_identities.add((TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION))
+            graph_names.add(TEAM_VERIFIER_GRAPH)
             execution_kinds.add(ExecutionKind.CODING)
         lease = await self.dispatcher.claim_next(
             worker_id=self.worker_id,
@@ -175,7 +167,7 @@ class DurableWorker:
             lease_duration=self.config.lease_duration,
             max_attempts=self.config.max_attempts,
             execution_kinds=frozenset(execution_kinds),
-            graph_identities=frozenset(graph_identities),
+            graph_names=frozenset(graph_names),
         )
         if lease is None:
             return False
@@ -186,25 +178,19 @@ class DurableWorker:
         await self._mark_worker_stopping()
 
     def _supported_graph_identities(self) -> list[GraphIdentity]:
-        identities = [GraphIdentity(RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION)]
+        identities = [GraphIdentity(RUNTIME_PROBE_GRAPH)]
         if self.coding_graph is not None:
-            identities.append(
-                GraphIdentity(READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION)
-            )
+            identities.append(GraphIdentity(READ_ONLY_CODING_GRAPH))
         if self.modifying_graph is not None:
-            identities.append(
-                GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION)
-            )
+            identities.append(GraphIdentity(MODIFYING_CODING_GRAPH))
         if self.team_graph is not None:
-            identities.append(
-                GraphIdentity(TEAM_CODING_GRAPH, SCOPED_TEAM_CODING_VERSION)
-            )
+            identities.append(GraphIdentity(SCOPED_TEAM_CODING_GRAPH))
         if self.team_leader_graph is not None:
-            identities.append(GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION))
+            identities.append(GraphIdentity(TEAM_CODING_GRAPH))
         if self.team_role_graph is not None:
-            identities.append(GraphIdentity(TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION))
+            identities.append(GraphIdentity(TEAM_ROLE_GRAPH))
         if self.team_verifier_graph is not None:
-            identities.append(GraphIdentity(TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION))
+            identities.append(GraphIdentity(TEAM_VERIFIER_GRAPH))
         return identities
 
     async def _upsert_worker_heartbeat(self) -> None:
@@ -243,7 +229,6 @@ class DurableWorker:
             await self.dispatcher.start_execution(
                 lease,
                 graph_name=run.graph_name or "",
-                graph_version=run.graph_version or 0,
             )
             state, recovered = await self._execute_with_heartbeat(run, lease)
             is_coding = run.execution_kind is ExecutionKind.CODING
@@ -510,37 +495,31 @@ class DurableWorker:
             return
         if (
             run.graph_name == READ_ONLY_CODING_GRAPH
-            and run.graph_version == READ_ONLY_CODING_VERSION
             and self.coding_graph is not None
         ):
             return
         if (
             run.graph_name == MODIFYING_CODING_GRAPH
-            and run.graph_version == MODIFYING_CODING_VERSION
             and self.modifying_graph is not None
         ):
             return
         if (
-            run.graph_name == TEAM_CODING_GRAPH
-            and run.graph_version == SCOPED_TEAM_CODING_VERSION
+            run.graph_name == SCOPED_TEAM_CODING_GRAPH
             and self.team_graph is not None
         ):
             return
         if (
             run.graph_name == TEAM_CODING_GRAPH
-            and run.graph_version == TEAM_CODING_VERSION
             and self.team_leader_graph is not None
         ):
             return
         if (
             run.graph_name == TEAM_ROLE_GRAPH
-            and run.graph_version == TEAM_ROLE_VERSION
             and self.team_role_graph is not None
         ):
             return
         if (
             run.graph_name == TEAM_VERIFIER_GRAPH
-            and run.graph_version == TEAM_VERIFIER_VERSION
             and self.team_verifier_graph is not None
         ):
             return
@@ -595,7 +574,6 @@ class DurableWorker:
 
                 if (
                     run.graph_name == READ_ONLY_CODING_GRAPH
-                    and run.graph_version == READ_ONLY_CODING_VERSION
                     and self.coding_graph
                 ):
                     coding_graph = self.coding_graph
@@ -609,7 +587,6 @@ class DurableWorker:
                     )
                 if (
                     run.graph_name == MODIFYING_CODING_GRAPH
-                    and run.graph_version == MODIFYING_CODING_VERSION
                     and self.modifying_graph
                 ):
                     modifying_graph = self.modifying_graph
@@ -622,8 +599,7 @@ class DurableWorker:
                         ),
                     )
                 if (
-                    run.graph_name == TEAM_CODING_GRAPH
-                    and run.graph_version == SCOPED_TEAM_CODING_VERSION
+                    run.graph_name == SCOPED_TEAM_CODING_GRAPH
                     and self.team_graph
                 ):
                     team_graph = self.team_graph
@@ -638,7 +614,6 @@ class DurableWorker:
                     )
                 if (
                     run.graph_name == TEAM_CODING_GRAPH
-                    and run.graph_version == TEAM_CODING_VERSION
                     and self.team_leader_graph
                 ):
                     team_leader_graph = self.team_leader_graph
@@ -653,7 +628,6 @@ class DurableWorker:
                     )
                 if (
                     run.graph_name == TEAM_ROLE_GRAPH
-                    and run.graph_version == TEAM_ROLE_VERSION
                     and self.team_role_graph
                 ):
                     team_role_graph = self.team_role_graph
@@ -668,7 +642,6 @@ class DurableWorker:
                     )
                 if (
                     run.graph_name == TEAM_VERIFIER_GRAPH
-                    and run.graph_version == TEAM_VERIFIER_VERSION
                     and self.team_verifier_graph
                 ):
                     team_verifier_graph = self.team_verifier_graph
@@ -698,7 +671,6 @@ class DurableWorker:
                 started=started,
                 attributes={
                     "graph_name": run.graph_name,
-                    "graph_version": run.graph_version,
                     "execution_kind": run.execution_kind.value,
                 },
                 error=error_text,
@@ -942,7 +914,7 @@ class DurableWorker:
     def _completion_kind(self, run: Run) -> str:
         if run.execution_kind is not ExecutionKind.CODING:
             return "runtime_probe"
-        if run.graph_name == TEAM_CODING_GRAPH:
+        if run.graph_name in {SCOPED_TEAM_CODING_GRAPH, TEAM_CODING_GRAPH}:
             return "team_validated"
         if run.graph_name == MODIFYING_CODING_GRAPH:
             return "modifying_validated"

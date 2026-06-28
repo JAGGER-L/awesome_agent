@@ -61,7 +61,6 @@ class RunRecord(Base):
     depth: Mapped[int] = mapped_column(Integer, default=0)
     child_role: Mapped[str | None] = mapped_column(String(64), index=True)
     graph_name: Mapped[str | None] = mapped_column(String(128))
-    graph_version: Mapped[int | None] = mapped_column(Integer)
     dispatch_status: Mapped[str] = mapped_column(String(32), index=True)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     current_worker_id: Mapped[UUID | None] = mapped_column(

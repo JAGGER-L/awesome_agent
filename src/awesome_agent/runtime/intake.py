@@ -36,11 +36,8 @@ from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
-    MODIFYING_CODING_VERSION,
     READ_ONLY_CODING_GRAPH,
-    READ_ONLY_CODING_VERSION,
     TEAM_CODING_GRAPH,
-    TEAM_CODING_VERSION,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 
@@ -78,7 +75,6 @@ class RunIntakeService:
         mode: RunMode = RunMode.SOLO,
         execution_kind: ExecutionKind = ExecutionKind.CODING,
         graph_name: str | None = None,
-        graph_version: int | None = None,
     ) -> Run:
         if (
             mode is RunMode.TEAM
@@ -86,7 +82,6 @@ class RunIntakeService:
             and graph_name is None
         ):
             graph_name = TEAM_CODING_GRAPH
-            graph_version = TEAM_CODING_VERSION
         if (
             mode is RunMode.SOLO
             and execution_kind is ExecutionKind.CODING
@@ -94,7 +89,6 @@ class RunIntakeService:
             and graph_name is None
         ):
             graph_name = READ_ONLY_CODING_GRAPH
-            graph_version = READ_ONLY_CODING_VERSION
         if (
             mode is RunMode.SOLO
             and execution_kind is ExecutionKind.CODING
@@ -102,7 +96,6 @@ class RunIntakeService:
             and graph_name is None
         ):
             graph_name = MODIFYING_CODING_GRAPH
-            graph_version = MODIFYING_CODING_VERSION
         await self.reconcile_incomplete()
         repository = await self.registry.get(repository_id)
         if not repository.enabled:
@@ -139,7 +132,6 @@ class RunIntakeService:
                 goal=goal,
                 execution_kind=execution_kind,
                 graph_name=graph_name,
-                graph_version=graph_version,
                 mode=mode,
             )
             await self.runtime.publish_intake(
@@ -198,7 +190,6 @@ class RunIntakeService:
         goal: str,
         execution_kind: ExecutionKind,
         graph_name: str | None,
-        graph_version: int | None,
         mode: RunMode,
     ) -> tuple[Run, Agent, TodoItem | None, list[RuntimeEvent]]:
         run = Run(
@@ -211,7 +202,6 @@ class RunIntakeService:
             intent=reservation.intent,
             execution_kind=execution_kind,
             graph_name=graph_name,
-            graph_version=graph_version,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=reservation.workspace_path,
             integration_branch=reservation.integration_branch,

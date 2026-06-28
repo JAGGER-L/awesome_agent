@@ -58,7 +58,6 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
-    MODIFYING_CODING_VERSION,
 )
 from awesome_agent.runtime.modifying_graph import (
     ModifyingAgentLoopFailed,
@@ -100,7 +99,6 @@ def _run(workspace: Path) -> tuple[Run, Agent]:
         goal="Change README",
         intent=RunIntent.MODIFYING,
         graph_name=MODIFYING_CODING_GRAPH,
-        graph_version=MODIFYING_CODING_VERSION,
         graph_thread_id=f"run:{uuid4()}",
         workspace_path=workspace,
     )
@@ -145,7 +143,6 @@ def _node_state(
             "run_id": str(run.id),
             "agent_id": str(agent.id),
             "graph_name": MODIFYING_CODING_GRAPH,
-            "graph_version": MODIFYING_CODING_VERSION,
             "messages": messages,
             "continuation": None,
             "model_turn_count": 0,
@@ -883,7 +880,6 @@ async def test_modifying_graph_rejects_incompatible_run(tmp_path: Path) -> None:
         intent=RunIntent.READ_ONLY,
         execution_kind=ExecutionKind.CODING,
         graph_name="other",
-        graph_version=999,
         graph_thread_id=run.graph_thread_id,
         workspace_path=tmp_path,
     )
@@ -907,7 +903,6 @@ async def test_modifying_graph_requires_thread_and_workspace(tmp_path: Path) -> 
         intent=run.intent,
         execution_kind=ExecutionKind.CODING,
         graph_name=run.graph_name,
-        graph_version=run.graph_version,
         workspace_path=tmp_path,
     )
     with pytest.raises(CorruptRuntimeStateError, match="graph_thread_id"):
@@ -919,7 +914,6 @@ async def test_modifying_graph_requires_thread_and_workspace(tmp_path: Path) -> 
         intent=run.intent,
         execution_kind=ExecutionKind.CODING,
         graph_name=run.graph_name,
-        graph_version=run.graph_version,
         graph_thread_id=run.graph_thread_id,
         workspace_path=tmp_path / "missing",
     )
@@ -1096,7 +1090,6 @@ def _change_ready_state(run: Run, agent: Agent) -> ModifyingAgentState:
             "run_id": str(run.id),
             "agent_id": str(agent.id),
             "graph_name": MODIFYING_CODING_GRAPH,
-            "graph_version": MODIFYING_CODING_VERSION,
             "messages": [],
             "continuation": None,
             "model_turn_count": 1,

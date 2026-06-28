@@ -53,8 +53,7 @@ from awesome_agent.runtime.dispatch import (
     PermanentExecutionError,
 )
 from awesome_agent.runtime.graphs import (
-    SCOPED_TEAM_CODING_VERSION,
-    TEAM_CODING_GRAPH,
+    SCOPED_TEAM_CODING_GRAPH,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.tools.repository import (
@@ -66,11 +65,8 @@ from awesome_agent.tools.repository import (
     tool_invocation_uuid,
 )
 
-TEAM_CODING_VERSION = SCOPED_TEAM_CODING_VERSION
-
 __all__ = [
-    "TEAM_CODING_GRAPH",
-    "TEAM_CODING_VERSION",
+    "SCOPED_TEAM_CODING_GRAPH",
     "AgentAssignment",
     "TeamCodingGraph",
     "TeamCodingState",
@@ -91,7 +87,6 @@ class TeamCodingState(TypedDict):
     run_id: str
     leader_id: str
     graph_name: str
-    graph_version: int
     phase: str
     created_agent_ids: list[str]
     assignments: dict[str, dict[str, object]]
@@ -157,7 +152,7 @@ class TeamCodingGraph:
         builder.add_edge("backend_subagent_step", "backend_precheck_step")
         builder.add_edge("backend_precheck_step", "verify")
         builder.add_edge("verify", END)
-        self.graph = builder.compile(checkpointer=saver, name=TEAM_CODING_GRAPH)
+        self.graph = builder.compile(checkpointer=saver, name=SCOPED_TEAM_CODING_GRAPH)
 
     async def execute(
         self,
@@ -184,8 +179,7 @@ class TeamCodingGraph:
                 {
                     "run_id": str(run.id),
                     "leader_id": str(leader.id),
-                    "graph_name": TEAM_CODING_GRAPH,
-                    "graph_version": TEAM_CODING_VERSION,
+                    "graph_name": SCOPED_TEAM_CODING_GRAPH,
                     "phase": "created",
                     "created_agent_ids": [],
                     "assignments": {},
@@ -898,11 +892,10 @@ class TeamCodingGraph:
     def _validate_run(self, run: Run, leader: Agent) -> None:
         if (
             run.mode is not RunMode.TEAM
-            or run.graph_name != TEAM_CODING_GRAPH
-            or run.graph_version != TEAM_CODING_VERSION
+            or run.graph_name != SCOPED_TEAM_CODING_GRAPH
         ):
             raise IncompatibleGraphError(
-                f"Unsupported team graph identity: {run.graph_name}@{run.graph_version}"
+                f"Unsupported team graph identity: {run.graph_name}"
             )
         if leader.kind is not AgentKind.LEADER:
             raise CorruptRuntimeStateError("Team Run requires a Leader.")
@@ -927,7 +920,6 @@ def _state(value: object) -> TeamCodingState:
         "run_id",
         "leader_id",
         "graph_name",
-        "graph_version",
         "phase",
         "created_agent_ids",
         "assignments",

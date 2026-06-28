@@ -21,16 +21,11 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
-    MODIFYING_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
-    SCOPED_TEAM_CODING_VERSION,
+    SCOPED_TEAM_CODING_GRAPH,
     TEAM_CODING_GRAPH,
-    TEAM_CODING_VERSION,
     TEAM_ROLE_GRAPH,
-    TEAM_ROLE_VERSION,
     TEAM_VERIFIER_GRAPH,
-    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
@@ -221,7 +216,6 @@ class FakeGraph:
             {
                 "run_id": "run",
                 "graph_name": "runtime-probe",
-                "graph_version": 1,
                 "phase": "completed",
                 "completed_steps": ["initialize", "checkpoint_probe", "finalize"],
                 "result_summary": "done",
@@ -254,7 +248,6 @@ class FakeModifyingGraph:
                 "run_id": "run",
                 "agent_id": "agent",
                 "graph_name": MODIFYING_CODING_GRAPH,
-                "graph_version": MODIFYING_CODING_VERSION,
                 "messages": [],
                 "model_turn_count": 1,
                 "tool_call_count": 2,
@@ -285,8 +278,7 @@ class FakeTeamGraph:
             {
                 "run_id": "run",
                 "agent_id": "agent",
-                "graph_name": TEAM_CODING_GRAPH,
-                "graph_version": SCOPED_TEAM_CODING_VERSION,
+                "graph_name": SCOPED_TEAM_CODING_GRAPH,
                 "phase": "completed",
                 "final_answer": "Team completed after verification.",
                 "result_summary": "team done",
@@ -354,7 +346,6 @@ def _run(lease: RunLease) -> Run:
         goal="probe",
         execution_kind=ExecutionKind.RUNTIME_PROBE,
         graph_name="runtime-probe",
-        graph_version=1,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -366,7 +357,6 @@ def _modifying_run(lease: RunLease) -> Run:
         intent=RunIntent.MODIFYING,
         execution_kind=ExecutionKind.CODING,
         graph_name=MODIFYING_CODING_GRAPH,
-        graph_version=MODIFYING_CODING_VERSION,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -377,8 +367,7 @@ def _team_run(lease: RunLease) -> Run:
         goal="team",
         intent=RunIntent.MODIFYING,
         execution_kind=ExecutionKind.CODING,
-        graph_name=TEAM_CODING_GRAPH,
-        graph_version=SCOPED_TEAM_CODING_VERSION,
+        graph_name=SCOPED_TEAM_CODING_GRAPH,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -522,10 +511,7 @@ async def test_worker_claims_modifying_graph_when_configured() -> None:
     claim = dispatcher.calls[0][1]
 
     assert isinstance(claim, dict)
-    assert (
-        MODIFYING_CODING_GRAPH,
-        MODIFYING_CODING_VERSION,
-    ) in claim["graph_identities"]
+    assert MODIFYING_CODING_GRAPH in claim["graph_names"]
 
 
 @pytest.mark.asyncio
@@ -543,10 +529,7 @@ async def test_worker_claims_scoped_team_graph_when_configured() -> None:
     claim = dispatcher.calls[0][1]
 
     assert isinstance(claim, dict)
-    assert (
-        TEAM_CODING_GRAPH,
-        SCOPED_TEAM_CODING_VERSION,
-    ) in claim["graph_identities"]
+    assert SCOPED_TEAM_CODING_GRAPH in claim["graph_names"]
 
 
 @pytest.mark.asyncio
@@ -566,18 +549,15 @@ async def test_worker_advertises_distributed_team_graphs_when_configured() -> No
     claim = dispatcher.calls[0][1]
 
     assert isinstance(claim, dict)
-    assert (
-        TEAM_CODING_GRAPH,
-        TEAM_CODING_VERSION,
-    ) in claim["graph_identities"]
-    assert (TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION) in claim["graph_identities"]
-    assert (TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION) in claim["graph_identities"]
+    assert TEAM_CODING_GRAPH in claim["graph_names"]
+    assert TEAM_ROLE_GRAPH in claim["graph_names"]
+    assert TEAM_VERIFIER_GRAPH in claim["graph_names"]
 
 
 @pytest.mark.asyncio
-async def test_worker_marks_graph_version_mismatch_for_recovery() -> None:
+async def test_worker_marks_unsupported_team_graph_for_recovery() -> None:
     lease = _lease()
-    run = _team_run(lease).model_copy(update={"graph_version": TEAM_CODING_VERSION})
+    run = _team_run(lease).model_copy(update={"graph_name": TEAM_CODING_GRAPH})
     dispatcher = FakeDispatcher(lease)
     worker = DurableWorker(
         dispatcher=dispatcher,
@@ -608,7 +588,7 @@ async def test_worker_upserts_heartbeat_before_claiming() -> None:
 
     assert heartbeats.heartbeats[0].worker_id == worker.worker_id
     assert heartbeats.heartbeats[0].supported_graphs == [
-        GraphIdentity(RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION)
+        GraphIdentity(RUNTIME_PROBE_GRAPH)
     ]
 
 

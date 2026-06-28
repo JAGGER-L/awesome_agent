@@ -36,14 +36,14 @@ async def test_two_workers_claim_one_run_once() -> None:
             worker_name="worker-a",
             lease_duration=timedelta(seconds=60),
             max_attempts=3,
-            graph_identities=_fixture_graphs(),
+            graph_names=_fixture_graphs(),
         ),
         dispatcher.claim_next(
             worker_id=uuid4(),
             worker_name="worker-b",
             lease_duration=timedelta(seconds=60),
             max_attempts=3,
-            graph_identities=_fixture_graphs(),
+            graph_names=_fixture_graphs(),
         ),
     )
 
@@ -71,7 +71,7 @@ async def test_heartbeat_and_fencing_reject_stale_owner() -> None:
         worker_name="worker-a",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
-        graph_identities=_fixture_graphs(),
+        graph_names=_fixture_graphs(),
     )
     assert lease is not None
 
@@ -91,7 +91,7 @@ async def test_heartbeat_and_fencing_reject_stale_owner() -> None:
         worker_name="worker-b",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
-        graph_identities=_fixture_graphs(),
+        graph_names=_fixture_graphs(),
     )
     assert replacement is not None
     assert replacement.fencing_token == 2
@@ -127,7 +127,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
         worker_name="worker-a",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
-        graph_identities=_fixture_graphs(),
+        graph_names=_fixture_graphs(),
     )
     assert lease is not None
     await dispatcher.release_for_retry(
@@ -143,7 +143,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
             worker_name="too-early",
             lease_duration=timedelta(seconds=60),
             max_attempts=3,
-            graph_identities=_fixture_graphs(),
+            graph_names=_fixture_graphs(),
         )
         is None
     )
@@ -164,7 +164,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
         worker_name="worker-b",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
-        graph_identities=_fixture_graphs(),
+        graph_names=_fixture_graphs(),
     )
     assert replacement is not None
     async with sessions.begin() as session:
@@ -189,7 +189,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
         worker_name="worker-c",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
-        graph_identities=_fixture_graphs(),
+        graph_names=_fixture_graphs(),
     )
     assert final is not None and final.attempt == 3
     async with sessions.begin() as session:
@@ -237,7 +237,7 @@ async def test_cancellation_is_atomic_and_rejects_claimed_run() -> None:
         worker_name="worker",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
-        graph_identities=_fixture_graphs(),
+        graph_names=_fixture_graphs(),
     )
     assert lease is not None and lease.run_id == claimed_id
     with pytest.raises(DispatchConflict):
@@ -258,12 +258,12 @@ async def _insert_queued_run(
                 """
                 INSERT INTO runs (
                     id, goal, mode, status, dispatch_status, graph_name,
-                    graph_version, legacy,
+                    legacy,
                     created_at, updated_at
                 )
                 VALUES (
                     :id, 'dispatch fixture', 'solo', 'created', 'queued',
-                    'dispatch-fixture', 1, false, clock_timestamp(),
+                    'dispatch-fixture', false, clock_timestamp(),
                     clock_timestamp()
                 )
                 """
@@ -273,8 +273,8 @@ async def _insert_queued_run(
     return run_id
 
 
-def _fixture_graphs() -> frozenset[tuple[str, int]]:
-    return frozenset({("dispatch-fixture", 1)})
+def _fixture_graphs() -> frozenset[str]:
+    return frozenset({"dispatch-fixture"})
 
 
 async def _delete_dispatch_fixtures(

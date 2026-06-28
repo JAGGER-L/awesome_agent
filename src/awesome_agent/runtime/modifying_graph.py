@@ -70,7 +70,6 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
-    MODIFYING_CODING_VERSION,
 )
 from awesome_agent.runtime.validation.config import load_validation_config
 from awesome_agent.runtime.validation.detection import detect_validation_plan
@@ -106,7 +105,6 @@ class ModifyingAgentState(TypedDict):
     run_id: str
     agent_id: str
     graph_name: str
-    graph_version: int
     messages: list[dict[str, Any]]
     continuation: dict[str, Any] | None
     model_turn_count: int
@@ -285,12 +283,11 @@ class ModifyingCodingGraph:
     def _validate_run(self, run: Run) -> None:
         if (
             run.graph_name != MODIFYING_CODING_GRAPH
-            or run.graph_version != MODIFYING_CODING_VERSION
             or run.intent is not RunIntent.MODIFYING
         ):
             raise IncompatibleGraphError(
                 f"Unsupported modifying graph: "
-                f"{run.intent.value}/{run.graph_name}@{run.graph_version}"
+                f"{run.intent.value}/{run.graph_name}"
             )
         if run.graph_thread_id is None:
             raise CorruptRuntimeStateError("Run is missing graph_thread_id.")
@@ -1004,7 +1001,7 @@ class ModifyingCodingGraph:
             run_id=run.id,
             agent_id=agent.id,
             graph_name=MODIFYING_CODING_GRAPH,
-            graph_version=MODIFYING_CODING_VERSION,
+            graph_version=1,
             messages=messages,
             rolling_summary=rolling_summary,
             policy=ContextPolicy(
@@ -1027,7 +1024,7 @@ class ModifyingCodingGraph:
                 run_id=run.id,
                 agent_id=agent.id,
                 graph_name=MODIFYING_CODING_GRAPH,
-                graph_version=MODIFYING_CODING_VERSION,
+                graph_version=1,
                 before_estimated_tokens=prepared.before_estimated_tokens,
                 after_estimated_tokens=prepared.after_estimated_tokens,
                 summary=prepared.rolling_summary,
@@ -1210,7 +1207,6 @@ def _initial_state(run: Run, agent: Agent) -> ModifyingAgentState:
         "run_id": str(run.id),
         "agent_id": str(agent.id),
         "graph_name": MODIFYING_CODING_GRAPH,
-        "graph_version": MODIFYING_CODING_VERSION,
         "messages": [
             SystemMessage(content=_SYSTEM_PROMPT).model_dump(mode="json"),
             UserMessage(content=run.goal).model_dump(mode="json"),
@@ -1239,7 +1235,6 @@ def _state(value: object) -> ModifyingAgentState:
         "run_id",
         "agent_id",
         "graph_name",
-        "graph_version",
         "messages",
         "model_turn_count",
         "tool_call_count",

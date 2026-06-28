@@ -307,7 +307,7 @@ def test_runtime_probe_has_explicit_execution_identity(tmp_path: Path) -> None:
     body = response.json()
     assert body["execution_kind"] == "runtime_probe"
     assert body["graph_name"] == "runtime-probe"
-    assert body["graph_version"] == 1
+    assert "graph_version" not in body
 
 
 def test_observability_endpoints_return_run_trace_metrics_and_model_calls(
@@ -449,7 +449,7 @@ def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["graph_name"] == "solo-modifying"
-    assert body["graph_version"] == 1
+    assert "graph_version" not in body
     assert body["dispatch_status"] == "queued"
 
 
@@ -473,7 +473,7 @@ def test_team_run_uses_team_graph_and_starts_with_leader_only(
     run_id = body["id"]
     assert body["mode"] == "team"
     assert body["graph_name"] == "team-coding"
-    assert body["graph_version"] == 2
+    assert "graph_version" not in body
     agents = client.get(f"/runs/{run_id}/agents").json()
     assert len(agents) == 1
     assert agents[0]["kind"] == "leader"

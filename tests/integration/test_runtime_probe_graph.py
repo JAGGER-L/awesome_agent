@@ -11,7 +11,6 @@ from awesome_agent.domain.models import Run
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.runtime.probe_graph import (
     RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
     RuntimeProbeGraph,
     RuntimeProbeState,
 )
@@ -37,7 +36,6 @@ async def test_runtime_probe_resumes_from_durable_checkpoint(
         goal="Runtime probe",
         execution_kind=ExecutionKind.RUNTIME_PROBE,
         graph_name=RUNTIME_PROBE_GRAPH,
-        graph_version=RUNTIME_PROBE_VERSION,
         graph_thread_id=f"run:{uuid4()}",
         workspace_path=workspace,
     )

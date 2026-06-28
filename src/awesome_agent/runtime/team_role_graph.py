@@ -31,7 +31,6 @@ class TeamRoleState(TypedDict):
     run_id: str
     agent_id: str
     graph_name: str
-    graph_version: int
     phase: str
     result_summary: str
     allowed_tools: list[str]
@@ -110,7 +109,6 @@ class TeamRoleGraph:
                 run_id=str(run.id),
                 agent_id=str(agent.id),
                 graph_name=run.graph_name or TEAM_ROLE_GRAPH,
-                graph_version=run.graph_version or TEAM_ROLE_VERSION,
                 phase="completed",
                 result_summary=f"{assignment.kind.value} assignment completed.",
                 allowed_tools=allowed_tools,
@@ -161,7 +159,7 @@ class TeamRoleGraph:
             run_id=run.id,
             agent_id=agent.id,
             graph_name=run.graph_name or TEAM_ROLE_GRAPH,
-            graph_version=run.graph_version or TEAM_ROLE_VERSION,
+            graph_version=assignment.graph_version,
             payload_kind="child-result",
             payload={"summary": summary, "changed_files": changed_files},
             artifact_store=self.artifact_store,
@@ -216,7 +214,6 @@ class TeamRoleGraph:
                 depth=2,
                 child_role=TeamAssignmentKind.SUBAGENT.value,
                 graph_name=TEAM_ROLE_GRAPH,
-                graph_version=TEAM_ROLE_VERSION,
                 dispatch_status=DispatchStatus.QUEUED,
                 workspace_path=run.workspace_path,
                 integration_branch=run.integration_branch,

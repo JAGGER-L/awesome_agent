@@ -36,7 +36,6 @@ class TeamLeaderState(TypedDict):
     run_id: str
     agent_id: str
     graph_name: str
-    graph_version: int
     phase: str
     result_summary: str
     final_answer: NotRequired[str]
@@ -127,7 +126,6 @@ class TeamLeaderGraph:
                 run_id=str(run.id),
                 agent_id=str(leader.id),
                 graph_name=run.graph_name or "team-coding",
-                graph_version=run.graph_version or 2,
                 phase="completed",
                 result_summary="Distributed team child Runs completed.",
                 final_answer="Distributed team child Runs completed.",
@@ -155,7 +153,6 @@ class TeamLeaderGraph:
             depth=1,
             child_role=TeamAssignmentKind.TEAMMATE.value,
             graph_name=TEAM_ROLE_GRAPH,
-            graph_version=TEAM_ROLE_VERSION,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=run.workspace_path,
             integration_branch=run.integration_branch,
@@ -292,7 +289,6 @@ class TeamLeaderGraph:
             depth=1,
             child_role=TeamAssignmentKind.VERIFIER.value,
             graph_name=TEAM_VERIFIER_GRAPH,
-            graph_version=TEAM_VERIFIER_VERSION,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=run.workspace_path,
             integration_branch=run.integration_branch,

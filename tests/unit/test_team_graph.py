@@ -28,13 +28,10 @@ from awesome_agent.persistence.validation import InMemoryValidationRepository
 from awesome_agent.runtime.budget import BudgetDecision, BudgetPolicy
 from awesome_agent.runtime.dispatch import PermanentExecutionError
 from awesome_agent.runtime.graphs import (
-    SCOPED_TEAM_CODING_VERSION,
-    TEAM_CODING_GRAPH,
+    SCOPED_TEAM_CODING_GRAPH,
 )
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_graph import AgentAssignment, TeamCodingGraph
-
-TEAM_CODING_VERSION = SCOPED_TEAM_CODING_VERSION
 
 
 def _git(path: Path, *arguments: str) -> None:
@@ -115,8 +112,7 @@ def _team_run(tmp_path: Path) -> tuple[Run, Agent]:
         goal="Implement backend and verify it",
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
-        graph_name=TEAM_CODING_GRAPH,
-        graph_version=TEAM_CODING_VERSION,
+        graph_name=SCOPED_TEAM_CODING_GRAPH,
         graph_thread_id=f"run:{uuid4()}",
         workspace_path=tmp_path,
     )
@@ -405,8 +401,7 @@ async def test_team_graph_rejects_tools_outside_leader_assignment_scope(
         goal="Implement backend and verify it",
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
-        graph_name=TEAM_CODING_GRAPH,
-        graph_version=TEAM_CODING_VERSION,
+        graph_name=SCOPED_TEAM_CODING_GRAPH,
         graph_thread_id=f"run:{uuid4()}",
         workspace_path=tmp_path,
     )

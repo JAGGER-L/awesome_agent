@@ -12,11 +12,10 @@ from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
     IncompatibleGraphError,
 )
-from awesome_agent.runtime.graphs import RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION
+from awesome_agent.runtime.graphs import RUNTIME_PROBE_GRAPH
 
 __all__ = [
     "RUNTIME_PROBE_GRAPH",
-    "RUNTIME_PROBE_VERSION",
     "RuntimeProbeGraph",
     "RuntimeProbeState",
 ]
@@ -25,7 +24,6 @@ __all__ = [
 class RuntimeProbeState(TypedDict):
     run_id: str
     graph_name: str
-    graph_version: int
     phase: str
     completed_steps: list[str]
     result_summary: NotRequired[str]
@@ -67,7 +65,6 @@ class RuntimeProbeGraph:
                 {
                     "run_id": str(run.id),
                     "graph_name": RUNTIME_PROBE_GRAPH,
-                    "graph_version": RUNTIME_PROBE_VERSION,
                     "phase": "created",
                     "completed_steps": [],
                 },
@@ -87,12 +84,9 @@ class RuntimeProbeGraph:
         return _state(result), True
 
     def _validate_run(self, run: Run) -> None:
-        if (
-            run.graph_name != RUNTIME_PROBE_GRAPH
-            or run.graph_version != RUNTIME_PROBE_VERSION
-        ):
+        if run.graph_name != RUNTIME_PROBE_GRAPH:
             raise IncompatibleGraphError(
-                f"Unsupported graph identity: {run.graph_name}@{run.graph_version}"
+                f"Unsupported graph identity: {run.graph_name}"
             )
         if run.graph_thread_id is None:
             raise CorruptRuntimeStateError("Run is missing graph_thread_id.")
@@ -141,7 +135,6 @@ def _state(value: object) -> RuntimeProbeState:
     required = {
         "run_id",
         "graph_name",
-        "graph_version",
         "phase",
         "completed_steps",
     }

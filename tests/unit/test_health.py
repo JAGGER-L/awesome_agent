@@ -171,6 +171,7 @@ def test_model_routes_check_reports_all_runtime_graph_identities() -> None:
             "runtime-probe",
             "solo-readonly",
             "solo-modifying",
+            "team-coding-scoped",
             "team-coding",
             "team-role",
             "team-verifier",

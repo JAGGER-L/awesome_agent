@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.domain.enums import (
@@ -44,7 +44,7 @@ class PostgresRunDispatcher(RunDispatcher):
         max_attempts: int,
         execution_kinds: frozenset[ExecutionKind] | None = None,
         run_intents: frozenset[RunIntent] | None = None,
-        graph_identities: frozenset[tuple[str, int]] | None = None,
+        graph_names: frozenset[str] | None = None,
     ) -> RunLease | None:
         if max_attempts < 1:
             raise ValueError("Maximum attempts must be positive.")
@@ -71,18 +71,8 @@ class PostgresRunDispatcher(RunDispatcher):
                 query = query.where(
                     RunRecord.intent.in_([intent.value for intent in run_intents])
                 )
-            if graph_identities is not None:
-                query = query.where(
-                    or_(
-                        *[
-                            and_(
-                                RunRecord.graph_name == name,
-                                RunRecord.graph_version == version,
-                            )
-                            for name, version in graph_identities
-                        ]
-                    )
-                )
+            if graph_names is not None:
+                query = query.where(RunRecord.graph_name.in_(list(graph_names)))
             record = await session.scalar(
                 query.order_by(
                     RunRecord.available_at,
@@ -541,11 +531,10 @@ class PostgresRunDispatcher(RunDispatcher):
         lease: RunLease,
         *,
         graph_name: str,
-        graph_version: int,
     ) -> None:
         async with self._sessions.begin() as session:
             record, now = await _locked_live_lease(session, lease)
-            if record.graph_name != graph_name or record.graph_version != graph_version:
+            if record.graph_name != graph_name:
                 raise ValueError("Run graph identity does not match the executor.")
             await transition_run_status(
                 session,
@@ -561,7 +550,6 @@ class PostgresRunDispatcher(RunDispatcher):
                 EventType.GRAPH_STARTED,
                 {
                     "graph_name": graph_name,
-                    "graph_version": graph_version,
                     "fencing_token": lease.fencing_token,
                 },
             )

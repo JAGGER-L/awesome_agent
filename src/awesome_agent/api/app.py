@@ -69,10 +69,7 @@ from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
-from awesome_agent.runtime.probe_graph import (
-    RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
-)
+from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_GRAPH
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.runtime.workspaces import (
     WorkspaceCandidate,
@@ -280,7 +277,6 @@ def create_app(
                 intent=RunIntent.READ_ONLY,
                 execution_kind=ExecutionKind.RUNTIME_PROBE,
                 graph_name=RUNTIME_PROBE_GRAPH,
-                graph_version=RUNTIME_PROBE_VERSION,
             )
         except KeyError as error:
             raise HTTPException(

@@ -13,7 +13,6 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.probe_graph import (
     RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
     RuntimeProbeGraph,
     RuntimeProbeState,
 )
@@ -53,7 +52,6 @@ def _run(tmp_path: Path) -> Run:
         goal="probe",
         execution_kind=ExecutionKind.RUNTIME_PROBE,
         graph_name=RUNTIME_PROBE_GRAPH,
-        graph_version=RUNTIME_PROBE_VERSION,
         graph_thread_id="run:test",
         workspace_path=workspace,
     )
@@ -63,7 +61,6 @@ def _state(run: Run) -> RuntimeProbeState:
     return {
         "run_id": str(run.id),
         "graph_name": RUNTIME_PROBE_GRAPH,
-        "graph_version": RUNTIME_PROBE_VERSION,
         "phase": "completed",
         "completed_steps": ["initialize", "checkpoint_probe", "finalize"],
         "result_summary": "done",
@@ -134,7 +131,6 @@ async def test_probe_nodes_build_stable_state() -> None:
     initial: RuntimeProbeState = {
         "run_id": "run",
         "graph_name": RUNTIME_PROBE_GRAPH,
-        "graph_version": RUNTIME_PROBE_VERSION,
         "phase": "created",
         "completed_steps": [],
     }
@@ -153,7 +149,7 @@ async def test_probe_nodes_build_stable_state() -> None:
 
 def test_probe_rejects_incompatible_or_corrupt_run(tmp_path: Path) -> None:
     probe = RuntimeProbeGraph.__new__(RuntimeProbeGraph)
-    incompatible = _run(tmp_path).model_copy(update={"graph_version": 2})
+    incompatible = _run(tmp_path).model_copy(update={"graph_name": "other-graph"})
     with pytest.raises(IncompatibleGraphError):
         probe._validate_run(incompatible)
 
