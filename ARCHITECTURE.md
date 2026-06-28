@@ -246,12 +246,60 @@ The Verifier is a specialized Teammate created whenever team mode starts.
 Teammate output reaches the Leader only after verification passes or after
 rejected work is revised and re-verified.
 
-Current `team-coding@1` uses one Run, one Worker claim, and one LangGraph
+Scoped `team-coding@1` uses one Run, one Worker claim, and one LangGraph
 checkpoint thread. The graph creates durable internal agent sessions for two
 Teammates, one Verifier, and bounded Subagents, and it records model calls,
 tool invocations, Todo transitions, validation reports, events, and
-observability spans. This is not yet the distributed architecture where a
-Leader Run creates Teammate child Runs that independent Workers claim.
+observability spans.
+
+Distributed `team-coding@2` is the forward architecture. The root Leader Run
+creates child Runs with durable lineage. Independent Workers can claim
+Teammate, Subagent, and Verifier child Runs through the same PostgreSQL
+dispatch protocol. Parent Runs release their lease while waiting for child
+work and are requeued when child assignments become terminal.
+
+```text
+                         +----------------------+
+                         | Root Run             |
+                         | Leader team-coding@2 |
+                         +----------+-----------+
+                                    |
+                                    | creates assignment + child Run
+                                    v
+                         +----------------------+
+                         | Child Run            |
+                         | Teammate team-role@1 |
+                         +----------+-----------+
+                                    |
+                      creates bounded Subagent child Runs
+                                    |
+                                    v
+                         +----------------------+
+                         | Grandchild Run       |
+                         | Subagent team-role@1 |
+                         +----------+-----------+
+                                    |
+                         terminal result wakes Teammate
+                                    |
+                                    v
+                         +----------------------+
+                         | Child Run            |
+                         | Verifier team-verifier@1 |
+                         +----------+-----------+
+                                    |
+                         pass/fail mailbox message wakes Leader
+                                    |
+                                    v
+                         +----------------------+
+                         | Root Run finalizes   |
+                         +----------------------+
+
+Durable state:
+  runs(parent_run_id, root_run_id, depth, child_role)
+  team_assignments(kind, graph, permissions, status, handoff_context)
+  team_mailbox_messages(route, subject, status)
+  team_child_results(summary, patch_artifact_id, patch_aggregated)
+```
 
 ## Harness and State Boundaries
 

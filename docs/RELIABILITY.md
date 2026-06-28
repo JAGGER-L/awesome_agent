@@ -70,8 +70,9 @@ forbidden.
 - Expired leases requeue before the attempt limit. At the limit, the Run enters
   `recovery_required + terminal` and preserves its workspace.
 - Each Worker process executes at most one Run. Workers always claim
-  `runtime_probe`; when a model provider is configured, they also claim
-  `solo-readonly@1`, `solo-modifying@1`, and `team-coding@1`.
+  `runtime_probe` and distributed team graphs `team-coding@2`, `team-role@1`,
+  and `team-verifier@1`. When a model provider is configured, they also claim
+  `solo-readonly@1`, `solo-modifying@1`, and scoped `team-coding@1`.
 - Probe checkpoints use synchronous LangGraph durability. Process-crash tests
   prove lease expiry, fencing-token increment, and checkpoint resume.
 - Graceful Worker shutdown stops new claims, retains heartbeat during a
@@ -106,6 +107,10 @@ forbidden.
   `degraded`. `/health` remains process liveness only. `/ready` returns 200 for
   `healthy` and `degraded`, and 503 for `unhealthy`; `doctor` exits 0 for
   `healthy` and `degraded`, and 1 for `unhealthy`.
+- Distributed team Runs release parent Runs to child-wait states instead of
+  holding a Worker lease. Child completion records assignment terminal status
+  and requeues the waiting parent. Parent cancellation recursively cancels
+  nonterminal descendants while preserving terminal child evidence.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

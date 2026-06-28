@@ -6,7 +6,7 @@
 - Tools use least-privilege capability grants.
 - Commands are classified as `ALLOW`, `ASK`, or `DENY`.
 - High-risk approvals are scoped to run, agent, command, workspace, and expiry.
-- Writing Teammates use isolated Git worktrees.
+- Writing Teammates use isolated Git worktrees or child Run workspaces.
 - Subagents cannot delegate or authorize actions.
 - Secrets are redacted before persistence, telemetry, artifacts, and memory.
 - Mem0 content is untrusted external context.
@@ -63,7 +63,16 @@
   `read`, and instruction-discovery tools against the managed Run worktree.
 - Read tools reject absolute/parent paths, `.git`, symlink or junction
   traversal, binary files, and common credential/private-key files.
-- Workers without a configured model API key do not claim Coding Runs.
+- Workers without a configured model API key do not claim model-driven solo or
+  scoped team Coding Runs. They may still claim deterministic distributed team
+  child-run graphs that do not call a provider.
+- Distributed team assignments carry explicit `allowed_tools`,
+  `allowed_skills`, write permission, delegation permission, and Subagent
+  limits. Child Runs must not register or execute capabilities outside their
+  assignment.
+- Team mailbox messages are route-restricted durable records, not arbitrary
+  cross-agent chat. Subagents report to their owning Teammate and do not read
+  the team mailbox.
 - Workspace cleanup validates resolved ownership markers, managed-root
   containment, active leases, branch identity, and unexported diffs before
   deletion. It defaults to preview and requires explicit apply.

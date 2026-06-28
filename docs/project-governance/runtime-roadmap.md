@@ -24,6 +24,7 @@ agents; they are not the durable product roadmap.
 | Task 14 | Done | Explicit managed workspace listing and dry-run-first cleanup with ownership, lease, branch, dirty, force, and recovery evidence protections. |
 | Task 15 | Done | Split `/health` liveness from structured `/ready` and `doctor --profile` readiness; checks PostgreSQL, migrations, checkpoint store, workspace root, provider keys, model routes, API bind policy, and Worker heartbeat registry. |
 | Task 16 | Done | Artifact-backed solo context compaction, durable token ledgers, active Worker execution budgets, budget/compaction APIs and CLI, and team global budget guards; money cost budget remains deferred. |
+| Task 17 | Done | Distributed team child-run skeleton with durable lineage, assignments, mailbox, child results, recursive cancellation, inspection APIs/CLI, production Worker wiring, and PostgreSQL integration/E2E evidence. |
 
 ## Completed Detail: Task 07 Isolated Mutation Sandbox and Shell
 

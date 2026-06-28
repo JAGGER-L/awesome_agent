@@ -61,14 +61,15 @@ PostgreSQL:
   passing required validation gates from `.agents/validation.toml` or
   conservative project detection. Failed required gates feed a bounded rework
   loop; exhausted or non-reworkable validation failure marks the Run failed.
-- **Explicit Team Coding Runs** route to `team-coding@1` only when the caller
-  uses CLI `--team` or API `mode: "team"`. Task 13 v1 keeps one Run, one Worker,
-  and one checkpoint thread while the graph creates durable Leader,
-  Teammates, Verifier, and Subagent records internally. Role steps are bounded,
-  Leader assignments scope `allowed_tools`, side-effecting tools are persisted,
-  verification rejection can rework before pass/fail, and the real E2E path
-  covers Worker, PostgreSQL, checkpointing, provider protocol, repository tools,
-  validation records, and observability evidence.
+- **Explicit Team Coding Runs** are selected with CLI `--team` or API
+  `mode: "team"`. Two team runtimes exist today: scoped `team-coding@1` keeps
+  one Run and one checkpoint thread while creating internal durable role
+  records; distributed `team-coding@2` creates Teammate, Subagent, and Verifier
+  child Runs that independent Workers can claim through PostgreSQL dispatch.
+  The distributed path persists lineage, assignments, mailbox messages, child
+  results, cancellation propagation, and inspection APIs/CLI. Its first E2E is
+  deterministic and does not yet perform model-driven team planning or
+  side-effecting team tools.
 
 ### Approval (implemented for solo modifying runs)
 
@@ -79,17 +80,20 @@ and resume through `Command(resume=...)` after the API or CLI approves or
 denies the request. Unsafe shell commands are denied without creating an
 approval.
 
-### Multi-agent (implemented as scoped v1)
+### Multi-agent (implemented as scoped and distributed runtimes)
 
-The durable team runtime is intentionally explicit and scoped. Intake starts
-with only the Leader. When `--team` or API `mode: "team"` is selected, the
-`team-coding@1` graph creates Teammates, one Verifier, and bounded Subagents
-inside the same Run. Subagents have isolated context and return evidence only
-to their owning Teammate. The Verifier must pass the work before the Leader can
-complete the Run.
+The durable team runtime is explicit. Intake starts with only the Leader. When
+`--team` or API `mode: "team"` is selected, current intake routes to
+distributed `team-coding@2`. The Leader creates Teammate child Runs; Teammates
+may create bounded Subagent child Runs; and the Leader creates an independent
+Verifier child Run before finalization. Subagents have isolated context and
+return evidence only to their owning Teammate. The Verifier must pass the work
+before the Leader can complete the root Run.
 
-This v1 is not yet the future distributed architecture where the Leader creates
-Teammate child Runs that independent Workers claim separately.
+The older scoped `team-coding@1` runtime remains documented and tested, but the
+new distributed path is the forward architecture. Rich model-driven
+specialization, team tool execution, and per-agent context compaction remain
+later work.
 
 ### Observability (implemented)
 
@@ -265,9 +269,10 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- distributed team child Runs claimed by independent Workers (Task 17).
 - full team context and budget hardening across Leader, Teammates, Verifier,
   Subagents, and mailbox evidence (Task 18).
+- richer model-driven distributed team planning, team tool use, and mailbox
+  collaboration policy.
 
 ## Documentation
 

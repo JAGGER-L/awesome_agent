@@ -16,10 +16,10 @@ complexity.
 
 A team contains at most six Teammates, including exactly one primary Verifier.
 
-Current v1 team mode is explicit. It is selected with CLI `--team` or API
-`mode: "team"` and routes to `team-coding@1`. Intake still creates only the
-Leader; the graph creates Teammates, the Verifier, and Subagents later when the
-team path starts.
+Team mode is explicit. It is selected with CLI `--team` or API `mode: "team"`.
+Intake still creates only the Leader. Current default routing uses distributed
+`team-coding@2`, where the Leader Run creates child Runs for Teammates and the
+Verifier, and each Teammate may create bounded Subagent child Runs.
 
 ## Teammates
 
@@ -30,11 +30,12 @@ Leader approval.
 
 Teammates and the Verifier default to `deepseek-v4-flash`.
 
-In `team-coding@1`, each Teammate receives a Leader assignment containing
-`allowed_tools`, `allowed_skills`, write permission, delegation permission,
-Subagent limits, and acceptance criteria. The runtime registers and executes
-only the tools granted by that assignment; unauthorized tool requests are
-rejected before reaching the central executor.
+Each Teammate receives a Leader assignment containing `allowed_tools`,
+`allowed_skills`, write permission, delegation permission, Subagent limits,
+acceptance criteria, and handoff context. In scoped `team-coding@1`, tools are
+executed inside one Run. In distributed `team-coding@2`, the assignment is
+durable data for the Teammate child Run; the first distributed skeleton records
+permissions and results but does not yet execute model-driven team tools.
 
 ## Subagents
 
@@ -47,7 +48,7 @@ Subagents default to `deepseek-v4-flash`. All defaults are configurable by
 agent kind, and a profile-specific override takes precedence. The resolved
 model is stored on the Agent record and exposed through the inspection API.
 
-## Current Durable Team Runtime
+## Scoped Team Runtime
 
 Task 13 implements a real but bounded team runtime. One Run is claimed by one
 Worker and executed through one LangGraph checkpoint thread. Inside that Run,
@@ -66,14 +67,29 @@ The current implementation persists agents, Todos, runtime events, model-call
 records, side-effecting tool invocations, validation reports, and observability
 spans for frontend inspection.
 
-## Future Distributed Team Runtime
+## Distributed Team Runtime
 
-The long-term design promotes Teammates from graph-internal sessions to child
-Runs. The Leader Run will create Teammate child Runs, each child Run can be
-claimed by an independent Worker, and the Leader will aggregate verified
-results through explicit lineage. That design requires parent/child Run status
-propagation, cross-Run cancellation, checkpoint coordination, and result
-aggregation before it can replace the scoped v1.
+Task 17 promotes Teammates from graph-internal sessions to child Runs. The
+Leader Run creates Teammate child Runs, each Teammate can create depth-one
+Subagent child Runs, and the Leader creates a Verifier child Run before
+finalization. Independent Workers can claim each child Run through the normal
+PostgreSQL dispatch path. Parent Runs release to `waiting_*` states while child
+work is active and are requeued when child assignments reach terminal states.
+
+Distributed team state is stored in:
+
+- `runs.parent_run_id`, `runs.root_run_id`, `runs.depth`, and `runs.child_role`;
+- `team_assignments` for role, permissions, graph identity, status, and handoff
+  context;
+- `team_mailbox_messages` for route-restricted durable communication;
+- `team_child_results` for summaries, patch artifact references, changed files,
+  aggregation status, and failure classification.
+
+The current distributed graph is a deterministic skeleton with real durable
+lineage, mailbox, cancellation propagation, API/CLI inspection, and
+PostgreSQL-backed integration/E2E evidence. Rich model-driven role planning,
+team tool execution, verifier rework loops, and per-agent/team context
+compaction remain later work.
 
 ## Limits
 

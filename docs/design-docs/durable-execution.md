@@ -79,11 +79,13 @@ Examples:
 The API exposes both values. Product UI may present a combined label but cannot
 discard either state.
 
-Current implementation note: the Worker executes `runtime_probe`,
-`solo-readonly@1`, `solo-modifying@1`, and explicit `team-coding@1` Runs.
-Modifying solo Runs can pause for durable exact-invocation approval and resume
-from the LangGraph checkpoint. Team Runs use one Run, one Worker claim, and one
-checkpoint thread in v1; distributed Teammate child Runs remain future work.
+Current implementation note: the Worker executes `runtime_probe`, distributed
+team graphs `team-coding@2`, `team-role@1`, and `team-verifier@1`. When a model
+provider is configured, it also executes `solo-readonly@1`,
+`solo-modifying@1`, and scoped `team-coding@1`. Modifying solo Runs can pause
+for durable exact-invocation approval and resume from the LangGraph checkpoint.
+Distributed team parent Runs release to child-wait states; child Runs commit
+terminal assignment state and requeue the waiting parent.
 
 ## Dispatch, Lease, and Fencing
 
@@ -361,7 +363,8 @@ Solo completion requires:
 ## Team Runtime Contract
 
 Team execution is explicit. CLI `--team` or API `mode: "team"` routes a coding
-Run to `team-coding@1`; default read-only and modifying Runs remain solo.
+Run to distributed `team-coding@2`; default read-only and modifying Runs remain
+solo.
 
 Task 13 implements a scoped v1 team graph:
 
@@ -383,10 +386,24 @@ Verifier execution or external failures use a separate retry budget and default
 to one retry. These defaults are intentionally conservative and tracked as
 policy-tuning debt.
 
-`team-coding@1` does not yet create Teammate child Runs or allow multiple
-Workers to claim team members independently. That distributed team runtime
-requires parent/child Run lineage, cross-Run cancellation, checkpoint
-coordination, status propagation, and result aggregation.
+Task 17 adds distributed `team-coding@2`:
+
+- the root Leader Run creates durable Teammate child Runs;
+- each Teammate can create bounded depth-one Subagent child Runs;
+- the root Leader creates a Verifier child Run before finalization;
+- child Runs are independently claimable through the normal PostgreSQL
+  dispatch queue;
+- `team_assignments` stores role, graph identity, permissions, status, and
+  handoff context;
+- `team_mailbox_messages` stores route-restricted communication;
+- `team_child_results` stores summaries, patch artifact references, changed
+  files, aggregation status, and failure classification;
+- child terminal state requeues waiting parents;
+- parent cancellation recursively propagates to nonterminal descendants.
+
+The current distributed graph is deterministic. Model-driven distributed team
+planning, central tool execution in team child Runs, durable verifier rework,
+and full per-agent context/budget management remain later work.
 
 ## Retry, Cancellation, and Failure
 
