@@ -56,6 +56,7 @@ from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCod
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_graph import TeamCodingGraph, TeamCodingState
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph, TeamLeaderState
+from awesome_agent.runtime.team_role_graph import TeamRoleGraph, TeamRoleState
 from awesome_agent.runtime.worker_heartbeats import (
     GraphIdentity,
     WorkerHeartbeat,
@@ -88,7 +89,7 @@ class DurableWorker:
         modifying_graph: ModifyingCodingGraph | None = None,
         team_graph: TeamCodingGraph | None = None,
         team_leader_graph: TeamLeaderGraph | None = None,
-        team_role_graph: object | None = None,
+        team_role_graph: TeamRoleGraph | None = None,
         team_verifier_graph: object | None = None,
         config: WorkerConfig,
         worker_id: UUID | None = None,
@@ -313,7 +314,8 @@ class DurableWorker:
         | ReadOnlyAgentState
         | ModifyingAgentState
         | TeamCodingState
-        | TeamLeaderState,
+        | TeamLeaderState
+        | TeamRoleState,
         bool,
     ]:
         lease_lost = asyncio.Event()
@@ -550,7 +552,8 @@ class DurableWorker:
         | ReadOnlyAgentState
         | ModifyingAgentState
         | TeamCodingState
-        | TeamLeaderState,
+        | TeamLeaderState
+        | TeamRoleState,
         bool,
     ]:
         started_at = datetime.now(UTC)
@@ -640,6 +643,21 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
+                if (
+                    run.graph_name == TEAM_ROLE_GRAPH
+                    and run.graph_version == TEAM_ROLE_VERSION
+                    and self.team_role_graph
+                ):
+                    team_role_graph = self.team_role_graph
+                    return await self._execute_with_active_budget(
+                        run,
+                        lambda: team_role_graph.execute(
+                            run,
+                            leader,
+                            repository=self.repository,
+                            event_sink=emit,
+                        ),
+                    )
             raise IncompatibleGraphError(
                 f"Worker cannot execute kind {run.execution_kind.value}."
             )
@@ -673,13 +691,18 @@ class DurableWorker:
                     ReadOnlyAgentState
                     | ModifyingAgentState
                     | TeamCodingState
-                    | TeamLeaderState,
+                    | TeamLeaderState
+                    | TeamRoleState,
                     bool,
                 ]
             ],
         ],
     ) -> tuple[
-        ReadOnlyAgentState | ModifyingAgentState | TeamCodingState | TeamLeaderState,
+        ReadOnlyAgentState
+        | ModifyingAgentState
+        | TeamCodingState
+        | TeamLeaderState
+        | TeamRoleState,
         bool,
     ]:
         if self.budget_repository is None:
