@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.runtime.graphs import (
-    MODIFYING_CODING_GRAPH,
-    READ_ONLY_CODING_GRAPH,
-    RUNTIME_PROBE_GRAPH,
-    SCOPED_TEAM_CODING_GRAPH,
-    TEAM_CODING_GRAPH,
-    TEAM_ROLE_GRAPH,
-    TEAM_VERIFIER_GRAPH,
+    MODIFYING_CODING_ROUTE,
+    READ_ONLY_CODING_ROUTE,
+    RUNTIME_PROBE_ROUTE,
+    SCOPED_TEAM_CODING_ROUTE,
+    TEAM_CODING_ROUTE,
+    TEAM_ROLE_ROUTE,
+    TEAM_VERIFIER_ROUTE,
 )
 from awesome_agent.settings import Settings
 
@@ -264,7 +264,7 @@ def model_routes_check(settings: Settings, profile: ReadinessProfile) -> HealthC
     return HealthCheck(
         "model_routes",
         HealthStatus.HEALTHY,
-        f"{profile.value} graph routes configured",
+        f"{profile.value} runtime routes configured",
         metadata={"graph_identities": graph_identities},
     )
 
@@ -365,13 +365,13 @@ def readiness_report(
 
 def _graph_identities() -> list[str]:
     return [
-        RUNTIME_PROBE_GRAPH,
-        READ_ONLY_CODING_GRAPH,
-        MODIFYING_CODING_GRAPH,
-        SCOPED_TEAM_CODING_GRAPH,
-        TEAM_CODING_GRAPH,
-        TEAM_ROLE_GRAPH,
-        TEAM_VERIFIER_GRAPH,
+        RUNTIME_PROBE_ROUTE,
+        READ_ONLY_CODING_ROUTE,
+        MODIFYING_CODING_ROUTE,
+        SCOPED_TEAM_CODING_ROUTE,
+        TEAM_CODING_ROUTE,
+        TEAM_ROLE_ROUTE,
+        TEAM_VERIFIER_ROUTE,
     ]
 
 
@@ -406,20 +406,20 @@ async def _runtime_worker_heartbeat_check(
         )
 
     from awesome_agent.runtime.worker_heartbeats import (
-        GraphIdentity,
+        RuntimeRoute,
         worker_heartbeat_check,
     )
 
     return await worker_heartbeat_check(
         worker_heartbeat_repository,
         settings,
-        required_graphs=[
-            GraphIdentity(RUNTIME_PROBE_GRAPH),
-            GraphIdentity(READ_ONLY_CODING_GRAPH),
-            GraphIdentity(MODIFYING_CODING_GRAPH),
-            GraphIdentity(SCOPED_TEAM_CODING_GRAPH),
-            GraphIdentity(TEAM_CODING_GRAPH),
-            GraphIdentity(TEAM_ROLE_GRAPH),
-            GraphIdentity(TEAM_VERIFIER_GRAPH),
+        required_runtime_routes=[
+            RuntimeRoute(RUNTIME_PROBE_ROUTE),
+            RuntimeRoute(READ_ONLY_CODING_ROUTE),
+            RuntimeRoute(MODIFYING_CODING_ROUTE),
+            RuntimeRoute(SCOPED_TEAM_CODING_ROUTE),
+            RuntimeRoute(TEAM_CODING_ROUTE),
+            RuntimeRoute(TEAM_ROLE_ROUTE),
+            RuntimeRoute(TEAM_VERIFIER_ROUTE),
         ],
     )

@@ -10,14 +10,14 @@ from awesome_agent.runtime.team_assignments import (
 )
 
 
-def test_teammate_assignment_uses_team_role_graph() -> None:
+def test_teammate_assignment_uses_TEAM_ROLE_ROUTE() -> None:
     assignment = TeamAssignment(
         root_run_id=uuid4(),
         parent_run_id=uuid4(),
         child_run_id=uuid4(),
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="backend-engineer",
-        graph_name="team-role",
+        runtime_route="team-role",
         goal="Implement backend",
         allowed_tools=["repo.read", "repo.apply_patch"],
         allowed_skills=["patch-authoring"],
@@ -38,7 +38,7 @@ def test_verifier_assignment_uses_verifier_graph() -> None:
         child_run_id=uuid4(),
         kind=TeamAssignmentKind.VERIFIER,
         role_profile="verifier",
-        graph_name="team-verifier",
+        runtime_route="team-verifier",
         goal="Verify aggregation",
     )
 
@@ -52,7 +52,7 @@ def test_subagent_assignment_cannot_delegate() -> None:
         child_run_id=uuid4(),
         kind=TeamAssignmentKind.SUBAGENT,
         role_profile="reader",
-        graph_name="team-role",
+        runtime_route="team-role",
         goal="Read one file",
         can_delegate=True,
         max_subagents=1,
@@ -69,7 +69,7 @@ def test_effective_assignment_tools_hide_deferred_until_promoted() -> None:
         child_run_id=uuid4(),
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="backend-engineer",
-        graph_name="team-role",
+        runtime_route="team-role",
         goal="Implement backend",
         allowed_tools=["repo.read", "repo.apply_patch", "shell.execute"],
         deferred_tools=["repo.apply_patch", "shell.execute"],

@@ -58,7 +58,7 @@ class RunDispatcher(Protocol):
         max_attempts: int,
         execution_kinds: frozenset[ExecutionKind] | None = None,
         run_intents: frozenset[RunIntent] | None = None,
-        graph_names: frozenset[str] | None = None,
+        runtime_routes: frozenset[str] | None = None,
     ) -> RunLease | None:
         """Claim the next eligible Run without waiting on competing claims."""
         ...
@@ -178,7 +178,7 @@ class RunDispatcher(Protocol):
         self,
         lease: RunLease,
         *,
-        graph_name: str,
+        runtime_route: str,
     ) -> None:
         """Move a claimed Run into fenced graph execution."""
         ...

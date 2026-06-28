@@ -494,7 +494,7 @@ async def test_graph_projection_transitions_are_fenced() -> None:
     record.lease_acquired_at = now
     record.lease_expires_at = now + timedelta(seconds=60)
     record.heartbeat_at = now
-    record.graph_name = "runtime-probe"
+    record.runtime_route = "runtime-probe"
     factory = FakeFactory(
         [
             FakeSession(scalar_results=[now, record, 0]),
@@ -506,7 +506,7 @@ async def test_graph_projection_transitions_are_fenced() -> None:
 
     await dispatcher.start_execution(
         lease,
-        graph_name="runtime-probe",
+        runtime_route="runtime-probe",
     )
     assert record.status == RunStatus.RUNNING.value
     assert record.dispatch_status == DispatchStatus.EXECUTING.value

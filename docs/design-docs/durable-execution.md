@@ -1,4 +1,4 @@
-﻿# Durable Execution
+# Durable Execution
 
 ## Purpose
 
@@ -118,7 +118,7 @@ reaches a safe boundary.
 
 ## Current Probe Graph
 
-Task 04 persists `execution_kind` and `graph_name`. The Worker claims only
+Task 04 persists `execution_kind` and `runtime_route`. The Worker claims only
 `runtime-probe` and executes:
 
 ```text
@@ -129,7 +129,7 @@ The graph uses `AsyncPostgresSaver` with `durability="sync"` and a stable
 Run-scoped thread ID. A replacement process resumes an incomplete checkpoint.
 If the graph checkpoint is complete but the terminal projection is missing,
 the Worker reconciles the fenced projection without replaying graph nodes.
-Unsupported graph identity or corrupt runtime state enters
+Unsupported runtime route or corrupt runtime state enters
 `recovery_required`; `/resume` does not bypass that state.
 
 ## Transition Identity and Reconciliation
@@ -395,7 +395,7 @@ Task 17 adds distributed `team-coding`:
 - the root Leader creates a Verifier child Run before finalization;
 - child Runs are independently claimable through the normal PostgreSQL
   dispatch queue;
-- `team_assignments` stores role, graph identity, permissions, status, and
+- `team_assignments` stores role, runtime route, permissions, status, and
   handoff context, including deferred and promoted tool exposure;
 - `team_mailbox_messages` stores route-restricted communication;
 - `team_child_results` stores summaries, patch artifact references, changed

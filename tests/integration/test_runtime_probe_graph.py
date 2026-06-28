@@ -10,7 +10,7 @@ from awesome_agent.domain.enums import ExecutionKind
 from awesome_agent.domain.models import Run
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.runtime.probe_graph import (
-    RUNTIME_PROBE_GRAPH,
+    RUNTIME_PROBE_ROUTE,
     RuntimeProbeGraph,
     RuntimeProbeState,
 )
@@ -35,7 +35,7 @@ async def test_runtime_probe_resumes_from_durable_checkpoint(
         id=uuid4(),
         goal="Runtime probe",
         execution_kind=ExecutionKind.RUNTIME_PROBE,
-        graph_name=RUNTIME_PROBE_GRAPH,
+        runtime_route=RUNTIME_PROBE_ROUTE,
         graph_thread_id=f"run:{uuid4()}",
         workspace_path=workspace,
     )

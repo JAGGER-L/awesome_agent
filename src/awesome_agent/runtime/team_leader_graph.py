@@ -13,8 +13,8 @@ from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import (
-    TEAM_ROLE_GRAPH,
-    TEAM_VERIFIER_GRAPH,
+    TEAM_ROLE_ROUTE,
+    TEAM_VERIFIER_ROUTE,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
@@ -33,7 +33,7 @@ _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 class TeamLeaderState(TypedDict):
     run_id: str
     agent_id: str
-    graph_name: str
+    runtime_route: str
     phase: str
     result_summary: str
     final_answer: NotRequired[str]
@@ -123,7 +123,7 @@ class TeamLeaderGraph:
             TeamLeaderState(
                 run_id=str(run.id),
                 agent_id=str(leader.id),
-                graph_name=run.graph_name or "team-coding",
+                runtime_route=run.runtime_route or "team-coding",
                 phase="completed",
                 result_summary="Distributed team child Runs completed.",
                 final_answer="Distributed team child Runs completed.",
@@ -150,7 +150,7 @@ class TeamLeaderGraph:
             root_run_id=run.root_run_id or run.id,
             depth=1,
             child_role=TeamAssignmentKind.TEAMMATE.value,
-            graph_name=TEAM_ROLE_GRAPH,
+            runtime_route=TEAM_ROLE_ROUTE,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=run.workspace_path,
             integration_branch=run.integration_branch,
@@ -172,7 +172,7 @@ class TeamLeaderGraph:
         compacted_handoff = await compact_team_payload(
             run_id=child.id,
             agent_id=teammate.id,
-            graph_name=TEAM_ROLE_GRAPH,
+            runtime_route=TEAM_ROLE_ROUTE,
             payload_kind="handoff-context",
             payload=handoff_context,
             artifact_store=self.artifact_store,
@@ -186,7 +186,7 @@ class TeamLeaderGraph:
             child_run_id=child.id,
             kind=TeamAssignmentKind.TEAMMATE,
             role_profile="teammate",
-            graph_name=TEAM_ROLE_GRAPH,
+            runtime_route=TEAM_ROLE_ROUTE,
             goal=child.goal,
             allowed_tools=[],
             allowed_skills=[],
@@ -284,7 +284,7 @@ class TeamLeaderGraph:
             root_run_id=run.root_run_id or run.id,
             depth=1,
             child_role=TeamAssignmentKind.VERIFIER.value,
-            graph_name=TEAM_VERIFIER_GRAPH,
+            runtime_route=TEAM_VERIFIER_ROUTE,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=run.workspace_path,
             integration_branch=run.integration_branch,
@@ -304,7 +304,7 @@ class TeamLeaderGraph:
             child_run_id=child.id,
             kind=TeamAssignmentKind.VERIFIER,
             role_profile="verifier",
-            graph_name=TEAM_VERIFIER_GRAPH,
+            runtime_route=TEAM_VERIFIER_ROUTE,
             goal=child.goal,
             allowed_tools=["repo.diff"],
             allowed_skills=[],

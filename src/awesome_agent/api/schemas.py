@@ -92,7 +92,7 @@ class ContextCompactionResponse(BaseModel):
     id: UUID
     run_id: UUID
     agent_id: UUID | None
-    graph_name: str
+    runtime_route: str
     before_estimated_tokens: int
     after_estimated_tokens: int
     summary: str

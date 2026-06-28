@@ -44,7 +44,7 @@ class PostgresRunDispatcher(RunDispatcher):
         max_attempts: int,
         execution_kinds: frozenset[ExecutionKind] | None = None,
         run_intents: frozenset[RunIntent] | None = None,
-        graph_names: frozenset[str] | None = None,
+        runtime_routes: frozenset[str] | None = None,
     ) -> RunLease | None:
         if max_attempts < 1:
             raise ValueError("Maximum attempts must be positive.")
@@ -71,8 +71,8 @@ class PostgresRunDispatcher(RunDispatcher):
                 query = query.where(
                     RunRecord.intent.in_([intent.value for intent in run_intents])
                 )
-            if graph_names is not None:
-                query = query.where(RunRecord.graph_name.in_(list(graph_names)))
+            if runtime_routes is not None:
+                query = query.where(RunRecord.runtime_route.in_(list(runtime_routes)))
             record = await session.scalar(
                 query.order_by(
                     RunRecord.available_at,
@@ -530,12 +530,12 @@ class PostgresRunDispatcher(RunDispatcher):
         self,
         lease: RunLease,
         *,
-        graph_name: str,
+        runtime_route: str,
     ) -> None:
         async with self._sessions.begin() as session:
             record, now = await _locked_live_lease(session, lease)
-            if record.graph_name != graph_name:
-                raise ValueError("Run graph identity does not match the executor.")
+            if record.runtime_route != runtime_route:
+                raise ValueError("Run runtime route does not match the executor.")
             await transition_run_status(
                 session,
                 record,
@@ -549,7 +549,7 @@ class PostgresRunDispatcher(RunDispatcher):
                 record,
                 EventType.GRAPH_STARTED,
                 {
-                    "graph_name": graph_name,
+                    "runtime_route": runtime_route,
                     "fencing_token": lease.fencing_token,
                 },
             )

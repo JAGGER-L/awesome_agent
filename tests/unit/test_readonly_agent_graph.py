@@ -35,7 +35,7 @@ from awesome_agent.runtime.context import (
     DeterministicSummaryProvider,
 )
 from awesome_agent.runtime.graphs import (
-    READ_ONLY_CODING_GRAPH,
+    READ_ONLY_CODING_ROUTE,
 )
 from awesome_agent.runtime.readonly_graph import (
     AgentLoopFailed,
@@ -61,7 +61,7 @@ def _run(workspace: Path) -> tuple[Run, Agent]:
     run = Run(
         goal="Explain the fixture",
         intent=RunIntent.READ_ONLY,
-        graph_name=READ_ONLY_CODING_GRAPH,
+        runtime_route=READ_ONLY_CODING_ROUTE,
         graph_thread_id=f"run:{uuid4()}",
         workspace_path=workspace,
     )
@@ -102,7 +102,7 @@ def _node_state(
         {
             "run_id": str(run.id),
             "agent_id": str(agent.id),
-            "graph_name": READ_ONLY_CODING_GRAPH,
+            "runtime_route": READ_ONLY_CODING_ROUTE,
             "messages": messages,
             "continuation": None,
             "model_turn_count": 0,

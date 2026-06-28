@@ -44,7 +44,7 @@ from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.context import ContextManager, DeterministicSummaryProvider
 from awesome_agent.runtime.events import EventStream
-from awesome_agent.runtime.graphs import MODIFYING_CODING_GRAPH
+from awesome_agent.runtime.graphs import MODIFYING_CODING_ROUTE
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
@@ -283,7 +283,7 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
 
     assert restored.status is RunStatus.COMPLETED
     assert restored.dispatch_status is DispatchStatus.TERMINAL
-    assert restored.graph_name == MODIFYING_CODING_GRAPH
+    assert restored.runtime_route == MODIFYING_CODING_ROUTE
     assert todos[0].status is TodoStatus.DONE
     assert (workspace / "README.md").read_text(encoding="utf-8") == "new\n"
     assert [invocation.tool_name for invocation in invocations] == [

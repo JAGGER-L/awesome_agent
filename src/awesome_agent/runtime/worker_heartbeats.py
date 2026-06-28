@@ -11,11 +11,11 @@ from awesome_agent.settings import Settings
 
 
 @dataclass(frozen=True, slots=True)
-class GraphIdentity:
-    name: str
+class RuntimeRoute:
+    route: str
 
     def label(self) -> str:
-        return self.name
+        return self.route
 
 
 class WorkerHeartbeatStatus(StrEnum):
@@ -30,7 +30,7 @@ class WorkerHeartbeat:
     worker_name: str
     started_at: datetime
     heartbeat_at: datetime
-    supported_graphs: list[GraphIdentity]
+    supported_runtime_routes: list[RuntimeRoute]
     status: WorkerHeartbeatStatus
 
 
@@ -68,7 +68,7 @@ class InMemoryWorkerHeartbeatRepository:
             worker_name=heartbeat.worker_name,
             started_at=heartbeat.started_at,
             heartbeat_at=datetime.now(UTC),
-            supported_graphs=heartbeat.supported_graphs,
+            supported_runtime_routes=heartbeat.supported_runtime_routes,
             status=WorkerHeartbeatStatus.STOPPING,
         )
 
@@ -77,7 +77,7 @@ async def worker_heartbeat_check(
     repository: WorkerHeartbeatRepository,
     settings: Settings,
     *,
-    required_graphs: list[GraphIdentity],
+    required_runtime_routes: list[RuntimeRoute],
     now: datetime | None = None,
 ) -> HealthCheck:
     current_time = now or datetime.now(UTC)
@@ -100,13 +100,13 @@ async def worker_heartbeat_check(
         if worker.status is WorkerHeartbeatStatus.ONLINE
     ]
     supported = {
-        graph for worker in online_workers for graph in worker.supported_graphs
+        route for worker in online_workers for route in worker.supported_runtime_routes
     }
-    missing = [graph for graph in required_graphs if graph not in supported]
+    missing = [route for route in required_runtime_routes if route not in supported]
     metadata = {
         "workers": len(online_workers),
-        "required_graphs": [graph.label() for graph in required_graphs],
-        "supported_graphs": sorted(graph.label() for graph in supported),
+        "required_runtime_routes": [route.label() for route in required_runtime_routes],
+        "supported_runtime_routes": sorted(route.label() for route in supported),
         "stale_after": stale_after.isoformat(),
     }
     if missing:
@@ -114,7 +114,7 @@ async def worker_heartbeat_check(
             "worker_heartbeat",
             HealthStatus.UNHEALTHY,
             "no fresh online worker heartbeat supports "
-            f"{', '.join(graph.label() for graph in missing)}",
+            f"{', '.join(route.label() for route in missing)}",
             severity=CheckSeverity.REQUIRED,
             remediation="Start an awesome-agent Worker for the runtime profile.",
             metadata=metadata,

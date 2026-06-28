@@ -69,7 +69,7 @@ from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
-from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_GRAPH
+from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_ROUTE
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.runtime.workspaces import (
     WorkspaceCandidate,
@@ -276,7 +276,7 @@ def create_app(
                 goal=request.goal,
                 intent=RunIntent.READ_ONLY,
                 execution_kind=ExecutionKind.RUNTIME_PROBE,
-                graph_name=RUNTIME_PROBE_GRAPH,
+                runtime_route=RUNTIME_PROBE_ROUTE,
             )
         except KeyError as error:
             raise HTTPException(
@@ -588,7 +588,7 @@ def create_app(
                 id=compaction.id,
                 run_id=compaction.run_id,
                 agent_id=compaction.agent_id,
-                graph_name=compaction.graph_name,
+                runtime_route=compaction.runtime_route,
                 before_estimated_tokens=compaction.before_estimated_tokens,
                 after_estimated_tokens=compaction.after_estimated_tokens,
                 summary=compaction.summary,

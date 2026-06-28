@@ -1,13 +1,13 @@
-READ_ONLY_CODING_GRAPH = "solo-readonly"
+READ_ONLY_CODING_ROUTE = "solo-readonly"
 
-MODIFYING_CODING_GRAPH = "solo-modifying"
+MODIFYING_CODING_ROUTE = "solo-modifying"
 
-SCOPED_TEAM_CODING_GRAPH = "team-coding-scoped"
+SCOPED_TEAM_CODING_ROUTE = "team-coding-scoped"
 
-TEAM_CODING_GRAPH = "team-coding"
+TEAM_CODING_ROUTE = "team-coding"
 
-TEAM_ROLE_GRAPH = "team-role"
+TEAM_ROLE_ROUTE = "team-role"
 
-TEAM_VERIFIER_GRAPH = "team-verifier"
+TEAM_VERIFIER_ROUTE = "team-verifier"
 
-RUNTIME_PROBE_GRAPH = "runtime-probe"
+RUNTIME_PROBE_ROUTE = "runtime-probe"

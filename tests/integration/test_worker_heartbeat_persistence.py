@@ -13,7 +13,7 @@ from awesome_agent.persistence.worker_heartbeats import (
     PostgresWorkerHeartbeatRepository,
 )
 from awesome_agent.runtime.worker_heartbeats import (
-    GraphIdentity,
+    RuntimeRoute,
     WorkerHeartbeat,
     WorkerHeartbeatStatus,
 )
@@ -40,9 +40,9 @@ async def test_postgres_worker_heartbeat_repository_round_trip() -> None:
             worker_name="worker-a",
             started_at=now,
             heartbeat_at=now,
-            supported_graphs=[
-                GraphIdentity("runtime-probe"),
-                GraphIdentity("solo-readonly"),
+            supported_runtime_routes=[
+                RuntimeRoute("runtime-probe"),
+                RuntimeRoute("solo-readonly"),
             ],
             status=WorkerHeartbeatStatus.ONLINE,
         )
@@ -51,9 +51,9 @@ async def test_postgres_worker_heartbeat_repository_round_trip() -> None:
     fresh = await repository.list_recent(stale_after=now - timedelta(seconds=120))
 
     assert [worker.worker_id for worker in fresh] == [worker_id]
-    assert fresh[0].supported_graphs == [
-        GraphIdentity("runtime-probe"),
-        GraphIdentity("solo-readonly"),
+    assert fresh[0].supported_runtime_routes == [
+        RuntimeRoute("runtime-probe"),
+        RuntimeRoute("solo-readonly"),
     ]
 
     await repository.mark_stopping(worker_id)

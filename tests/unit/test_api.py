@@ -306,7 +306,7 @@ def test_runtime_probe_has_explicit_execution_identity(tmp_path: Path) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["execution_kind"] == "runtime_probe"
-    assert body["graph_name"] == "runtime-probe"
+    assert body["runtime_route"] == "runtime-probe"
     assert "graph_version" not in body
 
 
@@ -411,7 +411,7 @@ def test_budget_endpoints_return_ledger_and_context_compactions(
             ContextCompactionRecord(
                 run_id=run_id,
                 agent_id=None,
-                graph_name="solo-readonly",
+                runtime_route="solo-readonly",
                 before_estimated_tokens=50_000,
                 after_estimated_tokens=12_000,
                 summary="Compacted repository inspection evidence.",
@@ -447,7 +447,7 @@ def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:
 
     assert response.status_code == 201
     body = response.json()
-    assert body["graph_name"] == "solo-modifying"
+    assert body["runtime_route"] == "solo-modifying"
     assert "graph_version" not in body
     assert body["dispatch_status"] == "queued"
 
@@ -471,7 +471,7 @@ def test_team_run_uses_team_graph_and_starts_with_leader_only(
     body = response.json()
     run_id = body["id"]
     assert body["mode"] == "team"
-    assert body["graph_name"] == "team-coding"
+    assert body["runtime_route"] == "team-coding"
     assert "graph_version" not in body
     agents = client.get(f"/runs/{run_id}/agents").json()
     assert len(agents) == 1
@@ -517,7 +517,7 @@ def test_team_inspection_endpoints_return_lineage_assignments_and_mailbox(
                 child_run_id=child.id,
                 kind=TeamAssignmentKind.TEAMMATE,
                 role_profile="teammate",
-                graph_name="team-role",
+                runtime_route="team-role",
                 goal="child",
             )
         )

@@ -11,7 +11,7 @@ from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
-from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH
+from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
@@ -30,7 +30,7 @@ _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 class TeamRoleState(TypedDict):
     run_id: str
     agent_id: str
-    graph_name: str
+    runtime_route: str
     phase: str
     result_summary: str
     allowed_tools: list[str]
@@ -108,7 +108,7 @@ class TeamRoleGraph:
             TeamRoleState(
                 run_id=str(run.id),
                 agent_id=str(agent.id),
-                graph_name=run.graph_name or TEAM_ROLE_GRAPH,
+                runtime_route=run.runtime_route or TEAM_ROLE_ROUTE,
                 phase="completed",
                 result_summary=f"{assignment.kind.value} assignment completed.",
                 allowed_tools=allowed_tools,
@@ -158,7 +158,7 @@ class TeamRoleGraph:
         compacted_summary = await compact_team_payload(
             run_id=run.id,
             agent_id=agent.id,
-            graph_name=run.graph_name or TEAM_ROLE_GRAPH,
+            runtime_route=run.runtime_route or TEAM_ROLE_ROUTE,
             payload_kind="child-result",
             payload={"summary": summary, "changed_files": changed_files},
             artifact_store=self.artifact_store,
@@ -212,7 +212,7 @@ class TeamRoleGraph:
                 root_run_id=run.root_run_id or assignment.root_run_id,
                 depth=2,
                 child_role=TeamAssignmentKind.SUBAGENT.value,
-                graph_name=TEAM_ROLE_GRAPH,
+                runtime_route=TEAM_ROLE_ROUTE,
                 dispatch_status=DispatchStatus.QUEUED,
                 workspace_path=run.workspace_path,
                 integration_branch=run.integration_branch,
@@ -232,7 +232,7 @@ class TeamRoleGraph:
                 child_run_id=child.id,
                 kind=TeamAssignmentKind.SUBAGENT,
                 role_profile="subagent",
-                graph_name=TEAM_ROLE_GRAPH,
+                runtime_route=TEAM_ROLE_ROUTE,
                 goal=goal,
                 allowed_tools=allowed_tools,
                 allowed_skills=assignment.allowed_skills,

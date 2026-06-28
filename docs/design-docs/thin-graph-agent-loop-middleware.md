@@ -3,9 +3,9 @@
 Task 19 defines the target runtime shape. It does not migrate the existing
 solo or team graphs yet.
 
-## Graph Identity
+## Runtime Route
 
-Runtime graph identity is `graph_name` only. The current graph names are:
+Runtime routing is stored as `runtime_route` only. The current route values are:
 
 - `runtime-probe`
 - `solo-readonly`
@@ -26,7 +26,7 @@ explicit concept that names the actual compatibility boundary:
 
 ThinGraph owns durable control flow only:
 
-- claim-time graph routing by `graph_name`;
+- claim-time runtime routing by `runtime_route`;
 - checkpoint thread identity;
 - interrupt, resume, retry, cancellation, and recovery transitions;
 - durable terminal state projection;

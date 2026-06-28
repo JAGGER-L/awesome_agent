@@ -64,7 +64,7 @@ Generated from SQLAlchemy metadata.
 | `id` | `UUID` | no |
 | `run_id` | `UUID` | no |
 | `agent_id` | `UUID` | yes |
-| `graph_name` | `VARCHAR(128)` | no |
+| `runtime_route` | `VARCHAR(128)` | no |
 | `before_estimated_tokens` | `INTEGER` | no |
 | `after_estimated_tokens` | `INTEGER` | no |
 | `summary` | `TEXT` | no |
@@ -186,7 +186,7 @@ Generated from SQLAlchemy metadata.
 | `root_run_id` | `UUID` | yes |
 | `depth` | `INTEGER` | no |
 | `child_role` | `VARCHAR(64)` | yes |
-| `graph_name` | `VARCHAR(128)` | yes |
+| `runtime_route` | `VARCHAR(128)` | yes |
 | `dispatch_status` | `VARCHAR(32)` | no |
 | `available_at` | `DATETIME` | no |
 | `current_worker_id` | `UUID` | yes |
@@ -242,7 +242,7 @@ Generated from SQLAlchemy metadata.
 | `kind` | `VARCHAR(32)` | no |
 | `status` | `VARCHAR(32)` | no |
 | `role_profile` | `VARCHAR(128)` | no |
-| `graph_name` | `VARCHAR(128)` | no |
+| `runtime_route` | `VARCHAR(128)` | no |
 | `goal` | `TEXT` | no |
 | `allowed_tools` | `JSONB` | no |
 | `deferred_tools` | `JSONB` | no |
@@ -381,5 +381,5 @@ Generated from SQLAlchemy metadata.
 | `worker_name` | `VARCHAR(255)` | no |
 | `started_at` | `DATETIME` | no |
 | `heartbeat_at` | `DATETIME` | no |
-| `supported_graphs` | `JSONB` | no |
+| `supported_runtime_routes` | `JSONB` | no |
 | `status` | `VARCHAR(32)` | no |

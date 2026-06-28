@@ -1,4 +1,4 @@
-﻿# Agent Team and Subagents
+# Agent Team and Subagents
 
 ## Leader
 
@@ -87,7 +87,7 @@ work is active and are requeued when child assignments reach terminal states.
 Distributed team state is stored in:
 
 - `runs.parent_run_id`, `runs.root_run_id`, `runs.depth`, and `runs.child_role`;
-- `team_assignments` for role, permissions, graph identity, status, and handoff
+- `team_assignments` for role, permissions, runtime route, status, and handoff
   context;
 - `team_mailbox_messages` for route-restricted durable communication;
 - `team_child_results` for summaries, patch artifact references, changed files,

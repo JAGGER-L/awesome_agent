@@ -1,4 +1,4 @@
-﻿# Technical Debt Tracker
+# Technical Debt Tracker
 
 Record durable project debt that remains after a development task ends.
 Task-specific notes and handoffs belong in ignored `.codex/exec-plans/`.
@@ -9,7 +9,7 @@ Task-specific notes and handoffs belong in ignored `.codex/exec-plans/`.
 | TD-002 | Resolved | Environment | Start Docker daemon | System tests 2026-06-25 | High | Docker client can reach server |
 | TD-003 | Open | Tests | FastAPI TestClient emits an upstream httpx deprecation warning | Test suite 2026-06-24 | Low | FastAPI/Starlette test client no longer emits the warning |
 | TD-004 | Resolved | Persistence | Local API projections were process-local while durable graph state used PostgreSQL checkpoints | `tests/integration/test_runtime_restart.py`, system tests 2026-06-25 | Medium | API run/agent/task projections reload from PostgreSQL after process restart |
-| TD-005 | Resolved | Runtime routing | Modifying Coding Runs could be accepted without an executable graph route | Task 07 modifying graph tests 2026-06-26 | High | `coding + modifying` Runs route to `solo-modifying`, and Workers advertise that graph when model providers are configured |
+| TD-005 | Resolved | Runtime routing | Modifying Coding Runs could be accepted without an executable runtime route | Task 07 modifying graph tests 2026-06-26 | High | `coding + modifying` Runs route to `solo-modifying`, and Workers advertise that graph when model providers are configured |
 | TD-006 | Resolved | Validation | Standard local checks depended on PostgreSQL environment outside `scripts/check.ps1` | Task 07 preflight 2026-06-26 | High | `scripts/check.ps1` supplies the project PostgreSQL defaults and prints actionable migration guidance |
 | TD-007 | Resolved | Tool safety | Read-only graph tool calls bypassed the central execution boundary | Task 07 central executor tests 2026-06-26 | High | Read-only graph tools execute through `ToolExecutor`, including capability, approval-policy, and timeout enforcement |
 | TD-008 | Resolved | Approval | Approval API was a placeholder and could not durably approve, deny, expire, or resume one exact invocation | Task 08 tests 2026-06-26 | High | Durable approval requests, decisions, expiry, worker release, and graph resume are covered by unit tests |

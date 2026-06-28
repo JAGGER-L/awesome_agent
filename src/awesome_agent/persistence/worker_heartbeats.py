@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.persistence.models import WorkerHeartbeatRecord
 from awesome_agent.runtime.worker_heartbeats import (
-    GraphIdentity,
+    RuntimeRoute,
     WorkerHeartbeat,
     WorkerHeartbeatStatus,
 )
@@ -25,8 +25,8 @@ class PostgresWorkerHeartbeatRepository:
             "worker_name": heartbeat.worker_name,
             "started_at": heartbeat.started_at,
             "heartbeat_at": heartbeat.heartbeat_at,
-            "supported_graphs": [
-                {"name": graph.name} for graph in heartbeat.supported_graphs
+            "supported_runtime_routes": [
+                {"route": route.route} for route in heartbeat.supported_runtime_routes
             ],
             "status": heartbeat.status.value,
         }
@@ -37,7 +37,7 @@ class PostgresWorkerHeartbeatRepository:
                 "worker_name": statement.excluded.worker_name,
                 "started_at": statement.excluded.started_at,
                 "heartbeat_at": statement.excluded.heartbeat_at,
-                "supported_graphs": statement.excluded.supported_graphs,
+                "supported_runtime_routes": statement.excluded.supported_runtime_routes,
                 "status": statement.excluded.status,
             },
         )
@@ -70,8 +70,9 @@ def _to_heartbeat(record: WorkerHeartbeatRecord) -> WorkerHeartbeat:
         worker_name=record.worker_name,
         started_at=record.started_at,
         heartbeat_at=record.heartbeat_at,
-        supported_graphs=[
-            GraphIdentity(str(graph["name"])) for graph in record.supported_graphs
+        supported_runtime_routes=[
+            RuntimeRoute(str(route["route"]))
+            for route in record.supported_runtime_routes
         ],
         status=WorkerHeartbeatStatus(record.status),
     )

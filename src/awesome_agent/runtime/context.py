@@ -98,7 +98,7 @@ class ContextManager:
         *,
         run_id: UUID,
         agent_id: UUID | None,
-        graph_name: str,
+        runtime_route: str,
         messages: Sequence[ModelMessage | Mapping[str, Any]],
         rolling_summary: str,
         policy: ContextPolicy,
@@ -129,7 +129,7 @@ class ContextManager:
                 await self._write_removed_messages_artifact(
                     run_id=run_id,
                     agent_id=agent_id,
-                    graph_name=graph_name,
+                    runtime_route=runtime_route,
                     removed_messages=removed_messages,
                 )
             )
@@ -169,13 +169,13 @@ class ContextManager:
         *,
         run_id: UUID,
         agent_id: UUID | None,
-        graph_name: str,
+        runtime_route: str,
         removed_messages: Sequence[dict[str, Any]],
     ) -> list[str]:
         if self._artifact_store is None or self._artifact_repository is None:
             return []
         payload = {
-            "graph_name": graph_name,
+            "runtime_route": runtime_route,
             "removed_messages": list(removed_messages),
         }
         content = json.dumps(
@@ -193,7 +193,7 @@ class ContextManager:
             mime_type="application/json",
             summary=(
                 f"Removed {len(removed_messages)} messages during "
-                f"{graph_name} context compaction."
+                f"{runtime_route} context compaction."
             ),
         )
         await self._artifact_repository.record(metadata)

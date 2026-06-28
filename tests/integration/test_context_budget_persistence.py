@@ -52,7 +52,7 @@ async def test_context_compaction_records_artifact_refs() -> None:
     compaction = ContextCompactionRecord(
         run_id=uuid4(),
         agent_id=uuid4(),
-        graph_name="solo-readonly",
+        runtime_route="solo-readonly",
         before_estimated_tokens=50_000,
         after_estimated_tokens=10_000,
         summary="Inspected repository files.",

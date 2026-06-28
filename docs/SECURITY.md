@@ -55,10 +55,10 @@
 - `/health` and `/ready` expose dependency state only; they do not grant tool,
   repository, or worker control. Operators should still keep the local API on
   loopback unless they add an external authentication boundary.
-- The `runtime_probe` graph has no model, tool, shell, sandbox, or
+- The `runtime-probe` route has no model, tool, shell, sandbox, or
   repository-content capability.
-- `POST /runtime/probes` selects the fixed supported probe graph on the server;
-  callers cannot supply arbitrary graph names or versions.
+- `POST /runtime/probes` selects the fixed supported probe route on the server;
+  callers cannot supply arbitrary runtime routes or versions.
 - `solo-readonly` exposes only bounded `status`, `list`, literal `search`,
   `read`, and instruction-discovery tools against the managed Run worktree.
 - Read tools reject absolute/parent paths, `.git`, symlink or junction

@@ -40,7 +40,7 @@ class Run(BaseModel):
     root_run_id: UUID | None = None
     depth: int = Field(default=0, ge=0, le=2)
     child_role: str | None = Field(default=None, max_length=64)
-    graph_name: str | None = None
+    runtime_route: str | None = None
     dispatch_status: DispatchStatus = DispatchStatus.TERMINAL
     available_at: datetime = Field(default_factory=utc_now)
     current_worker_id: UUID | None = None

@@ -128,7 +128,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.root_run_id = run.root_run_id
             record.depth = run.depth
             record.child_role = run.child_role
-            record.graph_name = run.graph_name
+            record.runtime_route = run.runtime_route
             record.dispatch_status = run.dispatch_status.value
             record.available_at = run.available_at
             record.current_worker_id = run.current_worker_id
@@ -367,7 +367,7 @@ def _run_from_record(record: RunRecord) -> Run:
         root_run_id=record.root_run_id,
         depth=record.depth,
         child_role=record.child_role,
-        graph_name=record.graph_name,
+        runtime_route=record.runtime_route,
         dispatch_status=DispatchStatus(record.dispatch_status),
         available_at=record.available_at,
         current_worker_id=record.current_worker_id,
@@ -418,7 +418,7 @@ def _run_to_record(run: Run) -> RunRecord:
         root_run_id=run.root_run_id,
         depth=run.depth,
         child_role=run.child_role,
-        graph_name=run.graph_name,
+        runtime_route=run.runtime_route,
         dispatch_status=run.dispatch_status.value,
         available_at=run.available_at,
         current_worker_id=run.current_worker_id,

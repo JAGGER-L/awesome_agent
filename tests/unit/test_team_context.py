@@ -23,7 +23,7 @@ async def test_compact_team_payload_offloads_large_payload_and_records_compactio
     result = await compact_team_payload(
         run_id=run_id,
         agent_id=agent_id,
-        graph_name="team-role",
+        runtime_route="team-role",
         payload_kind="child-result",
         payload={"summary": "important evidence " * 200},
         artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
@@ -50,7 +50,7 @@ async def test_compact_team_payload_keeps_small_payload_inline(
     result = await compact_team_payload(
         run_id=uuid4(),
         agent_id=None,
-        graph_name="team-role",
+        runtime_route="team-role",
         payload_kind="handoff",
         payload={"summary": "short"},
         artifact_store=LocalArtifactStore(tmp_path / "artifacts"),

@@ -21,7 +21,7 @@ from awesome_agent.persistence.database import create_engine, create_session_fac
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.team import PostgresTeamRepository
-from awesome_agent.runtime.graphs import TEAM_CODING_GRAPH
+from awesome_agent.runtime.graphs import TEAM_CODING_ROUTE
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.team_assignments import TeamAssignmentKind
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
@@ -55,7 +55,7 @@ async def test_distributed_team_runs_through_workers_with_lineage(
         goal="Coordinate teammate, subagent, and verifier",
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
-        graph_name=TEAM_CODING_GRAPH,
+        runtime_route=TEAM_CODING_ROUTE,
         dispatch_status=DispatchStatus.QUEUED,
         workspace_path=workspace,
     )

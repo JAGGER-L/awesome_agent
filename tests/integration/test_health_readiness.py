@@ -26,16 +26,16 @@ from awesome_agent.persistence.worker_heartbeats import (
     PostgresWorkerHeartbeatRepository,
 )
 from awesome_agent.runtime.graphs import (
-    MODIFYING_CODING_GRAPH,
-    READ_ONLY_CODING_GRAPH,
-    RUNTIME_PROBE_GRAPH,
-    SCOPED_TEAM_CODING_GRAPH,
-    TEAM_CODING_GRAPH,
-    TEAM_ROLE_GRAPH,
-    TEAM_VERIFIER_GRAPH,
+    MODIFYING_CODING_ROUTE,
+    READ_ONLY_CODING_ROUTE,
+    RUNTIME_PROBE_ROUTE,
+    SCOPED_TEAM_CODING_ROUTE,
+    TEAM_CODING_ROUTE,
+    TEAM_ROLE_ROUTE,
+    TEAM_VERIFIER_ROUTE,
 )
 from awesome_agent.runtime.worker_heartbeats import (
-    GraphIdentity,
+    RuntimeRoute,
     WorkerHeartbeat,
     WorkerHeartbeatStatus,
 )
@@ -116,14 +116,14 @@ async def test_runtime_readiness_is_healthy_with_fresh_worker_heartbeat(
             worker_name="worker-a",
             started_at=now,
             heartbeat_at=now,
-            supported_graphs=[
-                GraphIdentity(RUNTIME_PROBE_GRAPH),
-                GraphIdentity(READ_ONLY_CODING_GRAPH),
-                GraphIdentity(MODIFYING_CODING_GRAPH),
-                GraphIdentity(SCOPED_TEAM_CODING_GRAPH),
-                GraphIdentity(TEAM_CODING_GRAPH),
-                GraphIdentity(TEAM_ROLE_GRAPH),
-                GraphIdentity(TEAM_VERIFIER_GRAPH),
+            supported_runtime_routes=[
+                RuntimeRoute(RUNTIME_PROBE_ROUTE),
+                RuntimeRoute(READ_ONLY_CODING_ROUTE),
+                RuntimeRoute(MODIFYING_CODING_ROUTE),
+                RuntimeRoute(SCOPED_TEAM_CODING_ROUTE),
+                RuntimeRoute(TEAM_CODING_ROUTE),
+                RuntimeRoute(TEAM_ROLE_ROUTE),
+                RuntimeRoute(TEAM_VERIFIER_ROUTE),
             ],
             status=WorkerHeartbeatStatus.ONLINE,
         )

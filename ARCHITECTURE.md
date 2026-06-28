@@ -110,9 +110,9 @@ for `healthy` and `degraded`, and exits 1 for `unhealthy`.
 
 Worker liveness is not inferred from active Run leases. Workers upsert a
 process-scoped row in `worker_heartbeats` with worker id, worker name,
-supported graph identities, status, start time, and heartbeat time. The runtime
+supported runtime routes, status, start time, and heartbeat time. The runtime
 readiness profile requires a fresh online heartbeat that covers the required
-graph identities.
+runtime routes.
 
 ### Repository-Aware Run Intake
 
@@ -178,20 +178,20 @@ awesome-agent start
         |
         +---- Worker process
                  |
-                 +---- claim supported graphs
+                 +---- claim supported runtime routes
                  +---- heartbeat lease
                  +---- LangGraph sync checkpoint
                  +---- fenced projection update
 ```
 
 Each Worker process executes at most one Run. Workers always claim the
-diagnostic `runtime_probe` graph and, when model providers are configured, also
+diagnostic `runtime-probe` route and, when model providers are configured, also
 claim `solo-readonly`, `solo-modifying`, and explicit `team-coding-scoped`
 Runs. Workers also publish process heartbeat rows for readiness; Run lease
 heartbeat remains a separate fencing mechanism. A crashed Worker leaves its
-checkpoint and lease; after lease expiry, a
-replacement Worker claims with a new fencing token and resumes from the
-checkpoint. Unsupported graph names enter `recovery_required`.
+checkpoint and lease; after lease expiry, a replacement Worker claims with a
+new fencing token and resumes from the checkpoint. Unsupported runtime routes
+enter `recovery_required`.
 
 ## Agent Orchestration Topology
 
@@ -296,7 +296,7 @@ work and are requeued when child assignments become terminal.
 
 Durable state:
   runs(parent_run_id, root_run_id, depth, child_role)
-  team_assignments(kind, graph, permissions, status, handoff_context)
+  team_assignments(kind, runtime_route, permissions, status, handoff_context)
   team_mailbox_messages(route, subject, status)
   team_child_results(summary, patch_artifact_id, patch_aggregated)
 ```
@@ -482,7 +482,7 @@ Runtime observability has three layers:
 - ordered runtime events with a stable Run-scoped `trace_id`;
 - best-effort OpenTelemetry export and structured logs.
 
-The Worker records run, graph, model, tool, and sandbox spans without letting
+The Worker records run, runtime route, model, tool, and sandbox spans without letting
 observability write or exporter failures affect Run execution. Model-call
 records store provider, model, status, stop reason, token usage, latency, and
 trace/span IDs. FastAPI exposes `GET /runs/{run_id}/trace`,

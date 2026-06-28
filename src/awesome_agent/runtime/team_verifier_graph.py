@@ -28,7 +28,7 @@ _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 class TeamVerifierState(TypedDict):
     run_id: str
     agent_id: str
-    graph_name: str
+    runtime_route: str
     phase: str
     result_summary: str
     final_answer: NotRequired[str]
@@ -92,7 +92,7 @@ class TeamVerifierGraph:
         compacted_summary = await compact_team_payload(
             run_id=run.id,
             agent_id=agent.id,
-            graph_name=run.graph_name or "team-verifier",
+            runtime_route=run.runtime_route or "team-verifier",
             payload_kind="verifier-result",
             payload={"summary": summary, "passed": passed},
             artifact_store=self.artifact_store,
@@ -134,7 +134,7 @@ class TeamVerifierGraph:
             TeamVerifierState(
                 run_id=str(run.id),
                 agent_id=str(agent.id),
-                graph_name=run.graph_name or "team-verifier",
+                runtime_route=run.runtime_route or "team-verifier",
                 phase=("passed" if passed else "rejected"),
                 result_summary=summary,
                 final_answer=summary,

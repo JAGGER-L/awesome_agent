@@ -7,8 +7,8 @@ import pytest
 
 from awesome_agent.health import HealthStatus
 from awesome_agent.runtime.worker_heartbeats import (
-    GraphIdentity,
     InMemoryWorkerHeartbeatRepository,
+    RuntimeRoute,
     WorkerHeartbeat,
     WorkerHeartbeatStatus,
     worker_heartbeat_check,
@@ -16,8 +16,8 @@ from awesome_agent.runtime.worker_heartbeats import (
 from awesome_agent.settings import Settings
 
 
-def test_graph_identity_label_is_name_only() -> None:
-    assert GraphIdentity("solo-readonly").label() == "solo-readonly"
+def test_runtime_route_label_is_route_only() -> None:
+    assert RuntimeRoute("solo-readonly").label() == "solo-readonly"
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_in_memory_worker_heartbeat_reports_fresh_worker() -> None:
             worker_name="worker-a",
             started_at=now,
             heartbeat_at=now,
-            supported_graphs=[GraphIdentity("solo-readonly")],
+            supported_runtime_routes=[RuntimeRoute("solo-readonly")],
             status=WorkerHeartbeatStatus.ONLINE,
         )
     )
@@ -43,7 +43,7 @@ async def test_in_memory_worker_heartbeat_reports_fresh_worker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_heartbeat_check_requires_fresh_matching_graph() -> None:
+async def test_worker_heartbeat_check_requires_fresh_matching_route() -> None:
     repository = InMemoryWorkerHeartbeatRepository()
     now = datetime.now(UTC)
     await repository.upsert(
@@ -52,7 +52,7 @@ async def test_worker_heartbeat_check_requires_fresh_matching_graph() -> None:
             worker_name="worker-a",
             started_at=now,
             heartbeat_at=now,
-            supported_graphs=[GraphIdentity("solo-readonly")],
+            supported_runtime_routes=[RuntimeRoute("solo-readonly")],
             status=WorkerHeartbeatStatus.ONLINE,
         )
     )
@@ -60,7 +60,7 @@ async def test_worker_heartbeat_check_requires_fresh_matching_graph() -> None:
     check = await worker_heartbeat_check(
         repository,
         Settings(worker_heartbeat_stale_seconds=120),
-        required_graphs=[GraphIdentity("solo-readonly")],
+        required_runtime_routes=[RuntimeRoute("solo-readonly")],
         now=now,
     )
 
@@ -75,7 +75,7 @@ async def test_worker_heartbeat_check_reports_unhealthy_without_fresh_worker() -
     check = await worker_heartbeat_check(
         repository,
         Settings(worker_heartbeat_stale_seconds=120),
-        required_graphs=[GraphIdentity("solo-readonly")],
+        required_runtime_routes=[RuntimeRoute("solo-readonly")],
         now=now,
     )
 

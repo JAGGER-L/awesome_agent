@@ -52,7 +52,7 @@ from awesome_agent.runtime.dispatch import (
     TransientExecutionError,
 )
 from awesome_agent.runtime.graphs import (
-    READ_ONLY_CODING_GRAPH,
+    READ_ONLY_CODING_ROUTE,
 )
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.registry import ToolRegistry
@@ -76,7 +76,7 @@ you have enough repository evidence, and state remaining uncertainty.
 class ReadOnlyAgentState(TypedDict):
     run_id: str
     agent_id: str
-    graph_name: str
+    runtime_route: str
     messages: list[dict[str, Any]]
     continuation: dict[str, Any] | None
     model_turn_count: int
@@ -172,7 +172,7 @@ class ReadOnlyCodingGraph:
         builder.add_edge("finalize", END)
         self.graph = builder.compile(
             checkpointer=saver,
-            name=READ_ONLY_CODING_GRAPH,
+            name=READ_ONLY_CODING_ROUTE,
         )
 
     async def execute(
@@ -214,11 +214,11 @@ class ReadOnlyCodingGraph:
 
     def _validate_run(self, run: Run) -> None:
         if (
-            run.graph_name != READ_ONLY_CODING_GRAPH
+            run.runtime_route != READ_ONLY_CODING_ROUTE
             or run.intent is not RunIntent.READ_ONLY
         ):
             raise IncompatibleGraphError(
-                f"Unsupported read-only graph: {run.intent.value}/{run.graph_name}"
+                f"Unsupported read-only graph: {run.intent.value}/{run.runtime_route}"
             )
         if run.graph_thread_id is None:
             raise CorruptRuntimeStateError("Run is missing graph_thread_id.")
@@ -571,7 +571,7 @@ class ReadOnlyCodingGraph:
         return await self.context_manager.prepare_request(
             run_id=run.id,
             agent_id=agent.id,
-            graph_name=READ_ONLY_CODING_GRAPH,
+            runtime_route=READ_ONLY_CODING_ROUTE,
             messages=messages,
             rolling_summary=rolling_summary,
             policy=ContextPolicy(
@@ -594,7 +594,7 @@ class ReadOnlyCodingGraph:
             ContextCompactionRecord(
                 run_id=run.id,
                 agent_id=agent.id,
-                graph_name=READ_ONLY_CODING_GRAPH,
+                runtime_route=READ_ONLY_CODING_ROUTE,
                 before_estimated_tokens=prepared.before_estimated_tokens,
                 after_estimated_tokens=prepared.after_estimated_tokens,
                 summary=prepared.rolling_summary,
@@ -735,7 +735,7 @@ def _initial_state(run: Run, agent: Agent) -> ReadOnlyAgentState:
     return {
         "run_id": str(run.id),
         "agent_id": str(agent.id),
-        "graph_name": READ_ONLY_CODING_GRAPH,
+        "runtime_route": READ_ONLY_CODING_ROUTE,
         "messages": [
             SystemMessage(content=_SYSTEM_PROMPT).model_dump(mode="json"),
             UserMessage(content=run.goal).model_dump(mode="json"),
@@ -760,7 +760,7 @@ def _state(value: object) -> ReadOnlyAgentState:
     required = {
         "run_id",
         "agent_id",
-        "graph_name",
+        "runtime_route",
         "messages",
         "model_turn_count",
         "tool_call_count",

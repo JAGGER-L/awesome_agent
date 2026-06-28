@@ -48,7 +48,7 @@ async def test_team_assignment_round_trips_through_postgres() -> None:
         child_run_id=child.id,
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="backend-engineer",
-        graph_name="team-role",
+        runtime_route="team-role",
         goal="Implement backend",
         allowed_tools=["repo.read"],
         allowed_skills=["repository-inspection"],
@@ -198,7 +198,7 @@ async def test_team_child_result_round_trips_through_postgres() -> None:
             child_run_id=child.id,
             kind=TeamAssignmentKind.TEAMMATE,
             role_profile="backend-engineer",
-            graph_name="team-role",
+            runtime_route="team-role",
             goal="Implement backend",
         )
     )

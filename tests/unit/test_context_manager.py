@@ -52,7 +52,7 @@ async def test_context_manager_keeps_system_goal_and_recent_tool_cycle(
     prepared = await manager.prepare_request(
         run_id=run_id,
         agent_id=agent_id,
-        graph_name="solo-readonly",
+        runtime_route="solo-readonly",
         messages=messages,
         rolling_summary="",
         policy=ContextPolicy(
@@ -112,7 +112,7 @@ async def test_long_tool_result_is_replaced_with_artifact_ref(
     prepared = await manager.prepare_request(
         run_id=run_id,
         agent_id=uuid4(),
-        graph_name="solo-readonly",
+        runtime_route="solo-readonly",
         messages=[
             SystemMessage(content="system").model_dump(mode="json"),
             UserMessage(content="goal").model_dump(mode="json"),

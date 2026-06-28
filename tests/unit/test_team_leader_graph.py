@@ -23,8 +23,8 @@ from awesome_agent.persistence.team import InMemoryTeamRepository
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import (
-    TEAM_CODING_GRAPH,
-    TEAM_VERIFIER_GRAPH,
+    TEAM_CODING_ROUTE,
+    TEAM_VERIFIER_ROUTE,
 )
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
@@ -152,7 +152,7 @@ async def test_leader_creates_verifier_after_teammate_terminal() -> None:
         item for item in assignments if item.kind is TeamAssignmentKind.VERIFIER
     )
     verifier_run = await runtime.get_run(verifier.child_run_id)
-    assert verifier.graph_name == TEAM_VERIFIER_GRAPH
+    assert verifier.runtime_route == TEAM_VERIFIER_ROUTE
     assert not hasattr(verifier, "graph_version")
     assert verifier_run.child_role == "verifier"
 
@@ -181,7 +181,7 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
         root_run_id=run.id,
         depth=1,
         child_role="teammate",
-        graph_name="team-role",
+        runtime_route="team-role",
     )
     await runtime.create_run(
         child,
@@ -199,7 +199,7 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
         child_run_id=child.id,
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="teammate",
-        graph_name="team-role",
+        runtime_route="team-role",
         goal="child",
     )
     await teams.create_assignment(assignment)
@@ -298,7 +298,7 @@ async def test_worker_releases_parent_for_child_wait() -> None:
         goal="team",
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
-        graph_name=TEAM_CODING_GRAPH,
+        runtime_route=TEAM_CODING_ROUTE,
         graph_thread_id=f"run:{lease.run_id}",
     )
     leader = Agent(
@@ -342,7 +342,7 @@ async def test_worker_child_completion_requeues_waiting_parent() -> None:
         depth=1,
         child_role="teammate",
         execution_kind=ExecutionKind.RUNTIME_PROBE,
-        graph_name="runtime-probe",
+        runtime_route="runtime-probe",
     )
     child_agent = Agent(
         run_id=child.id,
@@ -362,7 +362,7 @@ async def test_worker_child_completion_requeues_waiting_parent() -> None:
             child_run_id=child.id,
             kind=TeamAssignmentKind.TEAMMATE,
             role_profile="teammate",
-            graph_name="team-role",
+            runtime_route="team-role",
             goal="child",
         )
     )
@@ -390,7 +390,7 @@ def _leader_run() -> tuple[Run, Agent]:
         goal="Implement backend and verify it",
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
-        graph_name=TEAM_CODING_GRAPH,
+        runtime_route=TEAM_CODING_ROUTE,
         graph_thread_id=f"run:{uuid4()}",
     )
     leader = Agent(

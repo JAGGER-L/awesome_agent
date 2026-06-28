@@ -1,4 +1,4 @@
-﻿# Reliability
+# Reliability
 
 V1 reliability requirements:
 
@@ -33,7 +33,7 @@ forbidden.
   unexpired lease all match.
 - Worker process liveness is recorded separately in `worker_heartbeats`.
   Runtime readiness requires a fresh online Worker heartbeat covering the
-  required graph identities; a stale or missing Worker heartbeat makes runtime
+  required runtime routes; a stale or missing Worker heartbeat makes runtime
   readiness `unhealthy` even when `/health` liveness still returns 200.
 - Defaults are a 60-second lease, 15-second heartbeat interval, and three
   maximum claims.

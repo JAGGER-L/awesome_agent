@@ -35,9 +35,9 @@ from awesome_agent.repositories.reservations import IntakeReservationStore
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.graphs import (
-    MODIFYING_CODING_GRAPH,
-    READ_ONLY_CODING_GRAPH,
-    TEAM_CODING_GRAPH,
+    MODIFYING_CODING_ROUTE,
+    READ_ONLY_CODING_ROUTE,
+    TEAM_CODING_ROUTE,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 
@@ -74,28 +74,28 @@ class RunIntakeService:
         intent: RunIntent,
         mode: RunMode = RunMode.SOLO,
         execution_kind: ExecutionKind = ExecutionKind.CODING,
-        graph_name: str | None = None,
+        runtime_route: str | None = None,
     ) -> Run:
         if (
             mode is RunMode.TEAM
             and execution_kind is ExecutionKind.CODING
-            and graph_name is None
+            and runtime_route is None
         ):
-            graph_name = TEAM_CODING_GRAPH
+            runtime_route = TEAM_CODING_ROUTE
         if (
             mode is RunMode.SOLO
             and execution_kind is ExecutionKind.CODING
             and intent is RunIntent.READ_ONLY
-            and graph_name is None
+            and runtime_route is None
         ):
-            graph_name = READ_ONLY_CODING_GRAPH
+            runtime_route = READ_ONLY_CODING_ROUTE
         if (
             mode is RunMode.SOLO
             and execution_kind is ExecutionKind.CODING
             and intent is RunIntent.MODIFYING
-            and graph_name is None
+            and runtime_route is None
         ):
-            graph_name = MODIFYING_CODING_GRAPH
+            runtime_route = MODIFYING_CODING_ROUTE
         await self.reconcile_incomplete()
         repository = await self.registry.get(repository_id)
         if not repository.enabled:
@@ -131,7 +131,7 @@ class RunIntakeService:
                 reservation=reservation,
                 goal=goal,
                 execution_kind=execution_kind,
-                graph_name=graph_name,
+                runtime_route=runtime_route,
                 mode=mode,
             )
             await self.runtime.publish_intake(
@@ -189,7 +189,7 @@ class RunIntakeService:
         reservation: IntakeReservation,
         goal: str,
         execution_kind: ExecutionKind,
-        graph_name: str | None,
+        runtime_route: str | None,
         mode: RunMode,
     ) -> tuple[Run, Agent, TodoItem | None, list[RuntimeEvent]]:
         run = Run(
@@ -201,7 +201,7 @@ class RunIntakeService:
             base_commit=reservation.base_commit,
             intent=reservation.intent,
             execution_kind=execution_kind,
-            graph_name=graph_name,
+            runtime_route=runtime_route,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=reservation.workspace_path,
             integration_branch=reservation.integration_branch,

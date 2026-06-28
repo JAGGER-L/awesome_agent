@@ -519,7 +519,7 @@ def test_context_compactions_command_reads_api(
                     "id": str(uuid4()),
                     "run_id": str(run_id),
                     "agent_id": None,
-                    "graph_name": "solo-readonly",
+                    "runtime_route": "solo-readonly",
                     "before_estimated_tokens": 50_000,
                     "after_estimated_tokens": 12_000,
                     "summary": "Compacted repository inspection evidence.",

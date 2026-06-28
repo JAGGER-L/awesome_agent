@@ -3,7 +3,7 @@ import pytest
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.team import InMemoryTeamRepository
-from awesome_agent.runtime.graphs import TEAM_VERIFIER_GRAPH
+from awesome_agent.runtime.graphs import TEAM_VERIFIER_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
@@ -122,7 +122,7 @@ def _verifier_run(parent: Run) -> tuple[Run, Agent, TeamAssignment]:
         root_run_id=parent.id,
         depth=1,
         child_role="verifier",
-        graph_name=TEAM_VERIFIER_GRAPH,
+        runtime_route=TEAM_VERIFIER_ROUTE,
     )
     agent = Agent(
         run_id=run.id,
@@ -136,7 +136,7 @@ def _verifier_run(parent: Run) -> tuple[Run, Agent, TeamAssignment]:
         child_run_id=run.id,
         kind=TeamAssignmentKind.VERIFIER,
         role_profile="verifier",
-        graph_name=TEAM_VERIFIER_GRAPH,
+        runtime_route=TEAM_VERIFIER_ROUTE,
         goal="verify",
     )
     return run, agent, assignment

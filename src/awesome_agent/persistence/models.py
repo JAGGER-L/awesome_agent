@@ -60,7 +60,7 @@ class RunRecord(Base):
     root_run_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), index=True)
     depth: Mapped[int] = mapped_column(Integer, default=0)
     child_role: Mapped[str | None] = mapped_column(String(64), index=True)
-    graph_name: Mapped[str | None] = mapped_column(String(128))
+    runtime_route: Mapped[str | None] = mapped_column(String(128))
     dispatch_status: Mapped[str] = mapped_column(String(32), index=True)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     current_worker_id: Mapped[UUID | None] = mapped_column(
@@ -108,7 +108,7 @@ class WorkerHeartbeatRecord(Base):
     worker_name: Mapped[str] = mapped_column(String(255))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    supported_graphs: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    supported_runtime_routes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(32), index=True)
 
 
@@ -135,7 +135,7 @@ class ContextCompactionRecord(Base):
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
     agent_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), index=True)
-    graph_name: Mapped[str] = mapped_column(String(128), index=True)
+    runtime_route: Mapped[str] = mapped_column(String(128), index=True)
     before_estimated_tokens: Mapped[int] = mapped_column(Integer)
     after_estimated_tokens: Mapped[int] = mapped_column(Integer)
     summary: Mapped[str] = mapped_column(Text)
@@ -162,7 +162,7 @@ class TeamAssignmentRecord(Base):
     kind: Mapped[str] = mapped_column(String(32), index=True)
     status: Mapped[str] = mapped_column(String(32), index=True)
     role_profile: Mapped[str] = mapped_column(String(128))
-    graph_name: Mapped[str] = mapped_column(String(128))
+    runtime_route: Mapped[str] = mapped_column(String(128))
     goal: Mapped[str] = mapped_column(Text)
     allowed_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)
     deferred_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)

@@ -53,7 +53,7 @@ from awesome_agent.runtime.dispatch import (
     PermanentExecutionError,
 )
 from awesome_agent.runtime.graphs import (
-    SCOPED_TEAM_CODING_GRAPH,
+    SCOPED_TEAM_CODING_ROUTE,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.tools.repository import (
@@ -66,7 +66,7 @@ from awesome_agent.tools.repository import (
 )
 
 __all__ = [
-    "SCOPED_TEAM_CODING_GRAPH",
+    "SCOPED_TEAM_CODING_ROUTE",
     "AgentAssignment",
     "TeamCodingGraph",
     "TeamCodingState",
@@ -86,7 +86,7 @@ class AgentAssignment(BaseModel):
 class TeamCodingState(TypedDict):
     run_id: str
     leader_id: str
-    graph_name: str
+    runtime_route: str
     phase: str
     created_agent_ids: list[str]
     assignments: dict[str, dict[str, object]]
@@ -152,7 +152,7 @@ class TeamCodingGraph:
         builder.add_edge("backend_subagent_step", "backend_precheck_step")
         builder.add_edge("backend_precheck_step", "verify")
         builder.add_edge("verify", END)
-        self.graph = builder.compile(checkpointer=saver, name=SCOPED_TEAM_CODING_GRAPH)
+        self.graph = builder.compile(checkpointer=saver, name=SCOPED_TEAM_CODING_ROUTE)
 
     async def execute(
         self,
@@ -179,7 +179,7 @@ class TeamCodingGraph:
                 {
                     "run_id": str(run.id),
                     "leader_id": str(leader.id),
-                    "graph_name": SCOPED_TEAM_CODING_GRAPH,
+                    "runtime_route": SCOPED_TEAM_CODING_ROUTE,
                     "phase": "created",
                     "created_agent_ids": [],
                     "assignments": {},
@@ -890,9 +890,12 @@ class TeamCodingGraph:
         )
 
     def _validate_run(self, run: Run, leader: Agent) -> None:
-        if run.mode is not RunMode.TEAM or run.graph_name != SCOPED_TEAM_CODING_GRAPH:
+        if (
+            run.mode is not RunMode.TEAM
+            or run.runtime_route != SCOPED_TEAM_CODING_ROUTE
+        ):
             raise IncompatibleGraphError(
-                f"Unsupported team graph identity: {run.graph_name}"
+                f"Unsupported team runtime route: {run.runtime_route}"
             )
         if leader.kind is not AgentKind.LEADER:
             raise CorruptRuntimeStateError("Team Run requires a Leader.")
@@ -916,7 +919,7 @@ def _state(value: object) -> TeamCodingState:
     required = {
         "run_id",
         "leader_id",
-        "graph_name",
+        "runtime_route",
         "phase",
         "created_agent_ids",
         "assignments",

@@ -57,7 +57,7 @@ from awesome_agent.runtime.dispatch import (
     IncompatibleGraphError,
 )
 from awesome_agent.runtime.graphs import (
-    MODIFYING_CODING_GRAPH,
+    MODIFYING_CODING_ROUTE,
 )
 from awesome_agent.runtime.modifying_graph import (
     ModifyingAgentLoopFailed,
@@ -98,7 +98,7 @@ def _run(workspace: Path) -> tuple[Run, Agent]:
     run = Run(
         goal="Change README",
         intent=RunIntent.MODIFYING,
-        graph_name=MODIFYING_CODING_GRAPH,
+        runtime_route=MODIFYING_CODING_ROUTE,
         graph_thread_id=f"run:{uuid4()}",
         workspace_path=workspace,
     )
@@ -142,7 +142,7 @@ def _node_state(
         {
             "run_id": str(run.id),
             "agent_id": str(agent.id),
-            "graph_name": MODIFYING_CODING_GRAPH,
+            "runtime_route": MODIFYING_CODING_ROUTE,
             "messages": messages,
             "continuation": None,
             "model_turn_count": 0,
@@ -879,7 +879,7 @@ async def test_modifying_graph_rejects_incompatible_run(tmp_path: Path) -> None:
         goal=run.goal,
         intent=RunIntent.READ_ONLY,
         execution_kind=ExecutionKind.CODING,
-        graph_name="other",
+        runtime_route="other",
         graph_thread_id=run.graph_thread_id,
         workspace_path=tmp_path,
     )
@@ -902,7 +902,7 @@ async def test_modifying_graph_requires_thread_and_workspace(tmp_path: Path) -> 
         goal=run.goal,
         intent=run.intent,
         execution_kind=ExecutionKind.CODING,
-        graph_name=run.graph_name,
+        runtime_route=run.runtime_route,
         workspace_path=tmp_path,
     )
     with pytest.raises(CorruptRuntimeStateError, match="graph_thread_id"):
@@ -913,7 +913,7 @@ async def test_modifying_graph_requires_thread_and_workspace(tmp_path: Path) -> 
         goal=run.goal,
         intent=run.intent,
         execution_kind=ExecutionKind.CODING,
-        graph_name=run.graph_name,
+        runtime_route=run.runtime_route,
         graph_thread_id=run.graph_thread_id,
         workspace_path=tmp_path / "missing",
     )
@@ -1089,7 +1089,7 @@ def _change_ready_state(run: Run, agent: Agent) -> ModifyingAgentState:
         {
             "run_id": str(run.id),
             "agent_id": str(agent.id),
-            "graph_name": MODIFYING_CODING_GRAPH,
+            "runtime_route": MODIFYING_CODING_ROUTE,
             "messages": [],
             "continuation": None,
             "model_turn_count": 1,

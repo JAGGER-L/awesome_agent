@@ -12,10 +12,10 @@ from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
     IncompatibleGraphError,
 )
-from awesome_agent.runtime.graphs import RUNTIME_PROBE_GRAPH
+from awesome_agent.runtime.graphs import RUNTIME_PROBE_ROUTE
 
 __all__ = [
-    "RUNTIME_PROBE_GRAPH",
+    "RUNTIME_PROBE_ROUTE",
     "RuntimeProbeGraph",
     "RuntimeProbeState",
 ]
@@ -23,7 +23,7 @@ __all__ = [
 
 class RuntimeProbeState(TypedDict):
     run_id: str
-    graph_name: str
+    runtime_route: str
     phase: str
     completed_steps: list[str]
     result_summary: NotRequired[str]
@@ -49,7 +49,7 @@ class RuntimeProbeGraph:
         builder.add_edge("initialize", "checkpoint_probe")
         builder.add_edge("checkpoint_probe", "finalize")
         builder.add_edge("finalize", END)
-        self.graph = builder.compile(checkpointer=saver, name=RUNTIME_PROBE_GRAPH)
+        self.graph = builder.compile(checkpointer=saver, name=RUNTIME_PROBE_ROUTE)
 
     async def execute(self, run: Run) -> tuple[RuntimeProbeState, bool]:
         self._validate_run(run)
@@ -64,7 +64,7 @@ class RuntimeProbeGraph:
             result = await self.graph.ainvoke(
                 {
                     "run_id": str(run.id),
-                    "graph_name": RUNTIME_PROBE_GRAPH,
+                    "runtime_route": RUNTIME_PROBE_ROUTE,
                     "phase": "created",
                     "completed_steps": [],
                 },
@@ -84,9 +84,9 @@ class RuntimeProbeGraph:
         return _state(result), True
 
     def _validate_run(self, run: Run) -> None:
-        if run.graph_name != RUNTIME_PROBE_GRAPH:
+        if run.runtime_route != RUNTIME_PROBE_ROUTE:
             raise IncompatibleGraphError(
-                f"Unsupported graph identity: {run.graph_name}"
+                f"Unsupported runtime route: {run.runtime_route}"
             )
         if run.graph_thread_id is None:
             raise CorruptRuntimeStateError("Run is missing graph_thread_id.")
@@ -134,7 +134,7 @@ def _state(value: object) -> RuntimeProbeState:
         raise CorruptRuntimeStateError("Runtime probe returned invalid state.")
     required = {
         "run_id",
-        "graph_name",
+        "runtime_route",
         "phase",
         "completed_steps",
     }

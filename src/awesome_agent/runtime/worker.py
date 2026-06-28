@@ -33,13 +33,13 @@ from awesome_agent.runtime.dispatch import (
     RunDispatcher,
 )
 from awesome_agent.runtime.graphs import (
-    MODIFYING_CODING_GRAPH,
-    READ_ONLY_CODING_GRAPH,
-    RUNTIME_PROBE_GRAPH,
-    SCOPED_TEAM_CODING_GRAPH,
-    TEAM_CODING_GRAPH,
-    TEAM_ROLE_GRAPH,
-    TEAM_VERIFIER_GRAPH,
+    MODIFYING_CODING_ROUTE,
+    READ_ONLY_CODING_ROUTE,
+    RUNTIME_PROBE_ROUTE,
+    SCOPED_TEAM_CODING_ROUTE,
+    TEAM_CODING_ROUTE,
+    TEAM_ROLE_ROUTE,
+    TEAM_VERIFIER_ROUTE,
 )
 from awesome_agent.runtime.modifying_graph import (
     ModifyingAgentState,
@@ -56,7 +56,7 @@ from awesome_agent.runtime.team_verifier_graph import (
     TeamVerifierState,
 )
 from awesome_agent.runtime.worker_heartbeats import (
-    GraphIdentity,
+    RuntimeRoute,
     WorkerHeartbeat,
     WorkerHeartbeatRepository,
     WorkerHeartbeatStatus,
@@ -141,25 +141,25 @@ class DurableWorker:
 
     async def run_once(self) -> bool:
         await self._upsert_worker_heartbeat()
-        graph_names = {graph.name for graph in self._supported_graph_identities()}
+        runtime_routes = {route.route for route in self._supported_runtime_routes()}
         execution_kinds = {ExecutionKind.RUNTIME_PROBE}
         if self.coding_graph is not None:
-            graph_names.add(READ_ONLY_CODING_GRAPH)
+            runtime_routes.add(READ_ONLY_CODING_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
         if self.modifying_graph is not None:
-            graph_names.add(MODIFYING_CODING_GRAPH)
+            runtime_routes.add(MODIFYING_CODING_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_graph is not None:
-            graph_names.add(SCOPED_TEAM_CODING_GRAPH)
+            runtime_routes.add(SCOPED_TEAM_CODING_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_leader_graph is not None:
-            graph_names.add(TEAM_CODING_GRAPH)
+            runtime_routes.add(TEAM_CODING_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_role_graph is not None:
-            graph_names.add(TEAM_ROLE_GRAPH)
+            runtime_routes.add(TEAM_ROLE_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
         if self.team_verifier_graph is not None:
-            graph_names.add(TEAM_VERIFIER_GRAPH)
+            runtime_routes.add(TEAM_VERIFIER_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
         lease = await self.dispatcher.claim_next(
             worker_id=self.worker_id,
@@ -167,7 +167,7 @@ class DurableWorker:
             lease_duration=self.config.lease_duration,
             max_attempts=self.config.max_attempts,
             execution_kinds=frozenset(execution_kinds),
-            graph_names=frozenset(graph_names),
+            runtime_routes=frozenset(runtime_routes),
         )
         if lease is None:
             return False
@@ -177,21 +177,21 @@ class DurableWorker:
     async def mark_stopping(self) -> None:
         await self._mark_worker_stopping()
 
-    def _supported_graph_identities(self) -> list[GraphIdentity]:
-        identities = [GraphIdentity(RUNTIME_PROBE_GRAPH)]
+    def _supported_runtime_routes(self) -> list[RuntimeRoute]:
+        routes = [RuntimeRoute(RUNTIME_PROBE_ROUTE)]
         if self.coding_graph is not None:
-            identities.append(GraphIdentity(READ_ONLY_CODING_GRAPH))
+            routes.append(RuntimeRoute(READ_ONLY_CODING_ROUTE))
         if self.modifying_graph is not None:
-            identities.append(GraphIdentity(MODIFYING_CODING_GRAPH))
+            routes.append(RuntimeRoute(MODIFYING_CODING_ROUTE))
         if self.team_graph is not None:
-            identities.append(GraphIdentity(SCOPED_TEAM_CODING_GRAPH))
+            routes.append(RuntimeRoute(SCOPED_TEAM_CODING_ROUTE))
         if self.team_leader_graph is not None:
-            identities.append(GraphIdentity(TEAM_CODING_GRAPH))
+            routes.append(RuntimeRoute(TEAM_CODING_ROUTE))
         if self.team_role_graph is not None:
-            identities.append(GraphIdentity(TEAM_ROLE_GRAPH))
+            routes.append(RuntimeRoute(TEAM_ROLE_ROUTE))
         if self.team_verifier_graph is not None:
-            identities.append(GraphIdentity(TEAM_VERIFIER_GRAPH))
-        return identities
+            routes.append(RuntimeRoute(TEAM_VERIFIER_ROUTE))
+        return routes
 
     async def _upsert_worker_heartbeat(self) -> None:
         if self.heartbeat_repository is None:
@@ -203,7 +203,7 @@ class DurableWorker:
                     worker_name=self.worker_name,
                     started_at=self.started_at,
                     heartbeat_at=datetime.now(UTC),
-                    supported_graphs=self._supported_graph_identities(),
+                    supported_runtime_routes=self._supported_runtime_routes(),
                     status=WorkerHeartbeatStatus.ONLINE,
                 )
             )
@@ -228,7 +228,7 @@ class DurableWorker:
             self._validate_run(run)
             await self.dispatcher.start_execution(
                 lease,
-                graph_name=run.graph_name or "",
+                runtime_route=run.runtime_route or "",
             )
             state, recovered = await self._execute_with_heartbeat(run, lease)
             is_coding = run.execution_kind is ExecutionKind.CODING
@@ -493,21 +493,30 @@ class DurableWorker:
     def _validate_run(self, run: Run) -> None:
         if run.execution_kind is not ExecutionKind.CODING:
             return
-        if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph is not None:
+        if (
+            run.runtime_route == READ_ONLY_CODING_ROUTE
+            and self.coding_graph is not None
+        ):
             return
         if (
-            run.graph_name == MODIFYING_CODING_GRAPH
+            run.runtime_route == MODIFYING_CODING_ROUTE
             and self.modifying_graph is not None
         ):
             return
-        if run.graph_name == SCOPED_TEAM_CODING_GRAPH and self.team_graph is not None:
-            return
-        if run.graph_name == TEAM_CODING_GRAPH and self.team_leader_graph is not None:
-            return
-        if run.graph_name == TEAM_ROLE_GRAPH and self.team_role_graph is not None:
+        if (
+            run.runtime_route == SCOPED_TEAM_CODING_ROUTE
+            and self.team_graph is not None
+        ):
             return
         if (
-            run.graph_name == TEAM_VERIFIER_GRAPH
+            run.runtime_route == TEAM_CODING_ROUTE
+            and self.team_leader_graph is not None
+        ):
+            return
+        if run.runtime_route == TEAM_ROLE_ROUTE and self.team_role_graph is not None:
+            return
+        if (
+            run.runtime_route == TEAM_VERIFIER_ROUTE
             and self.team_verifier_graph is not None
         ):
             return
@@ -560,7 +569,7 @@ class DurableWorker:
                     )
                     await self._record_event_observability(run, primary_agent, event)
 
-                if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph:
+                if run.runtime_route == READ_ONLY_CODING_ROUTE and self.coding_graph:
                     coding_graph = self.coding_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -570,7 +579,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.graph_name == MODIFYING_CODING_GRAPH and self.modifying_graph:
+                if run.runtime_route == MODIFYING_CODING_ROUTE and self.modifying_graph:
                     modifying_graph = self.modifying_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -580,7 +589,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.graph_name == SCOPED_TEAM_CODING_GRAPH and self.team_graph:
+                if run.runtime_route == SCOPED_TEAM_CODING_ROUTE and self.team_graph:
                     team_graph = self.team_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -591,7 +600,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.graph_name == TEAM_CODING_GRAPH and self.team_leader_graph:
+                if run.runtime_route == TEAM_CODING_ROUTE and self.team_leader_graph:
                     team_leader_graph = self.team_leader_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -602,7 +611,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.graph_name == TEAM_ROLE_GRAPH and self.team_role_graph:
+                if run.runtime_route == TEAM_ROLE_ROUTE and self.team_role_graph:
                     team_role_graph = self.team_role_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -613,7 +622,10 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.graph_name == TEAM_VERIFIER_GRAPH and self.team_verifier_graph:
+                if (
+                    run.runtime_route == TEAM_VERIFIER_ROUTE
+                    and self.team_verifier_graph
+                ):
                     team_verifier_graph = self.team_verifier_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -640,7 +652,7 @@ class DurableWorker:
                 started_at=started_at,
                 started=started,
                 attributes={
-                    "graph_name": run.graph_name,
+                    "runtime_route": run.runtime_route,
                     "execution_kind": run.execution_kind.value,
                 },
                 error=error_text,
@@ -884,9 +896,9 @@ class DurableWorker:
     def _completion_kind(self, run: Run) -> str:
         if run.execution_kind is not ExecutionKind.CODING:
             return "runtime_probe"
-        if run.graph_name in {SCOPED_TEAM_CODING_GRAPH, TEAM_CODING_GRAPH}:
+        if run.runtime_route in {SCOPED_TEAM_CODING_ROUTE, TEAM_CODING_ROUTE}:
             return "team_validated"
-        if run.graph_name == MODIFYING_CODING_GRAPH:
+        if run.runtime_route == MODIFYING_CODING_ROUTE:
             return "modifying_validated"
         return "read_only_coding"
 

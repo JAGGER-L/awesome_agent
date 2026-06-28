@@ -20,16 +20,16 @@ from awesome_agent.runtime.dispatch import (
     PermanentExecutionError,
 )
 from awesome_agent.runtime.graphs import (
-    MODIFYING_CODING_GRAPH,
-    RUNTIME_PROBE_GRAPH,
-    SCOPED_TEAM_CODING_GRAPH,
-    TEAM_CODING_GRAPH,
-    TEAM_ROLE_GRAPH,
-    TEAM_VERIFIER_GRAPH,
+    MODIFYING_CODING_ROUTE,
+    RUNTIME_PROBE_ROUTE,
+    SCOPED_TEAM_CODING_ROUTE,
+    TEAM_CODING_ROUTE,
+    TEAM_ROLE_ROUTE,
+    TEAM_VERIFIER_ROUTE,
 )
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
-from awesome_agent.runtime.worker_heartbeats import GraphIdentity, WorkerHeartbeat
+from awesome_agent.runtime.worker_heartbeats import RuntimeRoute, WorkerHeartbeat
 
 
 class FakeRepository:
@@ -215,7 +215,7 @@ class FakeGraph:
         return (
             {
                 "run_id": "run",
-                "graph_name": "runtime-probe",
+                "runtime_route": "runtime-probe",
                 "phase": "completed",
                 "completed_steps": ["initialize", "checkpoint_probe", "finalize"],
                 "result_summary": "done",
@@ -247,7 +247,7 @@ class FakeModifyingGraph:
             {
                 "run_id": "run",
                 "agent_id": "agent",
-                "graph_name": MODIFYING_CODING_GRAPH,
+                "runtime_route": MODIFYING_CODING_ROUTE,
                 "messages": [],
                 "model_turn_count": 1,
                 "tool_call_count": 2,
@@ -278,7 +278,7 @@ class FakeTeamGraph:
             {
                 "run_id": "run",
                 "agent_id": "agent",
-                "graph_name": SCOPED_TEAM_CODING_GRAPH,
+                "runtime_route": SCOPED_TEAM_CODING_ROUTE,
                 "phase": "completed",
                 "final_answer": "Team completed after verification.",
                 "result_summary": "team done",
@@ -345,7 +345,7 @@ def _run(lease: RunLease) -> Run:
         id=lease.run_id,
         goal="probe",
         execution_kind=ExecutionKind.RUNTIME_PROBE,
-        graph_name="runtime-probe",
+        runtime_route="runtime-probe",
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -356,7 +356,7 @@ def _modifying_run(lease: RunLease) -> Run:
         goal="modify",
         intent=RunIntent.MODIFYING,
         execution_kind=ExecutionKind.CODING,
-        graph_name=MODIFYING_CODING_GRAPH,
+        runtime_route=MODIFYING_CODING_ROUTE,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -367,7 +367,7 @@ def _team_run(lease: RunLease) -> Run:
         goal="team",
         intent=RunIntent.MODIFYING,
         execution_kind=ExecutionKind.CODING,
-        graph_name=SCOPED_TEAM_CODING_GRAPH,
+        runtime_route=SCOPED_TEAM_CODING_ROUTE,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -511,7 +511,7 @@ async def test_worker_claims_modifying_graph_when_configured() -> None:
     claim = dispatcher.calls[0][1]
 
     assert isinstance(claim, dict)
-    assert MODIFYING_CODING_GRAPH in claim["graph_names"]
+    assert MODIFYING_CODING_ROUTE in claim["runtime_routes"]
 
 
 @pytest.mark.asyncio
@@ -529,7 +529,7 @@ async def test_worker_claims_scoped_team_graph_when_configured() -> None:
     claim = dispatcher.calls[0][1]
 
     assert isinstance(claim, dict)
-    assert SCOPED_TEAM_CODING_GRAPH in claim["graph_names"]
+    assert SCOPED_TEAM_CODING_ROUTE in claim["runtime_routes"]
 
 
 @pytest.mark.asyncio
@@ -549,15 +549,15 @@ async def test_worker_advertises_distributed_team_graphs_when_configured() -> No
     claim = dispatcher.calls[0][1]
 
     assert isinstance(claim, dict)
-    assert TEAM_CODING_GRAPH in claim["graph_names"]
-    assert TEAM_ROLE_GRAPH in claim["graph_names"]
-    assert TEAM_VERIFIER_GRAPH in claim["graph_names"]
+    assert TEAM_CODING_ROUTE in claim["runtime_routes"]
+    assert TEAM_ROLE_ROUTE in claim["runtime_routes"]
+    assert TEAM_VERIFIER_ROUTE in claim["runtime_routes"]
 
 
 @pytest.mark.asyncio
 async def test_worker_marks_unsupported_team_graph_for_recovery() -> None:
     lease = _lease()
-    run = _team_run(lease).model_copy(update={"graph_name": TEAM_CODING_GRAPH})
+    run = _team_run(lease).model_copy(update={"runtime_route": TEAM_CODING_ROUTE})
     dispatcher = FakeDispatcher(lease)
     worker = DurableWorker(
         dispatcher=dispatcher,
@@ -587,8 +587,8 @@ async def test_worker_upserts_heartbeat_before_claiming() -> None:
     assert not await worker.run_once()
 
     assert heartbeats.heartbeats[0].worker_id == worker.worker_id
-    assert heartbeats.heartbeats[0].supported_graphs == [
-        GraphIdentity(RUNTIME_PROBE_GRAPH)
+    assert heartbeats.heartbeats[0].supported_runtime_routes == [
+        RuntimeRoute(RUNTIME_PROBE_ROUTE)
     ]
 
 

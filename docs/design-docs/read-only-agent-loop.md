@@ -1,4 +1,4 @@
-﻿# Read-Only Agent Loop
+# Read-Only Agent Loop
 
 ## Purpose
 
@@ -18,12 +18,12 @@ A Worker may execute the graph only when all route fields match:
 ```text
 execution_kind = coding
 intent = read_only
-graph_name = solo-readonly
+runtime_route = solo-readonly
 ```
 
 Modifying Runs remain queued for Task 07. Workers without a configured
 DeepSeek API key advertise only the runtime-probe route and never claim Coding
-Runs. Existing queued read-only Coding Runs without a graph identity are
+Runs. Existing queued read-only Coding Runs without a runtime route are
 backfilled to `solo-readonly`.
 
 ## Graph Topology
@@ -145,7 +145,7 @@ strategy-change message.
 | Worker fault after read/audit | lease retry and checkpoint resume |
 | authentication/permanent provider error | `failed + terminal` |
 | hard budget without supported answer | `failed + terminal` |
-| graph identity/checkpoint/workspace unsafe | `recovery_required + terminal` |
+| runtime route/checkpoint/workspace unsafe | `recovery_required + terminal` |
 | lease lost | stale Worker stops; lease recovery decides the next owner |
 
 `failed` means execution was understood but could not complete.
