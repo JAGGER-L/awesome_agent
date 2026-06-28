@@ -6,6 +6,7 @@ from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepositor
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION
@@ -160,6 +161,38 @@ async def test_teammate_records_patch_artifact_result(tmp_path: Path) -> None:
     assert result.patch_artifact_id is not None
     assert result.changed_files == ["README.md"]
     assert (await artifacts.get(result.patch_artifact_id)).artifact_type == "patch"
+
+
+@pytest.mark.asyncio
+async def test_teammate_compacts_large_child_result_summary(tmp_path: Path) -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    budgets = InMemoryBudgetRepository()
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+        budget_repository=budgets,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            handoff_context={"result_summary": "large evidence " * 2000},
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    result = (await teams.list_child_results(run.parent_run_id or run.id))[0]
+    assert "offloaded to artifact" in result.summary
+    assert result.evidence_artifact_refs
+    metadata = await artifacts.get(result.evidence_artifact_refs[0])
+    assert metadata.artifact_type == "team-context"
+    assert await budgets.list_compactions(run.id)
 
 
 def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:

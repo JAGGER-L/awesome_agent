@@ -22,6 +22,9 @@ from awesome_agent.runtime.team_assignments import (
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
+from awesome_agent.runtime.team_context import compact_team_payload
+
+_TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
 
 class TeamRoleState(TypedDict):
@@ -125,6 +128,11 @@ class TeamRoleGraph:
     ) -> None:
         patch_artifact_id = None
         changed_files: list[str] = []
+        evidence_artifact_refs = []
+        summary = str(
+            assignment.handoff_context.get("result_summary")
+            or f"{assignment.kind.value} assignment completed."
+        )
         patch = assignment.handoff_context.get("patch")
         if (
             assignment.can_write
@@ -149,6 +157,21 @@ class TeamRoleGraph:
                 for item in assignment.handoff_context.get("changed_files", [])
                 if isinstance(item, str)
             ]
+        compacted_summary = await compact_team_payload(
+            run_id=run.id,
+            agent_id=agent.id,
+            graph_name=run.graph_name or TEAM_ROLE_GRAPH,
+            graph_version=run.graph_version or TEAM_ROLE_VERSION,
+            payload_kind="child-result",
+            payload={"summary": summary, "changed_files": changed_files},
+            artifact_store=self.artifact_store,
+            artifact_repository=self.artifact_repository,
+            budget_repository=self.budget_repository,
+            max_inline_tokens=_TEAM_INLINE_PAYLOAD_TOKENS,
+        )
+        if compacted_summary.compacted:
+            evidence_artifact_refs.extend(compacted_summary.artifact_refs)
+            summary = compacted_summary.inline_payload["summary"]
         await self.team_repository.record_child_result(
             TeamChildResult(
                 assignment_id=assignment.id,
@@ -156,9 +179,10 @@ class TeamRoleGraph:
                 parent_run_id=assignment.parent_run_id,
                 root_run_id=assignment.root_run_id,
                 status="completed",
-                summary=f"{assignment.kind.value} assignment completed.",
+                summary=summary,
                 patch_artifact_id=patch_artifact_id,
                 changed_files=changed_files,
+                evidence_artifact_refs=evidence_artifact_refs,
             )
         )
 

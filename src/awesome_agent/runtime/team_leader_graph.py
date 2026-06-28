@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import NotRequired, TypedDict
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
+from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.budget import BudgetRepository
@@ -25,7 +26,10 @@ from awesome_agent.runtime.team_assignments import (
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
+from awesome_agent.runtime.team_context import compact_team_payload
 from awesome_agent.sandbox.process import run_process
+
+_TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
 
 class TeamLeaderState(TypedDict):
@@ -43,11 +47,13 @@ class TeamLeaderGraph:
         self,
         *,
         team_repository: TeamRepository,
+        artifact_store: LocalArtifactStore | None = None,
         artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
     ) -> None:
         self.team_repository = team_repository
+        self.artifact_store = artifact_store
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
@@ -163,6 +169,23 @@ class TeamLeaderGraph:
             profile="teammate",
             model=leader.model,
         )
+        handoff_context = {
+            "subagent_goals": [
+                "Inspect supporting context and return focused evidence."
+            ]
+        }
+        compacted_handoff = await compact_team_payload(
+            run_id=child.id,
+            agent_id=teammate.id,
+            graph_name=TEAM_ROLE_GRAPH,
+            graph_version=TEAM_ROLE_VERSION,
+            payload_kind="handoff-context",
+            payload=handoff_context,
+            artifact_store=self.artifact_store,
+            artifact_repository=self.artifact_repository,
+            budget_repository=self.budget_repository,
+            max_inline_tokens=_TEAM_INLINE_PAYLOAD_TOKENS,
+        )
         assignment = TeamAssignment(
             root_run_id=child.root_run_id or run.id,
             parent_run_id=run.id,
@@ -178,11 +201,7 @@ class TeamLeaderGraph:
             can_delegate=True,
             max_subagents=3,
             acceptance_criteria=["Return evidence and changed patch artifacts."],
-            handoff_context={
-                "subagent_goals": [
-                    "Inspect supporting context and return focused evidence."
-                ]
-            },
+            handoff_context=compacted_handoff.inline_payload,
         )
         validate_assignment_graph(assignment)
         await repository.create_run(child, teammate)

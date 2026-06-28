@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import NotRequired, TypedDict
 
+from awesome_agent.artifacts.repository import ArtifactMetadataRepository
+from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
@@ -13,11 +15,14 @@ from awesome_agent.runtime.team_assignments import (
     TeamChildResult,
 )
 from awesome_agent.runtime.team_budget import ensure_team_budget
+from awesome_agent.runtime.team_context import compact_team_payload
 from awesome_agent.runtime.team_mailbox import (
     MailboxMessage,
     MailboxMessageType,
     MailboxRoute,
 )
+
+_TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
 
 class TeamVerifierState(TypedDict):
@@ -35,10 +40,14 @@ class TeamVerifierGraph:
         self,
         *,
         team_repository: TeamRepository,
+        artifact_store: LocalArtifactStore | None = None,
+        artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
     ) -> None:
         self.team_repository = team_repository
+        self.artifact_store = artifact_store
+        self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
 
@@ -81,6 +90,21 @@ class TeamVerifierGraph:
             else "Verifier rejected incomplete child aggregation."
         )
         status = "completed" if passed else "failed"
+        compacted_summary = await compact_team_payload(
+            run_id=run.id,
+            agent_id=agent.id,
+            graph_name=run.graph_name or "team-verifier",
+            graph_version=run.graph_version or 1,
+            payload_kind="verifier-result",
+            payload={"summary": summary, "passed": passed},
+            artifact_store=self.artifact_store,
+            artifact_repository=self.artifact_repository,
+            budget_repository=self.budget_repository,
+            max_inline_tokens=_TEAM_INLINE_PAYLOAD_TOKENS,
+        )
+        artifact_refs = compacted_summary.artifact_refs
+        if compacted_summary.compacted:
+            summary = compacted_summary.inline_payload["summary"]
         await self.team_repository.record_child_result(
             TeamChildResult(
                 assignment_id=assignment.id,
@@ -89,6 +113,7 @@ class TeamVerifierGraph:
                 root_run_id=assignment.root_run_id,
                 status=status,  # type: ignore[arg-type]
                 summary=summary,
+                evidence_artifact_refs=artifact_refs,
                 failure_kind=(None if passed else "model_output_failure"),
             )
         )
@@ -103,6 +128,7 @@ class TeamVerifierGraph:
                 message_type=MailboxMessageType.VERIFICATION,
                 subject="Verifier result",
                 body_summary=summary,
+                artifact_refs=artifact_refs,
                 requires_response=not passed,
             )
         )

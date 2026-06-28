@@ -120,6 +120,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             ),
             team_leader_graph=TeamLeaderGraph(
                 team_repository=team_repository,
+                artifact_store=artifact_store,
                 artifact_repository=artifact_repository,
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
@@ -133,6 +134,8 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             ),
             team_verifier_graph=TeamVerifierGraph(
                 team_repository=team_repository,
+                artifact_store=artifact_store,
+                artifact_repository=artifact_repository,
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
             ),
