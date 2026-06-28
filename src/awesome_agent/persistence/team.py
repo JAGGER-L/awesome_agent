@@ -24,52 +24,55 @@ from awesome_agent.runtime.team_mailbox import (
 
 
 class TeamRepository(Protocol):
-    async def create_assignment(self, assignment: TeamAssignment) -> TeamAssignment:
-        ...
+    async def create_assignment(self, assignment: TeamAssignment) -> TeamAssignment: ...
 
-    async def get_assignment(self, assignment_id: UUID) -> TeamAssignment:
-        ...
+    async def get_assignment(self, assignment_id: UUID) -> TeamAssignment: ...
 
-    async def get_assignment_for_child_run(self, child_run_id: UUID) -> TeamAssignment:
-        ...
+    async def get_assignment_for_child_run(
+        self, child_run_id: UUID
+    ) -> TeamAssignment: ...
 
     async def list_assignments(
         self,
         root_run_id: UUID,
         *,
         include_inactive: bool = False,
-    ) -> list[TeamAssignment]:
-        ...
+    ) -> list[TeamAssignment]: ...
 
     async def retire_assignment(
         self,
         assignment_id: UUID,
         *,
         reason: str,
-    ) -> TeamAssignment:
-        ...
+    ) -> TeamAssignment: ...
 
     async def record_child_terminal(
         self,
         child_run_id: UUID,
         *,
         status: TeamAssignmentStatus,
-    ) -> UUID | None:
-        ...
+    ) -> UUID | None: ...
 
-    async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
-        ...
+    async def create_mailbox_message(
+        self, message: MailboxMessage
+    ) -> MailboxMessage: ...
 
-    async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage:
-        ...
+    async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage: ...
+
+    async def mark_mailbox_read(self, message_id: UUID) -> MailboxMessage: ...
+
+    async def respond_to_mailbox_message(
+        self,
+        message_id: UUID,
+        response: MailboxMessage,
+    ) -> tuple[MailboxMessage, MailboxMessage]: ...
 
     async def list_mailbox_messages(
         self,
         run_id: UUID,
         *,
         include_archived: bool = False,
-    ) -> list[MailboxMessage]:
-        ...
+    ) -> list[MailboxMessage]: ...
 
 
 class InMemoryTeamRepository(TeamRepository):
@@ -148,6 +151,36 @@ class InMemoryTeamRepository(TeamRepository):
 
     async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage:
         return self._mailbox[message_id]
+
+    async def mark_mailbox_read(self, message_id: UUID) -> MailboxMessage:
+        from awesome_agent.domain.models import utc_now
+
+        message = self._mailbox[message_id].model_copy(
+            update={
+                "status": MailboxMessageStatus.READ,
+                "read_at": utc_now(),
+            }
+        )
+        self._mailbox[message_id] = message
+        return message
+
+    async def respond_to_mailbox_message(
+        self,
+        message_id: UUID,
+        response: MailboxMessage,
+    ) -> tuple[MailboxMessage, MailboxMessage]:
+        from awesome_agent.domain.models import utc_now
+
+        original = self._mailbox[message_id].model_copy(
+            update={
+                "status": MailboxMessageStatus.RESPONDED,
+                "responded_at": utc_now(),
+            }
+        )
+        response = response.model_copy(update={"response_to_message_id": message_id})
+        self._mailbox[message_id] = original
+        self._mailbox[response.id] = response
+        return original, response
 
     async def list_mailbox_messages(
         self,
@@ -271,6 +304,36 @@ class PostgresTeamRepository(TeamRepository):
         if record is None:
             raise KeyError(message_id)
         return _mailbox_from_record(record)
+
+    async def mark_mailbox_read(self, message_id: UUID) -> MailboxMessage:
+        from awesome_agent.domain.models import utc_now
+
+        async with self._sessions.begin() as session:
+            record = await session.get(TeamMailboxMessageRecord, message_id)
+            if record is None:
+                raise KeyError(message_id)
+            record.status = MailboxMessageStatus.READ.value
+            record.read_at = utc_now()
+            return _mailbox_from_record(record)
+
+    async def respond_to_mailbox_message(
+        self,
+        message_id: UUID,
+        response: MailboxMessage,
+    ) -> tuple[MailboxMessage, MailboxMessage]:
+        from awesome_agent.domain.models import utc_now
+
+        async with self._sessions.begin() as session:
+            record = await session.get(TeamMailboxMessageRecord, message_id)
+            if record is None:
+                raise KeyError(message_id)
+            record.status = MailboxMessageStatus.RESPONDED.value
+            record.responded_at = utc_now()
+            response = response.model_copy(
+                update={"response_to_message_id": message_id}
+            )
+            session.add(_mailbox_to_record(response))
+            return _mailbox_from_record(record), response
 
     async def list_mailbox_messages(
         self,

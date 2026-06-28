@@ -8,6 +8,7 @@ from awesome_agent.runtime.team_mailbox import (
     MailboxMessageType,
     MailboxRoute,
     MailboxRouteError,
+    validate_mailbox_message,
     validate_mailbox_route,
 )
 
@@ -32,3 +33,18 @@ def test_mailbox_message_defaults_to_unread() -> None:
     )
 
     assert message.status is MailboxMessageStatus.UNREAD
+
+
+def test_mailbox_message_validates_route() -> None:
+    message = MailboxMessage(
+        team_root_run_id=uuid4(),
+        sender_run_id=uuid4(),
+        recipient_run_id=uuid4(),
+        route=MailboxRoute.VERIFIER_TO_TEAMMATE,
+        message_type=MailboxMessageType.QUESTION,
+        subject="Invalid",
+        body_summary="Verifier cannot message teammate directly.",
+    )
+
+    with pytest.raises(MailboxRouteError):
+        validate_mailbox_message(message)

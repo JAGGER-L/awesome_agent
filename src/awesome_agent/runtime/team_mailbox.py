@@ -64,3 +64,7 @@ def validate_mailbox_route(route: MailboxRoute) -> bool:
     if route is MailboxRoute.VERIFIER_TO_TEAMMATE:
         raise MailboxRouteError("verifier can only message leader")
     return True
+
+
+def validate_mailbox_message(message: MailboxMessage) -> bool:
+    return validate_mailbox_route(message.route)
