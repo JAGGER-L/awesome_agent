@@ -462,7 +462,7 @@ def test_team_run_uses_team_graph_and_starts_with_leader_only(
     run_id = body["id"]
     assert body["mode"] == "team"
     assert body["graph_name"] == "team-coding"
-    assert body["graph_version"] == 1
+    assert body["graph_version"] == 2
     agents = client.get(f"/runs/{run_id}/agents").json()
     assert len(agents) == 1
     assert agents[0]["kind"] == "leader"

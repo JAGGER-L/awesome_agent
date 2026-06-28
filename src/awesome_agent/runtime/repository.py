@@ -246,7 +246,50 @@ class InMemoryRuntimeRepository(RuntimeRepository):
         )
         self._runs[run_id] = run
         self._events[run_id].append(event)
+        for child in await self.list_descendant_runs(run_id):
+            await self._cancel_descendant(child, reason="parent_cancelled")
         return run, event
+
+    async def _cancel_descendant(self, run: Run, *, reason: str) -> None:
+        if run.status in {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.RECOVERY_REQUIRED,
+        }:
+            return
+        if run.dispatch_status in {
+            DispatchStatus.CLAIMED,
+            DispatchStatus.EXECUTING,
+        }:
+            updated = run.model_copy(
+                update={
+                    "cancel_requested_at": datetime.now(),
+                    "cancel_reason": reason,
+                }
+            )
+        else:
+            updated = run.model_copy(
+                update={
+                    "status": RunStatus.CANCELLED,
+                    "dispatch_status": DispatchStatus.TERMINAL,
+                    "cancel_reason": reason,
+                }
+            )
+        self._runs[run.id] = updated
+        self._events[run.id].append(
+            RuntimeEvent(
+                run_id=run.id,
+                sequence=len(self._events[run.id]) + 1,
+                event_type=EventType.RUN_STATUS_CHANGED,
+                payload={
+                    "status": updated.status.value,
+                    "dispatch_status": updated.dispatch_status.value,
+                    "reason": reason,
+                },
+                trace_id=run.id.hex,
+            )
+        )
 
     async def list_agents(self, run_id: UUID) -> list[Agent]:
         return list(self._agents[run_id])

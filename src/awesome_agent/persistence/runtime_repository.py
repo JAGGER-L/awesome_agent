@@ -239,6 +239,23 @@ class PostgresRuntimeRepository(RuntimeRepository):
                     "dispatch_status": DispatchStatus.TERMINAL.value,
                 },
             )
+            descendants = list(
+                await session.scalars(
+                    select(RunRecord)
+                    .where(
+                        RunRecord.root_run_id == run_id,
+                        RunRecord.id != run_id,
+                    )
+                    .with_for_update()
+                )
+            )
+            for descendant in descendants:
+                await _cancel_descendant_record(
+                    session,
+                    descendant,
+                    now=record.updated_at,
+                    reason="parent_cancelled",
+                )
             return _run_from_record(record), event
 
     async def list_agents(self, run_id: UUID) -> list[Agent]:
@@ -559,3 +576,47 @@ async def _append_locked_event(
     )
     session.add(_event_to_record(event))
     return event
+
+
+async def _cancel_descendant_record(
+    session: AsyncSession,
+    record: RunRecord,
+    *,
+    now: datetime,
+    reason: str,
+) -> None:
+    if record.status in {
+        RunStatus.COMPLETED.value,
+        RunStatus.FAILED.value,
+        RunStatus.CANCELLED.value,
+        RunStatus.RECOVERY_REQUIRED.value,
+    }:
+        return
+    if record.dispatch_status in {
+        DispatchStatus.CLAIMED.value,
+        DispatchStatus.EXECUTING.value,
+    }:
+        record.cancel_requested_at = record.cancel_requested_at or now
+        record.cancel_reason = reason
+        record.updated_at = now
+        await _append_locked_event(
+            session,
+            record.id,
+            EventType.CANCELLATION_REQUESTED,
+            {"reason": reason},
+        )
+        return
+    record.status = RunStatus.CANCELLED.value
+    record.dispatch_status = DispatchStatus.TERMINAL.value
+    record.cancel_reason = reason
+    record.updated_at = now
+    await _append_locked_event(
+        session,
+        record.id,
+        EventType.RUN_STATUS_CHANGED,
+        {
+            "status": RunStatus.CANCELLED.value,
+            "dispatch_status": DispatchStatus.TERMINAL.value,
+            "reason": reason,
+        },
+    )

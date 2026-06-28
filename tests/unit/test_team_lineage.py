@@ -2,8 +2,9 @@ from uuid import uuid4
 
 import pytest
 
-from awesome_agent.domain.enums import RunMode
+from awesome_agent.domain.enums import DispatchStatus, RunMode, RunStatus
 from awesome_agent.domain.models import Run
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import validate_child_depth
 
 
@@ -43,3 +44,39 @@ def test_depth_greater_than_two_is_rejected() -> None:
             depth=3,
             child_role="subagent",
         )
+
+
+async def test_in_memory_cancel_recurses_to_descendants() -> None:
+    repository = InMemoryRuntimeRepository()
+    leader = Run(goal="team", mode=RunMode.TEAM)
+    child = Run(
+        goal="child",
+        mode=RunMode.TEAM,
+        parent_run_id=leader.id,
+        root_run_id=leader.id,
+        depth=1,
+    )
+    completed = Run(
+        goal="done",
+        mode=RunMode.TEAM,
+        parent_run_id=leader.id,
+        root_run_id=leader.id,
+        depth=1,
+        status=RunStatus.COMPLETED,
+        dispatch_status=DispatchStatus.TERMINAL,
+    )
+    from awesome_agent.domain.enums import AgentKind
+    from awesome_agent.domain.models import Agent
+
+    agent = Agent(run_id=leader.id, kind=AgentKind.LEADER, profile="leader", model="x")
+    await repository.create_run(leader, agent)
+    await repository.create_run(child, agent.model_copy(update={"run_id": child.id}))
+    await repository.create_run(
+        completed,
+        agent.model_copy(update={"run_id": completed.id}),
+    )
+
+    await repository.cancel_run(leader.id)
+
+    assert (await repository.get_run(child.id)).status is RunStatus.CANCELLED
+    assert (await repository.get_run(completed.id)).status is RunStatus.COMPLETED

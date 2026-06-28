@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from awesome_agent.domain.enums import AgentKind, RunMode, RunStatus
+from awesome_agent.domain.enums import AgentKind, DispatchStatus, RunMode, RunStatus
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
@@ -133,6 +133,45 @@ async def test_runtime_lineage_queries_and_waiting_requeue() -> None:
     assert children == [child]
     assert descendants == [child, grandchild]
     assert requeued.status is RunStatus.RUNNING
+    await engine.dispose()
+
+
+@pytest.mark.skipif(
+    "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ,
+    reason="Integration database is not configured.",
+)
+async def test_cancelling_parent_recurses_to_non_terminal_descendants() -> None:
+    engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
+    sessions = create_session_factory(engine)
+    repository = PostgresRuntimeRepository(sessions)
+    root = await _create_run(repository, depth=0, child_role=None)
+    child = await _create_run(
+        repository,
+        root_run_id=root.id,
+        parent_run_id=root.id,
+        depth=1,
+        child_role="teammate",
+    )
+    completed = await _create_run(
+        repository,
+        root_run_id=root.id,
+        parent_run_id=root.id,
+        depth=1,
+        child_role="verifier",
+    )
+    await repository.update_run(
+        completed.model_copy(
+            update={
+                "status": RunStatus.COMPLETED,
+                "dispatch_status": DispatchStatus.TERMINAL,
+            }
+        )
+    )
+
+    await repository.cancel_run(root.id)
+
+    assert (await repository.get_run(child.id)).status is RunStatus.CANCELLED
+    assert (await repository.get_run(completed.id)).status is RunStatus.COMPLETED
     await engine.dispose()
 
 
