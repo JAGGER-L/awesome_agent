@@ -16,6 +16,10 @@ from awesome_agent.runtime.worker_heartbeats import (
 from awesome_agent.settings import Settings
 
 
+def test_graph_identity_label_is_name_only() -> None:
+    assert GraphIdentity("solo-readonly").label() == "solo-readonly"
+
+
 @pytest.mark.asyncio
 async def test_in_memory_worker_heartbeat_reports_fresh_worker() -> None:
     repository = InMemoryWorkerHeartbeatRepository()
@@ -28,7 +32,7 @@ async def test_in_memory_worker_heartbeat_reports_fresh_worker() -> None:
             worker_name="worker-a",
             started_at=now,
             heartbeat_at=now,
-            supported_graphs=[GraphIdentity("solo-readonly", 1)],
+            supported_graphs=[GraphIdentity("solo-readonly")],
             status=WorkerHeartbeatStatus.ONLINE,
         )
     )
@@ -48,7 +52,7 @@ async def test_worker_heartbeat_check_requires_fresh_matching_graph() -> None:
             worker_name="worker-a",
             started_at=now,
             heartbeat_at=now,
-            supported_graphs=[GraphIdentity("solo-readonly", 1)],
+            supported_graphs=[GraphIdentity("solo-readonly")],
             status=WorkerHeartbeatStatus.ONLINE,
         )
     )
@@ -56,7 +60,7 @@ async def test_worker_heartbeat_check_requires_fresh_matching_graph() -> None:
     check = await worker_heartbeat_check(
         repository,
         Settings(worker_heartbeat_stale_seconds=120),
-        required_graphs=[GraphIdentity("solo-readonly", 1)],
+        required_graphs=[GraphIdentity("solo-readonly")],
         now=now,
     )
 
@@ -71,7 +75,7 @@ async def test_worker_heartbeat_check_reports_unhealthy_without_fresh_worker() -
     check = await worker_heartbeat_check(
         repository,
         Settings(worker_heartbeat_stale_seconds=120),
-        required_graphs=[GraphIdentity("solo-readonly", 1)],
+        required_graphs=[GraphIdentity("solo-readonly")],
         now=now,
     )
 

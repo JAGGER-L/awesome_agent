@@ -26,8 +26,7 @@ class PostgresWorkerHeartbeatRepository:
             "started_at": heartbeat.started_at,
             "heartbeat_at": heartbeat.heartbeat_at,
             "supported_graphs": [
-                {"name": graph.name, "version": graph.version}
-                for graph in heartbeat.supported_graphs
+                {"name": graph.name} for graph in heartbeat.supported_graphs
             ],
             "status": heartbeat.status.value,
         }
@@ -72,8 +71,7 @@ def _to_heartbeat(record: WorkerHeartbeatRecord) -> WorkerHeartbeat:
         started_at=record.started_at,
         heartbeat_at=record.heartbeat_at,
         supported_graphs=[
-            GraphIdentity(str(graph["name"]), int(graph["version"]))
-            for graph in record.supported_graphs
+            GraphIdentity(str(graph["name"])) for graph in record.supported_graphs
         ],
         status=WorkerHeartbeatStatus(record.status),
     )

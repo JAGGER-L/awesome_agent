@@ -168,12 +168,12 @@ def test_model_routes_check_reports_all_runtime_graph_identities() -> None:
     assert check.status is HealthStatus.HEALTHY
     assert check.metadata == {
         "graph_identities": [
-            "runtime-probe@1",
-            "solo-readonly@1",
-            "solo-modifying@1",
-            "team-coding@2",
-            "team-role@1",
-            "team-verifier@1",
+            "runtime-probe",
+            "solo-readonly",
+            "solo-modifying",
+            "team-coding",
+            "team-role",
+            "team-verifier",
         ]
     }
 

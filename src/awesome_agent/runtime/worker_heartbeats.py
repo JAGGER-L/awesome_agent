@@ -13,10 +13,9 @@ from awesome_agent.settings import Settings
 @dataclass(frozen=True, slots=True)
 class GraphIdentity:
     name: str
-    version: int
 
     def label(self) -> str:
-        return f"{self.name}@{self.version}"
+        return self.name
 
 
 class WorkerHeartbeatStatus(StrEnum):

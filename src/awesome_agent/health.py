@@ -19,17 +19,11 @@ from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
-    MODIFYING_CODING_VERSION,
     READ_ONLY_CODING_GRAPH,
-    READ_ONLY_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
     TEAM_CODING_GRAPH,
-    TEAM_CODING_VERSION,
     TEAM_ROLE_GRAPH,
-    TEAM_ROLE_VERSION,
     TEAM_VERIFIER_GRAPH,
-    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.settings import Settings
 
@@ -370,12 +364,12 @@ def readiness_report(
 
 def _graph_identities() -> list[str]:
     return [
-        f"{RUNTIME_PROBE_GRAPH}@{RUNTIME_PROBE_VERSION}",
-        f"{READ_ONLY_CODING_GRAPH}@{READ_ONLY_CODING_VERSION}",
-        f"{MODIFYING_CODING_GRAPH}@{MODIFYING_CODING_VERSION}",
-        f"{TEAM_CODING_GRAPH}@{TEAM_CODING_VERSION}",
-        f"{TEAM_ROLE_GRAPH}@{TEAM_ROLE_VERSION}",
-        f"{TEAM_VERIFIER_GRAPH}@{TEAM_VERIFIER_VERSION}",
+        RUNTIME_PROBE_GRAPH,
+        READ_ONLY_CODING_GRAPH,
+        MODIFYING_CODING_GRAPH,
+        TEAM_CODING_GRAPH,
+        TEAM_ROLE_GRAPH,
+        TEAM_VERIFIER_GRAPH,
     ]
 
 
@@ -418,11 +412,11 @@ async def _runtime_worker_heartbeat_check(
         worker_heartbeat_repository,
         settings,
         required_graphs=[
-            GraphIdentity(RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION),
-            GraphIdentity(READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION),
-            GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION),
-            GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION),
-            GraphIdentity(TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION),
-            GraphIdentity(TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION),
+            GraphIdentity(RUNTIME_PROBE_GRAPH),
+            GraphIdentity(READ_ONLY_CODING_GRAPH),
+            GraphIdentity(MODIFYING_CODING_GRAPH),
+            GraphIdentity(TEAM_CODING_GRAPH),
+            GraphIdentity(TEAM_ROLE_GRAPH),
+            GraphIdentity(TEAM_VERIFIER_GRAPH),
         ],
     )

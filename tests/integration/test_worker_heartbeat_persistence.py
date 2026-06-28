@@ -41,8 +41,8 @@ async def test_postgres_worker_heartbeat_repository_round_trip() -> None:
             started_at=now,
             heartbeat_at=now,
             supported_graphs=[
-                GraphIdentity("runtime-probe", 1),
-                GraphIdentity("solo-readonly", 1),
+                GraphIdentity("runtime-probe"),
+                GraphIdentity("solo-readonly"),
             ],
             status=WorkerHeartbeatStatus.ONLINE,
         )
@@ -52,8 +52,8 @@ async def test_postgres_worker_heartbeat_repository_round_trip() -> None:
 
     assert [worker.worker_id for worker in fresh] == [worker_id]
     assert fresh[0].supported_graphs == [
-        GraphIdentity("runtime-probe", 1),
-        GraphIdentity("solo-readonly", 1),
+        GraphIdentity("runtime-probe"),
+        GraphIdentity("solo-readonly"),
     ]
 
     await repository.mark_stopping(worker_id)

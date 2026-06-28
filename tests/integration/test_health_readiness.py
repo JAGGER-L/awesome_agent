@@ -27,17 +27,11 @@ from awesome_agent.persistence.worker_heartbeats import (
 )
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_GRAPH,
-    MODIFYING_CODING_VERSION,
     READ_ONLY_CODING_GRAPH,
-    READ_ONLY_CODING_VERSION,
     RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
     TEAM_CODING_GRAPH,
-    TEAM_CODING_VERSION,
     TEAM_ROLE_GRAPH,
-    TEAM_ROLE_VERSION,
     TEAM_VERIFIER_GRAPH,
-    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.worker_heartbeats import (
     GraphIdentity,
@@ -122,12 +116,12 @@ async def test_runtime_readiness_is_healthy_with_fresh_worker_heartbeat(
             started_at=now,
             heartbeat_at=now,
             supported_graphs=[
-                GraphIdentity(RUNTIME_PROBE_GRAPH, RUNTIME_PROBE_VERSION),
-                GraphIdentity(READ_ONLY_CODING_GRAPH, READ_ONLY_CODING_VERSION),
-                GraphIdentity(MODIFYING_CODING_GRAPH, MODIFYING_CODING_VERSION),
-                GraphIdentity(TEAM_CODING_GRAPH, TEAM_CODING_VERSION),
-                GraphIdentity(TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION),
-                GraphIdentity(TEAM_VERIFIER_GRAPH, TEAM_VERIFIER_VERSION),
+                GraphIdentity(RUNTIME_PROBE_GRAPH),
+                GraphIdentity(READ_ONLY_CODING_GRAPH),
+                GraphIdentity(MODIFYING_CODING_GRAPH),
+                GraphIdentity(TEAM_CODING_GRAPH),
+                GraphIdentity(TEAM_ROLE_GRAPH),
+                GraphIdentity(TEAM_VERIFIER_GRAPH),
             ],
             status=WorkerHeartbeatStatus.ONLINE,
         )
