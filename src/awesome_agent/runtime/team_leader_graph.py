@@ -6,7 +6,12 @@ from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, Run
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.dispatch import ChildRunWait
-from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION
+from awesome_agent.runtime.graphs import (
+    TEAM_ROLE_GRAPH,
+    TEAM_ROLE_VERSION,
+    TEAM_VERIFIER_GRAPH,
+    TEAM_VERIFIER_VERSION,
+)
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
@@ -62,6 +67,25 @@ class TeamLeaderGraph:
             for assignment in teammate_assignments
         ):
             raise ChildRunWait("waiting_children")
+        verifier_assignments = [
+            assignment
+            for assignment in assignments
+            if assignment.parent_run_id == run.id
+            and assignment.kind is TeamAssignmentKind.VERIFIER
+        ]
+        if not verifier_assignments:
+            await self._create_verifier_child(
+                run,
+                leader,
+                repository=repository,
+                event_sink=event_sink,
+            )
+            raise ChildRunWait("waiting_verifier")
+        if any(
+            assignment.status is TeamAssignmentStatus.ACTIVE
+            for assignment in verifier_assignments
+        ):
+            raise ChildRunWait("waiting_verifier")
         return (
             TeamLeaderState(
                 run_id=str(run.id),
@@ -127,6 +151,79 @@ class TeamLeaderGraph:
         )
         validate_assignment_graph(assignment)
         await repository.create_run(child, teammate)
+        await self.team_repository.create_assignment(assignment)
+        if callable(event_sink):
+            await event_sink(
+                EventType.TEAM_CHILD_RUN_CREATED,
+                {
+                    "child_run_id": str(child.id),
+                    "assignment_id": str(assignment.id),
+                    "kind": assignment.kind.value,
+                },
+                f"team-child-created:{child.id}",
+            )
+            await event_sink(
+                EventType.TEAM_ASSIGNMENT_CREATED,
+                {
+                    "assignment_id": str(assignment.id),
+                    "child_run_id": str(child.id),
+                    "kind": assignment.kind.value,
+                },
+                f"team-assignment-created:{assignment.id}",
+            )
+
+    async def _create_verifier_child(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        repository: RuntimeRepository,
+        event_sink: object | None,
+    ) -> None:
+        child = Run(
+            goal=f"Verify team result for: {run.goal}",
+            mode=RunMode.TEAM,
+            repository_id=run.repository_id,
+            base_commit=run.base_commit,
+            intent=run.intent,
+            execution_kind=run.execution_kind,
+            parent_run_id=run.id,
+            root_run_id=run.root_run_id or run.id,
+            depth=1,
+            child_role=TeamAssignmentKind.VERIFIER.value,
+            graph_name=TEAM_VERIFIER_GRAPH,
+            graph_version=TEAM_VERIFIER_VERSION,
+            dispatch_status=DispatchStatus.QUEUED,
+            workspace_path=run.workspace_path,
+            integration_branch=run.integration_branch,
+            workspace_state=run.workspace_state,
+            graph_thread_id=f"run:{run.id}:verifier:1",
+        )
+        verifier = Agent(
+            run_id=child.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.VERIFIER,
+            profile="verifier",
+            model=leader.model,
+        )
+        assignment = TeamAssignment(
+            root_run_id=child.root_run_id or run.id,
+            parent_run_id=run.id,
+            child_run_id=child.id,
+            kind=TeamAssignmentKind.VERIFIER,
+            role_profile="verifier",
+            graph_name=TEAM_VERIFIER_GRAPH,
+            graph_version=TEAM_VERIFIER_VERSION,
+            goal=child.goal,
+            allowed_tools=["repo.diff"],
+            allowed_skills=[],
+            can_write=False,
+            can_delegate=False,
+            max_subagents=0,
+            acceptance_criteria=["Verify aggregated teammate evidence."],
+        )
+        validate_assignment_graph(assignment)
+        await repository.create_run(child, verifier)
         await self.team_repository.create_assignment(assignment)
         if callable(event_sink):
             await event_sink(

@@ -21,6 +21,7 @@ from awesome_agent.observability.repository import (
     ObservabilityRepository,
 )
 from awesome_agent.persistence.budget import BudgetRepository
+from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     ChildRunWait,
@@ -96,6 +97,7 @@ class DurableWorker:
         observability_repository: ObservabilityRepository | None = None,
         heartbeat_repository: WorkerHeartbeatRepository | None = None,
         budget_repository: BudgetRepository | None = None,
+        team_repository: TeamRepository | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.repository = repository
@@ -116,6 +118,7 @@ class DurableWorker:
         )
         self.heartbeat_repository = heartbeat_repository
         self.budget_repository = budget_repository
+        self.team_repository = team_repository
         self.started_at = datetime.now(UTC)
 
     def request_stop(self) -> None:
@@ -252,11 +255,13 @@ class DurableWorker:
                 goal_executed=is_coding,
                 result_text=(final_answer if isinstance(final_answer, str) else None),
             )
+            await self._record_child_terminal_if_needed(run, "completed")
         except LeaseLost:
             status = "lease_lost"
             return
         except RunCancelled:
             status = "cancelled"
+            await self._record_child_terminal_if_needed(run, "cancelled")
             return
         except ApprovalInterrupt as interrupt:
             status = "waiting_approval"
@@ -274,6 +279,7 @@ class DurableWorker:
             status = "failed"
             error_text = str(error)
             await self._fail_if_owned(lease, str(error))
+            await self._record_child_terminal_if_needed(run, "failed")
         except asyncio.CancelledError:
             status = "cancelled"
             error_text = "Worker task was cancelled."
@@ -450,6 +456,25 @@ class DurableWorker:
             await self.dispatcher.release_for_child_wait(lease, reason=reason)
         except LeaseLost:
             return
+
+    async def _record_child_terminal_if_needed(
+        self,
+        run: Run,
+        status: str,
+    ) -> None:
+        if run.parent_run_id is None or self.team_repository is None:
+            return
+        from awesome_agent.runtime.team_assignments import TeamAssignmentStatus
+
+        parent_run_id = await self.team_repository.record_child_terminal(
+            run.id,
+            status=TeamAssignmentStatus(status),
+        )
+        if parent_run_id is not None:
+            await self.repository.requeue_waiting_run(
+                parent_run_id,
+                reason="child_runs_terminal",
+            )
 
     async def _mark_recovery_if_owned(
         self,

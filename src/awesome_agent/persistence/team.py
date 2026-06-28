@@ -49,6 +49,14 @@ class TeamRepository(Protocol):
     ) -> TeamAssignment:
         ...
 
+    async def record_child_terminal(
+        self,
+        child_run_id: UUID,
+        *,
+        status: TeamAssignmentStatus,
+    ) -> UUID | None:
+        ...
+
     async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
         ...
 
@@ -115,6 +123,24 @@ class InMemoryTeamRepository(TeamRepository):
         )
         self._assignments[assignment_id] = assignment
         return assignment
+
+    async def record_child_terminal(
+        self,
+        child_run_id: UUID,
+        *,
+        status: TeamAssignmentStatus,
+    ) -> UUID | None:
+        assignment = await self.get_assignment_for_child_run(child_run_id)
+        updated = assignment.model_copy(update={"status": status})
+        self._assignments[assignment.id] = updated
+        siblings = [
+            item
+            for item in self._assignments.values()
+            if item.parent_run_id == assignment.parent_run_id
+        ]
+        if all(item.status is not TeamAssignmentStatus.ACTIVE for item in siblings):
+            return assignment.parent_run_id
+        return None
 
     async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
         self._mailbox[message.id] = message
@@ -204,6 +230,35 @@ class PostgresTeamRepository(TeamRepository):
             record.status = TeamAssignmentStatus.RETIRED.value
             record.retire_reason = reason
             return _assignment_from_record(record)
+
+    async def record_child_terminal(
+        self,
+        child_run_id: UUID,
+        *,
+        status: TeamAssignmentStatus,
+    ) -> UUID | None:
+        async with self._sessions.begin() as session:
+            record = await session.scalar(
+                select(TeamAssignmentRecord)
+                .where(TeamAssignmentRecord.child_run_id == child_run_id)
+                .with_for_update()
+            )
+            if record is None:
+                raise KeyError(child_run_id)
+            record.status = status.value
+            siblings = list(
+                await session.scalars(
+                    select(TeamAssignmentRecord)
+                    .where(TeamAssignmentRecord.parent_run_id == record.parent_run_id)
+                    .with_for_update()
+                )
+            )
+            if all(
+                sibling.status != TeamAssignmentStatus.ACTIVE.value
+                for sibling in siblings
+            ):
+                return record.parent_run_id
+            return None
 
     async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
         async with self._sessions.begin() as session:
