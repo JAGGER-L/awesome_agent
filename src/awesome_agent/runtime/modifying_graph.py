@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from time import monotonic
@@ -24,7 +24,6 @@ from awesome_agent.modeling import (
     ModelProviderError,
     ModelRequest,
     ModelTurn,
-    StopReason,
     SystemMessage,
     ToolCall,
     ToolChoice,
@@ -50,7 +49,10 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
     ModifyingBudgetExhausted,
     ModifyingBudgetMiddleware,
     ModifyingContextMiddleware,
+    ModifyingEvidenceMiddleware,
+    ModifyingFinalizationMiddleware,
     ModifyingToolMiddleware,
+    ModifyingValidationMiddleware,
     approval_id_from_interrupt_value,
     approval_interrupt_payload,
     elapsed_ms,
@@ -59,6 +61,8 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
     modifying_ledger_to_state,
     resume_approval_id,
     tool_error_result,
+    validation_failure_is_reworkable,
+    validation_report_snapshot,
     workspace_fingerprint,
 )
 from awesome_agent.runtime.budget import (
@@ -94,6 +98,8 @@ Docker-sandboxed check commands. Before finishing, call repo.diff after the
 last write and summarize changed files, commands run, and unverified work.
 Do not claim validation passed; Task 10 owns deterministic validation.
 """
+
+
 class ModifyingAgentState(TypedDict):
     run_id: str
     agent_id: str
@@ -211,6 +217,18 @@ class ModifyingCodingGraph:
             max_tool_calls=max_tool_calls,
             no_progress_turns=no_progress_turns,
             fault_hook=fault_hook,
+            emit=self._emit,
+        )
+        self.evidence_middleware = ModifyingEvidenceMiddleware(
+            failure_factory=ModifyingAgentLoopFailed,
+        )
+        self.validation_middleware = ModifyingValidationMiddleware(
+            validation_plan_resolver=self.validation_plan_resolver,
+            validation_runner=self.validation_runner,
+            emit=self._emit,
+            failure_factory=ModifyingAgentLoopFailed,
+        )
+        self.finalization_middleware = ModifyingFinalizationMiddleware(
             emit=self._emit,
         )
         self._run: Run | None = None
@@ -539,18 +557,15 @@ class ModifyingCodingGraph:
         state: ModifyingAgentState,
     ) -> Literal["tool", "feedback", "validate"]:
         turn = ModelTurn.model_validate(state["last_turn"])
-        if turn.assistant.tool_calls:
-            if state["force_final"]:
-                return "feedback"
-            return "tool"
-        if (
-            turn.stop_reason is StopReason.COMPLETED
-            and bool(turn.assistant.content.strip())
-            and state["successful_writes"] > 0
-            and state["final_diff_after_write"]
-        ):
-            return "validate"
-        return "feedback"
+        return cast(
+            Literal["tool", "feedback", "validate"],
+            self.evidence_middleware.route_turn(
+                turn=turn,
+                force_final=state["force_final"],
+                successful_writes=state["successful_writes"],
+                final_diff_after_write=state["final_diff_after_write"],
+            ),
+        )
 
     async def _execute_tool(
         self,
@@ -679,110 +694,40 @@ class ModifyingCodingGraph:
 
     async def _feedback(self, state: ModifyingAgentState) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
-        if state["force_final"]:
-            if (
-                turn.assistant.content.strip()
-                and state["successful_writes"] > 0
-                and state["final_diff_after_write"]
-            ):
-                return {
-                    **state,
-                    "last_turn": turn.model_copy(
-                        update={"stop_reason": StopReason.COMPLETED}
-                    ).model_dump(mode="json"),
-                    "phase": "forced_completion",
-                }
-            raise ModifyingAgentLoopFailed(
-                "The final no-tool turn did not produce a supported modifying result."
-            )
-        missing = []
-        if state["successful_writes"] == 0:
-            missing.append("make an actual patch or explain a no-change block")
-        if not state["final_diff_after_write"]:
-            missing.append("call repo.diff after the last write")
-        return {
-            **state,
-            "messages": [
-                *state["messages"],
-                turn.assistant.model_dump(mode="json"),
-                SystemMessage(
-                    content=(
-                        "Do not finish yet. Required before completion: "
-                        + "; ".join(missing)
-                        + "."
-                    )
-                ).model_dump(mode="json"),
-            ],
-            "stagnant_turns": state["stagnant_turns"] + 1,
-            "phase": "completion_rejected",
-        }
+        return cast(
+            ModifyingAgentState,
+            self.evidence_middleware.feedback_state(
+                state=cast(dict[str, Any], state),
+                turn=turn,
+            ),
+        )
 
     async def _validate(self, state: ModifyingAgentState) -> ModifyingAgentState:
         run = self._require_run()
         agent = self._require_agent()
         workspace = cast(Path, run.workspace_path)
-        plan = self.validation_plan_resolver(workspace)
-        if plan is None or not plan.gates:
-            raise ModifyingAgentLoopFailed("no_validation_gates")
-        report = await self.validation_runner(plan, run, agent)
-        reports = [*state["validation_reports"], _validation_report_snapshot(report)]
-        if report.report.status == "passed":
-            await self._emit(
-                EventType.VERIFICATION_CREATED,
-                {
-                    "status": "passed",
-                    "attempt": len(reports),
-                    "summary": report.report.summary,
-                },
-                f"validation:{len(reports)}",
-            )
-            return {
-                **state,
-                "validation_reports": reports,
-                "phase": "validation_passed",
-            }
-        if not _validation_failure_is_reworkable(report):
-            raise ModifyingAgentLoopFailed(report.report.summary)
-        if state["validation_rework_count"] >= plan.max_rework_attempts:
-            raise ModifyingAgentLoopFailed("validation rework attempts exhausted")
-        await self._emit(
-            EventType.VERIFICATION_CREATED,
-            {
-                "status": "failed",
-                "attempt": len(reports),
-                "summary": report.report.summary,
-                "reworkable": True,
-            },
-            f"validation:{len(reports)}",
+        return cast(
+            ModifyingAgentState,
+            await self.validation_middleware.validate(
+                state=cast(dict[str, Any], state),
+                run=run,
+                agent=agent,
+                workspace=workspace,
+            ),
         )
-        return {
-            **state,
-            "validation_reports": reports,
-            "phase": "validation_failed_reworkable",
-        }
 
     async def _validation_feedback(
         self,
         state: ModifyingAgentState,
     ) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
-        latest = state["validation_reports"][-1]
-        return {
-            **state,
-            "messages": [
-                *state["messages"],
-                turn.assistant.model_dump(mode="json"),
-                SystemMessage(
-                    content=(
-                        "Validation failed. Rework the implementation using this "
-                        f"bounded evidence, then call repo.diff again: {latest}"
-                    )
-                ).model_dump(mode="json"),
-            ],
-            "validation_rework_count": state["validation_rework_count"] + 1,
-            "stagnant_turns": 0,
-            "phase": "validation_feedback",
-        }
+        return cast(
+            ModifyingAgentState,
+            self.validation_middleware.validation_feedback(
+                state=cast(dict[str, Any], state),
+                turn=turn,
+            ),
+        )
 
     async def _finalize(self, state: ModifyingAgentState) -> ModifyingAgentState:
         run = self._require_run()
@@ -803,28 +748,13 @@ class ModifyingCodingGraph:
         state: ModifyingAgentState,
     ) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
-        answer = turn.assistant.content.strip()
-        await self._emit(
-            EventType.MESSAGE_CREATED,
-            {
-                "role": "assistant",
-                "content": answer[:32768],
-                "final": True,
-                "validation_complete": True,
-            },
-            "final-answer",
-        )
-        return {
-            **state,
-            "phase": "completed",
-            "final_answer": answer[:32768],
-            "result_summary": (
-                f"Modifying repository task produced validated changes after "
-                f"{state['model_turn_count']} model turn(s), "
-                f"{state['tool_call_count']} tool call(s), and "
-                f"{state['successful_writes']} write(s)."
+        return cast(
+            ModifyingAgentState,
+            await self.finalization_middleware.finalize(
+                state=cast(dict[str, Any], state),
+                turn=turn,
             ),
-        }
+        )
 
     async def _offload_result_if_needed(
         self,
@@ -987,30 +917,11 @@ def _resolve_validation_plan(workspace: Path) -> ValidationPlan | None:
 
 
 def _validation_report_snapshot(report: ValidationReportWithGates) -> dict[str, Any]:
-    return {
-        "id": str(report.report.id),
-        "status": report.report.status,
-        "summary": report.report.summary,
-        "gates": [
-            {
-                **asdict(gate),
-                "id": str(gate.id),
-                "report_id": str(gate.report_id),
-                "run_id": str(gate.run_id),
-                "created_at": gate.created_at.isoformat(),
-            }
-            for gate in report.gates
-        ],
-    }
+    return validation_report_snapshot(report)
 
 
 def _validation_failure_is_reworkable(report: ValidationReportWithGates) -> bool:
-    blocking = [
-        gate for gate in report.gates if gate.required and gate.status != "passed"
-    ]
-    return bool(blocking) and all(
-        gate.failure_kind == "command_failed" for gate in blocking
-    )
+    return validation_failure_is_reworkable(report)
 
 
 def _elapsed_ms(started: float) -> int:

@@ -4,7 +4,8 @@ import asyncio
 import hashlib
 import json
 import subprocess
-from dataclasses import replace
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
@@ -19,6 +20,8 @@ from awesome_agent.domain.enums import ApprovalStatus, EventType
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     ModelMessage,
+    ModelTurn,
+    StopReason,
     SystemMessage,
     ToolCall,
     ToolResultMessage,
@@ -33,6 +36,7 @@ from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     ToolInvocationRepository,
 )
+from awesome_agent.persistence.validation import ValidationReportWithGates
 from awesome_agent.runtime.budget import (
     BudgetDecision,
     BudgetLedger,
@@ -46,6 +50,7 @@ from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
     PermanentExecutionError,
 )
+from awesome_agent.runtime.validation.models import ValidationPlan
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.models import ApprovalRequired, ToolDenied
 from awesome_agent.tools.registry import ToolRegistry
@@ -748,6 +753,212 @@ class ModifyingToolMiddleware:
         )
 
 
+class ModifyingEvidenceMiddleware:
+    def __init__(
+        self,
+        *,
+        failure_factory: Callable[[str], Exception],
+    ) -> None:
+        self.failure_factory = failure_factory
+
+    def route_turn(
+        self,
+        *,
+        turn: ModelTurn,
+        force_final: bool,
+        successful_writes: int,
+        final_diff_after_write: bool,
+    ) -> str:
+        if turn.assistant.tool_calls:
+            if force_final:
+                return "feedback"
+            return "tool"
+        if (
+            turn.stop_reason is StopReason.COMPLETED
+            and bool(turn.assistant.content.strip())
+            and successful_writes > 0
+            and final_diff_after_write
+        ):
+            return "validate"
+        return "feedback"
+
+    def feedback_state(
+        self,
+        *,
+        state: dict[str, Any],
+        turn: ModelTurn,
+    ) -> dict[str, Any]:
+        if state["force_final"]:
+            if (
+                turn.assistant.content.strip()
+                and state["successful_writes"] > 0
+                and state["final_diff_after_write"]
+            ):
+                return {
+                    **state,
+                    "last_turn": turn.model_copy(
+                        update={"stop_reason": StopReason.COMPLETED}
+                    ).model_dump(mode="json"),
+                    "phase": "forced_completion",
+                }
+            raise self.failure_factory(
+                "The final no-tool turn did not produce a supported modifying result."
+            )
+        missing = []
+        if state["successful_writes"] == 0:
+            missing.append("make an actual patch or explain a no-change block")
+        if not state["final_diff_after_write"]:
+            missing.append("call repo.diff after the last write")
+        return {
+            **state,
+            "messages": [
+                *state["messages"],
+                turn.assistant.model_dump(mode="json"),
+                SystemMessage(
+                    content=(
+                        "Do not finish yet. Required before completion: "
+                        + "; ".join(missing)
+                        + "."
+                    )
+                ).model_dump(mode="json"),
+            ],
+            "stagnant_turns": state["stagnant_turns"] + 1,
+            "phase": "completion_rejected",
+        }
+
+
+ValidationPlanResolver = Callable[[Path], ValidationPlan | None]
+ValidationRunner = Callable[
+    [ValidationPlan, Run, Agent],
+    Awaitable[ValidationReportWithGates],
+]
+
+
+class ModifyingValidationMiddleware:
+    def __init__(
+        self,
+        *,
+        validation_plan_resolver: ValidationPlanResolver,
+        validation_runner: ValidationRunner,
+        emit: Any,
+        failure_factory: Callable[[str], Exception],
+    ) -> None:
+        self.validation_plan_resolver = validation_plan_resolver
+        self.validation_runner = validation_runner
+        self.emit = emit
+        self.failure_factory = failure_factory
+
+    async def validate(
+        self,
+        *,
+        state: dict[str, Any],
+        run: Run,
+        agent: Agent,
+        workspace: Path,
+    ) -> dict[str, Any]:
+        plan = self.validation_plan_resolver(workspace)
+        if plan is None or not plan.gates:
+            raise self.failure_factory("no_validation_gates")
+        report = await self.validation_runner(plan, run, agent)
+        reports = [*state["validation_reports"], validation_report_snapshot(report)]
+        if report.report.status == "passed":
+            await self.emit(
+                EventType.VERIFICATION_CREATED,
+                {
+                    "status": "passed",
+                    "attempt": len(reports),
+                    "summary": report.report.summary,
+                },
+                f"validation:{len(reports)}",
+            )
+            return {
+                **state,
+                "validation_reports": reports,
+                "phase": "validation_passed",
+            }
+        if not validation_failure_is_reworkable(report):
+            raise self.failure_factory(report.report.summary)
+        if state["validation_rework_count"] >= plan.max_rework_attempts:
+            raise self.failure_factory("validation rework attempts exhausted")
+        await self.emit(
+            EventType.VERIFICATION_CREATED,
+            {
+                "status": "failed",
+                "attempt": len(reports),
+                "summary": report.report.summary,
+                "reworkable": True,
+            },
+            f"validation:{len(reports)}",
+        )
+        return {
+            **state,
+            "validation_reports": reports,
+            "phase": "validation_failed_reworkable",
+        }
+
+    def validation_feedback(
+        self,
+        *,
+        state: dict[str, Any],
+        turn: ModelTurn,
+    ) -> dict[str, Any]:
+        latest = state["validation_reports"][-1]
+        return {
+            **state,
+            "messages": [
+                *state["messages"],
+                turn.assistant.model_dump(mode="json"),
+                SystemMessage(
+                    content=(
+                        "Validation failed. Rework the implementation using this "
+                        f"bounded evidence, then call repo.diff again: {latest}"
+                    )
+                ).model_dump(mode="json"),
+            ],
+            "validation_rework_count": state["validation_rework_count"] + 1,
+            "stagnant_turns": 0,
+            "phase": "validation_feedback",
+        }
+
+
+class ModifyingFinalizationMiddleware:
+    def __init__(
+        self,
+        *,
+        emit: Any,
+    ) -> None:
+        self.emit = emit
+
+    async def finalize(
+        self,
+        *,
+        state: dict[str, Any],
+        turn: ModelTurn,
+    ) -> dict[str, Any]:
+        answer = turn.assistant.content.strip()
+        await self.emit(
+            EventType.MESSAGE_CREATED,
+            {
+                "role": "assistant",
+                "content": answer[:32768],
+                "final": True,
+                "validation_complete": True,
+            },
+            "final-answer",
+        )
+        return {
+            **state,
+            "phase": "completed",
+            "final_answer": answer[:32768],
+            "result_summary": (
+                f"Modifying repository task produced validated changes after "
+                f"{state['model_turn_count']} model turn(s), "
+                f"{state['tool_call_count']} tool call(s), and "
+                f"{state['successful_writes']} write(s)."
+            ),
+        }
+
+
 def modifying_ledger_to_state(ledger: BudgetLedger) -> dict[str, Any]:
     return {
         "total_input_tokens": ledger.total_input_tokens,
@@ -945,3 +1156,30 @@ def _copy_invocation(
 
 def elapsed_ms(started: float) -> int:
     return max(0, int((monotonic() - started) * 1000))
+
+
+def validation_report_snapshot(report: ValidationReportWithGates) -> dict[str, Any]:
+    return {
+        "id": str(report.report.id),
+        "status": report.report.status,
+        "summary": report.report.summary,
+        "gates": [
+            {
+                **asdict(gate),
+                "id": str(gate.id),
+                "report_id": str(gate.report_id),
+                "run_id": str(gate.run_id),
+                "created_at": gate.created_at.isoformat(),
+            }
+            for gate in report.gates
+        ],
+    }
+
+
+def validation_failure_is_reworkable(report: ValidationReportWithGates) -> bool:
+    blocking = [
+        gate for gate in report.gates if gate.required and gate.status != "passed"
+    ]
+    return bool(blocking) and all(
+        gate.failure_kind == "command_failed" for gate in blocking
+    )

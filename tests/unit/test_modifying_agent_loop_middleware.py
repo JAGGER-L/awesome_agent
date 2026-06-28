@@ -7,7 +7,14 @@ import pytest
 
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
-from awesome_agent.modeling import SystemMessage
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelTurn,
+    ModelUsage,
+    StopReason,
+    SystemMessage,
+    ToolCall,
+)
 from awesome_agent.runtime.agent_loop.contracts import (
     MiddlewareContext,
     MiddlewareDecision,
@@ -21,6 +28,7 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
     ModifyingBudgetExhausted,
     ModifyingBudgetMiddleware,
     ModifyingContextMiddleware,
+    ModifyingEvidenceMiddleware,
     modifying_ledger_to_state,
 )
 from awesome_agent.runtime.budget import BudgetLedger, BudgetPolicy
@@ -201,3 +209,66 @@ async def _unused_emit(
     transition_id: str,
 ) -> None:
     raise AssertionError("emit should not be called")
+
+
+def test_modifying_evidence_middleware_routes_tool_calls_and_completion() -> None:
+    middleware = ModifyingEvidenceMiddleware(failure_factory=RuntimeError)
+    tool_turn = ModelTurn(
+        assistant=AssistantMessage(
+            tool_calls=[
+                ToolCall(
+                    call_id="call-1",
+                    name="repo.diff",
+                    arguments_json="{}",
+                )
+            ]
+        ),
+        stop_reason=StopReason.TOOL_CALLS,
+        usage=ModelUsage(),
+        provider="fake",
+        model="fake",
+    )
+    final_turn = ModelTurn(
+        assistant=AssistantMessage(content="Done."),
+        stop_reason=StopReason.COMPLETED,
+        usage=ModelUsage(),
+        provider="fake",
+        model="fake",
+    )
+
+    assert (
+        middleware.route_turn(
+            turn=tool_turn,
+            force_final=False,
+            successful_writes=0,
+            final_diff_after_write=False,
+        )
+        == "tool"
+    )
+    assert (
+        middleware.route_turn(
+            turn=tool_turn,
+            force_final=True,
+            successful_writes=0,
+            final_diff_after_write=False,
+        )
+        == "feedback"
+    )
+    assert (
+        middleware.route_turn(
+            turn=final_turn,
+            force_final=False,
+            successful_writes=1,
+            final_diff_after_write=True,
+        )
+        == "validate"
+    )
+    assert (
+        middleware.route_turn(
+            turn=final_turn,
+            force_final=False,
+            successful_writes=1,
+            final_diff_after_write=False,
+        )
+        == "feedback"
+    )

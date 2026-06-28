@@ -16,7 +16,10 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
     ModifyingBudgetExhausted,
     ModifyingBudgetMiddleware,
     ModifyingContextMiddleware,
+    ModifyingEvidenceMiddleware,
+    ModifyingFinalizationMiddleware,
     ModifyingToolMiddleware,
+    ModifyingValidationMiddleware,
     modifying_ledger_to_state,
 )
 from awesome_agent.runtime.agent_loop.read_only import ReadOnlyAgentLoop
@@ -35,7 +38,10 @@ __all__ = [
     "ModifyingBudgetExhausted",
     "ModifyingBudgetMiddleware",
     "ModifyingContextMiddleware",
+    "ModifyingEvidenceMiddleware",
+    "ModifyingFinalizationMiddleware",
     "ModifyingToolMiddleware",
+    "ModifyingValidationMiddleware",
     "ReadOnlyAgentLoop",
     "modifying_ledger_to_state",
 ]
