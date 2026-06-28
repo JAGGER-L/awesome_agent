@@ -1001,7 +1001,6 @@ class ModifyingCodingGraph:
             run_id=run.id,
             agent_id=agent.id,
             graph_name=MODIFYING_CODING_GRAPH,
-            graph_version=1,
             messages=messages,
             rolling_summary=rolling_summary,
             policy=ContextPolicy(
@@ -1024,7 +1023,6 @@ class ModifyingCodingGraph:
                 run_id=run.id,
                 agent_id=agent.id,
                 graph_name=MODIFYING_CODING_GRAPH,
-                graph_version=1,
                 before_estimated_tokens=prepared.before_estimated_tokens,
                 after_estimated_tokens=prepared.after_estimated_tokens,
                 summary=prepared.rolling_summary,

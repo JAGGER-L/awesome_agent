@@ -589,7 +589,6 @@ def create_app(
                 run_id=compaction.run_id,
                 agent_id=compaction.agent_id,
                 graph_name=compaction.graph_name,
-                graph_version=compaction.graph_version,
                 before_estimated_tokens=compaction.before_estimated_tokens,
                 after_estimated_tokens=compaction.after_estimated_tokens,
                 summary=compaction.summary,

@@ -218,7 +218,6 @@ def test_build_team_attribution_includes_lineage_assignment_and_agent() -> None:
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="backend",
         graph_name="team-role",
-        graph_version=1,
         goal="Implement backend.",
     )
     agent_id = uuid4()

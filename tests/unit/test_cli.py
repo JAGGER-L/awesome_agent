@@ -520,7 +520,6 @@ def test_context_compactions_command_reads_api(
                     "run_id": str(run_id),
                     "agent_id": None,
                     "graph_name": "solo-readonly",
-                    "graph_version": 1,
                     "before_estimated_tokens": 50_000,
                     "after_estimated_tokens": 12_000,
                     "summary": "Compacted repository inspection evidence.",
@@ -539,7 +538,7 @@ def test_context_compactions_command_reads_api(
 
     assert result.exit_code == 0
     assert calls[0].endswith(f"/runs/{run_id}/context-compactions")
-    assert "solo-readonly@1" in result.stdout
+    assert "solo-readonly" in result.stdout
     assert str(artifact_id) in result.stdout
 
 

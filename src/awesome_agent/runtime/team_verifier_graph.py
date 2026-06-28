@@ -93,7 +93,6 @@ class TeamVerifierGraph:
             run_id=run.id,
             agent_id=agent.id,
             graph_name=run.graph_name or "team-verifier",
-            graph_version=1,
             payload_kind="verifier-result",
             payload={"summary": summary, "passed": passed},
             artifact_store=self.artifact_store,

@@ -25,7 +25,6 @@ async def compact_team_payload(
     run_id: UUID,
     agent_id: UUID | None,
     graph_name: str,
-    graph_version: int,
     payload_kind: str,
     payload: Any,
     artifact_store: LocalArtifactStore | None,
@@ -53,7 +52,7 @@ async def compact_team_payload(
         filename=f"{payload_kind}.json",
         content=serialized.encode("utf-8"),
         mime_type="application/json",
-        summary=(f"Compacted {payload_kind} payload for {graph_name}@{graph_version}."),
+        summary=(f"Compacted {payload_kind} payload for {graph_name}."),
     )
     await artifact_repository.record(metadata)
     summary = (
@@ -73,7 +72,6 @@ async def compact_team_payload(
                 run_id=run_id,
                 agent_id=agent_id,
                 graph_name=graph_name,
-                graph_version=graph_version,
                 before_estimated_tokens=before_tokens,
                 after_estimated_tokens=after_tokens,
                 summary=summary,

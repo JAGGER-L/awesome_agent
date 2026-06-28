@@ -412,7 +412,6 @@ def test_budget_endpoints_return_ledger_and_context_compactions(
                 run_id=run_id,
                 agent_id=None,
                 graph_name="solo-readonly",
-                graph_version=1,
                 before_estimated_tokens=50_000,
                 after_estimated_tokens=12_000,
                 summary="Compacted repository inspection evidence.",
@@ -519,7 +518,6 @@ def test_team_inspection_endpoints_return_lineage_assignments_and_mailbox(
                 kind=TeamAssignmentKind.TEAMMATE,
                 role_profile="teammate",
                 graph_name="team-role",
-                graph_version=1,
                 goal="child",
             )
         )

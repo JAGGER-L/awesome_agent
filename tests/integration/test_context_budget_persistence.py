@@ -53,7 +53,6 @@ async def test_context_compaction_records_artifact_refs() -> None:
         run_id=uuid4(),
         agent_id=uuid4(),
         graph_name="solo-readonly",
-        graph_version=1,
         before_estimated_tokens=50_000,
         after_estimated_tokens=10_000,
         summary="Inspected repository files.",
@@ -64,4 +63,5 @@ async def test_context_compaction_records_artifact_refs() -> None:
 
     assert saved.id == compaction.id
     assert saved.artifact_refs == compaction.artifact_refs
+    assert not hasattr(saved, "graph_version")
     await engine.dispose()

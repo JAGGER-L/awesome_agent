@@ -159,7 +159,6 @@ class TeamRoleGraph:
             run_id=run.id,
             agent_id=agent.id,
             graph_name=run.graph_name or TEAM_ROLE_GRAPH,
-            graph_version=1,
             payload_kind="child-result",
             payload={"summary": summary, "changed_files": changed_files},
             artifact_store=self.artifact_store,

@@ -97,7 +97,7 @@ def context_compactions(
         typer.echo(
             " ".join(
                 [
-                    f"{compaction['graph_name']}@{compaction['graph_version']}",
+                    f"{compaction['graph_name']}",
                     f"before={compaction['before_estimated_tokens']}",
                     f"after={compaction['after_estimated_tokens']}",
                     f"artifacts={artifact_refs}",

@@ -28,10 +28,7 @@ from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeService
-from awesome_agent.runtime.probe_graph import (
-    RUNTIME_PROBE_GRAPH,
-    RUNTIME_PROBE_VERSION,
-)
+from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_GRAPH
 from awesome_agent.runtime.worker_app import run_worker
 from awesome_agent.sandbox.process import run_process
 from awesome_agent.settings import Settings
@@ -93,7 +90,6 @@ async def test_worker_processes_one_durable_runtime_probe(
         intent=RunIntent.READ_ONLY,
         execution_kind=ExecutionKind.RUNTIME_PROBE,
         graph_name=RUNTIME_PROBE_GRAPH,
-        graph_version=RUNTIME_PROBE_VERSION,
     )
 
     processed = await run_worker(
@@ -194,7 +190,6 @@ async def _create_probe(
         intent=RunIntent.READ_ONLY,
         execution_kind=ExecutionKind.RUNTIME_PROBE,
         graph_name=RUNTIME_PROBE_GRAPH,
-        graph_version=RUNTIME_PROBE_VERSION,
     )
     return engine, runtime, run
 

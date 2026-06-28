@@ -34,8 +34,7 @@ from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.graphs import (
-    SCOPED_TEAM_CODING_VERSION,
-    TEAM_CODING_GRAPH,
+    SCOPED_TEAM_CODING_GRAPH,
 )
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
@@ -106,8 +105,7 @@ async def test_team_run_executes_through_worker_with_verifier_rework(
         goal="Implement backend and verify it",
         intent=RunIntent.MODIFYING,
         mode=RunMode.TEAM,
-        graph_name=TEAM_CODING_GRAPH,
-        graph_version=SCOPED_TEAM_CODING_VERSION,
+        graph_name=SCOPED_TEAM_CODING_GRAPH,
     )
     provider = SequenceProvider([_turn() for _ in range(7)])
 
@@ -143,7 +141,7 @@ async def test_team_run_executes_through_worker_with_verifier_rework(
     workspace = Path(restored.workspace_path or "")
 
     assert restored.status is RunStatus.COMPLETED
-    assert restored.graph_name == TEAM_CODING_GRAPH
+    assert restored.graph_name == SCOPED_TEAM_CODING_GRAPH
     assert [agent.kind for agent in agents].count(AgentKind.LEADER) == 1
     assert [agent.kind for agent in agents].count(AgentKind.TEAMMATE) == 2
     assert [agent.kind for agent in agents].count(AgentKind.VERIFIER) == 1

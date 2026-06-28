@@ -99,7 +99,6 @@ class ContextManager:
         run_id: UUID,
         agent_id: UUID | None,
         graph_name: str,
-        graph_version: int,
         messages: Sequence[ModelMessage | Mapping[str, Any]],
         rolling_summary: str,
         policy: ContextPolicy,
@@ -131,7 +130,6 @@ class ContextManager:
                     run_id=run_id,
                     agent_id=agent_id,
                     graph_name=graph_name,
-                    graph_version=graph_version,
                     removed_messages=removed_messages,
                 )
             )
@@ -172,14 +170,12 @@ class ContextManager:
         run_id: UUID,
         agent_id: UUID | None,
         graph_name: str,
-        graph_version: int,
         removed_messages: Sequence[dict[str, Any]],
     ) -> list[str]:
         if self._artifact_store is None or self._artifact_repository is None:
             return []
         payload = {
             "graph_name": graph_name,
-            "graph_version": graph_version,
             "removed_messages": list(removed_messages),
         }
         content = json.dumps(
@@ -197,7 +193,7 @@ class ContextManager:
             mime_type="application/json",
             summary=(
                 f"Removed {len(removed_messages)} messages during "
-                f"{graph_name}@{graph_version} context compaction."
+                f"{graph_name} context compaction."
             ),
         )
         await self._artifact_repository.record(metadata)

@@ -173,7 +173,6 @@ class TeamLeaderGraph:
             run_id=child.id,
             agent_id=teammate.id,
             graph_name=TEAM_ROLE_GRAPH,
-            graph_version=1,
             payload_kind="handoff-context",
             payload=handoff_context,
             artifact_store=self.artifact_store,

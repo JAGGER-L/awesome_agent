@@ -136,7 +136,6 @@ class ContextCompactionRecord(Base):
     run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
     agent_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), index=True)
     graph_name: Mapped[str] = mapped_column(String(128), index=True)
-    graph_version: Mapped[int] = mapped_column(Integer)
     before_estimated_tokens: Mapped[int] = mapped_column(Integer)
     after_estimated_tokens: Mapped[int] = mapped_column(Integer)
     summary: Mapped[str] = mapped_column(Text)

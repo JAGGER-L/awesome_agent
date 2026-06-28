@@ -36,7 +36,6 @@ class ContextCompactionRecord:
     run_id: UUID
     agent_id: UUID | None
     graph_name: str
-    graph_version: int
     before_estimated_tokens: int
     after_estimated_tokens: int
     summary: str
@@ -282,7 +281,6 @@ def _compaction_to_row(compaction: ContextCompactionRecord) -> ContextCompaction
         run_id=compaction.run_id,
         agent_id=compaction.agent_id,
         graph_name=compaction.graph_name,
-        graph_version=compaction.graph_version,
         before_estimated_tokens=compaction.before_estimated_tokens,
         after_estimated_tokens=compaction.after_estimated_tokens,
         summary=compaction.summary,
@@ -297,7 +295,6 @@ def _compaction_from_row(row: ContextCompactionRow) -> ContextCompactionRecord:
         run_id=row.run_id,
         agent_id=row.agent_id,
         graph_name=row.graph_name,
-        graph_version=row.graph_version,
         before_estimated_tokens=row.before_estimated_tokens,
         after_estimated_tokens=row.after_estimated_tokens,
         summary=row.summary,
