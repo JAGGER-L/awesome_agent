@@ -48,6 +48,8 @@ team output.
 - dependency-aware `/ready` and `doctor --profile` checks for PostgreSQL,
   migrations, checkpoint store, workspace writability, provider configuration,
   model routes, API bind policy, and fresh Worker heartbeat evidence
+- artifact-backed context compaction, durable token ledgers, active Worker
+  execution budgets, and API/CLI budget inspection for solo Runs
 
 ## Non-Goals
 
@@ -60,4 +62,6 @@ team output.
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
 - distributed Teammate child Runs claimed by independent Workers
+- complete per-agent team context and mailbox compaction
+- money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server

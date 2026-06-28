@@ -110,3 +110,19 @@ forbidden.
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active
 sandbox execution, and validation.
+
+## Context And Budget Reliability
+
+- Solo read-only and modifying graphs compact context before provider calls
+  when the soft context threshold is crossed.
+- Removed messages and oversized tool observations are persisted as artifacts
+  before checkpoint state is reduced.
+- Hard context pressure disables further tool calls and forces a bounded final
+  response instead of allowing unbounded prompt growth.
+- Per-Run token ledgers persist input, output, reasoning tokens, model-call
+  count, threshold status, and active Worker execution seconds.
+- Active budget time starts only while a Worker is executing graph work and is
+  closed before completion, failure, retry, cancellation, or approval wait is
+  projected.
+- Token estimation is heuristic in Task 16; provider/tokenizer-specific
+  accounting remains tracked as technical debt.

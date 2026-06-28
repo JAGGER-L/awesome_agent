@@ -516,6 +516,23 @@ with a reason, while `recovery_required` workspaces are retained.
 See [Durable execution](docs/design-docs/durable-execution.md) for the complete
 target contract.
 
+## Context And Budget Boundaries
+
+Task 16 adds a shared context manager and per-Run budget ledger. Solo
+`solo-readonly@1` and `solo-modifying@1` model turns compact context before
+provider calls when the soft context limit is crossed. Removed messages and
+oversized tool observations are written to artifact storage; checkpoints retain
+a deterministic rolling summary plus recent evidence. Compactions are visible
+through `context.compacted` events, `context_compactions` rows,
+`GET /runs/{run_id}/context-compactions`, and the matching CLI command.
+
+The budget ledger records input, output, reasoning tokens, model-call count,
+threshold status, and active Worker execution seconds. Worker active time is
+opened only while graph work is executing and is closed before approval wait,
+pause, retry, completion, or failure is projected. `team-coding@1` currently
+gets global token and active wall-clock guards only; per-agent team context
+compaction remains Task 18. Money cost budgeting is not implemented yet.
+
 ## Security Boundary
 
 Docker is the default command execution boundary. CLI users may explicitly opt

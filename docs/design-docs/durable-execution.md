@@ -253,6 +253,22 @@ Prompt context is bounded. Durable call records store safe metadata, usage,
 status, summaries, and artifact references rather than unrestricted prompts or
 responses.
 
+Task 16 implements concrete context and budget controls for solo coding graphs.
+Before each solo provider call, the runtime estimates prompt tokens. Crossing
+the soft context threshold triggers artifact-backed compaction: removed
+messages and oversized tool observations are persisted as artifacts, while the
+checkpoint keeps a deterministic summary and recent evidence. Crossing the hard
+context threshold disables further tools and forces a bounded final response.
+The raw evidence remains inspectable through artifact refs and
+`context_compactions`.
+
+Each Run has a durable token ledger for input, output, reasoning tokens,
+model-call count, threshold status, and active Worker execution seconds. Active
+time is counted only while a Worker is inside graph execution; queued, paused,
+and approval-wait time is excluded. Team v1 receives only global token and
+active wall-clock guards in Task 16. Full per-agent team compaction is Task 18,
+and money cost budgeting is deferred.
+
 Current implementation note: Task 05 implements this provider-neutral protocol
 and streaming adapters. Visible reasoning and private continuation are separate:
 displayable reasoning may later reach the frontend, while continuation is

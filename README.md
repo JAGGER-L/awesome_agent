@@ -98,8 +98,26 @@ run/graph/model/tool/sandbox spans, model-call summaries, and metrics such as
 run, model, and tool latency. Runtime events receive a stable Run-scoped
 `trace_id`, OpenTelemetry console export is failure-isolated, and FastAPI
 exposes `GET /runs/{run_id}/trace`, `GET /runs/{run_id}/metrics`, and
-`GET /runs/{run_id}/model-calls` for frontend inspection. Full cost budgeting,
+`GET /runs/{run_id}/model-calls` for frontend inspection. Full cost budgeting
 and dashboards remain later work.
+
+### Context and budget management (implemented for solo runs)
+
+Solo read-only and modifying graphs now bound prompt/checkpoint growth with a
+deterministic context manager. When the soft context limit is crossed, older
+messages and oversized tool observations are preserved as artifacts, the
+checkpoint keeps a compact summary plus recent evidence, and runtime events
+record `context.compacted`. Hard context pressure forces a bounded final
+no-tool answer. Per-Run token ledgers track input, output, reasoning tokens,
+model-call count, and active Worker execution seconds. FastAPI exposes
+`GET /runs/{run_id}/budget` and
+`GET /runs/{run_id}/context-compactions`; the CLI mirrors them with
+`awesome-agent budget <run-id>` and
+`awesome-agent context-compactions <run-id>`.
+
+Team Runs currently receive only global token and active wall-clock guards.
+Full per-agent/team-mailbox compaction is deferred to Task 18. Money cost
+budgeting is also deferred.
 
 ## Stack
 
@@ -247,8 +265,9 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- full token-window, wall-clock, and cost budget management (Task 16).
 - distributed team child Runs claimed by independent Workers (Task 17).
+- full team context and budget hardening across Leader, Teammates, Verifier,
+  Subagents, and mailbox evidence (Task 18).
 
 ## Documentation
 

@@ -23,6 +23,7 @@ agents; they are not the durable product roadmap.
 | Task 13 | Done | Explicit scoped `team-coding@1` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
 | Task 14 | Done | Explicit managed workspace listing and dry-run-first cleanup with ownership, lease, branch, dirty, force, and recovery evidence protections. |
 | Task 15 | Done | Split `/health` liveness from structured `/ready` and `doctor --profile` readiness; checks PostgreSQL, migrations, checkpoint store, workspace root, provider keys, model routes, API bind policy, and Worker heartbeat registry. |
+| Task 16 | Done | Artifact-backed solo context compaction, durable token ledgers, active Worker execution budgets, budget/compaction APIs and CLI, and team global budget guards; money cost budget remains deferred. |
 
 ## Completed Detail: Task 07 Isolated Mutation Sandbox and Shell
 
@@ -82,7 +83,6 @@ Task 07 does not include:
 
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 16 | Context, checkpoint, and budget management | Add stronger token-window management, summaries, artifact-backed context, token ledgers, and active wall-clock budgets for solo runtime paths. | Solo long Runs remain bounded without losing required evidence or replay data; money cost budgeting remains deferred. |
 | Task 17 | Distributed team child Runs | Promote graph-internal team execution into Leader-created Teammate, Verifier, and depth-2 Subagent child Runs that independent Workers can claim. | Run lineage, durable assignments, structured mailbox, patch artifact aggregation, verifier gating, recursive cancellation, and real distributed team E2E pass. |
 | Task 18 | Team context and budget hardening | Extend context compaction and budget accounting across Leader, Teammates, Verifier, Subagents, team mailbox, and team evidence. | Team Runs have per-agent context budgets, team evidence compaction, verifier/rework history compression, and parent/child budget coordination. |
 
@@ -97,7 +97,7 @@ Task 07 does not include:
 | Running Runs cannot be cancelled | Resolved in Task 09 for solo runtime paths |
 | Deterministic validation and rework do not exist | Resolved in Task 10 for solo modifying runs |
 | One successful read is not enough proof for answer correctness | Future read-only answer validation hardening; Task 10 covers modifying validation only |
-| Context and checkpoints can grow quickly | Minimal artifact/prompt guard in Task 07; solo context/token/wall-clock budget system in Task 16; team hardening in Task 18 |
+| Context and checkpoints can grow quickly | Resolved for solo read-only and modifying paths in Task 16; complete team hardening remains Task 18 |
 | Lifecycle projections are inconsistent | Resolved in Task 11 for solo runtime paths |
 | Observability score is too high for current evidence | Resolved in Task 12 for solo runtime paths |
 | Artifact references are not connected to the main loop | Task 07 |
