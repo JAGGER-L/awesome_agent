@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from awesome_agent.agents.profiles import RoleModelResolver
+from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
     DispatchStatus,
     EventType,
@@ -26,6 +27,8 @@ from awesome_agent.modeling import (
     ToolCall,
     TurnCompleted,
 )
+from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
+from awesome_agent.persistence.budget import PostgresBudgetRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
@@ -36,6 +39,8 @@ from awesome_agent.persistence.repository_registry import PostgresRepositoryRegi
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
+from awesome_agent.runtime.budget import BudgetPolicy
+from awesome_agent.runtime.context import ContextManager, DeterministicSummaryProvider
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
@@ -49,11 +54,13 @@ pytestmark = pytest.mark.integration
 class SequenceProvider(StructuredModelProvider):
     def __init__(self, turns: list[ModelTurn]) -> None:
         self.turns = deque(turns)
+        self.requests: list[ModelRequest] = []
 
     async def stream(
         self,
         request: ModelRequest,
     ) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
         yield TurnCompleted(turn=self.turns.popleft())
 
 
@@ -71,7 +78,7 @@ async def test_fake_provider_completes_read_only_coding_run(
     await _git(repository_path, "config", "user.email", "test@example.com")
     await _git(repository_path, "config", "user.name", "Test")
     (repository_path / "README.md").write_text(
-        "# Fixture\nThe parser lives in src/parser.py.\n",
+        "# Fixture\nThe parser lives in src/parser.py.\n" + ("long evidence\n" * 2000),
         encoding="utf-8",
     )
     await _git(repository_path, "add", "README.md")
@@ -90,6 +97,8 @@ async def test_fake_provider_completes_read_only_coding_run(
         )
     )
     runtime = PostgresRuntimeRepository(sessions)
+    budget_repository = PostgresBudgetRepository(sessions)
+    artifact_repository = PostgresArtifactMetadataRepository(sessions)
     intake = RunIntakeService(
         registry=registry,
         reservations=PostgresIntakeReservationStore(sessions),
@@ -150,8 +159,23 @@ async def test_fake_provider_completes_read_only_coding_run(
                 saver,
                 provider_resolver=lambda _: provider,
                 fault_hook=fail_once,
+                context_manager=ContextManager(
+                    summary_provider=DeterministicSummaryProvider(),
+                    artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+                    artifact_repository=artifact_repository,
+                ),
+                budget_repository=budget_repository,
+                budget_policy=BudgetPolicy(
+                    soft_context_tokens=100,
+                    hard_context_tokens=10_000,
+                    recent_context_tokens=80,
+                    max_total_tokens_per_run=500_000,
+                    max_reasoning_tokens_per_run=250_000,
+                    max_active_seconds_per_run=3600,
+                ),
             ),
             config=_worker_config(),
+            budget_repository=budget_repository,
         )
         assert await worker.run_once()
         assert await worker.run_once()
@@ -159,6 +183,8 @@ async def test_fake_provider_completes_read_only_coding_run(
     restored = await runtime.get_run(run.id)
     todos = await runtime.list_todos(run.id)
     events = await runtime.list_events(run.id)
+    ledger = await budget_repository.get_ledger(run.id)
+    compactions = await budget_repository.list_compactions(run.id)
     assert restored.status is RunStatus.COMPLETED
     assert restored.dispatch_status is DispatchStatus.TERMINAL
     assert restored.result_text == (
@@ -172,6 +198,14 @@ async def test_fake_provider_completes_read_only_coding_run(
     assert (
         sum(event.event_type is EventType.DISPATCH_RETRY_SCHEDULED for event in events)
         == 1
+    )
+    assert ledger.model_call_count == 2
+    assert compactions
+    assert compactions[0].artifact_refs
+    assert len(provider.requests) == 2
+    assert all(
+        "long evidence\n" * 20 not in getattr(message, "content", "")
+        for message in provider.requests[1].messages
     )
     transition_ids = [
         event.transition_id for event in events if event.transition_id is not None

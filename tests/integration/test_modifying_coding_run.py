@@ -23,6 +23,7 @@ from awesome_agent.modeling import (
     TurnCompleted,
 )
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
+from awesome_agent.persistence.budget import PostgresBudgetRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
@@ -40,6 +41,8 @@ from awesome_agent.persistence.validation import (
 )
 from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
+from awesome_agent.runtime.budget import BudgetPolicy
+from awesome_agent.runtime.context import ContextManager, DeterministicSummaryProvider
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.graphs import MODIFYING_CODING_GRAPH
 from awesome_agent.runtime.intake import RunIntakeService
@@ -55,11 +58,13 @@ pytestmark = pytest.mark.integration
 class SequenceProvider(StructuredModelProvider):
     def __init__(self, turns: list[ModelTurn]) -> None:
         self.turns = deque(turns)
+        self.requests: list[ModelRequest] = []
 
     async def stream(
         self,
         request: ModelRequest,
     ) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
         yield TurnCompleted(turn=self.turns.popleft())
 
 
@@ -77,6 +82,7 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
     await _git(repository_path, "config", "user.email", "test@example.com")
     await _git(repository_path, "config", "user.name", "Test")
     (repository_path / "README.md").write_text("old\n", encoding="utf-8")
+    (repository_path / "large.txt").write_text("x" * 20_000, encoding="utf-8")
     await _git(repository_path, "add", "README.md")
     await _git(repository_path, "commit", "-m", "Initial")
     snapshot = await require_primary_clean_repository(repository_path)
@@ -116,6 +122,20 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
 """
     provider = SequenceProvider(
         [
+            ModelTurn(
+                assistant=AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="large-read",
+                            name="repo.read",
+                            arguments_json=json.dumps({"path": "large.txt"}),
+                        )
+                    ]
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            ),
             ModelTurn(
                 assistant=AssistantMessage(
                     tool_calls=[
@@ -172,6 +192,8 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
     )
     tool_repository = PostgresToolInvocationRepository(sessions)
     validation_repository = PostgresValidationRepository(sessions)
+    artifact_repository = PostgresArtifactMetadataRepository(sessions)
+    budget_repository = PostgresBudgetRepository(sessions)
     faulted = False
 
     async def validation_runner(
@@ -223,14 +245,29 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
                 saver,
                 provider_resolver=lambda _: provider,
                 artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
-                artifact_repository=PostgresArtifactMetadataRepository(sessions),
+                artifact_repository=artifact_repository,
                 tool_repository=tool_repository,
                 validation_repository=validation_repository,
                 validation_plan_resolver=lambda _: _validation_plan(),
                 validation_runner=validation_runner,
                 fault_hook=fail_after_patch,
+                context_manager=ContextManager(
+                    summary_provider=DeterministicSummaryProvider(),
+                    artifact_store=LocalArtifactStore(tmp_path / "context-artifacts"),
+                    artifact_repository=artifact_repository,
+                ),
+                budget_repository=budget_repository,
+                budget_policy=BudgetPolicy(
+                    soft_context_tokens=100,
+                    hard_context_tokens=20_000,
+                    recent_context_tokens=80,
+                    max_total_tokens_per_run=500_000,
+                    max_reasoning_tokens_per_run=250_000,
+                    max_active_seconds_per_run=3600,
+                ),
             ),
             config=_worker_config(),
+            budget_repository=budget_repository,
         )
         assert await worker.run_once()
         assert await worker.run_once()
@@ -239,6 +276,9 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
     todos = await runtime.list_todos(run.id)
     invocations = await tool_repository.list_for_run(run.id)
     validation_reports = await validation_repository.list_for_run(run.id)
+    artifacts = await artifact_repository.list_for_run(run.id)
+    ledger = await budget_repository.get_ledger(run.id)
+    compactions = await budget_repository.list_compactions(run.id)
     workspace = Path(restored.workspace_path or "")
 
     assert restored.status is RunStatus.COMPLETED
@@ -247,15 +287,19 @@ async def test_modifying_run_persists_tool_invocations_across_retry(
     assert todos[0].status is TodoStatus.DONE
     assert (workspace / "README.md").read_text(encoding="utf-8") == "new\n"
     assert [invocation.tool_name for invocation in invocations] == [
+        "repo.read",
         "shell.execute",
         "repo.apply_patch",
         "repo.diff",
     ]
-    patch_invocation = invocations[1]
+    patch_invocation = invocations[2]
     assert patch_invocation.status == "completed"
     assert patch_invocation.result_content is not None
     assert "postimage_hashes" in patch_invocation.result_content
-    assert len({invocation.idempotency_key for invocation in invocations}) == 3
+    assert len({invocation.idempotency_key for invocation in invocations}) == 4
+    assert any(artifact.artifact_type == "tool-output" for artifact in artifacts)
+    assert ledger.model_call_count >= 4
+    assert compactions
     assert validation_reports[0].report.status == "passed"
     assert validation_reports[0].gates[0].gate_id == "pytest"
     await engine.dispose()
