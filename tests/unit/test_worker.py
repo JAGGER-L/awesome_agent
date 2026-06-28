@@ -558,7 +558,7 @@ async def test_worker_advertises_distributed_team_graphs_when_configured() -> No
         probe_graph=FakeGraph(),  # type: ignore[arg-type]
         team_leader_graph=object(),  # type: ignore[arg-type]
         team_role_graph=object(),  # type: ignore[arg-type]
-        team_verifier_graph=object(),
+        team_verifier_graph=object(),  # type: ignore[arg-type]
         config=_config(),
     )
 
