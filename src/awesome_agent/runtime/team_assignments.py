@@ -33,7 +33,6 @@ class TeamAssignment(BaseModel):
     status: TeamAssignmentStatus = TeamAssignmentStatus.ACTIVE
     role_profile: str = Field(max_length=128)
     graph_name: str = Field(max_length=128)
-    graph_version: int = Field(ge=1)
     goal: str
     allowed_tools: list[str] = Field(default_factory=list)
     deferred_tools: list[str] = Field(default_factory=list)
@@ -84,11 +83,11 @@ def validate_assignment_graph(assignment: TeamAssignment) -> bool:
     if assignment.kind in {
         TeamAssignmentKind.TEAMMATE,
         TeamAssignmentKind.SUBAGENT,
-    } and (assignment.graph_name != "team-role" or assignment.graph_version != 1):
-        raise ValueError("teammate and subagent assignments use team-role@1")
+    } and assignment.graph_name != "team-role":
+        raise ValueError("teammate and subagent assignments use team-role")
     if assignment.kind is TeamAssignmentKind.VERIFIER:
-        if assignment.graph_name != "team-verifier" or assignment.graph_version != 1:
-            raise ValueError("verifier assignments use team-verifier@1")
+        if assignment.graph_name != "team-verifier":
+            raise ValueError("verifier assignments use team-verifier")
         if assignment.can_delegate:
             raise ValueError("verifier assignments cannot delegate")
     if assignment.kind is TeamAssignmentKind.SUBAGENT and (

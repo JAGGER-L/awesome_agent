@@ -18,7 +18,6 @@ def test_teammate_assignment_uses_team_role_graph() -> None:
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="backend-engineer",
         graph_name="team-role",
-        graph_version=1,
         goal="Implement backend",
         allowed_tools=["repo.read", "repo.apply_patch"],
         allowed_skills=["patch-authoring"],
@@ -29,6 +28,7 @@ def test_teammate_assignment_uses_team_role_graph() -> None:
     )
 
     assert validate_assignment_graph(assignment)
+    assert not hasattr(assignment, "graph_version")
 
 
 def test_verifier_assignment_uses_verifier_graph() -> None:
@@ -39,7 +39,6 @@ def test_verifier_assignment_uses_verifier_graph() -> None:
         kind=TeamAssignmentKind.VERIFIER,
         role_profile="verifier",
         graph_name="team-verifier",
-        graph_version=1,
         goal="Verify aggregation",
     )
 
@@ -54,7 +53,6 @@ def test_subagent_assignment_cannot_delegate() -> None:
         kind=TeamAssignmentKind.SUBAGENT,
         role_profile="reader",
         graph_name="team-role",
-        graph_version=1,
         goal="Read one file",
         can_delegate=True,
         max_subagents=1,
@@ -72,7 +70,6 @@ def test_effective_assignment_tools_hide_deferred_until_promoted() -> None:
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="backend-engineer",
         graph_name="team-role",
-        graph_version=1,
         goal="Implement backend",
         allowed_tools=["repo.read", "repo.apply_patch", "shell.execute"],
         deferred_tools=["repo.apply_patch", "shell.execute"],

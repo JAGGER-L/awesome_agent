@@ -14,9 +14,7 @@ from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import (
     TEAM_ROLE_GRAPH,
-    TEAM_ROLE_VERSION,
     TEAM_VERIFIER_GRAPH,
-    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
@@ -175,7 +173,7 @@ class TeamLeaderGraph:
             run_id=child.id,
             agent_id=teammate.id,
             graph_name=TEAM_ROLE_GRAPH,
-            graph_version=TEAM_ROLE_VERSION,
+            graph_version=1,
             payload_kind="handoff-context",
             payload=handoff_context,
             artifact_store=self.artifact_store,
@@ -190,7 +188,6 @@ class TeamLeaderGraph:
             kind=TeamAssignmentKind.TEAMMATE,
             role_profile="teammate",
             graph_name=TEAM_ROLE_GRAPH,
-            graph_version=TEAM_ROLE_VERSION,
             goal=child.goal,
             allowed_tools=[],
             allowed_skills=[],
@@ -309,7 +306,6 @@ class TeamLeaderGraph:
             kind=TeamAssignmentKind.VERIFIER,
             role_profile="verifier",
             graph_name=TEAM_VERIFIER_GRAPH,
-            graph_version=TEAM_VERIFIER_VERSION,
             goal=child.goal,
             allowed_tools=["repo.diff"],
             allowed_skills=[],

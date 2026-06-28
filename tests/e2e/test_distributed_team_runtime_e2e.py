@@ -86,7 +86,7 @@ async def test_team_run_completes_as_distributed_child_runs(tmp_path: Path) -> N
 
     assert restored.status is RunStatus.COMPLETED
     assert restored.graph_name == "team-coding"
-    assert restored.graph_version == 2
+    assert not hasattr(restored, "graph_version")
     assert [agent.kind for agent in agents] == [AgentKind.LEADER]
     assert [run.child_role for run in descendants] == [
         "teammate",

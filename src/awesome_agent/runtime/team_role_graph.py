@@ -11,7 +11,7 @@ from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
-from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION
+from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
@@ -159,7 +159,7 @@ class TeamRoleGraph:
             run_id=run.id,
             agent_id=agent.id,
             graph_name=run.graph_name or TEAM_ROLE_GRAPH,
-            graph_version=assignment.graph_version,
+            graph_version=1,
             payload_kind="child-result",
             payload={"summary": summary, "changed_files": changed_files},
             artifact_store=self.artifact_store,
@@ -234,7 +234,6 @@ class TeamRoleGraph:
                 kind=TeamAssignmentKind.SUBAGENT,
                 role_profile="subagent",
                 graph_name=TEAM_ROLE_GRAPH,
-                graph_version=TEAM_ROLE_VERSION,
                 goal=goal,
                 allowed_tools=allowed_tools,
                 allowed_skills=assignment.allowed_skills,

@@ -24,9 +24,7 @@ from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import (
     TEAM_CODING_GRAPH,
-    TEAM_CODING_VERSION,
     TEAM_VERIFIER_GRAPH,
-    TEAM_VERIFIER_VERSION,
 )
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
@@ -155,7 +153,7 @@ async def test_leader_creates_verifier_after_teammate_terminal() -> None:
     )
     verifier_run = await runtime.get_run(verifier.child_run_id)
     assert verifier.graph_name == TEAM_VERIFIER_GRAPH
-    assert verifier.graph_version == TEAM_VERIFIER_VERSION
+    assert not hasattr(verifier, "graph_version")
     assert verifier_run.child_role == "verifier"
 
 
@@ -184,7 +182,6 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
         depth=1,
         child_role="teammate",
         graph_name="team-role",
-        graph_version=1,
     )
     await runtime.create_run(
         child,
@@ -203,7 +200,6 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
         kind=TeamAssignmentKind.TEAMMATE,
         role_profile="teammate",
         graph_name="team-role",
-        graph_version=1,
         goal="child",
     )
     await teams.create_assignment(assignment)
@@ -303,7 +299,6 @@ async def test_worker_releases_parent_for_child_wait() -> None:
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
         graph_name=TEAM_CODING_GRAPH,
-        graph_version=TEAM_CODING_VERSION,
         graph_thread_id=f"run:{lease.run_id}",
     )
     leader = Agent(
@@ -348,7 +343,6 @@ async def test_worker_child_completion_requeues_waiting_parent() -> None:
         child_role="teammate",
         execution_kind=ExecutionKind.RUNTIME_PROBE,
         graph_name="runtime-probe",
-        graph_version=1,
     )
     child_agent = Agent(
         run_id=child.id,
@@ -369,7 +363,6 @@ async def test_worker_child_completion_requeues_waiting_parent() -> None:
             kind=TeamAssignmentKind.TEAMMATE,
             role_profile="teammate",
             graph_name="team-role",
-            graph_version=1,
             goal="child",
         )
     )
@@ -398,7 +391,6 @@ def _leader_run() -> tuple[Run, Agent]:
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
         graph_name=TEAM_CODING_GRAPH,
-        graph_version=TEAM_CODING_VERSION,
         graph_thread_id=f"run:{uuid4()}",
     )
     leader = Agent(

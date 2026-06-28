@@ -9,7 +9,7 @@ from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
 from awesome_agent.runtime.dispatch import ChildRunWait
-from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION
+from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
@@ -207,7 +207,6 @@ def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:
         depth=(1 if kind is TeamAssignmentKind.TEAMMATE else 2),
         child_role=kind.value,
         graph_name=TEAM_ROLE_GRAPH,
-        graph_version=TEAM_ROLE_VERSION,
     )
     agent = Agent(
         run_id=run.id,
@@ -241,7 +240,6 @@ def _assignment(
         kind=kind,
         role_profile=kind.value,
         graph_name=TEAM_ROLE_GRAPH,
-        graph_version=TEAM_ROLE_VERSION,
         goal=run.goal,
         allowed_tools=allowed_tools or [],
         deferred_tools=deferred_tools or [],

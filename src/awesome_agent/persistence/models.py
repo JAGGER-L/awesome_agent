@@ -164,7 +164,6 @@ class TeamAssignmentRecord(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
     role_profile: Mapped[str] = mapped_column(String(128))
     graph_name: Mapped[str] = mapped_column(String(128))
-    graph_version: Mapped[int] = mapped_column(Integer)
     goal: Mapped[str] = mapped_column(Text)
     allowed_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)
     deferred_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)
