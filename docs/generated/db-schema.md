@@ -57,6 +57,21 @@ Generated from SQLAlchemy metadata.
 | `summary` | `TEXT` | no |
 | `created_at` | `DATETIME` | no |
 
+## `context_compactions`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `run_id` | `UUID` | no |
+| `agent_id` | `UUID` | yes |
+| `graph_name` | `VARCHAR(128)` | no |
+| `graph_version` | `INTEGER` | no |
+| `before_estimated_tokens` | `INTEGER` | no |
+| `after_estimated_tokens` | `INTEGER` | no |
+| `summary` | `TEXT` | no |
+| `artifact_refs` | `JSONB` | no |
+| `created_at` | `DATETIME` | no |
+
 ## `intake_reservations`
 
 | Column | Type | Nullable |
@@ -141,6 +156,21 @@ Generated from SQLAlchemy metadata.
 | `updated_at` | `DATETIME` | no |
 | `last_seen_at` | `DATETIME` | no |
 
+## `run_budget_ledgers`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `run_id` | `UUID` | no |
+| `total_input_tokens` | `INTEGER` | no |
+| `total_output_tokens` | `INTEGER` | no |
+| `total_reasoning_tokens` | `INTEGER` | no |
+| `active_seconds` | `INTEGER` | no |
+| `model_call_count` | `INTEGER` | no |
+| `threshold_status` | `VARCHAR(64)` | no |
+| `active_window_started_at` | `DATETIME` | yes |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+
 ## `runs`
 
 | Column | Type | Nullable |
@@ -153,6 +183,10 @@ Generated from SQLAlchemy metadata.
 | `base_commit` | `VARCHAR(64)` | yes |
 | `intent` | `VARCHAR(32)` | no |
 | `execution_kind` | `VARCHAR(32)` | no |
+| `parent_run_id` | `UUID` | yes |
+| `root_run_id` | `UUID` | yes |
+| `depth` | `INTEGER` | no |
+| `child_role` | `VARCHAR(64)` | yes |
 | `graph_name` | `VARCHAR(128)` | yes |
 | `graph_version` | `INTEGER` | yes |
 | `dispatch_status` | `VARCHAR(32)` | no |
@@ -173,6 +207,9 @@ Generated from SQLAlchemy metadata.
 | `workspace_path` | `TEXT` | yes |
 | `integration_branch` | `VARCHAR(255)` | yes |
 | `workspace_state` | `VARCHAR(32)` | yes |
+| `workspace_retention_status` | `VARCHAR(32)` | no |
+| `workspace_cleaned_at` | `DATETIME` | yes |
+| `workspace_cleanup_reason` | `TEXT` | yes |
 | `graph_thread_id` | `VARCHAR(128)` | yes |
 | `legacy` | `BOOLEAN` | no |
 | `created_at` | `DATETIME` | no |
@@ -195,6 +232,71 @@ Generated from SQLAlchemy metadata.
 | `trace_id` | `VARCHAR(64)` | yes |
 | `span_id` | `VARCHAR(32)` | yes |
 | `created_at` | `DATETIME` | no |
+
+## `team_assignments`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `root_run_id` | `UUID` | no |
+| `parent_run_id` | `UUID` | no |
+| `child_run_id` | `UUID` | no |
+| `kind` | `VARCHAR(32)` | no |
+| `status` | `VARCHAR(32)` | no |
+| `role_profile` | `VARCHAR(128)` | no |
+| `graph_name` | `VARCHAR(128)` | no |
+| `graph_version` | `INTEGER` | no |
+| `goal` | `TEXT` | no |
+| `allowed_tools` | `JSONB` | no |
+| `allowed_skills` | `JSONB` | no |
+| `can_write` | `BOOLEAN` | no |
+| `can_delegate` | `BOOLEAN` | no |
+| `max_subagents` | `INTEGER` | no |
+| `acceptance_criteria` | `JSONB` | no |
+| `handoff_context` | `JSONB` | no |
+| `retire_reason` | `TEXT` | yes |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+
+## `team_child_results`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `child_run_id` | `UUID` | no |
+| `assignment_id` | `UUID` | no |
+| `parent_run_id` | `UUID` | no |
+| `root_run_id` | `UUID` | no |
+| `status` | `VARCHAR(32)` | no |
+| `summary` | `TEXT` | no |
+| `patch_artifact_id` | `UUID` | yes |
+| `changed_files` | `JSONB` | no |
+| `evidence_artifact_refs` | `JSONB` | no |
+| `failure_kind` | `VARCHAR(64)` | yes |
+| `patch_aggregated` | `BOOLEAN` | no |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+
+## `team_mailbox_messages`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `team_root_run_id` | `UUID` | no |
+| `sender_run_id` | `UUID` | no |
+| `sender_agent_id` | `UUID` | yes |
+| `recipient_run_id` | `UUID` | no |
+| `recipient_agent_id` | `UUID` | yes |
+| `route` | `VARCHAR(64)` | no |
+| `message_type` | `VARCHAR(64)` | no |
+| `status` | `VARCHAR(32)` | no |
+| `subject` | `VARCHAR(512)` | no |
+| `body_summary` | `TEXT` | no |
+| `artifact_refs` | `JSONB` | no |
+| `requires_response` | `BOOLEAN` | no |
+| `response_to_message_id` | `UUID` | yes |
+| `created_at` | `DATETIME` | no |
+| `read_at` | `DATETIME` | yes |
+| `responded_at` | `DATETIME` | yes |
 
 ## `todos`
 
@@ -271,3 +373,14 @@ Generated from SQLAlchemy metadata.
 | `status` | `VARCHAR(32)` | no |
 | `summary` | `TEXT` | no |
 | `created_at` | `DATETIME` | no |
+
+## `worker_heartbeats`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `worker_id` | `UUID` | no |
+| `worker_name` | `VARCHAR(255)` | no |
+| `started_at` | `DATETIME` | no |
+| `heartbeat_at` | `DATETIME` | no |
+| `supported_graphs` | `JSONB` | no |
+| `status` | `VARCHAR(32)` | no |

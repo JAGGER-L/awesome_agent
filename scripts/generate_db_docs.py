@@ -3,7 +3,7 @@ from pathlib import Path
 from awesome_agent.persistence.models import Base
 
 
-def main() -> None:
+def generate_schema_markdown() -> str:
     lines = [
         "# Database Schema",
         "",
@@ -23,11 +23,14 @@ def main() -> None:
             lines.append(
                 f"| `{column.name}` | `{column.type}` | "
                 f"{'yes' if column.nullable else 'no'} |"
-            )
+        )
         lines.append("")
+    return "\n".join(lines)
 
+
+def main() -> None:
     target = Path("docs/generated/db-schema.md")
-    target.write_text("\n".join(lines), encoding="utf-8")
+    target.write_text(generate_schema_markdown(), encoding="utf-8")
 
 
 if __name__ == "__main__":
