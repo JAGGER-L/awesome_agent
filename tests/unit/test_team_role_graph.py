@@ -66,9 +66,10 @@ async def test_teammate_can_create_limited_subagents() -> None:
 
     assert len(subagents) == 2
     assert all(child.depth == 2 for child in subagents)
-    assert [
-        item.kind for item in assignments if item.parent_run_id == run.id
-    ] == [TeamAssignmentKind.SUBAGENT, TeamAssignmentKind.SUBAGENT]
+    assert [item.kind for item in assignments if item.parent_run_id == run.id] == [
+        TeamAssignmentKind.SUBAGENT,
+        TeamAssignmentKind.SUBAGENT,
+    ]
 
 
 @pytest.mark.asyncio

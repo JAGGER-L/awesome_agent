@@ -521,9 +521,7 @@ def _child_result_from_record(record: TeamChildResultRecord) -> TeamChildResult:
         summary=record.summary,
         patch_artifact_id=record.patch_artifact_id,
         changed_files=list(record.changed_files),
-        evidence_artifact_refs=[
-            UUID(value) for value in record.evidence_artifact_refs
-        ],
+        evidence_artifact_refs=[UUID(value) for value in record.evidence_artifact_refs],
         failure_kind=record.failure_kind,
         patch_aggregated=record.patch_aggregated,
         created_at=record.created_at,

@@ -166,13 +166,7 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
         agent_id=None,
         artifact_type="patch",
         filename="change.patch",
-        content=(
-            b"--- a/README.md\n"
-            b"+++ b/README.md\n"
-            b"@@ -1 +1 @@\n"
-            b"-old\n"
-            b"+new\n"
-        ),
+        content=(b"--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n"),
         mime_type="text/x-diff",
         summary="README patch",
     )
