@@ -493,30 +493,18 @@ class DurableWorker:
     def _validate_run(self, run: Run) -> None:
         if run.execution_kind is not ExecutionKind.CODING:
             return
-        if (
-            run.graph_name == READ_ONLY_CODING_GRAPH
-            and self.coding_graph is not None
-        ):
+        if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph is not None:
             return
         if (
             run.graph_name == MODIFYING_CODING_GRAPH
             and self.modifying_graph is not None
         ):
             return
-        if (
-            run.graph_name == SCOPED_TEAM_CODING_GRAPH
-            and self.team_graph is not None
-        ):
+        if run.graph_name == SCOPED_TEAM_CODING_GRAPH and self.team_graph is not None:
             return
-        if (
-            run.graph_name == TEAM_CODING_GRAPH
-            and self.team_leader_graph is not None
-        ):
+        if run.graph_name == TEAM_CODING_GRAPH and self.team_leader_graph is not None:
             return
-        if (
-            run.graph_name == TEAM_ROLE_GRAPH
-            and self.team_role_graph is not None
-        ):
+        if run.graph_name == TEAM_ROLE_GRAPH and self.team_role_graph is not None:
             return
         if (
             run.graph_name == TEAM_VERIFIER_GRAPH
@@ -572,10 +560,7 @@ class DurableWorker:
                     )
                     await self._record_event_observability(run, primary_agent, event)
 
-                if (
-                    run.graph_name == READ_ONLY_CODING_GRAPH
-                    and self.coding_graph
-                ):
+                if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph:
                     coding_graph = self.coding_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -585,10 +570,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if (
-                    run.graph_name == MODIFYING_CODING_GRAPH
-                    and self.modifying_graph
-                ):
+                if run.graph_name == MODIFYING_CODING_GRAPH and self.modifying_graph:
                     modifying_graph = self.modifying_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -598,10 +580,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if (
-                    run.graph_name == SCOPED_TEAM_CODING_GRAPH
-                    and self.team_graph
-                ):
+                if run.graph_name == SCOPED_TEAM_CODING_GRAPH and self.team_graph:
                     team_graph = self.team_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -612,10 +591,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if (
-                    run.graph_name == TEAM_CODING_GRAPH
-                    and self.team_leader_graph
-                ):
+                if run.graph_name == TEAM_CODING_GRAPH and self.team_leader_graph:
                     team_leader_graph = self.team_leader_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -626,10 +602,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if (
-                    run.graph_name == TEAM_ROLE_GRAPH
-                    and self.team_role_graph
-                ):
+                if run.graph_name == TEAM_ROLE_GRAPH and self.team_role_graph:
                     team_role_graph = self.team_role_graph
                     return await self._execute_with_active_budget(
                         run,
@@ -640,10 +613,7 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if (
-                    run.graph_name == TEAM_VERIFIER_GRAPH
-                    and self.team_verifier_graph
-                ):
+                if run.graph_name == TEAM_VERIFIER_GRAPH and self.team_verifier_graph:
                     team_verifier_graph = self.team_verifier_graph
                     return await self._execute_with_active_budget(
                         run,

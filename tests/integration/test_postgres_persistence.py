@@ -32,8 +32,16 @@ async def test_event_repository_round_trip() -> None:
         await connection.execute(
             text(
                 """
-                INSERT INTO runs (id, goal, mode, status, created_at, updated_at)
-                VALUES (:id, 'test', 'solo', 'created', now(), now())
+                INSERT INTO runs (
+                    id, goal, mode, status, intent, execution_kind,
+                    dispatch_status, available_at, depth, fencing_token,
+                    attempt, legacy,
+                    created_at, updated_at
+                )
+                VALUES (
+                    :id, 'test', 'solo', 'created', 'read_only', 'coding',
+                    'terminal', now(), 0, 0, 0, false, now(), now()
+                )
                 """
             ),
             {"id": run_id},

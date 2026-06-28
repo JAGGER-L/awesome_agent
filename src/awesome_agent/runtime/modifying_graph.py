@@ -286,8 +286,7 @@ class ModifyingCodingGraph:
             or run.intent is not RunIntent.MODIFYING
         ):
             raise IncompatibleGraphError(
-                f"Unsupported modifying graph: "
-                f"{run.intent.value}/{run.graph_name}"
+                f"Unsupported modifying graph: {run.intent.value}/{run.graph_name}"
             )
         if run.graph_thread_id is None:
             raise CorruptRuntimeStateError("Run is missing graph_thread_id.")

@@ -257,14 +257,15 @@ async def _insert_queued_run(
             text(
                 """
                 INSERT INTO runs (
-                    id, goal, mode, status, dispatch_status, graph_name,
-                    legacy,
+                    id, goal, mode, status, intent, execution_kind,
+                    dispatch_status, graph_name, available_at, fencing_token,
+                    attempt, depth, legacy,
                     created_at, updated_at
                 )
                 VALUES (
-                    :id, 'dispatch fixture', 'solo', 'created', 'queued',
-                    'dispatch-fixture', false, clock_timestamp(),
-                    clock_timestamp()
+                    :id, 'dispatch fixture', 'solo', 'created', 'read_only',
+                    'coding', 'queued', 'dispatch-fixture', clock_timestamp(),
+                    0, 0, 0, false, clock_timestamp(), clock_timestamp()
                 )
                 """
             ),

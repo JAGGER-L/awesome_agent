@@ -80,10 +80,14 @@ def validate_child_depth(parent: Run, child: Run) -> bool:
 
 
 def validate_assignment_graph(assignment: TeamAssignment) -> bool:
-    if assignment.kind in {
-        TeamAssignmentKind.TEAMMATE,
-        TeamAssignmentKind.SUBAGENT,
-    } and assignment.graph_name != "team-role":
+    if (
+        assignment.kind
+        in {
+            TeamAssignmentKind.TEAMMATE,
+            TeamAssignmentKind.SUBAGENT,
+        }
+        and assignment.graph_name != "team-role"
+    ):
         raise ValueError("teammate and subagent assignments use team-role")
     if assignment.kind is TeamAssignmentKind.VERIFIER:
         if assignment.graph_name != "team-verifier":

@@ -28,11 +28,11 @@ pytestmark = pytest.mark.integration
 
 _RUN_SQL = """
 INSERT INTO runs (
-    id, goal, mode, status, intent, dispatch_status, available_at,
-    fencing_token, attempt, legacy, created_at, updated_at
+    id, goal, mode, status, intent, execution_kind, dispatch_status, available_at,
+    depth, fencing_token, attempt, legacy, created_at, updated_at
 ) VALUES (
-    :id, 'approval fixture', 'solo', 'created', 'modifying', 'queued', now(),
-    0, 0, false, now(), now()
+    :id, 'approval fixture', 'solo', 'created', 'modifying', 'coding', 'queued',
+    now(), 0, 0, 0, false, now(), now()
 )
 """
 

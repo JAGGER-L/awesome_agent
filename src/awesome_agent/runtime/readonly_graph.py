@@ -218,8 +218,7 @@ class ReadOnlyCodingGraph:
             or run.intent is not RunIntent.READ_ONLY
         ):
             raise IncompatibleGraphError(
-                f"Unsupported read-only graph: "
-                f"{run.intent.value}/{run.graph_name}"
+                f"Unsupported read-only graph: {run.intent.value}/{run.graph_name}"
             )
         if run.graph_thread_id is None:
             raise CorruptRuntimeStateError("Run is missing graph_thread_id.")

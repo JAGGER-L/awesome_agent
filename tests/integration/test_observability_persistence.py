@@ -89,11 +89,13 @@ async def _insert_run(sessions: async_sessionmaker[AsyncSession]) -> UUID:
                 """
                 INSERT INTO runs (
                     id, goal, mode, status, intent, execution_kind,
-                    dispatch_status, available_at, legacy, created_at, updated_at
+                    dispatch_status, available_at, depth, fencing_token,
+                    attempt, legacy,
+                    created_at, updated_at
                 )
                 VALUES (
                     :id, 'observability fixture', 'solo', 'created', 'read_only',
-                    'coding', 'queued', clock_timestamp(), false,
+                    'coding', 'queued', clock_timestamp(), 0, 0, 0, false,
                     clock_timestamp(), clock_timestamp()
                 )
                 """

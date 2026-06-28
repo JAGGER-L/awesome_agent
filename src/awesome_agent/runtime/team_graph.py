@@ -890,10 +890,7 @@ class TeamCodingGraph:
         )
 
     def _validate_run(self, run: Run, leader: Agent) -> None:
-        if (
-            run.mode is not RunMode.TEAM
-            or run.graph_name != SCOPED_TEAM_CODING_GRAPH
-        ):
+        if run.mode is not RunMode.TEAM or run.graph_name != SCOPED_TEAM_CODING_GRAPH:
             raise IncompatibleGraphError(
                 f"Unsupported team graph identity: {run.graph_name}"
             )
