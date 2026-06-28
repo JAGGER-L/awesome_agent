@@ -2,9 +2,10 @@
 
 The project does not use LangSmith.
 
-Use OpenTelemetry traces and metrics, structured JSON logs, immutable runtime
-events, and PostgreSQL projections. Local development initially uses a console
-exporter.
+Use structured JSON logs, immutable runtime events, PostgreSQL projections, and
+project-owned durable trace/metric query tables. OpenTelemetry integration is a
+future exporter/instrumentation path, not the current source of production
+Worker evidence.
 
 ## Current Solo Runtime Implementation
 
@@ -30,10 +31,10 @@ Runtime event lineage:
 
 Telemetry isolation:
 
-- OpenTelemetry console exporter is wrapped by a safe exporter that converts
-  exporter exceptions into exporter failure results;
 - Worker observability writes are best-effort and log failures without changing
   Run status;
+- OpenTelemetry setup currently exists as an isolated local/exporter utility,
+  but the Worker does not depend on OTel spans for production evidence;
 - tool, approval, validation, artifact, and side-effect evidence remains
   durable execution evidence and is not weakened by the best-effort telemetry
   path.

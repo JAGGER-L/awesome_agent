@@ -100,10 +100,11 @@ later work.
 Runtime observability now records durable query-table evidence for
 run/graph/model/tool/sandbox spans, model-call summaries, and metrics such as
 run, model, and tool latency. Runtime events receive a stable Run-scoped
-`trace_id`, OpenTelemetry console export is failure-isolated, and FastAPI
-exposes `GET /runs/{run_id}/trace`, `GET /runs/{run_id}/metrics`, and
-`GET /runs/{run_id}/model-calls` for frontend inspection. Full cost budgeting
-and dashboards remain later work.
+`trace_id`, and FastAPI exposes `GET /runs/{run_id}/trace`,
+`GET /runs/{run_id}/metrics`, and `GET /runs/{run_id}/model-calls` for frontend
+inspection. The current production Worker path uses project-owned durable
+records rather than full OpenTelemetry span instrumentation; full OTel coverage,
+cost budgeting, and dashboards remain later work.
 
 ### Context and budget management (implemented for solo runs)
 
@@ -131,7 +132,7 @@ budgeting is also deferred.
 - PostgreSQL and LangGraph PostgreSQL checkpointing
 - Typer CLI and local FastAPI API
 - Docker sandbox with explicit trusted-local opt-in
-- OpenTelemetry without LangSmith
+- durable query-table observability without LangSmith
 - optional built-in memory and optional Mem0 Platform integration
 
 ## Model Configuration
