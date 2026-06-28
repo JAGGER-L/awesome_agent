@@ -23,7 +23,7 @@ def generate_schema_markdown() -> str:
             lines.append(
                 f"| `{column.name}` | `{column.type}` | "
                 f"{'yes' if column.nullable else 'no'} |"
-        )
+            )
         lines.append("")
     return "\n".join(lines)
 
