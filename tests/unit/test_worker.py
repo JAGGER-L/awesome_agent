@@ -106,6 +106,13 @@ class FakeDispatcher:
     ) -> None:
         self.calls.append(("approval_wait", kwargs))
 
+    async def release_for_child_wait(
+        self,
+        lease: RunLease,
+        **kwargs: object,
+    ) -> None:
+        self.calls.append(("child_wait", kwargs))
+
     async def requeue_after_approval(self, **kwargs: object) -> None:
         self.calls.append(("approval_requeue", kwargs))
 
@@ -549,7 +556,7 @@ async def test_worker_advertises_distributed_team_graphs_when_configured() -> No
         dispatcher=dispatcher,
         repository=FakeRepository(Run(goal="unused")),  # type: ignore[arg-type]
         probe_graph=FakeGraph(),  # type: ignore[arg-type]
-        team_leader_graph=object(),
+        team_leader_graph=object(),  # type: ignore[arg-type]
         team_role_graph=object(),
         team_verifier_graph=object(),
         config=_config(),

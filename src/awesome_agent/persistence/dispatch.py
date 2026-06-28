@@ -288,6 +288,35 @@ class PostgresRunDispatcher(RunDispatcher):
                 },
             )
 
+    async def release_for_child_wait(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        async with self._sessions.begin() as session:
+            record, now = await _locked_live_lease(session, lease)
+            record.last_release_reason = reason
+            record.last_dispatch_error = None
+            _clear_lease(record)
+            await _append_event(
+                session,
+                record,
+                EventType.DISPATCH_RELEASED,
+                {
+                    "reason": reason,
+                    "next_status": DispatchStatus.WAITING.value,
+                },
+            )
+            await transition_run_status(
+                session,
+                record,
+                status=RunStatus.WAITING,
+                dispatch_status=DispatchStatus.WAITING.value,
+                now=now,
+                reason=reason,
+            )
+
     async def requeue_after_approval(
         self,
         *,

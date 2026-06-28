@@ -42,6 +42,12 @@ class RunCancelled(RuntimeError):
     pass
 
 
+class ChildRunWait(PermanentExecutionError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
 class RunDispatcher(Protocol):
     async def claim_next(
         self,
@@ -118,6 +124,15 @@ class RunDispatcher(Protocol):
         reason: str,
     ) -> None:
         """Release current ownership while the Run waits for approval."""
+        ...
+
+    async def release_for_child_wait(
+        self,
+        lease: RunLease,
+        *,
+        reason: str,
+    ) -> None:
+        """Release current ownership while a parent Run waits for child Runs."""
         ...
 
     async def requeue_after_approval(

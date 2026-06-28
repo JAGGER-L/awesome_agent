@@ -23,6 +23,7 @@ from awesome_agent.observability.repository import (
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
+    ChildRunWait,
     CorruptRuntimeStateError,
     IncompatibleGraphError,
     LeaseLost,
@@ -53,6 +54,7 @@ from awesome_agent.runtime.probe_graph import RuntimeProbeGraph, RuntimeProbeSta
 from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCodingGraph
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_graph import TeamCodingGraph, TeamCodingState
+from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph, TeamLeaderState
 from awesome_agent.runtime.worker_heartbeats import (
     GraphIdentity,
     WorkerHeartbeat,
@@ -84,7 +86,7 @@ class DurableWorker:
         coding_graph: ReadOnlyCodingGraph | None = None,
         modifying_graph: ModifyingCodingGraph | None = None,
         team_graph: TeamCodingGraph | None = None,
-        team_leader_graph: object | None = None,
+        team_leader_graph: TeamLeaderGraph | None = None,
         team_role_graph: object | None = None,
         team_verifier_graph: object | None = None,
         config: WorkerConfig,
@@ -260,6 +262,10 @@ class DurableWorker:
             status = "waiting_approval"
             error_text = str(interrupt)
             await self._release_for_approval_if_owned(lease, interrupt.approval_id)
+        except ChildRunWait as wait:
+            status = wait.reason
+            error_text = wait.reason
+            await self._release_for_child_wait_if_owned(lease, wait.reason)
         except (IncompatibleGraphError, CorruptRuntimeStateError) as error:
             status = "recovery_required"
             error_text = str(error)
@@ -297,7 +303,11 @@ class DurableWorker:
         run: Run,
         lease: RunLease,
     ) -> tuple[
-        RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState | TeamCodingState,
+        RuntimeProbeState
+        | ReadOnlyAgentState
+        | ModifyingAgentState
+        | TeamCodingState
+        | TeamLeaderState,
         bool,
     ]:
         lease_lost = asyncio.Event()
@@ -431,6 +441,16 @@ class DurableWorker:
         except LeaseLost:
             return
 
+    async def _release_for_child_wait_if_owned(
+        self,
+        lease: RunLease,
+        reason: str,
+    ) -> None:
+        try:
+            await self.dispatcher.release_for_child_wait(lease, reason=reason)
+        except LeaseLost:
+            return
+
     async def _mark_recovery_if_owned(
         self,
         lease: RunLease,
@@ -501,7 +521,11 @@ class DurableWorker:
         run: Run,
         lease: RunLease,
     ) -> tuple[
-        RuntimeProbeState | ReadOnlyAgentState | ModifyingAgentState | TeamCodingState,
+        RuntimeProbeState
+        | ReadOnlyAgentState
+        | ModifyingAgentState
+        | TeamCodingState
+        | TeamLeaderState,
         bool,
     ]:
         started_at = datetime.now(UTC)
@@ -576,6 +600,21 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
+                if (
+                    run.graph_name == TEAM_CODING_GRAPH
+                    and run.graph_version == TEAM_CODING_VERSION
+                    and self.team_leader_graph
+                ):
+                    team_leader_graph = self.team_leader_graph
+                    return await self._execute_with_active_budget(
+                        run,
+                        lambda: team_leader_graph.execute(
+                            run,
+                            leader,
+                            repository=self.repository,
+                            event_sink=emit,
+                        ),
+                    )
             raise IncompatibleGraphError(
                 f"Worker cannot execute kind {run.execution_kind.value}."
             )
@@ -606,12 +645,18 @@ class DurableWorker:
             [],
             Awaitable[
                 tuple[
-                    ReadOnlyAgentState | ModifyingAgentState | TeamCodingState,
+                    ReadOnlyAgentState
+                    | ModifyingAgentState
+                    | TeamCodingState
+                    | TeamLeaderState,
                     bool,
                 ]
             ],
         ],
-    ) -> tuple[ReadOnlyAgentState | ModifyingAgentState | TeamCodingState, bool]:
+    ) -> tuple[
+        ReadOnlyAgentState | ModifyingAgentState | TeamCodingState | TeamLeaderState,
+        bool,
+    ]:
         if self.budget_repository is None:
             return await action()
         await self.budget_repository.open_active_window(run.id, datetime.now(UTC))
