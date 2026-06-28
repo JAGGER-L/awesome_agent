@@ -13,6 +13,7 @@ from awesome_agent.persistence.team import PostgresTeamRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
+    TeamChildResult,
 )
 from awesome_agent.runtime.team_mailbox import (
     MailboxMessage,
@@ -132,6 +133,54 @@ async def test_runtime_lineage_queries_and_waiting_requeue() -> None:
     assert children == [child]
     assert descendants == [child, grandchild]
     assert requeued.status is RunStatus.RUNNING
+    await engine.dispose()
+
+
+@pytest.mark.skipif(
+    "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ,
+    reason="Integration database is not configured.",
+)
+async def test_team_child_result_round_trips_through_postgres() -> None:
+    engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
+    sessions = create_session_factory(engine)
+    runtime_repository = PostgresRuntimeRepository(sessions)
+    team_repository = PostgresTeamRepository(sessions)
+    root = await _create_run(runtime_repository, depth=0, child_role=None)
+    child = await _create_run(
+        runtime_repository,
+        root_run_id=root.id,
+        parent_run_id=root.id,
+        depth=1,
+        child_role="teammate",
+    )
+    assignment = await team_repository.create_assignment(
+        TeamAssignment(
+            root_run_id=root.id,
+            parent_run_id=root.id,
+            child_run_id=child.id,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile="backend-engineer",
+            graph_name="team-role",
+            graph_version=1,
+            goal="Implement backend",
+        )
+    )
+    result = TeamChildResult(
+        assignment_id=assignment.id,
+        child_run_id=child.id,
+        parent_run_id=root.id,
+        root_run_id=root.id,
+        status="completed",
+        summary="Changed README.",
+        changed_files=["README.md"],
+    )
+
+    saved = await team_repository.record_child_result(result)
+    loaded = (await team_repository.list_child_results(root.id))[0]
+    aggregated = await team_repository.mark_child_result_patch_aggregated(child.id)
+
+    assert loaded == saved
+    assert aggregated.patch_aggregated
     await engine.dispose()
 
 

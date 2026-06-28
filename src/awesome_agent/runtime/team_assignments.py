@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -43,6 +43,22 @@ class TeamAssignment(BaseModel):
     acceptance_criteria: list[str] = Field(default_factory=list)
     handoff_context: dict[str, Any] = Field(default_factory=dict)
     retire_reason: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class TeamChildResult(BaseModel):
+    assignment_id: UUID
+    child_run_id: UUID
+    parent_run_id: UUID
+    root_run_id: UUID
+    status: Literal["completed", "failed", "cancelled", "recovery_required"]
+    summary: str
+    patch_artifact_id: UUID | None = None
+    changed_files: list[str] = Field(default_factory=list)
+    evidence_artifact_refs: list[UUID] = Field(default_factory=list)
+    failure_kind: str | None = None
+    patch_aggregated: bool = False
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

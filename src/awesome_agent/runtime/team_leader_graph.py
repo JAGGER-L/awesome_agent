@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import NotRequired, TypedDict
 
+from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.team import TeamRepository
@@ -19,6 +21,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentStatus,
     validate_assignment_graph,
 )
+from awesome_agent.sandbox.process import run_process
 
 
 class TeamLeaderState(TypedDict):
@@ -32,8 +35,14 @@ class TeamLeaderState(TypedDict):
 
 
 class TeamLeaderGraph:
-    def __init__(self, *, team_repository: TeamRepository) -> None:
+    def __init__(
+        self,
+        *,
+        team_repository: TeamRepository,
+        artifact_repository: ArtifactMetadataRepository | None = None,
+    ) -> None:
         self.team_repository = team_repository
+        self.artifact_repository = artifact_repository
 
     async def execute(
         self,
@@ -67,6 +76,10 @@ class TeamLeaderGraph:
             for assignment in teammate_assignments
         ):
             raise ChildRunWait("waiting_children")
+        await self._aggregate_child_patches(
+            run,
+            event_sink=event_sink,
+        )
         verifier_assignments = [
             assignment
             for assignment in assignments
@@ -172,6 +185,42 @@ class TeamLeaderGraph:
                 f"team-assignment-created:{assignment.id}",
             )
 
+    async def _aggregate_child_patches(
+        self,
+        run: Run,
+        *,
+        event_sink: object | None,
+    ) -> None:
+        if run.workspace_path is None:
+            return
+        if self.artifact_repository is None:
+            return
+        results = await self.team_repository.list_child_results(run.id)
+        for result in results:
+            if result.status != "completed":
+                continue
+            if result.patch_artifact_id is None or result.patch_aggregated:
+                continue
+            metadata = await self.artifact_repository.get(result.patch_artifact_id)
+            patch = metadata.path.read_text(encoding="utf-8")
+            await _git_apply(run.workspace_path, patch)
+            diff = await _git_diff(run.workspace_path)
+            await self.team_repository.mark_child_result_patch_aggregated(
+                result.child_run_id
+            )
+            if callable(event_sink):
+                await event_sink(
+                    EventType.TEAM_PATCH_AGGREGATED,
+                    {
+                        "child_run_id": str(result.child_run_id),
+                        "assignment_id": str(result.assignment_id),
+                        "patch_artifact_id": str(result.patch_artifact_id),
+                        "changed_files": result.changed_files,
+                        "diff_changed": bool(diff.strip()),
+                    },
+                    f"team-patch-aggregated:{result.child_run_id}",
+                )
+
     async def _create_verifier_child(
         self,
         run: Run,
@@ -244,3 +293,31 @@ class TeamLeaderGraph:
                 },
                 f"team-assignment-created:{assignment.id}",
             )
+
+
+async def _git_apply(workspace: Path, patch: str) -> None:
+    patch_file = workspace / ".awesome-agent-team.patch"
+    patch_file.write_text(patch, encoding="utf-8")
+    try:
+        process = await run_process(
+            ["git", "apply", "--whitespace=nowarn", str(patch_file.name)],
+            command_label="git apply team patch",
+            workspace=workspace,
+            timeout_seconds=30,
+        )
+        if process.exit_code != 0:
+            raise RuntimeError(process.stderr or process.stdout or "git apply failed")
+    finally:
+        patch_file.unlink(missing_ok=True)
+
+
+async def _git_diff(workspace: Path) -> str:
+    process = await run_process(
+        ["git", "diff", "--", "."],
+        command_label="git diff team aggregation",
+        workspace=workspace,
+        timeout_seconds=30,
+    )
+    if process.exit_code != 0:
+        raise RuntimeError(process.stderr or process.stdout or "git diff failed")
+    return process.stdout

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import NotRequired, TypedDict
 
+from awesome_agent.artifacts.repository import ArtifactMetadataRepository
+from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.team import TeamRepository
@@ -12,6 +14,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
     TeamAssignmentStatus,
+    TeamChildResult,
     validate_assignment_graph,
 )
 
@@ -29,8 +32,16 @@ class TeamRoleState(TypedDict):
 
 
 class TeamRoleGraph:
-    def __init__(self, *, team_repository: TeamRepository) -> None:
+    def __init__(
+        self,
+        *,
+        team_repository: TeamRepository,
+        artifact_store: LocalArtifactStore | None = None,
+        artifact_repository: ArtifactMetadataRepository | None = None,
+    ) -> None:
         self.team_repository = team_repository
+        self.artifact_store = artifact_store
+        self.artifact_repository = artifact_repository
 
     async def execute(
         self,
@@ -69,6 +80,7 @@ class TeamRoleGraph:
                 raise ChildRunWait("waiting_subagents")
             if any(item.status is TeamAssignmentStatus.ACTIVE for item in subagents):
                 raise ChildRunWait("waiting_subagents")
+        await self._record_result_if_needed(run, agent, assignment)
         return (
             TeamRoleState(
                 run_id=str(run.id),
@@ -82,6 +94,51 @@ class TeamRoleGraph:
                 final_answer=f"{assignment.kind.value} assignment completed.",
             ),
             False,
+        )
+
+    async def _record_result_if_needed(
+        self,
+        run: Run,
+        agent: Agent,
+        assignment: TeamAssignment,
+    ) -> None:
+        patch_artifact_id = None
+        changed_files: list[str] = []
+        patch = assignment.handoff_context.get("patch")
+        if (
+            assignment.can_write
+            and isinstance(patch, str)
+            and patch.strip()
+            and self.artifact_store is not None
+            and self.artifact_repository is not None
+        ):
+            metadata = self.artifact_store.write(
+                run_id=run.id,
+                agent_id=agent.id,
+                artifact_type="patch",
+                filename="team-role.patch",
+                content=patch.encode("utf-8"),
+                mime_type="text/x-diff",
+                summary=f"Patch artifact for {assignment.kind.value} assignment.",
+            )
+            await self.artifact_repository.record(metadata)
+            patch_artifact_id = metadata.id
+            changed_files = [
+                item
+                for item in assignment.handoff_context.get("changed_files", [])
+                if isinstance(item, str)
+            ]
+        await self.team_repository.record_child_result(
+            TeamChildResult(
+                assignment_id=assignment.id,
+                child_run_id=run.id,
+                parent_run_id=assignment.parent_run_id,
+                root_run_id=assignment.root_run_id,
+                status="completed",
+                summary=f"{assignment.kind.value} assignment completed.",
+                patch_artifact_id=patch_artifact_id,
+                changed_files=changed_files,
+            )
         )
 
     async def _create_subagents(

@@ -8,12 +8,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.persistence.models import (
     TeamAssignmentRecord,
+    TeamChildResultRecord,
     TeamMailboxMessageRecord,
 )
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
     TeamAssignmentStatus,
+    TeamChildResult,
 )
 from awesome_agent.runtime.team_mailbox import (
     MailboxMessage,
@@ -53,6 +55,18 @@ class TeamRepository(Protocol):
         status: TeamAssignmentStatus,
     ) -> UUID | None: ...
 
+    async def record_child_result(self, result: TeamChildResult) -> TeamChildResult: ...
+
+    async def list_child_results(
+        self,
+        parent_run_id: UUID,
+    ) -> list[TeamChildResult]: ...
+
+    async def mark_child_result_patch_aggregated(
+        self,
+        child_run_id: UUID,
+    ) -> TeamChildResult: ...
+
     async def create_mailbox_message(
         self, message: MailboxMessage
     ) -> MailboxMessage: ...
@@ -79,6 +93,7 @@ class InMemoryTeamRepository(TeamRepository):
     def __init__(self) -> None:
         self._assignments: dict[UUID, TeamAssignment] = {}
         self._mailbox: dict[UUID, MailboxMessage] = {}
+        self._child_results: dict[UUID, TeamChildResult] = {}
 
     async def create_assignment(self, assignment: TeamAssignment) -> TeamAssignment:
         self._assignments[assignment.id] = assignment
@@ -148,6 +163,30 @@ class InMemoryTeamRepository(TeamRepository):
     async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
         self._mailbox[message.id] = message
         return message
+
+    async def record_child_result(self, result: TeamChildResult) -> TeamChildResult:
+        self._child_results[result.child_run_id] = result
+        return result
+
+    async def list_child_results(self, parent_run_id: UUID) -> list[TeamChildResult]:
+        return sorted(
+            [
+                result
+                for result in self._child_results.values()
+                if result.parent_run_id == parent_run_id
+            ],
+            key=lambda item: (item.created_at, item.child_run_id.hex),
+        )
+
+    async def mark_child_result_patch_aggregated(
+        self,
+        child_run_id: UUID,
+    ) -> TeamChildResult:
+        result = self._child_results[child_run_id].model_copy(
+            update={"patch_aggregated": True}
+        )
+        self._child_results[child_run_id] = result
+        return result
 
     async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage:
         return self._mailbox[message_id]
@@ -298,6 +337,52 @@ class PostgresTeamRepository(TeamRepository):
             session.add(_mailbox_to_record(message))
         return message
 
+    async def record_child_result(self, result: TeamChildResult) -> TeamChildResult:
+        async with self._sessions.begin() as session:
+            existing = await session.get(TeamChildResultRecord, result.child_run_id)
+            if existing is None:
+                session.add(_child_result_to_record(result))
+            else:
+                existing.status = result.status
+                existing.summary = result.summary
+                existing.patch_artifact_id = result.patch_artifact_id
+                existing.changed_files = result.changed_files
+                existing.evidence_artifact_refs = [
+                    str(value) for value in result.evidence_artifact_refs
+                ]
+                existing.failure_kind = result.failure_kind
+                existing.patch_aggregated = result.patch_aggregated
+                existing.updated_at = result.updated_at
+        return result
+
+    async def list_child_results(self, parent_run_id: UUID) -> list[TeamChildResult]:
+        async with self._sessions() as session:
+            records = list(
+                await session.scalars(
+                    select(TeamChildResultRecord)
+                    .where(TeamChildResultRecord.parent_run_id == parent_run_id)
+                    .order_by(
+                        TeamChildResultRecord.created_at,
+                        TeamChildResultRecord.child_run_id,
+                    )
+                )
+            )
+        return [_child_result_from_record(record) for record in records]
+
+    async def mark_child_result_patch_aggregated(
+        self,
+        child_run_id: UUID,
+    ) -> TeamChildResult:
+        async with self._sessions.begin() as session:
+            record = await session.get(TeamChildResultRecord, child_run_id)
+            if record is None:
+                raise KeyError(child_run_id)
+            record.patch_aggregated = True
+            from awesome_agent.domain.models import utc_now
+
+            record.updated_at = utc_now()
+            return _child_result_from_record(record)
+
     async def get_mailbox_message(self, message_id: UUID) -> MailboxMessage:
         async with self._sessions() as session:
             record = await session.get(TeamMailboxMessageRecord, message_id)
@@ -403,6 +488,44 @@ def _assignment_from_record(record: TeamAssignmentRecord) -> TeamAssignment:
         acceptance_criteria=list(record.acceptance_criteria),
         handoff_context=dict(record.handoff_context),
         retire_reason=record.retire_reason,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _child_result_to_record(result: TeamChildResult) -> TeamChildResultRecord:
+    return TeamChildResultRecord(
+        child_run_id=result.child_run_id,
+        assignment_id=result.assignment_id,
+        parent_run_id=result.parent_run_id,
+        root_run_id=result.root_run_id,
+        status=result.status,
+        summary=result.summary,
+        patch_artifact_id=result.patch_artifact_id,
+        changed_files=result.changed_files,
+        evidence_artifact_refs=[str(value) for value in result.evidence_artifact_refs],
+        failure_kind=result.failure_kind,
+        patch_aggregated=result.patch_aggregated,
+        created_at=result.created_at,
+        updated_at=result.updated_at,
+    )
+
+
+def _child_result_from_record(record: TeamChildResultRecord) -> TeamChildResult:
+    return TeamChildResult(
+        assignment_id=record.assignment_id,
+        child_run_id=record.child_run_id,
+        parent_run_id=record.parent_run_id,
+        root_run_id=record.root_run_id,
+        status=record.status,  # type: ignore[arg-type]
+        summary=record.summary,
+        patch_artifact_id=record.patch_artifact_id,
+        changed_files=list(record.changed_files),
+        evidence_artifact_refs=[
+            UUID(value) for value in record.evidence_artifact_refs
+        ],
+        failure_kind=record.failure_kind,
+        patch_aggregated=record.patch_aggregated,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )

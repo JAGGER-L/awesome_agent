@@ -1,5 +1,9 @@
+from pathlib import Path
+
 import pytest
 
+from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
+from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.team import InMemoryTeamRepository
@@ -115,6 +119,38 @@ async def test_teammate_resumes_after_subagents_terminal() -> None:
 
     assert not recovered
     assert state["phase"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_teammate_records_patch_artifact_result(tmp_path: Path) -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            can_delegate=False,
+            handoff_context={
+                "patch": "--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
+                "changed_files": ["README.md"],
+            },
+        ).model_copy(update={"can_write": True})
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    result = (await teams.list_child_results(run.parent_run_id or run.id))[0]
+    assert result.patch_artifact_id is not None
+    assert result.changed_files == ["README.md"]
+    assert (await artifacts.get(result.patch_artifact_id)).artifact_type == "patch"
 
 
 def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:

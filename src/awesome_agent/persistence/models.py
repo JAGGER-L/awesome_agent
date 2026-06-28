@@ -208,6 +208,36 @@ class TeamMailboxMessageRecord(Base):
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class TeamChildResultRecord(Base):
+    __tablename__ = "team_child_results"
+
+    child_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    assignment_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("team_assignments.id", ondelete="CASCADE"),
+        index=True,
+    )
+    parent_run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    root_run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    patch_artifact_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("artifacts.id", ondelete="SET NULL"),
+        index=True,
+    )
+    changed_files: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    evidence_artifact_refs: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    failure_kind: Mapped[str | None] = mapped_column(String(64), index=True)
+    patch_aggregated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class IntakeReservationRecord(Base):
     __tablename__ = "intake_reservations"
     __table_args__ = (

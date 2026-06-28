@@ -1,10 +1,14 @@
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
+from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
     DispatchStatus,
+    EventType,
     ExecutionKind,
     RunIntent,
     RunMode,
@@ -21,8 +25,10 @@ from awesome_agent.runtime.graphs import (
 )
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
+    TeamAssignment,
     TeamAssignmentKind,
     TeamAssignmentStatus,
+    TeamChildResult,
 )
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
 
@@ -105,6 +111,104 @@ async def test_leader_creates_verifier_after_teammate_terminal() -> None:
     assert verifier.graph_name == TEAM_VERIFIER_GRAPH
     assert verifier.graph_version == TEAM_VERIFIER_VERSION
     assert verifier_run.child_role == "verifier"
+
+
+@pytest.mark.asyncio
+async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    store = LocalArtifactStore(tmp_path / ".artifacts")
+    graph = TeamLeaderGraph(team_repository=teams, artifact_repository=artifacts)
+    run, leader = _leader_run()
+    run = run.model_copy(update={"workspace_path": tmp_path})
+    await runtime.create_run(run, leader)
+    child = Run(
+        goal="child",
+        mode=RunMode.TEAM,
+        intent=RunIntent.MODIFYING,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        graph_name="team-role",
+        graph_version=1,
+    )
+    await runtime.create_run(
+        child,
+        Agent(
+            run_id=child.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile="teammate",
+            model="fake",
+        ),
+    )
+    assignment = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="teammate",
+        graph_name="team-role",
+        graph_version=1,
+        goal="child",
+    )
+    await teams.create_assignment(assignment)
+    metadata = store.write(
+        run_id=child.id,
+        agent_id=None,
+        artifact_type="patch",
+        filename="change.patch",
+        content=(
+            b"--- a/README.md\n"
+            b"+++ b/README.md\n"
+            b"@@ -1 +1 @@\n"
+            b"-old\n"
+            b"+new\n"
+        ),
+        mime_type="text/x-diff",
+        summary="README patch",
+    )
+    await artifacts.record(metadata)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=assignment.id,
+            child_run_id=child.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="completed",
+            summary="Changed README.",
+            patch_artifact_id=metadata.id,
+            changed_files=["README.md"],
+        )
+    )
+    await teams.record_child_terminal(
+        child.id,
+        status=TeamAssignmentStatus.COMPLETED,
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(ChildRunWait, match="waiting_verifier"):
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    result = (await teams.list_child_results(run.id))[0]
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new\n"
+    assert result.patch_aggregated
+    assert any(event[0] is EventType.TEAM_PATCH_AGGREGATED for event in events)
 
 
 @pytest.mark.asyncio
@@ -264,3 +368,16 @@ def _leader_run() -> tuple[Run, Agent]:
         model="deepseek-v4-pro",
     )
     return run, leader
+
+
+def _git(path: Path, *arguments: str) -> None:
+    import subprocess
+
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=path,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    assert result.returncode == 0
