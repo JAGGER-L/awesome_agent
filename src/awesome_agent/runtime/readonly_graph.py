@@ -36,6 +36,7 @@ from awesome_agent.persistence.budget import (
     ContextCompactionRecord,
     RunBudgetLedgerRecord,
 )
+from awesome_agent.runtime.agent_loop import ReadOnlyAgentLoop
 from awesome_agent.runtime.budget import (
     BudgetDecision,
     BudgetLedger,
@@ -137,6 +138,7 @@ class ReadOnlyCodingGraph:
         self.context_manager = context_manager
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.agent_loop = ReadOnlyAgentLoop()
         self._run: Run | None = None
         self._agent: Agent | None = None
         self._event_sink: EventSink | None = None
@@ -229,9 +231,52 @@ class ReadOnlyCodingGraph:
         self,
         state: ReadOnlyAgentState,
     ) -> ReadOnlyAgentState:
+        return await self.agent_loop.before_agent(
+            state,
+            run=self._require_run(),
+            agent=self._require_agent(),
+            messages=self._messages_from_state(state),
+            handler=self._initialize_impl,
+        )
+
+    async def _initialize_impl(
+        self,
+        state: ReadOnlyAgentState,
+    ) -> ReadOnlyAgentState:
         return {**state, "phase": "initialized"}
 
     async def _model_turn(
+        self,
+        state: ReadOnlyAgentState,
+    ) -> ReadOnlyAgentState:
+        async def run_model(current: ReadOnlyAgentState) -> ReadOnlyAgentState:
+            return await self.agent_loop.wrap_model_call(
+                current,
+                run=self._require_run(),
+                agent=self._require_agent(),
+                messages=self._messages_from_state(current),
+                handler=self._model_turn_impl,
+            )
+
+        async def after_model(current: ReadOnlyAgentState) -> ReadOnlyAgentState:
+            completed = await run_model(current)
+            return await self.agent_loop.after_model(
+                completed,
+                run=self._require_run(),
+                agent=self._require_agent(),
+                messages=self._messages_from_state(completed),
+                handler=_identity_state,
+            )
+
+        return await self.agent_loop.before_model(
+            state,
+            run=self._require_run(),
+            agent=self._require_agent(),
+            messages=self._messages_from_state(state),
+            handler=after_model,
+        )
+
+    async def _model_turn_impl(
         self,
         state: ReadOnlyAgentState,
     ) -> ReadOnlyAgentState:
@@ -409,6 +454,18 @@ class ReadOnlyCodingGraph:
         self,
         state: ReadOnlyAgentState,
     ) -> ReadOnlyAgentState:
+        return await self.agent_loop.wrap_tool_call(
+            state,
+            run=self._require_run(),
+            agent=self._require_agent(),
+            messages=self._messages_from_state(state),
+            handler=self._execute_tools_impl,
+        )
+
+    async def _execute_tools_impl(
+        self,
+        state: ReadOnlyAgentState,
+    ) -> ReadOnlyAgentState:
         run = self._require_run()
         agent = self._require_agent()
         turn = ModelTurn.model_validate(state["last_turn"])
@@ -533,6 +590,19 @@ class ReadOnlyCodingGraph:
         }
 
     async def _finalize(
+        self,
+        state: ReadOnlyAgentState,
+    ) -> ReadOnlyAgentState:
+        finalized = await self._finalize_impl(state)
+        return await self.agent_loop.after_agent(
+            finalized,
+            run=self._require_run(),
+            agent=self._require_agent(),
+            messages=self._messages_from_state(finalized),
+            handler=_identity_state,
+        )
+
+    async def _finalize_impl(
         self,
         state: ReadOnlyAgentState,
     ) -> ReadOnlyAgentState:
@@ -730,6 +800,9 @@ class ReadOnlyCodingGraph:
             raise CorruptRuntimeStateError("Graph Agent context is unavailable.")
         return self._agent
 
+    def _messages_from_state(self, state: ReadOnlyAgentState) -> list[ModelMessage]:
+        return [_MESSAGE_ADAPTER.validate_python(item) for item in state["messages"]]
+
 
 def _initial_state(run: Run, agent: Agent) -> ReadOnlyAgentState:
     return {
@@ -841,3 +914,7 @@ def _uuid_artifact_refs(artifact_refs: list[str]) -> list[UUID]:
 
 def _elapsed_ms(started: float) -> int:
     return max(0, int((monotonic() - started) * 1000))
+
+
+async def _identity_state(state: ReadOnlyAgentState) -> ReadOnlyAgentState:
+    return state

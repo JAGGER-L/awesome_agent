@@ -9,6 +9,7 @@ from awesome_agent.runtime.agent_loop.middleware import (
     AgentLoopMiddleware,
     MiddlewareStack,
 )
+from awesome_agent.runtime.agent_loop.read_only import ReadOnlyAgentLoop
 
 __all__ = [
     "AgentLoopMiddleware",
@@ -18,4 +19,5 @@ __all__ = [
     "MiddlewareDecision",
     "MiddlewareStack",
     "MiddlewareStage",
+    "ReadOnlyAgentLoop",
 ]
