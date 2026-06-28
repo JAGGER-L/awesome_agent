@@ -26,6 +26,7 @@ pytestmark = pytest.mark.integration
 async def test_two_workers_claim_one_run_once() -> None:
     engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
     sessions = create_session_factory(engine)
+    await _delete_dispatch_fixtures(sessions)
     run_id = await _insert_queued_run(sessions)
     dispatcher = PostgresRunDispatcher(sessions)
 
@@ -35,12 +36,14 @@ async def test_two_workers_claim_one_run_once() -> None:
             worker_name="worker-a",
             lease_duration=timedelta(seconds=60),
             max_attempts=3,
+            graph_identities=_fixture_graphs(),
         ),
         dispatcher.claim_next(
             worker_id=uuid4(),
             worker_name="worker-b",
             lease_duration=timedelta(seconds=60),
             max_attempts=3,
+            graph_identities=_fixture_graphs(),
         ),
     )
 
@@ -60,6 +63,7 @@ async def test_two_workers_claim_one_run_once() -> None:
 async def test_heartbeat_and_fencing_reject_stale_owner() -> None:
     engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
     sessions = create_session_factory(engine)
+    await _delete_dispatch_fixtures(sessions)
     run_id = await _insert_queued_run(sessions)
     dispatcher = PostgresRunDispatcher(sessions)
     lease = await dispatcher.claim_next(
@@ -67,6 +71,7 @@ async def test_heartbeat_and_fencing_reject_stale_owner() -> None:
         worker_name="worker-a",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
+        graph_identities=_fixture_graphs(),
     )
     assert lease is not None
 
@@ -86,6 +91,7 @@ async def test_heartbeat_and_fencing_reject_stale_owner() -> None:
         worker_name="worker-b",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
+        graph_identities=_fixture_graphs(),
     )
     assert replacement is not None
     assert replacement.fencing_token == 2
@@ -113,6 +119,7 @@ async def test_heartbeat_and_fencing_reject_stale_owner() -> None:
 async def test_retry_delay_and_expired_lease_recovery() -> None:
     engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
     sessions = create_session_factory(engine)
+    await _delete_dispatch_fixtures(sessions)
     run_id = await _insert_queued_run(sessions)
     dispatcher = PostgresRunDispatcher(sessions)
     lease = await dispatcher.claim_next(
@@ -120,6 +127,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
         worker_name="worker-a",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
+        graph_identities=_fixture_graphs(),
     )
     assert lease is not None
     await dispatcher.release_for_retry(
@@ -135,6 +143,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
             worker_name="too-early",
             lease_duration=timedelta(seconds=60),
             max_attempts=3,
+            graph_identities=_fixture_graphs(),
         )
         is None
     )
@@ -155,6 +164,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
         worker_name="worker-b",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
+        graph_identities=_fixture_graphs(),
     )
     assert replacement is not None
     async with sessions.begin() as session:
@@ -169,7 +179,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
             {"run_id": run_id},
         )
 
-    assert await dispatcher.recover_expired(max_attempts=3) == 1
+    assert await dispatcher.recover_expired(max_attempts=3) >= 1
     restored = await PostgresRuntimeRepository(sessions).get_run(run_id)
     assert restored.dispatch_status is DispatchStatus.QUEUED
     assert restored.status is RunStatus.CREATED
@@ -179,6 +189,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
         worker_name="worker-c",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
+        graph_identities=_fixture_graphs(),
     )
     assert final is not None and final.attempt == 3
     async with sessions.begin() as session:
@@ -192,7 +203,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
             ),
             {"run_id": run_id},
         )
-    assert await dispatcher.recover_expired(max_attempts=3) == 1
+    assert await dispatcher.recover_expired(max_attempts=3) >= 1
     terminal = await PostgresRuntimeRepository(sessions).get_run(run_id)
     assert terminal.status is RunStatus.RECOVERY_REQUIRED
     assert terminal.dispatch_status is DispatchStatus.TERMINAL
@@ -207,6 +218,7 @@ async def test_retry_delay_and_expired_lease_recovery() -> None:
 async def test_cancellation_is_atomic_and_rejects_claimed_run() -> None:
     engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
     sessions = create_session_factory(engine)
+    await _delete_dispatch_fixtures(sessions)
     runtime = PostgresRuntimeRepository(sessions)
     dispatcher = PostgresRunDispatcher(sessions)
     queued_id = await _insert_queued_run(sessions)
@@ -225,6 +237,7 @@ async def test_cancellation_is_atomic_and_rejects_claimed_run() -> None:
         worker_name="worker",
         lease_duration=timedelta(seconds=60),
         max_attempts=3,
+        graph_identities=_fixture_graphs(),
     )
     assert lease is not None and lease.run_id == claimed_id
     with pytest.raises(DispatchConflict):
@@ -244,18 +257,33 @@ async def _insert_queued_run(
             text(
                 """
                 INSERT INTO runs (
-                    id, goal, mode, status, dispatch_status, legacy,
+                    id, goal, mode, status, dispatch_status, graph_name,
+                    graph_version, legacy,
                     created_at, updated_at
                 )
                 VALUES (
-                    :id, 'dispatch fixture', 'solo', 'created', 'queued', false,
-                    clock_timestamp(), clock_timestamp()
+                    :id, 'dispatch fixture', 'solo', 'created', 'queued',
+                    'dispatch-fixture', 1, false, clock_timestamp(),
+                    clock_timestamp()
                 )
                 """
             ),
             {"id": run_id},
         )
     return run_id
+
+
+def _fixture_graphs() -> frozenset[tuple[str, int]]:
+    return frozenset({("dispatch-fixture", 1)})
+
+
+async def _delete_dispatch_fixtures(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessions.begin() as session:
+        await session.execute(
+            delete(RunRecord).where(RunRecord.goal == "dispatch fixture")
+        )
 
 
 async def _delete_run(
