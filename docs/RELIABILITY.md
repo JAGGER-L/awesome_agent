@@ -70,9 +70,10 @@ forbidden.
 - Expired leases requeue before the attempt limit. At the limit, the Run enters
   `recovery_required + terminal` and preserves its workspace.
 - Each Worker process executes at most one Run. Workers always claim
-  `runtime_probe` and distributed team graphs `team-coding`, `team-role`,
-  and `team-verifier`. When a model provider is configured, they also claim
-  `solo-readonly`, `solo-modifying`, and scoped `team-coding-scoped`.
+  `runtime_probe` plus deterministic distributed child graphs `team-role` and
+  `team-verifier`. When a model provider is configured, they also claim
+  `solo-readonly`, `solo-modifying`, scoped `team-coding-scoped`, and the
+  model-driven distributed Leader root graph `team-coding`.
 - Probe checkpoints use synchronous LangGraph durability. Process-crash tests
   prove lease expiry, fencing-token increment, and checkpoint resume.
 - Graceful Worker shutdown stops new claims, retains heartbeat during a

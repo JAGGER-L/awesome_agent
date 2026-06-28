@@ -63,9 +63,9 @@
   `read`, and instruction-discovery tools against the managed Run worktree.
 - Read tools reject absolute/parent paths, `.git`, symlink or junction
   traversal, binary files, and common credential/private-key files.
-- Workers without a configured model API key do not claim model-driven solo or
-  scoped team Coding Runs. They may still claim deterministic distributed team
-  child-run graphs that do not call a provider.
+- Workers without a configured model API key do not claim model-driven solo,
+  scoped team, or distributed Leader root Coding Runs. They may still claim
+  deterministic distributed team child-run graphs that do not call a provider.
 - Distributed team assignments carry explicit `allowed_tools`,
   `allowed_skills`, write permission, delegation permission, and Subagent
   limits. Child Runs must not register or execute capabilities outside their

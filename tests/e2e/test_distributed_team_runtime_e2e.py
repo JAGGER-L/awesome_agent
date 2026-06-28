@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
+from tests.fakes import FakeModelProvider
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode, RunStatus
@@ -15,6 +18,7 @@ from awesome_agent.persistence.intake_reservations import (
 from awesome_agent.persistence.repository_registry import PostgresRepositoryRegistry
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.team import PostgresTeamRepository
+from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.events import EventStream
@@ -31,7 +35,10 @@ pytestmark = pytest.mark.e2e
     or "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL" not in os.environ,
     reason="Runtime and checkpoint databases are not configured.",
 )
-async def test_team_run_completes_as_distributed_child_runs(tmp_path: Path) -> None:
+async def test_team_run_completes_as_distributed_child_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     repository_path = await _git_workspace(tmp_path)
     snapshot = await require_primary_clean_repository(repository_path)
     engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
@@ -58,15 +65,18 @@ async def test_team_run_completes_as_distributed_child_runs(tmp_path: Path) -> N
     )
     run = await intake.create_run(
         repository_id=registered.id,
-        goal="Use a teammate, subagent, and verifier to inspect the repository",
+        goal="Use a teammate and verifier to inspect the repository",
         intent=RunIntent.MODIFYING,
         mode=RunMode.TEAM,
     )
+    provider = FakeModelProvider([_team_plan_json()])
+    monkeypatch.setattr(ModelProviderFactory, "create", lambda _self, _model: provider)
     settings = Settings(
         database_url=os.environ["AWESOME_AGENT_TEST_DATABASE_URL"],
         checkpoint_database_url=os.environ[
             "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL"
         ],
+        deepseek_api_key=SecretStr("fake"),
         artifact_root=tmp_path / "artifacts",
         worker_poll_interval_seconds=0.01,
     )
@@ -91,11 +101,9 @@ async def test_team_run_completes_as_distributed_child_runs(tmp_path: Path) -> N
     assert [run.child_role for run in descendants] == [
         "teammate",
         "verifier",
-        "subagent",
     ]
     assert {assignment.kind.value for assignment in assignments} == {
         "teammate",
-        "subagent",
         "verifier",
     }
     assert all(assignment.status.value == "completed" for assignment in assignments)
@@ -109,6 +117,27 @@ def _models() -> RoleModelResolver:
         teammate_model="fake-model",
         verifier_model="fake-model",
         subagent_model="fake-model",
+    )
+
+
+def _team_plan_json() -> str:
+    return json.dumps(
+        {
+            "rationale": "One teammate is enough for this distributed skeleton.",
+            "teammates": [
+                {
+                    "role_profile": "backend-engineer",
+                    "goal": "Inspect the repository and report a bounded result.",
+                    "allowed_tools": ["repo.read", "repo.diff"],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": False,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": ["Return a completed child result."],
+                }
+            ],
+        }
     )
 
 

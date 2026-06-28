@@ -388,10 +388,16 @@ Verifier execution or external failures use a separate retry budget and default
 to one retry. These defaults are intentionally conservative and tracked as
 policy-tuning debt.
 
-Task 17 adds distributed `team-coding`:
+Task 17 adds distributed `team-coding`; Task 22A begins replacing deterministic
+root coordination with model-driven planning:
 
-- the root Leader Run creates durable Teammate child Runs;
-- each Teammate can create bounded depth-one Subagent child Runs;
+- the root Leader Run calls the Leader model for a structured `TeamPlan`;
+- the plan is validated, retried once on invalid output, and recorded through
+  `team.plan_created` / `team.plan_rejected` events;
+- the accepted plan creates 1-3 durable Teammate child Runs;
+- the Leader cannot include Verifier assignments, `subagent_goals`,
+  `delegation_guidance`, or Subagent task direction in the plan;
+- dynamic depth-one Subagent child Runs remain a Task 22C target;
 - the root Leader creates a Verifier child Run before finalization;
 - child Runs are independently claimable through the normal PostgreSQL
   dispatch queue;
@@ -404,10 +410,10 @@ Task 17 adds distributed `team-coding`:
 - parent cancellation recursively propagates to nonterminal descendants.
 
 Task 18 adds root-aware team budget checks, deferred assignment tool filtering,
-and artifact-backed compaction for large team payloads. The current distributed
-graph remains deterministic. Model-driven distributed team planning, central
-tool execution in team child Runs, and durable verifier rework remain later
-work.
+and artifact-backed compaction for large team payloads. After Task 22A, only
+the distributed Leader planning step is model-driven. Central tool execution in
+team child Runs, dynamic Subagents, model-driven Verifier review, and durable
+targeted rework remain later Task 22 phases.
 
 ## Retry, Cancellation, and Failure
 

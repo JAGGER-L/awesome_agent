@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from tests.fakes import FakeModelProvider
 
+from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
@@ -52,7 +55,7 @@ async def test_distributed_team_runs_through_workers_with_lineage(
     teams = PostgresTeamRepository(sessions)
     artifacts = PostgresArtifactMetadataRepository(sessions)
     root = Run(
-        goal="Coordinate teammate, subagent, and verifier",
+        goal="Coordinate teammate and verifier",
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
         runtime_route=TEAM_CODING_ROUTE,
@@ -60,6 +63,7 @@ async def test_distributed_team_runs_through_workers_with_lineage(
         workspace_path=workspace,
     )
     root = root.model_copy(update={"graph_thread_id": f"run:{root.id}"})
+    provider = FakeModelProvider([_team_plan_json()])
     leader = Agent(
         run_id=root.id,
         kind=AgentKind.LEADER,
@@ -73,6 +77,8 @@ async def test_distributed_team_runs_through_workers_with_lineage(
         probe_graph=UnusedProbeGraph(),  # type: ignore[arg-type]
         team_leader_graph=TeamLeaderGraph(
             team_repository=teams,
+            provider_resolver=lambda _: provider,
+            model_resolver=_models(),
             artifact_repository=artifacts,
         ),
         team_role_graph=TeamRoleGraph(
@@ -92,32 +98,26 @@ async def test_distributed_team_runs_through_workers_with_lineage(
     assignments = await teams.list_assignments(root.id, include_inactive=True)
     root_results = await teams.list_child_results(root.id)
     teammate = next(run for run in descendants if run.child_role == "teammate")
-    subagent_results = await teams.list_child_results(teammate.id)
     mailbox = await teams.list_mailbox_messages(root.id)
     root_events = await runtime.list_events(root.id)
-    teammate_events = await runtime.list_events(teammate.id)
 
     assert restored.status is RunStatus.COMPLETED
     assert [run.child_role for run in descendants] == [
         "teammate",
         "verifier",
-        "subagent",
     ]
     assert {item.kind for item in assignments} == {
         TeamAssignmentKind.TEAMMATE,
-        TeamAssignmentKind.SUBAGENT,
         TeamAssignmentKind.VERIFIER,
     }
     assert all(item.status == "completed" for item in assignments)
     assert {result.status for result in root_results} == {"completed"}
-    assert subagent_results[0].status == "completed"
+    assert teammate.id
     assert mailbox[0].route == "verifier_to_leader"
     assert EventType.TEAM_CHILD_RUN_CREATED in {
         event.event_type for event in root_events
     }
-    assert EventType.TEAM_CHILD_RUN_CREATED in {
-        event.event_type for event in teammate_events
-    }
+    assert EventType.TEAM_PLAN_CREATED in {event.event_type for event in root_events}
     await engine.dispose()
 
 
@@ -142,6 +142,36 @@ def _worker_config() -> WorkerConfig:
         shutdown_grace=1,
         retry_delay=timedelta(seconds=0),
         max_attempts=3,
+    )
+
+
+def _models() -> RoleModelResolver:
+    return RoleModelResolver(
+        leader_model="fake-model",
+        teammate_model="fake-model",
+        verifier_model="fake-model",
+        subagent_model="fake-model",
+    )
+
+
+def _team_plan_json() -> str:
+    return json.dumps(
+        {
+            "rationale": "One teammate is enough for this skeleton run.",
+            "teammates": [
+                {
+                    "role_profile": "backend-engineer",
+                    "goal": "Inspect the repository and report a bounded result.",
+                    "allowed_tools": ["repo.read", "repo.diff"],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": False,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": ["Return a completed child result."],
+                }
+            ],
+        }
     )
 
 

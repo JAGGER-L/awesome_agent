@@ -88,9 +88,20 @@ Task 07 does not include:
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
 | Task 21 | Done | `solo-modifying` now enters AgentLoop middleware stages, with context, budget, tool execution, approval, artifact offload, evidence, validation, rework, and finalization policy extracted from the graph. |
-| Task 22 | Model-driven distributed team runtime | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
+| Task 22 | In progress | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. Task 22A is complete: the Leader now creates a validated model-generated `TeamPlan` before creating Teammate child Runs. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
 | Task 23 | OpenTelemetry runtime instrumentation | Add real OTel spans/metrics on API and Worker production paths while preserving durable query tables. | Worker/model/tool/sandbox/API spans are created, exporter failures are isolated, and trace IDs remain queryable through durable events. |
 | Task 24 | Graph file size reduction | Split remaining oversized graph files after middleware migration makes stable extraction points clear. | Large graph modules are reduced to durable orchestration with focused unit tests for extracted components. |
+
+## Task 22 Breakdown
+
+| Phase | Status | Purpose |
+| --- | --- | --- |
+| Task 22A | Done | Model-driven Leader `TeamPlan` creation, validation, retry-on-invalid, and Teammate child Run creation. |
+| Task 22B | Planned | Replace deterministic Teammate role completion with model/tool loops using assigned tools and skills. |
+| Task 22C | Planned | Add durable Teammate-owned dynamic Subagent creation with depth and concurrency limits. |
+| Task 22D | Planned | Replace deterministic Verifier completion with model-driven verification. |
+| Task 22E | Planned | Add targeted replacement and rework when verification fails. |
+| Task 22F | Planned | Add full distributed team E2E coverage and final documentation cleanup. |
 
 ## Gap Disposition
 

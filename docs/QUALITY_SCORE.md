@@ -1,14 +1,16 @@
 # Quality Score
 
 Current phase: durable solo read-only, solo modifying, explicit scoped team
-Coding, and deterministic distributed team child-run loops execute locally.
+Coding, and partially model-driven distributed team child-run loops execute
+locally.
 Solo paths have exact-invocation approvals, active cancellation,
 validation-gated modifying completion, coherent lifecycle projections, and
 queryable runtime observability. Distributed team child Runs now have durable
-lineage, assignments, mailbox, recursive cancellation, inspection APIs/CLI,
-root-aware budgets, deferred tool exposure, team payload compaction, and
-PostgreSQL E2E evidence. Model-driven distributed team planning and team tool
-execution remain roadmap work.
+lineage, model-generated Leader TeamPlans, assignments, mailbox, recursive
+cancellation, inspection APIs/CLI, root-aware budgets, deferred tool exposure,
+team payload compaction, and PostgreSQL E2E evidence. Dynamic distributed
+Subagents, team role tool execution, model-driven Verifier review, and targeted
+rework remain roadmap work.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

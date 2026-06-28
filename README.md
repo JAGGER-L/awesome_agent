@@ -62,14 +62,14 @@ PostgreSQL:
   conservative project detection. Failed required gates feed a bounded rework
   loop; exhausted or non-reworkable validation failure marks the Run failed.
 - **Explicit Team Coding Runs** are selected with CLI `--team` or API
-  `mode: "team"`. Two team runtimes exist today: scoped `team-coding-scoped` keeps
-  one Run and one checkpoint thread while creating internal durable role
-  records; distributed `team-coding` creates Teammate, Subagent, and Verifier
-  child Runs that independent Workers can claim through PostgreSQL dispatch.
-  The distributed path persists lineage, assignments, mailbox messages, child
-  results, cancellation propagation, and inspection APIs/CLI. Its first E2E is
-  deterministic and does not yet perform model-driven team planning or
-  side-effecting team tools.
+  `mode: "team"`. Two team runtimes exist today: scoped `team-coding-scoped`
+  keeps one Run and one checkpoint thread while creating internal durable role
+  records; distributed `team-coding` creates Teammate and Verifier child Runs
+  that independent Workers can claim through PostgreSQL dispatch. The
+  distributed Leader now asks the model for a validated structured `TeamPlan`
+  before creating 1-3 Teammates. Dynamic Teammate-owned Subagent child Runs,
+  model-driven role tool loops, and model-driven verifier rework are the next
+  Task 22 phases.
 
 ### Approval (implemented for solo modifying runs)
 
@@ -84,16 +84,18 @@ approval.
 
 The durable team runtime is explicit. Intake starts with only the Leader. When
 `--team` or API `mode: "team"` is selected, current intake routes to
-distributed `team-coding`. The Leader creates Teammate child Runs; Teammates
-may create bounded Subagent child Runs; and the Leader creates an independent
-Verifier child Run before finalization. Subagents have isolated context and
-return evidence only to their owning Teammate. The Verifier must pass the work
-before the Leader can complete the root Run.
+distributed `team-coding`. The Leader creates a model-generated structured
+`TeamPlan`, validates it, and creates Teammate child Runs from that plan. The
+Leader does not create Subagents or describe Subagent task direction. The
+Leader creates an independent Verifier child Run before finalization. Dynamic
+Teammate-owned Subagent creation is planned for Task 22C. The Verifier must
+pass the work before the Leader can complete the root Run.
 
-The older scoped `team-coding-scoped` runtime remains documented and tested, but the
-new distributed path is the forward architecture. Rich model-driven
-specialization and team tool execution remain later work. Distributed team
-assignments now support deferred tool exposure, root-aware token/active-time
+The older scoped `team-coding-scoped` runtime remains documented and tested,
+but the new distributed path is the forward architecture. Model-driven Leader
+planning has started; role execution, Subagent delegation, Verifier review,
+and targeted rework remain in later Task 22 phases. Distributed team
+assignments support deferred tool exposure, root-aware token/active-time
 budget checks, and artifact-backed compaction for large handoff, child-result,
 and verifier evidence payloads.
 
@@ -273,10 +275,9 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- model-driven distributed team planning, team tool execution, and verifier
-  rework on the `team-coding` path.
-- richer model-driven distributed team planning, team tool use, and mailbox
-  collaboration policy.
+- model-driven distributed team role tool execution, dynamic Subagent creation,
+  Verifier review, and targeted rework on the `team-coding` path.
+- richer team mailbox collaboration policy.
 
 ## Documentation
 

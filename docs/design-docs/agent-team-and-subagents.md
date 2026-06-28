@@ -19,7 +19,8 @@ A team contains at most six Teammates, including exactly one primary Verifier.
 Team mode is explicit. It is selected with CLI `--team` or API `mode: "team"`.
 Intake still creates only the Leader. Current default routing uses distributed
 `team-coding`, where the Leader Run creates child Runs for Teammates and the
-Verifier, and each Teammate may create bounded Subagent child Runs.
+Verifier. Dynamic Teammate-owned Subagent child Runs are a Task 22C target and
+are not part of the Task 22A runtime state.
 
 ## Teammates
 
@@ -77,10 +78,21 @@ Teammates or Subagents.
 
 ## Distributed Team Runtime
 
-Task 17 promotes Teammates from graph-internal sessions to child Runs. The
-Leader Run creates Teammate child Runs, each Teammate can create depth-one
-Subagent child Runs, and the Leader creates a Verifier child Run before
-finalization. Independent Workers can claim each child Run through the normal
+Task 17 promoted Teammates from graph-internal sessions to child Runs. Task 22A
+replaces deterministic Leader assignment creation with a model-generated
+structured `TeamPlan`. The Leader calls its configured model, validates the
+JSON plan, retries once on invalid output, emits `team.plan_created` or
+`team.plan_rejected`, and creates 1-3 Teammate child Runs from the accepted
+plan.
+
+The TeamPlan may grant Teammate tools, skills, write permission, delegation
+permission, Subagent slot count, and acceptance criteria. It must not contain
+Verifier assignments, `subagent_goals`, `delegation_guidance`, or any Subagent
+task direction. The Leader may only grant `can_delegate` and `max_subagents`;
+the Teammate will decide whether to create Subagents in Task 22C.
+
+The Leader creates a Verifier child Run only after Teammate assignments reach
+terminal state. Independent Workers can claim each child Run through the normal
 PostgreSQL dispatch path. Parent Runs release to `waiting_*` states while child
 work is active and are requeued when child assignments reach terminal states.
 
@@ -93,13 +105,11 @@ Distributed team state is stored in:
 - `team_child_results` for summaries, patch artifact references, changed files,
   aggregation status, and failure classification.
 
-The current distributed graph is a deterministic skeleton with real durable
-lineage, mailbox, cancellation propagation, API/CLI inspection, and
-PostgreSQL-backed integration/E2E evidence. Task 18 adds root-aware team budget
-checks, deferred assignment tool exposure, and artifact-backed compaction for
-large handoff, child-result, and verifier evidence payloads. Rich model-driven
-role planning, team tool execution, and verifier rework loops remain later
-work.
+The current distributed graph is a partially model-driven skeleton with real
+durable lineage, mailbox, cancellation propagation, API/CLI inspection, and
+PostgreSQL-backed integration/E2E evidence. Task 22A makes only the Leader plan
+model-driven. Team role execution, dynamic Subagent creation, Verifier review,
+and targeted rework loops remain later Task 22 phases.
 
 This boundary is intentional. In `team-coding`, Leader, role, and Verifier
 graphs are production-wired for dispatch and persistence, but the child role

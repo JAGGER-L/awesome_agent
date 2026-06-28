@@ -12,10 +12,10 @@ team output.
 - solo read-only and solo modifying execution
 - explicit scoped team runtime with Leader, Teammates, Verifier, Subagent
   lineage, scoped tools, verification rejection, and rework
-- deterministic distributed team runtime where the Leader creates Teammate
-  child Runs, Teammates create bounded Subagent child Runs, a Verifier child
-  Run gates completion, and independent Workers claim child Runs through
-  PostgreSQL dispatch
+- distributed team runtime where the Leader creates a validated structured
+  model-generated `TeamPlan`, creates Teammate child Runs from that plan, later
+  creates a Verifier child Run to gate completion, and independent Workers
+  claim child Runs through PostgreSQL dispatch
 - Docker command execution
 - PostgreSQL resume
 - durable PostgreSQL API projections across service restarts
@@ -70,6 +70,7 @@ team output.
 - automatic solo/team routing
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
-- model-driven distributed team planning and team tool execution
+- dynamic distributed Subagent creation, team role tool execution, model-driven
+  Verifier review, and targeted rework
 - money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server

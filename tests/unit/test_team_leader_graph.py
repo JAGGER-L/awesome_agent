@@ -1,8 +1,11 @@
+import json
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from tests.fakes import FakeModelProvider
 
+from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
@@ -40,7 +43,7 @@ from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
 async def test_leader_creates_teammate_child_run_and_assignment() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
-    graph = TeamLeaderGraph(team_repository=teams)
+    graph, provider = _graph(teams)
     run, leader = _leader_run()
     await runtime.create_run(run, leader)
     events: list[tuple[object, dict[str, object], str]] = []
@@ -66,13 +69,90 @@ async def test_leader_creates_teammate_child_run_and_assignment() -> None:
     assert len(assignments) == 1
     assert assignments[0].kind is TeamAssignmentKind.TEAMMATE
     assert assignments[0].child_run_id == children[0].id
-    assert assignments[0].allowed_tools == []
-    assert len(events) == 2
-    assert events[0][1]["root_run_id"] == str(run.id)
-    assert events[0][1]["parent_run_id"] == str(run.id)
-    assert events[0][1]["child_run_id"] == str(children[0].id)
-    assert events[0][1]["assignment_id"] == str(assignments[0].id)
-    assert events[0][1]["agent_id"]
+    assert assignments[0].role_profile == "backend-engineer"
+    assert assignments[0].allowed_tools == ["repo.read", "repo.apply_patch"]
+    assert assignments[0].deferred_tools == ["repo.apply_patch"]
+    assert assignments[0].allowed_skills == ["python"]
+    assert assignments[0].can_write
+    assert assignments[0].can_delegate
+    assert assignments[0].max_subagents == 3
+    assert "subagent_goals" not in assignments[0].handoff_context
+    child_agents = await runtime.list_agents(children[0].id)
+    assert child_agents[0].profile == "backend-engineer"
+    assert child_agents[0].model == "backend-model"
+    assert len(provider.requests) == 1
+    assert len(events) == 3
+    assert events[0][0] is EventType.TEAM_PLAN_CREATED
+    assert events[0][1]["teammate_count"] == 1
+    assert events[1][1]["root_run_id"] == str(run.id)
+    assert events[1][1]["parent_run_id"] == str(run.id)
+    assert events[1][1]["child_run_id"] == str(children[0].id)
+    assert events[1][1]["assignment_id"] == str(assignments[0].id)
+    assert events[1][1]["agent_id"]
+
+
+@pytest.mark.asyncio
+async def test_leader_retries_invalid_team_plan_once() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph, provider = _graph(
+        teams,
+        responses=[
+            _team_plan_json(extra={"subagent_goals": ["inspect evidence"]}),
+            _team_plan_json(),
+        ],
+    )
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    assert len(provider.requests) == 2
+    assert events[0][0] is EventType.TEAM_PLAN_REJECTED
+    assert events[0][1]["attempt"] == 1
+    assert events[1][0] is EventType.TEAM_PLAN_CREATED
+    assert events[1][1]["attempt"] == 2
+
+
+@pytest.mark.asyncio
+async def test_leader_fails_after_second_invalid_team_plan() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    invalid = _team_plan_json(extra={"delegation_guidance": "create a subagent"})
+    graph, provider = _graph(teams, responses=[invalid, invalid])
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+
+    with pytest.raises(PermanentExecutionError, match="team_plan_invalid"):
+        await graph.execute(run, leader, repository=runtime)
+
+    assert len(provider.requests) == 2
+    assert await runtime.list_child_runs(run.id) == []
+    assert await teams.list_assignments(run.id) == []
+
+
+@pytest.mark.asyncio
+async def test_leader_rejects_writing_teammate_for_read_only_root() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph, _ = _graph(teams, responses=[_team_plan_json(), _team_plan_json()])
+    run, leader = _leader_run()
+    run = run.model_copy(update={"intent": RunIntent.READ_ONLY})
+    await runtime.create_run(run, leader)
+
+    with pytest.raises(PermanentExecutionError, match="read-only"):
+        await graph.execute(run, leader, repository=runtime)
+
+    assert await runtime.list_child_runs(run.id) == []
 
 
 @pytest.mark.asyncio
@@ -115,7 +195,7 @@ async def test_leader_stops_before_child_creation_when_team_budget_exhausted() -
 async def test_leader_wait_is_idempotent_while_child_is_active() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
-    graph = TeamLeaderGraph(team_repository=teams)
+    graph, provider = _graph(teams)
     run, leader = _leader_run()
     await runtime.create_run(run, leader)
 
@@ -126,13 +206,14 @@ async def test_leader_wait_is_idempotent_while_child_is_active() -> None:
 
     assert len(await runtime.list_child_runs(run.id)) == 1
     assert len(await teams.list_assignments(run.id)) == 1
+    assert len(provider.requests) == 1
 
 
 @pytest.mark.asyncio
 async def test_leader_creates_verifier_after_teammate_terminal() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
-    graph = TeamLeaderGraph(team_repository=teams)
+    graph, _ = _graph(teams)
     run, leader = _leader_run()
     await runtime.create_run(run, leader)
 
@@ -251,7 +332,7 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
 async def test_leader_completes_after_verifier_assignment_terminal() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
-    graph = TeamLeaderGraph(team_repository=teams)
+    graph, _ = _graph(teams)
     run, leader = _leader_run()
     await runtime.create_run(run, leader)
 
@@ -314,7 +395,7 @@ async def test_worker_releases_parent_for_child_wait() -> None:
         dispatcher=dispatcher,
         repository=runtime,
         probe_graph=FakeGraph(),  # type: ignore[arg-type]
-        team_leader_graph=TeamLeaderGraph(team_repository=InMemoryTeamRepository()),
+        team_leader_graph=_graph(InMemoryTeamRepository())[0],
         config=_config(),
     )
 
@@ -410,6 +491,54 @@ def _tight_budget_policy() -> BudgetPolicy:
         max_total_tokens_per_run=120,
         max_reasoning_tokens_per_run=1000,
         max_active_seconds_per_run=3600,
+    )
+
+
+def _graph(
+    teams: InMemoryTeamRepository,
+    *,
+    responses: list[str] | None = None,
+) -> tuple[TeamLeaderGraph, FakeModelProvider]:
+    provider = FakeModelProvider(responses or [_team_plan_json()])
+    return (
+        TeamLeaderGraph(
+            team_repository=teams,
+            provider_resolver=lambda _: provider,
+            model_resolver=_models(),
+        ),
+        provider,
+    )
+
+
+def _models() -> RoleModelResolver:
+    return RoleModelResolver(
+        leader_model="leader-model",
+        teammate_model="teammate-model",
+        verifier_model="verifier-model",
+        subagent_model="subagent-model",
+        role_overrides={"backend-engineer": "backend-model"},
+    )
+
+
+def _team_plan_json(*, extra: dict[str, object] | None = None) -> str:
+    teammate: dict[str, object] = {
+        "role_profile": "backend-engineer",
+        "goal": "Implement the backend change and report the changed files.",
+        "allowed_tools": ["repo.read", "repo.apply_patch"],
+        "deferred_tools": ["repo.apply_patch"],
+        "allowed_skills": ["python"],
+        "can_write": True,
+        "can_delegate": True,
+        "max_subagents": 3,
+        "acceptance_criteria": ["Return a patch or explain why no patch is needed."],
+    }
+    if extra:
+        teammate.update(extra)
+    return json.dumps(
+        {
+            "rationale": "The task benefits from one backend teammate.",
+            "teammates": [teammate],
+        }
     )
 
 

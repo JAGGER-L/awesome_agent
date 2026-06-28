@@ -253,10 +253,13 @@ tool invocations, Todo transitions, validation reports, events, and
 observability spans.
 
 Distributed `team-coding` is the forward architecture. The root Leader Run
-creates child Runs with durable lineage. Independent Workers can claim
-Teammate, Subagent, and Verifier child Runs through the same PostgreSQL
-dispatch protocol. Parent Runs release their lease while waiting for child
-work and are requeued when child assignments become terminal.
+creates child Runs with durable lineage. In the current Task 22A state, the
+Leader calls the model for a validated structured `TeamPlan` and creates
+Teammate child Runs from that plan; it does not create or direct Subagents.
+Independent Workers can claim Teammate and Verifier child Runs through the same
+PostgreSQL dispatch protocol. Dynamic Teammate-owned Subagent child Runs are a
+Task 22C target. Parent Runs release their lease while waiting for child work
+and are requeued when child assignments become terminal.
 
 ```text
                          +----------------------+
@@ -264,22 +267,14 @@ work and are requeued when child assignments become terminal.
                          | Leader team-coding |
                          +----------+-----------+
                                     |
-                                    | creates assignment + child Run
+                                    | model TeamPlan -> Teammate child Runs
                                     v
                          +----------------------+
                          | Child Run            |
                          | Teammate team-role |
                          +----------+-----------+
                                     |
-                      creates bounded Subagent child Runs
-                                    |
-                                    v
-                         +----------------------+
-                         | Grandchild Run       |
-                         | Subagent team-role |
-                         +----------+-----------+
-                                    |
-                         terminal result wakes Teammate
+                         terminal result wakes Leader
                                     |
                                     v
                          +----------------------+

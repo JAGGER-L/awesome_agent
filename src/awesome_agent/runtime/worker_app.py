@@ -118,12 +118,18 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 if providers.coding_available
                 else None
             ),
-            team_leader_graph=TeamLeaderGraph(
-                team_repository=team_repository,
-                artifact_store=artifact_store,
-                artifact_repository=artifact_repository,
-                budget_repository=budget_repository,
-                budget_policy=budget_policy,
+            team_leader_graph=(
+                TeamLeaderGraph(
+                    team_repository=team_repository,
+                    provider_resolver=providers.create,
+                    model_resolver=RoleModelResolver.from_settings(configured),
+                    artifact_store=artifact_store,
+                    artifact_repository=artifact_repository,
+                    budget_repository=budget_repository,
+                    budget_policy=budget_policy,
+                )
+                if providers.coding_available
+                else None
             ),
             team_role_graph=TeamRoleGraph(
                 team_repository=team_repository,
