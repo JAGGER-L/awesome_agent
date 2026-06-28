@@ -56,14 +56,15 @@ async def compact_team_payload(
         summary=(f"Compacted {payload_kind} payload for {graph_name}@{graph_version}."),
     )
     await artifact_repository.record(metadata)
+    summary = (
+        f"{payload_kind} payload offloaded to artifact {metadata.id}; "
+        f"{before_tokens} estimated tokens preserved outside inline context."
+    )
     inline_payload = {
         "compacted": True,
         "payload_kind": payload_kind,
         "artifact_refs": [str(metadata.id)],
-        "summary": (
-            f"{payload_kind} payload offloaded to artifact {metadata.id}; "
-            f"{before_tokens} estimated tokens preserved outside inline context."
-        ),
+        "summary": summary,
     }
     after_tokens = estimate_tokens(json.dumps(inline_payload, sort_keys=True))
     if budget_repository is not None:
@@ -75,7 +76,7 @@ async def compact_team_payload(
                 graph_version=graph_version,
                 before_estimated_tokens=before_tokens,
                 after_estimated_tokens=after_tokens,
-                summary=inline_payload["summary"],
+                summary=summary,
                 artifact_refs=[metadata.id],
             )
         )

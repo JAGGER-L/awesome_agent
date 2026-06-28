@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -12,7 +13,7 @@ from awesome_agent.runtime.team_context import compact_team_payload
 
 @pytest.mark.asyncio
 async def test_compact_team_payload_offloads_large_payload_and_records_compaction(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     artifacts = InMemoryArtifactMetadataRepository()
     budgets = InMemoryBudgetRepository()
@@ -44,7 +45,9 @@ async def test_compact_team_payload_offloads_large_payload_and_records_compactio
 
 
 @pytest.mark.asyncio
-async def test_compact_team_payload_keeps_small_payload_inline(tmp_path) -> None:
+async def test_compact_team_payload_keeps_small_payload_inline(
+    tmp_path: Path,
+) -> None:
     result = await compact_team_payload(
         run_id=uuid4(),
         agent_id=None,

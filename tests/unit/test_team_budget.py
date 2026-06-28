@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from awesome_agent.domain.enums import RunMode
-from awesome_agent.domain.models import Run
+from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.budget import (
     InMemoryBudgetRepository,
     RunBudgetLedgerRecord,
@@ -242,8 +242,7 @@ def test_build_team_attribution_includes_lineage_assignment_and_agent() -> None:
     }
 
 
-def _agent_stub(run_id):
+def _agent_stub(run_id: UUID) -> Agent:
     from awesome_agent.domain.enums import AgentKind
-    from awesome_agent.domain.models import Agent
 
     return Agent(run_id=run_id, kind=AgentKind.LEADER, profile="leader", model="fake")
