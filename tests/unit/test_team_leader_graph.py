@@ -15,8 +15,13 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.persistence.budget import (
+    InMemoryBudgetRepository,
+    RunBudgetLedgerRecord,
+)
 from awesome_agent.persistence.team import InMemoryTeamRepository
-from awesome_agent.runtime.dispatch import ChildRunWait
+from awesome_agent.runtime.budget import BudgetPolicy
+from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import (
     TEAM_CODING_GRAPH,
     TEAM_CODING_VERSION,
@@ -65,6 +70,47 @@ async def test_leader_creates_teammate_child_run_and_assignment() -> None:
     assert assignments[0].child_run_id == children[0].id
     assert assignments[0].allowed_tools == []
     assert len(events) == 2
+    assert events[0][1]["root_run_id"] == str(run.id)
+    assert events[0][1]["parent_run_id"] == str(run.id)
+    assert events[0][1]["child_run_id"] == str(children[0].id)
+    assert events[0][1]["assignment_id"] == str(assignments[0].id)
+    assert events[0][1]["agent_id"]
+
+
+@pytest.mark.asyncio
+async def test_leader_stops_before_child_creation_when_team_budget_exhausted() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    budgets = InMemoryBudgetRepository()
+    graph = TeamLeaderGraph(
+        team_repository=teams,
+        budget_repository=budgets,
+        budget_policy=_tight_budget_policy(),
+    )
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+    await budgets.upsert_ledger(
+        RunBudgetLedgerRecord(
+            run_id=run.id,
+            total_input_tokens=100,
+            total_output_tokens=50,
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(PermanentExecutionError, match="team_budget_exhausted"):
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    assert await runtime.list_child_runs(run.id) == []
+    assert events[0][1]["root_run_id"] == str(run.id)
+    assert events[0][1]["scope"] == "team_root"
 
 
 @pytest.mark.asyncio
@@ -362,6 +408,17 @@ def _leader_run() -> tuple[Run, Agent]:
         model="deepseek-v4-pro",
     )
     return run, leader
+
+
+def _tight_budget_policy() -> BudgetPolicy:
+    return BudgetPolicy(
+        soft_context_tokens=1000,
+        hard_context_tokens=2000,
+        recent_context_tokens=800,
+        max_total_tokens_per_run=120,
+        max_reasoning_tokens_per_run=1000,
+        max_active_seconds_per_run=3600,
+    )
 
 
 def _git(path: Path, *arguments: str) -> None:

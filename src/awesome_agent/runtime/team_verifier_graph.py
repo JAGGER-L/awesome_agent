@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import NotRequired, TypedDict
 
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignmentKind,
     TeamChildResult,
 )
+from awesome_agent.runtime.team_budget import ensure_team_budget
 from awesome_agent.runtime.team_mailbox import (
     MailboxMessage,
     MailboxMessageType,
@@ -27,8 +31,16 @@ class TeamVerifierState(TypedDict):
 
 
 class TeamVerifierGraph:
-    def __init__(self, *, team_repository: TeamRepository) -> None:
+    def __init__(
+        self,
+        *,
+        team_repository: TeamRepository,
+        budget_repository: BudgetRepository | None = None,
+        budget_policy: BudgetPolicy | None = None,
+    ) -> None:
         self.team_repository = team_repository
+        self.budget_repository = budget_repository
+        self.budget_policy = budget_policy
 
     async def execute(
         self,
@@ -41,6 +53,16 @@ class TeamVerifierGraph:
         assignment = await self.team_repository.get_assignment_for_child_run(run.id)
         if assignment.kind is not TeamAssignmentKind.VERIFIER:
             raise ValueError("team-verifier graph requires verifier assignment")
+        await ensure_team_budget(
+            run=run,
+            repository=repository,
+            budget_repository=self.budget_repository,
+            policy=self.budget_policy,
+            now=datetime.now(UTC),
+            event_sink=event_sink,
+            assignment=assignment,
+            agent_id=agent.id,
+        )
         sibling_results = [
             result
             for result in await self.team_repository.list_child_results(

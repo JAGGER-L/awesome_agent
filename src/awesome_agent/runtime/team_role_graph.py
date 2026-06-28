@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import NotRequired, TypedDict
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import TEAM_ROLE_GRAPH, TEAM_ROLE_VERSION
 from awesome_agent.runtime.repository import RuntimeRepository
@@ -17,6 +20,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamChildResult,
     validate_assignment_graph,
 )
+from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
 
 
 class TeamRoleState(TypedDict):
@@ -38,10 +42,14 @@ class TeamRoleGraph:
         team_repository: TeamRepository,
         artifact_store: LocalArtifactStore | None = None,
         artifact_repository: ArtifactMetadataRepository | None = None,
+        budget_repository: BudgetRepository | None = None,
+        budget_policy: BudgetPolicy | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.artifact_store = artifact_store
         self.artifact_repository = artifact_repository
+        self.budget_repository = budget_repository
+        self.budget_policy = budget_policy
 
     async def execute(
         self,
@@ -53,6 +61,16 @@ class TeamRoleGraph:
     ) -> tuple[TeamRoleState, bool]:
         assignment = await self.team_repository.get_assignment_for_child_run(run.id)
         validate_assignment_graph(assignment)
+        await ensure_team_budget(
+            run=run,
+            repository=repository,
+            budget_repository=self.budget_repository,
+            policy=self.budget_policy,
+            now=datetime.now(UTC),
+            event_sink=event_sink,
+            assignment=assignment,
+            agent_id=agent.id,
+        )
         subagent_goals = _subagent_goals(assignment)
         if (
             assignment.kind is TeamAssignmentKind.TEAMMATE
@@ -207,6 +225,11 @@ class TeamRoleGraph:
                 await event_sink(
                     EventType.TEAM_CHILD_RUN_CREATED,
                     {
+                        **build_team_attribution(
+                            run=child,
+                            assignment=child_assignment,
+                            agent_id=subagent.id,
+                        ),
                         "child_run_id": str(child.id),
                         "assignment_id": str(child_assignment.id),
                         "kind": child_assignment.kind.value,

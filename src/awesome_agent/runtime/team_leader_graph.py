@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NotRequired, TypedDict
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import (
     TEAM_ROLE_GRAPH,
@@ -21,6 +24,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentStatus,
     validate_assignment_graph,
 )
+from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
 from awesome_agent.sandbox.process import run_process
 
 
@@ -40,9 +44,13 @@ class TeamLeaderGraph:
         *,
         team_repository: TeamRepository,
         artifact_repository: ArtifactMetadataRepository | None = None,
+        budget_repository: BudgetRepository | None = None,
+        budget_policy: BudgetPolicy | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.artifact_repository = artifact_repository
+        self.budget_repository = budget_repository
+        self.budget_policy = budget_policy
 
     async def execute(
         self,
@@ -53,6 +61,15 @@ class TeamLeaderGraph:
         event_sink: object | None = None,
     ) -> tuple[TeamLeaderState, bool]:
         root_run_id = run.root_run_id or run.id
+        await ensure_team_budget(
+            run=run,
+            repository=repository,
+            budget_repository=self.budget_repository,
+            policy=self.budget_policy,
+            now=datetime.now(UTC),
+            event_sink=event_sink,
+            agent_id=leader.id,
+        )
         assignments = await self.team_repository.list_assignments(
             root_run_id,
             include_inactive=True,
@@ -174,6 +191,11 @@ class TeamLeaderGraph:
             await event_sink(
                 EventType.TEAM_CHILD_RUN_CREATED,
                 {
+                    **build_team_attribution(
+                        run=child,
+                        assignment=assignment,
+                        agent_id=teammate.id,
+                    ),
                     "child_run_id": str(child.id),
                     "assignment_id": str(assignment.id),
                     "kind": assignment.kind.value,
@@ -183,6 +205,11 @@ class TeamLeaderGraph:
             await event_sink(
                 EventType.TEAM_ASSIGNMENT_CREATED,
                 {
+                    **build_team_attribution(
+                        run=child,
+                        assignment=assignment,
+                        agent_id=teammate.id,
+                    ),
                     "assignment_id": str(assignment.id),
                     "child_run_id": str(child.id),
                     "kind": assignment.kind.value,
@@ -283,6 +310,11 @@ class TeamLeaderGraph:
             await event_sink(
                 EventType.TEAM_CHILD_RUN_CREATED,
                 {
+                    **build_team_attribution(
+                        run=child,
+                        assignment=assignment,
+                        agent_id=verifier.id,
+                    ),
                     "child_run_id": str(child.id),
                     "assignment_id": str(assignment.id),
                     "kind": assignment.kind.value,
@@ -292,6 +324,11 @@ class TeamLeaderGraph:
             await event_sink(
                 EventType.TEAM_ASSIGNMENT_CREATED,
                 {
+                    **build_team_attribution(
+                        run=child,
+                        assignment=assignment,
+                        agent_id=verifier.id,
+                    ),
                     "assignment_id": str(assignment.id),
                     "child_run_id": str(child.id),
                     "kind": assignment.kind.value,

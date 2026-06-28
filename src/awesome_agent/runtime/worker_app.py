@@ -121,13 +121,21 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             team_leader_graph=TeamLeaderGraph(
                 team_repository=team_repository,
                 artifact_repository=artifact_repository,
+                budget_repository=budget_repository,
+                budget_policy=budget_policy,
             ),
             team_role_graph=TeamRoleGraph(
                 team_repository=team_repository,
                 artifact_store=artifact_store,
                 artifact_repository=artifact_repository,
+                budget_repository=budget_repository,
+                budget_policy=budget_policy,
             ),
-            team_verifier_graph=TeamVerifierGraph(team_repository=team_repository),
+            team_verifier_graph=TeamVerifierGraph(
+                team_repository=team_repository,
+                budget_repository=budget_repository,
+                budget_policy=budget_policy,
+            ),
             config=WorkerConfig(
                 lease_duration=timedelta(seconds=configured.lease_duration_seconds),
                 heartbeat_interval=timedelta(
