@@ -65,7 +65,6 @@ Generated from SQLAlchemy metadata.
 | `run_id` | `UUID` | no |
 | `agent_id` | `UUID` | yes |
 | `graph_name` | `VARCHAR(128)` | no |
-| `graph_version` | `INTEGER` | no |
 | `before_estimated_tokens` | `INTEGER` | no |
 | `after_estimated_tokens` | `INTEGER` | no |
 | `summary` | `TEXT` | no |
@@ -188,7 +187,6 @@ Generated from SQLAlchemy metadata.
 | `depth` | `INTEGER` | no |
 | `child_role` | `VARCHAR(64)` | yes |
 | `graph_name` | `VARCHAR(128)` | yes |
-| `graph_version` | `INTEGER` | yes |
 | `dispatch_status` | `VARCHAR(32)` | no |
 | `available_at` | `DATETIME` | no |
 | `current_worker_id` | `UUID` | yes |
@@ -245,7 +243,6 @@ Generated from SQLAlchemy metadata.
 | `status` | `VARCHAR(32)` | no |
 | `role_profile` | `VARCHAR(128)` | no |
 | `graph_name` | `VARCHAR(128)` | no |
-| `graph_version` | `INTEGER` | no |
 | `goal` | `TEXT` | no |
 | `allowed_tools` | `JSONB` | no |
 | `deferred_tools` | `JSONB` | no |
