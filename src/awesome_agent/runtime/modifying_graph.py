@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import json
-import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Any, Literal, NotRequired, TypedDict, cast
@@ -15,12 +11,11 @@ from uuid import UUID
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
 from pydantic import TypeAdapter
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import ApprovalStatus, EventType, RunIntent
+from awesome_agent.domain.enums import EventType, RunIntent
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     ContinuationState,
@@ -50,10 +45,21 @@ from awesome_agent.persistence.validation import (
 )
 from awesome_agent.runtime.agent_loop.modifying import ModifyingAgentLoop
 from awesome_agent.runtime.agent_loop.modifying_middleware import (
+    ModifyingApprovalMiddleware,
+    ModifyingArtifactMiddleware,
     ModifyingBudgetExhausted,
     ModifyingBudgetMiddleware,
     ModifyingContextMiddleware,
+    ModifyingToolMiddleware,
+    approval_id_from_interrupt_value,
+    approval_interrupt_payload,
+    elapsed_ms,
+    extract_postimage_hashes,
+    idempotency_key_for_tool_invocation,
     modifying_ledger_to_state,
+    resume_approval_id,
+    tool_error_result,
+    workspace_fingerprint,
 )
 from awesome_agent.runtime.budget import (
     BudgetPolicy,
@@ -62,7 +68,6 @@ from awesome_agent.runtime.budget import (
 )
 from awesome_agent.runtime.context import ContextManager
 from awesome_agent.runtime.dispatch import (
-    ApprovalInterrupt,
     CorruptRuntimeStateError,
     IncompatibleGraphError,
     PermanentExecutionError,
@@ -75,17 +80,10 @@ from awesome_agent.runtime.validation.config import load_validation_config
 from awesome_agent.runtime.validation.detection import detect_validation_plan
 from awesome_agent.runtime.validation.executor import execute_validation_plan
 from awesome_agent.runtime.validation.models import ValidationPlan
-from awesome_agent.tools.models import ApprovalRequired, ToolDenied
 from awesome_agent.tools.repository import (
-    RepositoryRecoveryRequired,
     build_modifying_executor,
     build_modifying_registry,
-    canonical_arguments_hash_from_arguments,
-    execute_repository_call,
     model_tool_definitions,
-    parse_tool_call_arguments,
-    repository_tool_effect_metadata,
-    tool_invocation_uuid,
 )
 
 _MESSAGE_ADAPTER: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
@@ -96,11 +94,6 @@ Docker-sandboxed check commands. Before finishing, call repo.diff after the
 last write and summarize changed files, commands run, and unverified work.
 Do not claim validation passed; Task 10 owns deterministic validation.
 """
-_TOOL_RESULT_OFFLOAD_CHARS = 12_000
-_TOOL_RESULT_HEAD_CHARS = 8_000
-_TOOL_RESULT_TAIL_CHARS = 3_000
-
-
 class ModifyingAgentState(TypedDict):
     run_id: str
     agent_id: str
@@ -197,6 +190,27 @@ class ModifyingCodingGraph:
         self.budget_middleware = ModifyingBudgetMiddleware(
             budget_repository=budget_repository,
             budget_policy=budget_policy,
+            emit=self._emit,
+        )
+        self.artifact_middleware = ModifyingArtifactMiddleware(
+            artifact_store=artifact_store,
+            artifact_repository=artifact_repository,
+        )
+        self.approval_middleware = ModifyingApprovalMiddleware(
+            approval_repository=approval_repository,
+            tool_repository=tool_repository,
+            approval_default_expiry=approval_default_expiry,
+            emit=self._emit,
+        )
+        self.tool_middleware = ModifyingToolMiddleware(
+            registry=self.registry,
+            executor=self.executor,
+            tool_repository=tool_repository,
+            approval_middleware=self.approval_middleware,
+            artifact_middleware=self.artifact_middleware,
+            max_tool_calls=max_tool_calls,
+            no_progress_turns=no_progress_turns,
+            fault_hook=fault_hook,
             emit=self._emit,
         )
         self._run: Run | None = None
@@ -543,208 +557,25 @@ class ModifyingCodingGraph:
         state: ModifyingAgentState,
     ) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
-        calls = turn.assistant.tool_calls
-        if not calls:
-            return state
-        if state["tool_call_count"] + len(calls) > self.max_tool_calls:
-            return {
-                **state,
-                "messages": [
-                    *state["messages"],
-                    turn.assistant.model_dump(mode="json"),
-                    SystemMessage(
-                        content=(
-                            "The tool-call budget is exhausted. Produce the best "
-                            "summary of completed, unvalidated work."
-                        )
-                    ).model_dump(mode="json"),
-                ],
-                "force_final": True,
-                "phase": "tool_budget_exhausted",
-            }
-        ordered_results = []
-        successful_writes = state["successful_writes"]
-        final_diff_after_write = state["final_diff_after_write"]
-        fingerprints: list[str] = []
-        for call in calls:
-            started = monotonic()
-            try:
-                result = await self._execute_durable_tool_call(call)
-            except RepositoryRecoveryRequired as error:
-                raise CorruptRuntimeStateError(str(error)) from error
-            except ToolDenied as error:
-                result = _tool_error_result(call, "denied", str(error))
-            latency_ms = _elapsed_ms(started)
-            result = await self._offload_result_if_needed(call.call_id, result)
-            if call.name == "repo.apply_patch" and not result.is_error:
-                successful_writes += 1
-                final_diff_after_write = False
-            if call.name == "repo.diff" and not result.is_error and successful_writes:
-                final_diff_after_write = True
-            fingerprint = hashlib.sha256(
-                f"{call.name}\0{call.arguments_json}\0{result.content}".encode()
-            ).hexdigest()
-            fingerprints.append(fingerprint)
-            await self._emit(
-                EventType.TOOL_CALL_CREATED,
-                {
-                    "turn": state["model_turn_count"],
-                    "call_id": call.call_id,
-                    "tool": call.name,
-                    "status": "failed" if result.is_error else "completed",
-                    "result_summary": result.content[:500],
-                    "sandbox": "docker" if call.name == "shell.execute" else "",
-                    "latency_ms": latency_ms,
-                },
-                f"tool:{state['model_turn_count']}:{call.call_id}",
-            )
-            ordered_results.append(result)
-        prior = set(state["progress_fingerprints"])
-        has_progress = any(fingerprint not in prior for fingerprint in fingerprints)
-        stagnant = 0 if has_progress else state["stagnant_turns"] + 1
-        messages = [
-            *state["messages"],
-            turn.assistant.model_dump(mode="json"),
-            *(result.model_dump(mode="json") for result in ordered_results),
-        ]
-        if stagnant >= self.no_progress_turns:
-            messages.append(
-                SystemMessage(
-                    content=(
-                        "You are repeating prior actions without progress. Change "
-                        "strategy, inspect the diff, or summarize why progress is "
-                        "blocked."
-                    )
-                ).model_dump(mode="json")
-            )
-        updated: ModifyingAgentState = {
-            **state,
-            "messages": messages,
-            "tool_call_count": state["tool_call_count"] + len(calls),
-            "successful_writes": successful_writes,
-            "final_diff_after_write": final_diff_after_write,
-            "progress_fingerprints": [
-                *state["progress_fingerprints"],
-                *fingerprints,
-            ],
-            "stagnant_turns": stagnant,
-            "phase": "tools_completed",
-        }
-        if self.fault_hook is not None:
-            await self.fault_hook("execute_tool", updated)
-        return updated
+        return cast(
+            ModifyingAgentState,
+            await self.tool_middleware.execute_turn(
+                state=cast(dict[str, Any], state),
+                turn_assistant=turn.assistant,
+                calls=turn.assistant.tool_calls,
+                run=self._require_run(),
+                agent=self._require_agent(),
+            ),
+        )
 
     async def _execute_durable_tool_call(self, call: ToolCall) -> ToolResultMessage:
-        if self.tool_repository is None:
-            return await self._execute_tool_call(call)
         run = self._require_run()
         agent = self._require_agent()
-        workspace = cast(Any, run.workspace_path)
-        arguments = parse_tool_call_arguments(call)
-        spec, _ = self.registry.resolve(call.name)
-        arguments_fingerprint = canonical_arguments_hash_from_arguments(arguments)
-        idempotency_key = _idempotency_key(
-            run_id=str(run.id),
-            agent_id=str(agent.id),
-            tool_name=call.name,
-            tool_version=spec.version,
-            arguments_hash=arguments_fingerprint,
-            workspace=str(workspace),
+        return await self.tool_middleware.execute_durable_tool_call(
+            call,
+            run=run,
+            agent=agent,
         )
-        existing = await self.tool_repository.get_by_idempotency_key(
-            run.id,
-            idempotency_key,
-        )
-        if existing is not None:
-            if existing.arguments_hash != arguments_fingerprint:
-                raise CorruptRuntimeStateError(
-                    "Tool invocation idempotency collision changed arguments."
-                )
-            if existing.status in {"completed", "failed"}:
-                if existing.result_content is None:
-                    raise CorruptRuntimeStateError(
-                        "Completed tool invocation has no durable result."
-                    )
-                return ToolResultMessage(
-                    call_id=call.call_id,
-                    content=existing.result_content,
-                    is_error=existing.result_is_error,
-                )
-            if existing.status == "approval_pending":
-                invocation = _copy_invocation(existing, updated_at=datetime.now(UTC))
-            elif call.name == "shell.execute":
-                raise CorruptRuntimeStateError(
-                    "Shell execution completion is unknown after restart."
-                )
-            elif call.name != "repo.apply_patch":
-                raise CorruptRuntimeStateError(
-                    f"Tool invocation {existing.id} stopped before completion."
-                )
-            else:
-                invocation = _copy_invocation(existing, updated_at=datetime.now(UTC))
-        else:
-            now = datetime.now(UTC)
-            path_refs, preimage_hashes = repository_tool_effect_metadata(
-                call.name,
-                arguments,
-                workspace=workspace,
-            )
-            invocation = DurableToolInvocation(
-                id=tool_invocation_uuid(f"{run.id}:{call.call_id}"),
-                run_id=run.id,
-                agent_id=agent.id,
-                tool_name=call.name,
-                tool_version=spec.version,
-                status="started",
-                idempotency_key=idempotency_key,
-                arguments_hash=arguments_fingerprint,
-                risk_level=spec.risk_level.value,
-                path_refs=path_refs,
-                preimage_hashes=preimage_hashes,
-                started_at=now,
-                updated_at=now,
-            )
-        await self.tool_repository.upsert(invocation)
-        try:
-            result = await self._execute_tool_call(call)
-        except ToolDenied as error:
-            result = _tool_error_result(call, "denied", str(error))
-        except ApprovalRequired:
-            result = await self._interrupt_for_approval(
-                call=call,
-                invocation=invocation,
-                arguments=arguments,
-                arguments_hash=arguments_fingerprint,
-                workspace=workspace,
-                tool_version=spec.version,
-                risk_level=spec.risk_level.value,
-            )
-        except RepositoryRecoveryRequired as error:
-            await self.tool_repository.upsert(
-                _copy_invocation(
-                    invocation,
-                    status="recovery_required",
-                    error=str(error),
-                    updated_at=datetime.now(UTC),
-                )
-            )
-            raise
-        completed_at = datetime.now(UTC)
-        expected_postimage_hashes = _extract_postimage_hashes(result.content)
-        await self.tool_repository.upsert(
-            _copy_invocation(
-                invocation,
-                status="failed" if result.is_error else "completed",
-                expected_postimage_hashes=expected_postimage_hashes,
-                result_summary=result.content[:500],
-                result_content=result.content,
-                result_is_error=result.is_error,
-                error=result.content[:500] if result.is_error else None,
-                completed_at=completed_at,
-                updated_at=completed_at,
-            )
-        )
-        return result
 
     async def _interrupt_for_approval(
         self,
@@ -757,9 +588,7 @@ class ModifyingCodingGraph:
         tool_version: str,
         risk_level: str,
     ) -> ToolResultMessage:
-        if self.approval_repository is None:
-            raise CorruptRuntimeStateError("Approval repository is not configured.")
-        approval = await self._upsert_approval(
+        return await self.approval_middleware.interrupt_for_approval(
             call=call,
             invocation=invocation,
             arguments=arguments,
@@ -767,33 +596,14 @@ class ModifyingCodingGraph:
             workspace=workspace,
             tool_version=tool_version,
             risk_level=risk_level,
-        )
-        if self.tool_repository is not None:
-            await self.tool_repository.upsert(
-                _copy_invocation(
-                    invocation,
-                    status="approval_pending",
-                    updated_at=datetime.now(UTC),
+            run=self._require_run(),
+            agent=self._require_agent(),
+            execute_tool_call=lambda resumed_call, *, approval_granted=False: (
+                self._execute_tool_call(
+                    resumed_call,
+                    approval_granted=approval_granted,
                 )
-            )
-        payload = _approval_interrupt_payload(approval)
-        await self._emit(
-            EventType.APPROVAL_REQUESTED,
-            {
-                **payload,
-                "reason": "waiting_approval",
-                "agent_id": str(self._require_agent().id),
-            },
-            f"approval:{approval.tool_call_id}",
-        )
-        resume = interrupt(payload)
-        return await self._resume_approved_tool_call(
-            call=call,
-            approval_id=_resume_approval_id(resume),
-            expected_arguments_hash=arguments_hash,
-            expected_tool_version=tool_version,
-            expected_workspace_fingerprint=approval.workspace_fingerprint,
-            expected_capabilities=approval.capabilities,
+            ),
         )
 
     async def _upsert_approval(
@@ -807,42 +617,19 @@ class ModifyingCodingGraph:
         tool_version: str,
         risk_level: str,
     ) -> DurableApproval:
-        repository = self._require_approval_repository()
         run = self._require_run()
         agent = self._require_agent()
-        existing = await repository.get_by_call(run.id, call.call_id)
-        now = datetime.now(UTC)
-        approval = DurableApproval(
-            id=(existing.id if existing is not None else invocation.id),
-            run_id=run.id,
-            agent_id=agent.id,
-            tool_invocation_id=invocation.id,
-            tool_call_id=call.call_id,
-            tool_name=call.name,
-            tool_version=tool_version,
-            canonical_arguments=arguments,
+        return await self.approval_middleware.upsert_approval(
+            call=call,
+            invocation=invocation,
+            arguments=arguments,
             arguments_hash=arguments_hash,
-            workspace_path=str(workspace),
-            workspace_fingerprint=await _workspace_fingerprint(workspace),
-            capabilities=[
-                "artifact:read",
-                "repository:read",
-                "repository:write",
-                "shell:execute",
-            ],
+            workspace=workspace,
+            tool_version=tool_version,
             risk_level=risk_level,
-            expires_at=(
-                existing.expires_at
-                if existing is not None
-                else now + self.approval_default_expiry
-            ),
-            status=(
-                existing.status if existing is not None else ApprovalStatus.PENDING
-            ),
-            created_at=(existing.created_at if existing is not None else now),
-            updated_at=now,
+            run=run,
+            agent=agent,
         )
-        return await repository.upsert(approval)
 
     async def _resume_approved_tool_call(
         self,
@@ -854,29 +641,20 @@ class ModifyingCodingGraph:
         expected_workspace_fingerprint: str,
         expected_capabilities: list[str],
     ) -> ToolResultMessage:
-        approval = await self._require_approval_repository().get(approval_id)
-        if approval.tool_call_id != call.call_id:
-            raise CorruptRuntimeStateError("Approval resume tool call mismatch.")
-        if approval.status in {ApprovalStatus.DENIED, ApprovalStatus.EXPIRED}:
-            return _tool_error_result(
-                call,
-                approval.status.value,
-                f"Tool execution was {approval.status.value} by approval decision.",
-            )
-        if approval.status is not ApprovalStatus.APPROVED:
-            raise ApprovalInterrupt(approval.id)
-        current_fingerprint = await _workspace_fingerprint(
-            Path(approval.workspace_path)
+        return await self.approval_middleware.resume_approved_tool_call(
+            call=call,
+            approval_id=approval_id,
+            expected_arguments_hash=expected_arguments_hash,
+            expected_tool_version=expected_tool_version,
+            expected_workspace_fingerprint=expected_workspace_fingerprint,
+            expected_capabilities=expected_capabilities,
+            execute_tool_call=lambda resumed_call, *, approval_granted=False: (
+                self._execute_tool_call(
+                    resumed_call,
+                    approval_granted=approval_granted,
+                )
+            ),
         )
-        if (
-            approval.arguments_hash != expected_arguments_hash
-            or approval.tool_version != expected_tool_version
-            or approval.workspace_fingerprint != expected_workspace_fingerprint
-            or current_fingerprint != approval.workspace_fingerprint
-            or approval.capabilities != expected_capabilities
-        ):
-            raise CorruptRuntimeStateError("Approval binding changed before resume.")
-        return await self._execute_tool_call(call, approval_granted=True)
 
     async def _execute_tool_call(
         self,
@@ -886,44 +664,18 @@ class ModifyingCodingGraph:
     ) -> ToolResultMessage:
         run = self._require_run()
         agent = self._require_agent()
-        return await execute_repository_call(
-            self.executor,
+        return await self.tool_middleware.execute_tool_call(
             call,
-            workspace=cast(Any, run.workspace_path),
-            agent_id=agent.id,
-            capabilities={
-                "repository:read",
-                "repository:write",
-                "shell:execute",
-                "artifact:read",
-            },
+            run=run,
+            agent=agent,
             approval_granted=approval_granted,
         )
 
     async def _resume_command(self, snapshot: Any) -> Any:
-        interrupts = getattr(snapshot, "interrupts", ())
-        if not interrupts:
-            return None
-        value = getattr(interrupts[0], "value", None)
-        approval_id = _approval_id_from_interrupt_value(value)
-        approval = await self._require_approval_repository().get(approval_id)
-        if approval.status is ApprovalStatus.PENDING:
-            raise ApprovalInterrupt(approval.id)
-        return Command(
-            resume={
-                "approval_id": str(approval.id),
-                "status": approval.status.value,
-            }
-        )
+        return await self.approval_middleware.resume_command(snapshot)
 
     def _raise_if_interrupted(self, result: object) -> None:
-        if not isinstance(result, dict):
-            return
-        interrupts = result.get("__interrupt__")
-        if not isinstance(interrupts, list) or not interrupts:
-            return
-        value = getattr(interrupts[0], "value", None)
-        raise ApprovalInterrupt(_approval_id_from_interrupt_value(value))
+        self.approval_middleware.raise_if_interrupted(result)
 
     async def _feedback(self, state: ModifyingAgentState) -> ModifyingAgentState:
         turn = ModelTurn.model_validate(state["last_turn"])
@@ -1079,34 +831,11 @@ class ModifyingCodingGraph:
         call_id: str,
         result: ToolResultMessage,
     ) -> ToolResultMessage:
-        if (
-            self.artifact_store is None
-            or self.artifact_repository is None
-            or len(result.content) <= _TOOL_RESULT_OFFLOAD_CHARS
-        ):
-            return result
-        run = self._require_run()
-        agent = self._require_agent()
-        metadata = self.artifact_store.write(
-            run_id=run.id,
-            agent_id=agent.id,
-            artifact_type="tool-output",
-            filename=f"{call_id}.json",
-            content=result.content.encode("utf-8"),
-            mime_type="application/json",
-            summary=f"Large tool output for {call_id}",
-        )
-        await self.artifact_repository.record(metadata)
-        head = result.content[:_TOOL_RESULT_HEAD_CHARS]
-        tail = result.content[-_TOOL_RESULT_TAIL_CHARS:]
-        return result.model_copy(
-            update={
-                "content": (
-                    f"{head}\n...[tool output offloaded to artifact "
-                    f"{metadata.id}; {len(result.content)} characters]...\n{tail}"
-                ),
-                "artifact_refs": [str(metadata.id)],
-            }
+        return await self.artifact_middleware.offload_result_if_needed(
+            call_id=call_id,
+            result=result,
+            run=self._require_run(),
+            agent=self._require_agent(),
         )
 
     async def _emit(
@@ -1208,68 +937,30 @@ def _idempotency_key(
     arguments_hash: str,
     workspace: str,
 ) -> str:
-    raw = "\0".join(
-        [run_id, agent_id, tool_name, tool_version, arguments_hash, workspace]
+    return idempotency_key_for_tool_invocation(
+        run_id=run_id,
+        agent_id=agent_id,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        arguments_hash=arguments_hash,
+        workspace=workspace,
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _extract_postimage_hashes(content: str) -> dict[str, str]:
-    try:
-        decoded = json.loads(content)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(decoded, dict):
-        return {}
-    postimage_hashes = decoded.get("postimage_hashes")
-    if not isinstance(postimage_hashes, dict):
-        return {}
-    return {
-        str(key): str(value)
-        for key, value in postimage_hashes.items()
-        if isinstance(key, str) and isinstance(value, str)
-    }
+    return extract_postimage_hashes(content)
 
 
 def _approval_interrupt_payload(approval: DurableApproval) -> dict[str, object]:
-    return {
-        "approval_id": str(approval.id),
-        "tool_call_id": approval.tool_call_id,
-        "tool": approval.tool_name,
-        "args_summary": _arguments_summary(approval.canonical_arguments),
-        "risk": approval.risk_level,
-        "expires_at": approval.expires_at.isoformat(),
-    }
-
-
-def _arguments_summary(arguments: dict[str, object]) -> str:
-    if "argv" in arguments and isinstance(arguments["argv"], list):
-        argv = " ".join(str(item) for item in arguments["argv"])
-        return argv[:500]
-    return json.dumps(
-        arguments,
-        ensure_ascii=False,
-        sort_keys=True,
-        default=str,
-    )[:500]
+    return approval_interrupt_payload(approval)
 
 
 def _approval_id_from_interrupt_value(value: object) -> UUID:
-    if not isinstance(value, dict):
-        raise CorruptRuntimeStateError("Approval interrupt payload is invalid.")
-    approval_id = value.get("approval_id")
-    if not isinstance(approval_id, str):
-        raise CorruptRuntimeStateError("Approval interrupt is missing approval_id.")
-    return UUID(approval_id)
+    return approval_id_from_interrupt_value(value)
 
 
 def _resume_approval_id(value: object) -> UUID:
-    if not isinstance(value, dict):
-        raise CorruptRuntimeStateError("Approval resume payload is invalid.")
-    approval_id = value.get("approval_id")
-    if not isinstance(approval_id, str):
-        raise CorruptRuntimeStateError("Approval resume is missing approval_id.")
-    return UUID(approval_id)
+    return resume_approval_id(value)
 
 
 def _tool_error_result(
@@ -1277,47 +968,11 @@ def _tool_error_result(
     status: str,
     message: str,
 ) -> ToolResultMessage:
-    return ToolResultMessage(
-        call_id=call.call_id,
-        content=json.dumps(
-            {
-                "status": status,
-                "error": message,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ),
-        is_error=True,
-    )
+    return tool_error_result(call, status, message)
 
 
 async def _workspace_fingerprint(workspace: Path) -> str:
-    resolved = workspace.resolve()
-    parts = [str(resolved)]
-    for args in (
-        ("rev-parse", "HEAD"),
-        ("diff", "--binary"),
-        ("diff", "--cached", "--binary"),
-    ):
-        parts.append(await _git_output(resolved, args))
-    return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
-
-
-async def _git_output(workspace: Path, args: tuple[str, ...]) -> str:
-    try:
-        completed = await asyncio.to_thread(
-            subprocess.run,
-            ["git", *args],
-            cwd=workspace,
-            capture_output=True,
-            check=False,
-            text=True,
-        )
-    except OSError as error:
-        return f"git-unavailable:{type(error).__name__}"
-    if completed.returncode != 0:
-        return f"git-error:{' '.join(args)}:{completed.stderr[:500]}"
-    return completed.stdout
+    return await workspace_fingerprint(workspace)
 
 
 def _copy_invocation(
@@ -1359,4 +1014,4 @@ def _validation_failure_is_reworkable(report: ValidationReportWithGates) -> bool
 
 
 def _elapsed_ms(started: float) -> int:
-    return max(0, int((monotonic() - started) * 1000))
+    return elapsed_ms(started)

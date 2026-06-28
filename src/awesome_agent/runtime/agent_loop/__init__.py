@@ -11,9 +11,12 @@ from awesome_agent.runtime.agent_loop.middleware import (
 )
 from awesome_agent.runtime.agent_loop.modifying import ModifyingAgentLoop
 from awesome_agent.runtime.agent_loop.modifying_middleware import (
+    ModifyingApprovalMiddleware,
+    ModifyingArtifactMiddleware,
     ModifyingBudgetExhausted,
     ModifyingBudgetMiddleware,
     ModifyingContextMiddleware,
+    ModifyingToolMiddleware,
     modifying_ledger_to_state,
 )
 from awesome_agent.runtime.agent_loop.read_only import ReadOnlyAgentLoop
@@ -27,9 +30,12 @@ __all__ = [
     "MiddlewareStack",
     "MiddlewareStage",
     "ModifyingAgentLoop",
+    "ModifyingApprovalMiddleware",
+    "ModifyingArtifactMiddleware",
     "ModifyingBudgetExhausted",
     "ModifyingBudgetMiddleware",
     "ModifyingContextMiddleware",
+    "ModifyingToolMiddleware",
     "ReadOnlyAgentLoop",
     "modifying_ledger_to_state",
 ]
