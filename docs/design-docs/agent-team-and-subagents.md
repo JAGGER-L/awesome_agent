@@ -67,6 +67,11 @@ The current implementation persists agents, Todos, runtime events, model-call
 records, side-effecting tool invocations, validation reports, and observability
 spans for frontend inspection.
 
+`team-coding@1` is kept as a scoped runtime and regression target. It proves
+team lifecycle, tool, verifier, and validation behavior inside one durable Run,
+but it is not the forward production architecture for independently scheduled
+Teammates or Subagents.
+
 ## Distributed Team Runtime
 
 Task 17 promotes Teammates from graph-internal sessions to child Runs. The
@@ -90,6 +95,32 @@ lineage, mailbox, cancellation propagation, API/CLI inspection, and
 PostgreSQL-backed integration/E2E evidence. Rich model-driven role planning,
 team tool execution, verifier rework loops, and per-agent/team context
 compaction remain later work.
+
+This boundary is intentional. In `team-coding@2`, Leader, role, and Verifier
+graphs are production-wired for dispatch and persistence, but the child role
+graphs currently execute deterministic assignments instead of autonomous
+model/tool loops. Leader patch aggregation can apply child patch artifacts when
+they exist; future model-driven role graphs must cover that path with real
+patch-producing E2E tests before the runtime is described as a full autonomous
+agent team.
+
+## Future Model-Driven Runtime
+
+The long-term runtime should move most cross-cutting behavior out of large graph
+files and into explicit loop/middleware layers:
+
+- Thin graph nodes own durable control flow, checkpoint identity, interrupts,
+  resume, and terminal state transitions.
+- Agent loop code owns the model/tool iteration contract and reports durable
+  loop outcomes back to the graph.
+- Middleware owns memory, context injection, token budgets, deferred tool
+  exposure, sandbox policy, approval, skill activation, team/subagent policy,
+  model/tool error handling, and context compaction.
+
+Until that migration exists, large graph files remain the source of truth for
+solo and team execution. New features should be added through focused helpers
+where possible and should avoid widening the deterministic distributed team
+skeleton into a partially model-driven runtime without tests.
 
 ## Limits
 
