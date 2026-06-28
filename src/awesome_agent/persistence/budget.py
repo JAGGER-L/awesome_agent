@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -64,6 +64,20 @@ class BudgetRepository(Protocol):
     async def list_compactions(self, run_id: UUID) -> list[ContextCompactionRecord]:
         pass
 
+    async def open_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        pass
+
+    async def close_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        pass
+
 
 class InMemoryBudgetRepository:
     def __init__(self) -> None:
@@ -93,6 +107,40 @@ class InMemoryBudgetRepository:
             for compaction in self._compactions
             if compaction.run_id == run_id
         ]
+
+    async def open_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        current = await self.get_ledger(run_id)
+        if current.active_window_started_at is not None:
+            return current
+        opened = replace(
+            current,
+            active_window_started_at=now,
+            updated_at=now,
+        )
+        self._ledgers[run_id] = opened
+        return opened
+
+    async def close_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        current = await self.get_ledger(run_id)
+        if current.active_window_started_at is None:
+            return current
+        elapsed = max(0, int((now - current.active_window_started_at).total_seconds()))
+        closed = replace(
+            current,
+            active_seconds=current.active_seconds + elapsed,
+            active_window_started_at=None,
+            updated_at=now,
+        )
+        self._ledgers[run_id] = closed
+        return closed
 
 
 class PostgresBudgetRepository:
@@ -177,6 +225,40 @@ class PostgresBudgetRepository:
                 )
             )
         return [_compaction_from_row(record) for record in records]
+
+    async def open_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        current = await self.get_ledger(run_id)
+        if current.active_window_started_at is not None:
+            return current
+        return await self.upsert_ledger(
+            replace(
+                current,
+                active_window_started_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def close_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        current = await self.get_ledger(run_id)
+        if current.active_window_started_at is None:
+            return current
+        elapsed = max(0, int((now - current.active_window_started_at).total_seconds()))
+        return await self.upsert_ledger(
+            replace(
+                current,
+                active_seconds=current.active_seconds + elapsed,
+                active_window_started_at=None,
+                updated_at=now,
+            )
+        )
 
 
 def _ledger_from_row(row: RunBudgetLedgerRow) -> RunBudgetLedgerRecord:

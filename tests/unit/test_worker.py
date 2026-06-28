@@ -10,6 +10,10 @@ import pytest
 from awesome_agent.domain.enums import AgentKind, EventType, ExecutionKind, RunIntent
 from awesome_agent.domain.models import Agent, Run, RunLease, RuntimeEvent
 from awesome_agent.observability.repository import InMemoryObservabilityRepository
+from awesome_agent.persistence.budget import (
+    ContextCompactionRecord,
+    RunBudgetLedgerRecord,
+)
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -153,6 +157,45 @@ class FakeWorkerHeartbeatRepository:
 
     async def mark_stopping(self, worker_id: UUID) -> None:
         return None
+
+
+class FakeBudgetRepository:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, UUID]] = []
+
+    async def upsert_ledger(
+        self,
+        ledger: RunBudgetLedgerRecord,
+    ) -> RunBudgetLedgerRecord:
+        return ledger
+
+    async def get_ledger(self, run_id: UUID) -> RunBudgetLedgerRecord:
+        return RunBudgetLedgerRecord(run_id=run_id)
+
+    async def record_compaction(
+        self,
+        compaction: ContextCompactionRecord,
+    ) -> ContextCompactionRecord:
+        return compaction
+
+    async def list_compactions(self, run_id: UUID) -> list[ContextCompactionRecord]:
+        return []
+
+    async def open_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        self.calls.append(("open", run_id))
+        return RunBudgetLedgerRecord(run_id=run_id, active_window_started_at=now)
+
+    async def close_active_window(
+        self,
+        run_id: UUID,
+        now: datetime,
+    ) -> RunBudgetLedgerRecord:
+        self.calls.append(("close", run_id))
+        return RunBudgetLedgerRecord(run_id=run_id, active_seconds=1)
 
 
 class FakeGraph:
@@ -540,6 +583,60 @@ async def test_worker_executes_modifying_graph_with_validated_completion() -> No
     assert isinstance(complete[1], dict)
     assert complete[1]["completion_kind"] == "modifying_validated"
     assert complete[1]["result_text"] == "Changed README.md; validation not run."
+
+
+@pytest.mark.asyncio
+async def test_worker_tracks_active_budget_window_for_coding_graph() -> None:
+    lease = _lease()
+    run = _modifying_run(lease)
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    budgets = FakeBudgetRepository()
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=FakeModifyingGraph(),  # type: ignore[arg-type]
+        config=_config(),
+        budget_repository=budgets,
+    )
+
+    assert await worker.run_once()
+
+    assert budgets.calls == [("open", run.id), ("close", run.id)]
+
+
+@pytest.mark.asyncio
+async def test_worker_closes_active_budget_window_for_approval_wait() -> None:
+    lease = _lease()
+    run = _modifying_run(lease)
+    approval_id = uuid4()
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    budgets = FakeBudgetRepository()
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=FakeModifyingGraph(ApprovalInterrupt(approval_id)),  # type: ignore[arg-type]
+        config=_config(),
+        budget_repository=budgets,
+    )
+
+    assert await worker.run_once()
+
+    assert budgets.calls == [("open", run.id), ("close", run.id)]
+    assert dispatcher.calls[-1][0] == "approval_wait"
 
 
 @pytest.mark.asyncio

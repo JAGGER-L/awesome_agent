@@ -16,13 +16,16 @@ from awesome_agent.modeling import (
     ModelRequest,
     ModelStreamEvent,
     ModelTurn,
+    ModelUsage,
     StopReason,
     StructuredModelProvider,
     ToolCall,
     TurnCompleted,
 )
+from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.tool_invocations import InMemoryToolInvocationRepository
 from awesome_agent.persistence.validation import InMemoryValidationRepository
+from awesome_agent.runtime.budget import BudgetDecision, BudgetPolicy
 from awesome_agent.runtime.dispatch import PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_CODING_GRAPH, TEAM_CODING_VERSION
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
@@ -64,12 +67,41 @@ class SequenceProvider(StructuredModelProvider):
         yield TurnCompleted(turn=self.turns.popleft())
 
 
-def _turn() -> ModelTurn:
+def _budget_policy(
+    *,
+    soft_context_tokens: int = 10_000,
+    hard_context_tokens: int = 20_000,
+    recent_context_tokens: int = 5_000,
+    max_total_tokens_per_run: int = 100_000,
+    max_reasoning_tokens_per_run: int = 100_000,
+    max_active_seconds_per_run: int = 3600,
+) -> BudgetPolicy:
+    return BudgetPolicy(
+        soft_context_tokens=soft_context_tokens,
+        hard_context_tokens=hard_context_tokens,
+        recent_context_tokens=recent_context_tokens,
+        max_total_tokens_per_run=max_total_tokens_per_run,
+        max_reasoning_tokens_per_run=max_reasoning_tokens_per_run,
+        max_active_seconds_per_run=max_active_seconds_per_run,
+    )
+
+
+def _turn(
+    *,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
+) -> ModelTurn:
     return ModelTurn(
         assistant=AssistantMessage(content="ack"),
         stop_reason=StopReason.COMPLETED,
         model="deepseek-v4-flash",
         provider="fake",
+        usage=ModelUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            reasoning_tokens=reasoning_tokens,
+        ),
     )
 
 
@@ -220,6 +252,81 @@ async def test_team_graph_calls_provider_for_bounded_role_steps(tmp_path: Path) 
     ]
     assert len(model_events) == len(provider.requests)
     assert {event[1]["status"] for event in model_events} == {"completed"}
+
+
+@pytest.mark.asyncio
+async def test_team_graph_tracks_global_budget_without_context_compaction(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    repository = InMemoryRuntimeRepository()
+    budget_repository = InMemoryBudgetRepository()
+    run, leader = _team_run(tmp_path)
+    await repository.create_run(run, leader)
+    provider = SequenceProvider(
+        [
+            _turn(input_tokens=10, output_tokens=2, reasoning_tokens=1),
+            _turn(input_tokens=10, output_tokens=2, reasoning_tokens=1),
+            _turn(input_tokens=10, output_tokens=2, reasoning_tokens=1),
+            _turn(input_tokens=10, output_tokens=2, reasoning_tokens=1),
+            _turn(input_tokens=10, output_tokens=2, reasoning_tokens=1),
+        ]
+    )
+    graph = TeamCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        model_resolver=_models(),
+        provider_resolver=lambda _: provider,
+        verification_outcomes=["passed"],
+        budget_repository=budget_repository,
+        budget_policy=_budget_policy(),
+    )
+
+    state, _ = await graph.execute(run, leader, repository=repository)
+
+    ledger = await budget_repository.get_ledger(run.id)
+    assert ledger.model_call_count == len(provider.requests)
+    assert ledger.total_input_tokens == 50
+    assert ledger.total_output_tokens == 10
+    assert ledger.total_reasoning_tokens == 5
+    assert "rolling_summary" not in state
+    assert "context_artifact_refs" not in state
+
+
+@pytest.mark.asyncio
+async def test_team_graph_fails_when_global_token_budget_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    repository = InMemoryRuntimeRepository()
+    budget_repository = InMemoryBudgetRepository()
+    run, leader = _team_run(tmp_path)
+    await repository.create_run(run, leader)
+    provider = SequenceProvider([_turn()])
+    graph = TeamCodingGraph(
+        MemorySaver(),  # type: ignore[arg-type]
+        model_resolver=_models(),
+        provider_resolver=lambda _: provider,
+        verification_outcomes=["passed"],
+        budget_repository=budget_repository,
+        budget_policy=_budget_policy(max_total_tokens_per_run=3),
+    )
+
+    with pytest.raises(PermanentExecutionError, match="budget_exhausted"):
+        await graph.execute(run, leader, repository=repository)
+
+    assert provider.requests == []
+    ledger = await budget_repository.get_ledger(run.id)
+    assert ledger.threshold_status == BudgetDecision.EXHAUSTED.value
 
 
 @pytest.mark.asyncio

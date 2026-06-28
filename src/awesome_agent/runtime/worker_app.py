@@ -11,6 +11,7 @@ from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.observability.repository import PostgresObservabilityRepository
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
+from awesome_agent.persistence.budget import PostgresBudgetRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
@@ -21,6 +22,8 @@ from awesome_agent.persistence.worker_heartbeats import (
     PostgresWorkerHeartbeatRepository,
 )
 from awesome_agent.providers.factory import ModelProviderFactory
+from awesome_agent.runtime.budget import BudgetPolicy
+from awesome_agent.runtime.context import ContextManager, DeterministicSummaryProvider
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
@@ -34,6 +37,22 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     engine = create_engine(configured.database_url)
     sessions = create_session_factory(engine)
     providers = ModelProviderFactory(configured)
+    artifact_store = LocalArtifactStore(configured.artifact_root)
+    artifact_repository = PostgresArtifactMetadataRepository(sessions)
+    budget_repository = PostgresBudgetRepository(sessions)
+    budget_policy = BudgetPolicy(
+        soft_context_tokens=configured.soft_context_tokens,
+        hard_context_tokens=configured.hard_context_tokens,
+        recent_context_tokens=configured.recent_context_tokens,
+        max_total_tokens_per_run=configured.max_total_tokens_per_run,
+        max_reasoning_tokens_per_run=configured.max_reasoning_tokens_per_run,
+        max_active_seconds_per_run=configured.max_active_seconds_per_run,
+    )
+    context_manager = ContextManager(
+        summary_provider=DeterministicSummaryProvider(),
+        artifact_store=artifact_store,
+        artifact_repository=artifact_repository,
+    )
     async with checkpoint_saver(configured.checkpoint_database_url) as saver:
         await saver.setup()
         coding_graph = (
@@ -45,6 +64,9 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 max_parallel_tools=configured.max_parallel_read_tools,
                 recursion_limit=configured.agent_graph_recursion_limit,
                 no_progress_turns=configured.no_progress_turns,
+                context_manager=context_manager,
+                budget_repository=budget_repository,
+                budget_policy=budget_policy,
             )
             if providers.coding_available
             else None
@@ -53,8 +75,8 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             ModifyingCodingGraph(
                 saver,
                 provider_resolver=providers.create,
-                artifact_store=LocalArtifactStore(configured.artifact_root),
-                artifact_repository=PostgresArtifactMetadataRepository(sessions),
+                artifact_store=artifact_store,
+                artifact_repository=artifact_repository,
                 tool_repository=PostgresToolInvocationRepository(sessions),
                 approval_repository=PostgresApprovalRepository(sessions),
                 validation_repository=PostgresValidationRepository(sessions),
@@ -65,6 +87,9 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 max_tool_calls=configured.max_tool_calls_per_run,
                 recursion_limit=configured.agent_graph_recursion_limit,
                 no_progress_turns=configured.no_progress_turns,
+                context_manager=context_manager,
+                budget_repository=budget_repository,
+                budget_policy=budget_policy,
             )
             if providers.coding_available
             else None
@@ -82,6 +107,8 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     provider_resolver=providers.create,
                     validation_repository=PostgresValidationRepository(sessions),
                     tool_repository=PostgresToolInvocationRepository(sessions),
+                    budget_repository=budget_repository,
+                    budget_policy=budget_policy,
                 )
                 if providers.coding_available
                 else None
@@ -99,6 +126,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             ),
             observability_repository=PostgresObservabilityRepository(sessions),
             heartbeat_repository=PostgresWorkerHeartbeatRepository(sessions),
+            budget_repository=budget_repository,
         )
         restore = _install_signal_handlers(worker)
         try:

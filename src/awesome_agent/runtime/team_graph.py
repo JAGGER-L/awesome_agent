@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import NotRequired, TypedDict, cast
@@ -27,6 +29,7 @@ from awesome_agent.modeling import (
     UserMessage,
 )
 from awesome_agent.orchestration.team import TeamRuntime
+from awesome_agent.persistence.budget import BudgetRepository, RunBudgetLedgerRecord
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
     ToolInvocationRepository,
@@ -35,6 +38,14 @@ from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
     ValidationRepository,
+)
+from awesome_agent.runtime.budget import (
+    BudgetDecision,
+    BudgetLedger,
+    BudgetPolicy,
+    TokenUsageDelta,
+    estimate_messages_tokens,
+    evaluate_budget,
 )
 from awesome_agent.runtime.dispatch import (
     CorruptRuntimeStateError,
@@ -81,6 +92,7 @@ class TeamCodingState(TypedDict):
     assignments: dict[str, dict[str, object]]
     evidence: dict[str, list[dict[str, object]]]
     tool_call_count: int
+    budget_ledger: NotRequired[dict[str, object]]
     backend_todo_id: NotRequired[str]
     verification_rework_count: int
     verification_reports: list[dict[str, object]]
@@ -109,6 +121,8 @@ class TeamCodingGraph:
         verification_outcomes: list[str] | None = None,
         max_verification_reworks: int = 10,
         max_verification_execution_retries: int = 1,
+        budget_repository: BudgetRepository | None = None,
+        budget_policy: BudgetPolicy | None = None,
     ) -> None:
         self.saver = saver
         self.model_resolver = model_resolver
@@ -119,6 +133,8 @@ class TeamCodingGraph:
         self.verification_outcomes = verification_outcomes or ["failed", "passed"]
         self.max_verification_reworks = max_verification_reworks
         self.max_verification_execution_retries = max_verification_execution_retries
+        self.budget_repository = budget_repository
+        self.budget_policy = budget_policy
         self._run: Run | None = None
         self._leader: Agent | None = None
         self._repository: RuntimeRepository | None = None
@@ -170,6 +186,7 @@ class TeamCodingGraph:
                     "assignments": {},
                     "evidence": {},
                     "tool_call_count": 0,
+                    "budget_ledger": {},
                     "verification_rework_count": 0,
                     "verification_reports": [],
                 },
@@ -620,23 +637,37 @@ class TeamCodingGraph:
     async def _model_step(self, agent: Agent, *, purpose: str, turn: int) -> None:
         if self.provider_resolver is None:
             return
+        run = _required(self._run, "Run")
         started = monotonic()
         provider = self.provider_resolver(agent.model)
-        model_turn = await provider.complete(
-            ModelRequest(
-                messages=[
-                    SystemMessage(
-                        content=(
-                            "You are a bounded role inside a team coding runtime. "
-                            "Acknowledge the assigned step; tool execution is "
-                            "controlled by the runtime."
-                        )
-                    ),
-                    UserMessage(content=purpose),
-                ],
-                max_output_tokens=200,
+        request = ModelRequest(
+            messages=[
+                SystemMessage(
+                    content=(
+                        "You are a bounded role inside a team coding runtime. "
+                        "Acknowledge the assigned step; tool execution is "
+                        "controlled by the runtime."
+                    )
+                ),
+                UserMessage(content=purpose),
+            ],
+            max_output_tokens=200,
+        )
+        ledger = await self._evaluate_budget_before_model_call(
+            run_id=run.id,
+            agent=agent,
+            request=request,
+            turn=turn,
+        )
+        model_turn = await provider.complete(request)
+        ledger = ledger.add_usage(
+            TokenUsageDelta(
+                input_tokens=model_turn.usage.input_tokens or 0,
+                output_tokens=model_turn.usage.output_tokens or 0,
+                reasoning_tokens=model_turn.usage.reasoning_tokens or 0,
             )
         )
+        await self._persist_budget_ledger(run.id, ledger)
         if self._event_sink is None:
             return
         usage = model_turn.usage
@@ -660,6 +691,82 @@ class TeamCodingGraph:
             },
             f"model:{agent.id}:{turn}",
         )
+
+    async def _evaluate_budget_before_model_call(
+        self,
+        *,
+        run_id: UUID,
+        agent: Agent,
+        request: ModelRequest,
+        turn: int,
+    ) -> BudgetLedger:
+        ledger = await self._load_budget_ledger(run_id)
+        if self.budget_policy is None:
+            return ledger
+        now = datetime.now(UTC)
+        estimated_prompt_tokens = estimate_messages_tokens(request.messages)
+        decision = evaluate_budget(
+            ledger,
+            self.budget_policy,
+            estimated_prompt_tokens=estimated_prompt_tokens,
+            now=now,
+        )
+        updated = replace(ledger, threshold_status=decision.value)
+        await self._persist_budget_ledger(run_id, updated)
+        if decision is BudgetDecision.EXHAUSTED:
+            exhausted = replace(
+                updated,
+                threshold_status=BudgetDecision.EXHAUSTED.value,
+            )
+            await self._persist_budget_ledger(run_id, exhausted)
+            if self._event_sink is not None:
+                await self._event_sink(
+                    EventType.BUDGET_EXHAUSTED,
+                    {
+                        "agent_id": str(agent.id),
+                        "profile": agent.profile,
+                        "turn": turn,
+                        "estimated_prompt_tokens": estimated_prompt_tokens,
+                        "total_tokens": exhausted.total_tokens,
+                        "reasoning_tokens": exhausted.total_reasoning_tokens,
+                        "active_seconds": exhausted.active_seconds_at(now),
+                    },
+                    f"budget-exhausted:{agent.id}:{turn}",
+                )
+            raise PermanentExecutionError(
+                "budget_exhausted: token or wall-clock budget exhausted"
+            )
+        if (
+            decision in {BudgetDecision.COMPACT, BudgetDecision.FINAL_ANSWER}
+            and self._event_sink is not None
+        ):
+            await self._event_sink(
+                EventType.BUDGET_THRESHOLD_REACHED,
+                {
+                    "agent_id": str(agent.id),
+                    "profile": agent.profile,
+                    "turn": turn,
+                    "decision": decision.value,
+                    "estimated_prompt_tokens": estimated_prompt_tokens,
+                },
+                f"budget-threshold:{agent.id}:{turn}",
+            )
+        return updated
+
+    async def _load_budget_ledger(self, run_id: UUID) -> BudgetLedger:
+        if self.budget_repository is None:
+            return BudgetLedger()
+        record = await self.budget_repository.get_ledger(run_id)
+        return _ledger_from_record(record)
+
+    async def _persist_budget_ledger(
+        self,
+        run_id: UUID,
+        ledger: BudgetLedger,
+    ) -> None:
+        if self.budget_repository is None:
+            return
+        await self.budget_repository.upsert_ledger(_record_from_ledger(run_id, ledger))
 
     async def _emit_todo_created(self, todo: TodoItem) -> None:
         if self._event_sink is None:
@@ -827,6 +934,34 @@ def _state(value: object) -> TeamCodingState:
     if not required.issubset(value):
         raise CorruptRuntimeStateError("Team graph state is incomplete.")
     return cast(TeamCodingState, value)
+
+
+def _ledger_from_record(record: RunBudgetLedgerRecord) -> BudgetLedger:
+    return BudgetLedger(
+        total_input_tokens=record.total_input_tokens,
+        total_output_tokens=record.total_output_tokens,
+        total_reasoning_tokens=record.total_reasoning_tokens,
+        active_seconds=record.active_seconds,
+        model_call_count=record.model_call_count,
+        threshold_status=record.threshold_status,
+        active_window_started_at=record.active_window_started_at,
+    )
+
+
+def _record_from_ledger(
+    run_id: UUID,
+    ledger: BudgetLedger,
+) -> RunBudgetLedgerRecord:
+    return RunBudgetLedgerRecord(
+        run_id=run_id,
+        total_input_tokens=ledger.total_input_tokens,
+        total_output_tokens=ledger.total_output_tokens,
+        total_reasoning_tokens=ledger.total_reasoning_tokens,
+        active_seconds=ledger.active_seconds,
+        model_call_count=ledger.model_call_count,
+        threshold_status=ledger.threshold_status,
+        active_window_started_at=ledger.active_window_started_at,
+    )
 
 
 def _default_assignments() -> list[AgentAssignment]:

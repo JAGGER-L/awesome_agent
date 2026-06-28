@@ -20,6 +20,7 @@ from awesome_agent.observability.repository import (
     NoopObservabilityRepository,
     ObservabilityRepository,
 )
+from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
@@ -84,6 +85,7 @@ class DurableWorker:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         observability_repository: ObservabilityRepository | None = None,
         heartbeat_repository: WorkerHeartbeatRepository | None = None,
+        budget_repository: BudgetRepository | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.repository = repository
@@ -100,6 +102,7 @@ class DurableWorker:
             observability_repository or NoopObservabilityRepository()
         )
         self.heartbeat_repository = heartbeat_repository
+        self.budget_repository = budget_repository
         self.started_at = datetime.now(UTC)
 
     def request_stop(self) -> None:
@@ -476,23 +479,35 @@ class DurableWorker:
                     await self._record_event_observability(run, leader, event)
 
                 if run.graph_name == READ_ONLY_CODING_GRAPH and self.coding_graph:
-                    return await self.coding_graph.execute(
+                    coding_graph = self.coding_graph
+                    return await self._execute_with_active_budget(
                         run,
-                        leader,
-                        event_sink=emit,
+                        lambda: coding_graph.execute(
+                            run,
+                            leader,
+                            event_sink=emit,
+                        ),
                     )
                 if run.graph_name == MODIFYING_CODING_GRAPH and self.modifying_graph:
-                    return await self.modifying_graph.execute(
+                    modifying_graph = self.modifying_graph
+                    return await self._execute_with_active_budget(
                         run,
-                        leader,
-                        event_sink=emit,
+                        lambda: modifying_graph.execute(
+                            run,
+                            leader,
+                            event_sink=emit,
+                        ),
                     )
                 if run.graph_name == TEAM_CODING_GRAPH and self.team_graph:
-                    return await self.team_graph.execute(
+                    team_graph = self.team_graph
+                    return await self._execute_with_active_budget(
                         run,
-                        leader,
-                        repository=self.repository,
-                        event_sink=emit,
+                        lambda: team_graph.execute(
+                            run,
+                            leader,
+                            repository=self.repository,
+                            event_sink=emit,
+                        ),
                     )
             raise IncompatibleGraphError(
                 f"Worker cannot execute kind {run.execution_kind.value}."
@@ -516,6 +531,27 @@ class DurableWorker:
                 },
                 error=error_text,
             )
+
+    async def _execute_with_active_budget(
+        self,
+        run: Run,
+        action: Callable[
+            [],
+            Awaitable[
+                tuple[
+                    ReadOnlyAgentState | ModifyingAgentState | TeamCodingState,
+                    bool,
+                ]
+            ],
+        ],
+    ) -> tuple[ReadOnlyAgentState | ModifyingAgentState | TeamCodingState, bool]:
+        if self.budget_repository is None:
+            return await action()
+        await self.budget_repository.open_active_window(run.id, datetime.now(UTC))
+        try:
+            return await action()
+        finally:
+            await self.budget_repository.close_active_window(run.id, datetime.now(UTC))
 
     async def _record_event_observability(
         self,
