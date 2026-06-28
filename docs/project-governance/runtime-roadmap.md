@@ -27,6 +27,7 @@ agents; they are not the durable product roadmap.
 | Task 17 | Done | Distributed team child-run skeleton with durable lineage, assignments, mailbox, child results, recursive cancellation, inspection APIs/CLI, production Worker wiring, and PostgreSQL integration/E2E evidence. |
 | Task 18 | Done | Root-aware distributed team budget checks, deferred assignment tool exposure, and artifact-backed compaction for large handoff, child-result, verifier evidence, and mailbox payloads. |
 | Task 19 | Done | Pre-production graph-version removal, baseline migration squash, and ThinGraph, AgentLoop, middleware, and checkpoint-boundary contracts. |
+| Task 20 | Done | `solo-readonly` now enters AgentLoop middleware stages, with read-only evidence, progress, context, compaction, and budget policy extracted from the graph. |
 
 ## Completed Detail: Task 07 Isolated Mutation Sandbox and Shell
 
@@ -86,7 +87,6 @@ Task 07 does not include:
 
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 20 | Solo read-only middleware migration | Move solo read-only cross-cutting behavior into the AgentLoop/middleware stack. | `solo-readonly` behavior and tests remain equivalent while graph code owns only durable routing and terminal state. |
 | Task 21 | Solo modifying middleware migration | Move modifying approval, tool execution, sandbox, validation, rework, artifact, and context behavior behind middleware boundaries. | `solo-modifying` keeps existing safety/evidence guarantees with smaller graph responsibility and regression tests. |
 | Task 22 | Model-driven distributed team runtime | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
 | Task 23 | OpenTelemetry runtime instrumentation | Add real OTel spans/metrics on API and Worker production paths while preserving durable query tables. | Worker/model/tool/sandbox/API spans are created, exporter failures are isolated, and trace IDs remain queryable through durable events. |
@@ -124,8 +124,8 @@ Task 07 does not include:
   passes real E2E with Leader, Teammate, Verifier, and depth-2 Subagent child
   Runs, independent Worker claims, patch aggregation, mailbox evidence, and
   recursive cancellation.
-- Do not claim middleware-based runtime architecture until Task 19 defines the
-  AgentLoop contract, middleware ordering, and checkpoint boundary semantics.
+- Do not claim modifying or team middleware-based runtime architecture until
+  Task 21 and later tasks migrate those routes behind AgentLoop middleware.
 - Do not claim model-driven distributed team autonomy until Task 22 replaces
   deterministic child role skeletons with model/tool/verifier evidence.
 - Do not describe observability as OpenTelemetry instrumentation until Task 23

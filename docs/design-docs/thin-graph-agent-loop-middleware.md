@@ -1,7 +1,8 @@
 # ThinGraph, AgentLoop, and Middleware Contracts
 
-Task 19 defines the target runtime shape. It does not migrate the existing
-solo or team graphs yet.
+Task 19 defined the target runtime shape. Task 20 migrated `solo-readonly`
+through the first AgentLoop/middleware boundary while preserving its existing
+LangGraph checkpoint topology.
 
 ## Runtime Route
 
@@ -107,3 +108,20 @@ Middleware may influence routing without becoming graph nodes:
 Graph nodes remain stable. Behavior changes should be implemented by changing
 middleware composition or middleware configuration, not by proliferating graph
 versions.
+
+## Current Migration Status
+
+`solo-readonly` now routes its LangGraph node handlers through
+`ReadOnlyAgentLoop` stages:
+
+- `initialize` enters `before_agent`;
+- `model_turn` enters `before_model`, `wrap_model_call`, and `after_model`;
+- `execute_tools` enters `wrap_tool_call`;
+- `finalize` enters `after_agent`.
+
+Read-only evidence routing, progress reminders, context preparation,
+context-compaction persistence, and budget ledger/evaluation behavior live in
+explicit read-only middleware classes. The graph still owns checkpoint resume,
+state shape, LangGraph back edges, and terminal handoff to the Worker.
+
+`solo-modifying` and team routes have not yet been migrated to this boundary.

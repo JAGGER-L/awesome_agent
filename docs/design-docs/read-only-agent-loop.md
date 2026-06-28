@@ -6,10 +6,11 @@
 a repository question by repeatedly alternating between a model turn and
 bounded read-only repository tools. It never modifies the Run worktree.
 
-The graph is a checkpointed Agent loop, not a fixed sequence. Nodes define the
-allowed transitions, while each model response dynamically determines which
-tools run, which files are inspected, and when a completion candidate is
-offered.
+The graph is a checkpointed Agent loop, not a fixed sequence. LangGraph nodes
+define durable transitions, while `ReadOnlyAgentLoop` and read-only middleware
+own model/tool iteration, context, budget, progress, and evidence policy. Each
+model response dynamically determines which tools run, which files are
+inspected, and when a completion candidate is offered.
 
 ## Execution Route
 
@@ -21,10 +22,9 @@ intent = read_only
 runtime_route = solo-readonly
 ```
 
-Modifying Runs remain queued for Task 07. Workers without a configured
-DeepSeek API key advertise only the runtime-probe route and never claim Coding
-Runs. Existing queued read-only Coding Runs without a runtime route are
-backfilled to `solo-readonly`.
+Workers without a configured model API key advertise only the runtime-probe
+route and never claim Coding Runs. Read-only Coding Runs route to
+`solo-readonly`; modifying and team Runs use their own runtime routes.
 
 ## Graph Topology
 
@@ -55,6 +55,10 @@ of repository actions is predetermined.
 
 ## Node Responsibilities
 
+Each node delegates through `ReadOnlyAgentLoop` middleware stages before or
+around the existing handler logic. The graph keeps the checkpoint state shape
+stable; middleware performs cross-cutting policy.
+
 ### `initialize`
 
 Initializes serializable graph state: Run and Leader identity,
@@ -68,12 +72,19 @@ provider with the five read-only tool schemas. Visible reasoning may be
 returned by the provider protocol, but realtime deltas are not persisted in
 Task 06. Private continuation remains checkpoint-only.
 
+Context preparation, context-compaction persistence, budget threshold events,
+token ledger updates, and progress reminders are provided by read-only
+middleware.
+
 ### `route_turn`
 
 - native tool calls route to `execute_tools`;
 - an answer without successful repository evidence routes to `feedback`;
 - a non-empty completed answer after a successful inspection routes to
   `finalize`.
+
+The evidence decision is owned by `ReadOnlyEvidenceMiddleware`; the graph only
+maps the decision to its existing durable edge labels.
 
 ### `execute_tools`
 
