@@ -75,3 +75,27 @@ class WorkspaceCandidateResponse(BaseModel):
     reason: str
     dirty: bool | None
     can_cleanup: bool
+
+
+class BudgetLedgerResponse(BaseModel):
+    run_id: UUID
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    reasoning_tokens: int
+    active_seconds: int
+    model_call_count: int
+    threshold_status: str
+
+
+class ContextCompactionResponse(BaseModel):
+    id: UUID
+    run_id: UUID
+    agent_id: UUID | None
+    graph_name: str
+    graph_version: int
+    before_estimated_tokens: int
+    after_estimated_tokens: int
+    summary: str
+    artifact_refs: list[UUID]
+    created_at: datetime

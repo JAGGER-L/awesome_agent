@@ -14,6 +14,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.schemas import (
     ApprovalDecisionRequest,
+    BudgetLedgerResponse,
+    ContextCompactionResponse,
     CreateProbeRequest,
     CreateRunRequest,
     DispatchResponse,
@@ -39,6 +41,7 @@ from awesome_agent.observability.repository import (
     PostgresObservabilityRepository,
 )
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
+from awesome_agent.persistence.budget import BudgetRepository, PostgresBudgetRepository
 from awesome_agent.persistence.database import (
     create_engine,
     create_session_factory,
@@ -89,6 +92,7 @@ def create_app(
     registry: RepositoryRegistry | None = None,
     validation_repository: ValidationRepository | None = None,
     observability_repository: ObservabilityRepository | None = None,
+    budget_repository: BudgetRepository | None = None,
     workspace_service: WorkspaceRetentionService | None = None,
     worker_heartbeat_repository: object | None = None,
 ) -> FastAPI:
@@ -110,6 +114,8 @@ def create_app(
             app.state.observability_repository = (
                 observability_repository or NoopObservabilityRepository()
             )
+            if budget_repository is not None:
+                app.state.budget_repository = budget_repository
             if worker_heartbeat_repository is not None:
                 app.state.worker_heartbeats = worker_heartbeat_repository
             yield
@@ -124,6 +130,7 @@ def create_app(
         dispatcher = PostgresRunDispatcher(sessions)
         validation = PostgresValidationRepository(sessions)
         worker_heartbeats = PostgresWorkerHeartbeatRepository(sessions)
+        budgets = PostgresBudgetRepository(sessions)
         local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
         app.state.runtime = RuntimeService(
             repository=runtime_repository,
@@ -140,6 +147,7 @@ def create_app(
         app.state.observability_repository = observability_repository or (
             PostgresObservabilityRepository(sessions)
         )
+        app.state.budget_repository = budget_repository or budgets
         worktree_manager = ManagedRunWorktreeManager(
             settings.workspace_root or local_config.workspace_root
         )
@@ -179,6 +187,8 @@ def create_app(
     app.state.observability_repository = (
         observability_repository or NoopObservabilityRepository()
     )
+    if budget_repository is not None:
+        app.state.budget_repository = budget_repository
 
     def runtime() -> RuntimeService:
         return cast(RuntimeService, app.state.runtime)
@@ -199,6 +209,12 @@ def create_app(
         return cast(
             ObservabilityRepository,
             app.state.observability_repository,
+        )
+
+    def budgets() -> BudgetRepository | None:
+        return cast(
+            BudgetRepository | None,
+            getattr(app.state, "budget_repository", None),
         )
 
     def workspaces() -> WorkspaceRetentionService:
@@ -477,6 +493,63 @@ def create_app(
         return [
             asdict(call)
             for call in await observability().list_model_calls_for_run(run_id)
+        ]
+
+    @app.get("/runs/{run_id}/budget")
+    async def get_budget(run_id: UUID) -> BudgetLedgerResponse:
+        try:
+            await runtime().get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found.") from error
+        repository = budgets()
+        if repository is None:
+            return BudgetLedgerResponse(
+                run_id=run_id,
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                reasoning_tokens=0,
+                active_seconds=0,
+                model_call_count=0,
+                threshold_status="within_budget",
+            )
+        ledger = await repository.get_ledger(run_id)
+        return BudgetLedgerResponse(
+            run_id=run_id,
+            input_tokens=ledger.total_input_tokens,
+            output_tokens=ledger.total_output_tokens,
+            total_tokens=ledger.total_input_tokens + ledger.total_output_tokens,
+            reasoning_tokens=ledger.total_reasoning_tokens,
+            active_seconds=ledger.active_seconds,
+            model_call_count=ledger.model_call_count,
+            threshold_status=ledger.threshold_status,
+        )
+
+    @app.get("/runs/{run_id}/context-compactions")
+    async def list_context_compactions(
+        run_id: UUID,
+    ) -> list[ContextCompactionResponse]:
+        try:
+            await runtime().get_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found.") from error
+        repository = budgets()
+        if repository is None:
+            return []
+        return [
+            ContextCompactionResponse(
+                id=compaction.id,
+                run_id=compaction.run_id,
+                agent_id=compaction.agent_id,
+                graph_name=compaction.graph_name,
+                graph_version=compaction.graph_version,
+                before_estimated_tokens=compaction.before_estimated_tokens,
+                after_estimated_tokens=compaction.after_estimated_tokens,
+                summary=compaction.summary,
+                artifact_refs=compaction.artifact_refs,
+                created_at=compaction.created_at,
+            )
+            for compaction in await repository.list_compactions(run_id)
         ]
 
     return app

@@ -16,6 +16,11 @@ from awesome_agent.observability.repository import (
     InMemoryObservabilityRepository,
     ObservabilityRepository,
 )
+from awesome_agent.persistence.budget import (
+    ContextCompactionRecord,
+    InMemoryBudgetRepository,
+    RunBudgetLedgerRecord,
+)
 from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
@@ -60,6 +65,7 @@ def _client(
     *,
     validation_repository: ValidationRepository | None = None,
     observability_repository: ObservabilityRepository | None = None,
+    budget_repository: InMemoryBudgetRepository | None = None,
 ) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
     repository_path = projects / "repository"
@@ -110,6 +116,7 @@ def _client(
                 registry=registry,
                 validation_repository=validation_repository,
                 observability_repository=observability_repository,
+                budget_repository=budget_repository,
                 workspace_service=workspace_service,
             )
         ),
@@ -359,6 +366,61 @@ def test_observability_endpoints_return_run_trace_metrics_and_model_calls(
     assert metrics.json()[0]["name"] == "run.duration_ms"
     assert model_calls.status_code == 200
     assert model_calls.json()[0]["model"] == "deepseek-v4-flash"
+
+
+def test_budget_endpoints_return_ledger_and_context_compactions(
+    tmp_path: Path,
+) -> None:
+    budget_repository = InMemoryBudgetRepository()
+    client, repository = _client(tmp_path, budget_repository=budget_repository)
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect project",
+            "intent": "read_only",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+    artifact_id = uuid4()
+
+    async def record() -> None:
+        await budget_repository.upsert_ledger(
+            RunBudgetLedgerRecord(
+                run_id=run_id,
+                total_input_tokens=10,
+                total_output_tokens=20,
+                total_reasoning_tokens=5,
+                active_seconds=30,
+                model_call_count=2,
+                threshold_status="compact",
+            )
+        )
+        await budget_repository.record_compaction(
+            ContextCompactionRecord(
+                run_id=run_id,
+                agent_id=None,
+                graph_name="solo-readonly",
+                graph_version=1,
+                before_estimated_tokens=50_000,
+                after_estimated_tokens=12_000,
+                summary="Compacted repository inspection evidence.",
+                artifact_refs=[artifact_id],
+            )
+        )
+
+    asyncio.run(record())
+
+    budget = client.get(f"/runs/{run_id}/budget")
+    compactions = client.get(f"/runs/{run_id}/context-compactions")
+
+    assert budget.status_code == 200
+    assert budget.json()["total_tokens"] == 30
+    assert budget.json()["reasoning_tokens"] == 5
+    assert budget.json()["threshold_status"] == "compact"
+    assert compactions.status_code == 200
+    assert compactions.json()[0]["summary"].startswith("Compacted")
+    assert compactions.json()[0]["artifact_refs"] == [str(artifact_id)]
 
 
 def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:

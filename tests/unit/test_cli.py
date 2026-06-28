@@ -468,6 +468,81 @@ def test_workspace_cleanup_force_requires_reason() -> None:
     assert "reason" in result.output
 
 
+def test_budget_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = uuid4()
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "run_id": str(run_id),
+                "total_tokens": 30,
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "reasoning_tokens": 5,
+                "active_seconds": 12,
+                "model_call_count": 2,
+                "threshold_status": "compact",
+            }
+
+    def get(url: str, **kwargs: Any) -> Response:
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    result = runner.invoke(app, ["budget", str(run_id)])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(f"/runs/{run_id}/budget")
+    assert "total_tokens=30" in result.stdout
+    assert "threshold=compact" in result.stdout
+
+
+def test_context_compactions_command_reads_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    artifact_id = uuid4()
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": str(uuid4()),
+                    "run_id": str(run_id),
+                    "agent_id": None,
+                    "graph_name": "solo-readonly",
+                    "graph_version": 1,
+                    "before_estimated_tokens": 50_000,
+                    "after_estimated_tokens": 12_000,
+                    "summary": "Compacted repository inspection evidence.",
+                    "artifact_refs": [str(artifact_id)],
+                    "created_at": "2026-06-28T00:00:00Z",
+                }
+            ]
+
+    def get(url: str, **kwargs: Any) -> Response:
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    result = runner.invoke(app, ["context-compactions", str(run_id)])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(f"/runs/{run_id}/context-compactions")
+    assert "solo-readonly@1" in result.stdout
+    assert str(artifact_id) in result.stdout
+
+
 def _readiness_report(
     status: HealthStatus,
     checks: list[HealthCheck],

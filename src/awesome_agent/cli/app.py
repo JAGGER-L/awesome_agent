@@ -57,6 +57,57 @@ def version() -> None:
 
 
 @app.command()
+def budget(
+    run_id: UUID,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Print token and active-time budget totals for a Run."""
+    response = httpx.get(f"{api_url}/runs/{run_id}/budget", timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    typer.echo(
+        " ".join(
+            [
+                f"run_id={body['run_id']}",
+                f"total_tokens={body['total_tokens']}",
+                f"input={body['input_tokens']}",
+                f"output={body['output_tokens']}",
+                f"reasoning={body['reasoning_tokens']}",
+                f"active_seconds={body['active_seconds']}",
+                f"model_calls={body['model_call_count']}",
+                f"threshold={body['threshold_status']}",
+            ]
+        )
+    )
+
+
+@app.command("context-compactions")
+def context_compactions(
+    run_id: UUID,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Print context compaction history for a Run."""
+    response = httpx.get(
+        f"{api_url}/runs/{run_id}/context-compactions",
+        timeout=30,
+    )
+    response.raise_for_status()
+    for compaction in response.json():
+        artifact_refs = ", ".join(compaction.get("artifact_refs", []))
+        typer.echo(
+            " ".join(
+                [
+                    f"{compaction['graph_name']}@{compaction['graph_version']}",
+                    f"before={compaction['before_estimated_tokens']}",
+                    f"after={compaction['after_estimated_tokens']}",
+                    f"artifacts={artifact_refs}",
+                    f"summary={compaction['summary']}",
+                ]
+            )
+        )
+
+
+@app.command()
 def doctor(
     profile: Annotated[
         ReadinessProfile,
