@@ -36,6 +36,10 @@ class Run(BaseModel):
     base_commit: str | None = None
     intent: RunIntent = RunIntent.MODIFYING
     execution_kind: ExecutionKind = ExecutionKind.CODING
+    parent_run_id: UUID | None = None
+    root_run_id: UUID | None = None
+    depth: int = Field(default=0, ge=0, le=2)
+    child_role: str | None = Field(default=None, max_length=64)
     graph_name: str | None = None
     graph_version: int | None = Field(default=None, ge=1)
     dispatch_status: DispatchStatus = DispatchStatus.TERMINAL

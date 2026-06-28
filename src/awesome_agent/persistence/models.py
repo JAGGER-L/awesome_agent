@@ -52,6 +52,14 @@ class RunRecord(Base):
     base_commit: Mapped[str | None] = mapped_column(String(64))
     intent: Mapped[str] = mapped_column(String(32))
     execution_kind: Mapped[str] = mapped_column(String(32), index=True)
+    parent_run_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="SET NULL"),
+        index=True,
+    )
+    root_run_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), index=True)
+    depth: Mapped[int] = mapped_column(Integer, default=0)
+    child_role: Mapped[str | None] = mapped_column(String(64), index=True)
     graph_name: Mapped[str | None] = mapped_column(String(128))
     graph_version: Mapped[int | None] = mapped_column(Integer)
     dispatch_status: Mapped[str] = mapped_column(String(32), index=True)
@@ -135,6 +143,69 @@ class ContextCompactionRecord(Base):
     summary: Mapped[str] = mapped_column(Text)
     artifact_refs: Mapped[list[str]] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class TeamAssignmentRecord(Base):
+    __tablename__ = "team_assignments"
+    __table_args__ = (
+        Index("ix_team_assignments_root_status", "root_run_id", "status"),
+        Index("ix_team_assignments_parent_status", "parent_run_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    root_run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    parent_run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    child_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    role_profile: Mapped[str] = mapped_column(String(128))
+    graph_name: Mapped[str] = mapped_column(String(128))
+    graph_version: Mapped[int] = mapped_column(Integer)
+    goal: Mapped[str] = mapped_column(Text)
+    allowed_tools: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    allowed_skills: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    can_write: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_delegate: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_subagents: Mapped[int] = mapped_column(Integer, default=0)
+    acceptance_criteria: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    handoff_context: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    retire_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class TeamMailboxMessageRecord(Base):
+    __tablename__ = "team_mailbox_messages"
+    __table_args__ = (
+        Index("ix_team_mailbox_root_recipient", "team_root_run_id", "recipient_run_id"),
+        Index("ix_team_mailbox_recipient_status", "recipient_run_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    team_root_run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    sender_run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    sender_agent_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    recipient_run_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    recipient_agent_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    route: Mapped[str] = mapped_column(String(64), index=True)
+    message_type: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    subject: Mapped[str] = mapped_column(String(512))
+    body_summary: Mapped[str] = mapped_column(Text)
+    artifact_refs: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    requires_response: Mapped[bool] = mapped_column(Boolean, default=False)
+    response_to_message_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("team_mailbox_messages.id", ondelete="SET NULL"),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class IntakeReservationRecord(Base):

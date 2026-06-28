@@ -99,6 +99,10 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.base_commit = run.base_commit
             record.intent = run.intent.value
             record.execution_kind = run.execution_kind.value
+            record.parent_run_id = run.parent_run_id
+            record.root_run_id = run.root_run_id
+            record.depth = run.depth
+            record.child_role = run.child_role
             record.graph_name = run.graph_name
             record.graph_version = run.graph_version
             record.dispatch_status = run.dispatch_status.value
@@ -290,6 +294,10 @@ def _run_from_record(record: RunRecord) -> Run:
         base_commit=record.base_commit,
         intent=RunIntent(record.intent),
         execution_kind=ExecutionKind(record.execution_kind),
+        parent_run_id=record.parent_run_id,
+        root_run_id=record.root_run_id,
+        depth=record.depth,
+        child_role=record.child_role,
         graph_name=record.graph_name,
         graph_version=record.graph_version,
         dispatch_status=DispatchStatus(record.dispatch_status),
@@ -338,6 +346,10 @@ def _run_to_record(run: Run) -> RunRecord:
         base_commit=run.base_commit,
         intent=run.intent.value,
         execution_kind=run.execution_kind.value,
+        parent_run_id=run.parent_run_id,
+        root_run_id=run.root_run_id,
+        depth=run.depth,
+        child_role=run.child_role,
         graph_name=run.graph_name,
         graph_version=run.graph_version,
         dispatch_status=run.dispatch_status.value,

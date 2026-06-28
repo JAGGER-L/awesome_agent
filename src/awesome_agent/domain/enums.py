@@ -49,6 +49,7 @@ class IntakeReservationStatus(StrEnum):
 class RunStatus(StrEnum):
     CREATED = "created"
     RUNNING = "running"
+    WAITING = "waiting"
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -116,6 +117,14 @@ class EventType(StrEnum):
     CONTEXT_COMPACTED = "context.compacted"
     BUDGET_THRESHOLD_REACHED = "budget.threshold_reached"
     BUDGET_EXHAUSTED = "budget.exhausted"
+    TEAM_CHILD_RUN_CREATED = "team.child_run_created"
+    TEAM_CHILD_RUN_COMPLETED = "team.child_run_completed"
+    TEAM_ASSIGNMENT_CREATED = "team.assignment_created"
+    TEAM_ASSIGNMENT_RETIRED = "team.assignment_retired"
+    TEAM_MAILBOX_MESSAGE_CREATED = "team.mailbox_message_created"
+    TEAM_MAILBOX_MESSAGE_READ = "team.mailbox_message_read"
+    TEAM_MAILBOX_MESSAGE_RESPONDED = "team.mailbox_message_responded"
+    TEAM_PATCH_AGGREGATED = "team.patch_aggregated"
     WORKSPACE_CLEANED = "workspace.cleaned"
 
 
