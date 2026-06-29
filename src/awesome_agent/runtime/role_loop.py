@@ -120,6 +120,7 @@ class RoleLoop:
         repository: RuntimeRepository,
         team_repository: TeamRepository,
         subagent_results: list[TeamChildResult] | None = None,
+        validation_feedback: str | None = None,
         event_sink: RoleEventSink | None = None,
     ) -> RoleLoopResult:
         registry = build_modifying_registry()
@@ -136,6 +137,7 @@ class RoleLoop:
             assignment,
             policy,
             subagent_results=subagent_results or [],
+            validation_feedback=validation_feedback,
         )
         model_turn_count = 0
         tool_call_count = 0
@@ -376,6 +378,7 @@ def _initial_messages(
     policy: RoleLoopPolicy,
     *,
     subagent_results: list[TeamChildResult],
+    validation_feedback: str | None,
 ) -> list[ModelMessage]:
     criteria = "\n".join(f"- {item}" for item in policy.acceptance_criteria)
     messages: list[ModelMessage] = [
@@ -406,6 +409,16 @@ def _initial_messages(
                 content=(
                     "Completed Subagent results available to this Teammate:\n"
                     f"{summaries}"
+                )
+            )
+        )
+    if validation_feedback:
+        messages.append(
+            SystemMessage(
+                content=(
+                    "Validation failed. Rework the implementation using this "
+                    "bounded evidence, then call repo.diff again before "
+                    f"finishing:\n{validation_feedback}"
                 )
             )
         )

@@ -197,6 +197,112 @@ async def test_team_run_completes_as_distributed_child_runs(
     or "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL" not in os.environ,
     reason="Runtime and checkpoint databases are not configured.",
 )
+async def test_team_run_reworks_same_child_after_validation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_path = await _git_workspace_for_validation_rework(tmp_path)
+    snapshot = await require_primary_clean_repository(repository_path)
+    engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
+    sessions = create_session_factory(engine)
+    registry = PostgresRepositoryRegistry(sessions)
+    registered = await registry.upsert(
+        Repository(
+            root=snapshot.root,
+            display_name="distributed-team-validation-rework-fixture",
+            git_common_dir=snapshot.git_common_dir,
+            default_branch=snapshot.branch,
+        )
+    )
+    runtime = PostgresRuntimeRepository(sessions)
+    teams = PostgresTeamRepository(sessions)
+    intake = RunIntakeService(
+        registry=registry,
+        reservations=PostgresIntakeReservationStore(sessions),
+        runtime=runtime,
+        events=EventStream(),
+        worktrees=ManagedRunWorktreeManager(tmp_path / "worktrees"),
+        allowed_roots=[tmp_path],
+        model_resolver=_models(),
+    )
+    run = await intake.create_run(
+        repository_id=registered.id,
+        goal="Patch README.md and repair validation failures in the same teammate",
+        intent=RunIntent.MODIFYING,
+        mode=RunMode.TEAM,
+    )
+    provider = DynamicValidationReworkProvider()
+    monkeypatch.setattr(ModelProviderFactory, "create", lambda _self, _model: provider)
+    settings = Settings(
+        database_url=os.environ["AWESOME_AGENT_TEST_DATABASE_URL"],
+        checkpoint_database_url=os.environ[
+            "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL"
+        ],
+        deepseek_api_key=SecretStr("fake"),
+        artifact_root=tmp_path / "artifacts",
+        worker_poll_interval_seconds=0.01,
+        max_claim_attempts=10,
+    )
+
+    for _ in range(20):
+        processed = await run_worker(once=True, settings=settings)
+        if (await runtime.get_run(run.id)).status is RunStatus.COMPLETED:
+            break
+        assert processed
+    else:
+        raise AssertionError("distributed validation rework run did not complete")
+
+    restored = await runtime.get_run(run.id)
+    descendants = await runtime.list_descendant_runs(run.id)
+    assignments = await teams.list_assignments(run.id, include_inactive=True)
+    results = await teams.list_child_results(run.id)
+    writing_assignments = [
+        item for item in assignments if item.kind.value == "teammate" and item.can_write
+    ]
+    validation_repository = PostgresValidationRepository(sessions)
+    writing_reports = await validation_repository.list_for_run(
+        writing_assignments[0].child_run_id
+    )
+    observability = PostgresObservabilityRepository(sessions)
+    spans = [
+        span
+        for observed_run in [restored, *descendants]
+        for span in await observability.list_spans_for_run(observed_run.id)
+    ]
+    workspace = Path(restored.workspace_path or "")
+
+    assert restored.status is RunStatus.COMPLETED
+    assert len(writing_assignments) == 1
+    assert not any(
+        item.handoff_context.get("previous_assignment_id") for item in assignments
+    )
+    assert [item.report.status for item in writing_reports] == ["failed", "passed"]
+    assert any(
+        result.child_run_id == writing_assignments[0].child_run_id
+        and result.status == "completed"
+        and result.patch_artifact_id is not None
+        for result in results
+    )
+    assert any(
+        span.name == "agent.run"
+        and span.attributes.get("team_operation") == "role_validation"
+        for span in spans
+    )
+    assert any(
+        any("Validation failed" in message.content for message in request.messages)
+        for request in provider.requests
+    )
+    readme = (workspace / "README.md").read_text(encoding="utf-8")
+    assert "team patch" in readme
+    assert "bad validation patch" not in readme
+    await engine.dispose()
+
+
+@pytest.mark.skipif(
+    "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ
+    or "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL" not in os.environ,
+    reason="Runtime and checkpoint databases are not configured.",
+)
 async def test_team_run_reworks_after_verifier_rejection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -354,6 +460,33 @@ class DynamicHappyPathProvider(StructuredModelProvider):
         )
 
 
+class DynamicValidationReworkProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
+        if _is_leader_plan_request(request):
+            yield _completed_text(_team_plan_validation_rework_json())
+            return
+        if _is_verifier_request(request):
+            yield _completed_text(_verifier_pass_turn())
+            return
+        if _is_validation_feedback_request(request):
+            yield TurnCompleted(turn=_validation_fix_turn(request))
+            return
+        if _is_patch_teammate_request(request):
+            yield TurnCompleted(turn=_validation_bad_patch_turn(request))
+            return
+        raise AssertionError(
+            "Unexpected validation rework request:\n"
+            + "\n---\n".join(message.content for message in request.messages)
+        )
+
+
 def _is_verifier_request(request: ModelRequest) -> bool:
     return any(
         "independent Verifier" in message.content for message in request.messages
@@ -369,6 +502,10 @@ def _is_leader_plan_request(request: ModelRequest) -> bool:
 
 def _is_patch_teammate_request(request: ModelRequest) -> bool:
     return any("Patch README.md" in message.content for message in request.messages)
+
+
+def _is_validation_feedback_request(request: ModelRequest) -> bool:
+    return any("Validation failed" in message.content for message in request.messages)
 
 
 def _is_read_request(request: ModelRequest) -> bool:
@@ -452,6 +589,30 @@ def _team_plan_without_subagent_json() -> str:
                     "can_delegate": False,
                     "max_subagents": 0,
                     "acceptance_criteria": ["Return repository evidence."],
+                }
+            ],
+        }
+    )
+
+
+def _team_plan_validation_rework_json() -> str:
+    return json.dumps(
+        {
+            "rationale": "One writing teammate can repair validation failures.",
+            "teammates": [
+                {
+                    "role_profile": "backend-engineer",
+                    "goal": "Patch README.md so validation passes.",
+                    "allowed_tools": ["repo.apply_patch", "repo.diff"],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": True,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": [
+                        "Apply a README.md patch.",
+                        "Repair validation feedback in the same child run.",
+                    ],
                 }
             ],
         }
@@ -544,6 +705,84 @@ def _patch_teammate_turn(request: ModelRequest) -> ModelTurn:
     )
 
 
+def _validation_bad_patch_turn(request: ModelRequest) -> ModelTurn:
+    if not _has_tool_result(request, "bad-validation-patch"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="bad-validation-patch",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps({"patch": _bad_validation_patch()}),
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    if not _has_tool_result(request, "bad-validation-diff"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="bad-validation-diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    return ModelTurn(
+        assistant=AssistantMessage(content="Patched README.md before validation."),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _validation_fix_turn(request: ModelRequest) -> ModelTurn:
+    if not _has_tool_result(request, "fix-validation-patch"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="fix-validation-patch",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps({"patch": _fix_validation_patch()}),
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    if not _has_tool_result(request, "fix-validation-diff"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="fix-validation-diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    return ModelTurn(
+        assistant=AssistantMessage(content="Fixed README.md after validation."),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
 def _read_or_final_turn(request: ModelRequest) -> ModelTurn:
     if _has_tool_result(request, "read"):
         return _role_final_turn()
@@ -575,6 +814,29 @@ def _readme_patch() -> str:
         "+++ b/README.md\n"
         "@@ -1 +1,2 @@\n"
         " fixture\n"
+        "+team patch\n"
+    )
+
+
+def _bad_validation_patch() -> str:
+    return (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1,2 @@\n"
+        " fixture\n"
+        "+bad validation patch\n"
+    )
+
+
+def _fix_validation_patch() -> str:
+    return (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1,2 +1,2 @@\n"
+        " fixture\n"
+        "-bad validation patch\n"
         "+team patch\n"
     )
 
@@ -648,6 +910,57 @@ async def _git_workspace(tmp_path: Path) -> Path:
                 "[[gates]]",
                 'id = "readme-present"',
                 'name = "README present"',
+                'command = ["./pytest"]',
+                "required = true",
+                "timeout_seconds = 30",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    await _git(
+        repository_path,
+        "add",
+        ".gitattributes",
+        "README.md",
+        "pytest",
+        ".agents/validation.toml",
+    )
+    await _git(repository_path, "commit", "-m", "Initial")
+    return repository_path
+
+
+async def _git_workspace_for_validation_rework(tmp_path: Path) -> Path:
+    repository_path = tmp_path / "validation-rework-repository"
+    repository_path.mkdir()
+    await _git(repository_path, "init")
+    await _git(repository_path, "config", "user.email", "test@example.com")
+    await _git(repository_path, "config", "user.name", "Test")
+    (repository_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    (repository_path / "pytest").write_bytes(
+        (
+            "#!/usr/local/bin/python\n"
+            "from pathlib import Path\n"
+            "text = Path('README.md').read_text()\n"
+            "assert 'team patch' in text\n"
+            "assert 'bad validation patch' not in text\n"
+        ).encode("ascii")
+    )
+    (repository_path / ".gitattributes").write_text(
+        "pytest text eol=lf\n",
+        encoding="utf-8",
+    )
+    validation_dir = repository_path / ".agents"
+    validation_dir.mkdir()
+    (validation_dir / "validation.toml").write_text(
+        "\n".join(
+            [
+                "version = 1",
+                "max_rework_attempts = 1",
+                "",
+                "[[gates]]",
+                'id = "readme-fixed"',
+                'name = "README fixed"',
                 'command = ["./pytest"]',
                 "required = true",
                 "timeout_seconds = 30",

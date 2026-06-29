@@ -149,6 +149,12 @@ publication, while failed validation records a failed child result with
 `failure_kind="validation_failed"` and lets the Leader replacement rework path
 handle recovery.
 
+Task 26 extends that gate with same-child bounded validation rework. Reworkable
+command failures feed a compact validation report back into the same Teammate
+role loop, which must patch, call `repo.diff`, and validate again before any
+patch artifact is published. Non-reworkable failures or exhausted local
+attempts preserve the failed child-result semantics from Task 25.
+
 Patch aggregation is idempotent. The Leader applies Teammate patch artifacts to
 the root workspace when the preimage matches; if the postimage is already
 present, the patch is treated as already aggregated. Partial or conflicting
@@ -160,8 +166,8 @@ for local execution. Task 24 moves Leader planning, Teammate/Subagent
 model/tool execution, delegation tool calls, Verifier decisions, and team
 observability behind `TeamAgentLoop` and shared middleware. Remaining work is
 not basic autonomy wiring; it is hardening: richer mailbox collaboration
-policy, advanced replanning, same-child validation rework, conflict recovery,
-empirically tuned rework budgets, and true concurrent Worker stress tests.
+policy, advanced replanning, conflict recovery, empirically tuned rework
+budgets, and true concurrent Worker stress tests.
 
 ## AgentLoop Boundary
 
