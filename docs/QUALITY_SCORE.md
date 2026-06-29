@@ -9,8 +9,9 @@ queryable runtime observability. Distributed team child Runs now have durable
 lineage, model-generated Leader TeamPlans, assignment-scoped Teammate
 model/tool loops, mailbox, recursive cancellation, inspection APIs/CLI,
 root-aware budgets, deferred tool exposure, team payload compaction, and
-PostgreSQL E2E evidence. Dynamic distributed Subagents, model-driven Verifier
-review, and targeted rework remain roadmap work.
+PostgreSQL E2E evidence. Teammate-owned dynamic Subagent creation is now wired
+into the distributed path. Model-driven Verifier review and targeted rework
+remain roadmap work.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

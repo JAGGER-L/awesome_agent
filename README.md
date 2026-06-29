@@ -69,8 +69,9 @@ PostgreSQL:
   distributed Leader now asks the model for a validated structured `TeamPlan`
   before creating 1-3 Teammates. Teammate child Runs now execute
   assignment-scoped model/tool loops with only the Leader-granted effective
-  tools. Dynamic Teammate-owned Subagent child Runs, model-driven verifier
-  review, and targeted rework are the next Task 22 phases.
+  tools, and Teammates with delegation permission can create read-only
+  Subagent child Runs. Model-driven verifier review and targeted rework are
+  the next Task 22 phases.
 
 ### Approval (implemented for solo modifying runs)
 
@@ -88,15 +89,17 @@ The durable team runtime is explicit. Intake starts with only the Leader. When
 distributed `team-coding`. The Leader creates a model-generated structured
 `TeamPlan`, validates it, and creates Teammate child Runs from that plan. The
 Leader does not create Subagents or describe Subagent task direction. The
-Leader creates an independent Verifier child Run before finalization. Dynamic
-Teammate-owned Subagent creation is planned for Task 22C. The Verifier must
-pass the work before the Leader can complete the root Run.
+Leader creates an independent Verifier child Run before finalization.
+Teammates may create read-only Subagent child Runs only when the Leader granted
+`can_delegate` and `max_subagents`; the Leader still cannot describe Subagent
+task direction. The Verifier must pass the work before the Leader can complete
+the root Run.
 
 The older scoped `team-coding-scoped` runtime remains documented and tested,
 but the new distributed path is the forward architecture. Model-driven Leader
-planning and assignment-scoped Teammate role loops have started; Subagent
-delegation, Verifier review, and targeted rework remain in later Task 22
-phases. Distributed team assignments support deferred tool exposure,
+planning, assignment-scoped Teammate role loops, and Teammate-owned Subagent
+delegation have started; Verifier review and targeted rework remain in later
+Task 22 phases. Distributed team assignments support deferred tool exposure,
 root-aware token/active-time
 budget checks, and artifact-backed compaction for large handoff, child-result,
 and verifier evidence payloads.
@@ -277,8 +280,7 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- dynamic Subagent creation, Verifier review, and targeted rework on the
-  `team-coding` path.
+- model-driven Verifier review and targeted rework on the `team-coding` path.
 - richer team mailbox collaboration policy.
 
 ## Documentation

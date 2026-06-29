@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 
-from awesome_agent.domain.enums import EventType
+from pydantic import BaseModel, Field, ValidationError
+
+from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     ModelMessage,
@@ -19,8 +22,17 @@ from awesome_agent.modeling import (
     ToolResultMessage,
     UserMessage,
 )
-from awesome_agent.runtime.dispatch import PermanentExecutionError
-from awesome_agent.runtime.team_assignments import TeamAssignment
+from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
+from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
+from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.runtime.team_assignments import (
+    TeamAssignment,
+    TeamAssignmentKind,
+    TeamAssignmentStatus,
+    TeamChildResult,
+    validate_assignment_graph,
+)
 from awesome_agent.runtime.team_budget import build_team_attribution
 from awesome_agent.sandbox.process import run_process
 from awesome_agent.tools.repository import (
@@ -34,6 +46,22 @@ ProviderResolver = Callable[[str], ModelProvider]
 RoleEventSink = Callable[[EventType, dict[str, object], str], Awaitable[None]]
 
 _WRITE_TOOLS = {"repo.apply_patch", "shell.execute"}
+_TEAM_CREATE_SUBAGENT = "team.create_subagent"
+_READ_ONLY_TEAM_TOOLS = {
+    "repo.status",
+    "repo.list",
+    "repo.search",
+    "repo.read",
+    "repo.instructions",
+    "repo.diff",
+}
+
+
+class TeamCreateSubagentArguments(BaseModel):
+    goal: str = Field(min_length=1, max_length=4000)
+    allowed_tools: list[str] = Field(min_length=1, max_length=12)
+    allowed_skills: list[str] = Field(default_factory=list, max_length=20)
+    acceptance_criteria: list[str] = Field(min_length=1, max_length=8)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +110,9 @@ class RoleLoop:
         assignment: TeamAssignment,
         policy: RoleLoopPolicy,
         workspace: Path,
+        repository: RuntimeRepository,
+        team_repository: TeamRepository,
+        subagent_results: list[TeamChildResult] | None = None,
         event_sink: RoleEventSink | None = None,
     ) -> RoleLoopResult:
         registry = build_modifying_registry()
@@ -90,11 +121,18 @@ class RoleLoop:
             model_tool_definitions(registry),
             policy.allowed_tools,
         )
+        if _TEAM_CREATE_SUBAGENT in policy.allowed_tools:
+            tool_definitions.append(_create_subagent_tool_definition())
         provider = self.provider_resolver(agent.model)
-        messages = _initial_messages(run, assignment, policy)
+        messages = _initial_messages(
+            run,
+            assignment,
+            policy,
+            subagent_results=subagent_results or [],
+        )
         model_turn_count = 0
         tool_call_count = 0
-        successful_inspections = 0
+        successful_inspections = len(subagent_results or [])
         successful_writes = 0
         diff_after_last_write = False
         final_answer = ""
@@ -143,6 +181,8 @@ class RoleLoop:
                         assignment=assignment,
                         policy=policy,
                         workspace=workspace,
+                        repository=repository,
+                        team_repository=team_repository,
                         call=call,
                         executor=executor,
                         event_sink=event_sink,
@@ -210,11 +250,25 @@ async def _execute_call(
     assignment: TeamAssignment,
     policy: RoleLoopPolicy,
     workspace: Path,
+    repository: RuntimeRepository,
+    team_repository: TeamRepository,
     call: ToolCall,
     executor: object,
     event_sink: RoleEventSink | None,
 ) -> ToolResultMessage:
     started = monotonic()
+    if call.name == _TEAM_CREATE_SUBAGENT:
+        await _create_dynamic_subagent(
+            run=run,
+            agent=agent,
+            assignment=assignment,
+            policy=policy,
+            repository=repository,
+            team_repository=team_repository,
+            call=call,
+            event_sink=event_sink,
+        )
+        raise ChildRunWait("waiting_subagents")
     allowed = call.name in policy.allowed_tools
     if not allowed and policy.can_write and call.name in _WRITE_TOOLS:
         raise PermanentExecutionError(f"team_role_tool_not_allowed: {call.name}")
@@ -267,9 +321,11 @@ def _initial_messages(
     run: Run,
     assignment: TeamAssignment,
     policy: RoleLoopPolicy,
+    *,
+    subagent_results: list[TeamChildResult],
 ) -> list[ModelMessage]:
     criteria = "\n".join(f"- {item}" for item in policy.acceptance_criteria)
-    return [
+    messages: list[ModelMessage] = [
         SystemMessage(
             content=(
                 "You are a bounded Teammate/Subagent inside a distributed coding "
@@ -288,6 +344,202 @@ def _initial_messages(
             )
         ),
     ]
+    if subagent_results:
+        summaries = "\n".join(
+            f"- {result.status}: {result.summary[:1000]}" for result in subagent_results
+        )
+        messages.append(
+            UserMessage(
+                content=(
+                    "Completed Subagent results available to this Teammate:\n"
+                    f"{summaries}"
+                )
+            )
+        )
+    return messages
+
+
+async def _create_dynamic_subagent(
+    *,
+    run: Run,
+    agent: Agent,
+    assignment: TeamAssignment,
+    policy: RoleLoopPolicy,
+    repository: RuntimeRepository,
+    team_repository: TeamRepository,
+    call: ToolCall,
+    event_sink: RoleEventSink | None,
+) -> None:
+    if (
+        assignment.kind is not TeamAssignmentKind.TEAMMATE
+        or run.depth != 1
+        or not assignment.can_delegate
+    ):
+        raise PermanentExecutionError("only teammates can create subagents")
+    arguments = _parse_create_subagent(call)
+    _validate_subagent_arguments(arguments, policy)
+    existing = await _find_subagent_for_call(
+        team_repository,
+        assignment=assignment,
+        call_id=call.call_id,
+    )
+    if existing is not None:
+        if existing.status is TeamAssignmentStatus.ACTIVE:
+            raise ChildRunWait("waiting_subagents")
+        return
+    active = [
+        item
+        for item in await team_repository.list_assignments(
+            assignment.root_run_id,
+            include_inactive=True,
+        )
+        if item.parent_run_id == run.id
+        and item.kind is TeamAssignmentKind.SUBAGENT
+        and item.status is TeamAssignmentStatus.ACTIVE
+    ]
+    if len(active) >= min(3, assignment.max_subagents):
+        raise PermanentExecutionError("active subagent limit reached")
+    child = Run(
+        goal=arguments.goal,
+        mode=RunMode.TEAM,
+        repository_id=run.repository_id,
+        base_commit=run.base_commit,
+        intent=run.intent,
+        execution_kind=run.execution_kind,
+        parent_run_id=run.id,
+        root_run_id=run.root_run_id or assignment.root_run_id,
+        depth=2,
+        child_role=TeamAssignmentKind.SUBAGENT.value,
+        runtime_route=TEAM_ROLE_ROUTE,
+        dispatch_status=DispatchStatus.QUEUED,
+        workspace_path=run.workspace_path,
+        integration_branch=run.integration_branch,
+        workspace_state=run.workspace_state,
+        graph_thread_id=f"run:{run.id}:subagent:{call.call_id}",
+    )
+    subagent = Agent(
+        run_id=child.id,
+        parent_agent_id=agent.id,
+        kind=AgentKind.SUBAGENT,
+        profile="subagent",
+        model=agent.model,
+    )
+    child_assignment = TeamAssignment(
+        root_run_id=assignment.root_run_id,
+        parent_run_id=run.id,
+        child_run_id=child.id,
+        kind=TeamAssignmentKind.SUBAGENT,
+        role_profile="subagent",
+        runtime_route=TEAM_ROLE_ROUTE,
+        goal=arguments.goal,
+        allowed_tools=arguments.allowed_tools,
+        allowed_skills=arguments.allowed_skills,
+        can_write=False,
+        can_delegate=False,
+        max_subagents=0,
+        acceptance_criteria=arguments.acceptance_criteria,
+        handoff_context={"created_by_tool_call_id": call.call_id},
+    )
+    validate_assignment_graph(child_assignment)
+    await repository.create_run(child, subagent)
+    await team_repository.create_assignment(child_assignment)
+    await _emit(
+        event_sink,
+        run,
+        assignment,
+        agent,
+        EventType.TEAM_SUBAGENT_REQUESTED,
+        {
+            "tool_call_id": call.call_id,
+            "child_run_id": str(child.id),
+            "assignment_id": str(child_assignment.id),
+            "goal": arguments.goal,
+        },
+        f"team-subagent-requested:{call.call_id}",
+    )
+    await _emit(
+        event_sink,
+        child,
+        child_assignment,
+        subagent,
+        EventType.TEAM_CHILD_RUN_CREATED,
+        {
+            "child_run_id": str(child.id),
+            "assignment_id": str(child_assignment.id),
+            "kind": child_assignment.kind.value,
+        },
+        f"team-child-created:{child.id}",
+    )
+    await _emit(
+        event_sink,
+        child,
+        child_assignment,
+        subagent,
+        EventType.TEAM_ASSIGNMENT_CREATED,
+        {
+            "assignment_id": str(child_assignment.id),
+            "child_run_id": str(child.id),
+            "kind": child_assignment.kind.value,
+        },
+        f"team-assignment-created:{child_assignment.id}",
+    )
+
+
+def _parse_create_subagent(call: ToolCall) -> TeamCreateSubagentArguments:
+    try:
+        raw = json.loads(call.arguments_json)
+        return TeamCreateSubagentArguments.model_validate(raw)
+    except (json.JSONDecodeError, ValidationError) as error:
+        message = f"invalid team.create_subagent arguments: {error}"
+        raise PermanentExecutionError(message) from error
+
+
+def _validate_subagent_arguments(
+    arguments: TeamCreateSubagentArguments,
+    policy: RoleLoopPolicy,
+) -> None:
+    allowed = set(policy.allowed_tools)
+    requested_tools = set(arguments.allowed_tools)
+    if not requested_tools.issubset(allowed):
+        raise PermanentExecutionError(
+            "subagent tools must be a subset of teammate tools"
+        )
+    if any(tool not in _READ_ONLY_TEAM_TOOLS for tool in requested_tools):
+        raise PermanentExecutionError("subagent tools must be read-only")
+    if not set(arguments.allowed_skills).issubset(policy.allowed_skills):
+        raise PermanentExecutionError(
+            "subagent skills must be a subset of teammate skills"
+        )
+
+
+async def _find_subagent_for_call(
+    team_repository: TeamRepository,
+    *,
+    assignment: TeamAssignment,
+    call_id: str,
+) -> TeamAssignment | None:
+    for item in await team_repository.list_assignments(
+        assignment.root_run_id,
+        include_inactive=True,
+    ):
+        if (
+            item.parent_run_id == assignment.child_run_id
+            and item.kind is TeamAssignmentKind.SUBAGENT
+            and item.handoff_context.get("created_by_tool_call_id") == call_id
+        ):
+            return item
+    return None
+
+
+def _create_subagent_tool_definition() -> ToolDefinition:
+    return ToolDefinition(
+        name=_TEAM_CREATE_SUBAGENT,
+        description=(
+            "Create one read-only Subagent child Run for bounded delegated "
+            "repository evidence. Only Teammates may call this tool."
+        ),
+        input_schema=TeamCreateSubagentArguments.model_json_schema(),
+    )
 
 
 def _filter_tool_definitions(

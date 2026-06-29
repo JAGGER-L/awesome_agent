@@ -88,34 +88,36 @@ class TeamRoleGraph:
             agent_id=agent.id,
         )
         allowed_tools = effective_assignment_tools(assignment)
+        existing_subagents = [
+            item
+            for item in await self.team_repository.list_assignments(
+                assignment.root_run_id,
+                include_inactive=True,
+            )
+            if item.parent_run_id == run.id and item.kind is TeamAssignmentKind.SUBAGENT
+        ]
+        if any(
+            item.status is TeamAssignmentStatus.ACTIVE for item in existing_subagents
+        ):
+            raise ChildRunWait("waiting_subagents")
         subagent_goals = _subagent_goals(assignment)
         if (
             assignment.kind is TeamAssignmentKind.TEAMMATE
             and assignment.can_delegate
             and subagent_goals
+            and not existing_subagents
         ):
-            subagents = [
-                item
-                for item in await self.team_repository.list_assignments(
-                    assignment.root_run_id,
-                    include_inactive=True,
-                )
-                if item.parent_run_id == run.id
-                and item.kind is TeamAssignmentKind.SUBAGENT
-            ]
-            if not subagents:
-                await self._create_subagents(
-                    run,
-                    agent,
-                    assignment=assignment,
-                    goals=subagent_goals,
-                    allowed_tools=allowed_tools,
-                    repository=repository,
-                    event_sink=event_sink,
-                )
-                raise ChildRunWait("waiting_subagents")
-            if any(item.status is TeamAssignmentStatus.ACTIVE for item in subagents):
-                raise ChildRunWait("waiting_subagents")
+            await self._create_subagents(
+                run,
+                agent,
+                assignment=assignment,
+                goals=subagent_goals,
+                allowed_tools=allowed_tools,
+                repository=repository,
+                event_sink=event_sink,
+            )
+            raise ChildRunWait("waiting_subagents")
+        subagent_results = await self.team_repository.list_child_results(run.id)
         result = None
         if self.role_loop is not None and run.workspace_path is not None:
             result = await self.role_loop.execute(
@@ -129,6 +131,9 @@ class TeamRoleGraph:
                     acceptance_criteria=assignment.acceptance_criteria,
                 ),
                 workspace=run.workspace_path,
+                repository=repository,
+                team_repository=self.team_repository,
+                subagent_results=subagent_results,
                 event_sink=event_sink,  # type: ignore[arg-type]
             )
         await self._record_result_if_needed(run, agent, assignment, result=result)

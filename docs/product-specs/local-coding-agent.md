@@ -74,7 +74,6 @@ team output.
 - automatic solo/team routing
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
-- dynamic distributed Subagent creation, model-driven Verifier review, and
-  targeted rework
+- model-driven distributed Verifier review and targeted rework
 - money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server

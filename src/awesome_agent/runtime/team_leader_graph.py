@@ -562,7 +562,8 @@ def _initial_team_plan_messages(run: Run) -> list[ModelMessage]:
                 f"Root intent: {run.intent.value}\n"
                 f"{intent_rules}\n"
                 "Known tools: repo.status, repo.list, repo.search, repo.read, "
-                "repo.instructions, repo.diff, repo.apply_patch, shell.execute.\n"
+                "repo.instructions, repo.diff, repo.apply_patch, shell.execute, "
+                "team.create_subagent.\n"
                 "Prefer the smallest useful team."
             )
         ),

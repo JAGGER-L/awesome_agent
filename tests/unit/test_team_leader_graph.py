@@ -124,6 +124,36 @@ async def test_leader_retries_invalid_team_plan_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_leader_plan_can_grant_subagent_creation_tool() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph, provider = _graph(
+        teams,
+        responses=[
+            _team_plan_json(
+                extra={
+                    "allowed_tools": ["repo.read", "team.create_subagent"],
+                    "deferred_tools": [],
+                    "can_write": False,
+                    "can_delegate": True,
+                    "max_subagents": 3,
+                }
+            )
+        ],
+    )
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime)
+
+    assignments = await teams.list_assignments(run.id)
+    assert assignments[0].allowed_tools == ["repo.read", "team.create_subagent"]
+    assert assignments[0].can_delegate is True
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_leader_fails_after_second_invalid_team_plan() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()

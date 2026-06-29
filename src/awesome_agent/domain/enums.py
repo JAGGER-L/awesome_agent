@@ -122,6 +122,7 @@ class EventType(StrEnum):
     TEAM_ASSIGNMENT_CREATED = "team.assignment_created"
     TEAM_PLAN_CREATED = "team.plan_created"
     TEAM_PLAN_REJECTED = "team.plan_rejected"
+    TEAM_SUBAGENT_REQUESTED = "team.subagent_requested"
     TEAM_ASSIGNMENT_RETIRED = "team.assignment_retired"
     TEAM_MAILBOX_MESSAGE_CREATED = "team.mailbox_message_created"
     TEAM_MAILBOX_MESSAGE_READ = "team.mailbox_message_read"

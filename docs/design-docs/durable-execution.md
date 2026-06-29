@@ -397,7 +397,8 @@ root coordination with model-driven planning:
 - the accepted plan creates 1-3 durable Teammate child Runs;
 - the Leader cannot include Verifier assignments, `subagent_goals`,
   `delegation_guidance`, or Subagent task direction in the plan;
-- dynamic depth-one Subagent child Runs remain a Task 22C target;
+- Teammates with delegation permission can create dynamic read-only Subagent
+  child Runs through `team.create_subagent`;
 - the root Leader creates a Verifier child Run before finalization;
 - child Runs are independently claimable through the normal PostgreSQL
   dispatch queue;
@@ -415,8 +416,9 @@ assignment-scoped model/tool loops for Teammate child Runs. The model receives
 only effective assignment tools, execution rechecks authorization, read-only
 roles require repository evidence before finalization, writing roles must call
 `repo.diff` after the last write, and patch artifacts are generated from the
-child workspace diff. Dynamic Subagents, model-driven Verifier review, and
-durable targeted rework remain later Task 22 phases.
+child workspace diff. Task 22C adds dynamic Teammate-owned Subagent creation
+with depth, authorization, and active-count limits. Model-driven Verifier review
+and durable targeted rework remain later Task 22 phases.
 
 ## Retry, Cancellation, and Failure
 

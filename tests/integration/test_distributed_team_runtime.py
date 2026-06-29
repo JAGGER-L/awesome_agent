@@ -70,7 +70,13 @@ async def test_distributed_team_runs_through_workers_with_lineage(
     )
     root = root.model_copy(update={"graph_thread_id": f"run:{root.id}"})
     provider = FakeModelProvider(
-        [_team_plan_json(), _role_read_turn(), _role_final_turn()]
+        [
+            _team_plan_json(),
+            _create_subagent_turn(),
+            _role_read_turn(),
+            _subagent_final_turn(),
+            _role_final_turn(),
+        ]
     )
     leader = Agent(
         run_id=root.id,
@@ -114,9 +120,11 @@ async def test_distributed_team_runs_through_workers_with_lineage(
     assert [run.child_role for run in descendants] == [
         "teammate",
         "verifier",
+        "subagent",
     ]
     assert {item.kind for item in assignments} == {
         TeamAssignmentKind.TEAMMATE,
+        TeamAssignmentKind.SUBAGENT,
         TeamAssignmentKind.VERIFIER,
     }
     assert all(item.status == "completed" for item in assignments)
@@ -135,7 +143,7 @@ async def _drain(
     repository: PostgresRuntimeRepository,
     run_id: object,
 ) -> None:
-    for _ in range(10):
+    for _ in range(15):
         assert await worker.run_once()
         if (await repository.get_run(run_id)).status is RunStatus.COMPLETED:  # type: ignore[arg-type]
             return
@@ -171,16 +179,44 @@ def _team_plan_json() -> str:
                 {
                     "role_profile": "backend-engineer",
                     "goal": "Inspect the repository and report a bounded result.",
-                    "allowed_tools": ["repo.read", "repo.diff"],
+                    "allowed_tools": ["repo.read", "team.create_subagent"],
                     "deferred_tools": [],
                     "allowed_skills": [],
                     "can_write": False,
-                    "can_delegate": False,
-                    "max_subagents": 0,
-                    "acceptance_criteria": ["Return a completed child result."],
+                    "can_delegate": True,
+                    "max_subagents": 3,
+                    "acceptance_criteria": [
+                        "Delegate repository inspection to a subagent.",
+                    ],
                 }
             ],
         }
+    )
+
+
+def _create_subagent_turn() -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(
+            tool_calls=[
+                ToolCall(
+                    call_id="subagent-read",
+                    name="team.create_subagent",
+                    arguments_json=json.dumps(
+                        {
+                            "goal": "Read README.md and report the evidence.",
+                            "allowed_tools": ["repo.read"],
+                            "allowed_skills": [],
+                            "acceptance_criteria": [
+                                "Return README evidence to the teammate.",
+                            ],
+                        }
+                    ),
+                )
+            ]
+        ),
+        stop_reason=StopReason.TOOL_CALLS,
+        model="fake-model",
+        provider="fake",
     )
 
 
@@ -201,9 +237,18 @@ def _role_read_turn() -> ModelTurn:
     )
 
 
+def _subagent_final_turn() -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(content="Subagent inspected README.md."),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
 def _role_final_turn() -> ModelTurn:
     return ModelTurn(
-        assistant=AssistantMessage(content="README.md was inspected."),
+        assistant=AssistantMessage(content="Used subagent README evidence."),
         stop_reason=StopReason.COMPLETED,
         model="fake-model",
         provider="fake",

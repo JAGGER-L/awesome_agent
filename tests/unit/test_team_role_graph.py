@@ -6,7 +6,13 @@ import pytest
 
 from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
+from awesome_agent.domain.enums import (
+    AgentKind,
+    DispatchStatus,
+    EventType,
+    RunIntent,
+    RunMode,
+)
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -20,13 +26,14 @@ from awesome_agent.modeling import (
 )
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
-from awesome_agent.runtime.dispatch import ChildRunWait
+from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
     TeamAssignmentStatus,
+    TeamChildResult,
 )
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 
@@ -429,6 +436,273 @@ async def test_read_only_teammate_rejects_write_tool_without_execution(
     assert result.patch_artifact_id is None
     assert (workspace / "README.md").read_text(encoding="utf-8") == "fixture\n"
     assert len(provider.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_teammate_can_create_dynamic_subagent(tmp_path: Path) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="subagent-1",
+                        name="team.create_subagent",
+                        arguments_json=(
+                            '{"goal":"Read README for focused evidence",'
+                            '"allowed_tools":["repo.read"],'
+                            '"allowed_skills":["repository-inspection"],'
+                            '"acceptance_criteria":["Return README evidence."]}'
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            )
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read", "team.create_subagent"],
+            allowed_skills=["repository-inspection"],
+            can_delegate=True,
+            max_subagents=3,
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(ChildRunWait, match="waiting_subagents"):
+        await graph.execute(run, agent, repository=runtime, event_sink=emit)
+
+    children = await runtime.list_child_runs(run.id)
+    assignments = await teams.list_assignments(run.root_run_id or run.id)
+    subagent_assignment = next(
+        item for item in assignments if item.kind is TeamAssignmentKind.SUBAGENT
+    )
+    assert len(children) == 1
+    assert children[0].depth == 2
+    assert children[0].dispatch_status is DispatchStatus.QUEUED
+    assert subagent_assignment.child_run_id == children[0].id
+    assert subagent_assignment.allowed_tools == ["repo.read"]
+    assert subagent_assignment.can_write is False
+    assert subagent_assignment.can_delegate is False
+    assert (
+        subagent_assignment.handoff_context["created_by_tool_call_id"] == "subagent-1"
+    )
+    team_events = [
+        event[0]
+        for event in events
+        if event[0]
+        in {
+            EventType.TEAM_SUBAGENT_REQUESTED,
+            EventType.TEAM_CHILD_RUN_CREATED,
+            EventType.TEAM_ASSIGNMENT_CREATED,
+        }
+    ]
+    assert team_events == [
+        EventType.TEAM_SUBAGENT_REQUESTED,
+        EventType.TEAM_CHILD_RUN_CREATED,
+        EventType.TEAM_ASSIGNMENT_CREATED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subagent_cannot_create_dynamic_subagent(tmp_path: Path) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="nested",
+                        name="team.create_subagent",
+                        arguments_json=(
+                            '{"goal":"nested",'
+                            '"allowed_tools":["repo.read"],'
+                            '"allowed_skills":[],'
+                            '"acceptance_criteria":["no nesting"]}'
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            )
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.SUBAGENT)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.SUBAGENT,
+            allowed_tools=["repo.read", "team.create_subagent"],
+        )
+    )
+
+    with pytest.raises(PermanentExecutionError, match="only teammates can create"):
+        await graph.execute(run, agent, repository=runtime)
+
+
+@pytest.mark.asyncio
+async def test_teammate_dynamic_subagent_active_limit(tmp_path: Path) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="too-many",
+                        name="team.create_subagent",
+                        arguments_json=(
+                            '{"goal":"extra",'
+                            '"allowed_tools":["repo.read"],'
+                            '"allowed_skills":[],'
+                            '"acceptance_criteria":["limit"]}'
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            )
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read", "team.create_subagent"],
+            can_delegate=True,
+            max_subagents=3,
+        )
+    )
+    for index in range(3):
+        child = Run(
+            goal=f"subagent {index}",
+            mode=RunMode.TEAM,
+            parent_run_id=run.id,
+            root_run_id=run.root_run_id,
+            depth=2,
+            child_role="subagent",
+            runtime_route=TEAM_ROLE_ROUTE,
+        )
+        await runtime.create_run(
+            child,
+            Agent(
+                run_id=child.id,
+                parent_agent_id=agent.id,
+                kind=AgentKind.SUBAGENT,
+                profile="subagent",
+                model="fake",
+            ),
+        )
+        await teams.create_assignment(
+            TeamAssignment(
+                root_run_id=run.root_run_id or run.id,
+                parent_run_id=run.id,
+                child_run_id=child.id,
+                kind=TeamAssignmentKind.SUBAGENT,
+                role_profile="subagent",
+                runtime_route=TEAM_ROLE_ROUTE,
+                goal=child.goal,
+                allowed_tools=["repo.read"],
+            )
+        )
+
+    with pytest.raises(ChildRunWait, match="waiting_subagents"):
+        await graph.execute(run, agent, repository=runtime)
+    assert provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_completed_subagent_result_is_injected_into_teammate_context(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider([_turn(content="Used subagent evidence.")])
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    teammate_assignment = _assignment(
+        run,
+        kind=TeamAssignmentKind.TEAMMATE,
+        allowed_tools=["repo.read", "team.create_subagent"],
+        can_delegate=True,
+        max_subagents=3,
+    )
+    await teams.create_assignment(teammate_assignment)
+    child = Run(
+        goal="read evidence",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.root_run_id,
+        depth=2,
+        child_role="subagent",
+        runtime_route=TEAM_ROLE_ROUTE,
+    )
+    await runtime.create_run(
+        child,
+        Agent(
+            run_id=child.id,
+            parent_agent_id=agent.id,
+            kind=AgentKind.SUBAGENT,
+            profile="subagent",
+            model="fake",
+        ),
+    )
+    sub_assignment = TeamAssignment(
+        root_run_id=run.root_run_id or run.id,
+        parent_run_id=run.id,
+        child_run_id=child.id,
+        kind=TeamAssignmentKind.SUBAGENT,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="subagent",
+        runtime_route=TEAM_ROLE_ROUTE,
+        goal=child.goal,
+        allowed_tools=["repo.read"],
+    )
+    await teams.create_assignment(sub_assignment)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=sub_assignment.id,
+            child_run_id=child.id,
+            parent_run_id=run.id,
+            root_run_id=run.root_run_id or run.id,
+            status="completed",
+            summary="Subagent found README evidence.",
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    request_text = "\n".join(
+        message.content for message in provider.requests[0].messages
+    )
+    assert "Subagent found README evidence." in request_text
 
 
 def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:

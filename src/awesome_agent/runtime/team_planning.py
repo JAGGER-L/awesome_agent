@@ -16,7 +16,10 @@ WRITE_TEAM_TOOLS = {
     "repo.apply_patch",
     "shell.execute",
 }
-ALL_TEAM_TOOLS = READ_ONLY_TEAM_TOOLS | WRITE_TEAM_TOOLS
+TEAM_CONTROL_TOOLS = {
+    "team.create_subagent",
+}
+ALL_TEAM_TOOLS = READ_ONLY_TEAM_TOOLS | WRITE_TEAM_TOOLS | TEAM_CONTROL_TOOLS
 
 
 class TeamPlanTeammate(BaseModel):

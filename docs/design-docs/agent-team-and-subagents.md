@@ -19,8 +19,9 @@ A team contains at most six Teammates, including exactly one primary Verifier.
 Team mode is explicit. It is selected with CLI `--team` or API `mode: "team"`.
 Intake still creates only the Leader. Current default routing uses distributed
 `team-coding`, where the Leader Run creates child Runs for Teammates and the
-Verifier. Dynamic Teammate-owned Subagent child Runs are a Task 22C target and
-are not part of the Task 22A runtime state.
+Verifier. Teammate-owned Subagent child Runs are created dynamically by
+Teammates only when the Leader granted delegation permission and Subagent
+capacity.
 
 ## Teammates
 
@@ -89,7 +90,8 @@ The TeamPlan may grant Teammate tools, skills, write permission, delegation
 permission, Subagent slot count, and acceptance criteria. It must not contain
 Verifier assignments, `subagent_goals`, `delegation_guidance`, or any Subagent
 task direction. The Leader may only grant `can_delegate` and `max_subagents`;
-the Teammate will decide whether to create Subagents in Task 22C.
+the Teammate decides whether to create Subagents through its own model/tool
+loop.
 
 The Leader creates a Verifier child Run only after Teammate assignments reach
 terminal state. Independent Workers can claim each child Run through the normal
@@ -105,6 +107,17 @@ write tools only when `can_write=true`, must call `repo.diff` after the last
 write, and produce patch artifacts from the child workspace diff for Leader
 aggregation.
 
+Task 22C adds `team.create_subagent` as an explicit Teammate-only tool. The
+tool is available only when the durable assignment includes delegation
+permission and remaining Subagent capacity. Arguments must include a bounded
+goal, explicit non-empty read-only `allowed_tools`, a subset of assigned skills,
+and acceptance criteria. The created Subagent Run has depth 2, uses
+`team-role`, has no mailbox privileges, cannot delegate, and receives only the
+Teammate-selected read-only tools. Replaying the same tool call reuses the
+existing assignment instead of creating a duplicate child Run. Teammates release
+their lease while active Subagents run, then resume with bounded Subagent
+result summaries injected into their model context.
+
 Distributed team state is stored in:
 
 - `runs.parent_run_id`, `runs.root_run_id`, `runs.depth`, and `runs.child_role`;
@@ -117,9 +130,9 @@ Distributed team state is stored in:
 The current distributed graph is a partially model-driven skeleton with real
 durable lineage, mailbox, cancellation propagation, API/CLI inspection, and
 PostgreSQL-backed integration/E2E evidence. Task 22A makes the Leader plan
-model-driven, and Task 22B makes Teammate role execution model-driven. Dynamic
-Subagent creation, Verifier review, and targeted rework loops remain later
-Task 22 phases.
+model-driven, Task 22B makes Teammate role execution model-driven, and Task
+22C adds Teammate-owned dynamic Subagent creation. Model-driven Verifier review
+and targeted rework loops remain later Task 22 phases.
 
 This boundary is intentional. In `team-coding`, Leader, role, and Verifier
 graphs are production-wired for dispatch and persistence, but the child role

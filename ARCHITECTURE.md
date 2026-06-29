@@ -253,15 +253,16 @@ tool invocations, Todo transitions, validation reports, events, and
 observability spans.
 
 Distributed `team-coding` is the forward architecture. The root Leader Run
-creates child Runs with durable lineage. In the current Task 22B state, the
+creates child Runs with durable lineage. In the current Task 22C state, the
 Leader calls the model for a validated structured `TeamPlan` and creates
 Teammate child Runs from that plan; it does not create or direct Subagents.
 Teammate child Runs execute assignment-scoped model/tool loops using only
-effective Leader-granted tools. Independent Workers can claim Teammate and
-Verifier child Runs through the same PostgreSQL dispatch protocol. Dynamic
-Teammate-owned Subagent child Runs are a Task 22C target. Parent Runs release
-their lease while waiting for child work and are requeued when child
-assignments become terminal.
+effective Leader-granted tools. When the Leader grants `can_delegate` and
+Subagent slots, a Teammate may call `team.create_subagent` to create read-only
+Subagent child Runs with depth and concurrency limits. Independent Workers can
+claim Teammate, Subagent, and Verifier child Runs through the same PostgreSQL
+dispatch protocol. Parent Runs release their lease while waiting for child work
+and are requeued when child assignments become terminal.
 
 ```text
                          +----------------------+
