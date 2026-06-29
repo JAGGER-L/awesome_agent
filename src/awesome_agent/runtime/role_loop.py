@@ -36,7 +36,10 @@ from awesome_agent.runtime.team_assignments import (
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution
-from awesome_agent.sandbox.process import run_process
+from awesome_agent.runtime.team_role_artifacts import (
+    role_changed_files,
+    role_git_diff,
+)
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
@@ -279,8 +282,8 @@ class RoleLoop:
         else:
             raise PermanentExecutionError("team_role_model_turn_budget_exhausted")
 
-        patch = await _git_diff(workspace)
-        changed_files = await _git_changed_files(workspace)
+        patch = await role_git_diff(workspace)
+        changed_files = await role_changed_files(workspace)
         return RoleLoopResult(
             summary=final_answer or "Team role completed.",
             final_answer=final_answer or "Team role completed.",
@@ -598,34 +601,6 @@ def _filter_tool_definitions(
 ) -> list[ToolDefinition]:
     allowed = set(allowed_tools)
     return [definition for definition in definitions if definition.name in allowed]
-
-
-async def _git_diff(workspace: Path) -> str:
-    result = await run_process(
-        ["git", "diff", "--", "."],
-        command_label="team role diff",
-        workspace=workspace,
-        timeout_seconds=30,
-    )
-    if result.exit_code != 0:
-        raise PermanentExecutionError(
-            result.stderr or result.stdout or "git diff failed"
-        )
-    return result.stdout
-
-
-async def _git_changed_files(workspace: Path) -> list[str]:
-    result = await run_process(
-        ["git", "diff", "--name-only", "--", "."],
-        command_label="team role changed files",
-        workspace=workspace,
-        timeout_seconds=30,
-    )
-    if result.exit_code != 0:
-        raise PermanentExecutionError(
-            result.stderr or result.stdout or "git diff --name-only failed"
-        )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 async def _emit(

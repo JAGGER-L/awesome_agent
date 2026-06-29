@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import NotRequired, TypedDict
 
 from awesome_agent.agents.profiles import RoleModelResolver
@@ -41,6 +40,10 @@ from awesome_agent.runtime.team_assignments import (
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
 from awesome_agent.runtime.team_context import compact_team_payload
+from awesome_agent.runtime.team_patch_aggregation import (
+    apply_team_patch,
+    team_aggregation_diff,
+)
 from awesome_agent.runtime.team_planning import (
     TeamPlan,
     TeamPlanTeammate,
@@ -51,7 +54,6 @@ from awesome_agent.runtime.team_rework import (
     rework_budget_for_failure,
 )
 from awesome_agent.runtime.team_verification import TeamReworkRequest
-from awesome_agent.sandbox.process import run_process
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
@@ -362,8 +364,8 @@ class TeamLeaderGraph:
                 continue
             metadata = await self.artifact_repository.get(result.patch_artifact_id)
             patch = metadata.path.read_text(encoding="utf-8")
-            await _git_apply(run.workspace_path, patch)
-            diff = await _git_diff(run.workspace_path)
+            await apply_team_patch(run.workspace_path, patch)
+            diff = await team_aggregation_diff(run.workspace_path)
             await self.team_repository.mark_child_result_patch_aggregated(
                 result.child_run_id
             )
@@ -677,57 +679,6 @@ def _replacement_exists(
         == str(verifier_child_run_id)
         for assignment in assignments
     )
-
-
-async def _git_apply(workspace: Path, patch: str) -> None:
-    patch_file = workspace / ".awesome-agent-team.patch"
-    patch_file.write_text(patch, encoding="utf-8")
-    try:
-        checked = await run_process(
-            ["git", "apply", "--check", "--whitespace=nowarn", str(patch_file.name)],
-            command_label="git apply --check team patch",
-            workspace=workspace,
-            timeout_seconds=30,
-        )
-        if checked.exit_code != 0:
-            reverse = await run_process(
-                [
-                    "git",
-                    "apply",
-                    "--check",
-                    "--reverse",
-                    "--whitespace=nowarn",
-                    str(patch_file.name),
-                ],
-                command_label="git apply --reverse --check team patch",
-                workspace=workspace,
-                timeout_seconds=30,
-            )
-            if reverse.exit_code == 0:
-                return
-            raise RuntimeError(checked.stderr or checked.stdout or "git apply failed")
-        process = await run_process(
-            ["git", "apply", "--whitespace=nowarn", str(patch_file.name)],
-            command_label="git apply team patch",
-            workspace=workspace,
-            timeout_seconds=30,
-        )
-        if process.exit_code != 0:
-            raise RuntimeError(process.stderr or process.stdout or "git apply failed")
-    finally:
-        patch_file.unlink(missing_ok=True)
-
-
-async def _git_diff(workspace: Path) -> str:
-    process = await run_process(
-        ["git", "diff", "--", "."],
-        command_label="git diff team aggregation",
-        workspace=workspace,
-        timeout_seconds=30,
-    )
-    if process.exit_code != 0:
-        raise RuntimeError(process.stderr or process.stdout or "git diff failed")
-    return process.stdout
 
 
 async def _emit_if_callable(
