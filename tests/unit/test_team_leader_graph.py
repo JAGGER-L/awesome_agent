@@ -405,6 +405,537 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_leader_creates_patch_conflict_rework_child(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("applied by sibling\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    store = LocalArtifactStore(tmp_path / ".artifacts")
+    graph = TeamLeaderGraph(
+        team_repository=teams,
+        artifact_repository=artifacts,
+        model_resolver=_models(),
+    )
+    run, leader = _leader_run()
+    run = run.model_copy(update={"workspace_path": tmp_path})
+    await runtime.create_run(run, leader)
+    child = Run(
+        goal="Patch README with conflicting content.",
+        mode=RunMode.TEAM,
+        intent=RunIntent.MODIFYING,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    await runtime.create_run(
+        child,
+        Agent(
+            run_id=child.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile="backend-engineer",
+            model="backend-model",
+        ),
+    )
+    assignment = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="Patch README with conflicting content.",
+        allowed_tools=["repo.apply_patch", "repo.diff"],
+        can_write=True,
+        acceptance_criteria=["Patch README.md."],
+    )
+    await teams.create_assignment(assignment)
+    metadata = store.write(
+        run_id=child.id,
+        agent_id=None,
+        artifact_type="patch",
+        filename="conflict.patch",
+        content=(
+            b"diff --git a/README.md b/README.md\n"
+            b"--- a/README.md\n"
+            b"+++ b/README.md\n"
+            b"@@ -1 +1 @@\n"
+            b"-fixture\n"
+            b"+conflicting child patch\n"
+        ),
+        mime_type="text/x-diff",
+        summary="Conflicting README patch",
+    )
+    await artifacts.record(metadata)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=assignment.id,
+            child_run_id=child.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="completed",
+            summary="Conflicting patch.",
+            patch_artifact_id=metadata.id,
+            changed_files=["README.md"],
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    assignments = await teams.list_assignments(run.id, include_inactive=True)
+    replacement = next(
+        item
+        for item in assignments
+        if item.handoff_context.get("rework_reason") == "patch_conflict"
+    )
+    result = (await teams.list_child_results(run.id))[0]
+    replacement_run = await runtime.get_run(replacement.child_run_id)
+    assert replacement.allowed_tools == assignment.allowed_tools
+    assert replacement.can_write is True
+    assert replacement.acceptance_criteria == assignment.acceptance_criteria
+    assert replacement.handoff_context["previous_assignment_id"] == str(assignment.id)
+    assert replacement.handoff_context["previous_child_run_id"] == str(child.id)
+    assert replacement.handoff_context["conflicting_patch_artifact_id"] == str(
+        metadata.id
+    )
+    assert replacement.handoff_context["patch_conflict_kind"] == "patch_does_not_apply"
+    assert replacement.handoff_context["rework_attempt"] == 1
+    assert "Patch conflict detected" in replacement.goal
+    assert replacement_run.dispatch_status is DispatchStatus.QUEUED
+    assert result.status == "recovery_required"
+    assert result.failure_kind == "patch_conflict"
+    assert result.patch_aggregated is False
+    assert EventType.TEAM_REWORK_REQUESTED in {event[0] for event in events}
+    assert any(event[1].get("rework_reason") == "patch_conflict" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_leader_skips_superseded_conflict_result_and_aggregates_replacement(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("team patch A\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    store = LocalArtifactStore(tmp_path / ".artifacts")
+    graph = TeamLeaderGraph(
+        team_repository=teams,
+        artifact_repository=artifacts,
+        model_resolver=_models(),
+    )
+    run, leader = _leader_run()
+    run = run.model_copy(update={"workspace_path": tmp_path})
+    await runtime.create_run(run, leader)
+    original_child = Run(
+        goal="original",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    replacement_child = Run(
+        goal="replacement",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    for child in [original_child, replacement_child]:
+        await runtime.create_run(
+            child,
+            Agent(
+                run_id=child.id,
+                parent_agent_id=leader.id,
+                kind=AgentKind.TEAMMATE,
+                profile="backend-engineer",
+                model="backend-model",
+            ),
+        )
+    original = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=original_child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="replace fixture with B",
+    )
+    replacement = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=replacement_child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="add B after A",
+        handoff_context={
+            "rework_reason": "patch_conflict",
+            "previous_assignment_id": str(original.id),
+            "previous_child_run_id": str(original_child.id),
+            "rework_attempt": 1,
+        },
+    )
+    await teams.create_assignment(original)
+    await teams.create_assignment(replacement)
+    original_patch = store.write(
+        run_id=original_child.id,
+        agent_id=None,
+        artifact_type="patch",
+        filename="old-conflict.patch",
+        content=(
+            b"diff --git a/README.md b/README.md\n"
+            b"--- a/README.md\n"
+            b"+++ b/README.md\n"
+            b"@@ -1 +1 @@\n"
+            b"-fixture\n"
+            b"+team patch B\n"
+        ),
+        mime_type="text/x-diff",
+        summary="Old conflicting patch",
+    )
+    replacement_patch = store.write(
+        run_id=replacement_child.id,
+        agent_id=None,
+        artifact_type="patch",
+        filename="replacement.patch",
+        content=(
+            b"diff --git a/README.md b/README.md\n"
+            b"--- a/README.md\n"
+            b"+++ b/README.md\n"
+            b"@@ -1 +1,2 @@\n"
+            b" team patch A\n"
+            b"+team patch B\n"
+        ),
+        mime_type="text/x-diff",
+        summary="Replacement patch",
+    )
+    await artifacts.record(original_patch)
+    await artifacts.record(replacement_patch)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=original.id,
+            child_run_id=original_child.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="recovery_required",
+            summary="Superseded conflict.",
+            patch_artifact_id=original_patch.id,
+            changed_files=["README.md"],
+            failure_kind="patch_conflict",
+        )
+    )
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=replacement.id,
+            child_run_id=replacement_child.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="completed",
+            summary="Replacement ready.",
+            patch_artifact_id=replacement_patch.id,
+            changed_files=["README.md"],
+        )
+    )
+
+    with pytest.raises(ChildRunWait, match="waiting_verifier"):
+        await graph.execute(run, leader, repository=runtime)
+
+    results = await teams.list_child_results(run.id)
+    original_result = next(
+        item for item in results if item.child_run_id == original_child.id
+    )
+    replacement_result = next(
+        item for item in results if item.child_run_id == replacement_child.id
+    )
+    assert original_result.patch_aggregated is False
+    assert replacement_result.patch_aggregated is True
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == (
+        "team patch A\nteam patch B\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_leader_does_not_duplicate_existing_patch_conflict_replacement(
+    tmp_path: Path,
+) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("team patch A\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    store = LocalArtifactStore(tmp_path / ".artifacts")
+    graph = TeamLeaderGraph(
+        team_repository=teams,
+        artifact_repository=artifacts,
+        model_resolver=_models(),
+    )
+    run, leader = _leader_run()
+    run = run.model_copy(update={"workspace_path": tmp_path})
+    await runtime.create_run(run, leader)
+    original_child = Run(
+        goal="original",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    existing_replacement_child = Run(
+        goal="existing replacement",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    for child in [original_child, existing_replacement_child]:
+        await runtime.create_run(
+            child,
+            Agent(
+                run_id=child.id,
+                parent_agent_id=leader.id,
+                kind=AgentKind.TEAMMATE,
+                profile="backend-engineer",
+                model="backend-model",
+            ),
+        )
+    original = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=original_child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="original",
+    )
+    existing_replacement = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=existing_replacement_child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="existing replacement",
+        handoff_context={
+            "rework_reason": "patch_conflict",
+            "previous_assignment_id": str(original.id),
+            "previous_child_run_id": str(original_child.id),
+            "rework_attempt": 1,
+        },
+    )
+    await teams.create_assignment(original)
+    await teams.create_assignment(existing_replacement)
+    metadata = store.write(
+        run_id=original_child.id,
+        agent_id=None,
+        artifact_type="patch",
+        filename="conflict.patch",
+        content=(
+            b"diff --git a/README.md b/README.md\n"
+            b"--- a/README.md\n"
+            b"+++ b/README.md\n"
+            b"@@ -1 +1 @@\n"
+            b"-fixture\n"
+            b"+conflict\n"
+        ),
+        mime_type="text/x-diff",
+        summary="Conflict",
+    )
+    await artifacts.record(metadata)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=original.id,
+            child_run_id=original_child.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="recovery_required",
+            summary="Conflict already has replacement.",
+            patch_artifact_id=metadata.id,
+            failure_kind="patch_conflict",
+        )
+    )
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=existing_replacement.id,
+            child_run_id=existing_replacement_child.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="completed",
+            summary="Replacement already aggregated.",
+            patch_aggregated=True,
+        )
+    )
+
+    with pytest.raises(ChildRunWait, match="waiting_verifier"):
+        await graph.execute(run, leader, repository=runtime)
+
+    assignments = await teams.list_assignments(run.id, include_inactive=True)
+    replacements = [
+        item
+        for item in assignments
+        if item.handoff_context.get("rework_reason") == "patch_conflict"
+    ]
+    assert replacements == [existing_replacement]
+    assert sum(item.kind is TeamAssignmentKind.VERIFIER for item in assignments) == 1
+
+
+@pytest.mark.asyncio
+async def test_leader_exhausts_patch_conflict_rework_budget(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "README.md").write_text("current\n", encoding="utf-8")
+    _git(tmp_path, "add", "README.md")
+    _git(tmp_path, "commit", "-m", "Initial")
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    store = LocalArtifactStore(tmp_path / ".artifacts")
+    graph = TeamLeaderGraph(
+        team_repository=teams,
+        artifact_repository=artifacts,
+        model_resolver=_models(),
+    )
+    run, leader = _leader_run()
+    run = run.model_copy(update={"workspace_path": tmp_path})
+    await runtime.create_run(run, leader)
+    root_original = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="root",
+    )
+    second_conflict_child = Run(
+        goal="second conflict",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    await runtime.create_run(
+        second_conflict_child,
+        Agent(
+            run_id=second_conflict_child.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile="backend-engineer",
+            model="backend-model",
+        ),
+    )
+    first_replacement = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="first replacement",
+        handoff_context={
+            "rework_reason": "patch_conflict",
+            "previous_assignment_id": str(root_original.id),
+            "previous_child_run_id": str(root_original.child_run_id),
+            "rework_attempt": 1,
+        },
+    )
+    second_conflict = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=second_conflict_child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="second conflict",
+        handoff_context={
+            "rework_reason": "patch_conflict",
+            "previous_assignment_id": str(root_original.id),
+            "previous_child_run_id": str(first_replacement.child_run_id),
+            "rework_attempt": 2,
+        },
+    )
+    await teams.create_assignment(root_original)
+    await teams.create_assignment(first_replacement)
+    await teams.create_assignment(second_conflict)
+    metadata = store.write(
+        run_id=second_conflict_child.id,
+        agent_id=None,
+        artifact_type="patch",
+        filename="second-conflict.patch",
+        content=(
+            b"diff --git a/README.md b/README.md\n"
+            b"--- a/README.md\n"
+            b"+++ b/README.md\n"
+            b"@@ -1 +1 @@\n"
+            b"-fixture\n"
+            b"+still conflict\n"
+        ),
+        mime_type="text/x-diff",
+        summary="Second conflict",
+    )
+    await artifacts.record(metadata)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=second_conflict.id,
+            child_run_id=second_conflict_child.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="completed",
+            summary="Second conflict.",
+            patch_artifact_id=metadata.id,
+        )
+    )
+
+    with pytest.raises(
+        PermanentExecutionError,
+        match="team_patch_conflict_rework_exhausted",
+    ):
+        await graph.execute(run, leader, repository=runtime)
+
+
+@pytest.mark.asyncio
 async def test_leader_creates_rework_replacement_from_verifier_request() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
