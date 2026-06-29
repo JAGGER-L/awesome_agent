@@ -22,7 +22,7 @@ distributed E2E.
 | Static validation | 4/5 | Ruff, strict mypy and architecture checks pass |
 | Behavioral tests | 4/5 | Unit, structural, integration, and E2E gates |
 | System tests | 4/5 | PostgreSQL restart, Worker crash/resume, sandbox, worktree, durable approval, active cancellation, validation evidence, lifecycle projection, API tests, real scoped team-runtime E2E, and distributed team child-run PostgreSQL E2E |
-| Observability | 3/5 | Runtime events carry trace IDs; PostgreSQL query tables and APIs expose run/model/tool/sandbox spans, metrics, model calls, token usage, and latency; readiness exposes dependency state; dashboards and cost budgets remain roadmap work |
+| Observability | 3/5 | Runtime events carry trace IDs; PostgreSQL query tables and APIs expose run/model/tool/sandbox spans, metrics, model calls, token usage, and latency; API, Worker boundary, and migrated solo AgentLoop paths create real OTel spans; readiness exposes dependency state; dashboards, OTel metrics, and cost budgets remain roadmap work |
 | Security | 4/5 | Deny-all allowed roots, UUID-only API intake, clean-base named worktrees, centralized shell approval policy |
 
 Scores increase only with executable evidence.

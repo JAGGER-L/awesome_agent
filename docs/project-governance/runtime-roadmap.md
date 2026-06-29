@@ -89,7 +89,7 @@ Task 07 does not include:
 | --- | --- | --- | --- |
 | Task 21 | Done | `solo-modifying` now enters AgentLoop middleware stages, with context, budget, tool execution, approval, artifact offload, evidence, validation, rework, and finalization policy extracted from the graph. |
 | Task 22 | Done | Replaced deterministic `team-coding` role skeletons with model-driven Leader planning, assignment-scoped Teammate model/tool loops, Teammate-owned Subagents, structured Verifier decisions, targeted replacement rework, and patch-producing distributed E2E evidence. | Full distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, scoped tools, patch artifact generation, idempotent patch aggregation, traceability, and verifier rework. |
-| Task 23 | OpenTelemetry runtime instrumentation | Add real OTel spans on API endpoints, Worker graph boundaries, and migrated solo AgentLoop model/tool paths while preserving durable query tables. | API, `run.execute`, `graph.execute`, `agent.run`, `model.call`, and `tool.call` spans are created through `ObservabilityFacade` and AgentLoop observability middleware; exporter failures are isolated and trace IDs remain queryable through durable events. |
+| Task 23 | Done | Real OTel spans on API endpoints, Worker graph boundaries, and migrated solo AgentLoop model/tool paths while preserving durable query tables. | API, `run.execute`, `graph.execute`, `agent.run`, `model.call`, and `tool.call` spans are created through `ObservabilityFacade` and AgentLoop observability middleware; exporter failures are isolated and trace IDs remain queryable through durable events. |
 | Task 24 | Team AgentLoop middleware migration | Move `team-coding`, `team-role`, and `team-verifier` behind the ThinGraph, AgentLoop, middleware, and hooks boundary, then split oversized graph files along the new boundary. | Team graph modules own only durable child-run coordination and state transitions; team model/tool/validation/delegation/verification policy runs through middleware with focused unit and distributed-worker tests. |
 
 ## Task 22 Breakdown
@@ -140,9 +140,6 @@ Task 07 does not include:
 - Do not claim concurrent distributed team stress hardening, richer mailbox
   collaboration, or team middleware architecture until the corresponding
   technical debts or later tasks are closed with executable evidence.
-- Do not describe observability as OpenTelemetry instrumentation until Task 23
-  creates actual OTel spans on production API endpoints, Worker graph
-  boundaries, and migrated AgentLoop model/tool paths.
 - Do not prioritize DeerFlow-style skills or MCP expansion until the runtime
   kernel is stable behind the ThinGraph, AgentLoop, middleware, and hooks
   boundary.

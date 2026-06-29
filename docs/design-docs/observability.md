@@ -2,15 +2,15 @@
 
 The project does not use LangSmith.
 
-Use structured JSON logs, immutable runtime events, PostgreSQL projections, and
-project-owned durable trace/metric query tables. OpenTelemetry integration is a
-future exporter/instrumentation path, not the current source of production
-Worker evidence.
+Use structured JSON logs, immutable runtime events, PostgreSQL projections,
+project-owned durable trace/metric query tables, and real OpenTelemetry spans.
+Durable query tables remain the product source of truth; OTel spans are an
+export/instrumentation path for operators and local debugging.
 
 ## Current Solo Runtime Implementation
 
-Task 12 implements solo-runtime observability without making observability a
-new source of Run failure.
+Task 23 adds real OTel spans without making observability a new source of Run
+or API failure.
 
 Durable query-table evidence:
 
@@ -26,15 +26,24 @@ Runtime event lineage:
 
 - product-created and dispatcher-created runtime events receive a stable
   Run-scoped `trace_id` based on the Run UUID;
-- graph-emitted model/tool events are projected into query tables by the
-  Worker after the fenced runtime event append succeeds.
+- migrated solo AgentLoop model/tool stages record `agent.run`, `model.call`,
+  and `tool.call` through `ObservabilityMiddleware`;
+- Worker-owned instrumentation records only outer `run.execute` and
+  `graph.execute` boundaries;
+- team routes keep Worker event projection compatibility until Task 24 moves
+  them behind the same AgentLoop middleware boundary.
 
 Telemetry isolation:
 
-- Worker observability writes are best-effort and log failures without changing
-  Run status;
-- OpenTelemetry setup currently exists as an isolated local/exporter utility,
-  but the Worker does not depend on OTel spans for production evidence;
+- `ObservabilityFacade` is the single telemetry output boundary for durable
+  query-table writes and OTel spans;
+- Worker, API, and AgentLoop observability writes are best-effort and log
+  failures without changing Run or HTTP results;
+- API and Worker processes configure process-local OTel providers with
+  `awesome.process_kind = api | worker`, console exporter defaults, and an OTLP
+  endpoint hook;
+- API endpoints are wrapped manually; automatic FastAPI instrumentation is not
+  used in Task 23;
 - tool, approval, validation, artifact, and side-effect evidence remains
   durable execution evidence and is not weakened by the best-effort telemetry
   path.
@@ -47,8 +56,9 @@ GET /runs/{run_id}/metrics
 GET /runs/{run_id}/model-calls
 ```
 
-Full dashboards, Prometheus/Grafana export, production alerting, health-check
-readiness, and budget enforcement remain separate roadmap work.
+Full dashboards, Prometheus/Grafana export, OTel metrics SDK integration,
+production alerting, and money-cost budget enforcement remain separate roadmap
+work.
 
 Every event includes lineage fields such as:
 
@@ -69,8 +79,8 @@ status
 The future frontend must inspect agent topology, conversations, mailbox
 messages, model calls, tool progress/results, task revisions, approvals,
 artifacts, verification loops, memory operations, token usage, latency, and
-errors. The current solo-runtime API already exposes model calls, spans, and
-metrics; team-runtime observability remains future work.
+errors. The current API exposes model calls, durable spans, and durable metrics;
+team model/tool OTel middleware migration remains Task 24 work.
 
 Model providers now expose generic reasoning-started and reasoning-delta events.
 The future frontend displays only a generic `thinking` state and collapsible

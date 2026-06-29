@@ -103,9 +103,11 @@ forbidden.
   expired by the worker recovery cadence and resume as structured tool errors.
 - Runtime observability writes are failure-isolated from Run execution.
   PostgreSQL query tables store run, graph, model, tool, and sandbox spans,
-  model-call summaries, latency metrics, and trace/span IDs. Full
-  OpenTelemetry span instrumentation is future work and must not be claimed
-  until Worker/API production paths create real OTel spans.
+  model-call summaries, latency metrics, and trace/span IDs. API endpoints,
+  Worker `run.execute`/`graph.execute` boundaries, and migrated solo AgentLoop
+  `agent.run`/`model.call`/`tool.call` stages create real OpenTelemetry spans
+  through a failure-isolated facade. OTel exporter failures must not alter Run
+  status or HTTP responses.
 - Readiness exposes `healthy`, `degraded`, and `unhealthy`. Required dependency
   failures make readiness `unhealthy`; optional or advisory failures make it
   `degraded`. `/health` remains process liveness only. `/ready` returns 200 for

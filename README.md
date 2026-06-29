@@ -112,9 +112,10 @@ run/graph/model/tool/sandbox spans, model-call summaries, and metrics such as
 run, model, and tool latency. Runtime events receive a stable Run-scoped
 `trace_id`, and FastAPI exposes `GET /runs/{run_id}/trace`,
 `GET /runs/{run_id}/metrics`, and `GET /runs/{run_id}/model-calls` for frontend
-inspection. The current production Worker path uses project-owned durable
-records rather than full OpenTelemetry span instrumentation; full OTel coverage,
-cost budgeting, and dashboards remain later work.
+inspection. The API, Worker graph boundaries, and migrated solo AgentLoop
+model/tool stages also create real OpenTelemetry spans through a
+failure-isolated observability facade. OTel metrics, cost budgeting, and
+dashboards remain later work.
 
 ### Context and budget management (implemented)
 
