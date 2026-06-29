@@ -1,16 +1,24 @@
 import asyncio
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, RunMode
 from awesome_agent.domain.models import Agent, Repository, Run
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import (
     DurableMetric,
     DurableModelCall,
@@ -74,6 +82,7 @@ def _client(
     *,
     validation_repository: ValidationRepository | None = None,
     observability_repository: ObservabilityRepository | None = None,
+    observability_facade: object | None = None,
     budget_repository: InMemoryBudgetRepository | None = None,
 ) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
@@ -126,12 +135,42 @@ def _client(
                 registry=registry,
                 validation_repository=validation_repository,
                 observability_repository=observability_repository,
+                observability_facade=observability_facade,  # type: ignore[arg-type]
                 budget_repository=budget_repository,
                 team_repository=team_repository,
                 workspace_service=workspace_service,
             )
         ),
         repository,
+    )
+
+
+class RecordingExporter(SpanExporter):
+    def __init__(self) -> None:
+        self.spans: list[ReadableSpan] = []
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        self.spans.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        return None
+
+
+class FailingFacade:
+    async def record_span(self, *_: object, **__: object) -> object:
+        raise RuntimeError("observability unavailable")
+
+
+def _facade(
+    repository: InMemoryObservabilityRepository,
+    exporter: RecordingExporter,
+) -> ObservabilityFacade:
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return ObservabilityFacade(
+        repository=repository,
+        tracer=provider.get_tracer("test"),
     )
 
 
@@ -372,11 +411,54 @@ def test_observability_endpoints_return_run_trace_metrics_and_model_calls(
     model_calls = client.get(f"/runs/{run_id}/model-calls")
 
     assert trace.status_code == 200
-    assert trace.json()[0]["name"] == "run.execute"
+    assert any(span["name"] == "run.execute" for span in trace.json())
     assert metrics.status_code == 200
     assert metrics.json()[0]["name"] == "run.duration_ms"
     assert model_calls.status_code == 200
     assert model_calls.json()[0]["model"] == "deepseek-v4-flash"
+
+
+def test_api_records_manual_endpoint_spans(tmp_path: Path) -> None:
+    observability = InMemoryObservabilityRepository()
+    exporter = RecordingExporter()
+    client, repository = _client(
+        tmp_path,
+        observability_repository=observability,
+        observability_facade=_facade(observability, exporter),
+    )
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/ready?profile=api").status_code in {200, 503}
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect project",
+            "intent": "read_only",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+    assert client.get(f"/runs/{run_id}/trace").status_code == 200
+    assert client.get(f"/runs/{run_id}/metrics").status_code == 200
+    assert client.get(f"/runs/{run_id}/model-calls").status_code == 200
+
+    assert {span.name for span in exporter.spans} >= {
+        "api.health",
+        "api.ready",
+        "api.runs.create",
+        "api.runs.trace",
+        "api.runs.metrics",
+        "api.runs.model_calls",
+    }
+    assert all("prompt" not in (span.attributes or {}) for span in exporter.spans)
+
+
+def test_api_observability_failure_preserves_http_status(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, observability_facade=FailingFacade())
+
+    response = client.get("/runs/00000000-0000-0000-0000-000000000000")
+
+    assert response.status_code == 404
 
 
 def test_budget_endpoints_return_ledger_and_context_compactions(

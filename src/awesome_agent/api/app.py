@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import Annotated, cast
 from uuid import UUID
 
@@ -35,6 +38,11 @@ from awesome_agent.health import (
     bind_policy_check,
     collect_readiness,
 )
+from awesome_agent.observability.facade import (
+    ObservabilityFacade,
+    ObservabilitySpanInput,
+)
+from awesome_agent.observability.otel import OTelConfig, configure_otel
 from awesome_agent.observability.repository import (
     NoopObservabilityRepository,
     ObservabilityRepository,
@@ -81,6 +89,9 @@ from awesome_agent.runtime.workspaces import (
 )
 from awesome_agent.settings import Settings
 
+logger = logging.getLogger(__name__)
+_NIL_RUN_ID = UUID(int=0)
+
 
 def create_app(
     service: RuntimeService | None = None,
@@ -90,6 +101,7 @@ def create_app(
     registry: RepositoryRegistry | None = None,
     validation_repository: ValidationRepository | None = None,
     observability_repository: ObservabilityRepository | None = None,
+    observability_facade: ObservabilityFacade | None = None,
     budget_repository: BudgetRepository | None = None,
     team_repository: TeamRepository | None = None,
     workspace_service: WorkspaceRetentionService | None = None,
@@ -110,8 +122,13 @@ def create_app(
                 app.state.workspaces = workspace_service
             if validation_repository is not None:
                 app.state.validation_repository = validation_repository
-            app.state.observability_repository = (
+            configured_observability = (
                 observability_repository or NoopObservabilityRepository()
+            )
+            app.state.observability_repository = configured_observability
+            app.state.observability_facade = (
+                observability_facade
+                or ObservabilityFacade(repository=configured_observability)
             )
             if budget_repository is not None:
                 app.state.budget_repository = budget_repository
@@ -131,6 +148,10 @@ def create_app(
         dispatcher = PostgresRunDispatcher(sessions)
         validation = PostgresValidationRepository(sessions)
         worker_heartbeats = PostgresWorkerHeartbeatRepository(sessions)
+        default_observability = observability_repository or (
+            PostgresObservabilityRepository(sessions)
+        )
+        otel_provider = configure_otel(OTelConfig(process_kind="api"))
         budgets = PostgresBudgetRepository(sessions)
         teams = PostgresTeamRepository(sessions)
         local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
@@ -146,8 +167,10 @@ def create_app(
         app.state.registry = repository_registry
         app.state.validation_repository = validation
         app.state.worker_heartbeats = worker_heartbeats
-        app.state.observability_repository = observability_repository or (
-            PostgresObservabilityRepository(sessions)
+        app.state.observability_repository = default_observability
+        app.state.observability_facade = observability_facade or ObservabilityFacade(
+            repository=default_observability,
+            tracer=otel_provider.get_tracer("awesome_agent.api"),
         )
         app.state.budget_repository = budget_repository or budgets
         app.state.team_repository = team_repository or teams
@@ -187,8 +210,10 @@ def create_app(
         app.state.validation_repository = validation_repository
     if worker_heartbeat_repository is not None:
         app.state.worker_heartbeats = worker_heartbeat_repository
-    app.state.observability_repository = (
-        observability_repository or NoopObservabilityRepository()
+    initial_observability = observability_repository or NoopObservabilityRepository()
+    app.state.observability_repository = initial_observability
+    app.state.observability_facade = observability_facade or ObservabilityFacade(
+        repository=initial_observability,
     )
     if budget_repository is not None:
         app.state.budget_repository = budget_repository
@@ -219,6 +244,45 @@ def create_app(
             app.state.observability_repository,
         )
 
+    def telemetry() -> ObservabilityFacade:
+        return cast(ObservabilityFacade, app.state.observability_facade)
+
+    @asynccontextmanager
+    async def api_span(
+        name: str,
+        *,
+        run_id: UUID | Callable[[], UUID] = _NIL_RUN_ID,
+        attributes: dict[str, object] | None = None,
+    ) -> AsyncIterator[None]:
+        started_at = datetime.now(UTC)
+        started = monotonic()
+        status = "completed"
+        error_text: str | None = None
+        try:
+            yield
+        except Exception as error:
+            status = "failed"
+            error_text = str(error)
+            raise
+        finally:
+            duration_ms = max(0, int((monotonic() - started) * 1000))
+            try:
+                await telemetry().record_span(
+                    ObservabilitySpanInput(
+                        run_id=run_id() if callable(run_id) else run_id,
+                        name=name,
+                        category="api",
+                        status=status,
+                        attributes=attributes or {},
+                        started_at=started_at,
+                        ended_at=datetime.now(UTC),
+                        duration_ms=duration_ms,
+                        error=error_text,
+                    )
+                )
+            except Exception:
+                logger.exception("API observability span recording failed.")
+
     def budgets() -> BudgetRepository | None:
         return cast(
             BudgetRepository | None,
@@ -230,43 +294,61 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok"}
+        async with api_span(
+            "api.health",
+            attributes=_api_attributes("GET", "/health", 200),
+        ):
+            return {"status": "ok"}
 
     @app.get("/ready")
     async def ready(
         response: Response,
         profile: Annotated[ReadinessProfile, Query()] = ReadinessProfile.API,
     ) -> ReadinessReportResponse:
-        report = await collect_readiness(
-            settings,
-            profile,
-            worker_heartbeat_repository=getattr(
-                app.state,
-                "worker_heartbeats",
-                None,
-            ),
-        )
-        if report.status is HealthStatus.UNHEALTHY:
-            response.status_code = 503
-        return _readiness_report_response(report)
+        attributes = _api_attributes("GET", "/ready", 200)
+        async with api_span("api.ready", attributes=attributes):
+            report = await collect_readiness(
+                settings,
+                profile,
+                worker_heartbeat_repository=getattr(
+                    app.state,
+                    "worker_heartbeats",
+                    None,
+                ),
+            )
+            if report.status is HealthStatus.UNHEALTHY:
+                response.status_code = 503
+                attributes["http.status_code"] = 503
+            return _readiness_report_response(report)
 
     @app.post("/runs", status_code=201)
     async def create_run(request: CreateRunRequest) -> dict[str, object]:
-        try:
-            run = await run_intake().create_run(
-                repository_id=request.repository_id,
-                goal=request.goal,
-                intent=request.intent,
-                mode=request.mode,
-            )
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail="Repository not found.",
-            ) from error
-        except (RunIntakeError, ValueError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return run.model_dump(mode="json")
+        span_run_id = _NIL_RUN_ID
+        attributes = _api_attributes("POST", "/runs", 201)
+        async with api_span(
+            "api.runs.create",
+            run_id=lambda: span_run_id,
+            attributes=attributes,
+        ):
+            try:
+                run = await run_intake().create_run(
+                    repository_id=request.repository_id,
+                    goal=request.goal,
+                    intent=request.intent,
+                    mode=request.mode,
+                )
+            except KeyError as error:
+                attributes["http.status_code"] = 404
+                raise HTTPException(
+                    status_code=404,
+                    detail="Repository not found.",
+                ) from error
+            except (RunIntakeError, ValueError) as error:
+                attributes["http.status_code"] = 409
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            span_run_id = run.id
+            attributes["run_id"] = str(run.id)
+            return run.model_dump(mode="json")
 
     @app.post("/runtime/probes", status_code=201)
     async def create_probe(request: CreateProbeRequest) -> dict[str, object]:
@@ -338,10 +420,14 @@ def create_app(
 
     @app.get("/runs/{run_id}")
     async def get_run(run_id: UUID) -> dict[str, object]:
-        try:
-            return (await runtime().get_run(run_id)).model_dump(mode="json")
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Run not found.") from error
+        attributes = _api_attributes("GET", "/runs/{run_id}", 200)
+        attributes["run_id"] = str(run_id)
+        async with api_span("api.runs.get", run_id=run_id, attributes=attributes):
+            try:
+                return (await runtime().get_run(run_id)).model_dump(mode="json")
+            except KeyError as error:
+                attributes["http.status_code"] = 404
+                raise HTTPException(status_code=404, detail="Run not found.") from error
 
     @app.get("/runs/{run_id}/dispatch")
     async def get_dispatch(run_id: UUID) -> DispatchResponse:
@@ -454,10 +540,13 @@ def create_app(
         run_id: UUID,
         after_sequence: int = Query(default=0, ge=0),
     ) -> StreamingResponse:
-        return StreamingResponse(
-            _sse(runtime(), run_id, after_sequence=after_sequence),
-            media_type="text/event-stream",
-        )
+        attributes = _api_attributes("GET", "/runs/{run_id}/events", 200)
+        attributes["run_id"] = str(run_id)
+        async with api_span("api.runs.events", run_id=run_id, attributes=attributes):
+            return StreamingResponse(
+                _sse(runtime(), run_id, after_sequence=after_sequence),
+                media_type="text/event-stream",
+            )
 
     @app.get("/runs/{run_id}/messages")
     async def list_messages(run_id: UUID) -> list[dict[str, object]]:
@@ -524,23 +613,37 @@ def create_app(
 
     @app.get("/runs/{run_id}/trace")
     async def list_trace(run_id: UUID) -> list[dict[str, object]]:
-        return [
-            asdict(span) for span in await observability().list_spans_for_run(run_id)
-        ]
+        attributes = _api_attributes("GET", "/runs/{run_id}/trace", 200)
+        attributes["run_id"] = str(run_id)
+        async with api_span("api.runs.trace", run_id=run_id, attributes=attributes):
+            return [
+                asdict(span)
+                for span in await observability().list_spans_for_run(run_id)
+            ]
 
     @app.get("/runs/{run_id}/metrics")
     async def list_metrics(run_id: UUID) -> list[dict[str, object]]:
-        return [
-            asdict(metric)
-            for metric in await observability().list_metrics_for_run(run_id)
-        ]
+        attributes = _api_attributes("GET", "/runs/{run_id}/metrics", 200)
+        attributes["run_id"] = str(run_id)
+        async with api_span("api.runs.metrics", run_id=run_id, attributes=attributes):
+            return [
+                asdict(metric)
+                for metric in await observability().list_metrics_for_run(run_id)
+            ]
 
     @app.get("/runs/{run_id}/model-calls")
     async def list_model_calls(run_id: UUID) -> list[dict[str, object]]:
-        return [
-            asdict(call)
-            for call in await observability().list_model_calls_for_run(run_id)
-        ]
+        attributes = _api_attributes("GET", "/runs/{run_id}/model-calls", 200)
+        attributes["run_id"] = str(run_id)
+        async with api_span(
+            "api.runs.model_calls",
+            run_id=run_id,
+            attributes=attributes,
+        ):
+            return [
+                asdict(call)
+                for call in await observability().list_model_calls_for_run(run_id)
+            ]
 
     @app.get("/runs/{run_id}/budget")
     async def get_budget(run_id: UUID) -> BudgetLedgerResponse:
@@ -617,6 +720,18 @@ async def _sse(
 def _format_sse(event: RuntimeEvent) -> str:
     data = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
     return f"id: {event.sequence}\nevent: {event.event_type.value}\ndata: {data}\n\n"
+
+
+def _api_attributes(
+    method: str,
+    route: str,
+    status_code: int,
+) -> dict[str, object]:
+    return {
+        "http.method": method,
+        "http.route": route,
+        "http.status_code": status_code,
+    }
 
 
 def _readiness_report_response(report: ReadinessReport) -> ReadinessReportResponse:
