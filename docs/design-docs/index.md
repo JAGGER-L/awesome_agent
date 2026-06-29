@@ -10,6 +10,7 @@ boundaries. Development-agent plans and handoffs belong in ignored `.codex/`.
 - [Read-only agent loop](read-only-agent-loop.md)
 - [Modifying agent loop](modifying-agent-loop.md)
 - [Agent team and subagents](agent-team-and-subagents.md)
+- [Teammate local validation](teammate-local-validation.md)
 - [Task and verification model](task-and-verification-model.md)
 - [Memory architecture](memory-architecture.md)
 - [Observability](observability.md)
