@@ -9,6 +9,7 @@ from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, Run
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.agent_loop import TeamAgentLoop
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
@@ -54,11 +55,13 @@ class TeamRoleGraph:
         artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        team_loop: TeamAgentLoop | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
+        self.team_loop = team_loop or TeamAgentLoop()
         self.role_loop = (
-            RoleLoop(provider_resolver=provider_resolver)
+            RoleLoop(provider_resolver=provider_resolver, team_loop=self.team_loop)
             if provider_resolver is not None
             else None
         )
