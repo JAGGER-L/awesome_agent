@@ -1,4 +1,5 @@
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,6 +24,13 @@ from awesome_agent.persistence.budget import (
     RunBudgetLedgerRecord,
 )
 from awesome_agent.persistence.team import InMemoryTeamRepository
+from awesome_agent.runtime.agent_loop import (
+    MiddlewareContext,
+    MiddlewareDecision,
+    MiddlewareStack,
+    MiddlewareStage,
+    TeamAgentLoop,
+)
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import (
@@ -94,6 +102,35 @@ async def test_leader_creates_teammate_child_run_and_assignment() -> None:
     assert events[1][1]["child_run_id"] == str(children[0].id)
     assert events[1][1]["assignment_id"] == str(assignments[0].id)
     assert events[1][1]["agent_id"]
+
+
+@pytest.mark.asyncio
+async def test_leader_planning_uses_team_agent_loop_boundary() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    recorder = RecordingTeamMiddleware()
+    team_loop = TeamAgentLoop(middleware_stack=MiddlewareStack([recorder]))
+    graph, _ = _graph(teams, team_loop=team_loop)
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime)
+
+    children = await runtime.list_child_runs(run.id)
+    assert len(children) == 1
+    assert recorder.model_call_metadata == [
+        {
+            "runtime_route": "team-coding",
+            "team_root_run_id": str(run.root_run_id or run.id),
+            "team_role": "leader",
+            "agent_kind": "leader",
+            "team_operation": "planning",
+            "attempt": 1,
+        }
+    ]
+    assert "Leader planning a coding-agent team" in recorder.model_prompt_text
+    assert "subagent_goals" not in recorder.model_metadata_text
 
 
 @pytest.mark.asyncio
@@ -673,6 +710,7 @@ def _graph(
     teams: InMemoryTeamRepository,
     *,
     responses: list[str] | None = None,
+    team_loop: TeamAgentLoop | None = None,
 ) -> tuple[TeamLeaderGraph, FakeModelProvider]:
     provider = FakeModelProvider(responses or [_team_plan_json()])
     return (
@@ -680,6 +718,7 @@ def _graph(
             team_repository=teams,
             provider_resolver=lambda _: provider,
             model_resolver=_models(),
+            team_loop=team_loop,
         ),
         provider,
     )
@@ -728,3 +767,36 @@ def _git(path: Path, *arguments: str) -> None:
         text=True,
     )
     assert result.returncode == 0
+
+
+class RecordingTeamMiddleware:
+    name = "recording-team-leader"
+
+    def __init__(self) -> None:
+        self.model_call_metadata: list[dict[str, object]] = []
+        self.model_prompt_text = ""
+
+    @property
+    def model_metadata_text(self) -> str:
+        return str(self.model_call_metadata)
+
+    async def handle(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
+    ) -> MiddlewareDecision:
+        return await call_next(context)
+
+    async def wrap_stage(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[object]],
+    ) -> object:
+        if stage is MiddlewareStage.WRAP_MODEL_CALL:
+            self.model_prompt_text = "\n".join(
+                message.content for message in context.messages
+            )
+            self.model_call_metadata.append(dict(context.metadata))
+        return await call_next(context)

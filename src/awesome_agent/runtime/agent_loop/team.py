@@ -16,6 +16,7 @@ from awesome_agent.runtime.agent_loop.observability_middleware import (
 )
 
 StateT = TypeVar("StateT")
+ResultT = TypeVar("ResultT")
 
 _SENSITIVE_METADATA_FRAGMENTS = frozenset(
     {
@@ -52,12 +53,12 @@ class TeamAgentLoop:
         run: Run,
         agent: Agent,
         messages: Sequence[ModelMessage],
-        handler: Callable[[StateT], Awaitable[StateT]],
+        handler: Callable[[StateT], Awaitable[ResultT]],
         assignment_id: object | None = None,
         team_role: str | None = None,
         agent_kind: str | None = None,
         metadata: Mapping[str, object] | None = None,
-    ) -> StateT:
+    ) -> ResultT:
         return await self._run_stage(
             MiddlewareStage.BEFORE_AGENT,
             state,
@@ -78,12 +79,12 @@ class TeamAgentLoop:
         run: Run,
         agent: Agent,
         messages: Sequence[ModelMessage],
-        handler: Callable[[StateT], Awaitable[StateT]],
+        handler: Callable[[StateT], Awaitable[ResultT]],
         assignment_id: object | None = None,
         team_role: str | None = None,
         agent_kind: str | None = None,
         metadata: Mapping[str, object] | None = None,
-    ) -> StateT:
+    ) -> ResultT:
         return await self._run_stage(
             MiddlewareStage.WRAP_MODEL_CALL,
             state,
@@ -104,12 +105,12 @@ class TeamAgentLoop:
         run: Run,
         agent: Agent,
         messages: Sequence[ModelMessage],
-        handler: Callable[[StateT], Awaitable[StateT]],
+        handler: Callable[[StateT], Awaitable[ResultT]],
         assignment_id: object | None = None,
         team_role: str | None = None,
         agent_kind: str | None = None,
         metadata: Mapping[str, object] | None = None,
-    ) -> StateT:
+    ) -> ResultT:
         return await self._run_stage(
             MiddlewareStage.WRAP_TOOL_CALL,
             state,
@@ -131,12 +132,12 @@ class TeamAgentLoop:
         run: Run,
         agent: Agent,
         messages: Sequence[ModelMessage],
-        handler: Callable[[StateT], Awaitable[StateT]],
+        handler: Callable[[StateT], Awaitable[ResultT]],
         assignment_id: object | None,
         team_role: str | None,
         agent_kind: str | None,
         metadata: Mapping[str, object] | None,
-    ) -> StateT:
+    ) -> ResultT:
         context = MiddlewareContext(
             run_id=str(run.id),
             agent_id=str(agent.id),
@@ -151,7 +152,7 @@ class TeamAgentLoop:
             ),
         )
 
-        async def operation() -> StateT:
+        async def operation() -> ResultT:
             decision = await self.middleware_stack.run_stage(stage, context)
             if not decision.continue_loop:
                 reason = decision.reason or f"{stage.value} stopped the team loop"

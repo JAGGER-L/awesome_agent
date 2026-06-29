@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NotRequired, TypedDict
-
-from pydantic import ValidationError
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
@@ -14,26 +11,20 @@ from awesome_agent.domain.enums import (
     AgentKind,
     DispatchStatus,
     EventType,
-    RunIntent,
     RunMode,
 )
 from awesome_agent.domain.models import Agent, Run
-from awesome_agent.modeling import (
-    ModelMessage,
-    ModelProvider,
-    ModelProviderError,
-    ModelRequest,
-    SystemMessage,
-    TransientModelError,
-    UserMessage,
-)
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.agent_loop import TeamAgentLoop
+from awesome_agent.runtime.agent_loop.team_middleware import (
+    ProviderResolver,
+    TeamPlanningMiddleware,
+)
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import (
     ChildRunWait,
     PermanentExecutionError,
-    TransientExecutionError,
 )
 from awesome_agent.runtime.graphs import (
     TEAM_ROLE_ROUTE,
@@ -52,7 +43,6 @@ from awesome_agent.runtime.team_context import compact_team_payload
 from awesome_agent.runtime.team_planning import (
     TeamPlan,
     TeamPlanTeammate,
-    validate_team_plan_for_intent,
 )
 from awesome_agent.runtime.team_rework import (
     compose_rework_goal,
@@ -63,8 +53,6 @@ from awesome_agent.runtime.team_verification import TeamReworkRequest
 from awesome_agent.sandbox.process import run_process
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
-ProviderResolver = Callable[[str], ModelProvider]
-_TEAM_PLAN_MAX_ATTEMPTS = 2
 
 
 class TeamLeaderState(TypedDict):
@@ -87,6 +75,7 @@ class TeamLeaderGraph:
         artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        team_loop: TeamAgentLoop | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -95,6 +84,11 @@ class TeamLeaderGraph:
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.team_loop = team_loop or TeamAgentLoop()
+        self.team_planning = TeamPlanningMiddleware(
+            provider_resolver=provider_resolver,
+            team_loop=self.team_loop,
+        )
 
     async def execute(
         self,
@@ -209,73 +203,13 @@ class TeamLeaderGraph:
         *,
         event_sink: object | None,
     ) -> tuple[TeamPlan, int]:
-        if self.provider_resolver is None:
-            raise PermanentExecutionError("team_plan_provider_unavailable")
         if self.model_resolver is None:
             raise PermanentExecutionError("team_model_resolver_unavailable")
-        provider = self.provider_resolver(leader.model)
-        messages = _initial_team_plan_messages(run)
-        last_error = ""
-        for attempt in range(1, _TEAM_PLAN_MAX_ATTEMPTS + 1):
-            try:
-                turn = await provider.complete(
-                    ModelRequest(
-                        messages=messages,
-                        tools=[],
-                    )
-                )
-            except TransientModelError as error:
-                raise TransientExecutionError(str(error)) from error
-            except ModelProviderError as error:
-                raise PermanentExecutionError(str(error)) from error
-            try:
-                plan = validate_team_plan_for_intent(
-                    TeamPlan.model_validate_json(turn.assistant.content),
-                    intent=run.intent,
-                )
-            except (ValidationError, ValueError) as error:
-                last_error = str(error)
-                await _emit_if_callable(
-                    event_sink,
-                    EventType.TEAM_PLAN_REJECTED,
-                    {
-                        "run_id": str(run.id),
-                        "agent_id": str(leader.id),
-                        "attempt": attempt,
-                        "error": last_error[:2000],
-                    },
-                    f"team-plan-rejected:{attempt}",
-                )
-                if attempt >= _TEAM_PLAN_MAX_ATTEMPTS:
-                    raise PermanentExecutionError(
-                        f"team_plan_invalid: {last_error[:500]}"
-                    ) from error
-                messages = [
-                    *messages,
-                    turn.assistant,
-                    UserMessage(
-                        content=(
-                            "Your previous TeamPlan was rejected. Fix these "
-                            "validation errors and return only corrected JSON: "
-                            f"{last_error[:2000]}"
-                        )
-                    ),
-                ]
-                continue
-            await _emit_if_callable(
-                event_sink,
-                EventType.TEAM_PLAN_CREATED,
-                {
-                    "run_id": str(run.id),
-                    "agent_id": str(leader.id),
-                    "attempt": attempt,
-                    "teammate_count": len(plan.teammates),
-                    "rationale": plan.rationale[:2000],
-                },
-                "team-plan-created",
-            )
-            return plan, attempt
-        raise PermanentExecutionError(f"team_plan_invalid: {last_error[:500]}")
+        return await self.team_planning.create_team_plan(
+            run,
+            leader,
+            event_sink=event_sink,
+        )
 
     async def _create_teammate_children_from_plan(
         self,
@@ -792,52 +726,6 @@ async def _git_diff(workspace: Path) -> str:
     if process.exit_code != 0:
         raise RuntimeError(process.stderr or process.stdout or "git diff failed")
     return process.stdout
-
-
-def _initial_team_plan_messages(run: Run) -> list[ModelMessage]:
-    intent_rules = (
-        "The root run is read-only. Every teammate must set can_write=false and "
-        "must not receive write tools."
-        if run.intent is RunIntent.READ_ONLY
-        else "The root run may modify files. Grant write tools only when the "
-        "teammate goal truly needs file changes or shell execution."
-    )
-    return [
-        SystemMessage(
-            content=(
-                "You are the Leader planning a coding-agent team. Return only "
-                "valid JSON matching this schema: "
-                "{"
-                '"rationale":"short reason",'
-                '"teammates":[{'
-                '"role_profile":"lowercase-slug",'
-                '"goal":"specific teammate task",'
-                '"allowed_tools":["repo.status"],'
-                '"deferred_tools":[],'
-                '"allowed_skills":[],'
-                '"can_write":false,'
-                '"can_delegate":false,'
-                '"max_subagents":0,'
-                '"acceptance_criteria":["observable completion criterion"]'
-                "}]"
-                "}. Create 1 to 3 teammates. Do not create, name, describe, "
-                "or direct Verifier agents. Do not include subagent_goals, "
-                "delegation_guidance, or any Subagent task description. You may "
-                "only set can_delegate and max_subagents for a teammate."
-            )
-        ),
-        UserMessage(
-            content=(
-                f"Root goal: {run.goal}\n"
-                f"Root intent: {run.intent.value}\n"
-                f"{intent_rules}\n"
-                "Known tools: repo.status, repo.list, repo.search, repo.read, "
-                "repo.instructions, repo.diff, repo.apply_patch, shell.execute, "
-                "team.create_subagent.\n"
-                "Prefer the smallest useful team."
-            )
-        ),
-    ]
 
 
 async def _emit_if_callable(
