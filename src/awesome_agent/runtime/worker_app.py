@@ -47,10 +47,27 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     artifact_repository = PostgresArtifactMetadataRepository(sessions)
     team_repository = PostgresTeamRepository(sessions)
     observability_repository = PostgresObservabilityRepository(sessions)
-    otel_provider = configure_otel(OTelConfig(process_kind="worker"))
+    otel_provider = (
+        configure_otel(
+            OTelConfig(
+                service_name=configured.otel_service_name,
+                process_kind="worker",
+                console_exporter=(
+                    configured.otel_console_exporter_enabled and not once
+                ),
+                otlp_endpoint=configured.otel_otlp_endpoint,
+            )
+        )
+        if configured.observability_enabled
+        else None
+    )
     observability = ObservabilityFacade(
         repository=observability_repository,
-        tracer=otel_provider.get_tracer("awesome_agent.worker"),
+        tracer=(
+            otel_provider.get_tracer("awesome_agent.worker")
+            if otel_provider is not None
+            else None
+        ),
     )
     budget_repository = PostgresBudgetRepository(sessions)
     budget_policy = BudgetPolicy(

@@ -16,3 +16,7 @@ def test_settings_use_confirmed_concurrency_defaults() -> None:
     assert settings.verifier_model == "deepseek-v4-flash"
     assert settings.subagent_model == "deepseek-v4-flash"
     assert settings.deepseek_thinking_enabled
+    assert settings.observability_enabled is True
+    assert settings.otel_service_name == "awesome-agent"
+    assert settings.otel_console_exporter_enabled is True
+    assert settings.otel_otlp_endpoint is None

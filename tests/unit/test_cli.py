@@ -168,6 +168,27 @@ def test_serve_allows_public_bind_with_explicit_unsafe(
     assert os.environ["AWESOME_AGENT_UNSAFE_BIND_PUBLIC"] == "true"
 
 
+def test_serve_does_not_configure_observability_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    fake_uvicorn = types.SimpleNamespace(run=lambda *args, **kwargs: None)
+
+    import awesome_agent.observability.setup as observability_setup
+
+    monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+    monkeypatch.setattr(
+        observability_setup,
+        "configure_observability",
+        lambda: calls.append("configured"),
+    )
+
+    result = runner.invoke(app, ["serve"])
+
+    assert result.exit_code == 0
+    assert calls == []
+
+
 def test_start_sets_api_bind_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -151,7 +151,18 @@ def create_app(
         default_observability = observability_repository or (
             PostgresObservabilityRepository(sessions)
         )
-        otel_provider = configure_otel(OTelConfig(process_kind="api"))
+        otel_provider = (
+            configure_otel(
+                OTelConfig(
+                    service_name=settings.otel_service_name,
+                    process_kind="api",
+                    console_exporter=settings.otel_console_exporter_enabled,
+                    otlp_endpoint=settings.otel_otlp_endpoint,
+                )
+            )
+            if settings.observability_enabled
+            else None
+        )
         budgets = PostgresBudgetRepository(sessions)
         teams = PostgresTeamRepository(sessions)
         local_config = LocalRepositoryConfigStore(settings.local_config_path).load()
@@ -170,7 +181,11 @@ def create_app(
         app.state.observability_repository = default_observability
         app.state.observability_facade = observability_facade or ObservabilityFacade(
             repository=default_observability,
-            tracer=otel_provider.get_tracer("awesome_agent.api"),
+            tracer=(
+                otel_provider.get_tracer("awesome_agent.api")
+                if otel_provider is not None
+                else None
+            ),
         )
         app.state.budget_repository = budget_repository or budgets
         app.state.team_repository = team_repository or teams

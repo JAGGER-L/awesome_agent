@@ -307,15 +307,6 @@ def serve(
 
     _reject_public_bind_without_consent(host, unsafe_bind_public)
     _set_api_bind_environment(host, unsafe_bind_public)
-    try:
-        from awesome_agent.observability.setup import configure_observability
-
-        configure_observability()
-    except ImportError:
-        typer.echo(
-            "Observability not installed. Run `uv sync --extra observability` "
-            "for structured logging and OpenTelemetry.",
-        )
     uvicorn.run("awesome_agent.api.app:app", host=host, port=port, reload=False)
 
 

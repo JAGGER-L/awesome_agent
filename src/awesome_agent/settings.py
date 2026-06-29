@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     max_model_concurrency: int = Field(default=8, ge=1)
     max_tool_concurrency: int = Field(default=12, ge=1)
     max_sandbox_concurrency: int = Field(default=6, ge=1)
+    observability_enabled: bool = True
+    otel_service_name: str = "awesome-agent"
+    otel_console_exporter_enabled: bool = True
+    otel_otlp_endpoint: str | None = None
 
     @model_validator(mode="after")
     def validate_heartbeat_interval(self) -> "Settings":
