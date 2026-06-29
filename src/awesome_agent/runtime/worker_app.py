@@ -8,6 +8,8 @@ from typing import Any
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.observability.facade import ObservabilityFacade
+from awesome_agent.observability.otel import OTelConfig, configure_otel
 from awesome_agent.observability.repository import PostgresObservabilityRepository
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
@@ -44,6 +46,12 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     artifact_store = LocalArtifactStore(configured.artifact_root)
     artifact_repository = PostgresArtifactMetadataRepository(sessions)
     team_repository = PostgresTeamRepository(sessions)
+    observability_repository = PostgresObservabilityRepository(sessions)
+    otel_provider = configure_otel(OTelConfig(process_kind="worker"))
+    observability = ObservabilityFacade(
+        repository=observability_repository,
+        tracer=otel_provider.get_tracer("awesome_agent.worker"),
+    )
     budget_repository = PostgresBudgetRepository(sessions)
     budget_policy = BudgetPolicy(
         soft_context_tokens=configured.soft_context_tokens,
@@ -72,6 +80,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 context_manager=context_manager,
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
+                observability=observability,
             )
             if providers.coding_available
             else None
@@ -95,6 +104,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 context_manager=context_manager,
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
+                observability=observability,
             )
             if providers.coding_available
             else None
@@ -162,7 +172,8 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 retry_delay=timedelta(seconds=configured.worker_retry_delay_seconds),
                 max_attempts=configured.max_claim_attempts,
             ),
-            observability_repository=PostgresObservabilityRepository(sessions),
+            observability=observability,
+            observability_repository=observability_repository,
             heartbeat_repository=PostgresWorkerHeartbeatRepository(sessions),
             budget_repository=budget_repository,
             team_repository=team_repository,

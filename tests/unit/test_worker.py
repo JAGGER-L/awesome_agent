@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 
 from awesome_agent.domain.enums import AgentKind, EventType, ExecutionKind, RunIntent
 from awesome_agent.domain.models import Agent, Run, RunLease, RuntimeEvent
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import InMemoryObservabilityRepository
 from awesome_agent.persistence.budget import (
     ContextCompactionRecord,
@@ -287,6 +295,51 @@ class FakeTeamGraph:
         )
 
 
+class EmittingTeamGraph(FakeTeamGraph):
+    async def execute(
+        self,
+        run: Run,
+        agent: Agent,
+        *,
+        repository: object,
+        event_sink: object | None = None,
+    ) -> tuple[dict[str, object], bool]:
+        if not callable(event_sink):
+            raise AssertionError("event sink is required")
+        await event_sink(
+            EventType.MODEL_CALL_CREATED,
+            {
+                "turn": 1,
+                "status": "completed",
+                "stop_reason": "completed",
+                "provider": "deepseek",
+                "model": "deepseek-v4-flash",
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "latency_ms": 31,
+            },
+            "model-turn:1",
+        )
+        await event_sink(
+            EventType.TOOL_CALL_CREATED,
+            {
+                "turn": 1,
+                "call_id": "call-1",
+                "tool": "repo.diff",
+                "status": "completed",
+                "latency_ms": 7,
+                "sandbox": "docker",
+            },
+            "tool:1:call-1",
+        )
+        return await super().execute(
+            run,
+            agent,
+            repository=repository,
+            event_sink=event_sink,
+        )
+
+
 class EmittingModifyingGraph(FakeModifyingGraph):
     async def execute(
         self,
@@ -324,6 +377,18 @@ class EmittingModifyingGraph(FakeModifyingGraph):
             "tool:1:call-1",
         )
         return await super().execute(run, agent, event_sink=event_sink)
+
+
+class RecordingExporter(SpanExporter):
+    def __init__(self) -> None:
+        self.spans: list[ReadableSpan] = []
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        self.spans.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        return None
 
 
 def _lease() -> RunLease:
@@ -381,6 +446,18 @@ def _config() -> WorkerConfig:
         shutdown_grace=0.01,
         retry_delay=timedelta(seconds=5),
         max_attempts=3,
+    )
+
+
+def _facade(
+    repository: InMemoryObservabilityRepository,
+    exporter: RecordingExporter,
+) -> ObservabilityFacade:
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return ObservabilityFacade(
+        repository=repository,
+        tracer=provider.get_tracer("test"),
     )
 
 
@@ -703,9 +780,47 @@ async def test_worker_executes_team_graph_with_validated_completion() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_records_run_model_and_tool_observability() -> None:
+async def test_worker_records_boundary_spans_through_observability_facade() -> None:
     lease = _lease()
     run = _modifying_run(lease)
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    observability = InMemoryObservabilityRepository()
+    exporter = RecordingExporter()
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        modifying_graph=EmittingModifyingGraph(),  # type: ignore[arg-type]
+        config=_config(),
+        observability=_facade(observability, exporter),
+        observability_repository=observability,
+    )
+
+    assert await worker.run_once()
+
+    spans = await observability.list_spans_for_run(run.id)
+    metrics = await observability.list_metrics_for_run(run.id)
+    model_calls = await observability.list_model_calls_for_run(run.id)
+
+    assert {span.name for span in spans} == {
+        "run.execute",
+        "graph.execute",
+    }
+    assert {span.name for span in exporter.spans} == {"run.execute", "graph.execute"}
+    assert not model_calls
+    assert any(metric.name == "run.duration_ms" for metric in metrics)
+
+
+@pytest.mark.asyncio
+async def test_worker_keeps_event_projection_for_unmigrated_team_routes() -> None:
+    lease = _lease()
+    run = _team_run(lease)
     leader = Agent(
         run_id=run.id,
         kind=AgentKind.LEADER,
@@ -718,7 +833,7 @@ async def test_worker_records_run_model_and_tool_observability() -> None:
         dispatcher=dispatcher,
         repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
         probe_graph=FakeGraph(),  # type: ignore[arg-type]
-        modifying_graph=EmittingModifyingGraph(),  # type: ignore[arg-type]
+        team_graph=EmittingTeamGraph(),  # type: ignore[arg-type]
         config=_config(),
         observability_repository=observability,
     )
@@ -731,10 +846,13 @@ async def test_worker_records_run_model_and_tool_observability() -> None:
 
     assert {span.name for span in spans} >= {
         "run.execute",
+        "graph.execute",
         "model.call",
         "tool.call",
+        "sandbox.execute",
     }
-    assert any(metric.name == "run.duration_ms" for metric in metrics)
+    assert any(metric.name == "model.latency_ms" for metric in metrics)
+    assert any(metric.name == "tool.duration_ms" for metric in metrics)
     assert model_calls[0].model == "deepseek-v4-flash"
     assert model_calls[0].latency_ms == 31
 

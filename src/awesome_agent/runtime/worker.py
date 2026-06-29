@@ -13,8 +13,11 @@ from uuid import UUID, uuid4
 
 from awesome_agent.domain.enums import EventType, ExecutionKind
 from awesome_agent.domain.models import Agent, Run, RunLease, RuntimeEvent
+from awesome_agent.observability.facade import (
+    ObservabilityFacade,
+    ObservabilitySpanInput,
+)
 from awesome_agent.observability.repository import (
-    DurableMetric,
     DurableModelCall,
     DurableSpan,
     NoopObservabilityRepository,
@@ -93,6 +96,7 @@ class DurableWorker:
         worker_id: UUID | None = None,
         worker_name: str | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        observability: ObservabilityFacade | None = None,
         observability_repository: ObservabilityRepository | None = None,
         heartbeat_repository: WorkerHeartbeatRepository | None = None,
         budget_repository: BudgetRepository | None = None,
@@ -114,6 +118,9 @@ class DurableWorker:
         self.stop_requested = asyncio.Event()
         self.observability_repository = (
             observability_repository or NoopObservabilityRepository()
+        )
+        self.observability = observability or ObservabilityFacade(
+            repository=self.observability_repository,
         )
         self.heartbeat_repository = heartbeat_repository
         self.budget_repository = budget_repository
@@ -698,6 +705,8 @@ class DurableWorker:
         leader: Agent,
         event: RuntimeEvent,
     ) -> None:
+        if run.runtime_route in {READ_ONLY_CODING_ROUTE, MODIFYING_CODING_ROUTE}:
+            return
         if event.event_type is EventType.MODEL_CALL_CREATED:
             await self._record_model_call_event(run, leader, event)
         elif event.event_type is EventType.TOOL_CALL_CREATED:
@@ -842,12 +851,9 @@ class DurableWorker:
         ended_at = datetime.now(UTC)
         duration_ms = max(0, int((monotonic() - started) * 1000))
         await self._record_best_effort(
-            self.observability_repository.record_span(
-                DurableSpan(
+            self.observability.record_span(
+                ObservabilitySpanInput(
                     run_id=run_id,
-                    trace_id=run_id.hex,
-                    span_id=_span_id(),
-                    parent_span_id=None,
                     name=name,
                     category=category,
                     status=status,
@@ -876,14 +882,12 @@ class DurableWorker:
         attributes: dict[str, object],
     ) -> None:
         await self._record_best_effort(
-            self.observability_repository.record_metric(
-                DurableMetric(
-                    run_id=run_id,
-                    name=name,
-                    value=value,
-                    unit=unit,
-                    attributes=attributes,
-                )
+            self.observability.record_metric(
+                run_id=run_id,
+                name=name,
+                value=value,
+                unit=unit,
+                attributes=attributes,
             )
         )
 
