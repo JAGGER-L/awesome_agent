@@ -30,6 +30,10 @@ from awesome_agent.persistence.validation import (
     ValidationReportWithGates,
     ValidationRepository,
 )
+from awesome_agent.runtime.agent_loop.modifying_middleware import (
+    validation_failure_is_reworkable,
+    validation_report_snapshot,
+)
 from awesome_agent.runtime.agent_loop.team import TeamAgentLoop
 from awesome_agent.runtime.dispatch import (
     PermanentExecutionError,
@@ -66,10 +70,21 @@ class TeamRoleValidationOutcome:
     status: Literal["passed", "failed"]
     summary: str
     report: ValidationReportWithGates
+    attempt: int
+    reworkable: bool = False
 
     @property
     def passed(self) -> bool:
         return self.status == "passed"
+
+    @property
+    def feedback(self) -> str:
+        return json.dumps(
+            validation_report_snapshot(self.report),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
 
 
 class TeamVerifierInvalidOutput(PermanentExecutionError):
@@ -288,6 +303,10 @@ class TeamRoleValidationMiddleware:
             status=status,
             summary=report.report.summary,
             report=report,
+            attempt=report.report.attempt,
+            reworkable=(
+                status == "failed" and validation_failure_is_reworkable(report)
+            ),
         )
 
 

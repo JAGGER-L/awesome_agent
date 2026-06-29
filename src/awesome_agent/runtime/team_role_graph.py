@@ -152,46 +152,15 @@ class TeamRoleGraph:
             )
             raise ChildRunWait("waiting_subagents")
         subagent_results = await self.team_repository.list_child_results(run.id)
-        result = None
         workspace = run.workspace_path
-        if self.role_loop is not None and workspace is not None:
-            role_loop = self.role_loop
-
-            async def execute_role_operation(_: object) -> RoleLoopResult:
-                return await role_loop.execute(
-                    run=run,
-                    agent=agent,
-                    assignment=assignment,
-                    policy=RoleLoopPolicy(
-                        allowed_tools=allowed_tools,
-                        allowed_skills=assignment.allowed_skills,
-                        can_write=assignment.can_write,
-                        acceptance_criteria=assignment.acceptance_criteria,
-                    ),
-                    workspace=workspace,
-                    repository=repository,
-                    team_repository=self.team_repository,
-                    subagent_results=subagent_results,
-                    event_sink=event_sink,  # type: ignore[arg-type]
-                )
-
-            result = await self.team_loop.run_agent_operation(
-                object(),
-                run=run,
-                agent=agent,
-                messages=[],
-                assignment_id=assignment.id,
-                team_role=assignment.kind.value,
-                agent_kind=agent.kind.value,
-                metadata={"team_operation": "role_execute"},
-                handler=execute_role_operation,
-            )
-        validation_outcome = await self._validate_write_result_if_needed(
+        result, validation_outcome = await self._execute_role_with_validation_rework(
             run,
             agent,
             assignment,
-            result=result,
+            allowed_tools=allowed_tools,
             workspace=workspace,
+            repository=repository,
+            subagent_results=subagent_results,
             event_sink=event_sink,
         )
         await self._record_result_if_needed(
@@ -225,6 +194,100 @@ class TeamRoleGraph:
             False,
         )
 
+    async def _execute_role_with_validation_rework(
+        self,
+        run: Run,
+        agent: Agent,
+        assignment: TeamAssignment,
+        *,
+        allowed_tools: list[str],
+        workspace: Path | None,
+        repository: RuntimeRepository,
+        subagent_results: list[TeamChildResult],
+        event_sink: object | None,
+    ) -> tuple[RoleLoopResult | None, TeamRoleValidationOutcome | None]:
+        validation_feedback: str | None = None
+        validation_rework_count = 0
+        while True:
+            result = await self._execute_role_once(
+                run,
+                agent,
+                assignment,
+                allowed_tools=allowed_tools,
+                workspace=workspace,
+                repository=repository,
+                subagent_results=subagent_results,
+                event_sink=event_sink,
+                validation_feedback=validation_feedback,
+            )
+            validation_outcome = await self._validate_write_result_if_needed(
+                run,
+                agent,
+                assignment,
+                result=result,
+                workspace=workspace,
+                event_sink=event_sink,
+            )
+            if validation_outcome is None or validation_outcome.passed:
+                return result, validation_outcome
+            plan = self._validation_plan_for_workspace(workspace)
+            max_rework_attempts = plan.max_rework_attempts if plan is not None else 0
+            if (
+                not validation_outcome.reworkable
+                or validation_rework_count >= max_rework_attempts
+            ):
+                return result, validation_outcome
+            validation_rework_count += 1
+            validation_feedback = validation_outcome.feedback
+
+    async def _execute_role_once(
+        self,
+        run: Run,
+        agent: Agent,
+        assignment: TeamAssignment,
+        *,
+        allowed_tools: list[str],
+        workspace: Path | None,
+        repository: RuntimeRepository,
+        subagent_results: list[TeamChildResult],
+        event_sink: object | None,
+        validation_feedback: str | None,
+    ) -> RoleLoopResult | None:
+        if self.role_loop is None or workspace is None:
+            return None
+        role_loop = self.role_loop
+
+        async def execute_role_operation(_: object) -> RoleLoopResult:
+            return await role_loop.execute(
+                run=run,
+                agent=agent,
+                assignment=assignment,
+                policy=RoleLoopPolicy(
+                    allowed_tools=allowed_tools,
+                    allowed_skills=assignment.allowed_skills,
+                    can_write=assignment.can_write,
+                    acceptance_criteria=assignment.acceptance_criteria,
+                ),
+                workspace=workspace,
+                repository=repository,
+                team_repository=self.team_repository,
+                subagent_results=subagent_results,
+                validation_feedback=validation_feedback,
+                event_sink=event_sink,  # type: ignore[arg-type]
+            )
+
+        return await self.team_loop.run_agent_operation(
+            object(),
+            run=run,
+            agent=agent,
+            messages=[],
+            assignment_id=assignment.id,
+            team_role=assignment.kind.value,
+            agent_kind=agent.kind.value,
+            metadata={"team_operation": "role_execute"},
+            handler=execute_role_operation,
+        )
+
     async def _validate_write_result_if_needed(
         self,
         run: Run,
@@ -247,6 +310,14 @@ class TeamRoleGraph:
             workspace=workspace,
             event_sink=event_sink,
         )
+
+    def _validation_plan_for_workspace(
+        self,
+        workspace: Path | None,
+    ) -> ValidationPlan | None:
+        if workspace is None:
+            return None
+        return self.validation_plan_resolver(workspace)
 
     async def _record_result_if_needed(
         self,

@@ -427,6 +427,330 @@ async def test_write_teammate_validation_failure_records_failed_child_result(
 
 
 @pytest.mark.asyncio
+async def test_write_teammate_reworks_same_child_after_validation_failure(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    validation = InMemoryValidationRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply-bad",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps(
+                            {"patch": _readme_bad_update_patch()}
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff-bad",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Changed README.md but validation may fail."),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="fix-bad",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps(
+                            {"patch": _readme_fix_update_patch()}
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff-fixed",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Fixed README.md after validation feedback."),
+        ]
+    )
+    validation_calls = 0
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        current_run: Run,
+        current_agent: Agent,
+    ) -> ValidationReportWithGates:
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 1:
+            return _validation_report(
+                run=current_run,
+                agent=current_agent,
+                status="failed",
+                summary="Validation failed: unit",
+                failure_kind="command_failed",
+                attempt=1,
+            )
+        return _validation_report(
+            run=current_run,
+            agent=current_agent,
+            status="passed",
+            summary="Validation passed with 1 gate(s).",
+            attempt=2,
+        )
+
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+        validation_repository=validation,
+        validation_plan_resolver=lambda _: _validation_plan_with_rework(1),
+        validation_runner=validation_runner,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.diff", "repo.apply_patch"],
+            can_write=True,
+        )
+    )
+
+    state, recovered = await graph.execute(run, agent, repository=runtime)
+
+    results = await teams.list_child_results(run.parent_run_id or run.id)
+    reports = await validation.list_for_run(run.id)
+    descendants = await runtime.list_child_runs(run.id)
+    assert not recovered
+    assert state["phase"] == "completed"
+    assert [item.report.status for item in reports] == ["failed", "passed"]
+    assert [result.status for result in results] == ["completed"]
+    assert results[0].patch_artifact_id is not None
+    assert not descendants
+    assert "fixed update" in (workspace / "README.md").read_text(encoding="utf-8")
+    patch = (await artifacts.get(results[0].patch_artifact_id)).path.read_text(
+        encoding="utf-8"
+    )
+    assert "+fixed update" in patch
+    assert any(
+        "Validation failed" in message.content
+        and "Validation failed: unit" in message.content
+        for message in provider.requests[3].messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_teammate_validation_rework_exhaustion_records_failed_child_result(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    validation = InMemoryValidationRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply-bad",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps(
+                            {"patch": _readme_bad_update_patch()}
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff-bad",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Changed README.md but validation will fail."),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="fix-bad",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps(
+                            {"patch": _readme_fix_update_patch()}
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff-fixed",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Fixed README.md but validation still fails."),
+        ]
+    )
+    validation_calls = 0
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        current_run: Run,
+        current_agent: Agent,
+    ) -> ValidationReportWithGates:
+        nonlocal validation_calls
+        validation_calls += 1
+        return _validation_report(
+            run=current_run,
+            agent=current_agent,
+            status="failed",
+            summary=f"Validation failed: unit attempt {validation_calls}",
+            failure_kind="command_failed",
+            attempt=validation_calls,
+        )
+
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+        validation_repository=validation,
+        validation_plan_resolver=lambda _: _validation_plan_with_rework(1),
+        validation_runner=validation_runner,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.diff", "repo.apply_patch"],
+            can_write=True,
+        )
+    )
+
+    with pytest.raises(PermanentExecutionError, match="team_role_validation_failed"):
+        await graph.execute(run, agent, repository=runtime)
+
+    results = await teams.list_child_results(run.parent_run_id or run.id)
+    reports = await validation.list_for_run(run.id)
+    assert [item.report.status for item in reports] == ["failed", "failed"]
+    assert len(results) == 1
+    assert results[0].status == "failed"
+    assert results[0].failure_kind == "validation_failed"
+    assert results[0].patch_artifact_id is None
+    assert results[0].changed_files == ["README.md"]
+    assert not await artifacts.list_for_run(run.id)
+
+
+@pytest.mark.asyncio
+async def test_write_teammate_non_reworkable_validation_failure_skips_rework(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    validation = InMemoryValidationRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps({"patch": _readme_update_patch()}),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Changed README.md but validation is not reworkable."),
+        ]
+    )
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        current_run: Run,
+        current_agent: Agent,
+    ) -> ValidationReportWithGates:
+        return _validation_report(
+            run=current_run,
+            agent=current_agent,
+            status="failed",
+            summary="Validation requires approval.",
+            failure_kind="approval_required",
+            gate_status="approval_required",
+            attempt=1,
+        )
+
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+        validation_repository=validation,
+        validation_plan_resolver=lambda _: _validation_plan_with_rework(2),
+        validation_runner=validation_runner,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.diff", "repo.apply_patch"],
+            can_write=True,
+        )
+    )
+
+    with pytest.raises(PermanentExecutionError, match="team_role_validation_failed"):
+        await graph.execute(run, agent, repository=runtime)
+
+    results = await teams.list_child_results(run.parent_run_id or run.id)
+    reports = await validation.list_for_run(run.id)
+    assert len(provider.requests) == 3
+    assert [item.report.status for item in reports] == ["failed"]
+    assert [result.status for result in results] == ["failed"]
+    assert results[0].patch_artifact_id is None
+    assert not await artifacts.list_for_run(run.id)
+
+
+@pytest.mark.asyncio
 async def test_teammate_validation_enters_team_agent_loop_without_patch_metadata(
     tmp_path: Path,
 ) -> None:
@@ -1208,6 +1532,10 @@ def _turn(
 
 
 def _validation_plan() -> ValidationPlan:
+    return _validation_plan_with_rework(0)
+
+
+def _validation_plan_with_rework(max_rework_attempts: int) -> ValidationPlan:
     return ValidationPlan(
         gates=[
             ValidationGate(
@@ -1219,7 +1547,7 @@ def _validation_plan() -> ValidationPlan:
             )
         ],
         source="configured",
-        max_rework_attempts=0,
+        max_rework_attempts=max_rework_attempts,
     )
 
 
@@ -1230,14 +1558,17 @@ def _validation_report(
     status: str,
     summary: str,
     failure_kind: str | None = None,
+    attempt: int = 0,
+    gate_status: str | None = None,
 ) -> ValidationReportWithGates:
     report = DurableValidationReport(
         run_id=run.id,
         agent_id=agent.id,
-        attempt=0,
+        attempt=attempt,
         status=status,
         summary=summary,
     )
+    gate_status = gate_status or status
     gate = DurableValidationGateResult(
         report_id=report.id,
         run_id=run.id,
@@ -1245,7 +1576,7 @@ def _validation_report(
         name="Unit validation",
         command=["python", "-m", "pytest", "-q"],
         required=True,
-        status=status,
+        status=gate_status,
         exit_code=0 if status == "passed" else 1,
         failure_kind=failure_kind,
         stdout_summary=summary if status == "passed" else "",
@@ -1268,6 +1599,29 @@ def _readme_update_patch() -> str:
         "@@ -1 +1,2 @@\n"
         " fixture\n"
         "+team role update\n"
+    )
+
+
+def _readme_bad_update_patch() -> str:
+    return (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1,2 @@\n"
+        " fixture\n"
+        "+bad update\n"
+    )
+
+
+def _readme_fix_update_patch() -> str:
+    return (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1,2 +1,2 @@\n"
+        " fixture\n"
+        "-bad update\n"
+        "+fixed update\n"
     )
 
 
