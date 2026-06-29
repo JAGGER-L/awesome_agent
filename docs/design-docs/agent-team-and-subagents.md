@@ -141,6 +141,14 @@ artifact generation, Leader patch aggregation, Verifier pass, Verifier rework,
 replacement Teammate creation, mailbox evidence, runtime events, model-call
 records, spans, and artifacts.
 
+Task 25 adds Teammate-local deterministic validation for writing Teammates that
+produce patches. Validation runs after the role loop produces a patch and before
+the child result is published. It is wrapped by `TeamAgentLoop` as
+`team_operation=role_validation`; passed validation allows patch artifact
+publication, while failed validation records a failed child result with
+`failure_kind="validation_failed"` and lets the Leader replacement rework path
+handle recovery.
+
 Patch aggregation is idempotent. The Leader applies Teammate patch artifacts to
 the root workspace when the preimage matches; if the postimage is already
 present, the patch is treated as already aggregated. Partial or conflicting
@@ -151,10 +159,9 @@ The implemented `team-coding` route is now the forward distributed team runtime
 for local execution. Task 24 moves Leader planning, Teammate/Subagent
 model/tool execution, delegation tool calls, Verifier decisions, and team
 observability behind `TeamAgentLoop` and shared middleware. Remaining work is
-not basic autonomy wiring; it is hardening: Teammate-local deterministic
-validation, richer mailbox collaboration policy, advanced replanning, conflict
-recovery, empirically tuned rework budgets, and true concurrent Worker stress
-tests.
+not basic autonomy wiring; it is hardening: richer mailbox collaboration
+policy, advanced replanning, same-child validation rework, conflict recovery,
+empirically tuned rework budgets, and true concurrent Worker stress tests.
 
 ## AgentLoop Boundary
 

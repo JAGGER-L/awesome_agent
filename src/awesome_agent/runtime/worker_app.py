@@ -168,6 +168,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 artifact_repository=artifact_repository,
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
+                validation_repository=PostgresValidationRepository(sessions),
                 observability=observability,
             ),
             team_verifier_graph=TeamVerifierGraph(

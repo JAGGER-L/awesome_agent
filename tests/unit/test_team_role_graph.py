@@ -1,3 +1,4 @@
+import json
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -26,6 +27,12 @@ from awesome_agent.modeling import (
 )
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
+from awesome_agent.persistence.validation import (
+    DurableValidationGateResult,
+    DurableValidationReport,
+    InMemoryValidationRepository,
+    ValidationReportWithGates,
+)
 from awesome_agent.runtime.agent_loop import (
     MiddlewareContext,
     MiddlewareDecision,
@@ -43,6 +50,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamChildResult,
 )
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
+from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
 
 
 class SequenceProvider(StructuredModelProvider):
@@ -235,6 +243,348 @@ async def test_teammate_compacts_large_child_result_summary(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_write_teammate_validates_patch_before_publishing_result(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    validation = InMemoryValidationRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps({"patch": _readme_update_patch()}),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Changed README.md after validation-ready diff."),
+        ]
+    )
+    validation_calls: list[ValidationPlan] = []
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        current_run: Run,
+        current_agent: Agent,
+    ) -> ValidationReportWithGates:
+        validation_calls.append(plan)
+        return _validation_report(
+            run=current_run,
+            agent=current_agent,
+            status="passed",
+            summary="Validation passed with 1 gate(s).",
+        )
+
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+        validation_repository=validation,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=validation_runner,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.diff", "repo.apply_patch"],
+            can_write=True,
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    state, recovered = await graph.execute(
+        run,
+        agent,
+        repository=runtime,
+        event_sink=emit,
+    )
+
+    result = (await teams.list_child_results(run.parent_run_id or run.id))[0]
+    reports = await validation.list_for_run(run.id)
+    assert not recovered
+    assert state["phase"] == "completed"
+    assert len(validation_calls) == 1
+    assert [item.report.status for item in reports] == ["passed"]
+    assert result.status == "completed"
+    assert result.patch_artifact_id is not None
+    assert any(
+        event_type is EventType.VERIFICATION_CREATED
+        and payload.get("status") == "passed"
+        and payload.get("summary") == "Validation passed with 1 gate(s)."
+        for event_type, payload, _ in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_teammate_validation_failure_records_failed_child_result(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    validation = InMemoryValidationRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps({"patch": _readme_update_patch()}),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Changed README.md but validation will fail."),
+        ]
+    )
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        current_run: Run,
+        current_agent: Agent,
+    ) -> ValidationReportWithGates:
+        return _validation_report(
+            run=current_run,
+            agent=current_agent,
+            status="failed",
+            summary="Validation failed: unit",
+            failure_kind="command_failed",
+        )
+
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+        validation_repository=validation,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=validation_runner,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.diff", "repo.apply_patch"],
+            can_write=True,
+        )
+    )
+
+    with pytest.raises(PermanentExecutionError, match="team_role_validation_failed"):
+        await graph.execute(run, agent, repository=runtime)
+
+    result = (await teams.list_child_results(run.parent_run_id or run.id))[0]
+    reports = await validation.list_for_run(run.id)
+    assert [item.report.status for item in reports] == ["failed"]
+    assert result.status == "failed"
+    assert result.failure_kind == "validation_failed"
+    assert result.patch_artifact_id is None
+    assert result.changed_files == ["README.md"]
+    assert "Validation failed: unit" in result.summary
+    assert not await artifacts.list_for_run(run.id)
+
+
+@pytest.mark.asyncio
+async def test_teammate_validation_enters_team_agent_loop_without_patch_metadata(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    validation = InMemoryValidationRepository()
+    recorder = RecordingAgentOperationMiddleware()
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=InMemoryArtifactMetadataRepository(),
+        validation_repository=validation,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=lambda plan, current_run, current_agent: _async_report(
+            _validation_report(
+                run=current_run,
+                agent=current_agent,
+                status="passed",
+                summary="Validation passed with 1 gate(s).",
+            )
+        ),
+        team_loop=TeamAgentLoop(middleware_stack=MiddlewareStack([recorder])),
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            can_write=True,
+            handoff_context={
+                "patch": _readme_update_patch(),
+                "changed_files": ["README.md"],
+            },
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    validation_call = next(
+        call
+        for call in recorder.calls
+        if call.get("team_operation") == "role_validation"
+    )
+    assert validation_call["assignment_id"]
+    assert validation_call["team_role"] == "teammate"
+    assert validation_call["agent_kind"] == "teammate"
+    assert "team role update" not in str(validation_call)
+    assert "Validation passed" not in str(validation_call)
+
+
+@pytest.mark.asyncio
+async def test_read_only_teammate_skips_local_validation(tmp_path: Path) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    validation_calls = 0
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        current_run: Run,
+        current_agent: Agent,
+    ) -> ValidationReportWithGates:
+        nonlocal validation_calls
+        validation_calls += 1
+        return _validation_report(
+            run=current_run,
+            agent=current_agent,
+            status="passed",
+            summary="unexpected",
+        )
+
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: SequenceProvider(
+            [
+                _turn(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="read",
+                            name="repo.read",
+                            arguments_json='{"path":"README.md"}',
+                        )
+                    ],
+                    stop_reason=StopReason.TOOL_CALLS,
+                ),
+                _turn(content="Read only."),
+            ]
+        ),
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=validation_runner,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read"],
+            can_write=False,
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    assert validation_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_write_teammate_without_patch_skips_local_validation(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    validation_calls = 0
+
+    async def validation_runner(
+        plan: ValidationPlan,
+        current_run: Run,
+        current_agent: Agent,
+    ) -> ValidationReportWithGates:
+        nonlocal validation_calls
+        validation_calls += 1
+        return _validation_report(
+            run=current_run,
+            agent=current_agent,
+            status="passed",
+            summary="unexpected",
+        )
+
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: SequenceProvider([_turn(content="No change.")]),
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=validation_runner,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.diff"],
+            can_write=True,
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    assert validation_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_teammate_runs_model_tool_loop_and_writes_patch_artifact(
     tmp_path: Path,
 ) -> None:
@@ -276,6 +626,15 @@ async def test_teammate_runs_model_tool_loop_and_writes_patch_artifact(
         provider_resolver=lambda _: provider,
         artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
         artifact_repository=artifacts,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=lambda plan, current_run, current_agent: _async_report(
+            _validation_report(
+                run=current_run,
+                agent=current_agent,
+                status="passed",
+                summary="Validation passed with 1 gate(s).",
+            )
+        ),
     )
     run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
     run = run.model_copy(update={"workspace_path": workspace})
@@ -422,6 +781,15 @@ async def test_write_teammate_must_diff_after_write(tmp_path: Path) -> None:
     graph = TeamRoleGraph(
         team_repository=teams,
         provider_resolver=lambda _: provider,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=lambda plan, current_run, current_agent: _async_report(
+            _validation_report(
+                run=current_run,
+                agent=current_agent,
+                status="passed",
+                summary="Validation passed with 1 gate(s).",
+            )
+        ),
     )
     run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
     run = run.model_copy(update={"workspace_path": workspace})
@@ -839,6 +1207,70 @@ def _turn(
     )
 
 
+def _validation_plan() -> ValidationPlan:
+    return ValidationPlan(
+        gates=[
+            ValidationGate(
+                id="unit",
+                name="Unit validation",
+                command=["python", "-m", "pytest", "-q"],
+                required=True,
+                timeout_seconds=30,
+            )
+        ],
+        source="configured",
+        max_rework_attempts=0,
+    )
+
+
+def _validation_report(
+    *,
+    run: Run,
+    agent: Agent,
+    status: str,
+    summary: str,
+    failure_kind: str | None = None,
+) -> ValidationReportWithGates:
+    report = DurableValidationReport(
+        run_id=run.id,
+        agent_id=agent.id,
+        attempt=0,
+        status=status,
+        summary=summary,
+    )
+    gate = DurableValidationGateResult(
+        report_id=report.id,
+        run_id=run.id,
+        gate_id="unit",
+        name="Unit validation",
+        command=["python", "-m", "pytest", "-q"],
+        required=True,
+        status=status,
+        exit_code=0 if status == "passed" else 1,
+        failure_kind=failure_kind,
+        stdout_summary=summary if status == "passed" else "",
+        stderr_summary=summary if status != "passed" else "",
+    )
+    return ValidationReportWithGates(report=report, gates=[gate])
+
+
+async def _async_report(
+    report: ValidationReportWithGates,
+) -> ValidationReportWithGates:
+    return report
+
+
+def _readme_update_patch() -> str:
+    return (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1,2 @@\n"
+        " fixture\n"
+        "+team role update\n"
+    )
+
+
 def _git_workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "repository"
     workspace.mkdir()
@@ -894,4 +1326,29 @@ class RecordingTeamMiddleware:
                     **context.metadata,
                 }
             )
+        return await call_next(context)
+
+
+class RecordingAgentOperationMiddleware:
+    name = "recording-agent-operation"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def handle(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
+    ) -> MiddlewareDecision:
+        return await call_next(context)
+
+    async def wrap_stage(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[object]],
+    ) -> object:
+        if stage is MiddlewareStage.BEFORE_AGENT:
+            self.calls.append({"stage": stage.value, **context.metadata})
         return await call_next(context)

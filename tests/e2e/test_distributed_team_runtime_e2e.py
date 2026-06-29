@@ -37,6 +37,7 @@ from awesome_agent.persistence.intake_reservations import (
 from awesome_agent.persistence.repository_registry import PostgresRepositoryRegistry
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.team import PostgresTeamRepository
+from awesome_agent.persistence.validation import PostgresValidationRepository
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.repositories.git import require_primary_clean_repository
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
@@ -138,6 +139,12 @@ async def test_team_run_completes_as_distributed_child_runs(
         for observed_run in descendants
         for artifact in await artifact_repository.list_for_run(observed_run.id)
     ]
+    validation_repository = PostgresValidationRepository(sessions)
+    validation_reports = [
+        report
+        for observed_run in descendants
+        for report in await validation_repository.list_for_run(observed_run.id)
+    ]
     workspace = Path(restored.workspace_path or "")
 
     assert restored.status is RunStatus.COMPLETED
@@ -171,6 +178,17 @@ async def test_team_run_completes_as_distributed_child_runs(
     assert {span.name for span in spans} >= {"model.call", "tool.call"}
     assert len(model_calls) >= 7
     assert any(artifact.artifact_type == "patch" for artifact in artifacts)
+    assert any(item.report.status == "passed" for item in validation_reports)
+    assert any(
+        event.event_type is EventType.VERIFICATION_CREATED
+        and event.payload.get("status") == "passed"
+        for event in events
+    )
+    assert any(
+        span.name == "agent.run"
+        and span.attributes.get("team_operation") == "role_validation"
+        for span in spans
+    )
     await engine.dispose()
 
 
@@ -609,7 +627,43 @@ async def _git_workspace(tmp_path: Path) -> Path:
     await _git(repository_path, "config", "user.email", "test@example.com")
     await _git(repository_path, "config", "user.name", "Test")
     (repository_path / "README.md").write_text("fixture\n", encoding="utf-8")
-    await _git(repository_path, "add", "README.md")
+    (repository_path / "pytest").write_bytes(
+        (
+            "#!/usr/local/bin/python\n"
+            "from pathlib import Path\n"
+            "assert Path('README.md').exists()\n"
+        ).encode("ascii")
+    )
+    (repository_path / ".gitattributes").write_text(
+        "pytest text eol=lf\n",
+        encoding="utf-8",
+    )
+    validation_dir = repository_path / ".agents"
+    validation_dir.mkdir()
+    (validation_dir / "validation.toml").write_text(
+        "\n".join(
+            [
+                "version = 1",
+                "",
+                "[[gates]]",
+                'id = "readme-present"',
+                'name = "README present"',
+                'command = ["./pytest"]',
+                "required = true",
+                "timeout_seconds = 30",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    await _git(
+        repository_path,
+        "add",
+        ".gitattributes",
+        "README.md",
+        "pytest",
+        ".agents/validation.toml",
+    )
     await _git(repository_path, "commit", "-m", "Initial")
     return repository_path
 

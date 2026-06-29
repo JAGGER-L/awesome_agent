@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import NotRequired, TypedDict
+from pathlib import Path
+from typing import Literal, NotRequired, TypedDict, cast
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
@@ -10,9 +11,19 @@ from awesome_agent.domain.models import Agent, Run
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.persistence.validation import (
+    ValidationReportWithGates,
+    ValidationRepository,
+)
 from awesome_agent.runtime.agent_loop import TeamAgentLoop
+from awesome_agent.runtime.agent_loop.team_middleware import (
+    TeamRoleValidationMiddleware,
+    TeamRoleValidationOutcome,
+    ValidationPlanResolver,
+    ValidationRunner,
+)
 from awesome_agent.runtime.budget import BudgetPolicy
-from awesome_agent.runtime.dispatch import ChildRunWait
+from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.role_loop import (
@@ -31,6 +42,10 @@ from awesome_agent.runtime.team_assignments import (
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
 from awesome_agent.runtime.team_context import compact_team_payload
+from awesome_agent.runtime.validation.config import load_validation_config
+from awesome_agent.runtime.validation.detection import detect_validation_plan
+from awesome_agent.runtime.validation.executor import execute_validation_plan
+from awesome_agent.runtime.validation.models import ValidationPlan
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
@@ -56,6 +71,9 @@ class TeamRoleGraph:
         artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        validation_repository: ValidationRepository | None = None,
+        validation_plan_resolver: ValidationPlanResolver | None = None,
+        validation_runner: ValidationRunner | None = None,
         team_loop: TeamAgentLoop | None = None,
         observability: ObservabilityFacade | None = None,
     ) -> None:
@@ -71,6 +89,17 @@ class TeamRoleGraph:
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.validation_repository = validation_repository
+        self.validation_plan_resolver = (
+            validation_plan_resolver or _resolve_validation_plan
+        )
+        self.validation_runner = validation_runner or self._run_validation
+        self.validation_middleware = TeamRoleValidationMiddleware(
+            validation_plan_resolver=self.validation_plan_resolver,
+            validation_runner=self.validation_runner,
+            validation_repository=validation_repository,
+            team_loop=self.team_loop,
+        )
 
     async def execute(
         self,
@@ -157,7 +186,23 @@ class TeamRoleGraph:
                 metadata={"team_operation": "role_execute"},
                 handler=execute_role_operation,
             )
-        await self._record_result_if_needed(run, agent, assignment, result=result)
+        validation_outcome = await self._validate_write_result_if_needed(
+            run,
+            agent,
+            assignment,
+            result=result,
+            workspace=workspace,
+            event_sink=event_sink,
+        )
+        await self._record_result_if_needed(
+            run,
+            agent,
+            assignment,
+            result=result,
+            validation_outcome=validation_outcome,
+        )
+        if validation_outcome is not None and not validation_outcome.passed:
+            raise PermanentExecutionError("team_role_validation_failed")
         return (
             TeamRoleState(
                 run_id=str(run.id),
@@ -180,6 +225,29 @@ class TeamRoleGraph:
             False,
         )
 
+    async def _validate_write_result_if_needed(
+        self,
+        run: Run,
+        agent: Agent,
+        assignment: TeamAssignment,
+        *,
+        result: RoleLoopResult | None,
+        workspace: Path | None,
+        event_sink: object | None,
+    ) -> TeamRoleValidationOutcome | None:
+        if workspace is None:
+            return None
+        patch = _result_patch(assignment, result)
+        if not assignment.can_write or not isinstance(patch, str) or not patch.strip():
+            return None
+        return await self.validation_middleware.validate_write_result(
+            run,
+            agent,
+            assignment=assignment,
+            workspace=workspace,
+            event_sink=event_sink,
+        )
+
     async def _record_result_if_needed(
         self,
         run: Run,
@@ -187,10 +255,18 @@ class TeamRoleGraph:
         assignment: TeamAssignment,
         *,
         result: RoleLoopResult | None = None,
+        validation_outcome: TeamRoleValidationOutcome | None = None,
     ) -> None:
         patch_artifact_id = None
         changed_files: list[str] = []
         evidence_artifact_refs = []
+        validation_failed = (
+            validation_outcome is not None and not validation_outcome.passed
+        )
+        status: Literal["failed", "completed"] = (
+            "failed" if validation_failed else "completed"
+        )
+        failure_kind = "validation_failed" if validation_failed else None
         summary = str(
             result.summary
             if result is not None
@@ -202,8 +278,24 @@ class TeamRoleGraph:
             if result is not None
             else assignment.handoff_context.get("patch")
         )
+        if validation_failed and validation_outcome is not None:
+            summary = (
+                "Validation failed before publishing child result: "
+                f"{validation_outcome.summary}"
+            )
+        if assignment.can_write and isinstance(patch, str) and patch.strip():
+            changed_files = (
+                result.changed_files
+                if result is not None
+                else [
+                    item
+                    for item in assignment.handoff_context.get("changed_files", [])
+                    if isinstance(item, str)
+                ]
+            )
         if (
-            assignment.can_write
+            not validation_failed
+            and assignment.can_write
             and isinstance(patch, str)
             and patch.strip()
             and self.artifact_store is not None
@@ -220,15 +312,6 @@ class TeamRoleGraph:
             )
             await self.artifact_repository.record(metadata)
             patch_artifact_id = metadata.id
-            changed_files = (
-                result.changed_files
-                if result is not None
-                else [
-                    item
-                    for item in assignment.handoff_context.get("changed_files", [])
-                    if isinstance(item, str)
-                ]
-            )
         compacted_summary = await compact_team_payload(
             run_id=run.id,
             agent_id=agent.id,
@@ -249,12 +332,27 @@ class TeamRoleGraph:
                 child_run_id=run.id,
                 parent_run_id=assignment.parent_run_id,
                 root_run_id=assignment.root_run_id,
-                status="completed",
+                status=status,
                 summary=summary,
                 patch_artifact_id=patch_artifact_id,
                 changed_files=changed_files,
                 evidence_artifact_refs=evidence_artifact_refs,
+                failure_kind=failure_kind,
             )
+        )
+
+    async def _run_validation(
+        self,
+        plan: ValidationPlan,
+        run: Run,
+        agent: Agent,
+    ) -> ValidationReportWithGates:
+        return await execute_validation_plan(
+            plan,
+            run_id=run.id,
+            agent_id=agent.id,
+            workspace=cast(Path, run.workspace_path),
+            repository=None,
         )
 
     async def _create_subagents(
@@ -340,3 +438,16 @@ def _subagent_goals(assignment: TeamAssignment) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item.strip()]
+
+
+def _result_patch(
+    assignment: TeamAssignment,
+    result: RoleLoopResult | None,
+) -> object:
+    if result is not None:
+        return result.patch
+    return assignment.handoff_context.get("patch")
+
+
+def _resolve_validation_plan(workspace: Path) -> ValidationPlan | None:
+    return load_validation_config(workspace) or detect_validation_plan(workspace)
