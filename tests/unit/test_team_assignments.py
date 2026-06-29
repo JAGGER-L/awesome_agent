@@ -5,8 +5,15 @@ import pytest
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
+    TeamChildResult,
     effective_assignment_tools,
     validate_assignment_graph,
+)
+from awesome_agent.runtime.team_rework import (
+    PATCH_CONFLICT_REWORK_REASON,
+    effective_child_results_for_verification,
+    patch_conflict_superseded_child_ids,
+    rework_budget_for_failure,
 )
 
 
@@ -77,3 +84,90 @@ def test_effective_assignment_tools_hide_deferred_until_promoted() -> None:
     )
 
     assert effective_assignment_tools(assignment) == ["repo.read", "repo.apply_patch"]
+
+
+def test_patch_conflict_superseded_child_ids_uses_rework_reason() -> None:
+    original = TeamAssignment(
+        root_run_id=uuid4(),
+        parent_run_id=uuid4(),
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="backend",
+        runtime_route="team-role",
+        goal="original",
+    )
+    replacement = TeamAssignment(
+        root_run_id=original.root_run_id,
+        parent_run_id=original.parent_run_id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="backend",
+        runtime_route="team-role",
+        goal="replacement",
+        handoff_context={
+            "rework_reason": PATCH_CONFLICT_REWORK_REASON,
+            "previous_assignment_id": str(original.id),
+            "previous_child_run_id": str(original.child_run_id),
+        },
+    )
+
+    assert patch_conflict_superseded_child_ids([original, replacement]) == {
+        str(original.child_run_id)
+    }
+
+
+def test_effective_child_results_excludes_patch_conflict_superseded_result() -> None:
+    parent_run_id = uuid4()
+    root_run_id = parent_run_id
+    original = TeamAssignment(
+        root_run_id=root_run_id,
+        parent_run_id=parent_run_id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="backend",
+        runtime_route="team-role",
+        goal="original",
+    )
+    replacement = TeamAssignment(
+        root_run_id=root_run_id,
+        parent_run_id=parent_run_id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="backend",
+        runtime_route="team-role",
+        goal="replacement",
+        handoff_context={
+            "rework_reason": PATCH_CONFLICT_REWORK_REASON,
+            "previous_assignment_id": str(original.id),
+            "previous_child_run_id": str(original.child_run_id),
+        },
+    )
+    original_result = TeamChildResult(
+        assignment_id=original.id,
+        child_run_id=original.child_run_id,
+        parent_run_id=parent_run_id,
+        root_run_id=root_run_id,
+        status="recovery_required",
+        summary="patch conflict",
+        patch_artifact_id=uuid4(),
+        failure_kind=PATCH_CONFLICT_REWORK_REASON,
+    )
+    replacement_result = TeamChildResult(
+        assignment_id=replacement.id,
+        child_run_id=replacement.child_run_id,
+        parent_run_id=parent_run_id,
+        root_run_id=root_run_id,
+        status="completed",
+        summary="replacement patch",
+        patch_artifact_id=uuid4(),
+        patch_aggregated=True,
+    )
+
+    assert effective_child_results_for_verification(
+        [original_result, replacement_result],
+        [original, replacement],
+    ) == [replacement_result]
+
+
+def test_patch_conflict_rework_budget_allows_two_attempts() -> None:
+    assert rework_budget_for_failure(PATCH_CONFLICT_REWORK_REASON) == 2
