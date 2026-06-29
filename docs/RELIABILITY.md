@@ -124,10 +124,11 @@ forbidden.
   and terminal mapping in graph modules. Leader planning, role model/tool
   execution, delegation tool calls, Verifier model decisions, and team
   observability run through `TeamAgentLoop` middleware.
-- Distributed team patch aggregation is idempotent. The Leader applies a
-  Teammate patch artifact when the preimage matches and treats an already
-  present postimage as aggregated; partial or conflicting patch state still
-  fails the parent Run for explicit recovery or rework.
+- Distributed team patch aggregation is idempotent and recoverable for
+  Teammate patch conflicts. The Leader applies a Teammate patch artifact when
+  the preimage matches, treats an already present postimage as aggregated, and
+  turns non-idempotent `git apply` conflicts into bounded replacement Teammate
+  child Runs with durable `patch_conflict` evidence before verifier creation.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active
