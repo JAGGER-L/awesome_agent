@@ -19,6 +19,12 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelTurn,
+    StopReason,
+    ToolCall,
+)
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
@@ -63,7 +69,9 @@ async def test_distributed_team_runs_through_workers_with_lineage(
         workspace_path=workspace,
     )
     root = root.model_copy(update={"graph_thread_id": f"run:{root.id}"})
-    provider = FakeModelProvider([_team_plan_json()])
+    provider = FakeModelProvider(
+        [_team_plan_json(), _role_read_turn(), _role_final_turn()]
+    )
     leader = Agent(
         run_id=root.id,
         kind=AgentKind.LEADER,
@@ -83,6 +91,7 @@ async def test_distributed_team_runs_through_workers_with_lineage(
         ),
         team_role_graph=TeamRoleGraph(
             team_repository=teams,
+            provider_resolver=lambda _: provider,
             artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
             artifact_repository=artifacts,
         ),
@@ -172,6 +181,32 @@ def _team_plan_json() -> str:
                 }
             ],
         }
+    )
+
+
+def _role_read_turn() -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(
+            tool_calls=[
+                ToolCall(
+                    call_id="read",
+                    name="repo.read",
+                    arguments_json='{"path":"README.md"}',
+                )
+            ]
+        ),
+        stop_reason=StopReason.TOOL_CALLS,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _role_final_turn() -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(content="README.md was inspected."),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
     )
 
 

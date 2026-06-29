@@ -13,6 +13,12 @@ from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.runtime.role_loop import (
+    ProviderResolver,
+    RoleLoop,
+    RoleLoopPolicy,
+    RoleLoopResult,
+)
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
@@ -43,12 +49,19 @@ class TeamRoleGraph:
         self,
         *,
         team_repository: TeamRepository,
+        provider_resolver: ProviderResolver | None = None,
         artifact_store: LocalArtifactStore | None = None,
         artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
     ) -> None:
         self.team_repository = team_repository
+        self.provider_resolver = provider_resolver
+        self.role_loop = (
+            RoleLoop(provider_resolver=provider_resolver)
+            if provider_resolver is not None
+            else None
+        )
         self.artifact_store = artifact_store
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
@@ -103,17 +116,40 @@ class TeamRoleGraph:
                 raise ChildRunWait("waiting_subagents")
             if any(item.status is TeamAssignmentStatus.ACTIVE for item in subagents):
                 raise ChildRunWait("waiting_subagents")
-        await self._record_result_if_needed(run, agent, assignment)
+        result = None
+        if self.role_loop is not None and run.workspace_path is not None:
+            result = await self.role_loop.execute(
+                run=run,
+                agent=agent,
+                assignment=assignment,
+                policy=RoleLoopPolicy(
+                    allowed_tools=allowed_tools,
+                    allowed_skills=assignment.allowed_skills,
+                    can_write=assignment.can_write,
+                    acceptance_criteria=assignment.acceptance_criteria,
+                ),
+                workspace=run.workspace_path,
+                event_sink=event_sink,  # type: ignore[arg-type]
+            )
+        await self._record_result_if_needed(run, agent, assignment, result=result)
         return (
             TeamRoleState(
                 run_id=str(run.id),
                 agent_id=str(agent.id),
                 runtime_route=run.runtime_route or TEAM_ROLE_ROUTE,
                 phase="completed",
-                result_summary=f"{assignment.kind.value} assignment completed.",
+                result_summary=(
+                    result.summary
+                    if result is not None
+                    else f"{assignment.kind.value} assignment completed."
+                ),
                 allowed_tools=allowed_tools,
                 allowed_skills=assignment.allowed_skills,
-                final_answer=f"{assignment.kind.value} assignment completed.",
+                final_answer=(
+                    result.final_answer
+                    if result is not None
+                    else f"{assignment.kind.value} assignment completed."
+                ),
             ),
             False,
         )
@@ -123,15 +159,23 @@ class TeamRoleGraph:
         run: Run,
         agent: Agent,
         assignment: TeamAssignment,
+        *,
+        result: RoleLoopResult | None = None,
     ) -> None:
         patch_artifact_id = None
         changed_files: list[str] = []
         evidence_artifact_refs = []
         summary = str(
-            assignment.handoff_context.get("result_summary")
+            result.summary
+            if result is not None
+            else assignment.handoff_context.get("result_summary")
             or f"{assignment.kind.value} assignment completed."
         )
-        patch = assignment.handoff_context.get("patch")
+        patch = (
+            result.patch
+            if result is not None
+            else assignment.handoff_context.get("patch")
+        )
         if (
             assignment.can_write
             and isinstance(patch, str)
@@ -150,11 +194,15 @@ class TeamRoleGraph:
             )
             await self.artifact_repository.record(metadata)
             patch_artifact_id = metadata.id
-            changed_files = [
-                item
-                for item in assignment.handoff_context.get("changed_files", [])
-                if isinstance(item, str)
-            ]
+            changed_files = (
+                result.changed_files
+                if result is not None
+                else [
+                    item
+                    for item in assignment.handoff_context.get("changed_files", [])
+                    if isinstance(item, str)
+                ]
+            )
         compacted_summary = await compact_team_payload(
             run_id=run.id,
             agent_id=agent.id,

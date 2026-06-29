@@ -16,6 +16,10 @@ team output.
   model-generated `TeamPlan`, creates Teammate child Runs from that plan, later
   creates a Verifier child Run to gate completion, and independent Workers
   claim child Runs through PostgreSQL dispatch
+- assignment-scoped model/tool loops for distributed Teammate child Runs, with
+  effective tool filtering, authorization rechecks, read-only evidence gates,
+  write-after-diff requirements, and patch artifacts generated from child
+  workspace diffs
 - Docker command execution
 - PostgreSQL resume
 - durable PostgreSQL API projections across service restarts
@@ -70,7 +74,7 @@ team output.
 - automatic solo/team routing
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
-- dynamic distributed Subagent creation, team role tool execution, model-driven
-  Verifier review, and targeted rework
+- dynamic distributed Subagent creation, model-driven Verifier review, and
+  targeted rework
 - money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server

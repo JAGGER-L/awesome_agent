@@ -1,3 +1,5 @@
+from collections import deque
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -6,6 +8,16 @@ from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepositor
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelRequest,
+    ModelStreamEvent,
+    ModelTurn,
+    StopReason,
+    StructuredModelProvider,
+    ToolCall,
+    TurnCompleted,
+)
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
 from awesome_agent.runtime.dispatch import ChildRunWait
@@ -17,6 +29,19 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentStatus,
 )
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
+
+
+class SequenceProvider(StructuredModelProvider):
+    def __init__(self, turns: list[ModelTurn]) -> None:
+        self.turns = deque(turns)
+        self.requests: list[ModelRequest] = []
+
+    async def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
+        yield TurnCompleted(turn=self.turns.popleft())
 
 
 @pytest.mark.asyncio
@@ -195,6 +220,217 @@ async def test_teammate_compacts_large_child_result_summary(tmp_path: Path) -> N
     assert await budgets.list_compactions(run.id)
 
 
+@pytest.mark.asyncio
+async def test_teammate_runs_model_tool_loop_and_writes_patch_artifact(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    artifacts = InMemoryArtifactMetadataRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply",
+                        name="repo.apply_patch",
+                        arguments_json=(
+                            '{"patch":"diff --git a/README.md b/README.md\\n'
+                            "--- a/README.md\\n+++ b/README.md\\n"
+                            '@@ -1 +1,2 @@\\n fixture\\n+team role update\\n"}'
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Changed README.md after inspecting the diff."),
+        ]
+    )
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifacts,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read", "repo.diff", "repo.apply_patch"],
+            can_write=True,
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    state, recovered = await graph.execute(
+        run, agent, repository=runtime, event_sink=emit
+    )
+
+    result = (await teams.list_child_results(run.parent_run_id or run.id))[0]
+    assert not recovered
+    assert state["phase"] == "completed"
+    assert "team role update" in (workspace / "README.md").read_text(encoding="utf-8")
+    assert result.patch_artifact_id is not None
+    assert result.changed_files == ["README.md"]
+    patch = (await artifacts.get(result.patch_artifact_id)).path.read_text(
+        encoding="utf-8"
+    )
+    assert "+team role update" in patch
+    assert [tool.name for request in provider.requests for tool in request.tools] == [
+        "repo.read",
+        "repo.diff",
+        "repo.apply_patch",
+        "repo.read",
+        "repo.diff",
+        "repo.apply_patch",
+        "repo.read",
+        "repo.diff",
+        "repo.apply_patch",
+    ]
+    assert any(
+        payload.get("root_run_id") == str(run.root_run_id)
+        and payload.get("agent_id") == str(agent.id)
+        for _, payload, _ in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_teammate_must_diff_after_write(tmp_path: Path) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply",
+                        name="repo.apply_patch",
+                        arguments_json=(
+                            '{"patch":"diff --git a/README.md b/README.md\\n'
+                            "--- a/README.md\\n+++ b/README.md\\n"
+                            '@@ -1 +1,2 @@\\n fixture\\n+team role update\\n"}'
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Done without diff."),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Done after diff reminder."),
+        ]
+    )
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.apply_patch", "repo.diff"],
+            can_write=True,
+        )
+    )
+
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    assert state["phase"] == "completed"
+    assert any(
+        "call repo.diff after the last write" in message.content
+        for request in provider.requests
+        for message in request.messages
+    )
+    assert len(provider.requests) == 4
+
+
+@pytest.mark.asyncio
+async def test_read_only_teammate_rejects_write_tool_without_execution(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="apply",
+                        name="repo.apply_patch",
+                        arguments_json='{"patch":"bad"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="No write executed; README was inspected."),
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read"],
+            can_write=False,
+        )
+    )
+
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    result = (await teams.list_child_results(run.parent_run_id or run.id))[0]
+    assert state["phase"] == "completed"
+    assert result.patch_artifact_id is None
+    assert (workspace / "README.md").read_text(encoding="utf-8") == "fixture\n"
+    assert len(provider.requests) == 3
+
+
 def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:
     root_id = Run(goal="root", mode=RunMode.TEAM).id
     parent_id = root_id if kind is TeamAssignmentKind.TEAMMATE else Run(goal="p").id
@@ -229,6 +465,7 @@ def _assignment(
     deferred_tools: list[str] | None = None,
     promoted_tools: list[str] | None = None,
     allowed_skills: list[str] | None = None,
+    can_write: bool = False,
     can_delegate: bool = False,
     max_subagents: int = 0,
     handoff_context: dict[str, object] | None = None,
@@ -245,7 +482,47 @@ def _assignment(
         deferred_tools=deferred_tools or [],
         promoted_tools=promoted_tools or [],
         allowed_skills=allowed_skills or [],
+        can_write=can_write,
         can_delegate=can_delegate,
         max_subagents=max_subagents,
         handoff_context=handoff_context or {},
     )
+
+
+def _turn(
+    *,
+    content: str = "",
+    tool_calls: list[ToolCall] | None = None,
+    stop_reason: StopReason = StopReason.COMPLETED,
+) -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(content=content, tool_calls=tool_calls or []),
+        stop_reason=stop_reason,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _git_workspace(tmp_path: Path) -> Path:
+    workspace = tmp_path / "repository"
+    workspace.mkdir()
+    _git(workspace, "init")
+    _git(workspace, "config", "user.email", "test@example.com")
+    _git(workspace, "config", "user.name", "Test")
+    (workspace / "README.md").write_text("fixture\n", encoding="utf-8")
+    _git(workspace, "add", "README.md")
+    _git(workspace, "commit", "-m", "Initial")
+    return workspace
+
+
+def _git(path: Path, *arguments: str) -> None:
+    import subprocess
+
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=path,
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    assert result.returncode == 0

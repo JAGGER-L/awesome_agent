@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -16,7 +16,7 @@ from awesome_agent.modeling import (
 
 
 class FakeModelProvider(StructuredModelProvider):
-    def __init__(self, responses: list[str]) -> None:
+    def __init__(self, responses: Sequence[str | ModelTurn]) -> None:
         self._responses = deque(responses)
         self.requests: list[ModelRequest] = []
 
@@ -25,7 +25,11 @@ class FakeModelProvider(StructuredModelProvider):
         request: ModelRequest,
     ) -> AsyncIterator[ModelStreamEvent]:
         self.requests.append(request)
-        text = self._responses.popleft()
+        response = self._responses.popleft()
+        if isinstance(response, ModelTurn):
+            yield TurnCompleted(turn=response)
+            return
+        text = response
         yield TextDelta(text=text)
         yield TurnCompleted(
             turn=ModelTurn(

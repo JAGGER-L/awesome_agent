@@ -6,11 +6,11 @@ locally.
 Solo paths have exact-invocation approvals, active cancellation,
 validation-gated modifying completion, coherent lifecycle projections, and
 queryable runtime observability. Distributed team child Runs now have durable
-lineage, model-generated Leader TeamPlans, assignments, mailbox, recursive
-cancellation, inspection APIs/CLI, root-aware budgets, deferred tool exposure,
-team payload compaction, and PostgreSQL E2E evidence. Dynamic distributed
-Subagents, team role tool execution, model-driven Verifier review, and targeted
-rework remain roadmap work.
+lineage, model-generated Leader TeamPlans, assignment-scoped Teammate
+model/tool loops, mailbox, recursive cancellation, inspection APIs/CLI,
+root-aware budgets, deferred tool exposure, team payload compaction, and
+PostgreSQL E2E evidence. Dynamic distributed Subagents, model-driven Verifier
+review, and targeted rework remain roadmap work.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

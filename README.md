@@ -67,9 +67,10 @@ PostgreSQL:
   records; distributed `team-coding` creates Teammate and Verifier child Runs
   that independent Workers can claim through PostgreSQL dispatch. The
   distributed Leader now asks the model for a validated structured `TeamPlan`
-  before creating 1-3 Teammates. Dynamic Teammate-owned Subagent child Runs,
-  model-driven role tool loops, and model-driven verifier rework are the next
-  Task 22 phases.
+  before creating 1-3 Teammates. Teammate child Runs now execute
+  assignment-scoped model/tool loops with only the Leader-granted effective
+  tools. Dynamic Teammate-owned Subagent child Runs, model-driven verifier
+  review, and targeted rework are the next Task 22 phases.
 
 ### Approval (implemented for solo modifying runs)
 
@@ -93,9 +94,10 @@ pass the work before the Leader can complete the root Run.
 
 The older scoped `team-coding-scoped` runtime remains documented and tested,
 but the new distributed path is the forward architecture. Model-driven Leader
-planning has started; role execution, Subagent delegation, Verifier review,
-and targeted rework remain in later Task 22 phases. Distributed team
-assignments support deferred tool exposure, root-aware token/active-time
+planning and assignment-scoped Teammate role loops have started; Subagent
+delegation, Verifier review, and targeted rework remain in later Task 22
+phases. Distributed team assignments support deferred tool exposure,
+root-aware token/active-time
 budget checks, and artifact-backed compaction for large handoff, child-result,
 and verifier evidence payloads.
 
@@ -275,8 +277,8 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- model-driven distributed team role tool execution, dynamic Subagent creation,
-  Verifier review, and targeted rework on the `team-coding` path.
+- dynamic Subagent creation, Verifier review, and targeted rework on the
+  `team-coding` path.
 - richer team mailbox collaboration policy.
 
 ## Documentation

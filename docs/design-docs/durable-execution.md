@@ -410,10 +410,13 @@ root coordination with model-driven planning:
 - parent cancellation recursively propagates to nonterminal descendants.
 
 Task 18 adds root-aware team budget checks, deferred assignment tool filtering,
-and artifact-backed compaction for large team payloads. After Task 22A, only
-the distributed Leader planning step is model-driven. Central tool execution in
-team child Runs, dynamic Subagents, model-driven Verifier review, and durable
-targeted rework remain later Task 22 phases.
+and artifact-backed compaction for large team payloads. Task 22B adds
+assignment-scoped model/tool loops for Teammate child Runs. The model receives
+only effective assignment tools, execution rechecks authorization, read-only
+roles require repository evidence before finalization, writing roles must call
+`repo.diff` after the last write, and patch artifacts are generated from the
+child workspace diff. Dynamic Subagents, model-driven Verifier review, and
+durable targeted rework remain later Task 22 phases.
 
 ## Retry, Cancellation, and Failure
 

@@ -38,8 +38,8 @@ context. Effective tools are `allowed_tools - (deferred_tools -
 promoted_tools)`, so the Leader can grant a tool but defer exposing it until a
 later promotion step. In scoped `team-coding-scoped`, tools are executed inside one
 Run. In distributed `team-coding`, the assignment is durable data for the
-Teammate child Run; the first distributed skeleton records permissions and
-results but does not yet execute model-driven team tools.
+Teammate child Run; Task 22B executes model-driven assignment-scoped role loops
+using only the effective tools granted by that assignment.
 
 ## Subagents
 
@@ -96,6 +96,15 @@ terminal state. Independent Workers can claim each child Run through the normal
 PostgreSQL dispatch path. Parent Runs release to `waiting_*` states while child
 work is active and are requeued when child assignments reach terminal states.
 
+Task 22B replaces deterministic Teammate completion with a model/tool loop.
+`team-role` builds the model request from the durable assignment, exposes only
+effective tools, rechecks authorization before every tool execution, and records
+model/tool events with team attribution. Read-only roles must collect at least
+one successful repository inspection before finalizing. Writing roles may use
+write tools only when `can_write=true`, must call `repo.diff` after the last
+write, and produce patch artifacts from the child workspace diff for Leader
+aggregation.
+
 Distributed team state is stored in:
 
 - `runs.parent_run_id`, `runs.root_run_id`, `runs.depth`, and `runs.child_role`;
@@ -107,17 +116,18 @@ Distributed team state is stored in:
 
 The current distributed graph is a partially model-driven skeleton with real
 durable lineage, mailbox, cancellation propagation, API/CLI inspection, and
-PostgreSQL-backed integration/E2E evidence. Task 22A makes only the Leader plan
-model-driven. Team role execution, dynamic Subagent creation, Verifier review,
-and targeted rework loops remain later Task 22 phases.
+PostgreSQL-backed integration/E2E evidence. Task 22A makes the Leader plan
+model-driven, and Task 22B makes Teammate role execution model-driven. Dynamic
+Subagent creation, Verifier review, and targeted rework loops remain later
+Task 22 phases.
 
 This boundary is intentional. In `team-coding`, Leader, role, and Verifier
 graphs are production-wired for dispatch and persistence, but the child role
-graphs currently execute deterministic assignments instead of autonomous
-model/tool loops. Leader patch aggregation can apply child patch artifacts when
-they exist; future model-driven role graphs must cover that path with real
-patch-producing E2E tests before the runtime is described as a full autonomous
-agent team.
+Verifier graphs currently execute deterministic assignments instead of
+autonomous model/tool loops. Leader patch aggregation can apply child patch
+artifacts when they exist; full patch-producing distributed E2E coverage remains
+part of Task 22F before the runtime is described as a full autonomous agent
+team.
 
 ## Future Model-Driven Runtime
 

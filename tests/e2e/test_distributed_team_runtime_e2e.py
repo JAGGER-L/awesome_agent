@@ -11,6 +11,12 @@ from tests.fakes import FakeModelProvider
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode, RunStatus
 from awesome_agent.domain.models import Repository
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelTurn,
+    StopReason,
+    ToolCall,
+)
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.intake_reservations import (
     PostgresIntakeReservationStore,
@@ -69,7 +75,9 @@ async def test_team_run_completes_as_distributed_child_runs(
         intent=RunIntent.MODIFYING,
         mode=RunMode.TEAM,
     )
-    provider = FakeModelProvider([_team_plan_json()])
+    provider = FakeModelProvider(
+        [_team_plan_json(), _role_read_turn(), _role_final_turn()]
+    )
     monkeypatch.setattr(ModelProviderFactory, "create", lambda _self, _model: provider)
     settings = Settings(
         database_url=os.environ["AWESOME_AGENT_TEST_DATABASE_URL"],
@@ -138,6 +146,32 @@ def _team_plan_json() -> str:
                 }
             ],
         }
+    )
+
+
+def _role_read_turn() -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(
+            tool_calls=[
+                ToolCall(
+                    call_id="read",
+                    name="repo.read",
+                    arguments_json='{"path":"README.md"}',
+                )
+            ]
+        ),
+        stop_reason=StopReason.TOOL_CALLS,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _role_final_turn() -> ModelTurn:
+    return ModelTurn(
+        assistant=AssistantMessage(content="README.md was inspected."),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
     )
 
 
