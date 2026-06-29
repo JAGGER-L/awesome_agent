@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from time import monotonic
 
 from pydantic import ValidationError
 
@@ -13,6 +15,9 @@ from awesome_agent.modeling import (
     ModelRequest,
     ModelTurn,
     SystemMessage,
+    ToolChoice,
+    ToolChoiceMode,
+    ToolDefinition,
     TransientModelError,
     UserMessage,
 )
@@ -21,13 +26,30 @@ from awesome_agent.runtime.dispatch import (
     PermanentExecutionError,
     TransientExecutionError,
 )
+from awesome_agent.runtime.team_assignments import (
+    TeamAssignment,
+    TeamChildResult,
+    effective_assignment_tools,
+)
 from awesome_agent.runtime.team_planning import (
     TeamPlan,
     validate_team_plan_for_intent,
 )
+from awesome_agent.runtime.team_verification import TeamVerificationDecision
+from awesome_agent.tools.repository import (
+    build_modifying_registry,
+    model_tool_definitions,
+)
 
 ProviderResolver = Callable[[str], ModelProvider]
 _TEAM_PLAN_MAX_ATTEMPTS = 2
+_DEFAULT_VERIFIER_TOOLS = {"repo.status", "repo.diff", "repo.read", "repo.search"}
+
+
+class TeamVerifierInvalidOutput(PermanentExecutionError):
+    def __init__(self, error: str) -> None:
+        self.error = error
+        super().__init__("team_verifier_invalid_output")
 
 
 class TeamPlanningMiddleware:
@@ -132,6 +154,94 @@ class TeamPlanningMiddleware:
         raise PermanentExecutionError(f"team_plan_invalid: {last_error[:500]}")
 
 
+class TeamVerificationMiddleware:
+    def __init__(
+        self,
+        *,
+        provider_resolver: ProviderResolver | None,
+        team_loop: TeamAgentLoop,
+    ) -> None:
+        self.provider_resolver = provider_resolver
+        self.team_loop = team_loop
+
+    async def model_decision(
+        self,
+        run: Run,
+        agent: Agent,
+        *,
+        assignment: TeamAssignment,
+        sibling_results: list[TeamChildResult],
+        event_sink: object | None,
+    ) -> TeamVerificationDecision:
+        if self.provider_resolver is None:
+            raise PermanentExecutionError("team_verifier_provider_unavailable")
+        provider = self.provider_resolver(agent.model)
+        messages = _initial_verifier_messages(run, assignment, sibling_results)
+        last_error = "invalid verifier output"
+        for attempt in range(1, 3):
+            started = monotonic()
+            attempt_messages = list(messages)
+
+            async def complete_verifier_attempt(
+                _: object,
+                *,
+                current_messages: list[ModelMessage] = attempt_messages,
+            ) -> ModelTurn:
+                return await provider.complete(
+                    ModelRequest(
+                        messages=current_messages,
+                        tools=_verifier_tool_definitions(run, assignment),
+                        tool_choice=ToolChoice(mode=ToolChoiceMode.AUTO),
+                    )
+                )
+
+            turn = await self.team_loop.wrap_model_call(
+                object(),
+                run=run,
+                agent=agent,
+                messages=attempt_messages,
+                assignment_id=assignment.id,
+                team_role=assignment.kind.value,
+                agent_kind=agent.kind.value,
+                metadata={"team_operation": "verification", "attempt": attempt},
+                handler=complete_verifier_attempt,
+            )
+            await _emit_if_callable(
+                event_sink,
+                EventType.MODEL_CALL_CREATED,
+                {
+                    "attempt": attempt,
+                    "status": "completed",
+                    "provider": turn.provider,
+                    "model": turn.model,
+                    "stop_reason": turn.stop_reason.value,
+                    "input_tokens": turn.usage.input_tokens,
+                    "output_tokens": turn.usage.output_tokens,
+                    "reasoning_tokens": turn.usage.reasoning_tokens,
+                    "latency_ms": _elapsed_ms(started),
+                },
+                f"model:{agent.id}:{attempt}",
+            )
+            try:
+                if turn.assistant.tool_calls:
+                    raise ValueError("verifier must return structured JSON only")
+                return _parse_decision(turn.assistant.content)
+            except (ValueError, ValidationError, json.JSONDecodeError) as error:
+                last_error = str(error)
+                messages.extend(
+                    [
+                        turn.assistant,
+                        SystemMessage(
+                            content=(
+                                "Invalid verifier output. Return only valid JSON "
+                                "matching the required verification schema."
+                            )
+                        ),
+                    ]
+                )
+        raise TeamVerifierInvalidOutput(last_error)
+
+
 def _initial_team_plan_messages(run: Run) -> list[ModelMessage]:
     intent_rules = (
         "The root run is read-only. Every teammate must set can_write=false and "
@@ -178,6 +288,72 @@ def _initial_team_plan_messages(run: Run) -> list[ModelMessage]:
     ]
 
 
+def _initial_verifier_messages(
+    run: Run,
+    assignment: TeamAssignment,
+    sibling_results: list[TeamChildResult],
+) -> list[ModelMessage]:
+    evidence = [
+        {
+            "child_run_id": str(result.child_run_id),
+            "status": result.status,
+            "summary": result.summary,
+            "patch_artifact_id": (
+                str(result.patch_artifact_id)
+                if result.patch_artifact_id is not None
+                else None
+            ),
+            "patch_aggregated": result.patch_aggregated,
+            "changed_files": result.changed_files,
+            "failure_kind": result.failure_kind,
+            "evidence_artifact_refs": [
+                str(artifact_id) for artifact_id in result.evidence_artifact_refs
+            ],
+        }
+        for result in sibling_results
+    ]
+    payload = {
+        "root_goal": run.goal,
+        "verifier_goal": assignment.goal,
+        "acceptance_criteria": assignment.acceptance_criteria,
+        "child_results": evidence,
+    }
+    return [
+        SystemMessage(
+            content=(
+                "You are the independent Verifier for a coding-agent team. "
+                "Return only valid JSON with keys: decision, summary, "
+                "rework_requests, failure_kind, risks. decision must be one of "
+                "passed, rework_required, failed. Do not request rework from "
+                "Subagents; target only sibling Teammate child_run_id values."
+            )
+        ),
+        UserMessage(content=json.dumps(payload, ensure_ascii=False)),
+    ]
+
+
+def _parse_decision(content: str) -> TeamVerificationDecision:
+    raw = json.loads(content)
+    return TeamVerificationDecision.model_validate(raw)
+
+
+def _verifier_tool_definitions(
+    run: Run,
+    assignment: TeamAssignment,
+) -> list[ToolDefinition]:
+    if run.workspace_path is None:
+        return []
+    allowed = set(effective_assignment_tools(assignment)) & _DEFAULT_VERIFIER_TOOLS
+    if not allowed:
+        return []
+    registry = build_modifying_registry()
+    return [
+        definition
+        for definition in model_tool_definitions(registry)
+        if definition.name in allowed
+    ]
+
+
 async def _emit_if_callable(
     event_sink: object | None,
     event_type: EventType,
@@ -188,7 +364,13 @@ async def _emit_if_callable(
         await event_sink(event_type, payload, transition_id)
 
 
+def _elapsed_ms(started: float) -> int:
+    return int((monotonic() - started) * 1000)
+
+
 __all__ = [
     "ProviderResolver",
     "TeamPlanningMiddleware",
+    "TeamVerificationMiddleware",
+    "TeamVerifierInvalidOutput",
 ]

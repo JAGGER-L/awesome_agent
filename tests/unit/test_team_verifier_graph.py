@@ -1,3 +1,5 @@
+from collections.abc import Awaitable, Callable
+
 import pytest
 from tests.fakes import FakeModelProvider
 
@@ -5,6 +7,13 @@ from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.team import InMemoryTeamRepository
+from awesome_agent.runtime.agent_loop import (
+    MiddlewareContext,
+    MiddlewareDecision,
+    MiddlewareStack,
+    MiddlewareStage,
+    TeamAgentLoop,
+)
 from awesome_agent.runtime.dispatch import PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_CODING_ROUTE, TEAM_VERIFIER_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
@@ -73,6 +82,62 @@ async def test_verifier_passes_aggregated_child_results() -> None:
     assert result.summary == "Verifier passed evidence."
     assert mailbox[-1].route is MailboxRoute.VERIFIER_TO_LEADER
     assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_verifier_model_decision_uses_team_agent_loop_boundary() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = FakeModelProvider([_decision("passed", "Verifier passed evidence.")])
+    recorder = RecordingTeamMiddleware()
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        team_loop=TeamAgentLoop(middleware_stack=MiddlewareStack([recorder])),
+    )
+    parent = Run(goal="parent", mode=RunMode.TEAM)
+    verifier, agent, assignment = _verifier_run(parent)
+    await runtime.create_run(
+        parent,
+        Agent(
+            run_id=parent.id,
+            kind=AgentKind.LEADER,
+            profile="leader",
+            model="fake",
+        ),
+    )
+    await runtime.create_run(verifier, agent)
+    await teams.create_assignment(assignment)
+    teammate = await _teammate_assignment(teams, parent)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=teammate.id,
+            child_run_id=teammate.child_run_id,
+            parent_run_id=parent.id,
+            root_run_id=parent.id,
+            status="completed",
+            summary="done",
+            patch_aggregated=True,
+        )
+    )
+
+    state, recovered = await graph.execute(verifier, agent, repository=runtime)
+
+    assert not recovered
+    assert state["phase"] == "passed"
+    assert recorder.model_call_metadata == [
+        {
+            "runtime_route": "team-verifier",
+            "team_root_run_id": str(parent.id),
+            "assignment_id": str(assignment.id),
+            "team_role": "verifier",
+            "agent_kind": "verifier",
+            "team_operation": "verification",
+            "attempt": 1,
+        }
+    ]
+    assert "independent Verifier" in recorder.model_prompt_text
+    assert "Verifier passed evidence" not in recorder.model_metadata_text
 
 
 @pytest.mark.asyncio
@@ -397,3 +462,36 @@ def _team_plan_json() -> str:
             ],
         }
     )
+
+
+class RecordingTeamMiddleware:
+    name = "recording-team-verifier"
+
+    def __init__(self) -> None:
+        self.model_call_metadata: list[dict[str, object]] = []
+        self.model_prompt_text = ""
+
+    @property
+    def model_metadata_text(self) -> str:
+        return str(self.model_call_metadata)
+
+    async def handle(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
+    ) -> MiddlewareDecision:
+        return await call_next(context)
+
+    async def wrap_stage(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[object]],
+    ) -> object:
+        if stage is MiddlewareStage.WRAP_MODEL_CALL:
+            self.model_prompt_text = "\n".join(
+                message.content for message in context.messages
+            )
+            self.model_call_metadata.append(dict(context.metadata))
+        return await call_next(context)
