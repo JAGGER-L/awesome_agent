@@ -8,7 +8,14 @@ from opentelemetry.sdk.trace import TracerProvider
 
 from awesome_agent.domain.enums import AgentKind, RunMode
 from awesome_agent.domain.models import Agent, Run
-from awesome_agent.modeling import SystemMessage
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelTurn,
+    ModelUsage,
+    StopReason,
+    SystemMessage,
+    ToolResultMessage,
+)
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import InMemoryObservabilityRepository
 from awesome_agent.runtime.agent_loop import (
@@ -151,6 +158,88 @@ def test_team_loop_installs_observability_middleware() -> None:
         isinstance(middleware, ObservabilityMiddleware)
         for middleware in loop.middleware_stack.middleware
     )
+
+
+@pytest.mark.asyncio
+async def test_team_loop_observability_records_direct_model_and_tool_results() -> None:
+    repository = InMemoryObservabilityRepository()
+    facade = ObservabilityFacade(
+        repository=repository,
+        tracer=TracerProvider().get_tracer("test"),
+    )
+    loop = TeamAgentLoop(observability=facade)
+    run, agent = _team_run_and_agent()
+    assignment_id = uuid4()
+
+    async def model_operation(_: object) -> ModelTurn:
+        return ModelTurn(
+            assistant=AssistantMessage(content="team model answer"),
+            stop_reason=StopReason.COMPLETED,
+            provider="deepseek",
+            model="deepseek-v4-flash",
+            usage=ModelUsage(input_tokens=3, output_tokens=5),
+        )
+
+    async def tool_operation(_: object) -> ToolResultMessage:
+        return ToolResultMessage(call_id="call-1", content="bounded result")
+
+    async def agent_operation(_: object) -> dict[str, object]:
+        await loop.wrap_model_call(
+            object(),
+            run=run,
+            agent=agent,
+            messages=[SystemMessage(content="private role prompt")],
+            assignment_id=assignment_id,
+            team_role="teammate",
+            agent_kind=AgentKind.TEAMMATE.value,
+            metadata={"team_operation": "role_model", "turn": 2},
+            handler=model_operation,
+        )
+        await loop.wrap_tool_call(
+            object(),
+            run=run,
+            agent=agent,
+            messages=[SystemMessage(content="private tool prompt")],
+            assignment_id=assignment_id,
+            team_role="teammate",
+            agent_kind=AgentKind.TEAMMATE.value,
+            metadata={
+                "team_operation": "role_tool",
+                "turn": 2,
+                "tool": "repo.read",
+                "call_id": "call-1",
+            },
+            handler=tool_operation,
+        )
+        return {"done": True}
+
+    result = await loop.run_agent_operation(
+        object(),
+        run=run,
+        agent=agent,
+        messages=[],
+        assignment_id=assignment_id,
+        team_role="teammate",
+        agent_kind=AgentKind.TEAMMATE.value,
+        metadata={"team_operation": "role_execute"},
+        handler=agent_operation,
+    )
+
+    spans = await repository.list_spans_for_run(run.id)
+    model_calls = await repository.list_model_calls_for_run(run.id)
+
+    assert result == {"done": True}
+    assert {span.name for span in spans} >= {"agent.run", "model.call", "tool.call"}
+    assert len(model_calls) == 1
+    assert model_calls[0].agent_id == agent.id
+    assert model_calls[0].turn == 2
+    assert model_calls[0].provider == "deepseek"
+    assert model_calls[0].input_tokens == 3
+    assert model_calls[0].output_tokens == 5
+    tool_span = next(span for span in spans if span.name == "tool.call")
+    assert tool_span.attributes["tool"] == "repo.read"
+    assert tool_span.attributes["call_id"] == "call-1"
+    assert tool_span.status == "completed"
 
 
 def _team_run_and_agent() -> tuple[Run, Agent]:

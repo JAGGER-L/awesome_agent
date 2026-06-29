@@ -69,6 +69,31 @@ class TeamPlanningMiddleware:
         *,
         event_sink: object | None,
     ) -> tuple[TeamPlan, int]:
+        async def plan_operation(_: object) -> tuple[TeamPlan, int]:
+            return await self._create_team_plan(
+                run,
+                leader,
+                event_sink=event_sink,
+            )
+
+        return await self.team_loop.run_agent_operation(
+            object(),
+            run=run,
+            agent=leader,
+            messages=[],
+            team_role="leader",
+            agent_kind=leader.kind.value,
+            metadata={"team_operation": "planning"},
+            handler=plan_operation,
+        )
+
+    async def _create_team_plan(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        event_sink: object | None,
+    ) -> tuple[TeamPlan, int]:
         if self.provider_resolver is None:
             raise PermanentExecutionError("team_plan_provider_unavailable")
         provider = self.provider_resolver(leader.model)
@@ -165,6 +190,36 @@ class TeamVerificationMiddleware:
         self.team_loop = team_loop
 
     async def model_decision(
+        self,
+        run: Run,
+        agent: Agent,
+        *,
+        assignment: TeamAssignment,
+        sibling_results: list[TeamChildResult],
+        event_sink: object | None,
+    ) -> TeamVerificationDecision:
+        async def verifier_operation(_: object) -> TeamVerificationDecision:
+            return await self._model_decision(
+                run,
+                agent,
+                assignment=assignment,
+                sibling_results=sibling_results,
+                event_sink=event_sink,
+            )
+
+        return await self.team_loop.run_agent_operation(
+            object(),
+            run=run,
+            agent=agent,
+            messages=[],
+            assignment_id=assignment.id,
+            team_role=assignment.kind.value,
+            agent_kind=agent.kind.value,
+            metadata={"team_operation": "verification"},
+            handler=verifier_operation,
+        )
+
+    async def _model_decision(
         self,
         run: Run,
         agent: Agent,

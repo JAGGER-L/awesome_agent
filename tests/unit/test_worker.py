@@ -857,6 +857,48 @@ async def test_worker_keeps_event_projection_for_unmigrated_team_routes() -> Non
     assert model_calls[0].latency_ms == 31
 
 
+@pytest.mark.parametrize(
+    "runtime_route",
+    [TEAM_CODING_ROUTE, TEAM_ROLE_ROUTE, TEAM_VERIFIER_ROUTE],
+)
+@pytest.mark.asyncio
+async def test_worker_skips_event_projection_for_migrated_team_routes(
+    runtime_route: str,
+) -> None:
+    lease = _lease()
+    run = _team_run(lease).model_copy(update={"runtime_route": runtime_route})
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    dispatcher = FakeDispatcher(lease)
+    observability = InMemoryObservabilityRepository()
+    graph = EmittingTeamGraph()
+    worker = DurableWorker(
+        dispatcher=dispatcher,
+        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
+        probe_graph=FakeGraph(),  # type: ignore[arg-type]
+        team_leader_graph=graph if runtime_route == TEAM_CODING_ROUTE else None,  # type: ignore[arg-type]
+        team_role_graph=graph if runtime_route == TEAM_ROLE_ROUTE else None,  # type: ignore[arg-type]
+        team_verifier_graph=graph if runtime_route == TEAM_VERIFIER_ROUTE else None,  # type: ignore[arg-type]
+        config=_config(),
+        observability_repository=observability,
+    )
+
+    assert await worker.run_once()
+
+    spans = await observability.list_spans_for_run(run.id)
+    metrics = await observability.list_metrics_for_run(run.id)
+    model_calls = await observability.list_model_calls_for_run(run.id)
+
+    assert {span.name for span in spans} == {"run.execute", "graph.execute"}
+    assert not any(metric.name == "model.latency_ms" for metric in metrics)
+    assert not any(metric.name == "tool.duration_ms" for metric in metrics)
+    assert not model_calls
+
+
 @pytest.mark.asyncio
 async def test_worker_releases_modifying_run_for_approval_wait() -> None:
     lease = _lease()

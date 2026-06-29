@@ -14,6 +14,7 @@ from awesome_agent.domain.enums import (
     RunMode,
 )
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.agent_loop import TeamAgentLoop
@@ -76,6 +77,7 @@ class TeamLeaderGraph:
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
         team_loop: TeamAgentLoop | None = None,
+        observability: ObservabilityFacade | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -84,7 +86,7 @@ class TeamLeaderGraph:
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
-        self.team_loop = team_loop or TeamAgentLoop()
+        self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.team_planning = TeamPlanningMiddleware(
             provider_resolver=provider_resolver,
             team_loop=self.team_loop,

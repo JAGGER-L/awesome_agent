@@ -67,6 +67,14 @@ from awesome_agent.runtime.worker_heartbeats import (
 
 logger = logging.getLogger(__name__)
 
+_AGENT_LOOP_EVENT_OBSERVABILITY_ROUTES = {
+    READ_ONLY_CODING_ROUTE,
+    MODIFYING_CODING_ROUTE,
+    TEAM_CODING_ROUTE,
+    TEAM_ROLE_ROUTE,
+    TEAM_VERIFIER_ROUTE,
+}
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerConfig:
@@ -705,7 +713,7 @@ class DurableWorker:
         leader: Agent,
         event: RuntimeEvent,
     ) -> None:
-        if run.runtime_route in {READ_ONLY_CODING_ROUTE, MODIFYING_CODING_ROUTE}:
+        if run.runtime_route in _AGENT_LOOP_EVENT_OBSERVABILITY_ROUTES:
             return
         if event.event_type is EventType.MODEL_CALL_CREATED:
             await self._record_model_call_event(run, leader, event)
