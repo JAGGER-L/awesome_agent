@@ -40,6 +40,7 @@ from awesome_agent.runtime.team_mailbox import (
     MailboxMessageType,
     MailboxRoute,
 )
+from awesome_agent.runtime.team_rework import encode_rework_decision
 from awesome_agent.runtime.team_verification import TeamVerificationDecision
 from awesome_agent.tools.repository import (
     build_modifying_registry,
@@ -266,6 +267,8 @@ class TeamVerifierGraph:
         summary: str,
     ) -> tuple[list[UUID], str]:
         passed = decision.decision == "passed"
+        if decision.decision == "rework_required":
+            summary = encode_rework_decision(decision)
         compacted_summary = await compact_team_payload(
             run_id=run.id,
             agent_id=agent.id,

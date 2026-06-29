@@ -88,7 +88,7 @@ Task 07 does not include:
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
 | Task 21 | Done | `solo-modifying` now enters AgentLoop middleware stages, with context, budget, tool execution, approval, artifact offload, evidence, validation, rework, and finalization policy extracted from the graph. |
-| Task 22 | In progress | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. Task 22A created model-generated Leader `TeamPlan`; Task 22B added assignment-scoped Teammate model/tool loops and patch artifacts from child workspace diffs; Task 22C added Teammate-owned dynamic Subagent creation; Task 22D added structured model-driven Verifier decisions. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
+| Task 22 | In progress | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. Task 22A created model-generated Leader `TeamPlan`; Task 22B added assignment-scoped Teammate model/tool loops and patch artifacts from child workspace diffs; Task 22C added Teammate-owned dynamic Subagent creation; Task 22D added structured model-driven Verifier decisions; Task 22E added targeted replacement rework. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
 | Task 23 | OpenTelemetry runtime instrumentation | Add real OTel spans/metrics on API and Worker production paths while preserving durable query tables. | Worker/model/tool/sandbox/API spans are created, exporter failures are isolated, and trace IDs remain queryable through durable events. |
 | Task 24 | Graph file size reduction | Split remaining oversized graph files after middleware migration makes stable extraction points clear. | Large graph modules are reduced to durable orchestration with focused unit tests for extracted components. |
 
@@ -100,7 +100,7 @@ Task 07 does not include:
 | Task 22B | Done | Replace deterministic Teammate role completion with assignment-scoped model/tool loops using assigned tools and skills. |
 | Task 22C | Done | Add durable Teammate-owned dynamic Subagent creation with depth and concurrency limits. |
 | Task 22D | Done | Replace deterministic Verifier completion with model-driven verification. |
-| Task 22E | Planned | Add targeted replacement and rework when verification fails. |
+| Task 22E | Done | Add targeted replacement and rework when verification fails. |
 | Task 22F | Planned | Add full distributed team E2E coverage and final documentation cleanup. |
 
 ## Gap Disposition

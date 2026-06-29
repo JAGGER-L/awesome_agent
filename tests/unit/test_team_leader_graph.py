@@ -37,6 +37,11 @@ from awesome_agent.runtime.team_assignments import (
     TeamChildResult,
 )
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
+from awesome_agent.runtime.team_rework import encode_rework_decision
+from awesome_agent.runtime.team_verification import (
+    TeamReworkRequest,
+    TeamVerificationDecision,
+)
 
 
 @pytest.mark.asyncio
@@ -360,6 +365,142 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new\n"
     assert result.patch_aggregated
     assert any(event[0] is EventType.TEAM_PATCH_AGGREGATED for event in events)
+
+
+@pytest.mark.asyncio
+async def test_leader_creates_rework_replacement_from_verifier_request() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph = TeamLeaderGraph(team_repository=teams, model_resolver=_models())
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+    teammate = Run(
+        goal="original",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    await runtime.create_run(
+        teammate,
+        Agent(
+            run_id=teammate.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile="backend-engineer",
+            model="backend-model",
+        ),
+    )
+    original = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=teammate.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="Inspect README.",
+        allowed_tools=["repo.read", "team.create_subagent"],
+        allowed_skills=["repository-inspection"],
+        can_delegate=True,
+        max_subagents=3,
+    )
+    await teams.create_assignment(original)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=original.id,
+            child_run_id=teammate.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="completed",
+            summary="Missing README details.",
+            patch_aggregated=True,
+        )
+    )
+    verifier = Run(
+        goal="verify",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="verifier",
+        runtime_route=TEAM_VERIFIER_ROUTE,
+    )
+    await runtime.create_run(
+        verifier,
+        Agent(
+            run_id=verifier.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.VERIFIER,
+            profile="verifier",
+            model="verifier-model",
+        ),
+    )
+    verifier_assignment = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=verifier.id,
+        kind=TeamAssignmentKind.VERIFIER,
+        status=TeamAssignmentStatus.FAILED,
+        role_profile="verifier",
+        runtime_route=TEAM_VERIFIER_ROUTE,
+        goal="verify",
+    )
+    await teams.create_assignment(verifier_assignment)
+    decision = TeamVerificationDecision(
+        decision="rework_required",
+        summary="Need README evidence.",
+        rework_requests=[
+            TeamReworkRequest(
+                target_child_run_id=str(teammate.id),
+                reason="Missing README evidence.",
+                acceptance_criteria=["Read README.md and summarize it."],
+            )
+        ],
+    )
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=verifier_assignment.id,
+            child_run_id=verifier.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="failed",
+            summary=encode_rework_decision(decision),
+            failure_kind="rework_required",
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    assignments = await teams.list_assignments(run.id, include_inactive=True)
+    replacement = next(
+        item
+        for item in assignments
+        if item.handoff_context.get("previous_assignment_id") == str(original.id)
+    )
+    retired_verifier = next(
+        item for item in assignments if item.id == verifier_assignment.id
+    )
+    assert replacement.allowed_tools == original.allowed_tools
+    assert replacement.allowed_skills == original.allowed_skills
+    assert replacement.can_delegate is True
+    assert replacement.max_subagents == 3
+    assert replacement.handoff_context["previous_child_run_id"] == str(teammate.id)
+    assert replacement.handoff_context["verifier_child_run_id"] == str(verifier.id)
+    assert replacement.handoff_context["rework_attempt"] == 1
+    assert retired_verifier.status is TeamAssignmentStatus.RETIRED
+    assert EventType.TEAM_REWORK_REQUESTED in {event[0] for event in events}
 
 
 @pytest.mark.asyncio

@@ -74,6 +74,6 @@ team output.
 - automatic solo/team routing
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
-- targeted distributed verifier rework
+- full patch-producing distributed team E2E coverage
 - money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server

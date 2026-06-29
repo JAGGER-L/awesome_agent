@@ -133,12 +133,13 @@ PostgreSQL-backed integration/E2E evidence. Task 22A makes the Leader plan
 model-driven, Task 22B makes Teammate role execution model-driven, and Task
 22C adds Teammate-owned dynamic Subagent creation. Task 22D makes Verifier
 review a structured model decision that is persisted as a child result and
-mailbox message. Targeted rework loops remain a later Task 22 phase.
+mailbox message. Task 22E turns verifier rework requests into replacement
+Teammate child Runs with immutable attempt lineage and bounded rework budgets.
 
 This boundary is intentional. In `team-coding`, Leader, role, and Verifier
-graphs are production-wired for dispatch and persistence, but targeted rework
-and full patch-producing distributed E2E coverage remain part of later Task 22
-phases before the runtime is described as a full autonomous agent team.
+graphs are production-wired for dispatch and persistence, but full
+patch-producing distributed E2E coverage remains part of later Task 22 phases
+before the runtime is described as a full autonomous agent team.
 
 ## Future Model-Driven Runtime
 

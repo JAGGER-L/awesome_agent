@@ -262,9 +262,10 @@ Subagent slots, a Teammate may call `team.create_subagent` to create read-only
 Subagent child Runs with depth and concurrency limits. Independent Workers can
 claim Teammate, Subagent, and Verifier child Runs through the same PostgreSQL
 dispatch protocol. Verifier child Runs produce structured model decisions that
-are persisted as child results and mailbox messages. Parent Runs release their
-lease while waiting for child work and are requeued when child assignments
-become terminal.
+are persisted as child results and mailbox messages. Rework decisions create
+replacement Teammate child Runs instead of reopening original attempts. Parent
+Runs release their lease while waiting for child work and are requeued when
+child assignments become terminal.
 
 ```text
                          +----------------------+

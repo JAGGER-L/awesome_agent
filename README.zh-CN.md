@@ -20,7 +20,7 @@
 
 - **Read-only Coding Run** 通过 `solo-readonly` 执行，支持受限仓库工具、最多 4 路并发只读工具、模型驱动 tool/feedback 回边、无进展检测和证据门控完成。
 - **Modifying Coding Run** 通过 `solo-modifying` 执行，支持 `repo.apply_patch`、`repo.diff`、Docker-backed `shell.execute` 和 `artifact.read`。写操作顺序执行，副作用工具调用持久化，超大工具输出卸载到 artifact storage。完成需要至少一个 patch、最后一次写后调用 `repo.diff`，并通过 required validation gates。
-- **显式 Team Coding Run** 通过 CLI `--team` 或 API `mode: "team"` 选择。当前同时保留两个 team runtime：scoped `team-coding-scoped` 在一个 Run 和一个 checkpoint thread 内创建内部角色记录；distributed `team-coding` 会创建可由独立 Worker claim 的 Teammate 和 Verifier child Runs。分布式 Leader 现在会调用模型生成并验证结构化 `TeamPlan`，再从中创建 1-3 个 Teammates。Teammate child Runs 现在会执行 assignment-scoped model/tool loop，并且只暴露 Leader 授权后的 effective tools；具备 delegation 权限的 Teammate 可以创建 read-only Subagent child Runs。Verifier child Run 现在使用模型结构化决策；targeted rework 属于后续 Task 22 阶段。
+- **显式 Team Coding Run** 通过 CLI `--team` 或 API `mode: "team"` 选择。当前同时保留两个 team runtime：scoped `team-coding-scoped` 在一个 Run 和一个 checkpoint thread 内创建内部角色记录；distributed `team-coding` 会创建可由独立 Worker claim 的 Teammate 和 Verifier child Runs。分布式 Leader 现在会调用模型生成并验证结构化 `TeamPlan`，再从中创建 1-3 个 Teammates。Teammate child Runs 现在会执行 assignment-scoped model/tool loop，并且只暴露 Leader 授权后的 effective tools；具备 delegation 权限的 Teammate 可以创建 read-only Subagent child Runs。Verifier child Run 现在使用模型结构化决策；targeted rework 会创建 replacement Teammate child Runs，并保留原始 attempt。
 
 ### 审批（已在 solo modifying run 中实现）
 
@@ -30,7 +30,7 @@
 
 Intake 初始只创建 Leader。选择 `--team` 或 API `mode: "team"` 后，当前默认路由到 distributed `team-coding`：Leader 创建模型生成的结构化 `TeamPlan`，验证后从计划中创建 Teammate child Runs。Leader 不创建 Subagents，也不能描述 Subagent 任务方向，只能授予 `can_delegate` 和 `max_subagents`。Teammate 获得 delegation 权限后，可按需创建 read-only Subagent child Runs。Leader 在最终完成前创建独立 Verifier child Run。Verifier 必须验收通过后，Leader 才能完成 root Run。
 
-旧的 scoped `team-coding-scoped` runtime 仍保留文档和测试，但新的 distributed path 是后续架构方向。模型驱动 Leader planning、assignment-scoped Teammate role loop、Teammate-owned Subagent delegation 和模型结构化 Verifier review 已经开始；targeted rework 仍在后续 Task 22 阶段。分布式 team assignment 支持 deferred tool exposure、跨 Leader/Teammate/Verifier/Subagent 的 root-aware token/active-time budget 检查，以及对大型 handoff、child result、verifier evidence payload 的 artifact-backed compaction。
+旧的 scoped `team-coding-scoped` runtime 仍保留文档和测试，但新的 distributed path 是后续架构方向。模型驱动 Leader planning、assignment-scoped Teammate role loop、Teammate-owned Subagent delegation、模型结构化 Verifier review 和 targeted replacement rework 已经开始。分布式 team assignment 支持 deferred tool exposure、跨 Leader/Teammate/Verifier/Subagent 的 root-aware token/active-time budget 检查，以及对大型 handoff、child result、verifier evidence payload 的 artifact-backed compaction。
 
 ### 可观测性（已实现）
 
@@ -122,7 +122,7 @@ container port: 5432
 
 持久化 runtime 工作记录在 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。尚未实现的重点项：
 
-- targeted rework 和更丰富的 mailbox 协作策略。
+- full patch-producing distributed team E2E coverage 和更丰富的 mailbox 协作策略。
 - Money cost budget 和 dashboard。
 
 ## 文档

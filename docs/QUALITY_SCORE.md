@@ -10,8 +10,9 @@ lineage, model-generated Leader TeamPlans, assignment-scoped Teammate
 model/tool loops, mailbox, recursive cancellation, inspection APIs/CLI,
 root-aware budgets, deferred tool exposure, team payload compaction, and
 PostgreSQL E2E evidence. Teammate-owned dynamic Subagent creation is now wired
-into the distributed path, and Verifier child Runs now persist structured model
-decisions. Targeted rework remains roadmap work.
+into the distributed path, Verifier child Runs now persist structured model
+decisions, and targeted rework creates replacement Teammate child Runs with
+immutable attempt lineage.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

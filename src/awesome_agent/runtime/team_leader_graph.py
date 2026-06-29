@@ -44,6 +44,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
     TeamAssignmentStatus,
+    TeamChildResult,
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
@@ -53,6 +54,12 @@ from awesome_agent.runtime.team_planning import (
     TeamPlanTeammate,
     validate_team_plan_for_intent,
 )
+from awesome_agent.runtime.team_rework import (
+    compose_rework_goal,
+    decode_rework_decision,
+    rework_budget_for_failure,
+)
+from awesome_agent.runtime.team_verification import TeamReworkRequest
 from awesome_agent.sandbox.process import run_process
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
@@ -146,6 +153,7 @@ class TeamLeaderGraph:
             for assignment in assignments
             if assignment.parent_run_id == run.id
             and assignment.kind is TeamAssignmentKind.VERIFIER
+            and assignment.status is not TeamAssignmentStatus.RETIRED
         ]
         if not verifier_assignments:
             await self._create_verifier_child(
@@ -160,6 +168,15 @@ class TeamLeaderGraph:
             for assignment in verifier_assignments
         ):
             raise ChildRunWait("waiting_verifier")
+        if await self._handle_verifier_rework(
+            run,
+            leader,
+            assignments=assignments,
+            verifier_assignments=verifier_assignments,
+            repository=repository,
+            event_sink=event_sink,
+        ):
+            raise ChildRunWait("waiting_children")
         verifier_results = [
             result
             for result in await self.team_repository.list_child_results(run.id)
@@ -512,6 +529,206 @@ class TeamLeaderGraph:
                 },
                 f"team-assignment-created:{assignment.id}",
             )
+
+    async def _handle_verifier_rework(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        assignments: list[TeamAssignment],
+        verifier_assignments: list[TeamAssignment],
+        repository: RuntimeRepository,
+        event_sink: object | None,
+    ) -> bool:
+        verifier_results = [
+            result
+            for result in await self.team_repository.list_child_results(run.id)
+            if any(
+                result.child_run_id == assignment.child_run_id
+                for assignment in verifier_assignments
+            )
+            and result.status == "failed"
+            and result.failure_kind == "rework_required"
+        ]
+        if not verifier_results:
+            return False
+        verifier_result = verifier_results[-1]
+        decision = decode_rework_decision(verifier_result.summary)
+        if decision is None:
+            return False
+        created_any = False
+        for request in decision.rework_requests:
+            original = _find_assignment_by_child(
+                assignments,
+                request.target_child_run_id,
+            )
+            if original is None or original.kind is not TeamAssignmentKind.TEAMMATE:
+                raise PermanentExecutionError("team_rework_target_not_found")
+            if _replacement_exists(assignments, verifier_result.child_run_id, original):
+                continue
+            await self._create_rework_child(
+                run,
+                leader,
+                original=original,
+                request=request,
+                verifier_result=verifier_result,
+                assignments=assignments,
+                repository=repository,
+                event_sink=event_sink,
+            )
+            created_any = True
+        if created_any:
+            verifier_assignment = next(
+                assignment
+                for assignment in verifier_assignments
+                if assignment.child_run_id == verifier_result.child_run_id
+            )
+            await self.team_repository.retire_assignment(
+                verifier_assignment.id,
+                reason="rework_requested",
+            )
+        return created_any
+
+    async def _create_rework_child(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        original: TeamAssignment,
+        request: TeamReworkRequest,
+        verifier_result: TeamChildResult,
+        assignments: list[TeamAssignment],
+        repository: RuntimeRepository,
+        event_sink: object | None,
+    ) -> None:
+        if self.model_resolver is None:
+            raise PermanentExecutionError("team_model_resolver_unavailable")
+        lineage_id = str(
+            original.handoff_context.get("previous_assignment_id") or original.id
+        )
+        attempt = (
+            sum(
+                1
+                for assignment in assignments
+                if str(assignment.handoff_context.get("previous_assignment_id"))
+                == lineage_id
+            )
+            + 1
+        )
+        budget = rework_budget_for_failure(verifier_result.failure_kind)
+        if attempt > budget:
+            await _emit_if_callable(
+                event_sink,
+                EventType.TEAM_REWORK_EXHAUSTED,
+                {
+                    "root_run_id": str(run.id),
+                    "previous_assignment_id": lineage_id,
+                    "budget": budget,
+                },
+                f"team-rework-exhausted:{lineage_id}",
+            )
+            raise PermanentExecutionError("team_rework_exhausted")
+        goal = compose_rework_goal(
+            original_goal=original.goal,
+            feedback_summary=verifier_result.summary,
+            acceptance_criteria=request.acceptance_criteria,
+        )
+        child = Run(
+            goal=goal,
+            mode=RunMode.TEAM,
+            intent=run.intent,
+            execution_kind=run.execution_kind,
+            parent_run_id=run.id,
+            root_run_id=run.root_run_id or run.id,
+            depth=1,
+            child_role=TeamAssignmentKind.TEAMMATE.value,
+            runtime_route=TEAM_ROLE_ROUTE,
+            dispatch_status=DispatchStatus.QUEUED,
+            workspace_path=run.workspace_path,
+            integration_branch=run.integration_branch,
+            workspace_state=run.workspace_state,
+            graph_thread_id=f"run:{run.id}:rework:{original.child_run_id}:{attempt}",
+        )
+        agent = Agent(
+            run_id=child.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile=original.role_profile,
+            model=self.model_resolver.resolve(
+                kind=AgentKind.TEAMMATE,
+                profile=original.role_profile,
+            ),
+        )
+        assignment = TeamAssignment(
+            root_run_id=child.root_run_id or run.id,
+            parent_run_id=run.id,
+            child_run_id=child.id,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile=original.role_profile,
+            runtime_route=TEAM_ROLE_ROUTE,
+            goal=goal,
+            allowed_tools=original.allowed_tools,
+            deferred_tools=original.deferred_tools,
+            promoted_tools=original.promoted_tools,
+            allowed_skills=original.allowed_skills,
+            can_write=original.can_write,
+            can_delegate=original.can_delegate,
+            max_subagents=original.max_subagents,
+            acceptance_criteria=request.acceptance_criteria,
+            handoff_context={
+                "previous_assignment_id": lineage_id,
+                "previous_child_run_id": str(original.child_run_id),
+                "verifier_child_run_id": str(verifier_result.child_run_id),
+                "verifier_feedback_summary": verifier_result.summary,
+                "rework_attempt": attempt,
+            },
+        )
+        validate_assignment_graph(assignment)
+        await repository.create_run(child, agent)
+        await self.team_repository.create_assignment(assignment)
+        await _emit_if_callable(
+            event_sink,
+            EventType.TEAM_REWORK_REQUESTED,
+            {
+                "root_run_id": str(run.id),
+                "previous_assignment_id": lineage_id,
+                "previous_child_run_id": str(original.child_run_id),
+                "replacement_assignment_id": str(assignment.id),
+                "replacement_child_run_id": str(child.id),
+                "rework_attempt": attempt,
+            },
+            f"team-rework:{child.id}",
+        )
+
+
+def _find_assignment_by_child(
+    assignments: list[TeamAssignment],
+    child_run_id: str,
+) -> TeamAssignment | None:
+    return next(
+        (
+            assignment
+            for assignment in assignments
+            if str(assignment.child_run_id) == child_run_id
+        ),
+        None,
+    )
+
+
+def _replacement_exists(
+    assignments: list[TeamAssignment],
+    verifier_child_run_id: object,
+    original: TeamAssignment,
+) -> bool:
+    lineage_id = str(
+        original.handoff_context.get("previous_assignment_id") or original.id
+    )
+    return any(
+        str(assignment.handoff_context.get("previous_assignment_id")) == lineage_id
+        and assignment.handoff_context.get("verifier_child_run_id")
+        == str(verifier_child_run_id)
+        for assignment in assignments
+    )
 
 
 async def _git_apply(workspace: Path, patch: str) -> None:

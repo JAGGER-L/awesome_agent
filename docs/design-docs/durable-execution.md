@@ -419,7 +419,8 @@ roles require repository evidence before finalization, writing roles must call
 child workspace diff. Task 22C adds dynamic Teammate-owned Subagent creation
 with depth, authorization, and active-count limits. Task 22D adds structured
 model-driven Verifier decisions and persists them through child results and
-mailbox messages. Durable targeted rework remains a later Task 22 phase.
+mailbox messages. Task 22E adds durable targeted replacement rework while
+preserving original attempts.
 
 ## Retry, Cancellation, and Failure
 
