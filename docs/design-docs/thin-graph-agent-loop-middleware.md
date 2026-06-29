@@ -3,7 +3,8 @@
 Task 19 defined the target runtime shape. Task 20 migrated `solo-readonly`
 through the first AgentLoop/middleware boundary. Task 21 migrated
 `solo-modifying` cross-cutting policy behind modifying middleware while
-preserving its existing LangGraph checkpoint topology.
+preserving its existing LangGraph checkpoint topology. Task 24 migrated the
+forward distributed team routes behind the same boundary.
 
 ## Runtime Route
 
@@ -139,7 +140,20 @@ explicit modifying middleware classes. The graph still owns checkpoint resume,
 state shape, LangGraph back edges, route validation, and terminal handoff to
 the Worker.
 
-Team routes have not yet been migrated to this boundary. `team-coding`,
-`team-role`, and `team-verifier` are model-driven and production-wired through
-distributed child Runs, but their control flow still lives in dedicated graph
-modules instead of a shared team AgentLoop/middleware stack.
+`team-coding`, `team-role`, and `team-verifier` now use `TeamAgentLoop` and the
+shared `MiddlewareStack`:
+
+- Leader TeamPlan prompting, provider calls, invalid-plan retry, and plan
+  events live in `TeamPlanningMiddleware`.
+- Teammate/Subagent model calls and repository/delegation tool calls pass
+  through `TeamAgentLoop.wrap_model_call` and `TeamAgentLoop.wrap_tool_call`.
+- Verifier prompting, tool exposure, provider calls, invalid-output retry, and
+  structured decision parsing live in `TeamVerificationMiddleware`.
+- Team graphs still own durable child-run coordination, assignment loading,
+  child wait/requeue behavior, patch aggregation, verifier result persistence,
+  mailbox creation, and terminal state mapping.
+- Team observability is inserted through `ObservabilityMiddleware`; Worker
+  event projection is retained only for unmigrated compatibility routes.
+
+`team-coding-scoped` remains a scoped regression route. It is not the forward
+architecture for independently scheduled Teammates, Subagents, or Verifiers.

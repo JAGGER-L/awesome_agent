@@ -99,12 +99,13 @@ PostgreSQL dispatch path. Parent Runs release to `waiting_*` states while child
 work is active and are requeued when child assignments reach terminal states.
 
 Task 22B replaces deterministic Teammate completion with a model/tool loop.
-`team-role` builds the model request from the durable assignment, exposes only
-effective tools, rechecks authorization before every tool execution, and records
-model/tool events with team attribution. Read-only roles must collect at least
-one successful repository inspection before finalizing. Writing roles may use
-write tools only when `can_write=true`, must call `repo.diff` after the last
-write, and produce patch artifacts from the child workspace diff for Leader
+Task 24 routes that loop through `TeamAgentLoop` middleware. `team-role` builds
+the model request from the durable assignment, exposes only effective tools,
+rechecks authorization before every tool execution, and records model/tool
+events with team attribution. Read-only roles must collect at least one
+successful repository inspection before finalizing. Writing roles may use write
+tools only when `can_write=true`, must call `repo.diff` after the last write,
+and produce patch artifacts from the child workspace diff for Leader
 aggregation.
 
 Task 22C adds `team.create_subagent` as an explicit Teammate-only tool. The
@@ -128,8 +129,12 @@ Distributed team state is stored in:
   aggregation status, and failure classification.
 
 Task 22D makes Verifier review a structured model decision that is persisted as
-a child result and mailbox message. Task 22E turns Verifier rework requests
-into replacement Teammate child Runs with immutable attempt lineage and bounded
+a child result and mailbox message. Task 24 moves Verifier prompting, provider
+calls, invalid-output retry, tool exposure, and structured decision parsing into
+`TeamVerificationMiddleware`; `TeamVerifierGraph` keeps sibling-result loading,
+decision validation against durable state, child-result persistence, mailbox
+creation, and graph result mapping. Task 22E turns Verifier rework requests into
+replacement Teammate child Runs with immutable attempt lineage and bounded
 rework budgets. Task 22F covers the full deterministic Worker path with real
 PostgreSQL dispatch, model calls, scoped tools, Teammate-owned Subagents, patch
 artifact generation, Leader patch aggregation, Verifier pass, Verifier rework,
@@ -143,30 +148,31 @@ patch state still fails the parent Run and is tracked as technical debt for a
 future recovery or rework path.
 
 The implemented `team-coding` route is now the forward distributed team runtime
-for local execution. Remaining work is not basic autonomy wiring; it is
-hardening: Teammate-local deterministic validation, richer mailbox
-collaboration policy, advanced replanning, conflict recovery, empirically tuned
-rework budgets, true concurrent Worker stress tests, and migration of team
-routes behind the AgentLoop/middleware boundary.
+for local execution. Task 24 moves Leader planning, Teammate/Subagent
+model/tool execution, delegation tool calls, Verifier decisions, and team
+observability behind `TeamAgentLoop` and shared middleware. Remaining work is
+not basic autonomy wiring; it is hardening: Teammate-local deterministic
+validation, richer mailbox collaboration policy, advanced replanning, conflict
+recovery, empirically tuned rework budgets, and true concurrent Worker stress
+tests.
 
-## Future Model-Driven Runtime
+## AgentLoop Boundary
 
-The long-term runtime should move most cross-cutting behavior out of large graph
-files and into explicit loop/middleware layers:
+The forward distributed runtime separates durable graph coordination from
+cross-cutting loop policy:
 
 - Thin graph nodes own durable control flow, checkpoint identity, interrupts,
-  resume, and terminal state transitions.
-- Agent loop code owns the model/tool iteration contract and reports durable
-  loop outcomes back to the graph.
-- Middleware owns memory, context injection, token budgets, deferred tool
-  exposure, sandbox policy, approval, skill activation, team/subagent policy,
-  model/tool error handling, and context compaction.
+  resume, child waits, child-run creation, patch aggregation, result
+  persistence, mailbox messages, and terminal state transitions.
+- `TeamAgentLoop` owns the middleware stage boundary for team agent
+  operations, model calls, and tool calls.
+- Team middleware owns Leader planning policy, Teammate/Subagent model/tool
+  execution policy, delegation tool handling, Verifier prompting and parsing,
+  model/tool observability, and bounded structural metadata.
 
-Until that migration exists, remaining team graph files remain the source of
-truth for distributed team control flow. New features should be added through
-focused helpers where possible and must preserve deterministic Worker-path
-tests for Leader planning, Teammate/Subagent execution, Verifier decisions,
-patch aggregation, and rework.
+New features should keep this split. Durable state transitions belong in graph
+modules or focused durable helpers; model/tool/delegation/verification policy
+belongs behind `TeamAgentLoop` middleware.
 
 ## Limits
 
