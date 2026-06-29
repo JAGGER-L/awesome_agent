@@ -6,6 +6,7 @@ import pytest
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 
+from awesome_agent.observability.otel import OTelConfig, configure_otel
 from awesome_agent.observability.repository import (
     DurableMetric,
     DurableModelCall,
@@ -22,6 +23,89 @@ def test_observability_configures_service_resource() -> None:
     )
 
     assert provider.resource.attributes["service.name"] == "awesome-agent-test"
+
+
+def test_otel_configures_process_kind_resource() -> None:
+    provider = configure_otel(
+        OTelConfig(
+            service_name="awesome-agent-test",
+            process_kind="worker",
+            console_exporter=False,
+            otlp_endpoint=None,
+        )
+    )
+
+    assert provider.resource.attributes["service.name"] == "awesome-agent-test"
+    assert provider.resource.attributes["awesome.process_kind"] == "worker"
+
+
+def test_otel_respects_console_exporter_toggle() -> None:
+    provider = configure_otel(
+        OTelConfig(
+            service_name="awesome-agent-test",
+            process_kind="api",
+            console_exporter=False,
+            otlp_endpoint=None,
+        )
+    )
+
+    processor = provider._active_span_processor
+    assert processor._span_processors == ()
+
+
+def test_otel_configures_otlp_exporter(monkeypatch: pytest.MonkeyPatch) -> None:
+    created_endpoints: list[str | None] = []
+
+    class RecordingOTLPExporter(FailingExporter):
+        def __init__(self, *, endpoint: str | None = None) -> None:
+            created_endpoints.append(endpoint)
+
+        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+            return SpanExportResult.SUCCESS
+
+    monkeypatch.setattr(
+        "awesome_agent.observability.otel.OTLPSpanExporter",
+        RecordingOTLPExporter,
+    )
+
+    provider = configure_otel(
+        OTelConfig(
+            service_name="awesome-agent-test",
+            process_kind="worker",
+            console_exporter=False,
+            otlp_endpoint="http://collector.example/v1/traces",
+        )
+    )
+
+    assert created_endpoints == ["http://collector.example/v1/traces"]
+    processor = provider._active_span_processor
+    assert len(processor._span_processors) == 1
+
+
+def test_otel_continues_when_otlp_exporter_initialization_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenOTLPExporter(FailingExporter):
+        def __init__(self, *, endpoint: str | None = None) -> None:
+            raise RuntimeError("collector unavailable")
+
+    monkeypatch.setattr(
+        "awesome_agent.observability.otel.OTLPSpanExporter",
+        BrokenOTLPExporter,
+    )
+
+    provider = configure_otel(
+        OTelConfig(
+            service_name="awesome-agent-test",
+            process_kind="worker",
+            console_exporter=False,
+            otlp_endpoint="http://collector.example/v1/traces",
+        )
+    )
+
+    assert provider.resource.attributes["awesome.process_kind"] == "worker"
+    processor = provider._active_span_processor
+    assert processor._span_processors == ()
 
 
 def test_safe_span_exporter_isolates_exporter_failures() -> None:
