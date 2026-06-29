@@ -762,8 +762,7 @@ class TeamLeaderGraph:
             integration_branch=run.integration_branch,
             workspace_state=run.workspace_state,
             graph_thread_id=(
-                f"run:{run.id}:patch-conflict-rework:"
-                f"{original.child_run_id}:{attempt}"
+                f"run:{run.id}:patch-conflict-rework:{original.child_run_id}:{attempt}"
             ),
         )
         agent = Agent(
