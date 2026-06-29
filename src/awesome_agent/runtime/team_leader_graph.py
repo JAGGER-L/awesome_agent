@@ -454,6 +454,18 @@ class TeamLeaderGraph:
     ) -> None:
         if self.model_resolver is None:
             raise PermanentExecutionError("team_model_resolver_unavailable")
+        verifier_index = (
+            sum(
+                1
+                for assignment in await self.team_repository.list_assignments(
+                    run.root_run_id or run.id,
+                    include_inactive=True,
+                )
+                if assignment.parent_run_id == run.id
+                and assignment.kind is TeamAssignmentKind.VERIFIER
+            )
+            + 1
+        )
         child = Run(
             goal=f"Verify team result for: {run.goal}",
             mode=RunMode.TEAM,
@@ -470,7 +482,7 @@ class TeamLeaderGraph:
             workspace_path=run.workspace_path,
             integration_branch=run.integration_branch,
             workspace_state=run.workspace_state,
-            graph_thread_id=f"run:{run.id}:verifier:1",
+            graph_thread_id=f"run:{run.id}:verifier:{verifier_index}",
         )
         verifier = Agent(
             run_id=child.id,
@@ -548,7 +560,7 @@ class TeamLeaderGraph:
                 for assignment in verifier_assignments
             )
             and result.status == "failed"
-            and result.failure_kind == "rework_required"
+            and decode_rework_decision(result.summary) is not None
         ]
         if not verifier_results:
             return False
@@ -735,6 +747,29 @@ async def _git_apply(workspace: Path, patch: str) -> None:
     patch_file = workspace / ".awesome-agent-team.patch"
     patch_file.write_text(patch, encoding="utf-8")
     try:
+        checked = await run_process(
+            ["git", "apply", "--check", "--whitespace=nowarn", str(patch_file.name)],
+            command_label="git apply --check team patch",
+            workspace=workspace,
+            timeout_seconds=30,
+        )
+        if checked.exit_code != 0:
+            reverse = await run_process(
+                [
+                    "git",
+                    "apply",
+                    "--check",
+                    "--reverse",
+                    "--whitespace=nowarn",
+                    str(patch_file.name),
+                ],
+                command_label="git apply --reverse --check team patch",
+                workspace=workspace,
+                timeout_seconds=30,
+            )
+            if reverse.exit_code == 0:
+                return
+            raise RuntimeError(checked.stderr or checked.stdout or "git apply failed")
         process = await run_process(
             ["git", "apply", "--whitespace=nowarn", str(patch_file.name)],
             command_label="git apply team patch",

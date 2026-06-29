@@ -1,18 +1,18 @@
 # Quality Score
 
 Current phase: durable solo read-only, solo modifying, explicit scoped team
-Coding, and partially model-driven distributed team child-run loops execute
-locally.
+Coding, and model-driven distributed team child-run loops execute locally.
 Solo paths have exact-invocation approvals, active cancellation,
 validation-gated modifying completion, coherent lifecycle projections, and
 queryable runtime observability. Distributed team child Runs now have durable
 lineage, model-generated Leader TeamPlans, assignment-scoped Teammate
 model/tool loops, mailbox, recursive cancellation, inspection APIs/CLI,
 root-aware budgets, deferred tool exposure, team payload compaction, and
-PostgreSQL E2E evidence. Teammate-owned dynamic Subagent creation is now wired
-into the distributed path, Verifier child Runs now persist structured model
-decisions, and targeted rework creates replacement Teammate child Runs with
-immutable attempt lineage.
+PostgreSQL E2E evidence. Teammate-owned dynamic Subagent creation is wired into
+the distributed path, Verifier child Runs persist structured model decisions,
+targeted rework creates replacement Teammate child Runs with immutable attempt
+lineage, and Task 22F covers patch-producing happy-path plus verifier-rework
+distributed E2E.
 
 | Area | Score | Evidence |
 | --- | ---: | --- |

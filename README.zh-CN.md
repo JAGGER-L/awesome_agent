@@ -122,7 +122,7 @@ container port: 5432
 
 持久化 runtime 工作记录在 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md)。尚未实现的重点项：
 
-- full patch-producing distributed team E2E coverage 和更丰富的 mailbox 协作策略。
+- 更丰富的 mailbox 协作策略。
 - Money cost budget 和 dashboard。
 
 ## 文档

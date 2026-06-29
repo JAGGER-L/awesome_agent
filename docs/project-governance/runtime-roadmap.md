@@ -88,7 +88,7 @@ Task 07 does not include:
 | Task | Name | Purpose | Exit condition |
 | --- | --- | --- | --- |
 | Task 21 | Done | `solo-modifying` now enters AgentLoop middleware stages, with context, budget, tool execution, approval, artifact offload, evidence, validation, rework, and finalization policy extracted from the graph. |
-| Task 22 | In progress | Replace deterministic `team-coding` role skeletons with model-driven assignment, scoped tool execution, verifier rework, and real patch-producing child Runs. Task 22A created model-generated Leader `TeamPlan`; Task 22B added assignment-scoped Teammate model/tool loops and patch artifacts from child workspace diffs; Task 22C added Teammate-owned dynamic Subagent creation; Task 22D added structured model-driven Verifier decisions; Task 22E added targeted replacement rework. | Distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, central tools, patch aggregation, validation, and rework. |
+| Task 22 | Done | Replaced deterministic `team-coding` role skeletons with model-driven Leader planning, assignment-scoped Teammate model/tool loops, Teammate-owned Subagents, structured Verifier decisions, targeted replacement rework, and patch-producing distributed E2E evidence. | Full distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, scoped tools, patch artifact generation, idempotent patch aggregation, traceability, and verifier rework. |
 | Task 23 | OpenTelemetry runtime instrumentation | Add real OTel spans/metrics on API and Worker production paths while preserving durable query tables. | Worker/model/tool/sandbox/API spans are created, exporter failures are isolated, and trace IDs remain queryable through durable events. |
 | Task 24 | Graph file size reduction | Split remaining oversized graph files after middleware migration makes stable extraction points clear. | Large graph modules are reduced to durable orchestration with focused unit tests for extracted components. |
 
@@ -101,7 +101,7 @@ Task 07 does not include:
 | Task 22C | Done | Add durable Teammate-owned dynamic Subagent creation with depth and concurrency limits. |
 | Task 22D | Done | Replace deterministic Verifier completion with model-driven verification. |
 | Task 22E | Done | Add targeted replacement and rework when verification fails. |
-| Task 22F | Planned | Add full distributed team E2E coverage and final documentation cleanup. |
+| Task 22F | Done | Added full distributed team happy-path and verifier-rework E2E coverage, trace assertions, idempotent patch aggregation, and final documentation cleanup. |
 
 ## Gap Disposition
 
@@ -114,11 +114,11 @@ Task 07 does not include:
 | Running Runs cannot be cancelled | Resolved in Task 09 for solo runtime paths |
 | Deterministic validation and rework do not exist | Resolved in Task 10 for solo modifying runs |
 | One successful read is not enough proof for answer correctness | Future read-only answer validation hardening; Task 10 covers modifying validation only |
-| Context and checkpoints can grow quickly | Resolved for solo read-only and modifying paths in Task 16; distributed team payload hardening resolved in Task 18; model-driven team loops need new budget integration when Task 22 lands |
+| Context and checkpoints can grow quickly | Resolved for solo read-only and modifying paths in Task 16; distributed team payload hardening resolved in Task 18; model-driven team loops use root-aware budget guards and compacted handoff/result payloads |
 | Lifecycle projections are inconsistent | Resolved in Task 11 for solo runtime paths |
 | Observability score is too high for current evidence | Resolved in Task 12 for solo runtime paths |
 | Artifact references are not connected to the main loop | Task 07 |
-| Team E2E is not real end-to-end execution | Resolved in Task 13 for scoped single-Run team runtime; distributed Teammate/Verifier/Subagent child-Run runtime remains Task 17 |
+| Team E2E is not real end-to-end execution | Resolved in Task 13 for scoped single-Run team runtime and Task 22F for distributed model-driven child-Run runtime |
 | Worktrees and branches accumulate permanently | Resolved in Task 14 for explicit managed workspace cleanup; background automatic cleanup remains out of scope |
 | API health and doctor are too optimistic | Resolved in Task 15 |
 | Local API can bind non-loopback without authentication | Resolved in Task 07 with explicit unsafe gate; production auth remains out of scope |
@@ -137,8 +137,9 @@ Task 07 does not include:
   recursive cancellation.
 - Do not claim modifying or team middleware-based runtime architecture until
   Task 21 and later tasks migrate those routes behind AgentLoop middleware.
-- Do not claim model-driven distributed team autonomy until Task 22 replaces
-  deterministic child role skeletons with model/tool/verifier evidence.
+- Do not claim concurrent distributed team stress hardening, richer mailbox
+  collaboration, or team middleware architecture until the corresponding
+  technical debts or later tasks are closed with executable evidence.
 - Do not describe observability as OpenTelemetry instrumentation until Task 23
   creates actual OTel spans on production API and Worker paths.
 - Do not raise quality scores unless executable evidence exists in tests,

@@ -139,4 +139,7 @@ explicit modifying middleware classes. The graph still owns checkpoint resume,
 state shape, LangGraph back edges, route validation, and terminal handoff to
 the Worker.
 
-Team routes have not yet been migrated to this boundary.
+Team routes have not yet been migrated to this boundary. `team-coding`,
+`team-role`, and `team-verifier` are model-driven and production-wired through
+distributed child Runs, but their control flow still lives in dedicated graph
+modules instead of a shared team AgentLoop/middleware stack.

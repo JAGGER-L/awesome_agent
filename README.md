@@ -281,8 +281,8 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- full patch-producing distributed team E2E coverage.
 - richer team mailbox collaboration policy.
+- money cost budgeting and dashboards.
 
 ## Documentation
 

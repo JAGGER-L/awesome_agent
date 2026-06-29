@@ -99,12 +99,22 @@ class TeamVerifierGraph:
             assignment=assignment,
             agent_id=agent.id,
         )
+        assignments = await self.team_repository.list_assignments(
+            assignment.root_run_id,
+            include_inactive=True,
+        )
+        teammate_child_ids = {
+            item.child_run_id
+            for item in assignments
+            if item.parent_run_id == assignment.parent_run_id
+            and item.kind is TeamAssignmentKind.TEAMMATE
+        }
         sibling_results = [
             result
             for result in await self.team_repository.list_child_results(
                 assignment.parent_run_id
             )
-            if result.child_run_id != run.id
+            if result.child_run_id in teammate_child_ids
         ]
         decision = await self._model_decision(
             run,

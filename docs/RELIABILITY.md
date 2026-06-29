@@ -115,6 +115,10 @@ forbidden.
   holding a Worker lease. Child completion records assignment terminal status
   and requeues the waiting parent. Parent cancellation recursively cancels
   nonterminal descendants while preserving terminal child evidence.
+- Distributed team patch aggregation is idempotent. The Leader applies a
+  Teammate patch artifact when the preimage matches and treats an already
+  present postimage as aggregated; partial or conflicting patch state still
+  fails the parent Run for explicit recovery or rework.
 
 Deterministic fault-injection tests must cover worker death around checkpoint
 and projection commits, lease expiry, stale fencing, approval wait, active

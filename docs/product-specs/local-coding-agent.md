@@ -63,6 +63,8 @@ team output.
   evidence, and mailbox payloads
 - distributed team inspection APIs and CLI for child Runs, assignments, and
   mailbox messages
+- full patch-producing distributed team E2E coverage for model-driven Leader,
+  Teammates, Subagents, Verifier, patch aggregation, and verifier rework
 
 ## Non-Goals
 
@@ -74,6 +76,7 @@ team output.
 - automatic solo/team routing
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
-- full patch-producing distributed team E2E coverage
+- richer arbitrary team mailbox collaboration beyond current route-restricted
+  messages
 - money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server

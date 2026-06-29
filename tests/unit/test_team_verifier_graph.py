@@ -45,10 +45,11 @@ async def test_verifier_passes_aggregated_child_results() -> None:
     )
     await runtime.create_run(verifier, agent)
     await teams.create_assignment(assignment)
+    teammate = await _teammate_assignment(teams, parent)
     await teams.record_child_result(
         TeamChildResult(
-            assignment_id=assignment.id,
-            child_run_id=Run(goal="teammate").id,
+            assignment_id=teammate.id,
+            child_run_id=teammate.child_run_id,
             parent_run_id=parent.id,
             root_run_id=parent.id,
             status="completed",
@@ -170,10 +171,11 @@ async def test_verifier_rejects_unaggregated_patch_even_if_model_passes() -> Non
     )
     await runtime.create_run(verifier, agent)
     await teams.create_assignment(assignment)
+    teammate = await _teammate_assignment(teams, parent)
     await teams.record_child_result(
         TeamChildResult(
-            assignment_id=assignment.id,
-            child_run_id=Run(goal="teammate").id,
+            assignment_id=teammate.id,
+            child_run_id=teammate.child_run_id,
             parent_run_id=parent.id,
             root_run_id=parent.id,
             status="completed",
@@ -334,6 +336,24 @@ def _verifier_run(parent: Run) -> tuple[Run, Agent, TeamAssignment]:
         goal="verify",
     )
     return run, agent, assignment
+
+
+async def _teammate_assignment(
+    teams: InMemoryTeamRepository,
+    parent: Run,
+) -> TeamAssignment:
+    teammate = Run(goal="teammate", mode=RunMode.TEAM)
+    assignment = TeamAssignment(
+        root_run_id=parent.id,
+        parent_run_id=parent.id,
+        child_run_id=teammate.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="inspect",
+    )
+    await teams.create_assignment(assignment)
+    return assignment
 
 
 def _decision(

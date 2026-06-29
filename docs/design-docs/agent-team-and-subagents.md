@@ -127,19 +127,27 @@ Distributed team state is stored in:
 - `team_child_results` for summaries, patch artifact references, changed files,
   aggregation status, and failure classification.
 
-The current distributed graph is a partially model-driven skeleton with real
-durable lineage, mailbox, cancellation propagation, API/CLI inspection, and
-PostgreSQL-backed integration/E2E evidence. Task 22A makes the Leader plan
-model-driven, Task 22B makes Teammate role execution model-driven, and Task
-22C adds Teammate-owned dynamic Subagent creation. Task 22D makes Verifier
-review a structured model decision that is persisted as a child result and
-mailbox message. Task 22E turns verifier rework requests into replacement
-Teammate child Runs with immutable attempt lineage and bounded rework budgets.
+Task 22D makes Verifier review a structured model decision that is persisted as
+a child result and mailbox message. Task 22E turns Verifier rework requests
+into replacement Teammate child Runs with immutable attempt lineage and bounded
+rework budgets. Task 22F covers the full deterministic Worker path with real
+PostgreSQL dispatch, model calls, scoped tools, Teammate-owned Subagents, patch
+artifact generation, Leader patch aggregation, Verifier pass, Verifier rework,
+replacement Teammate creation, mailbox evidence, runtime events, model-call
+records, spans, and artifacts.
 
-This boundary is intentional. In `team-coding`, Leader, role, and Verifier
-graphs are production-wired for dispatch and persistence, but full
-patch-producing distributed E2E coverage remains part of later Task 22 phases
-before the runtime is described as a full autonomous agent team.
+Patch aggregation is idempotent. The Leader applies Teammate patch artifacts to
+the root workspace when the preimage matches; if the postimage is already
+present, the patch is treated as already aggregated. Partial or conflicting
+patch state still fails the parent Run and is tracked as technical debt for a
+future recovery or rework path.
+
+The implemented `team-coding` route is now the forward distributed team runtime
+for local execution. Remaining work is not basic autonomy wiring; it is
+hardening: Teammate-local deterministic validation, richer mailbox
+collaboration policy, advanced replanning, conflict recovery, empirically tuned
+rework budgets, true concurrent Worker stress tests, and migration of team
+routes behind the AgentLoop/middleware boundary.
 
 ## Future Model-Driven Runtime
 
@@ -154,10 +162,11 @@ files and into explicit loop/middleware layers:
   exposure, sandbox policy, approval, skill activation, team/subagent policy,
   model/tool error handling, and context compaction.
 
-Until that migration exists, large graph files remain the source of truth for
-solo and team execution. New features should be added through focused helpers
-where possible and should avoid widening the deterministic distributed team
-skeleton into a partially model-driven runtime without tests.
+Until that migration exists, remaining team graph files remain the source of
+truth for distributed team control flow. New features should be added through
+focused helpers where possible and must preserve deterministic Worker-path
+tests for Leader planning, Teammate/Subagent execution, Verifier decisions,
+patch aggregation, and rework.
 
 ## Limits
 
