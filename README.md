@@ -70,8 +70,8 @@ PostgreSQL:
   before creating 1-3 Teammates. Teammate child Runs now execute
   assignment-scoped model/tool loops with only the Leader-granted effective
   tools, and Teammates with delegation permission can create read-only
-  Subagent child Runs. Model-driven verifier review and targeted rework are
-  the next Task 22 phases.
+  Subagent child Runs. Verifier child Runs now use a structured model decision;
+  targeted rework is the next Task 22 phase.
 
 ### Approval (implemented for solo modifying runs)
 
@@ -98,11 +98,11 @@ the root Run.
 The older scoped `team-coding-scoped` runtime remains documented and tested,
 but the new distributed path is the forward architecture. Model-driven Leader
 planning, assignment-scoped Teammate role loops, and Teammate-owned Subagent
-delegation have started; Verifier review and targeted rework remain in later
-Task 22 phases. Distributed team assignments support deferred tool exposure,
-root-aware token/active-time
-budget checks, and artifact-backed compaction for large handoff, child-result,
-and verifier evidence payloads.
+delegation have started, and Verifier review is model-driven; targeted rework
+remains in a later Task 22 phase. Distributed team assignments support
+deferred tool exposure, root-aware token/active-time budget checks, and
+artifact-backed compaction for large handoff, child-result, and verifier
+evidence payloads.
 
 ### Observability (implemented)
 
@@ -280,7 +280,7 @@ Durable runtime work is tracked in
 [docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
 Highlights of what is planned but not yet implemented:
 
-- model-driven Verifier review and targeted rework on the `team-coding` path.
+- targeted rework on the `team-coding` path.
 - richer team mailbox collaboration policy.
 
 ## Documentation

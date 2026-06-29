@@ -1,15 +1,20 @@
 import pytest
+from tests.fakes import FakeModelProvider
 
-from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
+from awesome_agent.agents.profiles import RoleModelResolver
+from awesome_agent.domain.enums import AgentKind, DispatchStatus, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.team import InMemoryTeamRepository
-from awesome_agent.runtime.graphs import TEAM_VERIFIER_ROUTE
+from awesome_agent.runtime.dispatch import PermanentExecutionError
+from awesome_agent.runtime.graphs import TEAM_CODING_ROUTE, TEAM_VERIFIER_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
+    TeamAssignmentStatus,
     TeamChildResult,
 )
+from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
 from awesome_agent.runtime.team_mailbox import MailboxRoute
 from awesome_agent.runtime.team_verifier_graph import (
     TeamVerifierGraph,
@@ -22,7 +27,11 @@ from awesome_agent.runtime.team_verifier_graph import (
 async def test_verifier_passes_aggregated_child_results() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
-    graph = TeamVerifierGraph(team_repository=teams)
+    provider = FakeModelProvider([_decision("passed", "Verifier passed evidence.")])
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+    )
     parent = Run(goal="parent", mode=RunMode.TEAM)
     verifier, agent, assignment = _verifier_run(parent)
     await runtime.create_run(
@@ -60,14 +69,94 @@ async def test_verifier_passes_aggregated_child_results() -> None:
     assert state["phase"] == "passed"
     assert result.child_run_id == verifier.id
     assert result.status == "completed"
+    assert result.summary == "Verifier passed evidence."
     assert mailbox[-1].route is MailboxRoute.VERIFIER_TO_LEADER
+    assert len(provider.requests) == 1
 
 
 @pytest.mark.asyncio
-async def test_verifier_rejects_unaggregated_patch_result() -> None:
+async def test_verifier_rework_decision_is_persisted_and_fails_child() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
-    graph = TeamVerifierGraph(team_repository=teams)
+    parent = Run(goal="parent", mode=RunMode.TEAM)
+    target = Run(goal="teammate", mode=RunMode.TEAM)
+    provider = FakeModelProvider(
+        [
+            _decision(
+                "rework_required",
+                "Needs one more check.",
+                rework_requests=[
+                    {
+                        "target_child_run_id": str(target.id),
+                        "reason": "Missing README evidence.",
+                        "acceptance_criteria": ["Read README.md."],
+                    }
+                ],
+            )
+        ]
+    )
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+    )
+    verifier, agent, assignment = _verifier_run(parent)
+    await runtime.create_run(
+        parent,
+        Agent(
+            run_id=parent.id,
+            kind=AgentKind.LEADER,
+            profile="leader",
+            model="fake",
+        ),
+    )
+    await runtime.create_run(verifier, agent)
+    await teams.create_assignment(assignment)
+    await teams.create_assignment(
+        TeamAssignment(
+            root_run_id=parent.id,
+            parent_run_id=parent.id,
+            child_run_id=target.id,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile="backend-engineer",
+            runtime_route="team-role",
+            goal="inspect",
+        )
+    )
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=assignment.id,
+            child_run_id=target.id,
+            parent_run_id=parent.id,
+            root_run_id=parent.id,
+            status="completed",
+            summary="done",
+            patch_aggregated=True,
+        )
+    )
+
+    with pytest.raises(PermanentExecutionError, match="team_verification_rework"):
+        await graph.execute(verifier, agent, repository=runtime)
+
+    result = next(
+        item
+        for item in await teams.list_child_results(parent.id)
+        if item.child_run_id == verifier.id
+    )
+    mailbox = await teams.list_mailbox_messages(parent.id)
+    assert result.status == "failed"
+    assert result.failure_kind == "rework_required"
+    assert mailbox[-1].requires_response
+
+
+@pytest.mark.asyncio
+async def test_verifier_rejects_unaggregated_patch_even_if_model_passes() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = FakeModelProvider([_decision("passed", "Looks good.")])
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+    )
     parent = Run(goal="parent", mode=RunMode.TEAM)
     verifier, agent, assignment = _verifier_run(parent)
     await runtime.create_run(
@@ -94,18 +183,123 @@ async def test_verifier_rejects_unaggregated_patch_result() -> None:
         )
     )
 
-    state, _ = await graph.execute(verifier, agent, repository=runtime)
+    with pytest.raises(PermanentExecutionError, match="unaggregated_patch"):
+        await graph.execute(verifier, agent, repository=runtime)
+
+
+@pytest.mark.asyncio
+async def test_verifier_invalid_output_retries_once_then_fails() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = FakeModelProvider(["not-json", "still-not-json"])
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+    )
+    parent = Run(goal="parent", mode=RunMode.TEAM)
+    verifier, agent, assignment = _verifier_run(parent)
+    await runtime.create_run(
+        parent,
+        Agent(
+            run_id=parent.id,
+            kind=AgentKind.LEADER,
+            profile="leader",
+            model="fake",
+        ),
+    )
+    await runtime.create_run(verifier, agent)
+    await teams.create_assignment(assignment)
+
+    with pytest.raises(PermanentExecutionError, match="team_verifier_invalid_output"):
+        await graph.execute(verifier, agent, repository=runtime)
 
     result = next(
         item
         for item in await teams.list_child_results(parent.id)
         if item.child_run_id == verifier.id
     )
-    mailbox = await teams.list_mailbox_messages(parent.id)
-    assert state["phase"] == "rejected"
+    assert len(provider.requests) == 2
     assert result.status == "failed"
     assert result.failure_kind == "model_output_failure"
-    assert mailbox[-1].requires_response
+
+
+@pytest.mark.asyncio
+async def test_leader_creates_verifier_with_verifier_model() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph = TeamLeaderGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: FakeModelProvider([_team_plan_json()]),
+        model_resolver=RoleModelResolver(
+            leader_model="leader-model",
+            teammate_model="teammate-model",
+            verifier_model="verifier-model",
+            subagent_model="subagent-model",
+        ),
+    )
+    root = Run(
+        goal="root",
+        mode=RunMode.TEAM,
+        runtime_route=TEAM_CODING_ROUTE,
+    )
+    leader = Agent(
+        run_id=root.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="leader-model",
+    )
+    await runtime.create_run(root, leader)
+    teammate = Run(
+        goal="done",
+        mode=RunMode.TEAM,
+        parent_run_id=root.id,
+        root_run_id=root.id,
+        depth=1,
+        child_role="teammate",
+        dispatch_status=DispatchStatus.TERMINAL,
+    )
+    await runtime.create_run(
+        teammate,
+        Agent(
+            run_id=teammate.id,
+            kind=AgentKind.TEAMMATE,
+            profile="teammate",
+            model="teammate-model",
+        ),
+    )
+    teammate_assignment = TeamAssignment(
+        root_run_id=root.id,
+        parent_run_id=root.id,
+        child_run_id=teammate.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="done",
+    )
+    await teams.create_assignment(teammate_assignment)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=teammate_assignment.id,
+            child_run_id=teammate.id,
+            parent_run_id=root.id,
+            root_run_id=root.id,
+            status="completed",
+            summary="done",
+            patch_aggregated=True,
+        )
+    )
+
+    with pytest.raises(Exception, match="waiting_verifier"):
+        await graph.execute(root, leader, repository=runtime)
+
+    verifier = next(
+        run
+        for run in await runtime.list_child_runs(root.id)
+        if run.child_role == "verifier"
+    )
+    verifier_agent = (await runtime.list_agents(verifier.id))[0]
+    assert verifier_agent.model == "verifier-model"
 
 
 def test_verifier_retry_budgets_are_explicit() -> None:
@@ -140,3 +334,46 @@ def _verifier_run(parent: Run) -> tuple[Run, Agent, TeamAssignment]:
         goal="verify",
     )
     return run, agent, assignment
+
+
+def _decision(
+    decision: str,
+    summary: str,
+    *,
+    rework_requests: list[dict[str, object]] | None = None,
+    failure_kind: str | None = None,
+) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "decision": decision,
+            "summary": summary,
+            "rework_requests": rework_requests or [],
+            "failure_kind": failure_kind,
+            "risks": [],
+        }
+    )
+
+
+def _team_plan_json() -> str:
+    import json
+
+    return json.dumps(
+        {
+            "rationale": "One teammate.",
+            "teammates": [
+                {
+                    "role_profile": "backend-engineer",
+                    "goal": "Inspect.",
+                    "allowed_tools": ["repo.read"],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": False,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": ["Done."],
+                }
+            ],
+        }
+    )

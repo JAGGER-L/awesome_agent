@@ -160,6 +160,19 @@ class TeamLeaderGraph:
             for assignment in verifier_assignments
         ):
             raise ChildRunWait("waiting_verifier")
+        verifier_results = [
+            result
+            for result in await self.team_repository.list_child_results(run.id)
+            if any(
+                result.child_run_id == assignment.child_run_id
+                for assignment in verifier_assignments
+            )
+        ]
+        if any(result.status != "completed" for result in verifier_results) or any(
+            assignment.status is not TeamAssignmentStatus.COMPLETED
+            for assignment in verifier_assignments
+        ):
+            raise PermanentExecutionError("team_verification_failed")
         return (
             TeamLeaderState(
                 run_id=str(run.id),
@@ -422,6 +435,8 @@ class TeamLeaderGraph:
         repository: RuntimeRepository,
         event_sink: object | None,
     ) -> None:
+        if self.model_resolver is None:
+            raise PermanentExecutionError("team_model_resolver_unavailable")
         child = Run(
             goal=f"Verify team result for: {run.goal}",
             mode=RunMode.TEAM,
@@ -445,7 +460,10 @@ class TeamLeaderGraph:
             parent_agent_id=leader.id,
             kind=AgentKind.VERIFIER,
             profile="verifier",
-            model=leader.model,
+            model=self.model_resolver.resolve(
+                kind=AgentKind.VERIFIER,
+                profile="verifier",
+            ),
         )
         assignment = TeamAssignment(
             root_run_id=child.root_run_id or run.id,

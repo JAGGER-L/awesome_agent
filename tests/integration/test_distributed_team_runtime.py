@@ -76,6 +76,7 @@ async def test_distributed_team_runs_through_workers_with_lineage(
             _role_read_turn(),
             _subagent_final_turn(),
             _role_final_turn(),
+            _verifier_pass_turn(),
         ]
     )
     leader = Agent(
@@ -101,7 +102,10 @@ async def test_distributed_team_runs_through_workers_with_lineage(
             artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
             artifact_repository=artifacts,
         ),
-        team_verifier_graph=TeamVerifierGraph(team_repository=teams),
+        team_verifier_graph=TeamVerifierGraph(
+            team_repository=teams,
+            provider_resolver=lambda _: provider,
+        ),
         config=_worker_config(),
         team_repository=teams,
     )
@@ -252,6 +256,18 @@ def _role_final_turn() -> ModelTurn:
         stop_reason=StopReason.COMPLETED,
         model="fake-model",
         provider="fake",
+    )
+
+
+def _verifier_pass_turn() -> str:
+    return json.dumps(
+        {
+            "decision": "passed",
+            "summary": "Verifier passed distributed team evidence.",
+            "rework_requests": [],
+            "failure_kind": None,
+            "risks": [],
+        }
     )
 
 

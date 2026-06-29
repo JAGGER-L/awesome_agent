@@ -143,6 +143,9 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             ),
             team_verifier_graph=TeamVerifierGraph(
                 team_repository=team_repository,
+                provider_resolver=providers.create
+                if providers.coding_available
+                else None,
                 artifact_store=artifact_store,
                 artifact_repository=artifact_repository,
                 budget_repository=budget_repository,

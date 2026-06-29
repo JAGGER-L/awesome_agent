@@ -280,7 +280,11 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
     teams = InMemoryTeamRepository()
     artifacts = InMemoryArtifactMetadataRepository()
     store = LocalArtifactStore(tmp_path / ".artifacts")
-    graph = TeamLeaderGraph(team_repository=teams, artifact_repository=artifacts)
+    graph = TeamLeaderGraph(
+        team_repository=teams,
+        artifact_repository=artifacts,
+        model_resolver=_models(),
+    )
     run, leader = _leader_run()
     run = run.model_copy(update={"workspace_path": tmp_path})
     await runtime.create_run(run, leader)

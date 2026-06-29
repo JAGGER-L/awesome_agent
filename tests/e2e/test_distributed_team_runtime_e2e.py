@@ -82,6 +82,7 @@ async def test_team_run_completes_as_distributed_child_runs(
             _role_read_turn(),
             _subagent_final_turn(),
             _role_final_turn(),
+            _verifier_pass_turn(),
         ]
     )
     monkeypatch.setattr(ModelProviderFactory, "create", lambda _self, _model: provider)
@@ -217,6 +218,18 @@ def _role_final_turn() -> ModelTurn:
         stop_reason=StopReason.COMPLETED,
         model="fake-model",
         provider="fake",
+    )
+
+
+def _verifier_pass_turn() -> str:
+    return json.dumps(
+        {
+            "decision": "passed",
+            "summary": "Verifier passed distributed team evidence.",
+            "rework_requests": [],
+            "failure_kind": None,
+            "risks": [],
+        }
     )
 
 
