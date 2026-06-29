@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from pathlib import Path
 from time import monotonic
+from typing import Literal
 
 from pydantic import ValidationError
 
@@ -21,6 +24,12 @@ from awesome_agent.modeling import (
     TransientModelError,
     UserMessage,
 )
+from awesome_agent.persistence.validation import (
+    DurableValidationGateResult,
+    DurableValidationReport,
+    ValidationReportWithGates,
+    ValidationRepository,
+)
 from awesome_agent.runtime.agent_loop.team import TeamAgentLoop
 from awesome_agent.runtime.dispatch import (
     PermanentExecutionError,
@@ -36,14 +45,31 @@ from awesome_agent.runtime.team_planning import (
     validate_team_plan_for_intent,
 )
 from awesome_agent.runtime.team_verification import TeamVerificationDecision
+from awesome_agent.runtime.validation.models import ValidationPlan
 from awesome_agent.tools.repository import (
     build_modifying_registry,
     model_tool_definitions,
 )
 
 ProviderResolver = Callable[[str], ModelProvider]
+ValidationPlanResolver = Callable[[Path], ValidationPlan | None]
+ValidationRunner = Callable[
+    [ValidationPlan, Run, Agent],
+    Awaitable[ValidationReportWithGates],
+]
 _TEAM_PLAN_MAX_ATTEMPTS = 2
 _DEFAULT_VERIFIER_TOOLS = {"repo.status", "repo.diff", "repo.read", "repo.search"}
+
+
+@dataclass(frozen=True, slots=True)
+class TeamRoleValidationOutcome:
+    status: Literal["passed", "failed"]
+    summary: str
+    report: ValidationReportWithGates
+
+    @property
+    def passed(self) -> bool:
+        return self.status == "passed"
 
 
 class TeamVerifierInvalidOutput(PermanentExecutionError):
@@ -177,6 +203,92 @@ class TeamPlanningMiddleware:
             )
             return plan, attempt
         raise PermanentExecutionError(f"team_plan_invalid: {last_error[:500]}")
+
+
+class TeamRoleValidationMiddleware:
+    def __init__(
+        self,
+        *,
+        validation_plan_resolver: ValidationPlanResolver,
+        validation_runner: ValidationRunner,
+        validation_repository: ValidationRepository | None,
+        team_loop: TeamAgentLoop,
+    ) -> None:
+        self.validation_plan_resolver = validation_plan_resolver
+        self.validation_runner = validation_runner
+        self.validation_repository = validation_repository
+        self.team_loop = team_loop
+
+    async def validate_write_result(
+        self,
+        run: Run,
+        agent: Agent,
+        *,
+        assignment: TeamAssignment,
+        workspace: Path,
+        event_sink: object | None,
+    ) -> TeamRoleValidationOutcome:
+        async def validation_operation(_: object) -> TeamRoleValidationOutcome:
+            return await self._validate_write_result(
+                run,
+                agent,
+                assignment=assignment,
+                workspace=workspace,
+                event_sink=event_sink,
+            )
+
+        return await self.team_loop.run_agent_operation(
+            object(),
+            run=run,
+            agent=agent,
+            messages=[],
+            assignment_id=assignment.id,
+            team_role=assignment.kind.value,
+            agent_kind=agent.kind.value,
+            metadata={"team_operation": "role_validation"},
+            handler=validation_operation,
+        )
+
+    async def _validate_write_result(
+        self,
+        run: Run,
+        agent: Agent,
+        *,
+        assignment: TeamAssignment,
+        workspace: Path,
+        event_sink: object | None,
+    ) -> TeamRoleValidationOutcome:
+        plan = self.validation_plan_resolver(workspace)
+        if plan is None or not plan.gates:
+            report = _missing_validation_report(run, agent)
+        else:
+            report = await self.validation_runner(plan, run, agent)
+        if self.validation_repository is not None:
+            await self.validation_repository.record_report(
+                report.report,
+                gates=report.gates,
+            )
+        await _emit_if_callable(
+            event_sink,
+            EventType.VERIFICATION_CREATED,
+            {
+                "verification_report_id": str(report.report.id),
+                "agent_id": str(agent.id),
+                "assignment_id": str(assignment.id),
+                "status": report.report.status,
+                "attempt": report.report.attempt,
+                "summary": report.report.summary,
+            },
+            f"team-role-validation:{report.report.id}",
+        )
+        status: Literal["passed", "failed"] = (
+            "passed" if report.report.status == "passed" else "failed"
+        )
+        return TeamRoleValidationOutcome(
+            status=status,
+            summary=report.report.summary,
+            report=report,
+        )
 
 
 class TeamVerificationMiddleware:
@@ -419,6 +531,33 @@ async def _emit_if_callable(
         await event_sink(event_type, payload, transition_id)
 
 
+def _missing_validation_report(
+    run: Run,
+    agent: Agent,
+) -> ValidationReportWithGates:
+    summary = "Validation failed: no validation gates were configured or detected."
+    report = DurableValidationReport(
+        run_id=run.id,
+        agent_id=agent.id,
+        attempt=0,
+        status="failed",
+        summary=summary,
+    )
+    gate = DurableValidationGateResult(
+        report_id=report.id,
+        run_id=run.id,
+        gate_id="validation-plan",
+        name="Validation plan",
+        command=["validation-plan"],
+        required=True,
+        status="failed",
+        exit_code=1,
+        failure_kind="missing_required_gate",
+        stderr_summary=summary,
+    )
+    return ValidationReportWithGates(report=report, gates=[gate])
+
+
 def _elapsed_ms(started: float) -> int:
     return int((monotonic() - started) * 1000)
 
@@ -426,6 +565,10 @@ def _elapsed_ms(started: float) -> int:
 __all__ = [
     "ProviderResolver",
     "TeamPlanningMiddleware",
+    "TeamRoleValidationMiddleware",
+    "TeamRoleValidationOutcome",
     "TeamVerificationMiddleware",
     "TeamVerifierInvalidOutput",
+    "ValidationPlanResolver",
+    "ValidationRunner",
 ]
