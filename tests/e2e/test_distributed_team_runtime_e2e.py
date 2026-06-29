@@ -303,6 +303,105 @@ async def test_team_run_reworks_same_child_after_validation_failure(
     or "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL" not in os.environ,
     reason="Runtime and checkpoint databases are not configured.",
 )
+async def test_team_run_recovers_from_patch_aggregation_conflict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository_path = await _git_workspace(tmp_path)
+    snapshot = await require_primary_clean_repository(repository_path)
+    engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
+    sessions = create_session_factory(engine)
+    registry = PostgresRepositoryRegistry(sessions)
+    registered = await registry.upsert(
+        Repository(
+            root=snapshot.root,
+            display_name="distributed-team-patch-conflict-fixture",
+            git_common_dir=snapshot.git_common_dir,
+            default_branch=snapshot.branch,
+        )
+    )
+    runtime = PostgresRuntimeRepository(sessions)
+    teams = PostgresTeamRepository(sessions)
+    intake = RunIntakeService(
+        registry=registry,
+        reservations=PostgresIntakeReservationStore(sessions),
+        runtime=runtime,
+        events=EventStream(),
+        worktrees=ManagedRunWorktreeManager(tmp_path / "worktrees"),
+        allowed_roots=[tmp_path],
+        model_resolver=_models(),
+    )
+    run = await intake.create_run(
+        repository_id=registered.id,
+        goal="Patch README.md with conflicting teammate edits and recover",
+        intent=RunIntent.MODIFYING,
+        mode=RunMode.TEAM,
+    )
+    provider = DynamicPatchConflictProvider()
+    monkeypatch.setattr(ModelProviderFactory, "create", lambda _self, _model: provider)
+    settings = Settings(
+        database_url=os.environ["AWESOME_AGENT_TEST_DATABASE_URL"],
+        checkpoint_database_url=os.environ[
+            "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL"
+        ],
+        deepseek_api_key=SecretStr("fake"),
+        artifact_root=tmp_path / "artifacts",
+        worker_poll_interval_seconds=0.01,
+        max_claim_attempts=10,
+    )
+
+    for _ in range(30):
+        processed = await run_worker(once=True, settings=settings)
+        if (await runtime.get_run(run.id)).status is RunStatus.COMPLETED:
+            break
+        assert processed
+    else:
+        raise AssertionError("distributed patch conflict recovery run did not complete")
+
+    restored = await runtime.get_run(run.id)
+    descendants = await runtime.list_descendant_runs(run.id)
+    assignments = await teams.list_assignments(run.id, include_inactive=True)
+    results = await teams.list_child_results(run.id)
+    events = await runtime.list_events(run.id)
+    workspace = Path(restored.workspace_path or "")
+
+    assert restored.status is RunStatus.COMPLETED
+    assert sum(item.child_role == "teammate" for item in descendants) == 3
+    assert sum(item.child_role == "verifier" for item in descendants) == 1
+    assert any(
+        item.handoff_context.get("rework_reason") == "patch_conflict"
+        for item in assignments
+    )
+    assert any(
+        result.status == "recovery_required"
+        and result.failure_kind == "patch_conflict"
+        and not result.patch_aggregated
+        for result in results
+    )
+    assert any(
+        result.status == "completed"
+        and result.patch_artifact_id is not None
+        and result.patch_aggregated
+        for result in results
+    )
+    readme = (workspace / "README.md").read_text(encoding="utf-8")
+    assert "team patch A" in readme
+    assert "team patch B" in readme
+    assert EventType.TEAM_REWORK_REQUESTED in {event.event_type for event in events}
+    assert any(
+        event.payload.get("rework_reason") == "patch_conflict" for event in events
+    )
+    assert any(
+        _is_patch_conflict_rework_request(request) for request in provider.requests
+    )
+    await engine.dispose()
+
+
+@pytest.mark.skipif(
+    "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ
+    or "AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL" not in os.environ,
+    reason="Runtime and checkpoint databases are not configured.",
+)
 async def test_team_run_reworks_after_verifier_rejection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -487,6 +586,43 @@ class DynamicValidationReworkProvider(StructuredModelProvider):
         )
 
 
+class DynamicPatchConflictProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
+        if _is_leader_plan_request(request):
+            yield _completed_text(_team_plan_patch_conflict_json())
+            return
+        if _is_verifier_request(request):
+            yield _completed_text(_verifier_pass_turn())
+            return
+        if _is_patch_conflict_rework_request(request):
+            yield TurnCompleted(turn=_patch_conflict_fix_turn(request))
+            return
+        if _is_alpha_patch_request(request):
+            yield TurnCompleted(
+                turn=_replace_readme_turn(
+                    request,
+                    call_prefix="alpha",
+                    replacement="team patch A",
+                    final="Applied team patch A.",
+                )
+            )
+            return
+        if _is_beta_patch_request(request):
+            yield TurnCompleted(turn=_append_team_patch_b_turn(request))
+            return
+        raise AssertionError(
+            "Unexpected patch conflict request:\n"
+            + "\n---\n".join(message.content for message in request.messages)
+        )
+
+
 def _is_verifier_request(request: ModelRequest) -> bool:
     return any(
         "independent Verifier" in message.content for message in request.messages
@@ -506,6 +642,26 @@ def _is_patch_teammate_request(request: ModelRequest) -> bool:
 
 def _is_validation_feedback_request(request: ModelRequest) -> bool:
     return any("Validation failed" in message.content for message in request.messages)
+
+
+def _is_alpha_patch_request(request: ModelRequest) -> bool:
+    return any(
+        "Patch README.md with team patch A" in message.content
+        for message in request.messages
+    )
+
+
+def _is_beta_patch_request(request: ModelRequest) -> bool:
+    return any(
+        "Patch README.md with team patch B" in message.content
+        for message in request.messages
+    )
+
+
+def _is_patch_conflict_rework_request(request: ModelRequest) -> bool:
+    return any(
+        "Patch conflict detected" in message.content for message in request.messages
+    )
 
 
 def _is_read_request(request: ModelRequest) -> bool:
@@ -614,6 +770,38 @@ def _team_plan_validation_rework_json() -> str:
                         "Repair validation feedback in the same child run.",
                     ],
                 }
+            ],
+        }
+    )
+
+
+def _team_plan_patch_conflict_json() -> str:
+    return json.dumps(
+        {
+            "rationale": "Two writing teammates intentionally touch the same line.",
+            "teammates": [
+                {
+                    "role_profile": "backend-engineer",
+                    "goal": "Patch README.md with team patch A.",
+                    "allowed_tools": ["repo.apply_patch", "repo.diff"],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": True,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": ["Apply team patch A to README.md."],
+                },
+                {
+                    "role_profile": "qa-engineer",
+                    "goal": "Patch README.md with team patch B.",
+                    "allowed_tools": ["repo.apply_patch", "repo.diff"],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": True,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": ["Apply team patch B to README.md."],
+                },
             ],
         }
     )
@@ -783,6 +971,122 @@ def _validation_fix_turn(request: ModelRequest) -> ModelTurn:
     )
 
 
+def _replace_readme_turn(
+    request: ModelRequest,
+    *,
+    call_prefix: str,
+    replacement: str,
+    final: str,
+) -> ModelTurn:
+    patch_call = f"{call_prefix}-patch"
+    diff_call = f"{call_prefix}-diff"
+    if not _has_tool_result(request, patch_call):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id=patch_call,
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps(
+                            {"patch": _replace_fixture_patch(replacement)}
+                        ),
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    if not _has_tool_result(request, diff_call):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id=diff_call,
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    return ModelTurn(
+        assistant=AssistantMessage(content=final),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _patch_conflict_fix_turn(request: ModelRequest) -> ModelTurn:
+    if not _has_tool_result(request, "conflict-fix-diff"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="conflict-fix-diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    return ModelTurn(
+        assistant=AssistantMessage(
+            content="Patch conflict already resolved in the current workspace."
+        ),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _append_team_patch_b_turn(request: ModelRequest) -> ModelTurn:
+    if not _has_tool_result(request, "beta-patch"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="beta-patch",
+                        name="repo.apply_patch",
+                        arguments_json=json.dumps(
+                            {"patch": _append_team_patch_b_after_a_patch()}
+                        ),
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    if not _has_tool_result(request, "beta-diff"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="beta-diff",
+                        name="repo.diff",
+                        arguments_json="{}",
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    return ModelTurn(
+        assistant=AssistantMessage(content="Applied team patch B after A."),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
 def _read_or_final_turn(request: ModelRequest) -> ModelTurn:
     if _has_tool_result(request, "read"):
         return _role_final_turn()
@@ -838,6 +1142,28 @@ def _fix_validation_patch() -> str:
         " fixture\n"
         "-bad validation patch\n"
         "+team patch\n"
+    )
+
+
+def _replace_fixture_patch(replacement: str) -> str:
+    return (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1 @@\n"
+        "-fixture\n"
+        f"+{replacement}\n"
+    )
+
+
+def _append_team_patch_b_after_a_patch() -> str:
+    return (
+        "diff --git a/README.md b/README.md\n"
+        "--- a/README.md\n"
+        "+++ b/README.md\n"
+        "@@ -1 +1,2 @@\n"
+        " team patch A\n"
+        "+team patch B\n"
     )
 
 

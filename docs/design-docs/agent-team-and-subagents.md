@@ -155,19 +155,23 @@ role loop, which must patch, call `repo.diff`, and validate again before any
 patch artifact is published. Non-reworkable failures or exhausted local
 attempts preserve the failed child-result semantics from Task 25.
 
-Patch aggregation is idempotent. The Leader applies Teammate patch artifacts to
-the root workspace when the preimage matches; if the postimage is already
-present, the patch is treated as already aggregated. Partial or conflicting
-patch state still fails the parent Run and is tracked as technical debt for a
-future recovery or rework path.
+Patch aggregation is idempotent and recoverable for teammate conflicts. The
+Leader applies Teammate patch artifacts to the root workspace when the preimage
+matches; if the postimage is already present, the patch is treated as already
+aggregated. If `git apply --check` reports a non-idempotent conflict, the Leader
+classifies the conflict, creates a bounded replacement Teammate child Run with
+the original assignment permissions, records the original child result as
+`recovery_required` with `failure_kind="patch_conflict"`, and waits for the
+replacement patch before creating the Verifier. Superseded conflict results stay
+auditable but are excluded from later aggregation and Verifier pass validation.
 
 The implemented `team-coding` route is now the forward distributed team runtime
 for local execution. Task 24 moves Leader planning, Teammate/Subagent
 model/tool execution, delegation tool calls, Verifier decisions, and team
 observability behind `TeamAgentLoop` and shared middleware. Remaining work is
 not basic autonomy wiring; it is hardening: richer mailbox collaboration
-policy, advanced replanning, conflict recovery, empirically tuned rework
-budgets, and true concurrent Worker stress tests.
+policy, advanced replanning, empirically tuned rework budgets, and true
+concurrent Worker stress tests.
 
 ## AgentLoop Boundary
 

@@ -49,8 +49,14 @@ from awesome_agent.runtime.team_planning import (
     TeamPlanTeammate,
 )
 from awesome_agent.runtime.team_rework import (
+    PATCH_CONFLICT_REWORK_REASON,
+    assignment_lineage_id,
+    compose_patch_conflict_rework_goal,
     compose_rework_goal,
     decode_rework_decision,
+    patch_conflict_replacement_exists,
+    patch_conflict_superseded_child_ids,
+    rework_attempt_for_lineage,
     rework_budget_for_failure,
 )
 from awesome_agent.runtime.team_verification import TeamReworkRequest
@@ -142,10 +148,14 @@ class TeamLeaderGraph:
             for assignment in teammate_assignments
         ):
             raise ChildRunWait("waiting_children")
-        await self._aggregate_child_patches(
+        if await self._aggregate_child_patches(
             run,
+            leader,
+            assignments=assignments,
+            repository=repository,
             event_sink=event_sink,
-        )
+        ):
+            raise ChildRunWait("waiting_children")
         verifier_assignments = [
             assignment
             for assignment in assignments
@@ -349,22 +359,62 @@ class TeamLeaderGraph:
     async def _aggregate_child_patches(
         self,
         run: Run,
+        leader: Agent,
         *,
+        assignments: list[TeamAssignment],
+        repository: RuntimeRepository,
         event_sink: object | None,
-    ) -> None:
+    ) -> bool:
         if run.workspace_path is None:
-            return
+            return False
         if self.artifact_repository is None:
-            return
+            return False
+        superseded_child_ids = patch_conflict_superseded_child_ids(assignments)
         results = await self.team_repository.list_child_results(run.id)
         for result in results:
+            if str(result.child_run_id) in superseded_child_ids:
+                continue
             if result.status != "completed":
                 continue
             if result.patch_artifact_id is None or result.patch_aggregated:
                 continue
             metadata = await self.artifact_repository.get(result.patch_artifact_id)
             patch = metadata.path.read_text(encoding="utf-8")
-            await apply_team_patch(run.workspace_path, patch)
+            aggregation = await apply_team_patch(run.workspace_path, patch)
+            if aggregation.status == "conflict":
+                original = _find_assignment_by_child(
+                    assignments,
+                    str(result.child_run_id),
+                )
+                if original is None or original.kind is not TeamAssignmentKind.TEAMMATE:
+                    raise PermanentExecutionError(
+                        "team_patch_conflict_target_not_found"
+                    )
+                created = await self._create_patch_conflict_rework_child(
+                    run,
+                    leader,
+                    original=original,
+                    result=result,
+                    conflict_kind=aggregation.conflict_kind or "unknown",
+                    conflict_summary=aggregation.summary,
+                    assignments=assignments,
+                    repository=repository,
+                    event_sink=event_sink,
+                )
+                if created:
+                    await self.team_repository.record_child_result(
+                        result.model_copy(
+                            update={
+                                "status": "recovery_required",
+                                "summary": (
+                                    "Patch aggregation conflict; replacement "
+                                    f"Teammate requested. {aggregation.summary}"
+                                ),
+                                "failure_kind": PATCH_CONFLICT_REWORK_REASON,
+                            }
+                        )
+                    )
+                return True
             diff = await team_aggregation_diff(run.workspace_path)
             await self.team_repository.mark_child_result_patch_aggregated(
                 result.child_run_id
@@ -378,9 +428,11 @@ class TeamLeaderGraph:
                         "patch_artifact_id": str(result.patch_artifact_id),
                         "changed_files": result.changed_files,
                         "diff_changed": bool(diff.strip()),
+                        "aggregation_status": aggregation.status,
                     },
                     f"team-patch-aggregated:{result.child_run_id}",
                 )
+        return False
 
     async def _create_verifier_child(
         self,
@@ -649,6 +701,161 @@ class TeamLeaderGraph:
             },
             f"team-rework:{child.id}",
         )
+
+    async def _create_patch_conflict_rework_child(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        original: TeamAssignment,
+        result: TeamChildResult,
+        conflict_kind: str,
+        conflict_summary: str,
+        assignments: list[TeamAssignment],
+        repository: RuntimeRepository,
+        event_sink: object | None,
+    ) -> bool:
+        if self.model_resolver is None:
+            raise PermanentExecutionError("team_model_resolver_unavailable")
+        lineage_id = assignment_lineage_id(original)
+        if patch_conflict_replacement_exists(
+            assignments,
+            lineage_id=lineage_id,
+            source_child_run_id=original.child_run_id,
+        ):
+            return False
+        attempt = rework_attempt_for_lineage(assignments, lineage_id=lineage_id)
+        budget = rework_budget_for_failure(PATCH_CONFLICT_REWORK_REASON)
+        if attempt > budget:
+            await _emit_if_callable(
+                event_sink,
+                EventType.TEAM_REWORK_EXHAUSTED,
+                {
+                    "root_run_id": str(run.id),
+                    "previous_assignment_id": lineage_id,
+                    "previous_child_run_id": str(original.child_run_id),
+                    "rework_reason": PATCH_CONFLICT_REWORK_REASON,
+                    "budget": budget,
+                },
+                f"team-patch-conflict-rework-exhausted:{lineage_id}",
+            )
+            raise PermanentExecutionError("team_patch_conflict_rework_exhausted")
+        goal = compose_patch_conflict_rework_goal(
+            original_goal=original.goal,
+            conflict_summary=conflict_summary,
+            acceptance_criteria=original.acceptance_criteria,
+        )
+        child = Run(
+            goal=goal,
+            mode=RunMode.TEAM,
+            repository_id=run.repository_id,
+            base_commit=run.base_commit,
+            intent=run.intent,
+            execution_kind=run.execution_kind,
+            parent_run_id=run.id,
+            root_run_id=run.root_run_id or run.id,
+            depth=1,
+            child_role=TeamAssignmentKind.TEAMMATE.value,
+            runtime_route=TEAM_ROLE_ROUTE,
+            dispatch_status=DispatchStatus.QUEUED,
+            workspace_path=run.workspace_path,
+            integration_branch=run.integration_branch,
+            workspace_state=run.workspace_state,
+            graph_thread_id=(
+                f"run:{run.id}:patch-conflict-rework:{original.child_run_id}:{attempt}"
+            ),
+        )
+        agent = Agent(
+            run_id=child.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile=original.role_profile,
+            model=self.model_resolver.resolve(
+                kind=AgentKind.TEAMMATE,
+                profile=original.role_profile,
+            ),
+        )
+        patch_artifact_id = (
+            str(result.patch_artifact_id)
+            if result.patch_artifact_id is not None
+            else None
+        )
+        assignment = TeamAssignment(
+            root_run_id=child.root_run_id or run.id,
+            parent_run_id=run.id,
+            child_run_id=child.id,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile=original.role_profile,
+            runtime_route=TEAM_ROLE_ROUTE,
+            goal=goal,
+            allowed_tools=original.allowed_tools,
+            deferred_tools=original.deferred_tools,
+            promoted_tools=original.promoted_tools,
+            allowed_skills=original.allowed_skills,
+            can_write=original.can_write,
+            can_delegate=original.can_delegate,
+            max_subagents=original.max_subagents,
+            acceptance_criteria=original.acceptance_criteria,
+            handoff_context={
+                "rework_reason": PATCH_CONFLICT_REWORK_REASON,
+                "previous_assignment_id": lineage_id,
+                "previous_child_run_id": str(original.child_run_id),
+                "conflicting_patch_artifact_id": patch_artifact_id,
+                "patch_conflict_kind": conflict_kind,
+                "patch_conflict_summary": conflict_summary,
+                "rework_attempt": attempt,
+            },
+        )
+        validate_assignment_graph(assignment)
+        await repository.create_run(child, agent)
+        await self.team_repository.create_assignment(assignment)
+        await _emit_if_callable(
+            event_sink,
+            EventType.TEAM_CHILD_RUN_CREATED,
+            {
+                **build_team_attribution(
+                    run=child,
+                    assignment=assignment,
+                    agent_id=agent.id,
+                ),
+                "child_run_id": str(child.id),
+                "assignment_id": str(assignment.id),
+                "kind": assignment.kind.value,
+            },
+            f"team-child-created:{child.id}",
+        )
+        await _emit_if_callable(
+            event_sink,
+            EventType.TEAM_ASSIGNMENT_CREATED,
+            {
+                **build_team_attribution(
+                    run=child,
+                    assignment=assignment,
+                    agent_id=agent.id,
+                ),
+                "assignment_id": str(assignment.id),
+                "child_run_id": str(child.id),
+                "kind": assignment.kind.value,
+            },
+            f"team-assignment-created:{assignment.id}",
+        )
+        await _emit_if_callable(
+            event_sink,
+            EventType.TEAM_REWORK_REQUESTED,
+            {
+                "root_run_id": str(run.id),
+                "previous_assignment_id": lineage_id,
+                "previous_child_run_id": str(original.child_run_id),
+                "replacement_assignment_id": str(assignment.id),
+                "replacement_child_run_id": str(child.id),
+                "rework_attempt": attempt,
+                "rework_reason": PATCH_CONFLICT_REWORK_REASON,
+                "patch_conflict_kind": conflict_kind,
+                "conflicting_patch_artifact_id": patch_artifact_id,
+            },
+            f"team-patch-conflict-rework:{child.id}",
+        )
+        return True
 
 
 def _find_assignment_by_child(
