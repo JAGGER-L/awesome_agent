@@ -7,10 +7,24 @@ from awesome_agent.modeling import (
     StopReason,
     ToolCall,
 )
+from awesome_agent.observability.facade import NoopObservabilityFacade
+from awesome_agent.runtime.agent_loop.observability_middleware import (
+    ObservabilityMiddleware,
+)
+from awesome_agent.runtime.agent_loop.read_only import ReadOnlyAgentLoop
 from awesome_agent.runtime.agent_loop.read_only_middleware import (
     ReadOnlyEvidenceMiddleware,
     ReadOnlyProgressMiddleware,
 )
+
+
+def test_readonly_agent_loop_installs_observability_middleware() -> None:
+    loop = ReadOnlyAgentLoop(observability=NoopObservabilityFacade())
+
+    assert any(
+        isinstance(middleware, ObservabilityMiddleware)
+        for middleware in loop.middleware_stack.middleware
+    )
 
 
 def test_readonly_evidence_middleware_routes_tool_calls_to_tools() -> None:

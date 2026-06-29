@@ -1,0 +1,362 @@
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from time import monotonic
+from typing import Any, TypeVar, cast
+from uuid import UUID, uuid4
+
+from pydantic import TypeAdapter, ValidationError
+
+from awesome_agent.modeling import ModelTurn
+from awesome_agent.observability.facade import (
+    ObservabilityFacade,
+    ObservabilitySpanInput,
+)
+from awesome_agent.observability.repository import DurableModelCall
+from awesome_agent.runtime.agent_loop.contracts import (
+    MiddlewareContext,
+    MiddlewareDecision,
+    MiddlewareStage,
+)
+
+logger = logging.getLogger(__name__)
+
+ResultT = TypeVar("ResultT")
+_TURN_ADAPTER: TypeAdapter[ModelTurn] = TypeAdapter(ModelTurn)
+_MODEL_STAGE = MiddlewareStage.WRAP_MODEL_CALL
+_TOOL_STAGE = MiddlewareStage.WRAP_TOOL_CALL
+_AGENT_STAGE = MiddlewareStage.BEFORE_AGENT
+
+
+class ObservabilityMiddleware:
+    name = "observability"
+
+    def __init__(self, facade: ObservabilityFacade | None) -> None:
+        self._facade = facade
+
+    async def handle(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
+    ) -> MiddlewareDecision:
+        return await call_next(context)
+
+    async def wrap_stage(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[ResultT]],
+    ) -> ResultT:
+        if self._facade is None or stage not in {
+            _AGENT_STAGE,
+            _MODEL_STAGE,
+            _TOOL_STAGE,
+        }:
+            return await call_next(context)
+        run_id = _uuid_or_none(context.run_id)
+        if run_id is None:
+            return await call_next(context)
+
+        started_at = _now()
+        started = monotonic()
+        try:
+            result = await call_next(context)
+        except Exception as error:
+            await self._record_failed_stage(
+                stage=stage,
+                context=context,
+                run_id=run_id,
+                started_at=started_at,
+                duration_ms=_elapsed_ms(started),
+                error=error,
+            )
+            raise
+
+        await self._record_completed_stage(
+            stage=stage,
+            context=context,
+            run_id=run_id,
+            result=result,
+            started_at=started_at,
+            duration_ms=_elapsed_ms(started),
+        )
+        return result
+
+    async def _record_completed_stage(
+        self,
+        *,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        run_id: UUID,
+        result: object,
+        started_at: datetime,
+        duration_ms: int,
+    ) -> None:
+        if stage is _MODEL_STAGE:
+            await self._record_model_call(
+                context=context,
+                run_id=run_id,
+                result=result,
+                started_at=started_at,
+                duration_ms=duration_ms,
+            )
+            return
+        if stage is _TOOL_STAGE:
+            await self._record_tool_calls(
+                context=context,
+                run_id=run_id,
+                result=result,
+                started_at=started_at,
+                duration_ms=duration_ms,
+            )
+            return
+        await self._safe_record_span(
+            ObservabilitySpanInput(
+                run_id=run_id,
+                name="agent.run",
+                category="agent",
+                status="completed",
+                attributes=_base_attributes(stage, context),
+                started_at=started_at,
+                ended_at=_now(),
+                duration_ms=duration_ms,
+            )
+        )
+
+    async def _record_failed_stage(
+        self,
+        *,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        run_id: UUID,
+        started_at: datetime,
+        duration_ms: int,
+        error: Exception,
+    ) -> None:
+        await self._safe_record_span(
+            ObservabilitySpanInput(
+                run_id=run_id,
+                name=_span_name(stage),
+                category=_span_category(stage),
+                status="failed",
+                attributes=_base_attributes(stage, context),
+                started_at=started_at,
+                ended_at=_now(),
+                duration_ms=duration_ms,
+                error=str(error),
+            )
+        )
+
+    async def _record_model_call(
+        self,
+        *,
+        context: MiddlewareContext,
+        run_id: UUID,
+        result: object,
+        started_at: datetime,
+        duration_ms: int,
+    ) -> None:
+        turn = _turn_from_result(result)
+        attributes = _base_attributes(MiddlewareStage.WRAP_MODEL_CALL, context)
+        attributes["turn"] = _turn_number(result)
+        if turn is not None:
+            attributes.update(
+                {
+                    "provider": turn.provider,
+                    "model": turn.model,
+                    "stop_reason": turn.stop_reason.value,
+                }
+            )
+        span_id = uuid4().hex[:16]
+        span = await self._safe_record_span(
+            ObservabilitySpanInput(
+                run_id=run_id,
+                name="model.call",
+                category="model",
+                status="completed",
+                attributes=attributes,
+                durable_span_id=span_id,
+                started_at=started_at,
+                ended_at=_now(),
+                duration_ms=duration_ms,
+            )
+        )
+        if turn is None:
+            return
+        await self._safe_record_model_call(
+            DurableModelCall(
+                run_id=run_id,
+                agent_id=_uuid_or_none(context.agent_id),
+                turn=_turn_number(result),
+                provider=turn.provider,
+                model=turn.model,
+                status="completed",
+                stop_reason=turn.stop_reason.value,
+                input_tokens=turn.usage.input_tokens,
+                output_tokens=turn.usage.output_tokens,
+                reasoning_tokens=turn.usage.reasoning_tokens,
+                cache_read_tokens=turn.usage.cache_read_tokens,
+                cache_write_tokens=turn.usage.cache_write_tokens,
+                latency_ms=duration_ms,
+                trace_id=span.trace_id,
+                span_id=span.span_id,
+            )
+        )
+
+    async def _record_tool_calls(
+        self,
+        *,
+        context: MiddlewareContext,
+        run_id: UUID,
+        result: object,
+        started_at: datetime,
+        duration_ms: int,
+    ) -> None:
+        turn = _turn_from_result(result)
+        calls = list(turn.assistant.tool_calls) if turn is not None else []
+        result_status = _tool_result_statuses(result)
+        if not calls:
+            await self._safe_record_span(
+                ObservabilitySpanInput(
+                    run_id=run_id,
+                    name="tool.call",
+                    category="tool",
+                    status="completed",
+                    attributes=_base_attributes(_TOOL_STAGE, context),
+                    started_at=started_at,
+                    ended_at=_now(),
+                    duration_ms=duration_ms,
+                )
+            )
+            return
+        for call in calls:
+            status = result_status.get(call.call_id, "completed")
+            attributes = _base_attributes(_TOOL_STAGE, context)
+            attributes.update(
+                {
+                    "tool": call.name,
+                    "call_id": call.call_id,
+                }
+            )
+            await self._safe_record_span(
+                ObservabilitySpanInput(
+                    run_id=run_id,
+                    name="tool.call",
+                    category="tool",
+                    status=status,
+                    attributes=attributes,
+                    started_at=started_at,
+                    ended_at=_now(),
+                    duration_ms=duration_ms,
+                )
+            )
+
+    async def _safe_record_span(
+        self,
+        span: ObservabilitySpanInput,
+    ) -> Any:
+        if self._facade is None:
+            return None
+        try:
+            return await self._facade.record_span(span)
+        except Exception:
+            logger.exception("AgentLoop observability span recording failed.")
+            return None
+
+    async def _safe_record_model_call(self, call: DurableModelCall) -> None:
+        if self._facade is None:
+            return
+        try:
+            await self._facade.record_model_call(call)
+        except Exception:
+            logger.exception("AgentLoop observability model-call recording failed.")
+
+
+def _base_attributes(
+    stage: MiddlewareStage,
+    context: MiddlewareContext,
+) -> dict[str, object]:
+    return {
+        **context.metadata,
+        "stage": stage.value,
+        "runtime_route": context.runtime_route,
+        "agent_id": context.agent_id,
+    }
+
+
+def _span_name(stage: MiddlewareStage) -> str:
+    if stage is _MODEL_STAGE:
+        return "model.call"
+    if stage is _TOOL_STAGE:
+        return "tool.call"
+    return "agent.run"
+
+
+def _span_category(stage: MiddlewareStage) -> str:
+    if stage is _MODEL_STAGE:
+        return "model"
+    if stage is _TOOL_STAGE:
+        return "tool"
+    return "agent"
+
+
+def _turn_from_result(result: object) -> ModelTurn | None:
+    state = _state_dict(result)
+    if state is None or "last_turn" not in state:
+        return None
+    try:
+        return _TURN_ADAPTER.validate_python(state["last_turn"])
+    except ValidationError:
+        logger.exception("AgentLoop observability could not parse model turn.")
+        return None
+
+
+def _tool_result_statuses(result: object) -> dict[str, str]:
+    state = _state_dict(result)
+    if state is None:
+        return {}
+    messages = state.get("messages")
+    if not isinstance(messages, list):
+        return {}
+    statuses: dict[str, str] = {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        call_id = message.get("call_id")
+        if isinstance(call_id, str):
+            statuses[call_id] = "failed" if message.get("is_error") else "completed"
+    return statuses
+
+
+def _turn_number(result: object) -> int:
+    state = _state_dict(result)
+    if state is None:
+        return 0
+    value = state.get("model_turn_count", 0)
+    if isinstance(value, int):
+        return value
+    return 0
+
+
+def _state_dict(result: object) -> dict[str, Any] | None:
+    if isinstance(result, dict):
+        return cast(dict[str, Any], result)
+    return None
+
+
+def _uuid_or_none(value: str) -> UUID | None:
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((monotonic() - started) * 1000))

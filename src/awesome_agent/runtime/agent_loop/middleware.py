@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Any, Protocol, TypeVar, cast
 
 from awesome_agent.runtime.agent_loop.contracts import (
     MiddlewareContext,
     MiddlewareDecision,
     MiddlewareStage,
 )
+
+ResultT = TypeVar("ResultT")
 
 
 class AgentLoopMiddleware(Protocol):
@@ -61,6 +63,46 @@ class MiddlewareStack:
                     stage,
                     current_context,
                     current_next,
+                )
+
+            call_next = handler
+        return await call_next(context)
+
+    async def run_operation(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        operation: Callable[[], Awaitable[ResultT]],
+    ) -> ResultT:
+        async def terminal(_: MiddlewareContext) -> ResultT:
+            return await operation()
+
+        call_next: Callable[[MiddlewareContext], Awaitable[ResultT]] = terminal
+        for middleware in reversed(self._middleware):
+            wrap_stage = getattr(middleware, "wrap_stage", None)
+            if not callable(wrap_stage):
+                continue
+            next_handler = call_next
+
+            async def handler(
+                current_context: MiddlewareContext,
+                *,
+                current_wrap_stage: Callable[
+                    [MiddlewareStage, MiddlewareContext, Callable[..., Any]],
+                    Awaitable[Any],
+                ] = wrap_stage,
+                current_next: Callable[
+                    [MiddlewareContext],
+                    Awaitable[ResultT],
+                ] = next_handler,
+            ) -> ResultT:
+                return cast(
+                    ResultT,
+                    await current_wrap_stage(
+                        stage,
+                        current_context,
+                        current_next,
+                    ),
                 )
 
             call_next = handler

@@ -28,6 +28,7 @@ from awesome_agent.modeling import (
     TransientModelError,
     UserMessage,
 )
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.persistence.budget import (
     BudgetRepository,
 )
@@ -124,6 +125,7 @@ class ReadOnlyCodingGraph:
         context_manager: ContextManager | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        observability: ObservabilityFacade | None = None,
     ) -> None:
         self.saver = saver
         self.provider_resolver = provider_resolver
@@ -138,7 +140,7 @@ class ReadOnlyCodingGraph:
         self.context_manager = context_manager
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
-        self.agent_loop = ReadOnlyAgentLoop()
+        self.agent_loop = ReadOnlyAgentLoop(observability=observability)
         self.context_middleware = ReadOnlyContextMiddleware(
             context_manager=context_manager,
             budget_repository=budget_repository,

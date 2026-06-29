@@ -15,6 +15,7 @@ from awesome_agent.modeling import (
     SystemMessage,
     ToolCall,
 )
+from awesome_agent.observability.facade import NoopObservabilityFacade
 from awesome_agent.runtime.agent_loop.contracts import (
     MiddlewareContext,
     MiddlewareDecision,
@@ -30,6 +31,9 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
     ModifyingContextMiddleware,
     ModifyingEvidenceMiddleware,
     modifying_ledger_to_state,
+)
+from awesome_agent.runtime.agent_loop.observability_middleware import (
+    ObservabilityMiddleware,
 )
 from awesome_agent.runtime.budget import BudgetLedger, BudgetPolicy
 
@@ -67,6 +71,15 @@ def _agent(run: Run) -> Agent:
         kind=AgentKind.LEADER,
         profile="leader",
         model="fake-model",
+    )
+
+
+def test_modifying_agent_loop_installs_observability_middleware() -> None:
+    loop = ModifyingAgentLoop(observability=NoopObservabilityFacade())
+
+    assert any(
+        isinstance(middleware, ObservabilityMiddleware)
+        for middleware in loop.middleware_stack.middleware
     )
 
 

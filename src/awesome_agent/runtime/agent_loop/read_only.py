@@ -5,11 +5,15 @@ from typing import TypeVar
 
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import ModelMessage
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.runtime.agent_loop.contracts import (
     MiddlewareContext,
     MiddlewareStage,
 )
 from awesome_agent.runtime.agent_loop.middleware import MiddlewareStack
+from awesome_agent.runtime.agent_loop.observability_middleware import (
+    ObservabilityMiddleware,
+)
 
 StateT = TypeVar("StateT")
 
@@ -19,8 +23,12 @@ class ReadOnlyAgentLoop:
         self,
         *,
         middleware_stack: MiddlewareStack | None = None,
+        observability: ObservabilityFacade | None = None,
     ) -> None:
-        self.middleware_stack = middleware_stack or MiddlewareStack()
+        middleware = list(middleware_stack.middleware) if middleware_stack else []
+        if observability is not None:
+            middleware.append(ObservabilityMiddleware(observability))
+        self.middleware_stack = MiddlewareStack(middleware)
 
     async def before_agent(
         self,
@@ -140,17 +148,19 @@ class ReadOnlyAgentLoop:
         messages: list[ModelMessage],
         handler: Callable[[StateT], Awaitable[StateT]],
     ) -> StateT:
-        decision = await self.middleware_stack.run_stage(
-            stage,
-            MiddlewareContext(
-                run_id=str(run.id),
-                agent_id=str(agent.id),
-                runtime_route=run.runtime_route or "",
-                messages=messages,
-                metadata={"stage": stage.value},
-            ),
+        context = MiddlewareContext(
+            run_id=str(run.id),
+            agent_id=str(agent.id),
+            runtime_route=run.runtime_route or "",
+            messages=messages,
+            metadata={"stage": stage.value},
         )
-        if not decision.continue_loop:
-            reason = decision.reason or f"{stage.value} stopped the agent loop"
-            raise RuntimeError(reason)
-        return await handler(state)
+
+        async def operation() -> StateT:
+            decision = await self.middleware_stack.run_stage(stage, context)
+            if not decision.continue_loop:
+                reason = decision.reason or f"{stage.value} stopped the agent loop"
+                raise RuntimeError(reason)
+            return await handler(state)
+
+        return await self.middleware_stack.run_operation(stage, context, operation)

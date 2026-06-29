@@ -32,6 +32,7 @@ from awesome_agent.modeling import (
     TransientModelError,
     UserMessage,
 )
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.persistence.approvals import ApprovalRepository, DurableApproval
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.tool_invocations import (
@@ -163,6 +164,7 @@ class ModifyingCodingGraph:
         context_manager: ContextManager | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        observability: ObservabilityFacade | None = None,
     ) -> None:
         self.saver = saver
         self.provider_resolver = provider_resolver
@@ -186,7 +188,7 @@ class ModifyingCodingGraph:
         self.context_manager = context_manager
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
-        self.agent_loop = ModifyingAgentLoop()
+        self.agent_loop = ModifyingAgentLoop(observability=observability)
         self.context_middleware = ModifyingContextMiddleware(
             context_manager=context_manager,
             budget_repository=budget_repository,
@@ -568,6 +570,23 @@ class ModifyingCodingGraph:
         )
 
     async def _execute_tool(
+        self,
+        state: ModifyingAgentState,
+    ) -> ModifyingAgentState:
+        run = self._require_run()
+        agent = self._require_agent()
+        messages = [
+            _MESSAGE_ADAPTER.validate_python(item) for item in state["messages"]
+        ]
+        return await self.agent_loop.wrap_tool_call(
+            state,
+            run=run,
+            agent=agent,
+            messages=messages,
+            handler=self._execute_tool_impl,
+        )
+
+    async def _execute_tool_impl(
         self,
         state: ModifyingAgentState,
     ) -> ModifyingAgentState:

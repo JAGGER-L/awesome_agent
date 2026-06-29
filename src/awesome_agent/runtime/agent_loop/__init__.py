@@ -22,6 +22,9 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
     ModifyingValidationMiddleware,
     modifying_ledger_to_state,
 )
+from awesome_agent.runtime.agent_loop.observability_middleware import (
+    ObservabilityMiddleware,
+)
 from awesome_agent.runtime.agent_loop.read_only import ReadOnlyAgentLoop
 
 __all__ = [
@@ -42,6 +45,7 @@ __all__ = [
     "ModifyingFinalizationMiddleware",
     "ModifyingToolMiddleware",
     "ModifyingValidationMiddleware",
+    "ObservabilityMiddleware",
     "ReadOnlyAgentLoop",
     "modifying_ledger_to_state",
 ]
