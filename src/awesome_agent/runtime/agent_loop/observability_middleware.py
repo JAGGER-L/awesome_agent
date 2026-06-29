@@ -217,9 +217,7 @@ class ObservabilityMiddleware:
     ) -> None:
         turn = _turn_from_result(result)
         calls = list(turn.assistant.tool_calls) if turn is not None else []
-        direct_tool_result = (
-            result if isinstance(result, ToolResultMessage) else None
-        )
+        direct_tool_result = result if isinstance(result, ToolResultMessage) else None
         if direct_tool_result is not None:
             attributes = _base_attributes(_TOOL_STAGE, context)
             attributes.setdefault("call_id", direct_tool_result.call_id)
