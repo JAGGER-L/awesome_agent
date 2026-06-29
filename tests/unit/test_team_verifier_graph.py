@@ -1,4 +1,6 @@
+import json
 from collections.abc import Awaitable, Callable
+from uuid import uuid4
 
 import pytest
 from tests.fakes import FakeModelProvider
@@ -252,6 +254,82 @@ async def test_verifier_rejects_unaggregated_patch_even_if_model_passes() -> Non
 
     with pytest.raises(PermanentExecutionError, match="unaggregated_patch"):
         await graph.execute(verifier, agent, repository=runtime)
+
+
+@pytest.mark.asyncio
+async def test_verifier_ignores_superseded_patch_conflict_result() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = FakeModelProvider([_decision("passed", "Replacement looks good.")])
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+    )
+    parent = Run(goal="parent", mode=RunMode.TEAM)
+    verifier, agent, assignment = _verifier_run(parent)
+    await runtime.create_run(
+        parent,
+        Agent(
+            run_id=parent.id,
+            kind=AgentKind.LEADER,
+            profile="leader",
+            model="fake",
+        ),
+    )
+    await runtime.create_run(verifier, agent)
+    await teams.create_assignment(assignment)
+    original = await _teammate_assignment(teams, parent)
+    replacement = TeamAssignment(
+        root_run_id=parent.id,
+        parent_run_id=parent.id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend",
+        runtime_route="team-role",
+        goal="replacement",
+        handoff_context={
+            "rework_reason": "patch_conflict",
+            "previous_assignment_id": str(original.id),
+            "previous_child_run_id": str(original.child_run_id),
+            "rework_attempt": 1,
+        },
+    )
+    await teams.create_assignment(replacement)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=original.id,
+            child_run_id=original.child_run_id,
+            parent_run_id=parent.id,
+            root_run_id=parent.id,
+            status="recovery_required",
+            summary="Old patch conflict.",
+            patch_artifact_id=uuid4(),
+            patch_aggregated=False,
+            failure_kind="patch_conflict",
+        )
+    )
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=replacement.id,
+            child_run_id=replacement.child_run_id,
+            parent_run_id=parent.id,
+            root_run_id=parent.id,
+            status="completed",
+            summary="Replacement patch aggregated.",
+            patch_artifact_id=uuid4(),
+            patch_aggregated=True,
+        )
+    )
+
+    state, recovered = await graph.execute(verifier, agent, repository=runtime)
+
+    payload = json.loads(provider.requests[0].messages[-1].content)
+    assert not recovered
+    assert state["phase"] == "passed"
+    assert [item["child_run_id"] for item in payload["child_results"]] == [
+        str(replacement.child_run_id)
+    ]
 
 
 @pytest.mark.asyncio
