@@ -90,7 +90,7 @@ Task 07 does not include:
 | Task 21 | Done | `solo-modifying` now enters AgentLoop middleware stages, with context, budget, tool execution, approval, artifact offload, evidence, validation, rework, and finalization policy extracted from the graph. |
 | Task 22 | Done | Replaced deterministic `team-coding` role skeletons with model-driven Leader planning, assignment-scoped Teammate model/tool loops, Teammate-owned Subagents, structured Verifier decisions, targeted replacement rework, and patch-producing distributed E2E evidence. | Full distributed team E2E covers Leader, Teammates, Verifier, Subagents, model calls, scoped tools, patch artifact generation, idempotent patch aggregation, traceability, and verifier rework. |
 | Task 23 | Done | Real OTel spans on API endpoints, Worker graph boundaries, and migrated solo AgentLoop model/tool paths while preserving durable query tables. | API, `run.execute`, `graph.execute`, `agent.run`, `model.call`, and `tool.call` spans are created through `ObservabilityFacade` and AgentLoop observability middleware; exporter failures are isolated and trace IDs remain queryable through durable events. |
-| Task 24 | Team AgentLoop middleware migration | Move `team-coding`, `team-role`, and `team-verifier` behind the ThinGraph, AgentLoop, middleware, and hooks boundary, then split oversized graph files along the new boundary. | Team graph modules own only durable child-run coordination and state transitions; team model/tool/validation/delegation/verification policy runs through middleware with focused unit and distributed-worker tests. |
+| Task 24 | Done | `team-coding`, `team-role`, and `team-verifier` now route Leader planning, Teammate/Subagent model/tool execution, Verifier decisions, and team observability through `TeamAgentLoop` middleware; durable child-run coordination remains graph-owned and helper modules are split along the new boundary. | Focused unit tests cover TeamAgentLoop, Leader planning, role model/tool calls, Verifier decisions, and Worker observability projection changes; distributed integration/E2E tests remain database-gated in local runs. |
 
 ## Task 22 Breakdown
 
@@ -135,8 +135,9 @@ Task 07 does not include:
   passes real E2E with Leader, Teammate, Verifier, and depth-2 Subagent child
   Runs, independent Worker claims, patch aggregation, mailbox evidence, and
   recursive cancellation.
-- Do not claim modifying or team middleware-based runtime architecture until
-  Task 21 and Task 24 migrate those routes behind AgentLoop middleware.
+- Do not claim new runtime routes use the middleware architecture unless those
+  routes have focused tests proving model/tool policy enters AgentLoop
+  middleware and graph modules retain only durable coordination.
 - Do not claim concurrent distributed team stress hardening, richer mailbox
   collaboration, or team middleware architecture until the corresponding
   technical debts or later tasks are closed with executable evidence.

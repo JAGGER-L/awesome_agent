@@ -7,8 +7,10 @@ from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.agent_loop import TeamAgentLoop
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import ChildRunWait
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
@@ -54,11 +56,14 @@ class TeamRoleGraph:
         artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        team_loop: TeamAgentLoop | None = None,
+        observability: ObservabilityFacade | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
+        self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.role_loop = (
-            RoleLoop(provider_resolver=provider_resolver)
+            RoleLoop(provider_resolver=provider_resolver, team_loop=self.team_loop)
             if provider_resolver is not None
             else None
         )
@@ -119,22 +124,38 @@ class TeamRoleGraph:
             raise ChildRunWait("waiting_subagents")
         subagent_results = await self.team_repository.list_child_results(run.id)
         result = None
-        if self.role_loop is not None and run.workspace_path is not None:
-            result = await self.role_loop.execute(
+        workspace = run.workspace_path
+        if self.role_loop is not None and workspace is not None:
+            role_loop = self.role_loop
+
+            async def execute_role_operation(_: object) -> RoleLoopResult:
+                return await role_loop.execute(
+                    run=run,
+                    agent=agent,
+                    assignment=assignment,
+                    policy=RoleLoopPolicy(
+                        allowed_tools=allowed_tools,
+                        allowed_skills=assignment.allowed_skills,
+                        can_write=assignment.can_write,
+                        acceptance_criteria=assignment.acceptance_criteria,
+                    ),
+                    workspace=workspace,
+                    repository=repository,
+                    team_repository=self.team_repository,
+                    subagent_results=subagent_results,
+                    event_sink=event_sink,  # type: ignore[arg-type]
+                )
+
+            result = await self.team_loop.run_agent_operation(
+                object(),
                 run=run,
                 agent=agent,
-                assignment=assignment,
-                policy=RoleLoopPolicy(
-                    allowed_tools=allowed_tools,
-                    allowed_skills=assignment.allowed_skills,
-                    can_write=assignment.can_write,
-                    acceptance_criteria=assignment.acceptance_criteria,
-                ),
-                workspace=run.workspace_path,
-                repository=repository,
-                team_repository=self.team_repository,
-                subagent_results=subagent_results,
-                event_sink=event_sink,  # type: ignore[arg-type]
+                messages=[],
+                assignment_id=assignment.id,
+                team_role=assignment.kind.value,
+                agent_kind=agent.kind.value,
+                metadata={"team_operation": "role_execute"},
+                handler=execute_role_operation,
             )
         await self._record_result_if_needed(run, agent, assignment, result=result)
         return (

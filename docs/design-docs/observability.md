@@ -7,10 +7,12 @@ project-owned durable trace/metric query tables, and real OpenTelemetry spans.
 Durable query tables remain the product source of truth; OTel spans are an
 export/instrumentation path for operators and local debugging.
 
-## Current Solo Runtime Implementation
+## Current Runtime Implementation
 
-Task 23 adds real OTel spans without making observability a new source of Run
-or API failure.
+Task 23 adds real OTel spans for API, Worker, and migrated solo AgentLoop
+paths without making observability a new source of Run or API failure. Task 24
+extends the same AgentLoop observability boundary to the forward distributed
+team routes.
 
 Durable query-table evidence:
 
@@ -26,12 +28,14 @@ Runtime event lineage:
 
 - product-created and dispatcher-created runtime events receive a stable
   Run-scoped `trace_id` based on the Run UUID;
-- migrated solo AgentLoop model/tool stages record `agent.run`, `model.call`,
-  and `tool.call` through `ObservabilityMiddleware`;
+- migrated solo and distributed team AgentLoop model/tool stages record
+  `agent.run`, `model.call`, and `tool.call` through
+  `ObservabilityMiddleware`;
 - Worker-owned instrumentation records only outer `run.execute` and
   `graph.execute` boundaries;
-- team routes keep Worker event projection compatibility until Task 24 moves
-  them behind the same AgentLoop middleware boundary.
+- Worker event projection compatibility remains only for `team-coding-scoped`
+  and other unmigrated routes, not for `team-coding`, `team-role`, or
+  `team-verifier`.
 
 Telemetry isolation:
 
@@ -79,8 +83,8 @@ status
 The future frontend must inspect agent topology, conversations, mailbox
 messages, model calls, tool progress/results, task revisions, approvals,
 artifacts, verification loops, memory operations, token usage, latency, and
-errors. The current API exposes model calls, durable spans, and durable metrics;
-team model/tool OTel middleware migration remains Task 24 work.
+errors. The current API exposes model calls, durable spans, and durable metrics
+for solo and forward distributed team routes.
 
 Model providers now expose generic reasoning-started and reasoning-delta events.
 The future frontend displays only a generic `thinking` state and collapsible

@@ -154,6 +154,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     artifact_repository=artifact_repository,
                     budget_repository=budget_repository,
                     budget_policy=budget_policy,
+                    observability=observability,
                 )
                 if providers.coding_available
                 else None
@@ -167,6 +168,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 artifact_repository=artifact_repository,
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
+                observability=observability,
             ),
             team_verifier_graph=TeamVerifierGraph(
                 team_repository=team_repository,
@@ -177,6 +179,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 artifact_repository=artifact_repository,
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
+                observability=observability,
             ),
             config=WorkerConfig(
                 lease_duration=timedelta(seconds=configured.lease_duration_seconds),

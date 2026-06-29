@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 from pydantic import TypeAdapter, ValidationError
 
-from awesome_agent.modeling import ModelTurn
+from awesome_agent.modeling import ModelTurn, ToolResultMessage
 from awesome_agent.observability.facade import (
     ObservabilityFacade,
     ObservabilitySpanInput,
@@ -161,7 +161,7 @@ class ObservabilityMiddleware:
     ) -> None:
         turn = _turn_from_result(result)
         attributes = _base_attributes(MiddlewareStage.WRAP_MODEL_CALL, context)
-        attributes["turn"] = _turn_number(result)
+        attributes["turn"] = _turn_number(result, context)
         if turn is not None:
             attributes.update(
                 {
@@ -190,7 +190,7 @@ class ObservabilityMiddleware:
             DurableModelCall(
                 run_id=run_id,
                 agent_id=_uuid_or_none(context.agent_id),
-                turn=_turn_number(result),
+                turn=_turn_number(result, context),
                 provider=turn.provider,
                 model=turn.model,
                 status="completed",
@@ -217,6 +217,23 @@ class ObservabilityMiddleware:
     ) -> None:
         turn = _turn_from_result(result)
         calls = list(turn.assistant.tool_calls) if turn is not None else []
+        direct_tool_result = result if isinstance(result, ToolResultMessage) else None
+        if direct_tool_result is not None:
+            attributes = _base_attributes(_TOOL_STAGE, context)
+            attributes.setdefault("call_id", direct_tool_result.call_id)
+            await self._safe_record_span(
+                ObservabilitySpanInput(
+                    run_id=run_id,
+                    name="tool.call",
+                    category="tool",
+                    status=("failed" if direct_tool_result.is_error else "completed"),
+                    attributes=attributes,
+                    started_at=started_at,
+                    ended_at=_now(),
+                    duration_ms=duration_ms,
+                )
+            )
+            return
         result_status = _tool_result_statuses(result)
         if not calls:
             await self._safe_record_span(
@@ -304,6 +321,8 @@ def _span_category(stage: MiddlewareStage) -> str:
 
 
 def _turn_from_result(result: object) -> ModelTurn | None:
+    if isinstance(result, ModelTurn):
+        return result
     state = _state_dict(result)
     if state is None or "last_turn" not in state:
         return None
@@ -331,13 +350,16 @@ def _tool_result_statuses(result: object) -> dict[str, str]:
     return statuses
 
 
-def _turn_number(result: object) -> int:
+def _turn_number(result: object, context: MiddlewareContext) -> int:
     state = _state_dict(result)
-    if state is None:
-        return 0
-    value = state.get("model_turn_count", 0)
-    if isinstance(value, int):
-        return value
+    if state is not None:
+        value = state.get("model_turn_count", 0)
+        if isinstance(value, int):
+            return value
+    for key in ("turn", "attempt"):
+        value = context.metadata.get(key)
+        if isinstance(value, int):
+            return value
     return 0
 
 

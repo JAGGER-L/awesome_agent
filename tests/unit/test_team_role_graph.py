@@ -1,5 +1,5 @@
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -26,6 +26,13 @@ from awesome_agent.modeling import (
 )
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
+from awesome_agent.runtime.agent_loop import (
+    MiddlewareContext,
+    MiddlewareDecision,
+    MiddlewareStack,
+    MiddlewareStage,
+    TeamAgentLoop,
+)
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
@@ -320,6 +327,61 @@ async def test_teammate_runs_model_tool_loop_and_writes_patch_artifact(
         and payload.get("agent_id") == str(agent.id)
         for _, payload, _ in events
     )
+
+
+@pytest.mark.asyncio
+async def test_teammate_model_and_tool_calls_use_team_agent_loop(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    recorder = RecordingTeamMiddleware()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Read README.md."),
+        ]
+    )
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        team_loop=TeamAgentLoop(middleware_stack=MiddlewareStack([recorder])),
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    assignment = _assignment(
+        run,
+        kind=TeamAssignmentKind.TEAMMATE,
+        allowed_tools=["repo.read"],
+        can_write=False,
+    )
+    await teams.create_assignment(assignment)
+
+    state, recovered = await graph.execute(run, agent, repository=runtime)
+
+    assert not recovered
+    assert state["phase"] == "completed"
+    assert [item["stage"] for item in recorder.calls] == [
+        "wrap_model_call",
+        "wrap_tool_call",
+        "wrap_model_call",
+    ]
+    assert recorder.calls[0]["assignment_id"] == str(assignment.id)
+    assert recorder.calls[0]["team_role"] == "teammate"
+    assert recorder.calls[0]["agent_kind"] == "teammate"
+    assert recorder.calls[1]["tool"] == "repo.read"
+    assert "README.md" not in str(recorder.calls[1])
 
 
 @pytest.mark.asyncio
@@ -800,3 +862,36 @@ def _git(path: Path, *arguments: str) -> None:
         text=True,
     )
     assert result.returncode == 0
+
+
+class RecordingTeamMiddleware:
+    name = "recording-team-role"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def handle(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
+    ) -> MiddlewareDecision:
+        return await call_next(context)
+
+    async def wrap_stage(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[object]],
+    ) -> object:
+        if stage in {
+            MiddlewareStage.WRAP_MODEL_CALL,
+            MiddlewareStage.WRAP_TOOL_CALL,
+        }:
+            self.calls.append(
+                {
+                    "stage": stage.value,
+                    **context.metadata,
+                }
+            )
+        return await call_next(context)

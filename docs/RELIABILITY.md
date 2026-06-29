@@ -104,10 +104,12 @@ forbidden.
 - Runtime observability writes are failure-isolated from Run execution.
   PostgreSQL query tables store run, graph, model, tool, and sandbox spans,
   model-call summaries, latency metrics, and trace/span IDs. API endpoints,
-  Worker `run.execute`/`graph.execute` boundaries, and migrated solo AgentLoop
-  `agent.run`/`model.call`/`tool.call` stages create real OpenTelemetry spans
-  through a failure-isolated facade. OTel exporter failures must not alter Run
-  status or HTTP responses.
+  Worker `run.execute`/`graph.execute` boundaries, migrated solo AgentLoop
+  stages, and forward distributed team AgentLoop `agent.run`/`model.call`/
+  `tool.call` stages create real OpenTelemetry spans through a failure-isolated
+  facade. Worker event projection is retained only for scoped or unmigrated
+  compatibility routes. OTel exporter failures must not alter Run status or
+  HTTP responses.
 - Readiness exposes `healthy`, `degraded`, and `unhealthy`. Required dependency
   failures make readiness `unhealthy`; optional or advisory failures make it
   `degraded`. `/health` remains process liveness only. `/ready` returns 200 for
@@ -117,6 +119,11 @@ forbidden.
   holding a Worker lease. Child completion records assignment terminal status
   and requeues the waiting parent. Parent cancellation recursively cancels
   nonterminal descendants while preserving terminal child evidence.
+- Forward distributed team routes keep durable child-run coordination,
+  assignment loading, patch aggregation, result persistence, mailbox messages,
+  and terminal mapping in graph modules. Leader planning, role model/tool
+  execution, delegation tool calls, Verifier model decisions, and team
+  observability run through `TeamAgentLoop` middleware.
 - Distributed team patch aggregation is idempotent. The Leader applies a
   Teammate patch artifact when the preimage matches and treats an already
   present postimage as aggregated; partial or conflicting patch state still

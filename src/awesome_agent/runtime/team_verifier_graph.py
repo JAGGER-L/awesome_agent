@@ -1,37 +1,28 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
-from time import monotonic
 from typing import NotRequired, TypedDict
 from uuid import UUID
 
-from pydantic import ValidationError
-
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import Agent, Run
-from awesome_agent.modeling import (
-    ModelMessage,
-    ModelRequest,
-    SystemMessage,
-    ToolChoice,
-    ToolChoiceMode,
-    ToolDefinition,
-    UserMessage,
-)
+from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.agent_loop import TeamAgentLoop
+from awesome_agent.runtime.agent_loop.team_middleware import (
+    ProviderResolver,
+    TeamVerificationMiddleware,
+    TeamVerifierInvalidOutput,
+)
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.dispatch import PermanentExecutionError
 from awesome_agent.runtime.repository import RuntimeRepository
-from awesome_agent.runtime.role_loop import ProviderResolver
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
     TeamChildResult,
-    effective_assignment_tools,
 )
 from awesome_agent.runtime.team_budget import ensure_team_budget
 from awesome_agent.runtime.team_context import compact_team_payload
@@ -42,13 +33,8 @@ from awesome_agent.runtime.team_mailbox import (
 )
 from awesome_agent.runtime.team_rework import encode_rework_decision
 from awesome_agent.runtime.team_verification import TeamVerificationDecision
-from awesome_agent.tools.repository import (
-    build_modifying_registry,
-    model_tool_definitions,
-)
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
-_DEFAULT_VERIFIER_TOOLS = {"repo.status", "repo.diff", "repo.read", "repo.search"}
 
 
 class TeamVerifierState(TypedDict):
@@ -70,6 +56,8 @@ class TeamVerifierGraph:
         artifact_repository: ArtifactMetadataRepository | None = None,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        team_loop: TeamAgentLoop | None = None,
+        observability: ObservabilityFacade | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -77,6 +65,11 @@ class TeamVerifierGraph:
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.team_loop = team_loop or TeamAgentLoop(observability=observability)
+        self.team_verification = TeamVerificationMiddleware(
+            provider_resolver=provider_resolver,
+            team_loop=self.team_loop,
+        )
 
     async def execute(
         self,
@@ -160,55 +153,17 @@ class TeamVerifierGraph:
         sibling_results: list[TeamChildResult],
         event_sink: object | None,
     ) -> TeamVerificationDecision:
-        if self.provider_resolver is None:
-            raise PermanentExecutionError("team_verifier_provider_unavailable")
-        provider = self.provider_resolver(agent.model)
-        messages = _initial_verifier_messages(run, assignment, sibling_results)
-        last_error = "invalid verifier output"
-        for attempt in range(1, 3):
-            started = monotonic()
-            turn = await provider.complete(
-                ModelRequest(
-                    messages=messages,
-                    tools=_verifier_tool_definitions(run, assignment),
-                    tool_choice=ToolChoice(mode=ToolChoiceMode.AUTO),
-                )
+        try:
+            return await self.team_verification.model_decision(
+                run,
+                agent,
+                assignment=assignment,
+                sibling_results=sibling_results,
+                event_sink=event_sink,
             )
-            await _emit_if_callable(
-                event_sink,
-                EventType.MODEL_CALL_CREATED,
-                {
-                    "attempt": attempt,
-                    "status": "completed",
-                    "provider": turn.provider,
-                    "model": turn.model,
-                    "stop_reason": turn.stop_reason.value,
-                    "input_tokens": turn.usage.input_tokens,
-                    "output_tokens": turn.usage.output_tokens,
-                    "reasoning_tokens": turn.usage.reasoning_tokens,
-                    "latency_ms": _elapsed_ms(started),
-                },
-                f"model:{agent.id}:{attempt}",
-            )
-            try:
-                if turn.assistant.tool_calls:
-                    raise ValueError("verifier must return structured JSON only")
-                return _parse_decision(turn.assistant.content)
-            except (ValueError, ValidationError, json.JSONDecodeError) as error:
-                last_error = str(error)
-                messages.extend(
-                    [
-                        turn.assistant,
-                        SystemMessage(
-                            content=(
-                                "Invalid verifier output. Return only valid JSON "
-                                "matching the required verification schema."
-                            )
-                        ),
-                    ]
-                )
-        await self._persist_invalid_output(run, agent, assignment, last_error)
-        raise PermanentExecutionError("team_verifier_invalid_output")
+        except TeamVerifierInvalidOutput as error:
+            await self._persist_invalid_output(run, agent, assignment, error.error)
+            raise PermanentExecutionError("team_verifier_invalid_output") from error
 
     async def _validate_decision(
         self,
@@ -326,86 +281,6 @@ class TeamVerifierGraph:
             )
         )
         return artifact_refs, summary
-
-
-def _initial_verifier_messages(
-    run: Run,
-    assignment: TeamAssignment,
-    sibling_results: list[TeamChildResult],
-) -> list[ModelMessage]:
-    evidence = [
-        {
-            "child_run_id": str(result.child_run_id),
-            "status": result.status,
-            "summary": result.summary,
-            "patch_artifact_id": (
-                str(result.patch_artifact_id)
-                if result.patch_artifact_id is not None
-                else None
-            ),
-            "patch_aggregated": result.patch_aggregated,
-            "changed_files": result.changed_files,
-            "failure_kind": result.failure_kind,
-            "evidence_artifact_refs": [
-                str(artifact_id) for artifact_id in result.evidence_artifact_refs
-            ],
-        }
-        for result in sibling_results
-    ]
-    payload = {
-        "root_goal": run.goal,
-        "verifier_goal": assignment.goal,
-        "acceptance_criteria": assignment.acceptance_criteria,
-        "child_results": evidence,
-    }
-    return [
-        SystemMessage(
-            content=(
-                "You are the independent Verifier for a coding-agent team. "
-                "Return only valid JSON with keys: decision, summary, "
-                "rework_requests, failure_kind, risks. decision must be one of "
-                "passed, rework_required, failed. Do not request rework from "
-                "Subagents; target only sibling Teammate child_run_id values."
-            )
-        ),
-        UserMessage(content=json.dumps(payload, ensure_ascii=False)),
-    ]
-
-
-def _parse_decision(content: str) -> TeamVerificationDecision:
-    raw = json.loads(content)
-    return TeamVerificationDecision.model_validate(raw)
-
-
-def _verifier_tool_definitions(
-    run: Run,
-    assignment: TeamAssignment,
-) -> list[ToolDefinition]:
-    if run.workspace_path is None:
-        return []
-    allowed = set(effective_assignment_tools(assignment)) & _DEFAULT_VERIFIER_TOOLS
-    if not allowed:
-        return []
-    registry = build_modifying_registry()
-    return [
-        definition
-        for definition in model_tool_definitions(registry)
-        if definition.name in allowed
-    ]
-
-
-async def _emit_if_callable(
-    event_sink: object | None,
-    event_type: EventType,
-    payload: dict[str, object],
-    transition_id: str,
-) -> None:
-    if callable(event_sink):
-        await event_sink(event_type, payload, transition_id)
-
-
-def _elapsed_ms(started: float) -> int:
-    return int((monotonic() - started) * 1000)
 
 
 def verifier_model_rejection_budget() -> int:

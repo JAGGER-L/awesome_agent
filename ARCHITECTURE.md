@@ -253,19 +253,21 @@ tool invocations, Todo transitions, validation reports, events, and
 observability spans.
 
 Distributed `team-coding` is the forward architecture. The root Leader Run
-creates child Runs with durable lineage. In the current Task 22C state, the
-Leader calls the model for a validated structured `TeamPlan` and creates
+creates child Runs with durable lineage. The Leader calls the model through
+`TeamAgentLoop` middleware for a validated structured `TeamPlan` and creates
 Teammate child Runs from that plan; it does not create or direct Subagents.
-Teammate child Runs execute assignment-scoped model/tool loops using only
-effective Leader-granted tools. When the Leader grants `can_delegate` and
-Subagent slots, a Teammate may call `team.create_subagent` to create read-only
-Subagent child Runs with depth and concurrency limits. Independent Workers can
-claim Teammate, Subagent, and Verifier child Runs through the same PostgreSQL
-dispatch protocol. Verifier child Runs produce structured model decisions that
-are persisted as child results and mailbox messages. Rework decisions create
-replacement Teammate child Runs instead of reopening original attempts. Parent
-Runs release their lease while waiting for child work and are requeued when
-child assignments become terminal.
+Teammate child Runs execute assignment-scoped model/tool loops through the
+same team AgentLoop boundary using only effective Leader-granted tools. When
+the Leader grants `can_delegate` and Subagent slots, a Teammate may call
+`team.create_subagent` to create read-only Subagent child Runs with depth and
+concurrency limits. Independent Workers can claim Teammate, Subagent, and
+Verifier child Runs through the same PostgreSQL dispatch protocol. Verifier
+child Runs produce structured model decisions through
+`TeamVerificationMiddleware`; the graph persists those decisions as child
+results and mailbox messages. Rework decisions create replacement Teammate
+child Runs instead of reopening original attempts. Parent Runs release their
+lease while waiting for child work and are requeued when child assignments
+become terminal.
 
 ```text
                          +----------------------+
@@ -433,8 +435,9 @@ failure marks the Run failed.
 ## Team Coding Loop
 
 Workers with a configured model provider also advertise explicit
-`coding + modifying + team-coding-scoped` routes. The caller must request team mode;
-default modifying Runs stay on the solo modifying graph.
+`coding + modifying + team-coding-scoped` and distributed `team-coding` routes.
+The caller must request team mode; default modifying Runs stay on the solo
+modifying graph.
 
 `team-coding-scoped` is a real but bounded team runtime path. Intake creates only
 the Leader. The graph then creates role assignments with `allowed_tools` and
@@ -474,6 +477,13 @@ PostgreSQL repository registry.
 Large outputs live in external artifact storage. PostgreSQL stores metadata,
 hashes, ownership, and paths.
 
+Distributed `team-coding`, `team-role`, and `team-verifier` are the forward
+team routes. Their graph modules own durable child-run coordination, child
+wait/requeue behavior, patch aggregation, result persistence, mailbox messages,
+and terminal mapping. Leader planning, Teammate/Subagent model/tool execution,
+delegation tool calls, Verifier decisions, and team observability run through
+`TeamAgentLoop` middleware.
+
 ## Observability
 
 Runtime observability has three layers:
@@ -483,10 +493,13 @@ Runtime observability has three layers:
 - ordered runtime events with a stable Run-scoped `trace_id`;
 - best-effort OpenTelemetry export and structured logs.
 
-The Worker records run, runtime route, model, tool, and sandbox spans without letting
-observability write or exporter failures affect Run execution. Model-call
-records store provider, model, status, stop reason, token usage, latency, and
-trace/span IDs. FastAPI exposes `GET /runs/{run_id}/trace`,
+The Worker records outer `run.execute` and `graph.execute` spans without
+letting observability writes or exporter failures affect Run execution.
+Migrated solo and forward distributed team AgentLoop stages record `agent.run`,
+`model.call`, and `tool.call` spans through `ObservabilityMiddleware`; scoped
+team compatibility routes keep event-projection observability until migrated.
+Model-call records store provider, model, status, stop reason, token usage,
+latency, and trace/span IDs. FastAPI exposes `GET /runs/{run_id}/trace`,
 `GET /runs/{run_id}/metrics`, and `GET /runs/{run_id}/model-calls` for the
 future frontend.
 
@@ -578,9 +591,10 @@ through `context.compacted` events, `context_compactions` rows,
 The budget ledger records input, output, reasoning tokens, model-call count,
 threshold status, and active Worker execution seconds. Worker active time is
 opened only while graph work is executing and is closed before approval wait,
-pause, retry, completion, or failure is projected. `team-coding-scoped` currently
-gets global token and active wall-clock guards only; per-agent team context
-compaction remains Task 18. Money cost budgeting is not implemented yet.
+pause, retry, completion, or failure is projected. Distributed team boundaries
+use root-aware budget checks, deferred tool exposure, and artifact-backed
+handoff/result/verifier payload compaction. Money cost budgeting is not
+implemented yet.
 
 ## Security Boundary
 

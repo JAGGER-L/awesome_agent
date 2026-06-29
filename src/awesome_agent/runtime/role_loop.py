@@ -14,6 +14,7 @@ from awesome_agent.modeling import (
     ModelMessage,
     ModelProvider,
     ModelRequest,
+    ModelTurn,
     SystemMessage,
     ToolCall,
     ToolChoice,
@@ -23,6 +24,7 @@ from awesome_agent.modeling import (
     UserMessage,
 )
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.agent_loop import TeamAgentLoop
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import RuntimeRepository
@@ -34,7 +36,10 @@ from awesome_agent.runtime.team_assignments import (
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution
-from awesome_agent.sandbox.process import run_process
+from awesome_agent.runtime.team_role_artifacts import (
+    role_changed_files,
+    role_git_diff,
+)
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
@@ -95,10 +100,12 @@ class RoleLoop:
         self,
         *,
         provider_resolver: ProviderResolver,
+        team_loop: TeamAgentLoop | None = None,
         max_model_turns: int = 20,
         max_tool_calls: int = 60,
     ) -> None:
         self.provider_resolver = provider_resolver
+        self.team_loop = team_loop or TeamAgentLoop()
         self.max_model_turns = max_model_turns
         self.max_tool_calls = max_tool_calls
 
@@ -141,14 +148,37 @@ class RoleLoop:
         while model_turn_count < min(policy.max_model_turns, self.max_model_turns):
             model_turn_count += 1
             started = monotonic()
-            turn = await provider.complete(
-                ModelRequest(
-                    messages=messages,
-                    tools=[] if force_final else tool_definitions,
-                    tool_choice=ToolChoice(
-                        mode=ToolChoiceMode.NONE if force_final else ToolChoiceMode.AUTO
-                    ),
+            model_messages = list(messages)
+
+            async def complete_role_turn(
+                _: object,
+                *,
+                current_messages: list[ModelMessage] = model_messages,
+            ) -> ModelTurn:
+                return await provider.complete(
+                    ModelRequest(
+                        messages=current_messages,
+                        tools=[] if force_final else tool_definitions,
+                        tool_choice=ToolChoice(
+                            mode=(
+                                ToolChoiceMode.NONE
+                                if force_final
+                                else ToolChoiceMode.AUTO
+                            )
+                        ),
+                    )
                 )
+
+            turn = await self.team_loop.wrap_model_call(
+                object(),
+                run=run,
+                agent=agent,
+                messages=model_messages,
+                assignment_id=assignment.id,
+                team_role=assignment.kind.value,
+                agent_kind=agent.kind.value,
+                metadata={"team_operation": "role_model", "turn": model_turn_count},
+                handler=complete_role_turn,
             )
             await _emit(
                 event_sink,
@@ -175,17 +205,40 @@ class RoleLoop:
                     limit = min(policy.max_tool_calls, self.max_tool_calls)
                     if tool_call_count >= limit:
                         raise PermanentExecutionError("team_role_tool_budget_exhausted")
-                    result = await _execute_call(
+                    tool_messages = list(messages)
+
+                    async def execute_role_tool(
+                        _: object,
+                        *,
+                        current_call: ToolCall = call,
+                    ) -> ToolResultMessage:
+                        return await _execute_call(
+                            run=run,
+                            agent=agent,
+                            assignment=assignment,
+                            policy=policy,
+                            workspace=workspace,
+                            repository=repository,
+                            team_repository=team_repository,
+                            call=current_call,
+                            executor=executor,
+                            event_sink=event_sink,
+                        )
+
+                    result = await self.team_loop.wrap_tool_call(
+                        object(),
                         run=run,
                         agent=agent,
-                        assignment=assignment,
-                        policy=policy,
-                        workspace=workspace,
-                        repository=repository,
-                        team_repository=team_repository,
-                        call=call,
-                        executor=executor,
-                        event_sink=event_sink,
+                        messages=tool_messages,
+                        assignment_id=assignment.id,
+                        team_role=assignment.kind.value,
+                        agent_kind=agent.kind.value,
+                        metadata={
+                            "team_operation": "role_tool",
+                            "tool": call.name,
+                            "call_id": call.call_id,
+                        },
+                        handler=execute_role_tool,
                     )
                     tool_call_count += 1
                     if not result.is_error:
@@ -229,8 +282,8 @@ class RoleLoop:
         else:
             raise PermanentExecutionError("team_role_model_turn_budget_exhausted")
 
-        patch = await _git_diff(workspace)
-        changed_files = await _git_changed_files(workspace)
+        patch = await role_git_diff(workspace)
+        changed_files = await role_changed_files(workspace)
         return RoleLoopResult(
             summary=final_answer or "Team role completed.",
             final_answer=final_answer or "Team role completed.",
@@ -548,34 +601,6 @@ def _filter_tool_definitions(
 ) -> list[ToolDefinition]:
     allowed = set(allowed_tools)
     return [definition for definition in definitions if definition.name in allowed]
-
-
-async def _git_diff(workspace: Path) -> str:
-    result = await run_process(
-        ["git", "diff", "--", "."],
-        command_label="team role diff",
-        workspace=workspace,
-        timeout_seconds=30,
-    )
-    if result.exit_code != 0:
-        raise PermanentExecutionError(
-            result.stderr or result.stdout or "git diff failed"
-        )
-    return result.stdout
-
-
-async def _git_changed_files(workspace: Path) -> list[str]:
-    result = await run_process(
-        ["git", "diff", "--name-only", "--", "."],
-        command_label="team role changed files",
-        workspace=workspace,
-        timeout_seconds=30,
-    )
-    if result.exit_code != 0:
-        raise PermanentExecutionError(
-            result.stderr or result.stdout or "git diff --name-only failed"
-        )
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 async def _emit(
