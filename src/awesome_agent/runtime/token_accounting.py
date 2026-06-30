@@ -172,6 +172,9 @@ class TokenAccountant:
             )
             if provider_matches and model_matches:
                 return profile
+        for profile in self._profiles:
+            if profile.provider == "unknown" and profile.model_pattern == "*":
+                return profile
         return _unknown_profile()
 
 

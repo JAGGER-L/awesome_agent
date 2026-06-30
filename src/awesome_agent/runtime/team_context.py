@@ -8,7 +8,10 @@ from uuid import UUID
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.persistence.budget import BudgetRepository, ContextCompactionRecord
-from awesome_agent.runtime.budget import estimate_tokens
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,9 +34,11 @@ async def compact_team_payload(
     artifact_repository: ArtifactMetadataRepository | None,
     budget_repository: BudgetRepository | None,
     max_inline_tokens: int,
+    token_accountant: TokenAccountant | None = None,
 ) -> TeamPayloadCompaction:
+    accountant = token_accountant or default_token_accountant()
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
-    before_tokens = estimate_tokens(serialized)
+    before_tokens = accountant.estimate_text(serialized).tokens
     if (
         before_tokens <= max_inline_tokens
         or artifact_store is None
@@ -65,7 +70,9 @@ async def compact_team_payload(
         "artifact_refs": [str(metadata.id)],
         "summary": summary,
     }
-    after_tokens = estimate_tokens(json.dumps(inline_payload, sort_keys=True))
+    after_tokens = accountant.estimate_text(
+        json.dumps(inline_payload, sort_keys=True)
+    ).tokens
     if budget_repository is not None:
         await budget_repository.record_compaction(
             ContextCompactionRecord(

@@ -17,7 +17,10 @@ from awesome_agent.modeling.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from awesome_agent.runtime.budget import estimate_messages_tokens, estimate_tokens
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
+)
 
 _MESSAGE_ADAPTER = TypeAdapter(list[ModelMessage])
 _SUMMARY_SNIPPET_CHARS = 240
@@ -88,10 +91,12 @@ class ContextManager:
         summary_provider: SummaryProvider,
         artifact_store: LocalArtifactStore | None = None,
         artifact_repository: ArtifactMetadataRepository | None = None,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self._summary_provider = summary_provider
         self._artifact_store = artifact_store
         self._artifact_repository = artifact_repository
+        self._token_accountant = token_accountant or default_token_accountant()
 
     async def prepare_request(
         self,
@@ -104,7 +109,7 @@ class ContextManager:
         policy: ContextPolicy,
     ) -> PreparedContext:
         parsed = _coerce_messages(messages)
-        before_tokens = estimate_messages_tokens(parsed)
+        before_tokens = self._token_accountant.estimate_messages(parsed).tokens
         if before_tokens < policy.soft_context_tokens:
             return PreparedContext(
                 request_messages=parsed,
@@ -116,7 +121,14 @@ class ContextManager:
             )
 
         keep_indexes = _required_context_indexes(parsed)
-        keep_indexes.update(_recent_context_indexes(parsed, keep_indexes, policy))
+        keep_indexes.update(
+            _recent_context_indexes(
+                parsed,
+                keep_indexes,
+                policy,
+                token_accountant=self._token_accountant,
+            )
+        )
         removed_messages = [
             _message_to_json(message)
             for index, message in enumerate(parsed)
@@ -149,14 +161,18 @@ class ContextManager:
             artifact_refs=artifact_refs,
         )
         request_messages = _insert_summary_message(kept_messages, updated_summary)
-        after_tokens = estimate_messages_tokens(request_messages)
+        after_tokens = self._token_accountant.estimate_messages(request_messages).tokens
         return PreparedContext(
             request_messages=request_messages,
             rolling_summary=updated_summary,
             compacted=bool(removed_messages or artifact_refs),
             hard_limit_exceeded=(
                 after_tokens >= policy.hard_context_tokens
-                or _required_non_tool_exceeds_hard_limit(parsed, policy)
+                or _required_non_tool_exceeds_hard_limit(
+                    parsed,
+                    policy,
+                    token_accountant=self._token_accountant,
+                )
             ),
             artifact_refs=artifact_refs,
             before_estimated_tokens=before_tokens,
@@ -212,7 +228,8 @@ class ContextManager:
         for message in messages:
             if (
                 isinstance(message, ToolResultMessage)
-                and estimate_tokens(message.content) > policy.recent_context_tokens
+                and self._token_accountant.estimate_text(message.content).tokens
+                > policy.recent_context_tokens
             ):
                 compacted.append(
                     await self._offload_tool_result(
@@ -308,15 +325,17 @@ def _recent_context_indexes(
     messages: Sequence[ModelMessage],
     required_indexes: set[int],
     policy: ContextPolicy,
+    *,
+    token_accountant: TokenAccountant,
 ) -> set[int]:
     selected: set[int] = set()
-    used_tokens = estimate_messages_tokens(
+    used_tokens = token_accountant.estimate_messages(
         [messages[index] for index in sorted(required_indexes)]
-    )
+    ).tokens
     for index in range(len(messages) - 1, -1, -1):
         if index in required_indexes:
             continue
-        message_tokens = estimate_messages_tokens([messages[index]])
+        message_tokens = token_accountant.estimate_messages([messages[index]]).tokens
         if used_tokens + message_tokens > policy.recent_context_tokens:
             continue
         selected.add(index)
@@ -340,13 +359,17 @@ def _insert_summary_message(
 def _required_non_tool_exceeds_hard_limit(
     messages: Sequence[ModelMessage],
     policy: ContextPolicy,
+    *,
+    token_accountant: TokenAccountant,
 ) -> bool:
     required = _required_context_indexes(messages)
     for index in required:
         message = messages[index]
         if isinstance(message, ToolResultMessage):
             continue
-        if estimate_messages_tokens([message]) >= policy.hard_context_tokens:
+        if token_accountant.estimate_messages([message]).tokens >= (
+            policy.hard_context_tokens
+        ):
             return True
     return False
 

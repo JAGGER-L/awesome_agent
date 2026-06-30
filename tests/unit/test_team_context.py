@@ -9,6 +9,29 @@ from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepositor
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.runtime.team_context import compact_team_payload
+from awesome_agent.runtime.token_accounting import ModelTokenProfile, TokenAccountant
+
+
+class CharacterTokenizer:
+    def count_text(self, text: str) -> int:
+        return len(text)
+
+
+def _character_accountant() -> TokenAccountant:
+    return TokenAccountant(
+        profiles=[
+            ModelTokenProfile(
+                provider="unknown",
+                model_pattern="*",
+                estimator_name="character-tokenizer",
+                tokenizer=CharacterTokenizer(),
+                message_overhead_tokens=0,
+                request_overhead_tokens=0,
+                tool_overhead_tokens=0,
+                error_margin_ratio=0,
+            )
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -62,3 +85,24 @@ async def test_compact_team_payload_keeps_small_payload_inline(
     assert not result.compacted
     assert result.inline_payload == {"summary": "short"}
     assert result.artifact_refs == []
+
+
+@pytest.mark.asyncio
+async def test_compact_team_payload_uses_injected_token_accountant(
+    tmp_path: Path,
+) -> None:
+    result = await compact_team_payload(
+        run_id=uuid4(),
+        agent_id=None,
+        runtime_route="team-role",
+        payload_kind="handoff",
+        payload={"summary": "x" * 200},
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=InMemoryArtifactMetadataRepository(),
+        budget_repository=InMemoryBudgetRepository(),
+        max_inline_tokens=50,
+        token_accountant=_character_accountant(),
+    )
+
+    assert result.compacted
+    assert result.before_estimated_tokens > 50
