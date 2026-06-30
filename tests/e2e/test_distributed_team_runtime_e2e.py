@@ -470,7 +470,19 @@ async def test_team_run_reworks_after_verifier_rejection(
     assert {result.status for result in results} == {"completed", "failed"}
     assert any(message.requires_response for message in messages)
     assert any(not message.requires_response for message in messages)
-    assert EventType.TEAM_REWORK_REQUESTED in {event.event_type for event in events}
+    repair_assignments = [
+        item
+        for item in assignments
+        if item.handoff_context.get("plan_repair_reason") == "verifier_rework"
+    ]
+    assert len(repair_assignments) == 1
+    assert (
+        repair_assignments[0].handoff_context["plan_repair_action"]
+        == "replace_teammate"
+    )
+    assert repair_assignments[0].handoff_context["plan_repair_attempt"] == 1
+    assert EventType.TEAM_PLAN_REPAIR_APPLIED in {event.event_type for event in events}
+    assert any(_is_plan_repair_request(request) for request in provider.requests)
     await engine.dispose()
 
 
@@ -502,6 +514,11 @@ class DynamicReworkProvider(StructuredModelProvider):
         request: ModelRequest,
     ) -> AsyncIterator[ModelStreamEvent]:
         self.requests.append(request)
+        if _is_plan_repair_request(request):
+            yield _completed_text(
+                _team_plan_repair_json(_first_repair_target_id(request))
+            )
+            return
         if _is_verifier_request(request):
             self._verifier_calls += 1
             if self._verifier_calls == 1:
@@ -636,6 +653,13 @@ def _is_leader_plan_request(request: ModelRequest) -> bool:
     )
 
 
+def _is_plan_repair_request(request: ModelRequest) -> bool:
+    return any(
+        "Leader repairing a coding-agent team plan" in message.content
+        for message in request.messages
+    )
+
+
 def _is_patch_teammate_request(request: ModelRequest) -> bool:
     return any("Patch README.md" in message.content for message in request.messages)
 
@@ -687,6 +711,11 @@ def _first_child_result_id(request: ModelRequest) -> str:
     return str(payload["child_results"][0]["child_run_id"])
 
 
+def _first_repair_target_id(request: ModelRequest) -> str:
+    payload = json.loads(request.messages[-1].content)
+    return str(payload["child_results"][0]["child_run_id"])
+
+
 def _team_plan_json() -> str:
     return json.dumps(
         {
@@ -725,6 +754,32 @@ def _team_plan_json() -> str:
                         "Return README evidence without writing files.",
                     ],
                 },
+            ],
+        }
+    )
+
+
+def _team_plan_repair_json(target_child_run_id: str) -> str:
+    return json.dumps(
+        {
+            "rationale": "Replace the weak teammate with a README-focused inspector.",
+            "actions": [
+                {
+                    "action": "replace_teammate",
+                    "target_child_run_id": target_child_run_id,
+                    "reason": "Verifier requested README evidence.",
+                    "teammate": {
+                        "role_profile": "repository-inspector",
+                        "goal": "Read README.md and return the missing evidence.",
+                        "allowed_tools": ["repo.read"],
+                        "deferred_tools": [],
+                        "allowed_skills": ["repository-inspection"],
+                        "can_write": False,
+                        "can_delegate": False,
+                        "max_subagents": 0,
+                        "acceptance_criteria": ["Return README evidence."],
+                    },
+                }
             ],
         }
     )
