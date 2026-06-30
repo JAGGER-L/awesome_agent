@@ -23,7 +23,7 @@ agents; they are not the durable product roadmap.
 | Task 13 | Done | Explicit scoped `team-coding-scoped` runtime with real Worker, PostgreSQL, checkpoint, provider, tool, verifier, rework, validation, and observability E2E evidence. |
 | Task 14 | Done | Explicit managed workspace listing and dry-run-first cleanup with ownership, lease, branch, dirty, force, and recovery evidence protections. |
 | Task 15 | Done | Split `/health` liveness from structured `/ready` and `doctor --profile` readiness; checks PostgreSQL, migrations, checkpoint store, workspace root, provider keys, model routes, API bind policy, and Worker heartbeat registry. |
-| Task 16 | Done | Artifact-backed solo context compaction, durable token ledgers, active Worker execution budgets, budget/compaction APIs and CLI, and team global budget guards; money cost budget remains deferred. |
+| Task 16 | Done | Artifact-backed solo context compaction, durable token ledgers, active Worker execution budgets, budget/compaction APIs and CLI, and team global budget guards. |
 | Task 17 | Done | Distributed team child-run skeleton with durable lineage, assignments, mailbox, child results, recursive cancellation, inspection APIs/CLI, production Worker wiring, and PostgreSQL integration/E2E evidence. |
 | Task 18 | Done | Root-aware distributed team budget checks, deferred assignment tool exposure, and artifact-backed compaction for large handoff, child-result, verifier evidence, and mailbox payloads. |
 | Task 19 | Done | Pre-production graph-version removal, baseline migration squash, and ThinGraph, AgentLoop, middleware, and checkpoint-boundary contracts. |
@@ -157,7 +157,7 @@ remaining locked sequence starts at Task 35.
 
 | Task | Phase | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 35 | Accounting | Remove money cost budget concepts and keep runtime budget enforcement token-based. | TD-024 is closed by deleting amount/cost-budget fields, docs, settings, and compatibility paths; token budgets remain the sole runtime budget control. |
+| Task 35 | Governance | Remove amount limits from the runtime budget model. | TD-024 is closed as a deliberate non-goal: built-in runtime budgets remain token, active-time, call-count, retry, and rework limits; amount-derived gates and ledgers are not implemented in the kernel. |
 | Task 36 | Observability | Make production observability an AgentLoop middleware capability as well as durable query-table evidence. | TD-033 is closed: model/tool/agent spans, metrics, latency, dashboards, alerts, and trace visualization are available through documented exporter paths; Worker-only projection is not the only observability path. |
 | Task 37 | Middleware | Mature `MiddlewareContext` into typed extension envelopes. | Middleware receives typed trace, capability, assignment, budget, handoff, and error-classification context without forcing unrelated middleware to depend on a monolithic context. |
 | Task 38 | Governance | Converge capability resolution across solo, team, subagent, API inspection, and validation paths. | P4 is fully complete: all runtime routes expose and execute tools through the same effective-policy model, with route-specific inputs rather than route-specific permission logic. |

@@ -114,8 +114,8 @@ run, model, and tool latency. Runtime events receive a stable Run-scoped
 `GET /runs/{run_id}/metrics`, and `GET /runs/{run_id}/model-calls` for frontend
 inspection. The API, Worker graph boundaries, and migrated solo AgentLoop
 model/tool stages also create real OpenTelemetry spans through a
-failure-isolated observability facade. OTel metrics, cost budgeting, and
-dashboards remain later work.
+failure-isolated observability facade. OTel metrics and dashboards remain
+later work.
 
 ### Context and budget management (implemented)
 
@@ -134,7 +134,8 @@ model-call count, and active Worker execution seconds. FastAPI exposes
 Distributed Team Runs add root-aware budget checks across the Leader,
 Teammates, Verifier, and Subagents. Large team handoff, child-result, and
 verifier evidence payloads are offloaded to artifacts and recorded through
-`context_compactions`. Money cost budgeting is still deferred.
+`context_compactions`. The runtime intentionally does not enforce amount-based
+limits; token and active-time budgets are the built-in resource controls.
 
 ## Stack
 
@@ -283,7 +284,7 @@ Durable runtime work is tracked in
 Highlights of what is planned but not yet implemented:
 
 - richer team mailbox collaboration policy.
-- money cost budgeting and dashboards.
+- dashboards and production observability workflows.
 
 ## Documentation
 

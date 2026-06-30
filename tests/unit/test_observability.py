@@ -193,6 +193,10 @@ async def test_facade_records_metric_and_model_call_with_safe_attributes() -> No
     assert await repository.list_model_calls_for_run(run_id) == [model_call]
 
 
+def test_durable_model_call_has_no_amount_field() -> None:
+    assert "estimated_cost_usd" not in DurableModelCall.__dataclass_fields__
+
+
 @pytest.mark.asyncio
 async def test_facade_isolates_repository_failures() -> None:
     facade = _facade(FailingObservabilityRepository(), RecordingExporter())

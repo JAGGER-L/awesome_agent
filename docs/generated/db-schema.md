@@ -105,7 +105,6 @@ Generated from SQLAlchemy metadata.
 | `cache_read_tokens` | `INTEGER` | yes |
 | `cache_write_tokens` | `INTEGER` | yes |
 | `latency_ms` | `INTEGER` | yes |
-| `estimated_cost_usd` | `FLOAT` | yes |
 | `trace_id` | `VARCHAR(64)` | yes |
 | `span_id` | `VARCHAR(32)` | yes |
 | `error` | `TEXT` | yes |
