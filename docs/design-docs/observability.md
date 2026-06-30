@@ -3,24 +3,28 @@
 The project does not use LangSmith.
 
 Use structured JSON logs, immutable runtime events, PostgreSQL projections,
-project-owned durable trace/metric query tables, and real OpenTelemetry spans.
-Durable query tables remain the product source of truth; OTel spans are an
-export/instrumentation path for operators and local debugging.
+project-owned durable trace/metric query tables, real OpenTelemetry spans, and
+OpenTelemetry metrics. Durable query tables remain the product source of truth;
+OTel spans and metrics are export/instrumentation paths for operators and
+local debugging.
 
 ## Current Runtime Implementation
 
-Task 23 adds real OTel spans for API, Worker, and migrated solo AgentLoop
+Task 23 added real OTel spans for API, Worker, and migrated solo AgentLoop
 paths without making observability a new source of Run or API failure. Task 24
-extends the same AgentLoop observability boundary to the forward distributed
-team routes.
+extended the same AgentLoop observability boundary to the forward distributed
+team routes. Task 36 made AgentLoop observability the primary production
+instrumentation boundary for agent/model/tool metrics and added OTel metrics
+SDK export alongside durable query-table metrics.
 
 Durable query-table evidence:
 
 - `observability_spans` stores run, graph, model, tool, and sandbox spans with
   trace/span IDs, status, timestamps, duration, bounded attributes, and error
   summaries.
-- `observability_metrics` stores latency and counter-style metric points that
-  can be recomputed from durable evidence if a best-effort write is missed.
+- `observability_metrics` stores latency, token, and counter-style metric
+  points that can be recomputed from durable evidence if a best-effort write is
+  missed.
 - `model_calls` stores provider, model, turn number, status, stop reason, token
   usage, latency, trace/span IDs, and error summary.
 
@@ -28,9 +32,9 @@ Runtime event lineage:
 
 - product-created and dispatcher-created runtime events receive a stable
   Run-scoped `trace_id` based on the Run UUID;
-- migrated solo and distributed team AgentLoop model/tool stages record
-  `agent.run`, `model.call`, and `tool.call` through
-  `ObservabilityMiddleware`;
+- migrated solo and distributed team AgentLoop agent/model/tool stages record
+  `agent.run`, `model.call`, and `tool.call` spans and matching
+  count/latency/token metrics through `ObservabilityMiddleware`;
 - Worker-owned instrumentation records only outer `run.execute` and
   `graph.execute` boundaries;
 - Worker event projection compatibility remains only for `team-coding-scoped`
@@ -40,12 +44,12 @@ Runtime event lineage:
 Telemetry isolation:
 
 - `ObservabilityFacade` is the single telemetry output boundary for durable
-  query-table writes and OTel spans;
+  query-table writes, OTel spans, and OTel metrics;
 - Worker, API, and AgentLoop observability writes are best-effort and log
   failures without changing Run or HTTP results;
 - API and Worker processes configure process-local OTel providers with
   `awesome.process_kind = api | worker`, console exporter defaults, and an OTLP
-  endpoint hook;
+  endpoint hook for traces and metrics;
 - API endpoints are wrapped manually; automatic FastAPI instrumentation is not
   used in Task 23;
 - tool, approval, validation, artifact, and side-effect evidence remains
@@ -60,8 +64,35 @@ GET /runs/{run_id}/metrics
 GET /runs/{run_id}/model-calls
 ```
 
-Full dashboards, Prometheus/Grafana export, OTel metrics SDK integration, and
-production alerting remain separate roadmap work.
+Dashboard and alert definitions should use these dimensions:
+
+- `runtime.route`
+- `agent.id`
+- `agent.role`
+- `agent.kind`
+- `team.root_run_id`
+- `parent_run.id`
+- `assignment.id`
+- `team_operation`
+- `model.provider`
+- `model.name`
+- `tool.name`
+- `tool.call_id`
+- `status`
+
+Recommended production alerts:
+
+- elevated `agent.run` failed-rate by `runtime.route`;
+- elevated `model.call` failed-rate by provider and model;
+- elevated p95 `model.call.latency_ms` or `tool.call.latency_ms`;
+- sustained token pressure through `model.input_tokens`,
+  `model.output_tokens`, and `model.reasoning_tokens`;
+- repeated observability export failures in process logs.
+
+Prometheus/Grafana export can be provided by an OTel collector configured from
+the API and Worker OTLP endpoint. The built-in runtime only emits the OTel
+metric stream and durable query-table evidence; dashboard storage remains an
+operator deployment concern.
 
 Every event includes lineage fields such as:
 
@@ -96,3 +127,6 @@ is never an observability field.
 
 Secrets, protected environment variables, and authorization headers are
 redacted before logs, traces, database writes, or artifacts.
+
+Runtime observability records token usage and latency. It does not record,
+estimate, or enforce money, price, cost, currency, or USD budget fields.

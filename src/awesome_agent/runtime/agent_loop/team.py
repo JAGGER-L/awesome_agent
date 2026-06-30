@@ -173,16 +173,26 @@ def _team_metadata(
     safe = _safe_metadata(metadata)
     safe.update(
         {
+            "run_id": str(run.id),
+            "run.id": str(run.id),
             "runtime_route": run.runtime_route or "",
+            "runtime.route": run.runtime_route or "",
             "team_root_run_id": str(run.root_run_id or run.id),
+            "team.root_run_id": str(run.root_run_id or run.id),
         }
     )
+    if run.parent_run_id is not None:
+        safe["parent_run_id"] = str(run.parent_run_id)
+        safe["parent_run.id"] = str(run.parent_run_id)
     if assignment_id is not None:
         safe["assignment_id"] = str(assignment_id)
+        safe["assignment.id"] = str(assignment_id)
     if team_role:
         safe["team_role"] = team_role
+        safe["agent.role"] = team_role
     if agent_kind:
         safe["agent_kind"] = agent_kind
+        safe["agent.kind"] = agent_kind
     return safe
 
 

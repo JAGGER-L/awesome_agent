@@ -234,6 +234,7 @@ async def test_observability_middleware_records_safe_model_call_span() -> None:
     assert "continuation-secret" not in str(durable_spans[0].attributes)
 
     model_calls = await repository.list_model_calls_for_run(run_id)
+    metrics = await repository.list_metrics_for_run(run_id)
     assert len(model_calls) == 1
     assert model_calls[0].agent_id == agent_id
     assert model_calls[0].turn == 1
@@ -241,6 +242,16 @@ async def test_observability_middleware_records_safe_model_call_span() -> None:
     assert model_calls[0].model == "deepseek-v4-flash"
     assert model_calls[0].input_tokens == 10
     assert model_calls[0].output_tokens == 20
+    metric_by_name = {metric.name: metric for metric in metrics}
+    assert metric_by_name["model.call.count"].value == 1
+    assert metric_by_name["model.call.count"].unit == "1"
+    assert metric_by_name["model.call.latency_ms"].value >= 0
+    assert metric_by_name["model.call.latency_ms"].unit == "ms"
+    assert metric_by_name["model.input_tokens"].value == 10
+    assert metric_by_name["model.input_tokens"].unit == "tokens"
+    assert metric_by_name["model.output_tokens"].value == 20
+    assert metric_by_name["model.output_tokens"].unit == "tokens"
+    assert all("cost" not in metric.name for metric in metrics)
     assert exporter.spans[0].name == "model.call"
 
 
@@ -295,6 +306,7 @@ async def test_observability_middleware_records_safe_tool_call_span() -> None:
     )
 
     durable_spans = await repository.list_spans_for_run(run_id)
+    metrics = await repository.list_metrics_for_run(run_id)
     assert [span.name for span in durable_spans] == ["tool.call"]
     assert durable_spans[0].attributes["runtime_route"] == "solo-modifying"
     assert durable_spans[0].attributes["agent_id"] == str(agent_id)
@@ -305,7 +317,46 @@ async def test_observability_middleware_records_safe_tool_call_span() -> None:
     assert "patch" not in durable_spans[0].attributes
     assert "tool_result" not in durable_spans[0].attributes
     assert "private patch body" not in str(durable_spans[0].attributes)
+    assert {(metric.name, metric.unit) for metric in metrics} >= {
+        ("tool.call.count", "1"),
+        ("tool.call.latency_ms", "ms"),
+    }
     assert exporter.spans[0].name == "tool.call"
+
+
+@pytest.mark.asyncio
+async def test_observability_middleware_records_agent_run_metrics() -> None:
+    repository = InMemoryObservabilityRepository()
+    exporter = RecordingExporter()
+    stack = MiddlewareStack([ObservabilityMiddleware(_facade(repository, exporter))])
+    run_id = uuid4()
+    agent_id = uuid4()
+
+    async def operation() -> dict[str, Any]:
+        return {"handled": True}
+
+    result = await stack.run_operation(
+        MiddlewareStage.BEFORE_AGENT,
+        MiddlewareContext(
+            run_id=str(run_id),
+            agent_id=str(agent_id),
+            runtime_route="solo-readonly",
+            messages=[SystemMessage(content="prompt text must stay private")],
+        ),
+        operation,
+    )
+
+    durable_spans = await repository.list_spans_for_run(run_id)
+    metrics = await repository.list_metrics_for_run(run_id)
+
+    assert result == {"handled": True}
+    assert durable_spans[0].name == "agent.run"
+    assert durable_spans[0].attributes["runtime.route"] == "solo-readonly"
+    assert durable_spans[0].attributes["agent.id"] == str(agent_id)
+    assert {(metric.name, metric.unit) for metric in metrics} >= {
+        ("agent.run.count", "1"),
+        ("agent.run.latency_ms", "ms"),
+    }
 
 
 @pytest.mark.asyncio

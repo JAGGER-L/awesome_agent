@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from typing import Protocol
 from uuid import UUID, uuid4
 
 from opentelemetry import trace
@@ -36,6 +37,19 @@ _SENSITIVE_ATTRIBUTE_KEYS = {
 AttributeValue = str | bool | int | float
 
 
+class MetricRecorder(Protocol):
+    def record_metric(
+        self,
+        *,
+        name: str,
+        value: float,
+        unit: str,
+        attributes: Mapping[str, object],
+    ) -> None:
+        """Record one operational metric projection."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class ObservabilitySpanInput:
     run_id: UUID
@@ -58,9 +72,11 @@ class ObservabilityFacade:
         *,
         repository: ObservabilityRepository,
         tracer: trace.Tracer | None = None,
+        metric_recorder: MetricRecorder | None = None,
     ) -> None:
         self._repository = repository
         self._tracer = tracer or get_tracer()
+        self._metric_recorder = metric_recorder
 
     @asynccontextmanager
     async def start_span(
@@ -120,12 +136,19 @@ class ObservabilityFacade:
         unit: str,
         attributes: dict[str, object] | None = None,
     ) -> DurableMetric:
+        safe_attributes = _safe_attributes(attributes or {})
         metric = DurableMetric(
             run_id=run_id,
             name=name,
             value=value,
             unit=unit,
-            attributes=_safe_attributes(attributes or {}),
+            attributes=safe_attributes,
+        )
+        self._safe_record_otel_metric(
+            name=name,
+            value=value,
+            unit=unit,
+            attributes=safe_attributes,
         )
         try:
             return await self._repository.record_metric(metric)
@@ -178,6 +201,26 @@ class ObservabilityFacade:
         except Exception:
             logger.exception("Observability span write failed.")
             return span
+
+    def _safe_record_otel_metric(
+        self,
+        *,
+        name: str,
+        value: float,
+        unit: str,
+        attributes: Mapping[str, object],
+    ) -> None:
+        if self._metric_recorder is None:
+            return
+        try:
+            self._metric_recorder.record_metric(
+                name=name,
+                value=value,
+                unit=unit,
+                attributes=attributes,
+            )
+        except Exception:
+            logger.exception("Observability metric export failed.")
 
 
 class NoopObservabilityFacade(ObservabilityFacade):

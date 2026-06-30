@@ -1,8 +1,13 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from opentelemetry.sdk.metrics.export import (
+    MetricExporter,
+    MetricExportResult,
+    MetricsData,
+)
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
@@ -15,7 +20,12 @@ from awesome_agent.observability.facade import (
     ObservabilityFacade,
     ObservabilitySpanInput,
 )
-from awesome_agent.observability.otel import OTelConfig, configure_otel
+from awesome_agent.observability.otel import (
+    OTelConfig,
+    SafeMetricExporter,
+    configure_otel,
+    configure_otel_metrics,
+)
 from awesome_agent.observability.repository import (
     DurableMetric,
     DurableModelCall,
@@ -123,6 +133,33 @@ def test_safe_span_exporter_isolates_exporter_failures() -> None:
     assert exporter.export(()) is SpanExportResult.FAILURE
 
 
+def test_safe_metric_exporter_isolates_exporter_failures() -> None:
+    exporter = SafeMetricExporter(FailingMetricExporter())
+
+    assert exporter.export(None) is MetricExportResult.FAILURE  # type: ignore[arg-type]
+
+
+def test_otel_metrics_recorder_accepts_runtime_metric() -> None:
+    recorder = configure_otel_metrics(
+        OTelConfig(
+            service_name="awesome-agent-test",
+            process_kind="worker",
+            console_exporter=False,
+            otlp_endpoint=None,
+        )
+    )
+
+    recorder.record_metric(
+        name="model.input_tokens",
+        value=12,
+        unit="tokens",
+        attributes={
+            "runtime.route": "solo-readonly",
+            "provider": "deepseek",
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_facade_records_durable_and_otel_span() -> None:
     repository = InMemoryObservabilityRepository()
@@ -162,7 +199,12 @@ async def test_facade_records_durable_and_otel_span() -> None:
 @pytest.mark.asyncio
 async def test_facade_records_metric_and_model_call_with_safe_attributes() -> None:
     repository = InMemoryObservabilityRepository()
-    facade = _facade(repository, RecordingExporter())
+    metric_recorder = RecordingMetricRecorder()
+    facade = _facade(
+        repository,
+        RecordingExporter(),
+        metric_recorder=metric_recorder,
+    )
     run_id = uuid4()
     agent_id = uuid4()
 
@@ -191,6 +233,14 @@ async def test_facade_records_metric_and_model_call_with_safe_attributes() -> No
     assert metric.attributes == {"status": "completed"}
     assert await repository.list_metrics_for_run(run_id) == [metric]
     assert await repository.list_model_calls_for_run(run_id) == [model_call]
+    assert metric_recorder.records == [
+        (
+            "run.duration_ms",
+            25,
+            "ms",
+            {"status": "completed"},
+        )
+    ]
 
 
 def test_durable_model_call_has_no_amount_field() -> None:
@@ -319,6 +369,22 @@ class FailingExporter(SpanExporter):
         return None
 
 
+class FailingMetricExporter(MetricExporter):
+    def export(
+        self,
+        metrics_data: MetricsData,
+        timeout_millis: float = 10000,
+        **kwargs: object,
+    ) -> MetricExportResult:
+        raise RuntimeError("metric exporter unavailable")
+
+    def shutdown(self, timeout_millis: float = 30000, **kwargs: object) -> None:
+        return None
+
+    def force_flush(self, timeout_millis: float = 10000) -> bool:
+        return True
+
+
 class RecordingExporter(SpanExporter):
     def __init__(self) -> None:
         self.spans: list[ReadableSpan] = []
@@ -351,13 +417,31 @@ class FailingObservabilityRepository:
         return []
 
 
+class RecordingMetricRecorder:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, float, str, dict[str, object]]] = []
+
+    def record_metric(
+        self,
+        *,
+        name: str,
+        value: float,
+        unit: str,
+        attributes: Mapping[str, object],
+    ) -> None:
+        self.records.append((name, value, unit, dict(attributes)))
+
+
 def _facade(
     repository: object,
     exporter: RecordingExporter,
+    *,
+    metric_recorder: RecordingMetricRecorder | None = None,
 ) -> ObservabilityFacade:
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     return ObservabilityFacade(
         repository=repository,  # type: ignore[arg-type]
         tracer=provider.get_tracer("test"),
+        metric_recorder=metric_recorder,
     )
