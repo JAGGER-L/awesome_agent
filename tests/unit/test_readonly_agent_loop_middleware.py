@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
+from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
+from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     AssistantMessage,
+    ModelMessage,
     ModelTurn,
     ModelUsage,
     StopReason,
@@ -13,6 +18,12 @@ from awesome_agent.modeling import (
     UserMessage,
 )
 from awesome_agent.observability.facade import NoopObservabilityFacade
+from awesome_agent.runtime.agent_loop.contracts import (
+    MiddlewareContext,
+    MiddlewareDecision,
+    MiddlewareStage,
+)
+from awesome_agent.runtime.agent_loop.middleware import MiddlewareStack
 from awesome_agent.runtime.agent_loop.observability_middleware import (
     ObservabilityMiddleware,
 )
@@ -49,12 +60,79 @@ def _character_accountant() -> TokenAccountant:
     )
 
 
+class RecordingMiddleware:
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.contexts: list[MiddlewareContext] = []
+
+    async def handle(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
+    ) -> MiddlewareDecision:
+        self.contexts.append(context)
+        return await call_next(context)
+
+
+def _run() -> Run:
+    return Run(
+        goal="inspect code",
+        mode=RunMode.SOLO,
+        intent=RunIntent.READ_ONLY,
+        runtime_route="solo-readonly",
+    )
+
+
+def _agent(run: Run) -> Agent:
+    return Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake-model",
+    )
+
+
 def test_readonly_agent_loop_installs_observability_middleware() -> None:
     loop = ReadOnlyAgentLoop(observability=NoopObservabilityFacade())
 
     assert any(
         isinstance(middleware, ObservabilityMiddleware)
         for middleware in loop.middleware_stack.middleware
+    )
+
+
+@pytest.mark.asyncio
+async def test_readonly_agent_loop_passes_typed_trace_and_budget_context() -> None:
+    run = _run()
+    agent = _agent(run)
+    middleware = RecordingMiddleware()
+    loop = ReadOnlyAgentLoop(middleware_stack=MiddlewareStack([middleware]))
+    messages: list[ModelMessage] = [UserMessage(content="question")]
+
+    async def handler(state: dict[str, Any]) -> dict[str, Any]:
+        return {**state, "handled": True}
+
+    result = await loop.before_model(
+        {"phase": "start"},
+        run=run,
+        agent=agent,
+        messages=messages,
+        handler=handler,
+    )
+
+    context = middleware.contexts[0]
+    assert result == {"phase": "start", "handled": True}
+    assert context.trace is not None
+    assert context.trace.run_id == str(run.id)
+    assert context.trace.trace_id == str(run.root_run_id or run.id)
+    assert context.trace.runtime_route == "solo-readonly"
+    assert context.budget is not None
+    assert context.budget.token_limit is None
+    assert not any(
+        hasattr(context.budget, field)
+        for field in ("cost", "price", "amount", "usd", "currency")
     )
 
 

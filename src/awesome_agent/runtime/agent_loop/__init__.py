@@ -1,9 +1,15 @@
 from awesome_agent.runtime.agent_loop.contracts import (
     AgentLoopResult,
     AgentLoopStatus,
+    AssignmentContext,
+    CapabilityContext,
+    ErrorClassificationContext,
+    HandoffContext,
     MiddlewareContext,
     MiddlewareDecision,
     MiddlewareStage,
+    TokenBudgetContext,
+    TraceContext,
 )
 from awesome_agent.runtime.agent_loop.middleware import (
     AgentLoopMiddleware,
@@ -32,6 +38,10 @@ __all__ = [
     "AgentLoopMiddleware",
     "AgentLoopResult",
     "AgentLoopStatus",
+    "AssignmentContext",
+    "CapabilityContext",
+    "ErrorClassificationContext",
+    "HandoffContext",
     "MiddlewareContext",
     "MiddlewareDecision",
     "MiddlewareStack",
@@ -49,5 +59,7 @@ __all__ = [
     "ObservabilityMiddleware",
     "ReadOnlyAgentLoop",
     "TeamAgentLoop",
+    "TokenBudgetContext",
+    "TraceContext",
     "modifying_ledger_to_state",
 ]

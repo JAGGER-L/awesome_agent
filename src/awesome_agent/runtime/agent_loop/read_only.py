@@ -9,6 +9,8 @@ from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.runtime.agent_loop.contracts import (
     MiddlewareContext,
     MiddlewareStage,
+    TokenBudgetContext,
+    TraceContext,
 )
 from awesome_agent.runtime.agent_loop.middleware import MiddlewareStack
 from awesome_agent.runtime.agent_loop.observability_middleware import (
@@ -154,6 +156,13 @@ class ReadOnlyAgentLoop:
             runtime_route=run.runtime_route or "",
             messages=messages,
             metadata={"stage": stage.value},
+            trace=TraceContext(
+                run_id=str(run.id),
+                parent_run_id=str(run.parent_run_id) if run.parent_run_id else None,
+                trace_id=str(run.root_run_id or run.id),
+                runtime_route=run.runtime_route or "",
+            ),
+            budget=TokenBudgetContext(token_limit=None),
         )
 
         async def operation() -> StateT:

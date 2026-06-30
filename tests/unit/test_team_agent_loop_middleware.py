@@ -47,6 +47,8 @@ class RecordingTeamMiddleware:
     def __init__(self) -> None:
         self.handled: list[tuple[MiddlewareStage, dict[str, object]]] = []
         self.wrapped: list[tuple[MiddlewareStage, dict[str, object]]] = []
+        self.handled_contexts: list[MiddlewareContext] = []
+        self.wrapped_contexts: list[MiddlewareContext] = []
 
     async def handle(
         self,
@@ -55,6 +57,7 @@ class RecordingTeamMiddleware:
         call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
     ) -> MiddlewareDecision:
         self.handled.append((stage, dict(context.metadata)))
+        self.handled_contexts.append(context)
         return await call_next(context)
 
     async def wrap_stage(
@@ -64,6 +67,7 @@ class RecordingTeamMiddleware:
         call_next: Callable[[MiddlewareContext], Awaitable[dict[str, object]]],
     ) -> dict[str, object]:
         self.wrapped.append((stage, dict(context.metadata)))
+        self.wrapped_contexts.append(context)
         return await call_next(context)
 
 
@@ -99,6 +103,19 @@ async def test_team_loop_builds_structural_context_for_agent_operation() -> None
     assert metadata["agent_kind"] == "leader"
     assert metadata["runtime_route"] == "team-coding"
     assert "private planning prompt" not in str(metadata)
+    context = recorder.handled_contexts[0]
+    assert context.trace is not None
+    assert context.trace.run_id == str(run.id)
+    assert context.trace.trace_id == str(run.root_run_id or run.id)
+    assert context.assignment is not None
+    assert context.assignment.assignment_id == str(assignment_id)
+    assert context.assignment.leader_run_id == str(run.root_run_id or run.id)
+    assert context.assignment.role == "leader"
+    assert context.assignment.objective == run.goal
+    assert context.handoff is not None
+    assert context.handoff.handoff_id == str(assignment_id)
+    assert context.handoff.target_agent == str(run.id)
+    assert context.budget is not None
 
 
 @pytest.mark.asyncio
@@ -155,6 +172,8 @@ async def test_team_loop_wraps_model_and_tool_operations() -> None:
     assert "verifier_json" not in tool_metadata
     assert "secret patch body" not in str(tool_metadata)
     assert "raw tool result" not in str(tool_metadata)
+    assert recorder.wrapped_contexts[1].assignment is not None
+    assert recorder.wrapped_contexts[1].assignment.role == "teammate"
 
 
 def test_team_loop_installs_observability_middleware() -> None:

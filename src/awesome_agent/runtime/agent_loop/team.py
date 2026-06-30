@@ -7,8 +7,13 @@ from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import ModelMessage
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.runtime.agent_loop.contracts import (
+    AssignmentContext,
+    CapabilityContext,
+    HandoffContext,
     MiddlewareContext,
     MiddlewareStage,
+    TokenBudgetContext,
+    TraceContext,
 )
 from awesome_agent.runtime.agent_loop.middleware import MiddlewareStack
 from awesome_agent.runtime.agent_loop.observability_middleware import (
@@ -138,17 +143,46 @@ class TeamAgentLoop:
         agent_kind: str | None,
         metadata: Mapping[str, object] | None,
     ) -> ResultT:
+        safe_metadata = _team_metadata(
+            run=run,
+            assignment_id=assignment_id,
+            team_role=team_role,
+            agent_kind=agent_kind,
+            metadata=metadata,
+        )
         context = MiddlewareContext(
             run_id=str(run.id),
             agent_id=str(agent.id),
             runtime_route=run.runtime_route or "",
             messages=list(messages),
-            metadata=_team_metadata(
-                run=run,
-                assignment_id=assignment_id,
-                team_role=team_role,
-                agent_kind=agent_kind,
-                metadata=metadata,
+            metadata=safe_metadata,
+            trace=TraceContext(
+                run_id=str(run.id),
+                parent_run_id=str(run.parent_run_id) if run.parent_run_id else None,
+                trace_id=str(run.root_run_id or run.id),
+                runtime_route=run.runtime_route or "",
+            ),
+            capabilities=CapabilityContext(
+                subject_id=str(agent.id),
+                subject_kind=agent_kind or agent.kind.value,
+                policy_id=None,
+                allowed_tool_names=_string_tuple(safe_metadata.get("allowed_tools")),
+                denied_tool_names=_string_tuple(safe_metadata.get("denied_tools")),
+            ),
+            assignment=AssignmentContext(
+                assignment_id=str(assignment_id) if assignment_id is not None else None,
+                leader_run_id=str(run.root_run_id or run.id),
+                role=team_role,
+                objective=run.goal,
+            ),
+            budget=TokenBudgetContext(token_limit=None),
+            handoff=HandoffContext(
+                handoff_id=str(assignment_id) if assignment_id is not None else None,
+                source_agent=(
+                    str(run.parent_run_id) if run.parent_run_id is not None else None
+                ),
+                target_agent=str(run.id),
+                reason=_string_or_none(safe_metadata.get("team_operation")),
             ),
         )
 
@@ -206,3 +240,17 @@ def _safe_metadata(metadata: Mapping[str, object] | None) -> dict[str, object]:
             continue
         safe[key] = value
     return safe
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence):
+        return tuple(item for item in value if isinstance(item, str))
+    return ()
+
+
+def _string_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None

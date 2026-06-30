@@ -101,6 +101,26 @@ Future export features may write user-facing reports under
 `.awesome-agent/exports/`, but PostgreSQL remains the authoritative runtime
 state.
 
+## AgentLoop Middleware Context
+
+AgentLoop middleware receives a `MiddlewareContext` at loop boundaries. Stable
+runtime facts are carried in focused typed envelopes:
+
+- trace context for Run, parent Run, trace, span, and runtime route identity;
+- capability context for the subject and effective tool-policy surface;
+- assignment context for team assignment identity, Leader/root ownership, role,
+  and objective;
+- token budget context for token limits and usage only;
+- handoff context for source, target, and reason;
+- error-classification context for category, retryability, and origin.
+
+Raw metadata remains available for route-specific annotations and legacy
+observability dimensions, but new cross-cutting behavior should use the typed
+envelopes. The graph remains responsible for durable coordination; middleware
+uses this context for observability, permission checks, budgets, retries,
+approval waits, validation policy, and other cross-cutting concerns without
+becoming a monolithic mutable runtime object.
+
 ## Runtime Documentation Discipline
 
 When the product modifies a user's project, it should detect the target

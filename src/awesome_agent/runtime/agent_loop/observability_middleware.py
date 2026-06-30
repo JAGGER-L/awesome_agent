@@ -446,14 +446,93 @@ def _base_attributes(
     stage: MiddlewareStage,
     context: MiddlewareContext,
 ) -> dict[str, object]:
+    runtime_route = context.runtime_route
+    if context.trace is not None and context.trace.runtime_route is not None:
+        runtime_route = context.trace.runtime_route
     attributes: dict[str, object] = {
         **context.metadata,
         "stage": stage.value,
-        "runtime_route": context.runtime_route,
-        "runtime.route": context.runtime_route,
+        "runtime_route": runtime_route,
+        "runtime.route": runtime_route,
         "agent_id": context.agent_id,
         "agent.id": context.agent_id,
     }
+    if context.trace is not None:
+        _set_if_not_none(attributes, "run_id", context.trace.run_id)
+        _set_if_not_none(attributes, "run.id", context.trace.run_id)
+        _set_if_not_none(attributes, "parent_run_id", context.trace.parent_run_id)
+        _set_if_not_none(attributes, "parent_run.id", context.trace.parent_run_id)
+        _set_if_not_none(attributes, "trace_id", context.trace.trace_id)
+        _set_if_not_none(attributes, "trace.id", context.trace.trace_id)
+        _set_if_not_none(attributes, "span_id", context.trace.span_id)
+        _set_if_not_none(attributes, "span.id", context.trace.span_id)
+    if context.capabilities is not None:
+        attributes.setdefault("capability.subject_id", context.capabilities.subject_id)
+        attributes.setdefault(
+            "capability.subject_kind",
+            context.capabilities.subject_kind,
+        )
+        _set_if_not_none(
+            attributes,
+            "capability.policy_id",
+            context.capabilities.policy_id,
+        )
+        if context.capabilities.allowed_tool_names:
+            attributes.setdefault(
+                "capability.allowed_tool_names",
+                context.capabilities.allowed_tool_names,
+            )
+        if context.capabilities.denied_tool_names:
+            attributes.setdefault(
+                "capability.denied_tool_names",
+                context.capabilities.denied_tool_names,
+            )
+    if context.assignment is not None:
+        _set_if_not_none(attributes, "assignment_id", context.assignment.assignment_id)
+        _set_if_not_none(attributes, "assignment.id", context.assignment.assignment_id)
+        _set_if_not_none(
+            attributes,
+            "team_root_run_id",
+            context.assignment.leader_run_id,
+        )
+        _set_if_not_none(
+            attributes,
+            "team.root_run_id",
+            context.assignment.leader_run_id,
+        )
+        _set_if_not_none(attributes, "team_role", context.assignment.role)
+        _set_if_not_none(attributes, "agent.role", context.assignment.role)
+    if context.budget is not None:
+        _set_if_not_none(attributes, "budget.token_limit", context.budget.token_limit)
+        attributes.setdefault(
+            "budget.input_tokens_used",
+            context.budget.input_tokens_used,
+        )
+        attributes.setdefault(
+            "budget.output_tokens_used",
+            context.budget.output_tokens_used,
+        )
+        attributes.setdefault(
+            "budget.reasoning_tokens_used",
+            context.budget.reasoning_tokens_used,
+        )
+    if context.handoff is not None:
+        _set_if_not_none(attributes, "handoff.id", context.handoff.handoff_id)
+        _set_if_not_none(
+            attributes,
+            "handoff.source_agent",
+            context.handoff.source_agent,
+        )
+        _set_if_not_none(
+            attributes,
+            "handoff.target_agent",
+            context.handoff.target_agent,
+        )
+        _set_if_not_none(attributes, "handoff.reason", context.handoff.reason)
+    if context.error is not None:
+        _set_if_not_none(attributes, "error.category", context.error.category)
+        _set_if_not_none(attributes, "error.retryable", context.error.retryable)
+        _set_if_not_none(attributes, "error.origin", context.error.origin)
     _copy_alias(attributes, "team_root_run_id", "team.root_run_id")
     _copy_alias(attributes, "assignment_id", "assignment.id")
     _copy_alias(attributes, "parent_run_id", "parent_run.id")
@@ -461,6 +540,15 @@ def _base_attributes(
     _copy_alias(attributes, "tool", "tool.name")
     _copy_alias(attributes, "call_id", "tool.call_id")
     return attributes
+
+
+def _set_if_not_none(
+    attributes: dict[str, object],
+    key: str,
+    value: object | None,
+) -> None:
+    if value is not None:
+        attributes.setdefault(key, value)
 
 
 def _copy_alias(

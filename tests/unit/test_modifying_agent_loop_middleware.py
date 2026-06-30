@@ -150,6 +150,18 @@ async def test_modifying_agent_loop_runs_stage_before_handler(
     assert middleware.contexts[0].runtime_route == "solo-modifying"
     assert middleware.contexts[0].messages == messages
     assert middleware.contexts[0].metadata == {"stage": stage.value}
+    assert middleware.contexts[0].trace is not None
+    assert middleware.contexts[0].trace.run_id == str(run.id)
+    assert middleware.contexts[0].trace.runtime_route == "solo-modifying"
+    assert middleware.contexts[0].capabilities is not None
+    assert middleware.contexts[0].capabilities.subject_id == str(agent.id)
+    assert middleware.contexts[0].capabilities.subject_kind == "leader"
+    assert middleware.contexts[0].capabilities.allowed_tool_names == ()
+    assert middleware.contexts[0].budget is not None
+    assert not any(
+        hasattr(middleware.contexts[0].budget, field)
+        for field in ("cost", "price", "amount", "usd", "currency")
+    )
 
 
 @pytest.mark.asyncio
