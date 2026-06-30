@@ -37,6 +37,10 @@ from awesome_agent.runtime.team_replanning import (
 )
 from awesome_agent.runtime.team_rework import encode_rework_decision
 from awesome_agent.runtime.team_verification import TeamVerificationDecision
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
+)
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
@@ -63,6 +67,7 @@ class TeamVerifierGraph:
         team_loop: TeamAgentLoop | None = None,
         observability: ObservabilityFacade | None = None,
         team_recovery_policy: TeamRecoveryPolicy | None = None,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -71,6 +76,7 @@ class TeamVerifierGraph:
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
         self.team_recovery_policy = team_recovery_policy or TeamRecoveryPolicy()
+        self.token_accountant = token_accountant or default_token_accountant()
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.team_verification = TeamVerificationMiddleware(
             provider_resolver=provider_resolver,
@@ -260,6 +266,7 @@ class TeamVerifierGraph:
             artifact_repository=self.artifact_repository,
             budget_repository=self.budget_repository,
             max_inline_tokens=_TEAM_INLINE_PAYLOAD_TOKENS,
+            token_accountant=self.token_accountant,
         )
         artifact_refs = compacted_summary.artifact_refs
         if compacted_summary.compacted:

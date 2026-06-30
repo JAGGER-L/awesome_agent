@@ -174,6 +174,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     budget_policy=budget_policy,
                     observability=observability,
                     team_recovery_policy=team_recovery_policy,
+                    token_accountant=token_accountant,
                 )
                 if providers.coding_available
                 else None
@@ -189,6 +190,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 budget_policy=budget_policy,
                 validation_repository=PostgresValidationRepository(sessions),
                 observability=observability,
+                token_accountant=token_accountant,
             ),
             team_verifier_graph=TeamVerifierGraph(
                 team_repository=team_repository,
@@ -201,6 +203,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 budget_policy=budget_policy,
                 observability=observability,
                 team_recovery_policy=team_recovery_policy,
+                token_accountant=token_accountant,
             ),
             config=WorkerConfig(
                 lease_duration=timedelta(seconds=configured.lease_duration_seconds),
