@@ -26,10 +26,12 @@ from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import InMemoryObservabilityRepository
 from awesome_agent.runtime.agent_loop import (
     AgentLoopStatus,
+    AssignmentContext,
     MiddlewareContext,
     MiddlewareDecision,
     MiddlewareStack,
     MiddlewareStage,
+    TraceContext,
 )
 from awesome_agent.runtime.agent_loop.observability_middleware import (
     ObservabilityMiddleware,
@@ -357,6 +359,52 @@ async def test_observability_middleware_records_agent_run_metrics() -> None:
         ("agent.run.count", "1"),
         ("agent.run.latency_ms", "ms"),
     }
+
+
+@pytest.mark.asyncio
+async def test_observability_middleware_prefers_typed_context_attributes() -> None:
+    repository = InMemoryObservabilityRepository()
+    exporter = RecordingExporter()
+    stack = MiddlewareStack([ObservabilityMiddleware(_facade(repository, exporter))])
+    run_id = uuid4()
+    root_id = uuid4()
+    parent_id = uuid4()
+    agent_id = uuid4()
+    assignment_id = uuid4()
+
+    async def operation() -> dict[str, Any]:
+        return {"handled": True}
+
+    await stack.run_operation(
+        MiddlewareStage.BEFORE_AGENT,
+        MiddlewareContext(
+            run_id=str(run_id),
+            agent_id=str(agent_id),
+            runtime_route="legacy-route",
+            messages=[],
+            trace=TraceContext(
+                run_id=str(run_id),
+                parent_run_id=str(parent_id),
+                trace_id=str(root_id),
+                runtime_route="typed-route",
+            ),
+            assignment=AssignmentContext(
+                assignment_id=str(assignment_id),
+                leader_run_id=str(root_id),
+                role="teammate",
+                objective="bounded subtask",
+            ),
+        ),
+        operation,
+    )
+
+    span = (await repository.list_spans_for_run(run_id))[0]
+    assert span.attributes["runtime.route"] == "typed-route"
+    assert span.attributes["run.id"] == str(run_id)
+    assert span.attributes["parent_run.id"] == str(parent_id)
+    assert span.attributes["team.root_run_id"] == str(root_id)
+    assert span.attributes["assignment.id"] == str(assignment_id)
+    assert span.attributes["agent.role"] == "teammate"
 
 
 @pytest.mark.asyncio

@@ -484,6 +484,13 @@ and terminal mapping. Leader planning, Teammate/Subagent model/tool execution,
 delegation tool calls, Verifier decisions, and team observability run through
 `TeamAgentLoop` middleware.
 
+AgentLoop middleware receives a typed `MiddlewareContext` rather than relying
+on route-specific metadata for stable runtime facts. The context exposes
+focused envelopes for trace, capability subject, assignment, token budget,
+handoff, and error classification. Metadata remains a compatibility and
+annotation channel; new cross-cutting policy should consume the typed
+envelopes and leave durable state transitions to the graph.
+
 ## Observability
 
 Runtime observability has three layers:
@@ -593,8 +600,8 @@ threshold status, and active Worker execution seconds. Worker active time is
 opened only while graph work is executing and is closed before approval wait,
 pause, retry, completion, or failure is projected. Distributed team boundaries
 use root-aware budget checks, deferred tool exposure, and artifact-backed
-handoff/result/verifier payload compaction. Money cost budgeting is not
-implemented yet.
+handoff/result/verifier payload compaction. Monetary amount budgeting is
+intentionally outside the runtime kernel.
 
 ## Security Boundary
 
