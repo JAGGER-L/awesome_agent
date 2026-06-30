@@ -100,8 +100,11 @@ def effective_child_results_for_verification(
     results: list[TeamChildResult],
     assignments: list[TeamAssignment],
 ) -> list[TeamChildResult]:
-    superseded = patch_conflict_superseded_child_ids(assignments)
-    return [result for result in results if str(result.child_run_id) not in superseded]
+    from awesome_agent.runtime.team_replanning import (
+        effective_child_results_for_team_verification,
+    )
+
+    return effective_child_results_for_team_verification(results, assignments)
 
 
 def compose_patch_conflict_rework_goal(

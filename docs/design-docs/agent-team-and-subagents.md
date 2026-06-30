@@ -156,6 +156,18 @@ artifact generation, Leader patch aggregation, Verifier pass, Verifier rework,
 replacement Teammate creation, mailbox evidence, runtime events, model-call
 records, spans, and artifacts.
 
+Task 32 upgrades Verifier-requested team rework into bounded Leader plan
+repair. When the Verifier returns `rework_required`, the Leader receives the
+Verifier feedback, current Teammate assignments, and child-result evidence and
+must return a structured `TeamPlanRepair`. A repair may replace a Teammate,
+including changing role, tools, skills, and acceptance criteria, or add a new
+bounded Teammate when existing evidence should remain. Each repair action
+creates a new durable Teammate child Run with `plan_repair_*` lineage in
+`handoff_context`; superseded child results remain auditable but are excluded
+from effective Verifier evidence. The failed Verifier assignment is retired and
+a new Verifier is created only after repair children finish, so the Leader does
+not bypass independent Verifier authority.
+
 Task 25 adds Teammate-local deterministic validation for writing Teammates that
 produce patches. Validation runs after the role loop produces a patch and before
 the child result is published. It is wrapped by `TeamAgentLoop` as
@@ -187,8 +199,8 @@ observability behind `TeamAgentLoop` and shared middleware. Task 28 adds
 PostgreSQL-backed concurrent Worker stress coverage for sibling Teammates,
 Teammate-owned Subagents, Verifier completion, patch aggregation, mailbox and
 result persistence, and dispatch claim evidence. Remaining work is not basic
-autonomy wiring; it is hardening: advanced replanning and empirically tuned
-rework budgets.
+autonomy wiring; it is hardening: empirically tuned rework budgets and later
+provider, accounting, observability, and capability convergence.
 
 ## AgentLoop Boundary
 

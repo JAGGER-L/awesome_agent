@@ -976,7 +976,6 @@ async def test_leader_exhausts_patch_conflict_rework_budget(tmp_path: Path) -> N
 async def test_leader_creates_rework_replacement_from_verifier_request() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
-    graph = TeamLeaderGraph(team_repository=teams, model_resolver=_models())
     run, leader = _leader_run()
     await runtime.create_run(run, leader)
     teammate = Run(
@@ -1024,57 +1023,16 @@ async def test_leader_creates_rework_replacement_from_verifier_request() -> None
             patch_aggregated=True,
         )
     )
-    verifier = Run(
-        goal="verify",
-        mode=RunMode.TEAM,
-        parent_run_id=run.id,
-        root_run_id=run.id,
-        depth=1,
-        child_role="verifier",
-        runtime_route=TEAM_VERIFIER_ROUTE,
+    graph, _ = _graph(
+        teams,
+        responses=[_team_plan_repair_json(target_child_run_id=str(teammate.id))],
     )
-    await runtime.create_run(
-        verifier,
-        Agent(
-            run_id=verifier.id,
-            parent_agent_id=leader.id,
-            kind=AgentKind.VERIFIER,
-            profile="verifier",
-            model="verifier-model",
-        ),
-    )
-    verifier_assignment = TeamAssignment(
-        root_run_id=run.id,
-        parent_run_id=run.id,
-        child_run_id=verifier.id,
-        kind=TeamAssignmentKind.VERIFIER,
-        status=TeamAssignmentStatus.FAILED,
-        role_profile="verifier",
-        runtime_route=TEAM_VERIFIER_ROUTE,
-        goal="verify",
-    )
-    await teams.create_assignment(verifier_assignment)
-    decision = TeamVerificationDecision(
-        decision="rework_required",
-        summary="Need README evidence.",
-        rework_requests=[
-            TeamReworkRequest(
-                target_child_run_id=str(teammate.id),
-                reason="Missing README evidence.",
-                acceptance_criteria=["Read README.md and summarize it."],
-            )
-        ],
-    )
-    await teams.record_child_result(
-        TeamChildResult(
-            assignment_id=verifier_assignment.id,
-            child_run_id=verifier.id,
-            parent_run_id=run.id,
-            root_run_id=run.id,
-            status="failed",
-            summary=encode_rework_decision(decision),
-            failure_kind="rework_required",
-        )
+    verifier, verifier_assignment = await _failed_verifier_with_rework(
+        runtime,
+        teams,
+        run,
+        leader,
+        target_child_run_id=str(teammate.id),
     )
     events: list[tuple[object, dict[str, object], str]] = []
 
@@ -1102,10 +1060,180 @@ async def test_leader_creates_rework_replacement_from_verifier_request() -> None
     assert replacement.can_delegate is True
     assert replacement.max_subagents == 3
     assert replacement.handoff_context["previous_child_run_id"] == str(teammate.id)
-    assert replacement.handoff_context["verifier_child_run_id"] == str(verifier.id)
-    assert replacement.handoff_context["rework_attempt"] == 1
+    assert replacement.handoff_context["plan_repair_action"] == "replace_teammate"
+    assert replacement.handoff_context["plan_repair_attempt"] == 1
+    assert replacement.handoff_context["plan_repair_verifier_child_run_id"] == str(
+        verifier.id
+    )
     assert retired_verifier.status is TeamAssignmentStatus.RETIRED
-    assert EventType.TEAM_REWORK_REQUESTED in {event[0] for event in events}
+    assert EventType.TEAM_PLAN_REPAIR_CREATED in {event[0] for event in events}
+    assert EventType.TEAM_PLAN_REPAIR_APPLIED in {event[0] for event in events}
+    assert EventType.TEAM_REWORK_REQUESTED not in {event[0] for event in events}
+
+
+@pytest.mark.asyncio
+async def test_leader_applies_plan_repair_additive_teammate() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph, _ = _graph(teams, responses=[_team_plan_repair_add_json()])
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+    teammate = Run(
+        goal="original",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    await runtime.create_run(
+        teammate,
+        Agent(
+            run_id=teammate.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile="backend-engineer",
+            model="backend-model",
+        ),
+    )
+    original = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=teammate.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="Inspect README.",
+        allowed_tools=["repo.read"],
+        can_write=False,
+    )
+    await teams.create_assignment(original)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=original.id,
+            child_run_id=teammate.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="completed",
+            summary="Need a separate reviewer.",
+        )
+    )
+    verifier, verifier_assignment = await _failed_verifier_with_rework(
+        runtime,
+        teams,
+        run,
+        leader,
+        target_child_run_id=str(teammate.id),
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    assignments = await teams.list_assignments(run.id, include_inactive=True)
+    additive = next(
+        item
+        for item in assignments
+        if item.handoff_context.get("plan_repair_action") == "add_teammate"
+    )
+    retired_verifier = next(
+        item for item in assignments if item.id == verifier_assignment.id
+    )
+
+    assert additive.handoff_context["plan_repair_verifier_child_run_id"] == str(
+        verifier.id
+    )
+    assert "previous_assignment_id" not in additive.handoff_context
+    assert additive.allowed_tools == ["repo.read", "repo.apply_patch"]
+    assert additive.can_write is True
+    assert retired_verifier.status is TeamAssignmentStatus.RETIRED
+    assert EventType.TEAM_PLAN_REPAIR_APPLIED in {event[0] for event in events}
+
+
+@pytest.mark.asyncio
+async def test_leader_exhausts_plan_repair_budget() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph, provider = _graph(teams, responses=[_team_plan_repair_add_json()])
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+    teammate = Run(
+        goal="original",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="teammate",
+        runtime_route="team-role",
+    )
+    await runtime.create_run(
+        teammate,
+        Agent(
+            run_id=teammate.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.TEAMMATE,
+            profile="backend-engineer",
+            model="backend-model",
+        ),
+    )
+    original = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=teammate.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="Inspect README.",
+    )
+    await teams.create_assignment(original)
+    verifier, _ = await _failed_verifier_with_rework(
+        runtime,
+        teams,
+        run,
+        leader,
+        target_child_run_id=str(teammate.id),
+    )
+    for index in range(2):
+        await teams.create_assignment(
+            TeamAssignment(
+                root_run_id=run.id,
+                parent_run_id=run.id,
+                child_run_id=uuid4(),
+                kind=TeamAssignmentKind.TEAMMATE,
+                status=TeamAssignmentStatus.COMPLETED,
+                role_profile="backend-engineer",
+                runtime_route="team-role",
+                goal=f"Prior repair {index}",
+                handoff_context={
+                    "plan_repair_reason": "verifier_rework",
+                    "plan_repair_verifier_child_run_id": str(verifier.id),
+                },
+            )
+        )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    with pytest.raises(PermanentExecutionError, match="team_plan_repair_exhausted"):
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    assert provider.requests == []
+    assert EventType.TEAM_PLAN_REPAIR_EXHAUSTED in {event[0] for event in events}
 
 
 @pytest.mark.asyncio
@@ -1322,6 +1450,123 @@ def _team_plan_json(*, extra: dict[str, object] | None = None) -> str:
             "teammates": [teammate],
         }
     )
+
+
+def _team_plan_repair_json(*, target_child_run_id: str) -> str:
+    return json.dumps(
+        {
+            "rationale": "The verifier found missing README evidence.",
+            "actions": [
+                {
+                    "action": "replace_teammate",
+                    "reason": "The original teammate missed required evidence.",
+                    "target_child_run_id": target_child_run_id,
+                    "teammate": {
+                        "role_profile": "backend-engineer",
+                        "goal": "Re-read README.md and provide the missing evidence.",
+                        "allowed_tools": ["repo.read", "team.create_subagent"],
+                        "allowed_skills": ["repository-inspection"],
+                        "can_write": False,
+                        "can_delegate": True,
+                        "max_subagents": 3,
+                        "acceptance_criteria": [
+                            "Read README.md and summarize the relevant evidence."
+                        ],
+                    },
+                }
+            ],
+        }
+    )
+
+
+def _team_plan_repair_add_json() -> str:
+    return json.dumps(
+        {
+            "rationale": "The verifier needs an additional teammate to close gaps.",
+            "actions": [
+                {
+                    "action": "add_teammate",
+                    "reason": "Add a focused implementer for the missing work.",
+                    "teammate": {
+                        "role_profile": "backend-engineer",
+                        "goal": "Implement the missing change and report files.",
+                        "allowed_tools": ["repo.read", "repo.apply_patch"],
+                        "deferred_tools": ["repo.apply_patch"],
+                        "allowed_skills": ["python"],
+                        "can_write": True,
+                        "can_delegate": False,
+                        "max_subagents": 0,
+                        "acceptance_criteria": [
+                            "Return a patch or explain why no patch is needed."
+                        ],
+                    },
+                }
+            ],
+        }
+    )
+
+
+async def _failed_verifier_with_rework(
+    runtime: InMemoryRuntimeRepository,
+    teams: InMemoryTeamRepository,
+    run: Run,
+    leader: Agent,
+    *,
+    target_child_run_id: str,
+) -> tuple[Run, TeamAssignment]:
+    verifier = Run(
+        goal="verify",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        depth=1,
+        child_role="verifier",
+        runtime_route=TEAM_VERIFIER_ROUTE,
+    )
+    await runtime.create_run(
+        verifier,
+        Agent(
+            run_id=verifier.id,
+            parent_agent_id=leader.id,
+            kind=AgentKind.VERIFIER,
+            profile="verifier",
+            model="verifier-model",
+        ),
+    )
+    verifier_assignment = TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=verifier.id,
+        kind=TeamAssignmentKind.VERIFIER,
+        status=TeamAssignmentStatus.FAILED,
+        role_profile="verifier",
+        runtime_route=TEAM_VERIFIER_ROUTE,
+        goal="verify",
+    )
+    await teams.create_assignment(verifier_assignment)
+    decision = TeamVerificationDecision(
+        decision="rework_required",
+        summary="Need README evidence.",
+        rework_requests=[
+            TeamReworkRequest(
+                target_child_run_id=target_child_run_id,
+                reason="Missing README evidence.",
+                acceptance_criteria=["Read README.md and summarize it."],
+            )
+        ],
+    )
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=verifier_assignment.id,
+            child_run_id=verifier.id,
+            parent_run_id=run.id,
+            root_run_id=run.id,
+            status="failed",
+            summary=encode_rework_decision(decision),
+            failure_kind="rework_required",
+        )
+    )
+    return verifier, verifier_assignment
 
 
 def _git(path: Path, *arguments: str) -> None:

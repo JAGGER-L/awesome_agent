@@ -98,6 +98,7 @@ Task 07 does not include:
 | Task 29 | Done | Added route-restricted Teammate mailbox collaboration through assignment-scoped mailbox tools, durable read/respond lifecycle, Leader root audit visibility, and Worker-path evidence. | Unit tests cover route policy, repository visibility, role-loop tool exposure, and mailbox tool execution; distributed integration covers Teammate-to-Teammate question/response mailbox flow without weakening Subagent isolation or Verifier authority. |
 | Task 30 | Done | Locked the post-Task-29 runtime roadmap, architecture invariants, P2-P5 disposition, forward task sequence, and change-control rules so later work does not re-plan the kernel from scratch after every task. | Runtime roadmap names Task 31-40 ordering, kernel-stability criteria, phase gates, and disallowed early expansions; local execution evidence records baseline and documentation validation. |
 | Task 31 | Done | Added a team-scoped `CapabilityResolver` / `EffectiveToolPolicy` foundation for distributed team assignments. | Team planning, role-loop exposure, role tool execution, Subagent grants, Verifier review tools, and API inspection use resolver-derived effective tools and per-tool capabilities without weakening mailbox, delegation, write, or Subagent restrictions. |
+| Task 32 | Done | Added bounded Leader plan repair for Verifier-requested distributed team rework. | Leader repair decisions are structured, audited, budgeted, and can replace or add Teammate child Runs while preserving assignment lineage, filtering superseded evidence, retiring failed Verifiers, and requiring a fresh Verifier pass after repaired children finish. |
 
 ## Runtime Architecture Invariants
 
@@ -141,7 +142,7 @@ These invariants override older task-level handoffs when they conflict:
 | P2: typed middleware contract | Partially complete. `MiddlewareContext` is typed but still thin and metadata-heavy. | Finish later as Task 37 with typed extension envelopes for trace, capability decision, assignment, budget, handoff, and error classification. Do not make one giant context object. |
 | P3: migrate team routes | Complete for the forward distributed routes. `team-coding`, `team-role`, and `team-verifier` enter `TeamAgentLoop` and shared middleware; graphs retain durable coordination. | Keep slimming graph-owned policy opportunistically, but do not reopen P3 as a broad migration task. |
 | P4: unified tool permission | Partially complete. Task 31 added the team-scoped `CapabilityResolver` / `EffectiveToolPolicy` foundation for distributed team assignments. | Finish full-route convergence in Task 38 so solo, team, Subagent, API inspection, and validation paths share the same effective-policy model. |
-| P5: team hardening | Mostly complete for local validation, same-child validation rework, patch conflict recovery, stress coverage, and mailbox collaboration. | Continue with Task 32 bounded replanning and Task 33 budget policy tuning. |
+| P5: team hardening | Mostly complete for local validation, same-child validation rework, patch conflict recovery, stress coverage, mailbox collaboration, and bounded Leader plan repair. | Continue with Task 33 budget policy tuning and later production hardening. |
 
 ## Locked Forward Roadmap
 
@@ -149,12 +150,11 @@ Task 30 fixes the default sequence below. Future changes may reorder it only
 through a documented roadmap change, not as an incidental implementation-plan
 choice.
 
-Task 31 is complete and recorded in the completed-task table above. The
-remaining locked sequence starts at Task 32.
+Task 32 is complete and recorded in the completed-task table above. The
+remaining locked sequence starts at Task 33.
 
 | Task | Phase | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 32 | Kernel | Add bounded Leader replanning and plan repair. | TD-029 is closed: the Leader can perform audited, budgeted plan repair, replacement, or role redistribution while preserving assignment lineage and Verifier authority. |
 | Task 33 | Kernel | Replace conservative team rework defaults with policy-backed retry and rework budgets. | TD-020 and TD-031 are closed or narrowed: budgets are configurable by failure class, task risk, model/provider quality, and observed runtime metrics. |
 | Task 34 | Accounting | Replace heuristic token estimation with provider/tokenizer-aware accounting. | TD-021 is closed with documented error bounds and provider-specific or tokenizer-backed prompt/completion accounting. |
 | Task 35 | Accounting | Add money cost budget ledger. | TD-024 is closed: token ledgers map to auditable spend through provider-aware pricing configuration or an external cost source. |

@@ -333,6 +333,80 @@ async def test_verifier_ignores_superseded_patch_conflict_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_ignores_superseded_plan_repair_result() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = FakeModelProvider([_decision("passed", "Replacement evidence passes.")])
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+    )
+    parent = Run(goal="parent", mode=RunMode.TEAM)
+    verifier, agent, assignment = _verifier_run(parent)
+    await runtime.create_run(
+        parent,
+        Agent(
+            run_id=parent.id,
+            kind=AgentKind.LEADER,
+            profile="leader",
+            model="fake",
+        ),
+    )
+    await runtime.create_run(verifier, agent)
+    await teams.create_assignment(assignment)
+    original = await _teammate_assignment(teams, parent)
+    replacement = TeamAssignment(
+        root_run_id=parent.id,
+        parent_run_id=parent.id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        status=TeamAssignmentStatus.COMPLETED,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="replacement",
+        handoff_context={
+            "plan_repair_reason": "verifier_rework",
+            "plan_repair_action": "replace_teammate",
+            "previous_assignment_id": str(original.id),
+            "previous_child_run_id": str(original.child_run_id),
+            "plan_repair_attempt": 1,
+        },
+    )
+    await teams.create_assignment(replacement)
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=original.id,
+            child_run_id=original.child_run_id,
+            parent_run_id=parent.id,
+            root_run_id=parent.id,
+            status="completed",
+            summary="Old weak evidence.",
+            patch_aggregated=True,
+        )
+    )
+    await teams.record_child_result(
+        TeamChildResult(
+            assignment_id=replacement.id,
+            child_run_id=replacement.child_run_id,
+            parent_run_id=parent.id,
+            root_run_id=parent.id,
+            status="completed",
+            summary="Replacement evidence.",
+            patch_aggregated=True,
+        )
+    )
+
+    state, recovered = await graph.execute(verifier, agent, repository=runtime)
+
+    payload = json.loads(provider.requests[0].messages[-1].content)
+    summaries = [item["summary"] for item in payload["child_results"]]
+    assert not recovered
+    assert state["phase"] == "passed"
+    assert summaries == ["Replacement evidence."]
+    assert "Old weak evidence." not in json.dumps(payload)
+
+
+@pytest.mark.asyncio
 async def test_verifier_invalid_output_retries_once_then_fails() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()

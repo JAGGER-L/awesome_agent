@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Literal
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -47,6 +48,10 @@ from awesome_agent.runtime.team_assignments import (
 from awesome_agent.runtime.team_planning import (
     TeamPlan,
     validate_team_plan_for_intent,
+)
+from awesome_agent.runtime.team_replanning import (
+    TeamPlanRepair,
+    validate_team_plan_repair,
 )
 from awesome_agent.runtime.team_verification import TeamVerificationDecision
 from awesome_agent.runtime.validation.models import ValidationPlan
@@ -125,6 +130,41 @@ class TeamPlanningMiddleware:
             agent_kind=leader.kind.value,
             metadata={"team_operation": "planning"},
             handler=plan_operation,
+        )
+
+    async def create_team_plan_repair(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        assignments: list[TeamAssignment],
+        child_results: list[TeamChildResult],
+        verifier_child_run_id: UUID,
+        verifier_feedback: str,
+        attempt: int,
+        event_sink: object | None,
+    ) -> tuple[TeamPlanRepair, int]:
+        async def repair_operation(_: object) -> tuple[TeamPlanRepair, int]:
+            return await self._create_team_plan_repair(
+                run,
+                leader,
+                assignments=assignments,
+                child_results=child_results,
+                verifier_child_run_id=verifier_child_run_id,
+                verifier_feedback=verifier_feedback,
+                attempt=attempt,
+                event_sink=event_sink,
+            )
+
+        return await self.team_loop.run_agent_operation(
+            object(),
+            run=run,
+            agent=leader,
+            messages=[],
+            team_role="leader",
+            agent_kind=leader.kind.value,
+            metadata={"team_operation": "plan_repair", "attempt": attempt},
+            handler=repair_operation,
         )
 
     async def _create_team_plan(
@@ -217,6 +257,111 @@ class TeamPlanningMiddleware:
             )
             return plan, attempt
         raise PermanentExecutionError(f"team_plan_invalid: {last_error[:500]}")
+
+    async def _create_team_plan_repair(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        assignments: list[TeamAssignment],
+        child_results: list[TeamChildResult],
+        verifier_child_run_id: UUID,
+        verifier_feedback: str,
+        attempt: int,
+        event_sink: object | None,
+    ) -> tuple[TeamPlanRepair, int]:
+        if self.provider_resolver is None:
+            raise PermanentExecutionError("team_plan_repair_provider_unavailable")
+        provider = self.provider_resolver(leader.model)
+        messages = _initial_team_plan_repair_messages(
+            run,
+            assignments=assignments,
+            child_results=child_results,
+            verifier_child_run_id=verifier_child_run_id,
+            verifier_feedback=verifier_feedback,
+        )
+        last_error = ""
+        for model_attempt in range(1, _TEAM_PLAN_MAX_ATTEMPTS + 1):
+            attempt_messages = list(messages)
+
+            async def complete_repair_attempt(
+                _: object,
+                *,
+                current_messages: list[ModelMessage] = attempt_messages,
+            ) -> ModelTurn:
+                try:
+                    return await provider.complete(
+                        ModelRequest(messages=current_messages, tools=[])
+                    )
+                except TransientModelError as error:
+                    raise TransientExecutionError(str(error)) from error
+                except ModelProviderError as error:
+                    raise PermanentExecutionError(str(error)) from error
+
+            turn = await self.team_loop.wrap_model_call(
+                object(),
+                run=run,
+                agent=leader,
+                messages=attempt_messages,
+                team_role="leader",
+                agent_kind=leader.kind.value,
+                metadata={
+                    "team_operation": "plan_repair",
+                    "attempt": model_attempt,
+                },
+                handler=complete_repair_attempt,
+            )
+            try:
+                repair = validate_team_plan_repair(
+                    TeamPlanRepair.model_validate_json(turn.assistant.content),
+                    intent=run.intent,
+                    assignments=assignments,
+                )
+            except (ValidationError, ValueError) as error:
+                last_error = str(error)
+                await _emit_if_callable(
+                    event_sink,
+                    EventType.TEAM_PLAN_REPAIR_REJECTED,
+                    {
+                        "run_id": str(run.id),
+                        "agent_id": str(leader.id),
+                        "attempt": model_attempt,
+                        "operation": "plan_repair",
+                        "error": last_error[:2000],
+                    },
+                    f"team-plan-repair-rejected:{attempt}:{model_attempt}",
+                )
+                if model_attempt >= _TEAM_PLAN_MAX_ATTEMPTS:
+                    raise PermanentExecutionError(
+                        f"team_plan_repair_invalid: {last_error[:500]}"
+                    ) from error
+                messages = [
+                    *messages,
+                    turn.assistant,
+                    UserMessage(
+                        content=(
+                            "Your previous TeamPlanRepair was rejected. Fix "
+                            "these validation errors and return only corrected "
+                            f"JSON: {last_error[:2000]}"
+                        )
+                    ),
+                ]
+                continue
+            await _emit_if_callable(
+                event_sink,
+                EventType.TEAM_PLAN_REPAIR_CREATED,
+                {
+                    "run_id": str(run.id),
+                    "agent_id": str(leader.id),
+                    "attempt": attempt,
+                    "model_attempt": model_attempt,
+                    "action_count": len(repair.actions),
+                    "rationale": repair.rationale[:2000],
+                },
+                f"team-plan-repair-created:{attempt}",
+            )
+            return repair, model_attempt
+        raise PermanentExecutionError(f"team_plan_repair_invalid: {last_error[:500]}")
 
 
 class TeamRoleValidationMiddleware:
@@ -473,6 +618,92 @@ def _initial_team_plan_messages(run: Run) -> list[ModelMessage]:
                 "Prefer the smallest useful team."
             )
         ),
+    ]
+
+
+def _initial_team_plan_repair_messages(
+    run: Run,
+    *,
+    assignments: list[TeamAssignment],
+    child_results: list[TeamChildResult],
+    verifier_child_run_id: UUID,
+    verifier_feedback: str,
+) -> list[ModelMessage]:
+    assignment_payload = [
+        {
+            "assignment_id": str(assignment.id),
+            "child_run_id": str(assignment.child_run_id),
+            "kind": assignment.kind.value,
+            "status": assignment.status.value,
+            "role_profile": assignment.role_profile,
+            "goal": assignment.goal,
+            "allowed_tools": assignment.allowed_tools,
+            "deferred_tools": assignment.deferred_tools,
+            "promoted_tools": assignment.promoted_tools,
+            "allowed_skills": assignment.allowed_skills,
+            "can_write": assignment.can_write,
+            "can_delegate": assignment.can_delegate,
+            "max_subagents": assignment.max_subagents,
+            "acceptance_criteria": assignment.acceptance_criteria,
+            "handoff_context": assignment.handoff_context,
+        }
+        for assignment in assignments
+        if assignment.kind.value == "teammate"
+    ]
+    result_payload = [
+        {
+            "assignment_id": str(result.assignment_id),
+            "child_run_id": str(result.child_run_id),
+            "status": result.status,
+            "summary": result.summary,
+            "patch_artifact_id": (
+                str(result.patch_artifact_id)
+                if result.patch_artifact_id is not None
+                else None
+            ),
+            "patch_aggregated": result.patch_aggregated,
+            "changed_files": result.changed_files,
+            "failure_kind": result.failure_kind,
+        }
+        for result in child_results
+    ]
+    payload = {
+        "root_goal": run.goal,
+        "root_intent": run.intent.value,
+        "verifier_child_run_id": str(verifier_child_run_id),
+        "verifier_feedback": verifier_feedback,
+        "teammate_assignments": assignment_payload,
+        "child_results": result_payload,
+    }
+    return [
+        SystemMessage(
+            content=(
+                "You are the Leader repairing a coding-agent team plan after "
+                "the independent Verifier requested rework. Return only valid "
+                "JSON matching this schema: {"
+                '"rationale":"short reason",'
+                '"actions":[{'
+                '"action":"replace_teammate|add_teammate",'
+                '"target_child_run_id":"required only for replace_teammate",'
+                '"reason":"why this repair is needed",'
+                '"teammate":{'
+                '"role_profile":"lowercase-slug",'
+                '"goal":"specific teammate task",'
+                '"allowed_tools":["repo.status"],'
+                '"deferred_tools":[],'
+                '"allowed_skills":[],'
+                '"can_write":false,'
+                '"can_delegate":false,'
+                '"max_subagents":0,'
+                '"acceptance_criteria":["observable completion criterion"]'
+                "}}]}"
+                "}. Use replace_teammate to supersede weak or mis-scoped "
+                "evidence. Use add_teammate when the existing work should stay "
+                "but another bounded role is needed. Do not create Verifiers or "
+                "Subagents. Do not mark the team passed."
+            )
+        ),
+        UserMessage(content=json.dumps(payload, ensure_ascii=False)),
     ]
 
 

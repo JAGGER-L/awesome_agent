@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
+from tests.fakes import FakeModelProvider
 
-from awesome_agent.domain.enums import AgentKind, RunMode
+from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -28,6 +30,12 @@ from awesome_agent.runtime.agent_loop.observability_middleware import (
     ObservabilityMiddleware,
 )
 from awesome_agent.runtime.agent_loop.team import TeamAgentLoop
+from awesome_agent.runtime.agent_loop.team_middleware import TeamPlanningMiddleware
+from awesome_agent.runtime.team_assignments import (
+    TeamAssignment,
+    TeamAssignmentKind,
+    TeamChildResult,
+)
 
 
 class RecordingTeamMiddleware:
@@ -161,6 +169,91 @@ def test_team_loop_installs_observability_middleware() -> None:
 
 
 @pytest.mark.asyncio
+async def test_team_planning_middleware_creates_plan_repair() -> None:
+    run, leader = _leader_run()
+    target = _assignment(run)
+    provider = FakeModelProvider([_repair_json(str(target.child_run_id))])
+    recorder = RepairRecordingMiddleware()
+    middleware = TeamPlanningMiddleware(
+        provider_resolver=lambda _: provider,
+        team_loop=TeamAgentLoop(middleware_stack=MiddlewareStack([recorder])),
+    )
+    result = _result(run, target)
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object, payload: dict[str, object], transition_id: str
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    repair, attempt = await middleware.create_team_plan_repair(
+        run,
+        leader,
+        assignments=[target],
+        child_results=[result],
+        verifier_child_run_id=uuid4(),
+        verifier_feedback="Missing README evidence.",
+        attempt=1,
+        event_sink=emit,
+    )
+
+    assert attempt == 1
+    assert repair.actions[0].action == "replace_teammate"
+    assert repair.actions[0].target_child_run_id == str(target.child_run_id)
+    assert recorder.model_call_metadata == [
+        {
+            "runtime_route": "team-coding",
+            "team_root_run_id": str(run.id),
+            "team_role": "leader",
+            "agent_kind": "leader",
+            "team_operation": "plan_repair",
+            "attempt": 1,
+        }
+    ]
+    assert "Leader repairing a coding-agent team plan" in recorder.model_prompt_text
+    assert "Missing README evidence" in recorder.model_prompt_text
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_team_planning_middleware_retries_invalid_plan_repair_once() -> None:
+    run, leader = _leader_run()
+    target = _assignment(run)
+    provider = FakeModelProvider(
+        [
+            json.dumps({"rationale": "bad", "actions": []}),
+            _repair_json(str(target.child_run_id)),
+        ]
+    )
+    middleware = TeamPlanningMiddleware(
+        provider_resolver=lambda _: provider,
+        team_loop=TeamAgentLoop(),
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object, payload: dict[str, object], transition_id: str
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    repair, attempt = await middleware.create_team_plan_repair(
+        run,
+        leader,
+        assignments=[target],
+        child_results=[_result(run, target)],
+        verifier_child_run_id=uuid4(),
+        verifier_feedback="Missing evidence.",
+        attempt=1,
+        event_sink=emit,
+    )
+
+    assert attempt == 2
+    assert repair.actions[0].action == "replace_teammate"
+    assert events[0][1]["attempt"] == 1
+    assert events[0][1]["operation"] == "plan_repair"
+
+
+@pytest.mark.asyncio
 async def test_team_loop_observability_records_direct_model_and_tool_results() -> None:
     repository = InMemoryObservabilityRepository()
     facade = ObservabilityFacade(
@@ -256,3 +349,101 @@ def _team_run_and_agent() -> tuple[Run, Agent]:
         model="fake",
     )
     return run, agent
+
+
+def _leader_run() -> tuple[Run, Agent]:
+    run = Run(
+        id=uuid4(),
+        goal="Repair team output.",
+        mode=RunMode.TEAM,
+        intent=RunIntent.MODIFYING,
+        runtime_route="team-coding",
+    )
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="leader-model",
+    )
+    return run, leader
+
+
+def _assignment(run: Run) -> TeamAssignment:
+    return TeamAssignment(
+        root_run_id=run.id,
+        parent_run_id=run.id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="backend-engineer",
+        runtime_route="team-role",
+        goal="Inspect README.",
+        allowed_tools=["repo.read"],
+        acceptance_criteria=["Return README evidence."],
+    )
+
+
+def _result(run: Run, assignment: TeamAssignment) -> TeamChildResult:
+    return TeamChildResult(
+        assignment_id=assignment.id,
+        child_run_id=assignment.child_run_id,
+        parent_run_id=run.id,
+        root_run_id=run.id,
+        status="completed",
+        summary="No README evidence.",
+        patch_aggregated=True,
+    )
+
+
+def _repair_json(target_child_run_id: str) -> str:
+    return json.dumps(
+        {
+            "rationale": "Replace the teammate with a focused README inspection role.",
+            "actions": [
+                {
+                    "action": "replace_teammate",
+                    "target_child_run_id": target_child_run_id,
+                    "reason": "Verifier reported missing README evidence.",
+                    "teammate": {
+                        "role_profile": "repository-inspector",
+                        "goal": "Read README.md and return bounded evidence.",
+                        "allowed_tools": ["repo.read"],
+                        "deferred_tools": [],
+                        "allowed_skills": ["repository-inspection"],
+                        "can_write": False,
+                        "can_delegate": False,
+                        "max_subagents": 0,
+                        "acceptance_criteria": ["Quote README evidence in the result."],
+                    },
+                }
+            ],
+        }
+    )
+
+
+class RepairRecordingMiddleware:
+    name = "repair-recorder"
+
+    def __init__(self) -> None:
+        self.model_call_metadata: list[dict[str, object]] = []
+        self.model_prompt_text = ""
+
+    async def handle(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[MiddlewareDecision]],
+    ) -> MiddlewareDecision:
+        return await call_next(context)
+
+    async def wrap_stage(
+        self,
+        stage: MiddlewareStage,
+        context: MiddlewareContext,
+        call_next: Callable[[MiddlewareContext], Awaitable[object]],
+    ) -> object:
+        if stage is MiddlewareStage.WRAP_MODEL_CALL:
+            self.model_prompt_text = "\n".join(
+                message.content for message in context.messages
+            )
+            self.model_call_metadata.append(dict(context.metadata))
+        return await call_next(context)
