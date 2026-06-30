@@ -31,10 +31,10 @@ from awesome_agent.runtime.team_mailbox import (
     MailboxMessageType,
     MailboxRoute,
 )
-from awesome_agent.runtime.team_rework import (
-    effective_child_results_for_verification,
-    encode_rework_decision,
+from awesome_agent.runtime.team_replanning import (
+    effective_child_results_for_team_verification,
 )
+from awesome_agent.runtime.team_rework import encode_rework_decision
 from awesome_agent.runtime.team_verification import TeamVerificationDecision
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
@@ -112,7 +112,7 @@ class TeamVerifierGraph:
             )
             if result.child_run_id in teammate_child_ids
         ]
-        sibling_results = effective_child_results_for_verification(
+        sibling_results = effective_child_results_for_team_verification(
             sibling_results,
             assignments,
         )
