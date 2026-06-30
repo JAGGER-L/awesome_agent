@@ -16,6 +16,7 @@ from awesome_agent.runtime.team_replanning import (
     PLAN_REPAIR_SUPERSEDED_REASONS,
     TeamPlanRepair,
     TeamPlanRepairAction,
+    TeamPlanRepairActionKind,
     effective_child_results_for_team_verification,
     plan_repair_attempt_for_verifier,
     plan_repair_budget_for_reason,
@@ -30,7 +31,7 @@ def test_repair_action_replace_requires_target_child_run_id() -> None:
         ValidationError, match="replace_teammate requires target_child_run_id"
     ):
         TeamPlanRepairAction(
-            action="replace_teammate",
+            action=TeamPlanRepairActionKind.REPLACE_TEAMMATE,
             reason="Missing evidence.",
             teammate=_teammate_plan(),
         )
@@ -41,7 +42,7 @@ def test_repair_action_add_forbids_target_child_run_id() -> None:
         ValidationError, match="add_teammate cannot target an existing child"
     ):
         TeamPlanRepairAction(
-            action="add_teammate",
+            action=TeamPlanRepairActionKind.ADD_TEAMMATE,
             target_child_run_id=str(uuid4()),
             reason="Split the role.",
             teammate=_teammate_plan(),
@@ -53,7 +54,7 @@ def test_validate_repair_rejects_unknown_replacement_target() -> None:
         rationale="Replace missing evidence.",
         actions=[
             TeamPlanRepairAction(
-                action="replace_teammate",
+                action=TeamPlanRepairActionKind.REPLACE_TEAMMATE,
                 target_child_run_id=str(uuid4()),
                 reason="Missing README evidence.",
                 teammate=_teammate_plan(),
@@ -75,7 +76,7 @@ def test_validate_repair_uses_team_plan_tool_rules_for_read_only_runs() -> None:
         rationale="Replace with invalid writer.",
         actions=[
             TeamPlanRepairAction(
-                action="replace_teammate",
+                action=TeamPlanRepairActionKind.REPLACE_TEAMMATE,
                 target_child_run_id=str(target.child_run_id),
                 reason="Should not write in read-only mode.",
                 teammate=_teammate_plan(
@@ -119,7 +120,7 @@ def test_plan_repair_attempt_counts_prior_verifier_repair_assignments() -> None:
     assert plan_repair_budget_for_reason(PLAN_REPAIR_REASON_VERIFIER_REWORK) == 2
 
 
-def test_effective_results_filter_patch_conflict_and_plan_repair_superseded_children() -> None:
+def test_effective_results_filter_superseded_children() -> None:
     root_run_id = uuid4()
     parent_run_id = uuid4()
     patch_target = _assignment(root_run_id=root_run_id, parent_run_id=parent_run_id)
