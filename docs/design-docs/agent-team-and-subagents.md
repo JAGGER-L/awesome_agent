@@ -168,10 +168,12 @@ auditable but are excluded from later aggregation and Verifier pass validation.
 The implemented `team-coding` route is now the forward distributed team runtime
 for local execution. Task 24 moves Leader planning, Teammate/Subagent
 model/tool execution, delegation tool calls, Verifier decisions, and team
-observability behind `TeamAgentLoop` and shared middleware. Remaining work is
-not basic autonomy wiring; it is hardening: richer mailbox collaboration
-policy, advanced replanning, empirically tuned rework budgets, and true
-concurrent Worker stress tests.
+observability behind `TeamAgentLoop` and shared middleware. Task 28 adds
+PostgreSQL-backed concurrent Worker stress coverage for sibling Teammates,
+Teammate-owned Subagents, Verifier completion, patch aggregation, mailbox and
+result persistence, and dispatch claim evidence. Remaining work is not basic
+autonomy wiring; it is hardening: richer mailbox collaboration policy,
+advanced replanning, and empirically tuned rework budgets.
 
 ## AgentLoop Boundary
 

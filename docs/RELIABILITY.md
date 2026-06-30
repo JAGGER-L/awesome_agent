@@ -119,6 +119,10 @@ forbidden.
   holding a Worker lease. Child completion records assignment terminal status
   and requeues the waiting parent. Parent cancellation recursively cancels
   nonterminal descendants while preserving terminal child evidence.
+- Concurrent Worker stress coverage exercises multiple DurableWorkers claiming
+  sibling team work against PostgreSQL and verifies unique assignment/result
+  persistence, parent requeue, Verifier completion, mailbox persistence, and
+  single patch aggregation.
 - Forward distributed team routes keep durable child-run coordination,
   assignment loading, patch aggregation, result persistence, mailbox messages,
   and terminal mapping in graph modules. Leader planning, role model/tool
