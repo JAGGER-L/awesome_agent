@@ -305,7 +305,10 @@ class TeamRoleGraph:
             assignment_id=assignment.id,
             team_role=assignment.kind.value,
             agent_kind=agent.kind.value,
-            metadata={"team_operation": "role_execute"},
+            metadata={
+                "team_operation": "role_execute",
+                "allowed_tools": allowed_tools,
+            },
             handler=execute_role_operation,
         )
 

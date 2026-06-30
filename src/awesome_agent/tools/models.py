@@ -35,6 +35,7 @@ class ToolInvocation(BaseModel):
     agent_id: UUID
     profile: str
     capabilities: set[str] = Field(default_factory=set)
+    effective_tool_names: set[str] | None = None
     arguments: dict[str, Any] = Field(default_factory=dict)
     workspace: Path | None = None
     approval_granted: bool = False

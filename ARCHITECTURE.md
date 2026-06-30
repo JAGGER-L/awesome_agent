@@ -373,7 +373,8 @@ Rules:
 - `modeling` owns provider-neutral messages, tools, turns, reasoning,
   continuation, usage, streaming events, and failure categories.
 - every Agent records its resolved model for API and event traceability.
-- tool execution always passes through approval and sandbox policies.
+- tool execution always passes through effective capability policy, approval,
+  and sandbox policies.
 - runtime events are immutable and all state changes emit an event.
 - implementation agents cannot approve their own team-mode work.
 
@@ -490,6 +491,13 @@ focused envelopes for trace, capability subject, assignment, token budget,
 handoff, and error classification. Metadata remains a compatibility and
 annotation channel; new cross-cutting policy should consume the typed
 envelopes and leave durable state transitions to the graph.
+
+Capability resolution is the authorization boundary for tool exposure and
+execution. The registry owns tool inventory, schemas, risk, and required raw
+capabilities; `EffectiveToolPolicy` owns whether a subject may see or execute a
+tool in a route. API inspection and team-role execution consume the same
+resolver output, and the executor rejects invocations outside a provided
+effective policy even if their raw capability set is sufficient.
 
 ## Observability
 

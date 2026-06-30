@@ -6,7 +6,7 @@ import os
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -34,6 +34,15 @@ _SENSITIVE_NAMES = {
     "id_rsa",
 }
 _SENSITIVE_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
+
+
+class EffectiveToolPolicyLike(Protocol):
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        ...
+
+    def capabilities_for(self, tool_name: str) -> frozenset[str]:
+        ...
 
 
 class RepositoryToolError(RuntimeError):
@@ -189,17 +198,26 @@ async def execute_repository_call(
     agent_id: Any,
     profile: str = "leader",
     capabilities: set[str] | None = None,
+    effective_tools: EffectiveToolPolicyLike | None = None,
     approval_granted: bool = False,
 ) -> ToolResultMessage:
     try:
         arguments = _parse_arguments(call)
+        invocation_capabilities = capabilities
+        if invocation_capabilities is None and effective_tools is not None:
+            invocation_capabilities = set(effective_tools.capabilities_for(call.name))
         result = await executor.execute(
             ToolInvocation(
                 id=_tool_uuid(call.call_id),
                 tool_name=call.name,
                 agent_id=agent_id,
                 profile=profile,
-                capabilities=capabilities or {"repository:read"},
+                capabilities=invocation_capabilities or {"repository:read"},
+                effective_tool_names=(
+                    set(effective_tools.tool_names)
+                    if effective_tools is not None
+                    else None
+                ),
                 arguments=arguments,
                 workspace=workspace,
                 approval_granted=approval_granted,
