@@ -88,6 +88,7 @@ async def test_teammate_loads_assignment_permissions() -> None:
             deferred_tools=["repo.apply_patch", "shell.execute"],
             promoted_tools=["repo.apply_patch"],
             allowed_skills=["repository-inspection"],
+            can_write=True,
         )
     )
 
@@ -1766,7 +1767,7 @@ async def test_subagent_cannot_use_mailbox_tool_even_if_granted(
     assert state["phase"] == "completed"
     assert await teams.list_mailbox_messages(run.root_run_id or run.id) == []
     tool_text = "\n".join(message.content for message in provider.requests[1].messages)
-    assert "Only Teammates can send team mailbox messages" in tool_text
+    assert "Tool team.mailbox_send is not allowed for this assignment." in tool_text
 
 
 @pytest.mark.asyncio
@@ -1879,6 +1880,90 @@ async def test_teammate_mailbox_response_marks_original_responded(
     assert EventType.TEAM_MAILBOX_MESSAGE_RESPONDED in {
         event_type for event_type, _, _ in events
     }
+
+
+@pytest.mark.asyncio
+async def test_legacy_subagent_goals_receive_resolved_read_only_tools() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph = TeamRoleGraph(team_repository=teams)
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=[
+                "repo.read",
+                "repo.apply_patch",
+                "team.mailbox_send",
+                "team.create_subagent",
+            ],
+            can_write=True,
+            can_delegate=True,
+            max_subagents=2,
+            handoff_context={"subagent_goals": ["Read README"]},
+        )
+    )
+
+    with pytest.raises(ChildRunWait, match="waiting_subagents"):
+        await graph.execute(run, agent, repository=runtime)
+
+    assignments = await teams.list_assignments(run.root_run_id or run.id)
+    subagent_assignment = next(
+        item for item in assignments if item.kind is TeamAssignmentKind.SUBAGENT
+    )
+    assert subagent_assignment.allowed_tools == ["repo.read"]
+    assert not subagent_assignment.can_write
+    assert not subagent_assignment.can_delegate
+
+
+@pytest.mark.asyncio
+async def test_dynamic_subagent_grant_rejects_non_read_only_tools_via_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="delegate",
+                        name="team.create_subagent",
+                        arguments_json=json.dumps(
+                            {
+                                "goal": "Inspect repository.",
+                                "allowed_tools": ["repo.read", "team.mailbox_send"],
+                                "allowed_skills": [],
+                                "acceptance_criteria": ["Return README evidence."],
+                            }
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            )
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read", "team.mailbox_send", "team.create_subagent"],
+            can_delegate=True,
+            max_subagents=1,
+        )
+    )
+
+    with pytest.raises(PermanentExecutionError, match="subagent tools must be read-only"):
+        await graph.execute(run, agent, repository=runtime)
+
+    assert await runtime.list_child_runs(run.id) == []
 
 
 def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:
