@@ -43,3 +43,28 @@ async def test_mailbox_read_and_response_lifecycle() -> None:
     assert read.status is MailboxMessageStatus.READ
     assert responded.status is MailboxMessageStatus.RESPONDED
     assert response.response_to_message_id == message.id
+
+
+@pytest.mark.asyncio
+async def test_root_lists_all_team_mailbox_messages() -> None:
+    repository = InMemoryTeamRepository()
+    root_run_id = uuid4()
+    teammate_a = uuid4()
+    teammate_b = uuid4()
+    unrelated = uuid4()
+    message = MailboxMessage(
+        team_root_run_id=root_run_id,
+        sender_run_id=teammate_a,
+        recipient_run_id=teammate_b,
+        route=MailboxRoute.TEAMMATE_TO_TEAMMATE,
+        message_type=MailboxMessageType.QUESTION,
+        subject="Need interface detail",
+        body_summary="Can you confirm the expected JSON field?",
+        requires_response=True,
+    )
+    await repository.create_mailbox_message(message)
+
+    assert await repository.list_mailbox_messages(root_run_id) == [message]
+    assert await repository.list_mailbox_messages(teammate_a) == [message]
+    assert await repository.list_mailbox_messages(teammate_b) == [message]
+    assert await repository.list_mailbox_messages(unrelated) == []

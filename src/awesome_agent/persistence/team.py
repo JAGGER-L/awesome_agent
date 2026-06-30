@@ -230,7 +230,9 @@ class InMemoryTeamRepository(TeamRepository):
         messages = [
             message
             for message in self._mailbox.values()
-            if message.sender_run_id == run_id or message.recipient_run_id == run_id
+            if message.team_root_run_id == run_id
+            or message.sender_run_id == run_id
+            or message.recipient_run_id == run_id
         ]
         if not include_archived:
             messages = [
@@ -431,7 +433,8 @@ class PostgresTeamRepository(TeamRepository):
         include_archived: bool = False,
     ) -> list[MailboxMessage]:
         statement = select(TeamMailboxMessageRecord).where(
-            (TeamMailboxMessageRecord.sender_run_id == run_id)
+            (TeamMailboxMessageRecord.team_root_run_id == run_id)
+            | (TeamMailboxMessageRecord.sender_run_id == run_id)
             | (TeamMailboxMessageRecord.recipient_run_id == run_id)
         )
         if not include_archived:

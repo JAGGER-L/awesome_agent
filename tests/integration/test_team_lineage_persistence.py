@@ -103,6 +103,38 @@ async def test_mailbox_message_round_trips_through_postgres() -> None:
     "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ,
     reason="Integration database is not configured.",
 )
+async def test_root_lists_all_postgres_mailbox_messages() -> None:
+    engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
+    sessions = create_session_factory(engine)
+    repository = PostgresTeamRepository(sessions)
+    root_run_id = uuid4()
+    teammate_a = uuid4()
+    teammate_b = uuid4()
+    unrelated = uuid4()
+    message = MailboxMessage(
+        team_root_run_id=root_run_id,
+        sender_run_id=teammate_a,
+        recipient_run_id=teammate_b,
+        route=MailboxRoute.TEAMMATE_TO_TEAMMATE,
+        message_type=MailboxMessageType.QUESTION,
+        subject="Need interface detail",
+        body_summary="Can you confirm the expected JSON field?",
+        requires_response=True,
+    )
+
+    saved = await repository.create_mailbox_message(message)
+
+    assert await repository.list_mailbox_messages(root_run_id) == [saved]
+    assert await repository.list_mailbox_messages(teammate_a) == [saved]
+    assert await repository.list_mailbox_messages(teammate_b) == [saved]
+    assert await repository.list_mailbox_messages(unrelated) == []
+    await engine.dispose()
+
+
+@pytest.mark.skipif(
+    "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ,
+    reason="Integration database is not configured.",
+)
 async def test_runtime_lineage_queries_and_waiting_requeue() -> None:
     engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
     sessions = create_session_factory(engine)
