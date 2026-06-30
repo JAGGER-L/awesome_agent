@@ -81,5 +81,5 @@ team output.
 - ordinary force cleanup for `recovery_required` workspaces
 - arbitrary free-form team chat beyond bounded route-restricted mailbox
   question/status messages
-- money cost budgeting and dashboards
+- dashboards and production observability workflows
 - LangSmith or LangGraph Agent Server

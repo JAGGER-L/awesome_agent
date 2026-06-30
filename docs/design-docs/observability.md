@@ -60,9 +60,8 @@ GET /runs/{run_id}/metrics
 GET /runs/{run_id}/model-calls
 ```
 
-Full dashboards, Prometheus/Grafana export, OTel metrics SDK integration,
-production alerting, and money-cost budget enforcement remain separate roadmap
-work.
+Full dashboards, Prometheus/Grafana export, OTel metrics SDK integration, and
+production alerting remain separate roadmap work.
 
 Every event includes lineage fields such as:
 
