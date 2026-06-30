@@ -1,11 +1,14 @@
 from uuid import uuid4
 
 from awesome_agent.runtime.capabilities import (
+    ALL_TEAM_TOOLS,
     CapabilityPurpose,
     CapabilityResolver,
     ToolDecisionReason,
+    WRITE_TEAM_TOOLS,
 )
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
+from awesome_agent.runtime.team_planning import TeamPlanTeammate
 
 
 def test_team_policy_hides_deferred_and_reports_capabilities() -> None:
@@ -170,6 +173,24 @@ def test_unknown_tools_are_denied_with_reason() -> None:
 
     assert policy.tool_names == ("repo.read",)
     assert policy.denied_reason("unknown.tool") is ToolDecisionReason.UNKNOWN_TOOL
+
+
+def test_team_planning_uses_shared_capability_catalog() -> None:
+    teammate = TeamPlanTeammate(
+        role_profile="backend",
+        goal="Read and coordinate",
+        allowed_tools=["repo.read", "team.mailbox_send"],
+        deferred_tools=[],
+        allowed_skills=[],
+        can_write=False,
+        can_delegate=False,
+        max_subagents=0,
+        acceptance_criteria=["Return evidence."],
+    )
+
+    assert "team.mailbox_send" in ALL_TEAM_TOOLS
+    assert "repo.apply_patch" in WRITE_TEAM_TOOLS
+    assert teammate.allowed_tools == ["repo.read", "team.mailbox_send"]
 
 
 def _assignment(
