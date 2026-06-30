@@ -35,12 +35,16 @@ Teammates and the Verifier default to `deepseek-v4-flash`.
 Each Teammate receives a Leader assignment containing `allowed_tools`,
 `deferred_tools`, `promoted_tools`, `allowed_skills`, write permission,
 delegation permission, Subagent limits, acceptance criteria, and handoff
-context. Effective tools are `allowed_tools - (deferred_tools -
-promoted_tools)`, so the Leader can grant a tool but defer exposing it until a
-later promotion step. In scoped `team-coding-scoped`, tools are executed inside one
-Run. In distributed `team-coding`, the assignment is durable data for the
-Teammate child Run; Task 22B executes model-driven assignment-scoped role loops
-using only the effective tools granted by that assignment.
+context. Effective tools are computed by `CapabilityResolver` from durable
+assignment state. The resolver starts with `allowed_tools - (deferred_tools -
+promoted_tools)`, then applies actor-kind, write, delegation, mailbox,
+Subagent-scope, Verifier-scope, and known-tool checks. The durable assignment
+stores the grant request; model exposure, tool execution, Subagent grants,
+Verifier tool exposure, and inspection use the resolved `EffectiveToolPolicy`.
+In scoped `team-coding-scoped`, tools are executed inside one Run. In
+distributed `team-coding`, the assignment is durable data for the Teammate child
+Run; Task 22B executes model-driven assignment-scoped role loops using only the
+effective tools granted by that assignment.
 
 ## Subagents
 

@@ -149,6 +149,9 @@ shared `MiddlewareStack`:
   through `TeamAgentLoop.wrap_model_call` and `TeamAgentLoop.wrap_tool_call`.
 - Verifier prompting, tool exposure, provider calls, invalid-output retry, and
   structured decision parsing live in `TeamVerificationMiddleware`.
+- Team tool exposure and execution use `CapabilityResolver` to project
+  effective assignment tools and per-tool capabilities at AgentLoop/RoleLoop
+  boundaries; graphs still persist assignments and child coordination.
 - Team graphs still own durable child-run coordination, assignment loading,
   child wait/requeue behavior, patch aggregation, verifier result persistence,
   mailbox creation, and terminal state mapping.
