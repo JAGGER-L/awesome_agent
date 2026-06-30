@@ -601,6 +601,7 @@ def test_team_inspection_endpoints_return_lineage_assignments_and_mailbox(
                 role_profile="teammate",
                 runtime_route="team-role",
                 goal="child",
+                allowed_tools=["repo.read", "repo.apply_patch"],
             )
         )
     )
@@ -635,6 +636,12 @@ def test_team_inspection_endpoints_return_lineage_assignments_and_mailbox(
     assert children[0]["id"] == str(child.id)
     assert descendants[0]["id"] == str(child.id)
     assert assignments[0]["id"] == str(assignment.id)
+    assert assignments[0]["allowed_tools"] == ["repo.read", "repo.apply_patch"]
+    assert assignments[0]["effective_tools"] == ["repo.read"]
+    assert "repository:read" in assignments[0]["effective_capabilities"]
+    assert {
+        item["tool"]: item["reason"] for item in assignments[0]["denied_tools"]
+    }["repo.apply_patch"] == "requires_write"
     assert mailbox[0]["route"] == "leader_to_teammate"
     assert retired.json()["status"] == "retired"
     assert active_after_retire == []

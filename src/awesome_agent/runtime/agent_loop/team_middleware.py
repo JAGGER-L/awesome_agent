@@ -35,6 +35,7 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
     validation_report_snapshot,
 )
 from awesome_agent.runtime.agent_loop.team import TeamAgentLoop
+from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
 from awesome_agent.runtime.dispatch import (
     PermanentExecutionError,
     TransientExecutionError,
@@ -42,7 +43,6 @@ from awesome_agent.runtime.dispatch import (
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamChildResult,
-    effective_assignment_tools,
 )
 from awesome_agent.runtime.team_planning import (
     TeamPlan,
@@ -62,7 +62,6 @@ ValidationRunner = Callable[
     Awaitable[ValidationReportWithGates],
 ]
 _TEAM_PLAN_MAX_ATTEMPTS = 2
-_DEFAULT_VERIFIER_TOOLS = {"repo.status", "repo.diff", "repo.read", "repo.search"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -532,7 +531,11 @@ def _verifier_tool_definitions(
 ) -> list[ToolDefinition]:
     if run.workspace_path is None:
         return []
-    allowed = set(effective_assignment_tools(assignment)) & _DEFAULT_VERIFIER_TOOLS
+    policy = CapabilityResolver().resolve_team_assignment(
+        assignment,
+        purpose=CapabilityPurpose.VERIFIER_REVIEW,
+    )
+    allowed = set(policy.tool_names)
     if not allowed:
         return []
     registry = build_modifying_registry()
