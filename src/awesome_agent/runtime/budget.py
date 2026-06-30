@@ -4,9 +4,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
-from math import ceil
 
-from awesome_agent.modeling.messages import AssistantMessage, ModelMessage
+from awesome_agent.modeling.messages import ModelMessage
+from awesome_agent.modeling.turns import ModelRequest
+from awesome_agent.runtime.token_accounting import default_token_accountant
 
 
 class BudgetDecision(StrEnum):
@@ -81,23 +82,15 @@ class BudgetLedger:
 
 
 def estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    non_ascii = sum(1 for char in text if ord(char) > 127)
-    ascii_chars = len(text) - non_ascii
-    return ceil(ascii_chars / 3) + non_ascii
+    return default_token_accountant().estimate_text(text).tokens
 
 
 def estimate_messages_tokens(messages: Sequence[ModelMessage]) -> int:
-    total = 0
-    for message in messages:
-        total += estimate_tokens(getattr(message, "content", ""))
-        if isinstance(message, AssistantMessage):
-            total += sum(
-                estimate_tokens(call.name) + estimate_tokens(call.arguments_json)
-                for call in message.tool_calls
-            )
-    return total
+    return default_token_accountant().estimate_messages(messages).tokens
+
+
+def estimate_model_request_tokens(request: ModelRequest) -> int:
+    return default_token_accountant().estimate_request(request).tokens
 
 
 def evaluate_budget(

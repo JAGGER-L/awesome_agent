@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from awesome_agent.modeling import ModelRequest, ToolDefinition, UserMessage
 from awesome_agent.runtime.budget import (
     BudgetDecision,
     BudgetLedger,
     BudgetPolicy,
+    estimate_model_request_tokens,
     estimate_tokens,
     evaluate_budget,
 )
@@ -14,6 +16,24 @@ from awesome_agent.runtime.budget import (
 def test_estimate_tokens_is_conservative_for_code_and_chinese() -> None:
     assert estimate_tokens("abc" * 30) >= 30
     assert estimate_tokens("你好" * 20) >= 20
+
+
+def test_estimate_model_request_tokens_counts_tools() -> None:
+    request_without_tools = ModelRequest(messages=[UserMessage(content="inspect")])
+    request_with_tools = ModelRequest(
+        messages=[UserMessage(content="inspect")],
+        tools=[
+            ToolDefinition(
+                name="repo.read",
+                description="Read a repository file.",
+                input_schema={"type": "object"},
+            )
+        ],
+    )
+
+    assert estimate_model_request_tokens(request_with_tools) > (
+        estimate_model_request_tokens(request_without_tools)
+    )
 
 
 def test_soft_context_limit_requests_compaction() -> None:
