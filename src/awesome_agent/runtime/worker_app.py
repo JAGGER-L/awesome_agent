@@ -35,6 +35,7 @@ from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
 from awesome_agent.runtime.team_recovery_policy import TeamRecoveryPolicy
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 from awesome_agent.runtime.team_verifier_graph import TeamVerifierGraph
+from awesome_agent.runtime.token_accounting import default_token_accountant
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.settings import Settings
 
@@ -90,10 +91,12 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         model_output_rework_budget=configured.team_model_output_rework_budget,
         default_rework_budget=configured.team_default_rework_budget,
     )
+    token_accountant = default_token_accountant()
     context_manager = ContextManager(
         summary_provider=DeterministicSummaryProvider(),
         artifact_store=artifact_store,
         artifact_repository=artifact_repository,
+        token_accountant=token_accountant,
     )
     async with checkpoint_saver(configured.checkpoint_database_url) as saver:
         await saver.setup()
@@ -110,6 +113,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
                 observability=observability,
+                token_accountant=token_accountant,
             )
             if providers.coding_available
             else None
@@ -134,6 +138,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
                 observability=observability,
+                token_accountant=token_accountant,
             )
             if providers.coding_available
             else None
@@ -153,6 +158,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     tool_repository=PostgresToolInvocationRepository(sessions),
                     budget_repository=budget_repository,
                     budget_policy=budget_policy,
+                    token_accountant=token_accountant,
                 )
                 if providers.coding_available
                 else None
