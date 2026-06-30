@@ -128,17 +128,16 @@ async def test_verifier_model_decision_uses_team_agent_loop_boundary() -> None:
 
     assert not recovered
     assert state["phase"] == "passed"
-    assert recorder.model_call_metadata == [
-        {
-            "runtime_route": "team-verifier",
-            "team_root_run_id": str(parent.id),
-            "assignment_id": str(assignment.id),
-            "team_role": "verifier",
-            "agent_kind": "verifier",
-            "team_operation": "verification",
-            "attempt": 1,
-        }
-    ]
+    assert len(recorder.model_call_metadata) == 1
+    assert {
+        "runtime_route": "team-verifier",
+        "team_root_run_id": str(parent.id),
+        "assignment_id": str(assignment.id),
+        "team_role": "verifier",
+        "agent_kind": "verifier",
+        "team_operation": "verification",
+        "attempt": 1,
+    }.items() <= recorder.model_call_metadata[0].items()
     assert "independent Verifier" in recorder.model_prompt_text
     assert "Verifier passed evidence" not in recorder.model_metadata_text
 

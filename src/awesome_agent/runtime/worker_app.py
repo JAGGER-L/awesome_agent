@@ -9,7 +9,11 @@ from typing import Any
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.observability.facade import ObservabilityFacade
-from awesome_agent.observability.otel import OTelConfig, configure_otel
+from awesome_agent.observability.otel import (
+    OTelConfig,
+    configure_otel,
+    configure_otel_metrics,
+)
 from awesome_agent.observability.repository import PostgresObservabilityRepository
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
@@ -49,17 +53,17 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     artifact_repository = PostgresArtifactMetadataRepository(sessions)
     team_repository = PostgresTeamRepository(sessions)
     observability_repository = PostgresObservabilityRepository(sessions)
+    otel_config = OTelConfig(
+        service_name=configured.otel_service_name,
+        process_kind="worker",
+        console_exporter=(configured.otel_console_exporter_enabled and not once),
+        otlp_endpoint=configured.otel_otlp_endpoint,
+    )
     otel_provider = (
-        configure_otel(
-            OTelConfig(
-                service_name=configured.otel_service_name,
-                process_kind="worker",
-                console_exporter=(
-                    configured.otel_console_exporter_enabled and not once
-                ),
-                otlp_endpoint=configured.otel_otlp_endpoint,
-            )
-        )
+        configure_otel(otel_config) if configured.observability_enabled else None
+    )
+    otel_metrics = (
+        configure_otel_metrics(otel_config)
         if configured.observability_enabled
         else None
     )
@@ -70,6 +74,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             if otel_provider is not None
             else None
         ),
+        metric_recorder=otel_metrics,
     )
     budget_repository = PostgresBudgetRepository(sessions)
     budget_policy = BudgetPolicy(

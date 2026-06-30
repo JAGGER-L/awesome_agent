@@ -10,3 +10,4 @@ plans belong under `.codex/exec-plans/` and must remain uncommitted. Historical
 
 - [Technical debt tracker](tech-debt-tracker.md)
 - [Runtime roadmap](runtime-roadmap.md)
+- [Roadmap writing rules](roadmap-writing-rules.md)

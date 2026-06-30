@@ -4,9 +4,10 @@ from awesome_agent.observability.otel import (
     OTelConfig,
     SafeSpanExporter,
     configure_otel,
+    configure_otel_metrics,
 )
 
-__all__ = ["SafeSpanExporter", "configure_observability"]
+__all__ = ["SafeSpanExporter", "configure_observability", "configure_otel_metrics"]
 
 
 def configure_observability(

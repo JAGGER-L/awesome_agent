@@ -212,16 +212,15 @@ async def test_team_planning_middleware_creates_plan_repair() -> None:
     assert attempt == 1
     assert repair.actions[0].action == "replace_teammate"
     assert repair.actions[0].target_child_run_id == str(target.child_run_id)
-    assert recorder.model_call_metadata == [
-        {
-            "runtime_route": "team-coding",
-            "team_root_run_id": str(run.id),
-            "team_role": "leader",
-            "agent_kind": "leader",
-            "team_operation": "plan_repair",
-            "attempt": 1,
-        }
-    ]
+    assert len(recorder.model_call_metadata) == 1
+    assert {
+        "runtime_route": "team-coding",
+        "team_root_run_id": str(run.id),
+        "team_role": "leader",
+        "agent_kind": "leader",
+        "team_operation": "plan_repair",
+        "attempt": 1,
+    }.items() <= recorder.model_call_metadata[0].items()
     assert "Leader repairing a coding-agent team plan" in recorder.model_prompt_text
     assert "Missing README evidence" in recorder.model_prompt_text
     assert len(provider.requests) == 1
@@ -332,6 +331,7 @@ async def test_team_loop_observability_records_direct_model_and_tool_results() -
 
     spans = await repository.list_spans_for_run(run.id)
     model_calls = await repository.list_model_calls_for_run(run.id)
+    metrics = await repository.list_metrics_for_run(run.id)
 
     assert result == {"done": True}
     assert {span.name for span in spans} >= {"agent.run", "model.call", "tool.call"}
@@ -344,7 +344,65 @@ async def test_team_loop_observability_records_direct_model_and_tool_results() -
     tool_span = next(span for span in spans if span.name == "tool.call")
     assert tool_span.attributes["tool"] == "repo.read"
     assert tool_span.attributes["call_id"] == "call-1"
+    assert tool_span.attributes["team.root_run_id"] == str(run.root_run_id or run.id)
+    assert tool_span.attributes["assignment.id"] == str(assignment_id)
     assert tool_span.status == "completed"
+    assert {metric.name for metric in metrics} >= {
+        "agent.run.count",
+        "model.call.count",
+        "tool.call.count",
+        "model.input_tokens",
+        "model.output_tokens",
+    }
+
+
+@pytest.mark.asyncio
+async def test_team_loop_observability_records_parent_child_correlation() -> None:
+    repository = InMemoryObservabilityRepository()
+    facade = ObservabilityFacade(
+        repository=repository,
+        tracer=TracerProvider().get_tracer("test"),
+    )
+    loop = TeamAgentLoop(observability=facade)
+    root_id = uuid4()
+    parent_id = uuid4()
+    run = Run(
+        id=uuid4(),
+        goal="subagent task",
+        mode=RunMode.TEAM,
+        root_run_id=root_id,
+        parent_run_id=parent_id,
+        runtime_route="team-role",
+    )
+    agent = Agent(
+        run_id=run.id,
+        kind=AgentKind.TEAMMATE,
+        profile="teammate",
+        model="fake",
+    )
+    assignment_id = uuid4()
+
+    async def operation(_: object) -> dict[str, object]:
+        return {"done": True}
+
+    await loop.run_agent_operation(
+        object(),
+        run=run,
+        agent=agent,
+        messages=[],
+        assignment_id=assignment_id,
+        team_role="teammate",
+        agent_kind=AgentKind.TEAMMATE.value,
+        metadata={"team_operation": "role_execute"},
+        handler=operation,
+    )
+
+    spans = await repository.list_spans_for_run(run.id)
+
+    assert spans[0].name == "agent.run"
+    assert spans[0].attributes["team.root_run_id"] == str(root_id)
+    assert spans[0].attributes["parent_run.id"] == str(parent_id)
+    assert spans[0].attributes["assignment.id"] == str(assignment_id)
 
 
 def _team_run_and_agent() -> tuple[Run, Agent]:

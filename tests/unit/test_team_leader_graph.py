@@ -120,16 +120,15 @@ async def test_leader_planning_uses_team_agent_loop_boundary() -> None:
 
     children = await runtime.list_child_runs(run.id)
     assert len(children) == 1
-    assert recorder.model_call_metadata == [
-        {
-            "runtime_route": "team-coding",
-            "team_root_run_id": str(run.root_run_id or run.id),
-            "team_role": "leader",
-            "agent_kind": "leader",
-            "team_operation": "planning",
-            "attempt": 1,
-        }
-    ]
+    assert len(recorder.model_call_metadata) == 1
+    assert {
+        "runtime_route": "team-coding",
+        "team_root_run_id": str(run.root_run_id or run.id),
+        "team_role": "leader",
+        "agent_kind": "leader",
+        "team_operation": "planning",
+        "attempt": 1,
+    }.items() <= recorder.model_call_metadata[0].items()
     assert "Leader planning a coding-agent team" in recorder.model_prompt_text
     assert "subagent_goals" not in recorder.model_metadata_text
 

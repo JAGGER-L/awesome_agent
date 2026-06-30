@@ -42,7 +42,11 @@ from awesome_agent.observability.facade import (
     ObservabilityFacade,
     ObservabilitySpanInput,
 )
-from awesome_agent.observability.otel import OTelConfig, configure_otel
+from awesome_agent.observability.otel import (
+    OTelConfig,
+    configure_otel,
+    configure_otel_metrics,
+)
 from awesome_agent.observability.repository import (
     NoopObservabilityRepository,
     ObservabilityRepository,
@@ -152,15 +156,17 @@ def create_app(
         default_observability = observability_repository or (
             PostgresObservabilityRepository(sessions)
         )
+        otel_config = OTelConfig(
+            service_name=settings.otel_service_name,
+            process_kind="api",
+            console_exporter=settings.otel_console_exporter_enabled,
+            otlp_endpoint=settings.otel_otlp_endpoint,
+        )
         otel_provider = (
-            configure_otel(
-                OTelConfig(
-                    service_name=settings.otel_service_name,
-                    process_kind="api",
-                    console_exporter=settings.otel_console_exporter_enabled,
-                    otlp_endpoint=settings.otel_otlp_endpoint,
-                )
-            )
+            configure_otel(otel_config) if settings.observability_enabled else None
+        )
+        otel_metrics = (
+            configure_otel_metrics(otel_config)
             if settings.observability_enabled
             else None
         )
@@ -187,6 +193,7 @@ def create_app(
                 if otel_provider is not None
                 else None
             ),
+            metric_recorder=otel_metrics,
         )
         app.state.budget_repository = budget_repository or budgets
         app.state.team_repository = team_repository or teams

@@ -113,17 +113,26 @@ class ObservabilityMiddleware:
                 duration_ms=duration_ms,
             )
             return
+        attributes = _base_attributes(stage, context)
         await self._safe_record_span(
             ObservabilitySpanInput(
                 run_id=run_id,
                 name="agent.run",
                 category="agent",
                 status="completed",
-                attributes=_base_attributes(stage, context),
+                attributes=attributes,
                 started_at=started_at,
                 ended_at=_now(),
                 duration_ms=duration_ms,
             )
+        )
+        await self._record_stage_metrics(
+            run_id=run_id,
+            count_name="agent.run.count",
+            latency_name="agent.run.latency_ms",
+            status="completed",
+            duration_ms=duration_ms,
+            attributes=attributes,
         )
 
     async def _record_failed_stage(
@@ -136,18 +145,27 @@ class ObservabilityMiddleware:
         duration_ms: int,
         error: Exception,
     ) -> None:
+        attributes = _base_attributes(stage, context)
         await self._safe_record_span(
             ObservabilitySpanInput(
                 run_id=run_id,
                 name=_span_name(stage),
                 category=_span_category(stage),
                 status="failed",
-                attributes=_base_attributes(stage, context),
+                attributes=attributes,
                 started_at=started_at,
                 ended_at=_now(),
                 duration_ms=duration_ms,
                 error=str(error),
             )
+        )
+        await self._record_stage_metrics(
+            run_id=run_id,
+            count_name=f"{_span_name(stage)}.count",
+            latency_name=f"{_span_name(stage)}.latency_ms",
+            status="failed",
+            duration_ms=duration_ms,
+            attributes=attributes,
         )
 
     async def _record_model_call(
@@ -167,6 +185,8 @@ class ObservabilityMiddleware:
                 {
                     "provider": turn.provider,
                     "model": turn.model,
+                    "model.provider": turn.provider,
+                    "model.name": turn.model,
                     "stop_reason": turn.stop_reason.value,
                 }
             )
@@ -184,7 +204,17 @@ class ObservabilityMiddleware:
                 duration_ms=duration_ms,
             )
         )
+        trace_id = getattr(span, "trace_id", run_id.hex)
+        durable_span_id = getattr(span, "span_id", span_id)
         if turn is None:
+            await self._record_stage_metrics(
+                run_id=run_id,
+                count_name="model.call.count",
+                latency_name="model.call.latency_ms",
+                status="completed",
+                duration_ms=duration_ms,
+                attributes=attributes,
+            )
             return
         await self._safe_record_model_call(
             DurableModelCall(
@@ -201,9 +231,35 @@ class ObservabilityMiddleware:
                 cache_read_tokens=turn.usage.cache_read_tokens,
                 cache_write_tokens=turn.usage.cache_write_tokens,
                 latency_ms=duration_ms,
-                trace_id=span.trace_id,
-                span_id=span.span_id,
+                trace_id=trace_id,
+                span_id=durable_span_id,
             )
+        )
+        await self._record_stage_metrics(
+            run_id=run_id,
+            count_name="model.call.count",
+            latency_name="model.call.latency_ms",
+            status="completed",
+            duration_ms=duration_ms,
+            attributes=attributes,
+        )
+        await self._record_token_metric(
+            run_id=run_id,
+            name="model.input_tokens",
+            value=turn.usage.input_tokens,
+            attributes=attributes,
+        )
+        await self._record_token_metric(
+            run_id=run_id,
+            name="model.output_tokens",
+            value=turn.usage.output_tokens,
+            attributes=attributes,
+        )
+        await self._record_token_metric(
+            run_id=run_id,
+            name="model.reasoning_tokens",
+            value=turn.usage.reasoning_tokens,
+            attributes=attributes,
         )
 
     async def _record_tool_calls(
@@ -221,6 +277,7 @@ class ObservabilityMiddleware:
         if direct_tool_result is not None:
             attributes = _base_attributes(_TOOL_STAGE, context)
             attributes.setdefault("call_id", direct_tool_result.call_id)
+            attributes.setdefault("tool.call_id", direct_tool_result.call_id)
             await self._safe_record_span(
                 ObservabilitySpanInput(
                     run_id=run_id,
@@ -233,20 +290,37 @@ class ObservabilityMiddleware:
                     duration_ms=duration_ms,
                 )
             )
+            await self._record_stage_metrics(
+                run_id=run_id,
+                count_name="tool.call.count",
+                latency_name="tool.call.latency_ms",
+                status=("failed" if direct_tool_result.is_error else "completed"),
+                duration_ms=duration_ms,
+                attributes=attributes,
+            )
             return
         result_status = _tool_result_statuses(result)
         if not calls:
+            attributes = _base_attributes(_TOOL_STAGE, context)
             await self._safe_record_span(
                 ObservabilitySpanInput(
                     run_id=run_id,
                     name="tool.call",
                     category="tool",
                     status="completed",
-                    attributes=_base_attributes(_TOOL_STAGE, context),
+                    attributes=attributes,
                     started_at=started_at,
                     ended_at=_now(),
                     duration_ms=duration_ms,
                 )
+            )
+            await self._record_stage_metrics(
+                run_id=run_id,
+                count_name="tool.call.count",
+                latency_name="tool.call.latency_ms",
+                status="completed",
+                duration_ms=duration_ms,
+                attributes=attributes,
             )
             return
         for call in calls:
@@ -255,7 +329,9 @@ class ObservabilityMiddleware:
             attributes.update(
                 {
                     "tool": call.name,
+                    "tool.name": call.name,
                     "call_id": call.call_id,
+                    "tool.call_id": call.call_id,
                 }
             )
             await self._safe_record_span(
@@ -269,6 +345,14 @@ class ObservabilityMiddleware:
                     ended_at=_now(),
                     duration_ms=duration_ms,
                 )
+            )
+            await self._record_stage_metrics(
+                run_id=run_id,
+                count_name="tool.call.count",
+                latency_name="tool.call.latency_ms",
+                status=status,
+                duration_ms=duration_ms,
+                attributes=attributes,
             )
 
     async def _safe_record_span(
@@ -291,17 +375,102 @@ class ObservabilityMiddleware:
         except Exception:
             logger.exception("AgentLoop observability model-call recording failed.")
 
+    async def _record_stage_metrics(
+        self,
+        *,
+        run_id: UUID,
+        count_name: str,
+        latency_name: str,
+        status: str,
+        duration_ms: int,
+        attributes: dict[str, object],
+    ) -> None:
+        metric_attributes = {**attributes, "status": status}
+        await self._safe_record_metric(
+            run_id=run_id,
+            name=count_name,
+            value=1,
+            unit="1",
+            attributes=metric_attributes,
+        )
+        await self._safe_record_metric(
+            run_id=run_id,
+            name=latency_name,
+            value=duration_ms,
+            unit="ms",
+            attributes=metric_attributes,
+        )
+
+    async def _record_token_metric(
+        self,
+        *,
+        run_id: UUID,
+        name: str,
+        value: int | None,
+        attributes: dict[str, object],
+    ) -> None:
+        if value is None:
+            return
+        await self._safe_record_metric(
+            run_id=run_id,
+            name=name,
+            value=value,
+            unit="tokens",
+            attributes=attributes,
+        )
+
+    async def _safe_record_metric(
+        self,
+        *,
+        run_id: UUID,
+        name: str,
+        value: float,
+        unit: str,
+        attributes: dict[str, object],
+    ) -> None:
+        if self._facade is None:
+            return
+        try:
+            await self._facade.record_metric(
+                run_id=run_id,
+                name=name,
+                value=value,
+                unit=unit,
+                attributes=attributes,
+            )
+        except Exception:
+            logger.exception("AgentLoop observability metric recording failed.")
+
 
 def _base_attributes(
     stage: MiddlewareStage,
     context: MiddlewareContext,
 ) -> dict[str, object]:
-    return {
+    attributes: dict[str, object] = {
         **context.metadata,
         "stage": stage.value,
         "runtime_route": context.runtime_route,
+        "runtime.route": context.runtime_route,
         "agent_id": context.agent_id,
+        "agent.id": context.agent_id,
     }
+    _copy_alias(attributes, "team_root_run_id", "team.root_run_id")
+    _copy_alias(attributes, "assignment_id", "assignment.id")
+    _copy_alias(attributes, "parent_run_id", "parent_run.id")
+    _copy_alias(attributes, "team_role", "agent.role")
+    _copy_alias(attributes, "tool", "tool.name")
+    _copy_alias(attributes, "call_id", "tool.call_id")
+    return attributes
+
+
+def _copy_alias(
+    attributes: dict[str, object],
+    source: str,
+    target: str,
+) -> None:
+    value = attributes.get(source)
+    if value is not None:
+        attributes.setdefault(target, value)
 
 
 def _span_name(stage: MiddlewareStage) -> str:
