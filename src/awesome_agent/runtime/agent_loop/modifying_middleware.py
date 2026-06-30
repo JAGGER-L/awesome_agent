@@ -41,7 +41,6 @@ from awesome_agent.runtime.budget import (
     BudgetDecision,
     BudgetLedger,
     BudgetPolicy,
-    estimate_messages_tokens,
     evaluate_budget,
 )
 from awesome_agent.runtime.context import ContextManager, ContextPolicy, PreparedContext
@@ -49,6 +48,10 @@ from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
     PermanentExecutionError,
+)
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
 )
 from awesome_agent.runtime.validation.models import ValidationPlan
 from awesome_agent.tools.executor import ToolExecutor
@@ -138,10 +141,12 @@ class ModifyingBudgetMiddleware:
         budget_repository: BudgetRepository | None,
         budget_policy: BudgetPolicy | None,
         emit: Any,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
         self.emit = emit
+        self.token_accountant = token_accountant or default_token_accountant()
 
     async def load_ledger(
         self,
@@ -181,7 +186,9 @@ class ModifyingBudgetMiddleware:
             estimated_prompt_tokens=before_estimated_tokens,
             now=now,
         )
-        estimated_prompt_tokens = estimate_messages_tokens(request_messages)
+        estimated_prompt_tokens = self.token_accountant.estimate_messages(
+            request_messages
+        ).tokens
         decision = evaluate_budget(
             ledger,
             self.budget_policy,

@@ -44,7 +44,6 @@ from awesome_agent.runtime.budget import (
     BudgetLedger,
     BudgetPolicy,
     TokenUsageDelta,
-    estimate_messages_tokens,
     evaluate_budget,
 )
 from awesome_agent.runtime.dispatch import (
@@ -56,6 +55,10 @@ from awesome_agent.runtime.graphs import (
     SCOPED_TEAM_CODING_ROUTE,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
+)
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
@@ -123,6 +126,7 @@ class TeamCodingGraph:
         max_verification_execution_retries: int = 1,
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self.saver = saver
         self.model_resolver = model_resolver
@@ -135,6 +139,7 @@ class TeamCodingGraph:
         self.max_verification_execution_retries = max_verification_execution_retries
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.token_accountant = token_accountant or default_token_accountant()
         self._run: Run | None = None
         self._leader: Agent | None = None
         self._repository: RuntimeRepository | None = None
@@ -703,7 +708,10 @@ class TeamCodingGraph:
         if self.budget_policy is None:
             return ledger
         now = datetime.now(UTC)
-        estimated_prompt_tokens = estimate_messages_tokens(request.messages)
+        estimated_prompt_tokens = self.token_accountant.estimate_request(
+            request,
+            model=agent.model,
+        ).tokens
         decision = evaluate_budget(
             ledger,
             self.budget_policy,

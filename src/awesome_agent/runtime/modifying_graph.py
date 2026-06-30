@@ -69,7 +69,6 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
 from awesome_agent.runtime.budget import (
     BudgetPolicy,
     TokenUsageDelta,
-    estimate_messages_tokens,
 )
 from awesome_agent.runtime.context import ContextManager
 from awesome_agent.runtime.dispatch import (
@@ -80,6 +79,10 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_ROUTE,
+)
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
 )
 from awesome_agent.runtime.validation.config import load_validation_config
 from awesome_agent.runtime.validation.detection import detect_validation_plan
@@ -165,6 +168,7 @@ class ModifyingCodingGraph:
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
         observability: ObservabilityFacade | None = None,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self.saver = saver
         self.provider_resolver = provider_resolver
@@ -188,6 +192,7 @@ class ModifyingCodingGraph:
         self.context_manager = context_manager
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.token_accountant = token_accountant or default_token_accountant()
         self.agent_loop = ModifyingAgentLoop(observability=observability)
         self.context_middleware = ModifyingContextMiddleware(
             context_manager=context_manager,
@@ -199,6 +204,7 @@ class ModifyingCodingGraph:
             budget_repository=budget_repository,
             budget_policy=budget_policy,
             emit=self._emit,
+            token_accountant=self.token_accountant,
         )
         self.artifact_middleware = ModifyingArtifactMiddleware(
             artifact_store=artifact_store,
@@ -449,7 +455,7 @@ class ModifyingCodingGraph:
                 before_estimated_tokens=(
                     prepared.before_estimated_tokens
                     if prepared is not None
-                    else estimate_messages_tokens(messages)
+                    else self.token_accountant.estimate_messages(messages).tokens
                 ),
                 turn=next_count,
             )

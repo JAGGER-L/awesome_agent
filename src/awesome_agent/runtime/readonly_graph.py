@@ -44,7 +44,6 @@ from awesome_agent.runtime.agent_loop.read_only_middleware import (
 from awesome_agent.runtime.budget import (
     BudgetPolicy,
     TokenUsageDelta,
-    estimate_messages_tokens,
 )
 from awesome_agent.runtime.context import ContextManager
 from awesome_agent.runtime.dispatch import (
@@ -55,6 +54,10 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.graphs import (
     READ_ONLY_CODING_ROUTE,
+)
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
 )
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.registry import ToolRegistry
@@ -126,6 +129,7 @@ class ReadOnlyCodingGraph:
         budget_repository: BudgetRepository | None = None,
         budget_policy: BudgetPolicy | None = None,
         observability: ObservabilityFacade | None = None,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self.saver = saver
         self.provider_resolver = provider_resolver
@@ -140,6 +144,7 @@ class ReadOnlyCodingGraph:
         self.context_manager = context_manager
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.token_accountant = token_accountant or default_token_accountant()
         self.agent_loop = ReadOnlyAgentLoop(observability=observability)
         self.context_middleware = ReadOnlyContextMiddleware(
             context_manager=context_manager,
@@ -151,6 +156,7 @@ class ReadOnlyCodingGraph:
             budget_repository=budget_repository,
             budget_policy=budget_policy,
             emit=self._emit,
+            token_accountant=self.token_accountant,
         )
         self.evidence_middleware = ReadOnlyEvidenceMiddleware()
         self.progress_middleware = ReadOnlyProgressMiddleware()
@@ -356,7 +362,7 @@ class ReadOnlyCodingGraph:
                 before_estimated_tokens=(
                     prepared.before_estimated_tokens
                     if prepared is not None
-                    else estimate_messages_tokens(messages)
+                    else self.token_accountant.estimate_messages(messages).tokens
                 ),
                 turn=next_count,
             )

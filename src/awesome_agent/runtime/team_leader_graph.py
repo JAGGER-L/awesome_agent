@@ -69,6 +69,10 @@ from awesome_agent.runtime.team_rework import (
     rework_attempt_for_lineage,
     rework_budget_for_failure,
 )
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
+)
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
@@ -96,6 +100,7 @@ class TeamLeaderGraph:
         team_loop: TeamAgentLoop | None = None,
         observability: ObservabilityFacade | None = None,
         team_recovery_policy: TeamRecoveryPolicy | None = None,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -105,6 +110,7 @@ class TeamLeaderGraph:
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
         self.team_recovery_policy = team_recovery_policy or TeamRecoveryPolicy()
+        self.token_accountant = token_accountant or default_token_accountant()
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.team_planning = TeamPlanningMiddleware(
             provider_resolver=provider_resolver,
@@ -316,6 +322,7 @@ class TeamLeaderGraph:
             artifact_repository=self.artifact_repository,
             budget_repository=self.budget_repository,
             max_inline_tokens=_TEAM_INLINE_PAYLOAD_TOKENS,
+            token_accountant=self.token_accountant,
         )
         assignment = TeamAssignment(
             root_run_id=child.root_run_id or run.id,

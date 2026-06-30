@@ -46,6 +46,10 @@ from awesome_agent.runtime.team_assignments import (
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
 from awesome_agent.runtime.team_context import compact_team_payload
+from awesome_agent.runtime.token_accounting import (
+    TokenAccountant,
+    default_token_accountant,
+)
 from awesome_agent.runtime.validation.config import load_validation_config
 from awesome_agent.runtime.validation.detection import detect_validation_plan
 from awesome_agent.runtime.validation.executor import execute_validation_plan
@@ -81,9 +85,11 @@ class TeamRoleGraph:
         team_loop: TeamAgentLoop | None = None,
         observability: ObservabilityFacade | None = None,
         capability_resolver: CapabilityResolver | None = None,
+        token_accountant: TokenAccountant | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.capability_resolver = capability_resolver or CapabilityResolver()
+        self.token_accountant = token_accountant or default_token_accountant()
         self.provider_resolver = provider_resolver
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.role_loop = (
@@ -408,6 +414,7 @@ class TeamRoleGraph:
             artifact_repository=self.artifact_repository,
             budget_repository=self.budget_repository,
             max_inline_tokens=_TEAM_INLINE_PAYLOAD_TOKENS,
+            token_accountant=self.token_accountant,
         )
         if compacted_summary.compacted:
             evidence_artifact_refs.extend(compacted_summary.artifact_refs)
