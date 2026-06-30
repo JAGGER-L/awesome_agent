@@ -70,8 +70,10 @@
   limits. Child Runs must not register or execute capabilities outside their
   assignment.
 - Team mailbox messages are route-restricted durable records, not arbitrary
-  cross-agent chat. Subagents report to their owning Teammate and do not read
-  the team mailbox.
+  cross-agent chat. Runtime mailbox tools expose only Teammate-to-Leader and
+  Teammate-to-Teammate `question` and `status` messages, require
+  assignment-granted tools, deny Subagent mailbox access, and keep Verifier
+  communication Leader-only.
 - Workspace cleanup validates resolved ownership markers, managed-root
   containment, active leases, branch identity, and unexported diffs before
   deletion. It defaults to preview and requires explicit apply.

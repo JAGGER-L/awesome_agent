@@ -124,9 +124,20 @@ Distributed team state is stored in:
 - `runs.parent_run_id`, `runs.root_run_id`, `runs.depth`, and `runs.child_role`;
 - `team_assignments` for role, permissions, runtime route, status, and handoff
   context;
-- `team_mailbox_messages` for route-restricted durable communication;
+- `team_mailbox_messages` for route-restricted durable communication,
+  read/respond lifecycle, and response links;
 - `team_child_results` for summaries, patch artifact references, changed files,
   aggregation status, and failure classification.
+
+Task 29 turns the durable mailbox into a bounded collaboration protocol for
+distributed Teammates. Teammates may use assignment-granted
+`team.mailbox_list` and `team.mailbox_send` tools to exchange route-restricted
+`question` and `status` messages with the Leader root Run or sibling
+Teammates. The Leader can observe every message through the root mailbox view.
+Mailbox messages are audit evidence only: they do not mutate assignments, grant
+tools, create descendants, bypass patch aggregation, or bypass Verifier.
+Subagents still have no mailbox privileges, and the Verifier still messages
+only the Leader.
 
 Task 22D makes Verifier review a structured model decision that is persisted as
 a child result and mailbox message. Task 24 moves Verifier prompting, provider
@@ -172,8 +183,8 @@ observability behind `TeamAgentLoop` and shared middleware. Task 28 adds
 PostgreSQL-backed concurrent Worker stress coverage for sibling Teammates,
 Teammate-owned Subagents, Verifier completion, patch aggregation, mailbox and
 result persistence, and dispatch claim evidence. Remaining work is not basic
-autonomy wiring; it is hardening: richer mailbox collaboration policy,
-advanced replanning, and empirically tuned rework budgets.
+autonomy wiring; it is hardening: advanced replanning and empirically tuned
+rework budgets.
 
 ## AgentLoop Boundary
 

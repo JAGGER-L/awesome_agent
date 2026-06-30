@@ -404,7 +404,9 @@ root coordination with model-driven planning:
   dispatch queue;
 - `team_assignments` stores role, runtime route, permissions, status, and
   handoff context, including deferred and promoted tool exposure;
-- `team_mailbox_messages` stores route-restricted communication;
+- `team_mailbox_messages` stores route-restricted communication, read/respond
+  lifecycle, and response links. The root Run mailbox view is the Leader audit
+  view for all team messages;
 - `team_child_results` stores summaries, patch artifact references, changed
   files, aggregation status, and failure classification;
 - child terminal state requeues waiting parents;

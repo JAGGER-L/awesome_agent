@@ -95,6 +95,7 @@ Task 07 does not include:
 | Task 26 | Done | Writing Teammate child Runs now perform bounded same-child validation rework for reworkable deterministic command failures before publishing patch artifacts or falling back to failed child-result semantics. | Focused unit tests cover fail-then-pass, exhaustion, non-reworkable failures, and feedback injection; distributed E2E covers same-child validation recovery without replacement child creation. |
 | Task 27 | Done | Distributed team patch aggregation now classifies conflicting Teammate patches and recovers through bounded replacement Teammate child Runs before verifier creation. | Focused unit tests cover aggregation classification, Leader replacement creation, superseded result filtering, budget exhaustion, and Verifier effective evidence; distributed E2E covers Worker-path conflict recovery with durable events/results. |
 | Task 28 | Done | Added true concurrent multi-Worker stress coverage for distributed team Runs across sibling Teammates, Teammate-owned Subagents, Verifier, patch aggregation, mailbox/result persistence, and dispatch claim evidence. | Integration stress test runs multiple DurableWorkers concurrently against PostgreSQL and asserts no duplicate claims, assignments, child results, patch aggregation, or parent verifier races. |
+| Task 29 | Done | Added route-restricted Teammate mailbox collaboration through assignment-scoped mailbox tools, durable read/respond lifecycle, Leader root audit visibility, and Worker-path evidence. | Unit tests cover route policy, repository visibility, role-loop tool exposure, and mailbox tool execution; distributed integration covers Teammate-to-Teammate question/response mailbox flow without weakening Subagent isolation or Verifier authority. |
 
 ## Task 22 Breakdown
 
@@ -142,9 +143,10 @@ Task 07 does not include:
 - Do not claim new runtime routes use the middleware architecture unless those
   routes have focused tests proving model/tool policy enters AgentLoop
   middleware and graph modules retain only durable coordination.
-- Do not claim concurrent distributed team stress hardening, richer mailbox
-  collaboration, or team middleware architecture until the corresponding
-  technical debts or later tasks are closed with executable evidence.
+- Do not claim concurrent distributed team stress hardening, mailbox
+  collaboration, advanced replanning, or team middleware architecture until the
+  corresponding technical debts or later tasks are closed with executable
+  evidence.
 - Do not prioritize DeerFlow-style skills or MCP expansion until the runtime
   kernel is stable behind the ThinGraph, AgentLoop, middleware, and hooks
   boundary.
