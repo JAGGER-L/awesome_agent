@@ -63,7 +63,6 @@ class DurableModelCall:
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     latency_ms: int | None = None
-    estimated_cost_usd: float | None = None
     trace_id: str | None = None
     span_id: str | None = None
     error: str | None = None
@@ -324,7 +323,6 @@ def _model_call_to_record(call: DurableModelCall) -> ModelCallRecord:
         cache_read_tokens=call.cache_read_tokens,
         cache_write_tokens=call.cache_write_tokens,
         latency_ms=call.latency_ms,
-        estimated_cost_usd=call.estimated_cost_usd,
         trace_id=call.trace_id,
         span_id=call.span_id,
         error=call.error,
@@ -344,7 +342,6 @@ def _update_model_call_record(
     record.cache_read_tokens = call.cache_read_tokens
     record.cache_write_tokens = call.cache_write_tokens
     record.latency_ms = call.latency_ms
-    record.estimated_cost_usd = call.estimated_cost_usd
     record.trace_id = call.trace_id
     record.span_id = call.span_id
     record.error = call.error
@@ -366,7 +363,6 @@ def _model_call_from_record(record: ModelCallRecord) -> DurableModelCall:
         cache_read_tokens=record.cache_read_tokens,
         cache_write_tokens=record.cache_write_tokens,
         latency_ms=record.latency_ms,
-        estimated_cost_usd=record.estimated_cost_usd,
         trace_id=record.trace_id,
         span_id=record.span_id,
         error=record.error,

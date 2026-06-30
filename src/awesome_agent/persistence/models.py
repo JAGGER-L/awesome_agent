@@ -532,7 +532,6 @@ class ModelCallRecord(Base):
     cache_read_tokens: Mapped[int | None] = mapped_column(Integer)
     cache_write_tokens: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
-    estimated_cost_usd: Mapped[float | None] = mapped_column(Float)
     trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
     span_id: Mapped[str | None] = mapped_column(String(32))
     error: Mapped[str | None] = mapped_column(Text)
