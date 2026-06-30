@@ -31,6 +31,9 @@ load user task and project policy
 - Each Teammate may create at most three depth-one Subagents.
 - Subagents have isolated context, no team mailbox access, and no descendants.
 - Tool execution passes through the centralized registry and approval policy.
+- The registry is tool inventory only. Effective tool exposure and execution
+  authorization are capability-resolver decisions, represented as an
+  `EffectiveToolPolicy` and enforced again at the executor boundary.
 - Untrusted commands use Docker; trusted-local requires explicit CLI consent.
 - PostgreSQL stores durable run projections and LangGraph checkpoints.
 - Run business state and worker dispatch state remain separate.
@@ -120,6 +123,20 @@ envelopes. The graph remains responsible for durable coordination; middleware
 uses this context for observability, permission checks, budgets, retries,
 approval waits, validation policy, and other cross-cutting concerns without
 becoming a monolithic mutable runtime object.
+
+## Capability Policy Boundary
+
+Tool access is a shared effective-policy decision. Runtime routes, API
+inspection, validation helpers, and execution helpers should ask the capability
+resolver for the applicable effective tool policy instead of deriving
+permissions from prompt text, route-local lists, or registry membership alone.
+
+The tool registry provides descriptors, schemas, risk, and capability
+requirements. The effective policy decides which inventory items are visible to
+the model and which invocations may execute for the current subject, route,
+assignment, and grant set. The executor rejects invocations that are outside a
+provided effective policy even when the invocation's raw capability set would
+otherwise satisfy the tool descriptor.
 
 ## Runtime Documentation Discipline
 

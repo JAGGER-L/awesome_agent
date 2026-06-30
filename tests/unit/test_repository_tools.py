@@ -33,6 +33,18 @@ def _git(path: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+class FakeEffectiveToolPolicy:
+    def __init__(self, tool_names: tuple[str, ...]) -> None:
+        self._tool_names = tool_names
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return self._tool_names
+
+    def capabilities_for(self, tool_name: str) -> frozenset[str]:
+        return frozenset({"repository:read"})
+
+
 def test_canonical_arguments_hash_normalizes_tool_arguments() -> None:
     left = canonical_arguments_hash(
         ToolCall(
@@ -164,6 +176,42 @@ async def test_repository_calls_pass_through_executor_capability_policy(
             workspace=tmp_path,
             agent_id=uuid4(),
         )
+
+
+@pytest.mark.asyncio
+async def test_repository_calls_enforce_effective_tool_policy(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    registry = build_read_only_registry()
+
+    with pytest.raises(ToolDenied):
+        await execute_repository_call(
+            build_read_only_executor(registry),
+            ToolCall(
+                call_id="denied-policy",
+                name="repo.read",
+                arguments_json='{"path":"README.md"}',
+            ),
+            workspace=tmp_path,
+            agent_id=uuid4(),
+            capabilities={"repository:read"},
+            effective_tools=FakeEffectiveToolPolicy(("repo.search",)),
+        )
+
+    result = await execute_repository_call(
+        build_read_only_executor(registry),
+        ToolCall(
+            call_id="allowed-policy",
+            name="repo.read",
+            arguments_json='{"path":"README.md"}',
+        ),
+        workspace=tmp_path,
+        agent_id=uuid4(),
+        effective_tools=FakeEffectiveToolPolicy(("repo.read",)),
+    )
+    assert not result.is_error
+    assert "fixture" in result.content
 
 
 @pytest.mark.asyncio

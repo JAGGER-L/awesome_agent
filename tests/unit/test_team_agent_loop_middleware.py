@@ -116,6 +116,8 @@ async def test_team_loop_builds_structural_context_for_agent_operation() -> None
     assert context.handoff.handoff_id == str(assignment_id)
     assert context.handoff.target_agent == str(run.id)
     assert context.budget is not None
+    assert context.capabilities is not None
+    assert context.capabilities.subject_kind == "leader"
 
 
 @pytest.mark.asyncio
@@ -151,6 +153,7 @@ async def test_team_loop_wraps_model_and_tool_operations() -> None:
         agent_kind=AgentKind.TEAMMATE.value,
         metadata={
             "tool": "repo.apply_patch",
+            "allowed_tools": ["repo.read", "repo.apply_patch"],
             "patch": "secret patch body",
             "tool_result": "raw tool result",
             "verifier_json": '{"decision":"passed"}',
@@ -174,6 +177,11 @@ async def test_team_loop_wraps_model_and_tool_operations() -> None:
     assert "raw tool result" not in str(tool_metadata)
     assert recorder.wrapped_contexts[1].assignment is not None
     assert recorder.wrapped_contexts[1].assignment.role == "teammate"
+    assert recorder.wrapped_contexts[1].capabilities is not None
+    assert recorder.wrapped_contexts[1].capabilities.allowed_tool_names == (
+        "repo.read",
+        "repo.apply_patch",
+    )
 
 
 def test_team_loop_installs_observability_middleware() -> None:

@@ -4,6 +4,12 @@
 - Host execution requires explicit CLI `--trusted-local` consent.
 - FastAPI cannot select trusted-local execution.
 - Tools use least-privilege capability grants.
+- The tool registry is not an authorization boundary. It is inventory; runtime
+  routes and API inspection use `EffectiveToolPolicy` to decide visible and
+  executable tools.
+- Tool execution denies an invocation that is outside the provided effective
+  policy even if the invocation carries enough raw capabilities for the tool
+  descriptor.
 - Commands are classified as `ALLOW`, `ASK`, or `DENY`.
 - High-risk approvals are scoped to run, agent, command, workspace, and expiry.
 - Writing Teammates use isolated Git worktrees or child Run workspaces.
@@ -69,6 +75,9 @@
   `allowed_skills`, write permission, delegation permission, and Subagent
   limits. Child Runs must not register or execute capabilities outside their
   assignment.
+- Subagent and Verifier tool access is an intersection of assignment grants and
+  resolver scope rules. Temporary or promoted grants are resolver inputs, not a
+  bypass around executor enforcement.
 - Team mailbox messages are route-restricted durable records, not arbitrary
   cross-agent chat. Runtime mailbox tools expose only Teammate-to-Leader and
   Teammate-to-Teammate `question` and `status` messages, require

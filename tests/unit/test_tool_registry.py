@@ -63,6 +63,27 @@ async def test_executor_requires_capability() -> None:
 
 
 @pytest.mark.asyncio
+async def test_executor_requires_effective_tool_policy_when_present() -> None:
+    registry = ToolRegistry()
+    registry.register(_spec(), _handler)
+    executor = ToolExecutor(registry, ApprovalPolicy())
+    invocation = ToolInvocation(
+        tool_name="shell",
+        agent_id=uuid4(),
+        profile="backend-engineer",
+        capabilities={"shell"},
+        effective_tool_names={"repo.read"},
+    )
+
+    with pytest.raises(ToolDenied):
+        await executor.execute(invocation)
+
+    allowed = invocation.model_copy(update={"effective_tool_names": {"shell"}})
+    result = await executor.execute(allowed)
+    assert result.output == {"ok": True}
+
+
+@pytest.mark.asyncio
 async def test_executor_requires_approval_for_matching_command() -> None:
     registry = ToolRegistry()
     registry.register(_spec(), _handler)

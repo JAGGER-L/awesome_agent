@@ -23,6 +23,11 @@ class ToolExecutor:
         progress: ProgressCallback | None = None,
     ) -> ToolResult:
         spec, handler = self._registry.resolve(invocation.tool_name)
+        if (
+            invocation.effective_tool_names is not None
+            and invocation.tool_name not in invocation.effective_tool_names
+        ):
+            raise ToolDenied(invocation.tool_name)
         if spec.allowed_profiles and invocation.profile not in spec.allowed_profiles:
             raise ToolDenied(invocation.tool_name)
         if not spec.required_capabilities.issubset(invocation.capabilities):

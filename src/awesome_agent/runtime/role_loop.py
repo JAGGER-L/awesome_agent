@@ -420,6 +420,7 @@ async def _execute_call(
             agent_id=agent.id,
             profile=agent.profile,
             capabilities=capabilities,
+            effective_tools=policy.effective_tools,
         )
     await _emit(
         event_sink,
