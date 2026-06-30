@@ -138,6 +138,21 @@ assignment, and grant set. The executor rejects invocations that are outside a
 provided effective policy even when the invocation's raw capability set would
 otherwise satisfy the tool descriptor.
 
+## Provider Routing Boundary
+
+Provider routing is a model-call concern, not graph business logic. A
+`ModelRouter` resolves a route request into an ordered `ModelRouteDecision`.
+The model-call executor attempts those candidates in order and falls back only
+for provider errors classified as retryable before any external tool side
+effect. Authentication, invalid request, context-length, unsupported provider,
+capability, approval, validation, and token-budget failures are not silently
+retried as provider fallback.
+
+Each routing attempt carries provider, model, route id, attempt number,
+outcome, and fallback reason for observability. Token budget checks happen
+before each attempt, and token usage recording happens after each completed
+turn. Routing data structures intentionally contain no monetary fields.
+
 ## Runtime Documentation Discipline
 
 When the product modifies a user's project, it should detect the target

@@ -112,10 +112,11 @@ The active kernel completion sequence is:
 | Task 36 | Observability | Done | Production observability is now an AgentLoop middleware capability as well as durable query-table evidence. | TD-033 closed: agent/model/tool spans, count/latency/token metrics, OTel metrics SDK export, dashboard dimensions, alert guidance, and trace visualization paths are documented; Worker-only projection is not the only observability path. |
 | Task 37 | Middleware | Done | `MiddlewareContext` now carries focused typed extension envelopes. | Middleware receives typed trace, capability, assignment, token budget, handoff, and error-classification context without forcing unrelated middleware to depend on a monolithic context. |
 | Task 38 | Governance | Done | Effective tool policy now reaches API inspection, team-role exposure, typed capability context, and executor enforcement. | Registry inventory and raw capability sets are no longer sufficient to execute a tool when an effective policy is provided; extension surfaces must reuse the same resolver/executor contract. |
-| Task 39 | Provider | Planned | Add multi-model and multi-provider routing/fallback after accounting, permissions, observability, and error classification are stable. | Model routing can make provider decisions without bypassing token budget, capability policy, observability, or error-classification policy. |
+| Task 39 | Provider | Done | Added the provider routing/fallback contract and candidate-aware provider factory boundary. | Model routing can express ordered candidates, check token budget before each attempt, record token usage after completed turns, fall back only on retryable provider errors, and preserve token-only governance with no monetary fields. |
 
-The runtime kernel is stable only after Task 38 is complete. Task 39 is the
-first provider-ecosystem task and must still preserve the kernel boundaries.
+The runtime kernel is stable after Task 39. Future provider, MCP, skill, and
+product work should reuse the kernel boundaries instead of reopening graph,
+middleware, capability, observability, or token-budget ownership.
 
 ## Architecture Debt Carried Forward
 

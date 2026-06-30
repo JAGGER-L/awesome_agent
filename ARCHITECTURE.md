@@ -404,6 +404,15 @@ message types never enter orchestration, events, logs, memory, or public APIs.
 The Worker connects provider-neutral model turns to solo read-only, solo
 modifying, and explicit team Coding graphs when a model provider is configured.
 
+Provider routing sits between AgentLoop model-call policy and concrete provider
+clients. A router returns ordered provider/model candidates for a runtime
+route, role, and task profile; a model-call executor checks token budget before
+each candidate, records token usage after a completed turn, and falls back only
+for retryable provider errors. Provider factories create clients for resolved
+candidates but do not own graph state, tool permissions, or monetary policy.
+The default route remains the existing single DeepSeek candidate unless routing
+configuration supplies a different ordered decision.
+
 ## Read-Only Coding Loop
 
 Workers with a configured model provider also advertise the
