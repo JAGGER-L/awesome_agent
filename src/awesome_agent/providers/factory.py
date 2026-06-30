@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from awesome_agent.modeling import ModelProvider
 from awesome_agent.providers.deepseek import DeepSeekProvider
+from awesome_agent.providers.routing import ModelRouteCandidate
 from awesome_agent.settings import Settings
 
 
@@ -24,3 +25,8 @@ class ModelProviderFactory:
             thinking_enabled=self.settings.deepseek_thinking_enabled,
             reasoning_effort=self.settings.deepseek_reasoning_effort,
         )
+
+    def create_candidate(self, candidate: ModelRouteCandidate) -> ModelProvider:
+        if candidate.provider != "deepseek":
+            raise RuntimeError(f"Unsupported provider route: {candidate.provider}.")
+        return self.create(candidate.model)
