@@ -1,0 +1,201 @@
+from uuid import uuid4
+
+from awesome_agent.runtime.capabilities import (
+    CapabilityPurpose,
+    CapabilityResolver,
+    ToolDecisionReason,
+)
+from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
+
+
+def test_team_policy_hides_deferred_and_reports_capabilities() -> None:
+    assignment = _assignment(
+        allowed_tools=["repo.read", "repo.apply_patch", "shell.execute"],
+        deferred_tools=["repo.apply_patch", "shell.execute"],
+        promoted_tools=["repo.apply_patch"],
+        can_write=True,
+    )
+
+    policy = CapabilityResolver().resolve_team_assignment(
+        assignment,
+        purpose=CapabilityPurpose.ROLE_EXECUTION,
+    )
+
+    assert policy.tool_names == ("repo.read", "repo.apply_patch")
+    assert policy.capabilities_for("repo.read") == frozenset({"repository:read"})
+    assert policy.capabilities_for("repo.apply_patch") == frozenset(
+        {"repository:write"}
+    )
+    assert policy.denied_reason("shell.execute") is ToolDecisionReason.DEFERRED
+
+
+def test_read_only_assignment_denies_write_tools_even_if_granted() -> None:
+    assignment = _assignment(
+        allowed_tools=["repo.read", "repo.apply_patch", "shell.execute"],
+        can_write=False,
+    )
+
+    policy = CapabilityResolver().resolve_team_assignment(
+        assignment,
+        purpose=CapabilityPurpose.ROLE_EXECUTION,
+    )
+
+    assert policy.tool_names == ("repo.read",)
+    assert policy.denied_reason("repo.apply_patch") is ToolDecisionReason.REQUIRES_WRITE
+    assert policy.denied_reason("shell.execute") is ToolDecisionReason.REQUIRES_WRITE
+
+
+def test_teammate_control_tools_require_assignment_authority() -> None:
+    assignment = _assignment(
+        allowed_tools=[
+            "repo.read",
+            "team.create_subagent",
+            "team.mailbox_list",
+            "team.mailbox_send",
+        ],
+        can_delegate=False,
+        max_subagents=0,
+    )
+
+    policy = CapabilityResolver().resolve_team_assignment(
+        assignment,
+        purpose=CapabilityPurpose.ROLE_EXECUTION,
+    )
+
+    assert policy.tool_names == ("repo.read", "team.mailbox_list", "team.mailbox_send")
+    assert (
+        policy.denied_reason("team.create_subagent")
+        is ToolDecisionReason.REQUIRES_DELEGATION
+    )
+    assert policy.capabilities_for("team.mailbox_send") == frozenset({"team:mailbox"})
+
+
+def test_subagent_cannot_receive_mailbox_delegation_or_write_tools() -> None:
+    assignment = _assignment(
+        kind=TeamAssignmentKind.SUBAGENT,
+        allowed_tools=[
+            "repo.read",
+            "repo.apply_patch",
+            "team.create_subagent",
+            "team.mailbox_send",
+        ],
+        can_write=True,
+        can_delegate=True,
+        max_subagents=1,
+    )
+
+    policy = CapabilityResolver().resolve_team_assignment(
+        assignment,
+        purpose=CapabilityPurpose.ROLE_EXECUTION,
+    )
+
+    assert policy.tool_names == ("repo.read",)
+    assert (
+        policy.denied_reason("team.mailbox_send")
+        is ToolDecisionReason.ACTOR_KIND_DENIED
+    )
+    assert (
+        policy.denied_reason("team.create_subagent")
+        is ToolDecisionReason.ACTOR_KIND_DENIED
+    )
+    assert policy.denied_reason("repo.apply_patch") is ToolDecisionReason.REQUIRES_WRITE
+
+
+def test_subagent_grant_keeps_only_read_only_repository_subset() -> None:
+    parent = _assignment(
+        allowed_tools=[
+            "repo.read",
+            "repo.diff",
+            "repo.apply_patch",
+            "team.mailbox_send",
+            "team.create_subagent",
+        ],
+        can_write=True,
+        can_delegate=True,
+        max_subagents=2,
+    )
+
+    policy = CapabilityResolver().resolve_team_assignment(
+        parent,
+        purpose=CapabilityPurpose.SUBAGENT_GRANT,
+        requested_tools=[
+            "repo.read",
+            "repo.diff",
+            "repo.apply_patch",
+            "team.mailbox_send",
+            "team.create_subagent",
+        ],
+    )
+
+    assert policy.tool_names == ("repo.read", "repo.diff")
+    assert policy.denied_reason("repo.apply_patch") is ToolDecisionReason.SUBAGENT_SCOPE
+    assert policy.denied_reason("team.mailbox_send") is ToolDecisionReason.SUBAGENT_SCOPE
+    assert (
+        policy.denied_reason("team.create_subagent")
+        is ToolDecisionReason.SUBAGENT_SCOPE
+    )
+
+
+def test_verifier_review_intersects_assignment_with_verifier_tool_subset() -> None:
+    assignment = _assignment(
+        kind=TeamAssignmentKind.VERIFIER,
+        allowed_tools=[
+            "repo.status",
+            "repo.diff",
+            "repo.read",
+            "repo.search",
+            "repo.apply_patch",
+            "team.mailbox_send",
+        ],
+        can_write=True,
+    )
+
+    policy = CapabilityResolver().resolve_team_assignment(
+        assignment,
+        purpose=CapabilityPurpose.VERIFIER_REVIEW,
+    )
+
+    assert policy.tool_names == ("repo.status", "repo.diff", "repo.read", "repo.search")
+    assert policy.denied_reason("repo.apply_patch") is ToolDecisionReason.VERIFIER_SCOPE
+    assert policy.denied_reason("team.mailbox_send") is ToolDecisionReason.VERIFIER_SCOPE
+
+
+def test_unknown_tools_are_denied_with_reason() -> None:
+    assignment = _assignment(allowed_tools=["repo.read", "unknown.tool"])
+
+    policy = CapabilityResolver().resolve_team_assignment(
+        assignment,
+        purpose=CapabilityPurpose.ROLE_EXECUTION,
+    )
+
+    assert policy.tool_names == ("repo.read",)
+    assert policy.denied_reason("unknown.tool") is ToolDecisionReason.UNKNOWN_TOOL
+
+
+def _assignment(
+    *,
+    kind: TeamAssignmentKind = TeamAssignmentKind.TEAMMATE,
+    allowed_tools: list[str] | None = None,
+    deferred_tools: list[str] | None = None,
+    promoted_tools: list[str] | None = None,
+    can_write: bool = False,
+    can_delegate: bool = False,
+    max_subagents: int = 0,
+) -> TeamAssignment:
+    root_run_id = uuid4()
+    route = "team-verifier" if kind is TeamAssignmentKind.VERIFIER else "team-role"
+    return TeamAssignment(
+        root_run_id=root_run_id,
+        parent_run_id=root_run_id,
+        child_run_id=uuid4(),
+        kind=kind,
+        role_profile=kind.value,
+        runtime_route=route,
+        goal="test assignment",
+        allowed_tools=allowed_tools or [],
+        deferred_tools=deferred_tools or [],
+        promoted_tools=promoted_tools or [],
+        can_write=can_write,
+        can_delegate=can_delegate,
+        max_subagents=max_subagents,
+    )

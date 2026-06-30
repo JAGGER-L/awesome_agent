@@ -81,6 +81,7 @@ def test_effective_assignment_tools_hide_deferred_until_promoted() -> None:
         allowed_tools=["repo.read", "repo.apply_patch", "shell.execute"],
         deferred_tools=["repo.apply_patch", "shell.execute"],
         promoted_tools=["repo.apply_patch", "not-granted"],
+        can_write=True,
     )
 
     assert effective_assignment_tools(assignment) == ["repo.read", "repo.apply_patch"]
