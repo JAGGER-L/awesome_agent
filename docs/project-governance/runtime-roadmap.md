@@ -100,6 +100,7 @@ Task 07 does not include:
 | Task 31 | Done | Added a team-scoped `CapabilityResolver` / `EffectiveToolPolicy` foundation for distributed team assignments. | Team planning, role-loop exposure, role tool execution, Subagent grants, Verifier review tools, and API inspection use resolver-derived effective tools and per-tool capabilities without weakening mailbox, delegation, write, or Subagent restrictions. |
 | Task 32 | Done | Added bounded Leader plan repair for Verifier-requested distributed team rework. | Leader repair decisions are structured, audited, budgeted, and can replace or add Teammate child Runs while preserving assignment lineage, filtering superseded evidence, retiring failed Verifiers, and requiring a fresh Verifier pass after repaired children finish. |
 | Task 33 | Done | Replaced hard-coded distributed team recovery defaults with `TeamRecoveryPolicy` and Worker settings. | Verifier invalid-output attempts, verifier retry helpers, plan-repair budgets, patch-conflict rework budgets, model-output rework budgets, and unknown-failure fallback budgets are policy-owned, configurable, validated, and emitted in recovery events. |
+| Task 34 | Done | Replaced heuristic-only prompt token estimation with provider/model-aware token accounting. | Budget checks, context compaction, team payload compaction, and model-request estimates use `TokenAccountant` profiles with estimator provenance and documented fallback error margins while provider-reported usage remains the durable ledger source. |
 
 ## Runtime Architecture Invariants
 
@@ -151,12 +152,11 @@ Task 30 fixes the default sequence below. Future changes may reorder it only
 through a documented roadmap change, not as an incidental implementation-plan
 choice.
 
-Task 33 is complete and recorded in the completed-task table above. The
-remaining locked sequence starts at Task 34.
+Task 34 is complete and recorded in the completed-task table above. The
+remaining locked sequence starts at Task 35.
 
 | Task | Phase | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 34 | Accounting | Replace heuristic token estimation with provider/tokenizer-aware accounting. | TD-021 is closed with documented error bounds and provider-specific or tokenizer-backed prompt/completion accounting. |
 | Task 35 | Accounting | Remove money cost budget concepts and keep runtime budget enforcement token-based. | TD-024 is closed by deleting amount/cost-budget fields, docs, settings, and compatibility paths; token budgets remain the sole runtime budget control. |
 | Task 36 | Observability | Make production observability an AgentLoop middleware capability as well as durable query-table evidence. | TD-033 is closed: model/tool/agent spans, metrics, latency, dashboards, alerts, and trace visualization are available through documented exporter paths; Worker-only projection is not the only observability path. |
 | Task 37 | Middleware | Mature `MiddlewareContext` into typed extension envelopes. | Middleware receives typed trace, capability, assignment, budget, handoff, and error-classification context without forcing unrelated middleware to depend on a monolithic context. |

@@ -179,6 +179,12 @@ the resolved budget and `budget_source="team_recovery_policy"` for audit
 evidence. Task 33 does not claim empirical provider-quality adaptation; it
 narrows that remaining work to future metrics-driven tuning.
 
+Task 34 makes distributed team payload compaction and scoped team model-call
+budget checks use the same provider/model-aware `TokenAccountant` as solo
+routes. This does not change assignment schemas or Verifier authority; it only
+improves pre-call token estimates while preserving provider-reported usage as
+the durable ledger input.
+
 Task 25 adds Teammate-local deterministic validation for writing Teammates that
 produce patches. Validation runs after the role loop produces a patch and before
 the child result is published. It is wrapped by `TeamAgentLoop` as

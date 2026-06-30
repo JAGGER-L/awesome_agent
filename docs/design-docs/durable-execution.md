@@ -271,7 +271,17 @@ and approval-wait time is excluded. Task 18 extends the same ledger model to
 distributed team roots by aggregating the root Run and descendants at team graph
 boundaries. Large team handoff, child-result, verifier evidence, and mailbox
 payloads are compacted into artifacts and recorded through
-`context_compactions`. Money cost budgeting is deferred.
+`context_compactions`. Runtime budget enforcement remains token-based; monetary
+spend limits are not a runtime budget concept.
+
+Task 34 replaces heuristic-only prompt estimates with provider/model-aware
+token accounting. `TokenAccountant` selects a model profile, counts message
+content, tool calls, and tool definitions, and records whether the estimate is
+exact or calibrated with an error margin. Pre-call budget checks and context
+compaction use these estimates; post-call budget ledgers continue to use
+provider-reported `ModelUsage` as the durable source of truth. Unknown models
+fall back to a conservative character heuristic, so budget safety remains
+bounded even without a provider tokenizer.
 
 Current implementation note: Task 05 implements this provider-neutral protocol
 and streaming adapters. Visible reasoning and private continuation are separate:
