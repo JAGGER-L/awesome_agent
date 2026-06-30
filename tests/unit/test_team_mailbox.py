@@ -48,3 +48,8 @@ def test_mailbox_message_validates_route() -> None:
 
     with pytest.raises(MailboxRouteError):
         validate_mailbox_message(message)
+
+
+def test_mailbox_route_validation_keeps_subagent_routes_unexposed_by_policy() -> None:
+    assert validate_mailbox_route(MailboxRoute.TEAMMATE_TO_SUBAGENT)
+    assert validate_mailbox_route(MailboxRoute.SUBAGENT_TO_TEAMMATE)
