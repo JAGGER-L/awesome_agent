@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamChildResult
+from awesome_agent.runtime.team_recovery_policy import (
+    PATCH_CONFLICT_REWORK_REASON,
+    TeamRecoveryPolicy,
+)
 from awesome_agent.runtime.team_verification import TeamVerificationDecision
 
 REWORK_DECISION_PREFIX = "TEAM_REWORK_DECISION:"
-PATCH_CONFLICT_REWORK_REASON = "patch_conflict"
 
 
 def encode_rework_decision(decision: TeamVerificationDecision) -> str:
@@ -20,12 +23,12 @@ def decode_rework_decision(summary: str) -> TeamVerificationDecision | None:
     return TeamVerificationDecision.model_validate(raw)
 
 
-def rework_budget_for_failure(failure_kind: str | None) -> int:
-    if failure_kind in {None, "rework_required", "model_output_failure"}:
-        return 10
-    if failure_kind == PATCH_CONFLICT_REWORK_REASON:
-        return 2
-    return 1
+def rework_budget_for_failure(
+    failure_kind: str | None,
+    *,
+    policy: TeamRecoveryPolicy | None = None,
+) -> int:
+    return (policy or TeamRecoveryPolicy()).rework_budget_for_failure(failure_kind)
 
 
 def compose_rework_goal(

@@ -168,6 +168,17 @@ from effective Verifier evidence. The failed Verifier assignment is retired and
 a new Verifier is created only after repair children finish, so the Leader does
 not bypass independent Verifier authority.
 
+Task 33 makes team recovery budgets policy-backed rather than graph-local
+constants. `TeamRecoveryPolicy` owns Verifier invalid-output attempts,
+Verifier model and external retry helper budgets, Verifier-requested
+plan-repair budgets, patch-conflict rework budgets, model-output rework
+budgets, and the unknown-failure fallback. Worker settings expose these values
+with the current defaults, so operators can tune failure classes and risk
+appetite without changing durable schemas. Exhaustion and repair events include
+the resolved budget and `budget_source="team_recovery_policy"` for audit
+evidence. Task 33 does not claim empirical provider-quality adaptation; it
+narrows that remaining work to future metrics-driven tuning.
+
 Task 25 adds Teammate-local deterministic validation for writing Teammates that
 produce patches. Validation runs after the role loop produces a patch and before
 the child result is published. It is wrapped by `TeamAgentLoop` as
@@ -199,7 +210,7 @@ observability behind `TeamAgentLoop` and shared middleware. Task 28 adds
 PostgreSQL-backed concurrent Worker stress coverage for sibling Teammates,
 Teammate-owned Subagents, Verifier completion, patch aggregation, mailbox and
 result persistence, and dispatch claim evidence. Remaining work is not basic
-autonomy wiring; it is hardening: empirically tuned rework budgets and later
+autonomy wiring; it is hardening: empirically tuned recovery policies and later
 provider, accounting, observability, and capability convergence.
 
 ## AgentLoop Boundary

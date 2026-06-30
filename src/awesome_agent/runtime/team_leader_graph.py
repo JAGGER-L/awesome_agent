@@ -48,8 +48,12 @@ from awesome_agent.runtime.team_planning import (
     TeamPlan,
     TeamPlanTeammate,
 )
-from awesome_agent.runtime.team_replanning import (
+from awesome_agent.runtime.team_recovery_policy import (
+    PATCH_CONFLICT_REWORK_REASON,
     PLAN_REPAIR_REASON_VERIFIER_REWORK,
+    TeamRecoveryPolicy,
+)
+from awesome_agent.runtime.team_replanning import (
     TeamPlanRepair,
     TeamPlanRepairAction,
     TeamPlanRepairActionKind,
@@ -57,7 +61,6 @@ from awesome_agent.runtime.team_replanning import (
     plan_repair_budget_for_reason,
 )
 from awesome_agent.runtime.team_rework import (
-    PATCH_CONFLICT_REWORK_REASON,
     assignment_lineage_id,
     compose_patch_conflict_rework_goal,
     decode_rework_decision,
@@ -92,6 +95,7 @@ class TeamLeaderGraph:
         budget_policy: BudgetPolicy | None = None,
         team_loop: TeamAgentLoop | None = None,
         observability: ObservabilityFacade | None = None,
+        team_recovery_policy: TeamRecoveryPolicy | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -100,6 +104,7 @@ class TeamLeaderGraph:
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.team_recovery_policy = team_recovery_policy or TeamRecoveryPolicy()
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.team_planning = TeamPlanningMiddleware(
             provider_resolver=provider_resolver,
@@ -575,7 +580,10 @@ class TeamLeaderGraph:
             assignments,
             verifier_child_run_id=verifier_result.child_run_id,
         )
-        budget = plan_repair_budget_for_reason(PLAN_REPAIR_REASON_VERIFIER_REWORK)
+        budget = plan_repair_budget_for_reason(
+            PLAN_REPAIR_REASON_VERIFIER_REWORK,
+            policy=self.team_recovery_policy,
+        )
         if attempt > budget:
             await _emit_if_callable(
                 event_sink,
@@ -585,6 +593,7 @@ class TeamLeaderGraph:
                     "verifier_child_run_id": str(verifier_result.child_run_id),
                     "reason": PLAN_REPAIR_REASON_VERIFIER_REWORK,
                     "budget": budget,
+                    "budget_source": "team_recovery_policy",
                     "attempt": attempt,
                 },
                 f"team-plan-repair-exhausted:{verifier_result.child_run_id}",
@@ -656,6 +665,11 @@ class TeamLeaderGraph:
                 "verifier_child_run_id": str(verifier_result.child_run_id),
                 "reason": PLAN_REPAIR_REASON_VERIFIER_REWORK,
                 "attempt": attempt,
+                "budget": plan_repair_budget_for_reason(
+                    PLAN_REPAIR_REASON_VERIFIER_REWORK,
+                    policy=self.team_recovery_policy,
+                ),
+                "budget_source": "team_recovery_policy",
                 "action_count": len(repair.actions),
                 "rationale": repair.rationale[:2000],
             },
@@ -819,7 +833,10 @@ class TeamLeaderGraph:
         ):
             return False
         attempt = rework_attempt_for_lineage(assignments, lineage_id=lineage_id)
-        budget = rework_budget_for_failure(PATCH_CONFLICT_REWORK_REASON)
+        budget = rework_budget_for_failure(
+            PATCH_CONFLICT_REWORK_REASON,
+            policy=self.team_recovery_policy,
+        )
         if attempt > budget:
             await _emit_if_callable(
                 event_sink,
@@ -830,6 +847,7 @@ class TeamLeaderGraph:
                     "previous_child_run_id": str(original.child_run_id),
                     "rework_reason": PATCH_CONFLICT_REWORK_REASON,
                     "budget": budget,
+                    "budget_source": "team_recovery_policy",
                 },
                 f"team-patch-conflict-rework-exhausted:{lineage_id}",
             )
@@ -944,6 +962,8 @@ class TeamLeaderGraph:
                 "replacement_child_run_id": str(child.id),
                 "rework_attempt": attempt,
                 "rework_reason": PATCH_CONFLICT_REWORK_REASON,
+                "budget": budget,
+                "budget_source": "team_recovery_policy",
                 "patch_conflict_kind": conflict_kind,
                 "conflicting_patch_artifact_id": patch_artifact_id,
             },

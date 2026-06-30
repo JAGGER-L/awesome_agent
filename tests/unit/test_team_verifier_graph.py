@@ -27,6 +27,7 @@ from awesome_agent.runtime.team_assignments import (
 )
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
 from awesome_agent.runtime.team_mailbox import MailboxRoute
+from awesome_agent.runtime.team_recovery_policy import TeamRecoveryPolicy
 from awesome_agent.runtime.team_verifier_graph import (
     TeamVerifierGraph,
     verifier_external_retry_budget,
@@ -443,6 +444,36 @@ async def test_verifier_invalid_output_retries_once_then_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verifier_invalid_output_attempts_use_policy() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = FakeModelProvider(["not-json", "still-not-json", "bad-again"])
+    graph = TeamVerifierGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        team_recovery_policy=TeamRecoveryPolicy(verifier_model_output_attempts=3),
+    )
+    parent = Run(goal="parent", mode=RunMode.TEAM)
+    verifier, agent, assignment = _verifier_run(parent)
+    await runtime.create_run(
+        parent,
+        Agent(
+            run_id=parent.id,
+            kind=AgentKind.LEADER,
+            profile="leader",
+            model="fake",
+        ),
+    )
+    await runtime.create_run(verifier, agent)
+    await teams.create_assignment(assignment)
+
+    with pytest.raises(PermanentExecutionError, match="team_verifier_invalid_output"):
+        await graph.execute(verifier, agent, repository=runtime)
+
+    assert len(provider.requests) == 3
+
+
+@pytest.mark.asyncio
 async def test_leader_creates_verifier_with_verifier_model() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
@@ -524,6 +555,16 @@ async def test_leader_creates_verifier_with_verifier_model() -> None:
 def test_verifier_retry_budgets_are_explicit() -> None:
     assert verifier_model_rejection_budget() == 10
     assert verifier_external_retry_budget() == 1
+
+
+def test_verifier_retry_budgets_are_policy_backed() -> None:
+    policy = TeamRecoveryPolicy(
+        verifier_model_rejection_budget=7,
+        verifier_external_retry_budget=2,
+    )
+
+    assert verifier_model_rejection_budget(policy=policy) == 7
+    assert verifier_external_retry_budget(policy=policy) == 2
 
 
 def _verifier_run(parent: Run) -> tuple[Run, Agent, TeamAssignment]:

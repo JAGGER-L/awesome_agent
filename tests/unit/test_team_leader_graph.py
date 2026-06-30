@@ -45,6 +45,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamChildResult,
 )
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
+from awesome_agent.runtime.team_recovery_policy import TeamRecoveryPolicy
 from awesome_agent.runtime.team_rework import encode_rework_decision
 from awesome_agent.runtime.team_verification import (
     TeamReworkRequest,
@@ -965,11 +966,26 @@ async def test_leader_exhausts_patch_conflict_rework_budget(tmp_path: Path) -> N
         )
     )
 
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
     with pytest.raises(
         PermanentExecutionError,
         match="team_patch_conflict_rework_exhausted",
     ):
-        await graph.execute(run, leader, repository=runtime)
+        await graph.execute(run, leader, repository=runtime, event_sink=emit)
+
+    exhausted = next(
+        event for event in events if event[0] is EventType.TEAM_REWORK_EXHAUSTED
+    )
+    assert exhausted[1]["budget"] == 2
+    assert exhausted[1]["budget_source"] == "team_recovery_policy"
 
 
 @pytest.mark.asyncio
@@ -1233,7 +1249,11 @@ async def test_leader_exhausts_plan_repair_budget() -> None:
         await graph.execute(run, leader, repository=runtime, event_sink=emit)
 
     assert provider.requests == []
-    assert EventType.TEAM_PLAN_REPAIR_EXHAUSTED in {event[0] for event in events}
+    exhausted = next(
+        event for event in events if event[0] is EventType.TEAM_PLAN_REPAIR_EXHAUSTED
+    )
+    assert exhausted[1]["budget"] == 2
+    assert exhausted[1]["budget_source"] == "team_recovery_policy"
 
 
 @pytest.mark.asyncio
@@ -1407,6 +1427,7 @@ def _graph(
     *,
     responses: list[str] | None = None,
     team_loop: TeamAgentLoop | None = None,
+    team_recovery_policy: TeamRecoveryPolicy | None = None,
 ) -> tuple[TeamLeaderGraph, FakeModelProvider]:
     provider = FakeModelProvider(responses or [_team_plan_json()])
     return (
@@ -1415,6 +1436,7 @@ def _graph(
             provider_resolver=lambda _: provider,
             model_resolver=_models(),
             team_loop=team_loop,
+            team_recovery_policy=team_recovery_policy,
         ),
         provider,
     )

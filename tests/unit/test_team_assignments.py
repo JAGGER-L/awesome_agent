@@ -9,8 +9,11 @@ from awesome_agent.runtime.team_assignments import (
     effective_assignment_tools,
     validate_assignment_graph,
 )
-from awesome_agent.runtime.team_rework import (
+from awesome_agent.runtime.team_recovery_policy import (
     PATCH_CONFLICT_REWORK_REASON,
+    TeamRecoveryPolicy,
+)
+from awesome_agent.runtime.team_rework import (
     effective_child_results_for_verification,
     patch_conflict_superseded_child_ids,
     rework_budget_for_failure,
@@ -172,3 +175,15 @@ def test_effective_child_results_excludes_patch_conflict_superseded_result() -> 
 
 def test_patch_conflict_rework_budget_allows_two_attempts() -> None:
     assert rework_budget_for_failure(PATCH_CONFLICT_REWORK_REASON) == 2
+
+
+def test_rework_budget_accepts_policy_override() -> None:
+    policy = TeamRecoveryPolicy(
+        patch_conflict_rework_budget=3,
+        model_output_rework_budget=6,
+        default_rework_budget=2,
+    )
+
+    assert rework_budget_for_failure(PATCH_CONFLICT_REWORK_REASON, policy=policy) == 3
+    assert rework_budget_for_failure("model_output_failure", policy=policy) == 6
+    assert rework_budget_for_failure("unknown_failure", policy=policy) == 2

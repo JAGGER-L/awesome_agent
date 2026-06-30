@@ -99,6 +99,7 @@ Task 07 does not include:
 | Task 30 | Done | Locked the post-Task-29 runtime roadmap, architecture invariants, P2-P5 disposition, forward task sequence, and change-control rules so later work does not re-plan the kernel from scratch after every task. | Runtime roadmap names Task 31-40 ordering, kernel-stability criteria, phase gates, and disallowed early expansions; local execution evidence records baseline and documentation validation. |
 | Task 31 | Done | Added a team-scoped `CapabilityResolver` / `EffectiveToolPolicy` foundation for distributed team assignments. | Team planning, role-loop exposure, role tool execution, Subagent grants, Verifier review tools, and API inspection use resolver-derived effective tools and per-tool capabilities without weakening mailbox, delegation, write, or Subagent restrictions. |
 | Task 32 | Done | Added bounded Leader plan repair for Verifier-requested distributed team rework. | Leader repair decisions are structured, audited, budgeted, and can replace or add Teammate child Runs while preserving assignment lineage, filtering superseded evidence, retiring failed Verifiers, and requiring a fresh Verifier pass after repaired children finish. |
+| Task 33 | Done | Replaced hard-coded distributed team recovery defaults with `TeamRecoveryPolicy` and Worker settings. | Verifier invalid-output attempts, verifier retry helpers, plan-repair budgets, patch-conflict rework budgets, model-output rework budgets, and unknown-failure fallback budgets are policy-owned, configurable, validated, and emitted in recovery events. |
 
 ## Runtime Architecture Invariants
 
@@ -142,7 +143,7 @@ These invariants override older task-level handoffs when they conflict:
 | P2: typed middleware contract | Partially complete. `MiddlewareContext` is typed but still thin and metadata-heavy. | Finish later as Task 37 with typed extension envelopes for trace, capability decision, assignment, budget, handoff, and error classification. Do not make one giant context object. |
 | P3: migrate team routes | Complete for the forward distributed routes. `team-coding`, `team-role`, and `team-verifier` enter `TeamAgentLoop` and shared middleware; graphs retain durable coordination. | Keep slimming graph-owned policy opportunistically, but do not reopen P3 as a broad migration task. |
 | P4: unified tool permission | Partially complete. Task 31 added the team-scoped `CapabilityResolver` / `EffectiveToolPolicy` foundation for distributed team assignments. | Finish full-route convergence in Task 38 so solo, team, Subagent, API inspection, and validation paths share the same effective-policy model. |
-| P5: team hardening | Mostly complete for local validation, same-child validation rework, patch conflict recovery, stress coverage, mailbox collaboration, and bounded Leader plan repair. | Continue with Task 33 budget policy tuning and later production hardening. |
+| P5: team hardening | Mostly complete for local validation, same-child validation rework, patch conflict recovery, stress coverage, mailbox collaboration, bounded Leader plan repair, and policy-backed recovery budgets. | Continue later with metrics-driven recovery tuning after accounting and observability are stable. |
 
 ## Locked Forward Roadmap
 
@@ -150,18 +151,17 @@ Task 30 fixes the default sequence below. Future changes may reorder it only
 through a documented roadmap change, not as an incidental implementation-plan
 choice.
 
-Task 32 is complete and recorded in the completed-task table above. The
-remaining locked sequence starts at Task 33.
+Task 33 is complete and recorded in the completed-task table above. The
+remaining locked sequence starts at Task 34.
 
 | Task | Phase | Purpose | Exit condition |
 | --- | --- | --- | --- |
-| Task 33 | Kernel | Replace conservative team rework defaults with policy-backed retry and rework budgets. | TD-020 and TD-031 are closed or narrowed: budgets are configurable by failure class, task risk, model/provider quality, and observed runtime metrics. |
 | Task 34 | Accounting | Replace heuristic token estimation with provider/tokenizer-aware accounting. | TD-021 is closed with documented error bounds and provider-specific or tokenizer-backed prompt/completion accounting. |
-| Task 35 | Accounting | Add money cost budget ledger. | TD-024 is closed: token ledgers map to auditable spend through provider-aware pricing configuration or an external cost source. |
+| Task 35 | Accounting | Remove money cost budget concepts and keep runtime budget enforcement token-based. | TD-024 is closed by deleting amount/cost-budget fields, docs, settings, and compatibility paths; token budgets remain the sole runtime budget control. |
 | Task 36 | Observability | Make production observability an AgentLoop middleware capability as well as durable query-table evidence. | TD-033 is closed: model/tool/agent spans, metrics, latency, dashboards, alerts, and trace visualization are available through documented exporter paths; Worker-only projection is not the only observability path. |
 | Task 37 | Middleware | Mature `MiddlewareContext` into typed extension envelopes. | Middleware receives typed trace, capability, assignment, budget, handoff, and error-classification context without forcing unrelated middleware to depend on a monolithic context. |
 | Task 38 | Governance | Converge capability resolution across solo, team, subagent, API inspection, and validation paths. | P4 is fully complete: all runtime routes expose and execute tools through the same effective-policy model, with route-specific inputs rather than route-specific permission logic. |
-| Task 39 | Provider | Add multi-model and multi-provider routing/fallback after accounting and permissions are stable. | Model routing can make provider decisions without bypassing token, cost, capability, observability, or error-classification policy. |
+| Task 39 | Provider | Add multi-model and multi-provider routing/fallback after accounting and permissions are stable. | Model routing can make provider decisions without bypassing token, capability, observability, or error-classification policy. |
 | Task 40 | Extension | Add MCP, skills, or DeerFlow-style expansion only after the runtime kernel is stable. | External tool/skill expansion uses the same capability resolver, audit records, budgets, and AgentLoop observability as built-in tools. |
 
 The runtime kernel is considered stable only after the remaining kernel tasks

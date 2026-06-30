@@ -1,3 +1,5 @@
+import pytest
+
 from awesome_agent.settings import Settings
 
 
@@ -20,3 +22,15 @@ def test_settings_use_confirmed_concurrency_defaults() -> None:
     assert settings.otel_service_name == "awesome-agent"
     assert settings.otel_console_exporter_enabled is True
     assert settings.otel_otlp_endpoint is None
+    assert settings.team_verifier_model_output_attempts == 2
+    assert settings.team_verifier_model_rejection_budget == 10
+    assert settings.team_verifier_external_retry_budget == 1
+    assert settings.team_verifier_plan_repair_budget == 2
+    assert settings.team_patch_conflict_rework_budget == 2
+    assert settings.team_model_output_rework_budget == 10
+    assert settings.team_default_rework_budget == 1
+
+
+def test_team_recovery_budget_settings_reject_invalid_values() -> None:
+    with pytest.raises(ValueError, match="team_verifier_plan_repair_budget"):
+        Settings(_env_file=None, team_verifier_plan_repair_budget=0)  # type: ignore[call-arg]

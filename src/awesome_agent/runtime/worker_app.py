@@ -32,6 +32,7 @@ from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
 from awesome_agent.runtime.team_graph import TeamCodingGraph
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
+from awesome_agent.runtime.team_recovery_policy import TeamRecoveryPolicy
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 from awesome_agent.runtime.team_verifier_graph import TeamVerifierGraph
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
@@ -77,6 +78,17 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         max_total_tokens_per_run=configured.max_total_tokens_per_run,
         max_reasoning_tokens_per_run=configured.max_reasoning_tokens_per_run,
         max_active_seconds_per_run=configured.max_active_seconds_per_run,
+    )
+    team_recovery_policy = TeamRecoveryPolicy(
+        verifier_model_output_attempts=(configured.team_verifier_model_output_attempts),
+        verifier_model_rejection_budget=(
+            configured.team_verifier_model_rejection_budget
+        ),
+        verifier_external_retry_budget=(configured.team_verifier_external_retry_budget),
+        verifier_plan_repair_budget=configured.team_verifier_plan_repair_budget,
+        patch_conflict_rework_budget=configured.team_patch_conflict_rework_budget,
+        model_output_rework_budget=configured.team_model_output_rework_budget,
+        default_rework_budget=configured.team_default_rework_budget,
     )
     context_manager = ContextManager(
         summary_provider=DeterministicSummaryProvider(),
@@ -155,6 +167,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     budget_repository=budget_repository,
                     budget_policy=budget_policy,
                     observability=observability,
+                    team_recovery_policy=team_recovery_policy,
                 )
                 if providers.coding_available
                 else None
@@ -181,6 +194,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 budget_repository=budget_repository,
                 budget_policy=budget_policy,
                 observability=observability,
+                team_recovery_policy=team_recovery_policy,
             ),
             config=WorkerConfig(
                 lease_duration=timedelta(seconds=configured.lease_duration_seconds),

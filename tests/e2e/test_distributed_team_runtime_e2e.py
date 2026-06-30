@@ -447,6 +447,7 @@ async def test_team_run_reworks_after_verifier_rejection(
         artifact_root=tmp_path / "artifacts",
         worker_poll_interval_seconds=0.01,
         max_claim_attempts=10,
+        team_verifier_plan_repair_budget=3,
     )
 
     for _ in range(25):
@@ -481,7 +482,14 @@ async def test_team_run_reworks_after_verifier_rejection(
         == "replace_teammate"
     )
     assert repair_assignments[0].handoff_context["plan_repair_attempt"] == 1
-    assert EventType.TEAM_PLAN_REPAIR_APPLIED in {event.event_type for event in events}
+    repair_events = [
+        event
+        for event in events
+        if event.event_type is EventType.TEAM_PLAN_REPAIR_APPLIED
+    ]
+    assert len(repair_events) == 1
+    assert repair_events[0].payload["budget"] == 3
+    assert repair_events[0].payload["budget_source"] == "team_recovery_policy"
     assert any(_is_plan_repair_request(request) for request in provider.requests)
     await engine.dispose()
 
