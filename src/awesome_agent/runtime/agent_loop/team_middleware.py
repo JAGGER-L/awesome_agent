@@ -467,7 +467,10 @@ def _initial_team_plan_messages(run: Run) -> list[ModelMessage]:
                 f"{intent_rules}\n"
                 "Known tools: repo.status, repo.list, repo.search, repo.read, "
                 "repo.instructions, repo.diff, repo.apply_patch, shell.execute, "
-                "team.create_subagent.\n"
+                "team.create_subagent, team.mailbox_list, team.mailbox_send.\n"
+                "Grant mailbox tools only when bounded teammate coordination or "
+                "status exchange is useful. Mailbox messages do not change "
+                "assignments, grant tools, create descendants, or bypass Verifier.\n"
                 "Prefer the smallest useful team."
             )
         ),

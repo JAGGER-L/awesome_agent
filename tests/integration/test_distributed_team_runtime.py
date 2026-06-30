@@ -41,6 +41,7 @@ from awesome_agent.runtime.graphs import TEAM_CODING_ROUTE
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.team_assignments import TeamAssignmentKind
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
+from awesome_agent.runtime.team_mailbox import MailboxMessageStatus, MailboxRoute
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 from awesome_agent.runtime.team_verifier_graph import TeamVerifierGraph
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
@@ -259,6 +260,104 @@ async def test_distributed_team_concurrent_workers_claim_sibling_runs_once(
     await engine.dispose()
 
 
+@pytest.mark.skipif(
+    "AWESOME_AGENT_TEST_DATABASE_URL" not in os.environ,
+    reason="Integration database is not configured.",
+)
+async def test_distributed_team_teammates_collaborate_through_mailbox(
+    tmp_path: Path,
+) -> None:
+    workspace = await _git_workspace(tmp_path)
+    engine = create_engine(os.environ["AWESOME_AGENT_TEST_DATABASE_URL"])
+    sessions = create_session_factory(engine)
+    runtime = PostgresRuntimeRepository(sessions)
+    teams = PostgresTeamRepository(sessions)
+    artifacts = PostgresArtifactMetadataRepository(sessions)
+    root = Run(
+        goal="Coordinate API field naming through mailbox",
+        mode=RunMode.TEAM,
+        intent=RunIntent.READ_ONLY,
+        runtime_route=TEAM_CODING_ROUTE,
+        dispatch_status=DispatchStatus.QUEUED,
+        workspace_path=workspace,
+    )
+    root = root.model_copy(update={"graph_thread_id": f"run:{root.id}"})
+    provider = MailboxCollaborationProvider()
+    leader = Agent(
+        run_id=root.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    await runtime.create_run(root, leader)
+    worker = DurableWorker(
+        dispatcher=PostgresRunDispatcher(sessions),
+        repository=runtime,
+        probe_graph=UnusedProbeGraph(),  # type: ignore[arg-type]
+        team_leader_graph=TeamLeaderGraph(
+            team_repository=teams,
+            provider_resolver=lambda _: provider,
+            model_resolver=_models(),
+            artifact_repository=artifacts,
+        ),
+        team_role_graph=TeamRoleGraph(
+            team_repository=teams,
+            provider_resolver=lambda _: provider,
+            artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+            artifact_repository=artifacts,
+        ),
+        team_verifier_graph=TeamVerifierGraph(
+            team_repository=teams,
+            provider_resolver=lambda _: provider,
+        ),
+        config=_worker_config(),
+        team_repository=teams,
+    )
+
+    await _drain(worker, runtime, root.id)
+
+    restored = await runtime.get_run(root.id)
+    descendants = await runtime.list_descendant_runs(root.id)
+    assignments = await teams.list_assignments(root.id, include_inactive=True)
+    messages = await teams.list_mailbox_messages(root.id)
+    events = [
+        event
+        for observed_run in [restored, *descendants]
+        for event in await runtime.list_events(observed_run.id)
+    ]
+
+    assert restored is not None
+    assert restored.status is RunStatus.COMPLETED
+    assert [message.route for message in messages] == [
+        MailboxRoute.TEAMMATE_TO_TEAMMATE,
+        MailboxRoute.TEAMMATE_TO_TEAMMATE,
+        MailboxRoute.VERIFIER_TO_LEADER,
+    ]
+    assert messages[0].status is MailboxMessageStatus.RESPONDED
+    assert messages[0].requires_response
+    assert messages[1].response_to_message_id == messages[0].id
+    assert any(
+        item.allowed_tools == ["repo.read", "team.mailbox_send"]
+        for item in assignments
+        if item.kind is TeamAssignmentKind.TEAMMATE
+    )
+    assert any(
+        item.allowed_tools
+        == [
+            "repo.read",
+            "team.mailbox_list",
+            "team.mailbox_send",
+        ]
+        for item in assignments
+        if item.kind is TeamAssignmentKind.TEAMMATE
+    )
+    event_types = {event.event_type for event in events}
+    assert EventType.TEAM_MAILBOX_MESSAGE_CREATED in event_types
+    assert EventType.TEAM_MAILBOX_MESSAGE_READ in event_types
+    assert EventType.TEAM_MAILBOX_MESSAGE_RESPONDED in event_types
+    await engine.dispose()
+
+
 async def _drain(
     worker: DurableWorker,
     repository: PostgresRuntimeRepository,
@@ -427,6 +526,33 @@ class ConcurrentStressProvider(StructuredModelProvider):
         )
 
 
+class MailboxCollaborationProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(
+        self,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
+        if _is_leader_plan_request(request):
+            yield _completed_text(_mailbox_team_plan_json())
+            return
+        if _is_verifier_request(request):
+            yield _completed_text(_verifier_pass_turn())
+            return
+        if _is_mailbox_sender_request(request):
+            yield TurnCompleted(turn=_mailbox_sender_turn(request))
+            return
+        if _is_mailbox_responder_request(request):
+            yield TurnCompleted(turn=_mailbox_responder_turn(request))
+            return
+        raise AssertionError(
+            "Unexpected mailbox collaboration request:\n"
+            + "\n---\n".join(message.content for message in request.messages)
+        )
+
+
 def _is_leader_plan_request(request: ModelRequest) -> bool:
     return any(
         "Leader planning a coding-agent team" in message.content
@@ -477,11 +603,34 @@ def _is_stress_subagent_b_request(request: ModelRequest) -> bool:
     )
 
 
+def _is_mailbox_sender_request(request: ModelRequest) -> bool:
+    return any(
+        "Ask QA for the response field name through the mailbox." in message.content
+        for message in request.messages
+    )
+
+
+def _is_mailbox_responder_request(request: ModelRequest) -> bool:
+    return any(
+        "Read mailbox coordination and answer backend." in message.content
+        for message in request.messages
+    )
+
+
 def _has_tool_result(request: ModelRequest, call_id: str) -> bool:
     return any(
         message.role == "tool" and message.call_id == call_id
         for message in request.messages
     )
+
+
+def _tool_result_payload(request: ModelRequest, call_id: str) -> dict[str, object]:
+    for message in request.messages:
+        if message.role == "tool" and message.call_id == call_id:
+            payload = json.loads(message.content)
+            assert isinstance(payload, dict)
+            return payload
+    raise AssertionError(f"missing tool result {call_id}")
 
 
 def _has_subagent_results(request: ModelRequest) -> bool:
@@ -559,6 +708,178 @@ def _concurrent_team_plan_json() -> str:
             ],
         }
     )
+
+
+def _mailbox_team_plan_json() -> str:
+    return json.dumps(
+        {
+            "rationale": "Backend and QA coordinate one field name.",
+            "teammates": [
+                {
+                    "role_profile": "backend-engineer",
+                    "goal": "Ask QA for the response field name through the mailbox.",
+                    "allowed_tools": ["repo.read", "team.mailbox_send"],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": False,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": [
+                        "Ask QA through mailbox and read README evidence.",
+                    ],
+                },
+                {
+                    "role_profile": "qa-engineer",
+                    "goal": "Read mailbox coordination and answer backend.",
+                    "allowed_tools": [
+                        "repo.read",
+                        "team.mailbox_list",
+                        "team.mailbox_send",
+                    ],
+                    "deferred_tools": [],
+                    "allowed_skills": [],
+                    "can_write": False,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                    "acceptance_criteria": [
+                        "Answer backend mailbox question and read README evidence.",
+                    ],
+                },
+            ],
+        }
+    )
+
+
+def _mailbox_sender_turn(request: ModelRequest) -> ModelTurn:
+    if not _has_tool_result(request, "ask-qa"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="ask-qa",
+                        name="team.mailbox_send",
+                        arguments_json=json.dumps(
+                            {
+                                "recipient_run_id": _mailbox_directory_run_id(
+                                    request,
+                                    "qa-engineer",
+                                ),
+                                "message_type": "question",
+                                "subject": "Response field",
+                                "body_summary": (
+                                    "Please confirm the response field name."
+                                ),
+                                "requires_response": True,
+                            }
+                        ),
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    if not _has_tool_result(request, "backend-read"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="backend-read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    return ModelTurn(
+        assistant=AssistantMessage(
+            content="Backend asked QA through mailbox and read README."
+        ),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _mailbox_responder_turn(request: ModelRequest) -> ModelTurn:
+    if not _has_tool_result(request, "list-mail"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="list-mail",
+                        name="team.mailbox_list",
+                        arguments_json='{"limit":5}',
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    if not _has_tool_result(request, "answer-backend"):
+        payload = _tool_result_payload(request, "list-mail")
+        messages = payload["messages"]
+        assert isinstance(messages, list) and messages
+        question = messages[0]
+        assert isinstance(question, dict)
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="answer-backend",
+                        name="team.mailbox_send",
+                        arguments_json=json.dumps(
+                            {
+                                "recipient_run_id": question["sender_run_id"],
+                                "message_type": "status",
+                                "subject": "Response field",
+                                "body_summary": "Use response_text.",
+                                "response_to_message_id": question["id"],
+                            }
+                        ),
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    if not _has_tool_result(request, "qa-read"):
+        return ModelTurn(
+            assistant=AssistantMessage(
+                tool_calls=[
+                    ToolCall(
+                        call_id="qa-read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ]
+            ),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+    return ModelTurn(
+        assistant=AssistantMessage(
+            content="QA answered backend through mailbox and read README."
+        ),
+        stop_reason=StopReason.COMPLETED,
+        model="fake-model",
+        provider="fake",
+    )
+
+
+def _mailbox_directory_run_id(request: ModelRequest, role_profile: str) -> str:
+    prefix = f"- teammate {role_profile}: run_id="
+    for message in request.messages:
+        for line in message.content.splitlines():
+            if line.startswith(prefix):
+                return line.removeprefix(prefix)
+    raise AssertionError(f"mailbox directory missing {role_profile}")
 
 
 def _stress_writer_turn(request: ModelRequest) -> ModelTurn:

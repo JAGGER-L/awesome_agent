@@ -196,6 +196,43 @@ async def test_leader_plan_can_grant_subagent_creation_tool() -> None:
 
 
 @pytest.mark.asyncio
+async def test_leader_plan_can_grant_mailbox_tools() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    graph, provider = _graph(
+        teams,
+        responses=[
+            _team_plan_json(
+                extra={
+                    "allowed_tools": [
+                        "repo.read",
+                        "team.mailbox_list",
+                        "team.mailbox_send",
+                    ],
+                    "deferred_tools": [],
+                    "can_write": False,
+                    "can_delegate": False,
+                    "max_subagents": 0,
+                }
+            )
+        ],
+    )
+    run, leader = _leader_run()
+    await runtime.create_run(run, leader)
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime)
+
+    assignments = await teams.list_assignments(run.id)
+    assert assignments[0].allowed_tools == [
+        "repo.read",
+        "team.mailbox_list",
+        "team.mailbox_send",
+    ]
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_leader_fails_after_second_invalid_team_plan() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()

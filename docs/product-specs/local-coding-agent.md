@@ -63,6 +63,9 @@ team output.
   evidence, and mailbox payloads
 - distributed team inspection APIs and CLI for child Runs, assignments, and
   mailbox messages
+- assignment-granted route-restricted mailbox tools for Teammates to exchange
+  bounded questions and status with the Leader root Run or sibling Teammates,
+  with Leader root audit visibility
 - full patch-producing distributed team E2E coverage for model-driven Leader,
   Teammates, Subagents, Verifier, patch aggregation, and verifier rework
 
@@ -76,7 +79,7 @@ team output.
 - automatic solo/team routing
 - background automatic workspace cleanup
 - ordinary force cleanup for `recovery_required` workspaces
-- richer arbitrary team mailbox collaboration beyond current route-restricted
-  messages
+- arbitrary free-form team chat beyond bounded route-restricted mailbox
+  question/status messages
 - money cost budgeting and dashboards
 - LangSmith or LangGraph Agent Server
