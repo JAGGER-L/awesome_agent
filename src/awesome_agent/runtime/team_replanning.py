@@ -16,11 +16,13 @@ from awesome_agent.runtime.team_planning import (
     TeamPlanTeammate,
     validate_team_plan_for_intent,
 )
+from awesome_agent.runtime.team_recovery_policy import (
+    PLAN_REPAIR_REASON_VERIFIER_REWORK,
+    TeamRecoveryPolicy,
+)
 from awesome_agent.runtime.team_rework import patch_conflict_superseded_child_ids
 
-PLAN_REPAIR_REASON_VERIFIER_REWORK = "verifier_rework"
 PLAN_REPAIR_SUPERSEDED_REASONS = frozenset({PLAN_REPAIR_REASON_VERIFIER_REWORK})
-_PLAN_REPAIR_BUDGETS = {PLAN_REPAIR_REASON_VERIFIER_REWORK: 2}
 _MAX_EFFECTIVE_TEAMMATES = 6
 
 
@@ -92,8 +94,12 @@ def validate_team_plan_repair(
     return repair
 
 
-def plan_repair_budget_for_reason(reason: str) -> int:
-    return _PLAN_REPAIR_BUDGETS.get(reason, 1)
+def plan_repair_budget_for_reason(
+    reason: str,
+    *,
+    policy: TeamRecoveryPolicy | None = None,
+) -> int:
+    return (policy or TeamRecoveryPolicy()).plan_repair_budget(reason)
 
 
 def plan_repair_attempt_for_verifier(

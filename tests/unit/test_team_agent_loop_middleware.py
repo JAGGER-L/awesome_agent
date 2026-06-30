@@ -30,7 +30,10 @@ from awesome_agent.runtime.agent_loop.observability_middleware import (
     ObservabilityMiddleware,
 )
 from awesome_agent.runtime.agent_loop.team import TeamAgentLoop
-from awesome_agent.runtime.agent_loop.team_middleware import TeamPlanningMiddleware
+from awesome_agent.runtime.agent_loop.team_middleware import (
+    TeamPlanningMiddleware,
+    TeamVerificationMiddleware,
+)
 from awesome_agent.runtime.team_assignments import (
     TeamAssignment,
     TeamAssignmentKind,
@@ -166,6 +169,15 @@ def test_team_loop_installs_observability_middleware() -> None:
         isinstance(middleware, ObservabilityMiddleware)
         for middleware in loop.middleware_stack.middleware
     )
+
+
+def test_team_verification_middleware_rejects_invalid_attempt_budget() -> None:
+    with pytest.raises(ValueError, match="verifier_model_output_attempts"):
+        TeamVerificationMiddleware(
+            provider_resolver=None,
+            team_loop=TeamAgentLoop(),
+            verifier_model_output_attempts=0,
+        )
 
 
 @pytest.mark.asyncio

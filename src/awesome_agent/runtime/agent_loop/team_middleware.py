@@ -460,9 +460,13 @@ class TeamVerificationMiddleware:
         *,
         provider_resolver: ProviderResolver | None,
         team_loop: TeamAgentLoop,
+        verifier_model_output_attempts: int = 2,
     ) -> None:
+        if verifier_model_output_attempts < 1:
+            raise ValueError("verifier_model_output_attempts must be at least 1")
         self.provider_resolver = provider_resolver
         self.team_loop = team_loop
+        self.verifier_model_output_attempts = verifier_model_output_attempts
 
     async def model_decision(
         self,
@@ -508,7 +512,7 @@ class TeamVerificationMiddleware:
         provider = self.provider_resolver(agent.model)
         messages = _initial_verifier_messages(run, assignment, sibling_results)
         last_error = "invalid verifier output"
-        for attempt in range(1, 3):
+        for attempt in range(1, self.verifier_model_output_attempts + 1):
             started = monotonic()
             attempt_messages = list(messages)
 

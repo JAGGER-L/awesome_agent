@@ -31,6 +31,7 @@ from awesome_agent.runtime.team_mailbox import (
     MailboxMessageType,
     MailboxRoute,
 )
+from awesome_agent.runtime.team_recovery_policy import TeamRecoveryPolicy
 from awesome_agent.runtime.team_replanning import (
     effective_child_results_for_team_verification,
 )
@@ -61,6 +62,7 @@ class TeamVerifierGraph:
         budget_policy: BudgetPolicy | None = None,
         team_loop: TeamAgentLoop | None = None,
         observability: ObservabilityFacade | None = None,
+        team_recovery_policy: TeamRecoveryPolicy | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -68,10 +70,14 @@ class TeamVerifierGraph:
         self.artifact_repository = artifact_repository
         self.budget_repository = budget_repository
         self.budget_policy = budget_policy
+        self.team_recovery_policy = team_recovery_policy or TeamRecoveryPolicy()
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.team_verification = TeamVerificationMiddleware(
             provider_resolver=provider_resolver,
             team_loop=self.team_loop,
+            verifier_model_output_attempts=(
+                self.team_recovery_policy.verifier_model_output_attempts
+            ),
         )
 
     async def execute(
@@ -290,9 +296,15 @@ class TeamVerifierGraph:
         return artifact_refs, summary
 
 
-def verifier_model_rejection_budget() -> int:
-    return 10
+def verifier_model_rejection_budget(
+    *,
+    policy: TeamRecoveryPolicy | None = None,
+) -> int:
+    return (policy or TeamRecoveryPolicy()).verifier_model_rejection_budget
 
 
-def verifier_external_retry_budget() -> int:
-    return 1
+def verifier_external_retry_budget(
+    *,
+    policy: TeamRecoveryPolicy | None = None,
+) -> int:
+    return (policy or TeamRecoveryPolicy()).verifier_external_retry_budget

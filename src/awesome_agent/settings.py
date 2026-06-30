@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     mem0_enabled: bool = False
     max_teammates: int = Field(default=6, ge=1)
     max_subagents_per_teammate: int = Field(default=3, ge=0)
+    team_verifier_model_output_attempts: int = Field(default=2, ge=1, le=20)
+    team_verifier_model_rejection_budget: int = Field(default=10, ge=1, le=100)
+    team_verifier_external_retry_budget: int = Field(default=1, ge=1, le=20)
+    team_verifier_plan_repair_budget: int = Field(default=2, ge=1, le=20)
+    team_patch_conflict_rework_budget: int = Field(default=2, ge=1, le=20)
+    team_model_output_rework_budget: int = Field(default=10, ge=1, le=100)
+    team_default_rework_budget: int = Field(default=1, ge=1, le=20)
     max_model_concurrency: int = Field(default=8, ge=1)
     max_tool_concurrency: int = Field(default=12, ge=1)
     max_sandbox_concurrency: int = Field(default=6, ge=1)

@@ -11,8 +11,12 @@ from awesome_agent.runtime.team_assignments import (
     TeamChildResult,
 )
 from awesome_agent.runtime.team_planning import TeamPlanTeammate
-from awesome_agent.runtime.team_replanning import (
+from awesome_agent.runtime.team_recovery_policy import (
+    PATCH_CONFLICT_REWORK_REASON,
     PLAN_REPAIR_REASON_VERIFIER_REWORK,
+    TeamRecoveryPolicy,
+)
+from awesome_agent.runtime.team_replanning import (
     PLAN_REPAIR_SUPERSEDED_REASONS,
     TeamPlanRepair,
     TeamPlanRepairAction,
@@ -23,7 +27,6 @@ from awesome_agent.runtime.team_replanning import (
     superseded_child_ids_for_team_verification,
     validate_team_plan_repair,
 )
-from awesome_agent.runtime.team_rework import PATCH_CONFLICT_REWORK_REASON
 
 
 def test_repair_action_replace_requires_target_child_run_id() -> None:
@@ -118,6 +121,18 @@ def test_plan_repair_attempt_counts_prior_verifier_repair_assignments() -> None:
         == 2
     )
     assert plan_repair_budget_for_reason(PLAN_REPAIR_REASON_VERIFIER_REWORK) == 2
+
+
+def test_plan_repair_budget_accepts_policy_override() -> None:
+    policy = TeamRecoveryPolicy(verifier_plan_repair_budget=4)
+
+    assert (
+        plan_repair_budget_for_reason(
+            PLAN_REPAIR_REASON_VERIFIER_REWORK,
+            policy=policy,
+        )
+        == 4
+    )
 
 
 def test_effective_results_filter_superseded_children() -> None:
