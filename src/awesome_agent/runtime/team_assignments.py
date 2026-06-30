@@ -104,7 +104,6 @@ def validate_assignment_graph(assignment: TeamAssignment) -> bool:
 
 
 def effective_assignment_tools(assignment: TeamAssignment) -> list[str]:
-    deferred = set(assignment.deferred_tools)
-    promoted = set(assignment.promoted_tools)
-    hidden = deferred - promoted
-    return [tool for tool in assignment.allowed_tools if tool not in hidden]
+    from awesome_agent.runtime.capabilities import CapabilityResolver
+
+    return list(CapabilityResolver().resolve_team_assignment(assignment).tool_names)

@@ -3,28 +3,9 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from awesome_agent.domain.enums import RunIntent
-
-READ_ONLY_TEAM_TOOLS = {
-    "repo.status",
-    "repo.list",
-    "repo.search",
-    "repo.read",
-    "repo.instructions",
-    "repo.diff",
-}
-WRITE_TEAM_TOOLS = {
-    "repo.apply_patch",
-    "shell.execute",
-}
-TEAM_CONTROL_TOOLS = {
-    "team.create_subagent",
-}
-TEAM_MAILBOX_TOOLS = {
-    "team.mailbox_list",
-    "team.mailbox_send",
-}
-ALL_TEAM_TOOLS = (
-    READ_ONLY_TEAM_TOOLS | WRITE_TEAM_TOOLS | TEAM_CONTROL_TOOLS | TEAM_MAILBOX_TOOLS
+from awesome_agent.runtime.capabilities import (
+    ALL_TEAM_TOOLS,
+    WRITE_TEAM_TOOLS,
 )
 
 

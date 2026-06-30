@@ -23,6 +23,11 @@ from awesome_agent.runtime.agent_loop.team_middleware import (
     ValidationRunner,
 )
 from awesome_agent.runtime.budget import BudgetPolicy
+from awesome_agent.runtime.capabilities import (
+    CapabilityPurpose,
+    CapabilityResolver,
+    EffectiveToolPolicy,
+)
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import RuntimeRepository
@@ -37,7 +42,6 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentKind,
     TeamAssignmentStatus,
     TeamChildResult,
-    effective_assignment_tools,
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
@@ -76,8 +80,10 @@ class TeamRoleGraph:
         validation_runner: ValidationRunner | None = None,
         team_loop: TeamAgentLoop | None = None,
         observability: ObservabilityFacade | None = None,
+        capability_resolver: CapabilityResolver | None = None,
     ) -> None:
         self.team_repository = team_repository
+        self.capability_resolver = capability_resolver or CapabilityResolver()
         self.provider_resolver = provider_resolver
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.role_loop = (
@@ -121,7 +127,11 @@ class TeamRoleGraph:
             assignment=assignment,
             agent_id=agent.id,
         )
-        allowed_tools = effective_assignment_tools(assignment)
+        tool_policy = self.capability_resolver.resolve_team_assignment(
+            assignment,
+            purpose=CapabilityPurpose.ROLE_EXECUTION,
+        )
+        allowed_tools = list(tool_policy.tool_names)
         existing_subagents = [
             item
             for item in await self.team_repository.list_assignments(
@@ -146,7 +156,7 @@ class TeamRoleGraph:
                 agent,
                 assignment=assignment,
                 goals=subagent_goals,
-                allowed_tools=allowed_tools,
+                parent_tool_policy=tool_policy,
                 repository=repository,
                 event_sink=event_sink,
             )
@@ -157,6 +167,7 @@ class TeamRoleGraph:
             run,
             agent,
             assignment,
+            tool_policy=tool_policy,
             allowed_tools=allowed_tools,
             workspace=workspace,
             repository=repository,
@@ -200,6 +211,7 @@ class TeamRoleGraph:
         agent: Agent,
         assignment: TeamAssignment,
         *,
+        tool_policy: EffectiveToolPolicy,
         allowed_tools: list[str],
         workspace: Path | None,
         repository: RuntimeRepository,
@@ -213,6 +225,7 @@ class TeamRoleGraph:
                 run,
                 agent,
                 assignment,
+                tool_policy=tool_policy,
                 allowed_tools=allowed_tools,
                 workspace=workspace,
                 repository=repository,
@@ -246,6 +259,7 @@ class TeamRoleGraph:
         agent: Agent,
         assignment: TeamAssignment,
         *,
+        tool_policy: EffectiveToolPolicy,
         allowed_tools: list[str],
         workspace: Path | None,
         repository: RuntimeRepository,
@@ -267,6 +281,7 @@ class TeamRoleGraph:
                     allowed_skills=assignment.allowed_skills,
                     can_write=assignment.can_write,
                     acceptance_criteria=assignment.acceptance_criteria,
+                    effective_tools=tool_policy,
                 ),
                 workspace=workspace,
                 repository=repository,
@@ -433,7 +448,7 @@ class TeamRoleGraph:
         *,
         assignment: TeamAssignment,
         goals: list[str],
-        allowed_tools: list[str],
+        parent_tool_policy: EffectiveToolPolicy,
         repository: RuntimeRepository,
         event_sink: object | None,
     ) -> None:
@@ -443,6 +458,12 @@ class TeamRoleGraph:
             raise ValueError("assignment cannot delegate")
         if len(goals) > assignment.max_subagents:
             raise ValueError("subagent request exceeds assignment limit")
+        subagent_policy = self.capability_resolver.resolve_team_assignment(
+            assignment,
+            purpose=CapabilityPurpose.SUBAGENT_GRANT,
+            requested_tools=list(parent_tool_policy.tool_names),
+        )
+        subagent_tools = list(subagent_policy.tool_names)
         for index, goal in enumerate(goals, start=1):
             child = Run(
                 goal=goal,
@@ -477,7 +498,7 @@ class TeamRoleGraph:
                 role_profile="subagent",
                 runtime_route=TEAM_ROLE_ROUTE,
                 goal=goal,
-                allowed_tools=allowed_tools,
+                allowed_tools=subagent_tools,
                 allowed_skills=assignment.allowed_skills,
                 can_write=False,
                 can_delegate=False,

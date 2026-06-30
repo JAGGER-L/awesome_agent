@@ -96,6 +96,93 @@ Task 07 does not include:
 | Task 27 | Done | Distributed team patch aggregation now classifies conflicting Teammate patches and recovers through bounded replacement Teammate child Runs before verifier creation. | Focused unit tests cover aggregation classification, Leader replacement creation, superseded result filtering, budget exhaustion, and Verifier effective evidence; distributed E2E covers Worker-path conflict recovery with durable events/results. |
 | Task 28 | Done | Added true concurrent multi-Worker stress coverage for distributed team Runs across sibling Teammates, Teammate-owned Subagents, Verifier, patch aggregation, mailbox/result persistence, and dispatch claim evidence. | Integration stress test runs multiple DurableWorkers concurrently against PostgreSQL and asserts no duplicate claims, assignments, child results, patch aggregation, or parent verifier races. |
 | Task 29 | Done | Added route-restricted Teammate mailbox collaboration through assignment-scoped mailbox tools, durable read/respond lifecycle, Leader root audit visibility, and Worker-path evidence. | Unit tests cover route policy, repository visibility, role-loop tool exposure, and mailbox tool execution; distributed integration covers Teammate-to-Teammate question/response mailbox flow without weakening Subagent isolation or Verifier authority. |
+| Task 30 | Done | Locked the post-Task-29 runtime roadmap, architecture invariants, P2-P5 disposition, forward task sequence, and change-control rules so later work does not re-plan the kernel from scratch after every task. | Runtime roadmap names Task 31-40 ordering, kernel-stability criteria, phase gates, and disallowed early expansions; local execution evidence records baseline and documentation validation. |
+| Task 31 | Done | Added a team-scoped `CapabilityResolver` / `EffectiveToolPolicy` foundation for distributed team assignments. | Team planning, role-loop exposure, role tool execution, Subagent grants, Verifier review tools, and API inspection use resolver-derived effective tools and per-tool capabilities without weakening mailbox, delegation, write, or Subagent restrictions. |
+
+## Runtime Architecture Invariants
+
+The long-term goal is a local coding-agent runtime kernel, not a DeerFlow
+clone. DeerFlow remains a useful comparison point for team orchestration,
+role separation, and workflow clarity, but this project optimizes for durable
+local execution, auditable side effects, least-privilege tools, and bounded
+recovery.
+
+These invariants override older task-level handoffs when they conflict:
+
+- `Graph` modules own durable coordination only: checkpoint identity,
+  state transitions, interrupts, resume, cancellation, child-run creation and
+  waits, result persistence, patch aggregation, mailbox persistence, and
+  terminal projection.
+- `AgentLoop` owns model-to-tool iteration for one agent operation.
+- Middleware and hooks own cross-cutting runtime policy: context assembly,
+  tool exposure, permission checks, budget checks, validation policy,
+  observability, retry wrapping, error classification, approval waits,
+  artifact offload, and terminal loop cleanup.
+- Leader authority is durable and explicit. The Leader assigns Teammates,
+  grants capabilities, observes mailbox audit evidence, integrates results,
+  decides bounded replanning, and creates the Verifier. The Leader does not
+  directly create Subagents.
+- Teammates own bounded execution and may create Subagents only when their
+  durable assignment grants delegation. Subagents stay read-only, scoped,
+  mailbox-less, non-delegating, and accountable to their owning Teammate.
+- Tool access is an effective capability decision, not a prompt convention.
+  Global tools, Leader-only tools, Teammate tools, Subagent tools, deferred
+  tools, promoted tools, and temporary grants must converge through a shared
+  resolver before they are exposed to a model or executed.
+- Durable state is reserved for facts needed after a crash, resume, audit, or
+  UI inspection. Prompt scaffolding, transient model-call shaping, in-memory
+  retries, and per-turn scratch policy remain ephemeral unless a middleware
+  crosses an explicit durable boundary.
+
+## P2-P5 Disposition After Task 29
+
+| Prior item | Current disposition | Forward action |
+| --- | --- | --- |
+| P2: typed middleware contract | Partially complete. `MiddlewareContext` is typed but still thin and metadata-heavy. | Finish later as Task 37 with typed extension envelopes for trace, capability decision, assignment, budget, handoff, and error classification. Do not make one giant context object. |
+| P3: migrate team routes | Complete for the forward distributed routes. `team-coding`, `team-role`, and `team-verifier` enter `TeamAgentLoop` and shared middleware; graphs retain durable coordination. | Keep slimming graph-owned policy opportunistically, but do not reopen P3 as a broad migration task. |
+| P4: unified tool permission | Partially complete. Task 31 added the team-scoped `CapabilityResolver` / `EffectiveToolPolicy` foundation for distributed team assignments. | Finish full-route convergence in Task 38 so solo, team, Subagent, API inspection, and validation paths share the same effective-policy model. |
+| P5: team hardening | Mostly complete for local validation, same-child validation rework, patch conflict recovery, stress coverage, and mailbox collaboration. | Continue with Task 32 bounded replanning and Task 33 budget policy tuning. |
+
+## Locked Forward Roadmap
+
+Task 30 fixes the default sequence below. Future changes may reorder it only
+through a documented roadmap change, not as an incidental implementation-plan
+choice.
+
+Task 31 is complete and recorded in the completed-task table above. The
+remaining locked sequence starts at Task 32.
+
+| Task | Phase | Purpose | Exit condition |
+| --- | --- | --- | --- |
+| Task 32 | Kernel | Add bounded Leader replanning and plan repair. | TD-029 is closed: the Leader can perform audited, budgeted plan repair, replacement, or role redistribution while preserving assignment lineage and Verifier authority. |
+| Task 33 | Kernel | Replace conservative team rework defaults with policy-backed retry and rework budgets. | TD-020 and TD-031 are closed or narrowed: budgets are configurable by failure class, task risk, model/provider quality, and observed runtime metrics. |
+| Task 34 | Accounting | Replace heuristic token estimation with provider/tokenizer-aware accounting. | TD-021 is closed with documented error bounds and provider-specific or tokenizer-backed prompt/completion accounting. |
+| Task 35 | Accounting | Add money cost budget ledger. | TD-024 is closed: token ledgers map to auditable spend through provider-aware pricing configuration or an external cost source. |
+| Task 36 | Observability | Make production observability an AgentLoop middleware capability as well as durable query-table evidence. | TD-033 is closed: model/tool/agent spans, metrics, latency, dashboards, alerts, and trace visualization are available through documented exporter paths; Worker-only projection is not the only observability path. |
+| Task 37 | Middleware | Mature `MiddlewareContext` into typed extension envelopes. | Middleware receives typed trace, capability, assignment, budget, handoff, and error-classification context without forcing unrelated middleware to depend on a monolithic context. |
+| Task 38 | Governance | Converge capability resolution across solo, team, subagent, API inspection, and validation paths. | P4 is fully complete: all runtime routes expose and execute tools through the same effective-policy model, with route-specific inputs rather than route-specific permission logic. |
+| Task 39 | Provider | Add multi-model and multi-provider routing/fallback after accounting and permissions are stable. | Model routing can make provider decisions without bypassing token, cost, capability, observability, or error-classification policy. |
+| Task 40 | Extension | Add MCP, skills, or DeerFlow-style expansion only after the runtime kernel is stable. | External tool/skill expansion uses the same capability resolver, audit records, budgets, and AgentLoop observability as built-in tools. |
+
+The runtime kernel is considered stable only after the remaining kernel tasks
+through Task 38 are complete. Before then, new provider, MCP, skill, or
+product-surface work must be limited to changes required to finish those tasks.
+
+## Roadmap Change Control
+
+- Every new task must map to one row in the locked roadmap, one open technical
+  debt item, or a documented production incident.
+- If a future task needs to reorder the roadmap, first update this document in
+  a standalone governance commit that states the reason, dependency impact,
+  and displaced work.
+- Local plans under `.codex/exec-plans/active/` may decompose work but must not
+  silently change architecture direction, phase ordering, or exit conditions.
+- A task may close or narrow debt only when executable evidence exists in
+  tests, health checks, traces, durable query APIs, or documented operational
+  checks.
+- Do not start broad refactors, multi-provider work, MCP expansion, or
+  DeerFlow-style skill orchestration while a kernel-phase task remains open,
+  unless the refactor is the explicit purpose of that kernel task.
 
 ## Task 22 Breakdown
 

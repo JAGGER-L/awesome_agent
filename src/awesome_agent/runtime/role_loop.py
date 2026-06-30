@@ -26,6 +26,13 @@ from awesome_agent.modeling import (
 )
 from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.agent_loop import TeamAgentLoop
+from awesome_agent.runtime.capabilities import (
+    READ_ONLY_TEAM_TOOLS,
+    WRITE_TEAM_TOOLS,
+    CapabilityPurpose,
+    CapabilityResolver,
+    EffectiveToolPolicy,
+)
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import RuntimeRepository
@@ -63,16 +70,9 @@ from awesome_agent.tools.repository import (
 ProviderResolver = Callable[[str], ModelProvider]
 RoleEventSink = Callable[[EventType, dict[str, object], str], Awaitable[None]]
 
-_WRITE_TOOLS = {"repo.apply_patch", "shell.execute"}
+_WRITE_TOOLS = WRITE_TEAM_TOOLS
 _TEAM_CREATE_SUBAGENT = "team.create_subagent"
-_READ_ONLY_TEAM_TOOLS = {
-    "repo.status",
-    "repo.list",
-    "repo.search",
-    "repo.read",
-    "repo.instructions",
-    "repo.diff",
-}
+_READ_ONLY_TEAM_TOOLS = READ_ONLY_TEAM_TOOLS
 
 
 class TeamCreateSubagentArguments(BaseModel):
@@ -103,8 +103,15 @@ class RoleLoopPolicy:
     allowed_skills: list[str]
     can_write: bool
     acceptance_criteria: list[str]
+    effective_tools: EffectiveToolPolicy | None = None
     max_model_turns: int = 20
     max_tool_calls: int = 60
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        if self.effective_tools is None:
+            return tuple(self.allowed_tools)
+        return self.effective_tools.tool_names
 
     @property
     def requires_read_evidence(self) -> bool:
@@ -155,14 +162,14 @@ class RoleLoop:
         executor = build_modifying_executor(registry)
         tool_definitions = _filter_tool_definitions(
             model_tool_definitions(registry),
-            policy.allowed_tools,
+            policy.tool_names,
         )
-        if _TEAM_CREATE_SUBAGENT in policy.allowed_tools:
+        if _TEAM_CREATE_SUBAGENT in policy.tool_names:
             tool_definitions.append(_create_subagent_tool_definition())
         if assignment.kind is TeamAssignmentKind.TEAMMATE:
-            if TEAM_MAILBOX_LIST_TOOL in policy.allowed_tools:
+            if TEAM_MAILBOX_LIST_TOOL in policy.tool_names:
                 tool_definitions.append(_mailbox_list_tool_definition())
-            if TEAM_MAILBOX_SEND_TOOL in policy.allowed_tools:
+            if TEAM_MAILBOX_SEND_TOOL in policy.tool_names:
                 tool_definitions.append(_mailbox_send_tool_definition())
         provider = self.provider_resolver(agent.model)
         mailbox_directory = await _mailbox_directory(
@@ -364,7 +371,7 @@ async def _execute_call(
             event_sink=event_sink,
         )
         raise ChildRunWait("waiting_subagents")
-    allowed = call.name in policy.allowed_tools
+    allowed = _policy_allows(policy, call.name)
     if not allowed and policy.can_write and call.name in _WRITE_TOOLS:
         raise PermanentExecutionError(f"team_role_tool_not_allowed: {call.name}")
     if not allowed:
@@ -401,10 +408,11 @@ async def _execute_call(
             is_error=True,
         )
     else:
-        capabilities = {"repository:read"}
-        if policy.can_write:
-            capabilities.add("repository:write")
-            capabilities.add("shell:execute")
+        capabilities = (
+            set(policy.effective_tools.capabilities_for(call.name))
+            if policy.effective_tools is not None
+            else _legacy_capabilities(policy, call.name)
+        )
         result = await execute_repository_call(
             executor,  # type: ignore[arg-type]
             call,
@@ -747,7 +755,7 @@ async def _create_dynamic_subagent(
     ):
         raise PermanentExecutionError("only teammates can create subagents")
     arguments = _parse_create_subagent(call)
-    _validate_subagent_arguments(arguments, policy)
+    _validate_subagent_arguments(arguments, policy, assignment=assignment)
     existing = await _find_subagent_for_call(
         team_repository,
         assignment=assignment,
@@ -867,15 +875,36 @@ def _parse_create_subagent(call: ToolCall) -> TeamCreateSubagentArguments:
 def _validate_subagent_arguments(
     arguments: TeamCreateSubagentArguments,
     policy: RoleLoopPolicy,
+    *,
+    assignment: TeamAssignment,
 ) -> None:
-    allowed = set(policy.allowed_tools)
     requested_tools = set(arguments.allowed_tools)
-    if not requested_tools.issubset(allowed):
-        raise PermanentExecutionError(
-            "subagent tools must be a subset of teammate tools"
+    if policy.effective_tools is None:
+        allowed = set(policy.allowed_tools)
+        if not requested_tools.issubset(allowed):
+            raise PermanentExecutionError(
+                "subagent tools must be a subset of teammate tools"
+            )
+        if any(tool not in _READ_ONLY_TEAM_TOOLS for tool in requested_tools):
+            raise PermanentExecutionError("subagent tools must be read-only")
+    else:
+        granted = set(policy.effective_tools.tool_names)
+        if not requested_tools.issubset(granted):
+            raise PermanentExecutionError(
+                "subagent tools must be a subset of teammate tools"
+            )
+        subagent_policy = CapabilityResolver().resolve_team_assignment(
+            assignment,
+            purpose=CapabilityPurpose.SUBAGENT_GRANT,
+            requested_tools=arguments.allowed_tools,
         )
-    if any(tool not in _READ_ONLY_TEAM_TOOLS for tool in requested_tools):
-        raise PermanentExecutionError("subagent tools must be read-only")
+        denied_requested = [
+            decision
+            for decision in subagent_policy.denied
+            if decision.tool_name in requested_tools
+        ]
+        if denied_requested:
+            raise PermanentExecutionError("subagent tools must be read-only")
     if not set(arguments.allowed_skills).issubset(policy.allowed_skills):
         raise PermanentExecutionError(
             "subagent skills must be a subset of teammate skills"
@@ -936,10 +965,24 @@ def _mailbox_send_tool_definition() -> ToolDefinition:
 
 def _filter_tool_definitions(
     definitions: list[ToolDefinition],
-    allowed_tools: list[str],
+    allowed_tools: list[str] | tuple[str, ...],
 ) -> list[ToolDefinition]:
     allowed = set(allowed_tools)
     return [definition for definition in definitions if definition.name in allowed]
+
+
+def _policy_allows(policy: RoleLoopPolicy, tool_name: str) -> bool:
+    if policy.effective_tools is None:
+        return tool_name in policy.allowed_tools
+    return policy.effective_tools.allows(tool_name)
+
+
+def _legacy_capabilities(policy: RoleLoopPolicy, tool_name: str) -> set[str]:
+    if tool_name == "repo.apply_patch" and policy.can_write:
+        return {"repository:write"}
+    if tool_name == "shell.execute" and policy.can_write:
+        return {"shell:execute"}
+    return {"repository:read"}
 
 
 async def _emit(

@@ -74,6 +74,7 @@ from awesome_agent.persistence.worker_heartbeats import (
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
+from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
@@ -529,7 +530,17 @@ def create_app(
             run_id,
             include_inactive=all,
         )
-        return [assignment.model_dump(mode="json") for assignment in assignments]
+        resolver = CapabilityResolver()
+        payloads: list[dict[str, object]] = []
+        for assignment in assignments:
+            policy = resolver.resolve_team_assignment(
+                assignment,
+                purpose=CapabilityPurpose.INSPECTION,
+            )
+            payload = assignment.model_dump(mode="json")
+            payload.update(policy.as_inspection_payload())
+            payloads.append(payload)
+        return payloads
 
     @app.get("/runs/{run_id}/team/mailbox")
     async def list_team_mailbox(run_id: UUID) -> list[dict[str, object]]:
