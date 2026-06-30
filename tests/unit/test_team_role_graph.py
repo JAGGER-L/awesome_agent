@@ -2,6 +2,7 @@ import json
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -48,6 +49,12 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentKind,
     TeamAssignmentStatus,
     TeamChildResult,
+)
+from awesome_agent.runtime.team_mailbox import (
+    MailboxMessage,
+    MailboxMessageStatus,
+    MailboxMessageType,
+    MailboxRoute,
 )
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
@@ -1459,6 +1466,421 @@ async def test_completed_subagent_result_is_injected_into_teammate_context(
     assert "Subagent found README evidence." in request_text
 
 
+@pytest.mark.asyncio
+async def test_teammate_receives_mailbox_tools_and_directory(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Read README and saw mailbox tools."),
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile="backend-engineer",
+            allowed_tools=["repo.read", "team.mailbox_list", "team.mailbox_send"],
+            can_write=False,
+        )
+    )
+    sibling = Run(
+        goal="QA teammate",
+        mode=RunMode.TEAM,
+        parent_run_id=run.parent_run_id,
+        root_run_id=run.root_run_id,
+        depth=1,
+        child_role="teammate",
+        runtime_route=TEAM_ROLE_ROUTE,
+        workspace_path=workspace,
+    )
+    await runtime.create_run(
+        sibling,
+        Agent(
+            run_id=sibling.id,
+            kind=AgentKind.TEAMMATE,
+            profile="qa-engineer",
+            model="fake",
+        ),
+    )
+    await teams.create_assignment(
+        TeamAssignment(
+            root_run_id=run.root_run_id or run.id,
+            parent_run_id=run.parent_run_id or run.id,
+            child_run_id=sibling.id,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile="qa-engineer",
+            runtime_route=TEAM_ROLE_ROUTE,
+            goal=sibling.goal,
+            allowed_tools=["repo.read", "team.mailbox_list", "team.mailbox_send"],
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    first_request = provider.requests[0]
+    assert [tool.name for tool in first_request.tools] == [
+        "repo.read",
+        "team.mailbox_list",
+        "team.mailbox_send",
+    ]
+    prompt_text = "\n".join(message.content for message in first_request.messages)
+    assert f"- leader root: run_id={run.root_run_id}" in prompt_text
+    assert f"- teammate qa-engineer: run_id={sibling.id}" in prompt_text
+    directory_lines = [
+        line
+        for line in prompt_text.splitlines()
+        if line.startswith("- leader root:") or line.startswith("- teammate ")
+    ]
+    assert all("subagent" not in line.lower() for line in directory_lines)
+    assert all("verifier" not in line.lower() for line in directory_lines)
+
+
+@pytest.mark.asyncio
+async def test_teammate_can_send_mailbox_message_to_sibling(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    sibling = await _create_sibling_teammate(
+        runtime,
+        teams,
+        run,
+        role_profile="qa-engineer",
+        workspace=workspace,
+    )
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="ask-qa",
+                        name="team.mailbox_send",
+                        arguments_json=json.dumps(
+                            {
+                                "recipient_run_id": str(sibling.id),
+                                "message_type": "question",
+                                "subject": "Response field",
+                                "body_summary": (
+                                    "Please confirm the response field name."
+                                ),
+                                "requires_response": True,
+                            }
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Asked QA and read README."),
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile="backend-engineer",
+            allowed_tools=["repo.read", "team.mailbox_send"],
+            can_write=False,
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    state, _ = await graph.execute(run, agent, repository=runtime, event_sink=emit)
+
+    messages = await teams.list_mailbox_messages(run.root_run_id or run.id)
+    assert state["phase"] == "completed"
+    assert len(messages) == 1
+    assert messages[0].route is MailboxRoute.TEAMMATE_TO_TEAMMATE
+    assert messages[0].message_type is MailboxMessageType.QUESTION
+    assert messages[0].sender_run_id == run.id
+    assert messages[0].recipient_run_id == sibling.id
+    assert messages[0].requires_response is True
+    assert EventType.TEAM_MAILBOX_MESSAGE_CREATED in {
+        event_type for event_type, _, _ in events
+    }
+
+
+@pytest.mark.asyncio
+async def test_mailbox_tool_does_not_satisfy_read_only_evidence(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    sibling = await _create_sibling_teammate(
+        runtime,
+        teams,
+        run,
+        role_profile="qa-engineer",
+        workspace=workspace,
+    )
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="status",
+                        name="team.mailbox_send",
+                        arguments_json=json.dumps(
+                            {
+                                "recipient_run_id": str(sibling.id),
+                                "message_type": "status",
+                                "subject": "Status",
+                                "body_summary": "Coordination note only.",
+                            }
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Done after mailbox only."),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Now read README."),
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile="backend-engineer",
+            allowed_tools=["repo.read", "team.mailbox_send"],
+            can_write=False,
+        )
+    )
+
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    assert state["phase"] == "completed"
+    assert len(provider.requests) == 4
+    feedback_text = "\n".join(
+        message.content for message in provider.requests[2].messages
+    )
+    assert "Do not finish yet" in feedback_text
+
+
+@pytest.mark.asyncio
+async def test_subagent_cannot_use_mailbox_tool_even_if_granted(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="mail",
+                        name="team.mailbox_send",
+                        arguments_json=json.dumps(
+                            {
+                                "recipient_run_id": str(uuid4()),
+                                "message_type": "status",
+                                "subject": "Invalid",
+                                "body_summary": "Subagents must not use mailbox.",
+                            }
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Read README after mailbox denial."),
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    run, agent = _role_run(kind=TeamAssignmentKind.SUBAGENT)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.SUBAGENT,
+            allowed_tools=["repo.read", "team.mailbox_send"],
+        )
+    )
+
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    assert state["phase"] == "completed"
+    assert await teams.list_mailbox_messages(run.root_run_id or run.id) == []
+    tool_text = "\n".join(message.content for message in provider.requests[1].messages)
+    assert "Only Teammates can send team mailbox messages" in tool_text
+
+
+@pytest.mark.asyncio
+async def test_teammate_mailbox_response_marks_original_responded(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    sibling = await _create_sibling_teammate(
+        runtime,
+        teams,
+        run,
+        role_profile="backend-engineer",
+        workspace=workspace,
+    )
+    original = await teams.create_mailbox_message(
+        MailboxMessage(
+            team_root_run_id=run.root_run_id or run.id,
+            sender_run_id=sibling.id,
+            recipient_run_id=run.id,
+            route=MailboxRoute.TEAMMATE_TO_TEAMMATE,
+            message_type=MailboxMessageType.QUESTION,
+            subject="Response field",
+            body_summary="What response field should backend use?",
+            requires_response=True,
+        )
+    )
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="list-mail",
+                        name="team.mailbox_list",
+                        arguments_json='{"limit":5}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="respond",
+                        name="team.mailbox_send",
+                        arguments_json=json.dumps(
+                            {
+                                "recipient_run_id": str(sibling.id),
+                                "message_type": "status",
+                                "subject": "Response field",
+                                "body_summary": "Use response_text.",
+                                "response_to_message_id": str(original.id),
+                            }
+                        ),
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Answered mailbox and read README."),
+        ]
+    )
+    graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile="qa-engineer",
+            allowed_tools=["repo.read", "team.mailbox_list", "team.mailbox_send"],
+            can_write=False,
+        )
+    )
+    events: list[tuple[object, dict[str, object], str]] = []
+
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    await graph.execute(run, agent, repository=runtime, event_sink=emit)
+
+    messages = await teams.list_mailbox_messages(run.root_run_id or run.id)
+    restored_original = next(
+        message for message in messages if message.id == original.id
+    )
+    response = next(
+        message for message in messages if message.response_to_message_id == original.id
+    )
+    assert restored_original.status is MailboxMessageStatus.RESPONDED
+    assert restored_original.read_at is not None
+    assert response.sender_run_id == run.id
+    assert response.recipient_run_id == sibling.id
+    assert EventType.TEAM_MAILBOX_MESSAGE_READ in {
+        event_type for event_type, _, _ in events
+    }
+    assert EventType.TEAM_MAILBOX_MESSAGE_RESPONDED in {
+        event_type for event_type, _, _ in events
+    }
+
+
 def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:
     root_id = Run(goal="root", mode=RunMode.TEAM).id
     parent_id = root_id if kind is TeamAssignmentKind.TEAMMATE else Run(goal="p").id
@@ -1489,6 +1911,7 @@ def _assignment(
     run: Run,
     *,
     kind: TeamAssignmentKind,
+    role_profile: str | None = None,
     allowed_tools: list[str] | None = None,
     deferred_tools: list[str] | None = None,
     promoted_tools: list[str] | None = None,
@@ -1503,7 +1926,7 @@ def _assignment(
         parent_run_id=run.parent_run_id or run.id,
         child_run_id=run.id,
         kind=kind,
-        role_profile=kind.value,
+        role_profile=role_profile or kind.value,
         runtime_route=TEAM_ROLE_ROUTE,
         goal=run.goal,
         allowed_tools=allowed_tools or [],
@@ -1515,6 +1938,48 @@ def _assignment(
         max_subagents=max_subagents,
         handoff_context=handoff_context or {},
     )
+
+
+async def _create_sibling_teammate(
+    runtime: InMemoryRuntimeRepository,
+    teams: InMemoryTeamRepository,
+    run: Run,
+    *,
+    role_profile: str,
+    workspace: Path,
+) -> Run:
+    sibling = Run(
+        goal=f"{role_profile} teammate",
+        mode=RunMode.TEAM,
+        parent_run_id=run.parent_run_id,
+        root_run_id=run.root_run_id,
+        depth=1,
+        child_role="teammate",
+        runtime_route=TEAM_ROLE_ROUTE,
+        workspace_path=workspace,
+    )
+    await runtime.create_run(
+        sibling,
+        Agent(
+            run_id=sibling.id,
+            kind=AgentKind.TEAMMATE,
+            profile=role_profile,
+            model="fake",
+        ),
+    )
+    await teams.create_assignment(
+        TeamAssignment(
+            root_run_id=run.root_run_id or run.id,
+            parent_run_id=run.parent_run_id or run.id,
+            child_run_id=sibling.id,
+            kind=TeamAssignmentKind.TEAMMATE,
+            role_profile=role_profile,
+            runtime_route=TEAM_ROLE_ROUTE,
+            goal=sibling.goal,
+            allowed_tools=["repo.read", "team.mailbox_list", "team.mailbox_send"],
+        )
+    )
+    return sibling
 
 
 def _turn(

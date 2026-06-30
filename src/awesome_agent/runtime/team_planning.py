@@ -19,7 +19,13 @@ WRITE_TEAM_TOOLS = {
 TEAM_CONTROL_TOOLS = {
     "team.create_subagent",
 }
-ALL_TEAM_TOOLS = READ_ONLY_TEAM_TOOLS | WRITE_TEAM_TOOLS | TEAM_CONTROL_TOOLS
+TEAM_MAILBOX_TOOLS = {
+    "team.mailbox_list",
+    "team.mailbox_send",
+}
+ALL_TEAM_TOOLS = (
+    READ_ONLY_TEAM_TOOLS | WRITE_TEAM_TOOLS | TEAM_CONTROL_TOOLS | TEAM_MAILBOX_TOOLS
+)
 
 
 class TeamPlanTeammate(BaseModel):

@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
+from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -36,6 +37,18 @@ from awesome_agent.runtime.team_assignments import (
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution
+from awesome_agent.runtime.team_mailbox import (
+    MailboxMessage,
+    MailboxMessageStatus,
+    MailboxMessageType,
+)
+from awesome_agent.runtime.team_mailbox_policy import (
+    TEAM_MAILBOX_LIST_TOOL,
+    TEAM_MAILBOX_SEND_TOOL,
+    TEAM_MAILBOX_TOOLS,
+    MailboxPolicyError,
+    resolve_teammate_mailbox_route,
+)
 from awesome_agent.runtime.team_role_artifacts import (
     role_changed_files,
     role_git_diff,
@@ -67,6 +80,21 @@ class TeamCreateSubagentArguments(BaseModel):
     allowed_tools: list[str] = Field(min_length=1, max_length=12)
     allowed_skills: list[str] = Field(default_factory=list, max_length=20)
     acceptance_criteria: list[str] = Field(min_length=1, max_length=8)
+
+
+class TeamMailboxListArguments(BaseModel):
+    include_sent: bool = False
+    unread_only: bool = False
+    limit: int = Field(default=10, ge=1, le=20)
+
+
+class TeamMailboxSendArguments(BaseModel):
+    recipient_run_id: UUID
+    message_type: MailboxMessageType
+    subject: str = Field(min_length=1, max_length=160)
+    body_summary: str = Field(min_length=1, max_length=2000)
+    requires_response: bool = False
+    response_to_message_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,13 +159,24 @@ class RoleLoop:
         )
         if _TEAM_CREATE_SUBAGENT in policy.allowed_tools:
             tool_definitions.append(_create_subagent_tool_definition())
+        if assignment.kind is TeamAssignmentKind.TEAMMATE:
+            if TEAM_MAILBOX_LIST_TOOL in policy.allowed_tools:
+                tool_definitions.append(_mailbox_list_tool_definition())
+            if TEAM_MAILBOX_SEND_TOOL in policy.allowed_tools:
+                tool_definitions.append(_mailbox_send_tool_definition())
         provider = self.provider_resolver(agent.model)
+        mailbox_directory = await _mailbox_directory(
+            assignment=assignment,
+            policy=policy,
+            team_repository=team_repository,
+        )
         messages = _initial_messages(
             run,
             assignment,
             policy,
             subagent_results=subagent_results or [],
             validation_feedback=validation_feedback,
+            mailbox_directory=mailbox_directory,
         )
         model_turn_count = 0
         tool_call_count = 0
@@ -244,7 +283,8 @@ class RoleLoop:
                     )
                     tool_call_count += 1
                     if not result.is_error:
-                        successful_inspections += 1
+                        if call.name in _READ_ONLY_TEAM_TOOLS:
+                            successful_inspections += 1
                         if call.name in _WRITE_TOOLS:
                             successful_writes += 1
                             diff_after_last_write = False
@@ -333,6 +373,25 @@ async def _execute_call(
             content=f"Tool {call.name} is not allowed for this assignment.",
             is_error=True,
         )
+    elif call.name == TEAM_MAILBOX_LIST_TOOL:
+        result = await _execute_mailbox_list(
+            run=run,
+            agent=agent,
+            assignment=assignment,
+            team_repository=team_repository,
+            call=call,
+            event_sink=event_sink,
+        )
+    elif call.name == TEAM_MAILBOX_SEND_TOOL:
+        result = await _execute_mailbox_send(
+            run=run,
+            agent=agent,
+            assignment=assignment,
+            repository=repository,
+            team_repository=team_repository,
+            call=call,
+            event_sink=event_sink,
+        )
     elif call.name in _WRITE_TOOLS and not policy.can_write:
         result = ToolResultMessage(
             call_id=call.call_id,
@@ -372,6 +431,216 @@ async def _execute_call(
     return result
 
 
+async def _execute_mailbox_list(
+    *,
+    run: Run,
+    agent: Agent,
+    assignment: TeamAssignment,
+    team_repository: TeamRepository,
+    call: ToolCall,
+    event_sink: RoleEventSink | None,
+) -> ToolResultMessage:
+    if assignment.kind is not TeamAssignmentKind.TEAMMATE:
+        return ToolResultMessage(
+            call_id=call.call_id,
+            content="Only Teammates can list team mailbox messages.",
+            is_error=True,
+        )
+    try:
+        arguments = TeamMailboxListArguments.model_validate_json(call.arguments_json)
+    except ValidationError as error:
+        return ToolResultMessage(
+            call_id=call.call_id,
+            content=f"invalid team.mailbox_list arguments: {error}",
+            is_error=True,
+        )
+
+    messages = await team_repository.list_mailbox_messages(run.id)
+    filtered = [
+        message
+        for message in messages
+        if arguments.include_sent or message.recipient_run_id == run.id
+    ]
+    if arguments.unread_only:
+        filtered = [
+            message
+            for message in filtered
+            if message.status is MailboxMessageStatus.UNREAD
+        ]
+    selected = filtered[: arguments.limit]
+    read_ids: list[str] = []
+    for message in selected:
+        if (
+            message.recipient_run_id == run.id
+            and message.status is MailboxMessageStatus.UNREAD
+        ):
+            read = await team_repository.mark_mailbox_read(message.id)
+            read_ids.append(str(read.id))
+            await _emit(
+                event_sink,
+                run,
+                assignment,
+                agent,
+                EventType.TEAM_MAILBOX_MESSAGE_READ,
+                {"message_id": str(read.id), "route": read.route.value},
+                f"team-mailbox-read:{read.id}",
+            )
+
+    return ToolResultMessage(
+        call_id=call.call_id,
+        content=json.dumps(
+            {
+                "messages": [_mailbox_message_payload(message) for message in selected],
+                "marked_read_ids": read_ids,
+            }
+        ),
+    )
+
+
+async def _execute_mailbox_send(
+    *,
+    run: Run,
+    agent: Agent,
+    assignment: TeamAssignment,
+    repository: RuntimeRepository,
+    team_repository: TeamRepository,
+    call: ToolCall,
+    event_sink: RoleEventSink | None,
+) -> ToolResultMessage:
+    if assignment.kind is not TeamAssignmentKind.TEAMMATE:
+        return ToolResultMessage(
+            call_id=call.call_id,
+            content="Only Teammates can send team mailbox messages.",
+            is_error=True,
+        )
+    try:
+        arguments = TeamMailboxSendArguments.model_validate_json(call.arguments_json)
+    except ValidationError as error:
+        return ToolResultMessage(
+            call_id=call.call_id,
+            content=f"invalid team.mailbox_send arguments: {error}",
+            is_error=True,
+        )
+
+    try:
+        recipient_run = await repository.get_run(arguments.recipient_run_id)
+        route = resolve_teammate_mailbox_route(
+            sender_run=run,
+            sender_assignment=assignment,
+            recipient_run=recipient_run,
+            message_type=arguments.message_type,
+        )
+    except (KeyError, MailboxPolicyError) as error:
+        return ToolResultMessage(
+            call_id=call.call_id,
+            content=str(error),
+            is_error=True,
+        )
+
+    message = MailboxMessage(
+        team_root_run_id=assignment.root_run_id,
+        sender_run_id=run.id,
+        sender_agent_id=agent.id,
+        recipient_run_id=recipient_run.id,
+        route=route,
+        message_type=arguments.message_type,
+        subject=arguments.subject,
+        body_summary=arguments.body_summary,
+        requires_response=arguments.requires_response,
+        response_to_message_id=arguments.response_to_message_id,
+    )
+
+    if arguments.response_to_message_id is None:
+        saved = await team_repository.create_mailbox_message(message)
+    else:
+        try:
+            original = await team_repository.get_mailbox_message(
+                arguments.response_to_message_id
+            )
+        except KeyError:
+            return ToolResultMessage(
+                call_id=call.call_id,
+                content=(
+                    f"Response message not found: {arguments.response_to_message_id}"
+                ),
+                is_error=True,
+            )
+        if original.recipient_run_id != run.id:
+            return ToolResultMessage(
+                call_id=call.call_id,
+                content="Only the original recipient can respond to a mailbox message.",
+                is_error=True,
+            )
+        if original.sender_run_id != recipient_run.id:
+            return ToolResultMessage(
+                call_id=call.call_id,
+                content="Response recipient must be the original sender.",
+                is_error=True,
+            )
+        _, saved = await team_repository.respond_to_mailbox_message(
+            arguments.response_to_message_id,
+            message,
+        )
+        await _emit(
+            event_sink,
+            run,
+            assignment,
+            agent,
+            EventType.TEAM_MAILBOX_MESSAGE_RESPONDED,
+            {
+                "message_id": str(arguments.response_to_message_id),
+                "response_message_id": str(saved.id),
+                "route": saved.route.value,
+            },
+            f"team-mailbox-responded:{arguments.response_to_message_id}:{saved.id}",
+        )
+
+    await _emit(
+        event_sink,
+        run,
+        assignment,
+        agent,
+        EventType.TEAM_MAILBOX_MESSAGE_CREATED,
+        {
+            "message_id": str(saved.id),
+            "route": saved.route.value,
+            "message_type": saved.message_type.value,
+            "recipient_run_id": str(saved.recipient_run_id),
+            "requires_response": saved.requires_response,
+        },
+        f"team-mailbox-created:{saved.id}",
+    )
+    return ToolResultMessage(
+        call_id=call.call_id,
+        content=json.dumps(
+            {
+                "message_id": str(saved.id),
+                "route": saved.route.value,
+                "status": saved.status.value,
+            }
+        ),
+    )
+
+
+def _mailbox_message_payload(message: MailboxMessage) -> dict[str, object]:
+    return {
+        "id": str(message.id),
+        "route": message.route.value,
+        "message_type": message.message_type.value,
+        "status": message.status.value,
+        "sender_run_id": str(message.sender_run_id),
+        "recipient_run_id": str(message.recipient_run_id),
+        "subject": message.subject,
+        "body_summary": message.body_summary,
+        "requires_response": message.requires_response,
+        "response_to_message_id": (
+            str(message.response_to_message_id)
+            if message.response_to_message_id is not None
+            else None
+        ),
+    }
+
+
 def _initial_messages(
     run: Run,
     assignment: TeamAssignment,
@@ -379,6 +648,7 @@ def _initial_messages(
     *,
     subagent_results: list[TeamChildResult],
     validation_feedback: str | None,
+    mailbox_directory: str | None,
 ) -> list[ModelMessage]:
     criteria = "\n".join(f"- {item}" for item in policy.acceptance_criteria)
     messages: list[ModelMessage] = [
@@ -422,7 +692,41 @@ def _initial_messages(
                 )
             )
         )
+    if mailbox_directory:
+        messages.append(UserMessage(content=mailbox_directory))
     return messages
+
+
+async def _mailbox_directory(
+    *,
+    assignment: TeamAssignment,
+    policy: RoleLoopPolicy,
+    team_repository: TeamRepository,
+) -> str | None:
+    if assignment.kind is not TeamAssignmentKind.TEAMMATE:
+        return None
+    if not TEAM_MAILBOX_TOOLS.intersection(policy.allowed_tools):
+        return None
+    lines = [
+        "Mailbox directory for assignment-granted coordination:",
+        f"- leader root: run_id={assignment.root_run_id}",
+    ]
+    assignments = await team_repository.list_assignments(
+        assignment.root_run_id,
+        include_inactive=True,
+    )
+    for item in assignments:
+        if (
+            item.kind is TeamAssignmentKind.TEAMMATE
+            and item.child_run_id != assignment.child_run_id
+            and item.status is TeamAssignmentStatus.ACTIVE
+        ):
+            lines.append(f"- teammate {item.role_profile}: run_id={item.child_run_id}")
+    lines.append(
+        "Use team.mailbox_send only for bounded question/status coordination; "
+        "mailbox messages do not grant tools, mutate assignments, or bypass Verifier."
+    )
+    return "\n".join(lines)
 
 
 async def _create_dynamic_subagent(
@@ -605,6 +909,28 @@ def _create_subagent_tool_definition() -> ToolDefinition:
             "repository evidence. Only Teammates may call this tool."
         ),
         input_schema=TeamCreateSubagentArguments.model_json_schema(),
+    )
+
+
+def _mailbox_list_tool_definition() -> ToolDefinition:
+    return ToolDefinition(
+        name=TEAM_MAILBOX_LIST_TOOL,
+        description=(
+            "List assignment-scoped team mailbox messages for this Teammate. "
+            "Unread received messages may be marked read."
+        ),
+        input_schema=TeamMailboxListArguments.model_json_schema(),
+    )
+
+
+def _mailbox_send_tool_definition() -> ToolDefinition:
+    return ToolDefinition(
+        name=TEAM_MAILBOX_SEND_TOOL,
+        description=(
+            "Send a bounded question or status mailbox message to the Leader "
+            "root Run or a sibling Teammate Run."
+        ),
+        input_schema=TeamMailboxSendArguments.model_json_schema(),
     )
 
 
