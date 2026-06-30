@@ -310,26 +310,30 @@ class PostgresTeamRepository(TeamRepository):
         status: TeamAssignmentStatus,
     ) -> UUID | None:
         async with self._sessions.begin() as session:
-            record = await session.scalar(
-                select(TeamAssignmentRecord)
-                .where(TeamAssignmentRecord.child_run_id == child_run_id)
-                .with_for_update()
+            parent_run_id = await session.scalar(
+                select(TeamAssignmentRecord.parent_run_id).where(
+                    TeamAssignmentRecord.child_run_id == child_run_id
+                )
             )
-            if record is None:
+            if parent_run_id is None:
                 raise KeyError(child_run_id)
-            record.status = status.value
             siblings = list(
                 await session.scalars(
                     select(TeamAssignmentRecord)
-                    .where(TeamAssignmentRecord.parent_run_id == record.parent_run_id)
+                    .where(TeamAssignmentRecord.parent_run_id == parent_run_id)
+                    .order_by(TeamAssignmentRecord.id)
                     .with_for_update()
                 )
             )
+            record = next(
+                sibling for sibling in siblings if sibling.child_run_id == child_run_id
+            )
+            record.status = status.value
             if all(
                 sibling.status != TeamAssignmentStatus.ACTIVE.value
                 for sibling in siblings
             ):
-                return record.parent_run_id
+                return parent_run_id
             return None
 
     async def create_mailbox_message(self, message: MailboxMessage) -> MailboxMessage:
