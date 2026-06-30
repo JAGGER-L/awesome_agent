@@ -27,11 +27,11 @@ from awesome_agent.modeling import (
 from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.runtime.agent_loop import TeamAgentLoop
 from awesome_agent.runtime.capabilities import (
+    READ_ONLY_TEAM_TOOLS,
+    WRITE_TEAM_TOOLS,
     CapabilityPurpose,
     CapabilityResolver,
     EffectiveToolPolicy,
-    READ_ONLY_TEAM_TOOLS,
-    WRITE_TEAM_TOOLS,
 )
 from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE

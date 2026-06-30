@@ -1960,7 +1960,9 @@ async def test_dynamic_subagent_grant_rejects_non_read_only_tools_via_policy(
         )
     )
 
-    with pytest.raises(PermanentExecutionError, match="subagent tools must be read-only"):
+    with pytest.raises(
+        PermanentExecutionError, match="subagent tools must be read-only"
+    ):
         await graph.execute(run, agent, repository=runtime)
 
     assert await runtime.list_child_runs(run.id) == []

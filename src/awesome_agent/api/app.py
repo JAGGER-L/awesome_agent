@@ -74,10 +74,10 @@ from awesome_agent.persistence.worker_heartbeats import (
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
+from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
-from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
 from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_ROUTE
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.runtime.workspaces import (

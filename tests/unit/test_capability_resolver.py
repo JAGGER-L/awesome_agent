@@ -2,10 +2,10 @@ from uuid import uuid4
 
 from awesome_agent.runtime.capabilities import (
     ALL_TEAM_TOOLS,
+    WRITE_TEAM_TOOLS,
     CapabilityPurpose,
     CapabilityResolver,
     ToolDecisionReason,
-    WRITE_TEAM_TOOLS,
 )
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
 from awesome_agent.runtime.team_planning import TeamPlanTeammate
@@ -132,7 +132,9 @@ def test_subagent_grant_keeps_only_read_only_repository_subset() -> None:
 
     assert policy.tool_names == ("repo.read", "repo.diff")
     assert policy.denied_reason("repo.apply_patch") is ToolDecisionReason.SUBAGENT_SCOPE
-    assert policy.denied_reason("team.mailbox_send") is ToolDecisionReason.SUBAGENT_SCOPE
+    assert (
+        policy.denied_reason("team.mailbox_send") is ToolDecisionReason.SUBAGENT_SCOPE
+    )
     assert (
         policy.denied_reason("team.create_subagent")
         is ToolDecisionReason.SUBAGENT_SCOPE
@@ -160,7 +162,9 @@ def test_verifier_review_intersects_assignment_with_verifier_tool_subset() -> No
 
     assert policy.tool_names == ("repo.status", "repo.diff", "repo.read", "repo.search")
     assert policy.denied_reason("repo.apply_patch") is ToolDecisionReason.VERIFIER_SCOPE
-    assert policy.denied_reason("team.mailbox_send") is ToolDecisionReason.VERIFIER_SCOPE
+    assert (
+        policy.denied_reason("team.mailbox_send") is ToolDecisionReason.VERIFIER_SCOPE
+    )
 
 
 def test_unknown_tools_are_denied_with_reason() -> None:
