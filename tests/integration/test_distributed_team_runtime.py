@@ -627,7 +627,9 @@ def _has_tool_result(request: ModelRequest, call_id: str) -> bool:
 def _tool_result_payload(request: ModelRequest, call_id: str) -> dict[str, object]:
     for message in request.messages:
         if message.role == "tool" and message.call_id == call_id:
-            return json.loads(message.content)
+            payload = json.loads(message.content)
+            assert isinstance(payload, dict)
+            return payload
     raise AssertionError(f"missing tool result {call_id}")
 
 
