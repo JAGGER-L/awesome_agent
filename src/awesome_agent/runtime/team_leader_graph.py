@@ -48,18 +48,24 @@ from awesome_agent.runtime.team_planning import (
     TeamPlan,
     TeamPlanTeammate,
 )
+from awesome_agent.runtime.team_replanning import (
+    PLAN_REPAIR_REASON_VERIFIER_REWORK,
+    TeamPlanRepair,
+    TeamPlanRepairAction,
+    TeamPlanRepairActionKind,
+    plan_repair_attempt_for_verifier,
+    plan_repair_budget_for_reason,
+)
 from awesome_agent.runtime.team_rework import (
     PATCH_CONFLICT_REWORK_REASON,
     assignment_lineage_id,
     compose_patch_conflict_rework_goal,
-    compose_rework_goal,
     decode_rework_decision,
     patch_conflict_replacement_exists,
     patch_conflict_superseded_child_ids,
     rework_attempt_for_lineage,
     rework_budget_for_failure,
 )
-from awesome_agent.runtime.team_verification import TeamReworkRequest
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
@@ -558,7 +564,6 @@ class TeamLeaderGraph:
         decision = decode_rework_decision(verifier_result.summary)
         if decision is None:
             return False
-        created_any = False
         for request in decision.rework_requests:
             original = _find_assignment_by_child(
                 assignments,
@@ -566,19 +571,46 @@ class TeamLeaderGraph:
             )
             if original is None or original.kind is not TeamAssignmentKind.TEAMMATE:
                 raise PermanentExecutionError("team_rework_target_not_found")
-            if _replacement_exists(assignments, verifier_result.child_run_id, original):
-                continue
-            await self._create_rework_child(
-                run,
-                leader,
-                original=original,
-                request=request,
-                verifier_result=verifier_result,
-                assignments=assignments,
-                repository=repository,
-                event_sink=event_sink,
+        attempt = plan_repair_attempt_for_verifier(
+            assignments,
+            verifier_child_run_id=verifier_result.child_run_id,
+        )
+        budget = plan_repair_budget_for_reason(PLAN_REPAIR_REASON_VERIFIER_REWORK)
+        if attempt > budget:
+            await _emit_if_callable(
+                event_sink,
+                EventType.TEAM_PLAN_REPAIR_EXHAUSTED,
+                {
+                    "root_run_id": str(run.id),
+                    "verifier_child_run_id": str(verifier_result.child_run_id),
+                    "reason": PLAN_REPAIR_REASON_VERIFIER_REWORK,
+                    "budget": budget,
+                    "attempt": attempt,
+                },
+                f"team-plan-repair-exhausted:{verifier_result.child_run_id}",
             )
-            created_any = True
+            raise PermanentExecutionError("team_plan_repair_exhausted")
+        child_results = await self.team_repository.list_child_results(run.id)
+        repair, _ = await self.team_planning.create_team_plan_repair(
+            run,
+            leader,
+            assignments=assignments,
+            child_results=child_results,
+            verifier_child_run_id=verifier_result.child_run_id,
+            verifier_feedback=verifier_result.summary,
+            attempt=attempt,
+            event_sink=event_sink,
+        )
+        created_any = await self._apply_plan_repair(
+            run,
+            leader,
+            repair=repair,
+            verifier_result=verifier_result,
+            assignments=assignments,
+            attempt=attempt,
+            repository=repository,
+            event_sink=event_sink,
+        )
         if created_any:
             verifier_assignment = next(
                 assignment
@@ -587,57 +619,82 @@ class TeamLeaderGraph:
             )
             await self.team_repository.retire_assignment(
                 verifier_assignment.id,
-                reason="rework_requested",
+                reason="plan_repair_requested",
             )
         return created_any
 
-    async def _create_rework_child(
+    async def _apply_plan_repair(
         self,
         run: Run,
         leader: Agent,
         *,
-        original: TeamAssignment,
-        request: TeamReworkRequest,
+        repair: TeamPlanRepair,
         verifier_result: TeamChildResult,
         assignments: list[TeamAssignment],
+        attempt: int,
+        repository: RuntimeRepository,
+        event_sink: object | None,
+    ) -> bool:
+        for action_index, action in enumerate(repair.actions, start=1):
+            await self._create_plan_repair_child(
+                run,
+                leader,
+                repair=repair,
+                action=action,
+                verifier_result=verifier_result,
+                assignments=assignments,
+                attempt=attempt,
+                action_index=action_index,
+                repository=repository,
+                event_sink=event_sink,
+            )
+        await _emit_if_callable(
+            event_sink,
+            EventType.TEAM_PLAN_REPAIR_APPLIED,
+            {
+                "root_run_id": str(run.id),
+                "verifier_child_run_id": str(verifier_result.child_run_id),
+                "reason": PLAN_REPAIR_REASON_VERIFIER_REWORK,
+                "attempt": attempt,
+                "action_count": len(repair.actions),
+                "rationale": repair.rationale[:2000],
+            },
+            f"team-plan-repair-applied:{verifier_result.child_run_id}:{attempt}",
+        )
+        return bool(repair.actions)
+
+    async def _create_plan_repair_child(
+        self,
+        run: Run,
+        leader: Agent,
+        *,
+        repair: TeamPlanRepair,
+        action: TeamPlanRepairAction,
+        verifier_result: TeamChildResult,
+        assignments: list[TeamAssignment],
+        attempt: int,
+        action_index: int,
         repository: RuntimeRepository,
         event_sink: object | None,
     ) -> None:
         if self.model_resolver is None:
             raise PermanentExecutionError("team_model_resolver_unavailable")
-        lineage_id = str(
-            original.handoff_context.get("previous_assignment_id") or original.id
-        )
-        attempt = (
-            sum(
-                1
-                for assignment in assignments
-                if str(assignment.handoff_context.get("previous_assignment_id"))
-                == lineage_id
+        original = None
+        if action.action is TeamPlanRepairActionKind.REPLACE_TEAMMATE:
+            if action.target_child_run_id is None:
+                raise PermanentExecutionError("team_plan_repair_target_not_found")
+            original = _find_assignment_by_child(
+                assignments,
+                action.target_child_run_id,
             )
-            + 1
-        )
-        budget = rework_budget_for_failure(verifier_result.failure_kind)
-        if attempt > budget:
-            await _emit_if_callable(
-                event_sink,
-                EventType.TEAM_REWORK_EXHAUSTED,
-                {
-                    "root_run_id": str(run.id),
-                    "previous_assignment_id": lineage_id,
-                    "budget": budget,
-                },
-                f"team-rework-exhausted:{lineage_id}",
-            )
-            raise PermanentExecutionError("team_rework_exhausted")
-        goal = compose_rework_goal(
-            original_goal=original.goal,
-            feedback_summary=verifier_result.summary,
-            acceptance_criteria=request.acceptance_criteria,
-        )
+            if original is None:
+                raise PermanentExecutionError("team_plan_repair_target_not_found")
+        teammate_plan = action.teammate
         child = Run(
-            goal=goal,
+            goal=teammate_plan.goal,
             mode=RunMode.TEAM,
+            repository_id=run.repository_id,
+            base_commit=run.base_commit,
             intent=run.intent,
             execution_kind=run.execution_kind,
             parent_run_id=run.id,
@@ -649,57 +706,94 @@ class TeamLeaderGraph:
             workspace_path=run.workspace_path,
             integration_branch=run.integration_branch,
             workspace_state=run.workspace_state,
-            graph_thread_id=f"run:{run.id}:rework:{original.child_run_id}:{attempt}",
+            graph_thread_id=(
+                f"run:{run.id}:plan-repair:{verifier_result.child_run_id}:"
+                f"{attempt}:{action_index}"
+            ),
         )
         agent = Agent(
             run_id=child.id,
             parent_agent_id=leader.id,
             kind=AgentKind.TEAMMATE,
-            profile=original.role_profile,
+            profile=teammate_plan.role_profile,
             model=self.model_resolver.resolve(
                 kind=AgentKind.TEAMMATE,
-                profile=original.role_profile,
+                profile=teammate_plan.role_profile,
             ),
         )
+        handoff_context: dict[str, object] = {
+            "plan_repair_reason": PLAN_REPAIR_REASON_VERIFIER_REWORK,
+            "plan_repair_action": action.action.value,
+            "plan_repair_attempt": attempt,
+            "plan_repair_action_index": action_index,
+            "plan_repair_verifier_child_run_id": str(verifier_result.child_run_id),
+            "plan_repair_rationale": repair.rationale,
+            "plan_repair_action_reason": action.reason,
+            "verifier_feedback_summary": verifier_result.summary,
+        }
+        if original is not None:
+            lineage_id = str(
+                original.handoff_context.get("previous_assignment_id") or original.id
+            )
+            handoff_context.update(
+                {
+                    "previous_assignment_id": lineage_id,
+                    "previous_child_run_id": str(original.child_run_id),
+                }
+            )
         assignment = TeamAssignment(
             root_run_id=child.root_run_id or run.id,
             parent_run_id=run.id,
             child_run_id=child.id,
             kind=TeamAssignmentKind.TEAMMATE,
-            role_profile=original.role_profile,
+            role_profile=teammate_plan.role_profile,
             runtime_route=TEAM_ROLE_ROUTE,
-            goal=goal,
-            allowed_tools=original.allowed_tools,
-            deferred_tools=original.deferred_tools,
-            promoted_tools=original.promoted_tools,
-            allowed_skills=original.allowed_skills,
-            can_write=original.can_write,
-            can_delegate=original.can_delegate,
-            max_subagents=original.max_subagents,
-            acceptance_criteria=request.acceptance_criteria,
-            handoff_context={
-                "previous_assignment_id": lineage_id,
-                "previous_child_run_id": str(original.child_run_id),
-                "verifier_child_run_id": str(verifier_result.child_run_id),
-                "verifier_feedback_summary": verifier_result.summary,
-                "rework_attempt": attempt,
-            },
+            goal=teammate_plan.goal,
+            allowed_tools=teammate_plan.allowed_tools,
+            deferred_tools=teammate_plan.deferred_tools,
+            allowed_skills=teammate_plan.allowed_skills,
+            can_write=teammate_plan.can_write,
+            can_delegate=teammate_plan.can_delegate,
+            max_subagents=teammate_plan.max_subagents,
+            acceptance_criteria=teammate_plan.acceptance_criteria,
+            handoff_context=handoff_context,
         )
         validate_assignment_graph(assignment)
         await repository.create_run(child, agent)
         await self.team_repository.create_assignment(assignment)
         await _emit_if_callable(
             event_sink,
-            EventType.TEAM_REWORK_REQUESTED,
+            EventType.TEAM_CHILD_RUN_CREATED,
             {
-                "root_run_id": str(run.id),
-                "previous_assignment_id": lineage_id,
-                "previous_child_run_id": str(original.child_run_id),
-                "replacement_assignment_id": str(assignment.id),
-                "replacement_child_run_id": str(child.id),
-                "rework_attempt": attempt,
+                **build_team_attribution(
+                    run=child,
+                    assignment=assignment,
+                    agent_id=agent.id,
+                ),
+                "child_run_id": str(child.id),
+                "assignment_id": str(assignment.id),
+                "kind": assignment.kind.value,
+                "plan_repair_action": action.action.value,
+                "plan_repair_attempt": attempt,
             },
-            f"team-rework:{child.id}",
+            f"team-child-created:{child.id}",
+        )
+        await _emit_if_callable(
+            event_sink,
+            EventType.TEAM_ASSIGNMENT_CREATED,
+            {
+                **build_team_attribution(
+                    run=child,
+                    assignment=assignment,
+                    agent_id=agent.id,
+                ),
+                "assignment_id": str(assignment.id),
+                "child_run_id": str(child.id),
+                "kind": assignment.kind.value,
+                "plan_repair_action": action.action.value,
+                "plan_repair_attempt": attempt,
+            },
+            f"team-assignment-created:{assignment.id}",
         )
 
     async def _create_patch_conflict_rework_child(
@@ -869,22 +963,6 @@ def _find_assignment_by_child(
             if str(assignment.child_run_id) == child_run_id
         ),
         None,
-    )
-
-
-def _replacement_exists(
-    assignments: list[TeamAssignment],
-    verifier_child_run_id: object,
-    original: TeamAssignment,
-) -> bool:
-    lineage_id = str(
-        original.handoff_context.get("previous_assignment_id") or original.id
-    )
-    return any(
-        str(assignment.handoff_context.get("previous_assignment_id")) == lineage_id
-        and assignment.handoff_context.get("verifier_child_run_id")
-        == str(verifier_child_run_id)
-        for assignment in assignments
     )
 
 
