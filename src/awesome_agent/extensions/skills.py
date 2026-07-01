@@ -57,8 +57,15 @@ class SkillDirectorySource:
         ]
 
 
+class ResolvedSkill(BaseModel):
+    id: str
+    version: str
+    instructions: str = ""
+
+
 class SkillRuntimeView(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
+    skills: list[ResolvedSkill] = Field(default_factory=list)
     requested_tools: list[str] = Field(default_factory=list)
     granted_tools: list[str] = Field(default_factory=list)
     required_capabilities: set[str] = Field(default_factory=set)
@@ -78,6 +85,7 @@ class SkillRuntimeView(BaseModel):
         allowed = set(allowed_skill_ids)
         manifests = {skill.id: skill for skill in catalog.skills}
         skill_ids: list[str] = []
+        resolved_skills: list[ResolvedSkill] = []
         requested_tools: list[str] = []
         granted_tools: list[str] = []
         required_capabilities: set[str] = set()
@@ -101,6 +109,13 @@ class SkillRuntimeView(BaseModel):
                 denied_skill_reasons[skill_id] = "not_allowed"
                 continue
             skill_ids.append(skill_id)
+            resolved_skills.append(
+                ResolvedSkill(
+                    id=manifest.id,
+                    version=manifest.version,
+                    instructions=manifest.instructions,
+                )
+            )
             required_capabilities.update(manifest.required_capabilities)
             for tool_name in manifest.requested_tools:
                 if tool_name not in requested_tools:
@@ -111,6 +126,7 @@ class SkillRuntimeView(BaseModel):
                     denied_tool_reasons[tool_name] = "not_assigned"
         return cls(
             skill_ids=skill_ids,
+            skills=resolved_skills,
             requested_tools=requested_tools,
             granted_tools=granted_tools,
             required_capabilities=required_capabilities,
