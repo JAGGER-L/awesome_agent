@@ -49,6 +49,30 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     engine = create_engine(configured.database_url)
     sessions = create_session_factory(engine)
     providers = ModelProviderFactory(configured)
+    readonly_provider_resolver = providers.create_routed_resolver(
+        runtime_route="solo-readonly",
+        agent_role="leader",
+    )
+    modifying_provider_resolver = providers.create_routed_resolver(
+        runtime_route="solo-modifying",
+        agent_role="leader",
+    )
+    team_provider_resolver = providers.create_routed_resolver(
+        runtime_route="team-coding-scoped",
+        agent_role="leader",
+    )
+    team_leader_provider_resolver = providers.create_routed_resolver(
+        runtime_route="team-coding",
+        agent_role="leader",
+    )
+    team_role_provider_resolver = providers.create_routed_resolver(
+        runtime_route="team-role",
+        agent_role="teammate",
+    )
+    team_verifier_provider_resolver = providers.create_routed_resolver(
+        runtime_route="team-verifier",
+        agent_role="verifier",
+    )
     artifact_store = LocalArtifactStore(configured.artifact_root)
     artifact_repository = PostgresArtifactMetadataRepository(sessions)
     team_repository = PostgresTeamRepository(sessions)
@@ -108,7 +132,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         coding_graph = (
             ReadOnlyCodingGraph(
                 saver,
-                provider_resolver=providers.create,
+                provider_resolver=readonly_provider_resolver,
                 max_model_turns=configured.max_model_turns,
                 max_tool_calls=configured.max_tool_calls_per_run,
                 max_parallel_tools=configured.max_parallel_read_tools,
@@ -126,7 +150,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         modifying_graph = (
             ModifyingCodingGraph(
                 saver,
-                provider_resolver=providers.create,
+                provider_resolver=modifying_provider_resolver,
                 artifact_store=artifact_store,
                 artifact_repository=artifact_repository,
                 tool_repository=PostgresToolInvocationRepository(sessions),
@@ -158,7 +182,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 TeamCodingGraph(
                     saver,
                     model_resolver=RoleModelResolver.from_settings(configured),
-                    provider_resolver=providers.create,
+                    provider_resolver=team_provider_resolver,
                     validation_repository=PostgresValidationRepository(sessions),
                     tool_repository=PostgresToolInvocationRepository(sessions),
                     budget_repository=budget_repository,
@@ -171,7 +195,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             team_leader_graph=(
                 TeamLeaderGraph(
                     team_repository=team_repository,
-                    provider_resolver=providers.create,
+                    provider_resolver=team_leader_provider_resolver,
                     model_resolver=RoleModelResolver.from_settings(configured),
                     artifact_store=artifact_store,
                     artifact_repository=artifact_repository,
@@ -186,7 +210,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             ),
             team_role_graph=TeamRoleGraph(
                 team_repository=team_repository,
-                provider_resolver=providers.create
+                provider_resolver=team_role_provider_resolver
                 if providers.coding_available
                 else None,
                 artifact_store=artifact_store,
@@ -199,7 +223,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             ),
             team_verifier_graph=TeamVerifierGraph(
                 team_repository=team_repository,
-                provider_resolver=providers.create
+                provider_resolver=team_verifier_provider_resolver
                 if providers.coding_available
                 else None,
                 artifact_store=artifact_store,

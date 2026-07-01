@@ -25,6 +25,7 @@ from awesome_agent.providers.routing import (
     ModelRouteDecision,
     ModelRouteExecutionError,
     ModelRouteRequest,
+    RoutedModelProvider,
     StaticModelRouter,
 )
 
@@ -143,6 +144,43 @@ async def test_model_call_executor_checks_and_records_token_usage_per_attempt() 
 
     assert checked == [("deepseek", 1)]
     assert usage == [("deepseek", 3, 5)]
+
+
+@pytest.mark.asyncio
+async def test_routed_model_provider_resolves_and_executes_route() -> None:
+    attempts: list[ModelRouteAttempt] = []
+    router = StaticModelRouter(
+        default_candidate=ModelRouteCandidate("default", "default", "unused"),
+        route_candidates={
+            ("solo-readonly", "leader"): (
+                ModelRouteCandidate("primary", "model-a", "primary"),
+                ModelRouteCandidate("fallback", "model-b", "fallback"),
+            )
+        },
+    )
+    provider = RoutedModelProvider(
+        router=router,
+        route_request=ModelRouteRequest(
+            runtime_route="solo-readonly",
+            agent_role="leader",
+        ),
+        provider_factory=lambda candidate: (
+            FailingProvider(TransientModelError("temporary", provider="primary"))
+            if candidate.provider == "primary"
+            else SuccessfulProvider(provider=candidate.provider, model=candidate.model)
+        ),
+        attempt_recorder=attempts.append,
+    )
+
+    turn = await provider.complete(_request())
+
+    assert turn.provider == "fallback"
+    assert turn.model == "model-b"
+    assert [(attempt.provider, attempt.outcome) for attempt in attempts] == [
+        ("primary", "failed"),
+        ("fallback", "completed"),
+    ]
+    assert attempts[0].route_id.startswith("solo-readonly:leader:coding")
 
 
 def test_routing_contract_has_no_monetary_fields() -> None:

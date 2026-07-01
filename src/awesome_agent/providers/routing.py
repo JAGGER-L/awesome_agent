@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from awesome_agent.modeling import ModelProvider, ModelRequest, ModelTurn
+from awesome_agent.modeling import (
+    ModelProvider,
+    ModelRequest,
+    ModelStreamEvent,
+    ModelTurn,
+)
 from awesome_agent.modeling.errors import ModelProviderError
 
 
@@ -178,6 +183,36 @@ class ModelCallExecutor:
     def _record_attempt(self, attempt: ModelRouteAttempt) -> None:
         if self._attempt_recorder is not None:
             self._attempt_recorder(attempt)
+
+
+class RoutedModelProvider:
+    def __init__(
+        self,
+        *,
+        router: ModelRouter,
+        route_request: ModelRouteRequest,
+        provider_factory: ProviderFactory,
+        token_budget_check: TokenBudgetCheck | None = None,
+        token_usage_recorder: TokenUsageRecorder | None = None,
+        attempt_recorder: AttemptRecorder | None = None,
+    ) -> None:
+        self._router = router
+        self._route_request = route_request
+        self._executor = ModelCallExecutor(
+            provider_factory,
+            token_budget_check=token_budget_check,
+            token_usage_recorder=token_usage_recorder,
+            attempt_recorder=attempt_recorder,
+        )
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        raise NotImplementedError(
+            "Route-aware streaming is not implemented for runtime graphs."
+        )
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        decision = self._router.resolve(self._route_request)
+        return await self._executor.complete(decision, request)
 
 
 def _route_id(
