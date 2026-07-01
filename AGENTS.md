@@ -36,6 +36,11 @@ work.
   `--trusted-local` consent.
 - Team-mode work requires an independent Verifier before the Leader may finish.
 - Update `README.md` and `README.zh-CN.md` together in the same change.
+- Keep `.codex/exec-plans/active/` small. It should contain only the current
+  execution plan and, when explicitly requested, the next approved plan. After
+  a task is verified, merged, or otherwise closed, move its local plan to
+  `.codex/exec-plans/completed/`. Use `.codex/exec-plans/pending/` for future
+  plans that are accepted but not yet active.
 - After changing code, consider whether behavior, interfaces, configuration, or
   architecture described in the docs also changed. Update the relevant docs
   when needed; bug fixes and internal refactors do not require artificial
@@ -68,12 +73,47 @@ Before ending:
 
 ## Documentation Map
 
-- `ARCHITECTURE.md`: system boundaries and dependency direction.
-- `docs/design-docs/index.md`: detailed technical designs.
-- `.codex/exec-plans/active/`: ignored local scope, evidence, and handoff.
+- `README.md` / `README.zh-CN.md`: user-facing project introduction,
+  quickstart, feature overview, and docs entry points.
+- `docs/README.md`: reader-oriented documentation index.
+- `ARCHITECTURE.md`: system boundaries, source layout, and dependency
+  direction.
+- `docs/getting-started/quickstart.md`: manual first-run path.
+- `docs/user-guide/README.md`: user-facing runtime surfaces.
+- `docs/operations/README.md`: local operation, readiness, diagnostics, and
+  workspace guidance.
+- `docs/design-docs/index.md`: durable architecture design contracts.
+- `docs/project-governance/documentation-governance.md`: where project
+  information belongs.
+- `docs/project-governance/runtime-roadmap.md`: durable runtime roadmap.
+- `docs/project-governance/tech-debt-tracker.md`: durable debt registry.
 - `docs/engineering/execution-plans.md`: local execution-plan rules.
 - `docs/engineering/engineering-harness.md`: rules for repository agents.
 - `docs/design-docs/runtime-agent-harness.md`: product runtime harness.
 - `docs/QUALITY_SCORE.md`: quality gates and current score.
 - `docs/RELIABILITY.md`: failure and recovery requirements.
 - `docs/SECURITY.md`: sandbox, approval, and data-safety rules.
+- `.codex/exec-plans/active/`: ignored local current execution plans.
+- `.codex/exec-plans/completed/`: ignored local completed execution plans.
+- `.codex/exec-plans/pending/`: ignored local future accepted plans.
+
+## Repository Map
+
+- `src/awesome_agent/domain/`: framework-free domain models, enums, and
+  transition rules.
+- `src/awesome_agent/runtime/`: durable graph routes, AgentLoop integration,
+  dispatch, worker execution, context, budgets, validation, and team runtime.
+- `src/awesome_agent/runtime/agent_loop/`: model/tool loop contracts and
+  middleware.
+- `src/awesome_agent/extensions/`: extension catalog, skill, MCP, community
+  tool, diagnostics, and project extension config adapters.
+- `src/awesome_agent/tools/`: built-in tool specs, registry, executor,
+  approval policy, repository tools, shell, and artifact tool.
+- `src/awesome_agent/modeling/` and `src/awesome_agent/providers/`:
+  provider-neutral model protocol and concrete provider adapters.
+- `src/awesome_agent/persistence/`: PostgreSQL adapters.
+- `src/awesome_agent/api/` and `src/awesome_agent/cli/`: user and operator
+  surfaces.
+- `scripts/`: local developer and operations helper scripts.
+- `skills/`: project runtime skill packages discovered as extension inventory.
+- `tests/`: unit, integration, e2e, and structural tests.
