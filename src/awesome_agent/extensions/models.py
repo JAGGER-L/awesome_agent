@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -20,6 +21,7 @@ class ExtensionConfigError(ValueError):
 
 class ExtensionSourceType(StrEnum):
     STATIC = "static"
+    SKILL_DIRECTORY = "skill_directory"
 
 
 class ExtensionTrustLevel(StrEnum):
@@ -60,6 +62,7 @@ class ExtensionSourceConfig(BaseModel):
     id: str = Field(min_length=1, max_length=128)
     type: ExtensionSourceType
     trust: ExtensionTrustLevel = ExtensionTrustLevel.PROJECT
+    path: Path | None = None
     tools: list[ExtensionStaticToolConfig] = Field(default_factory=list)
     skills: list[ExtensionStaticSkillConfig] = Field(default_factory=list)
 
@@ -91,8 +94,13 @@ class ExtensionSkillInventoryItem(BaseModel):
     id: str
     source_id: str
     version: str
+    instructions: str = ""
+    context_refs: list[str] = Field(default_factory=list)
     requested_tools: list[str] = Field(default_factory=list)
     required_capabilities: set[str] = Field(default_factory=set)
+    compatible_actor_kinds: set[str] = Field(default_factory=set)
+    compatible_routes: set[str] = Field(default_factory=set)
+    risk_level: RiskLevel = RiskLevel.LOW
 
 
 class ExtensionDiscoverySnapshot(BaseModel):
@@ -110,4 +118,3 @@ class ExtensionCatalog(BaseModel):
 
 
 ExtensionSourceConfigInput = ExtensionSourceConfig | Mapping[str, object]
-

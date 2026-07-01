@@ -16,6 +16,7 @@ from awesome_agent.extensions.models import (
     ExtensionSourceType,
     ExtensionToolInventoryItem,
 )
+from awesome_agent.extensions.skills import SkillDirectorySource
 
 
 class ExtensionSource(Protocol):
@@ -71,6 +72,29 @@ class StaticExtensionSource:
         )
 
 
+class SkillDirectoryExtensionSource:
+    def __init__(self, config: ExtensionSourceConfig) -> None:
+        if config.path is None:
+            raise ExtensionConfigError("skill_directory source requires path.")
+        self._config = config
+        self._directory = SkillDirectorySource(config.path, source_id=config.id)
+
+    @property
+    def source_id(self) -> str:
+        return self._config.id
+
+    async def discover(self) -> ExtensionDiscoverySnapshot:
+        return ExtensionDiscoverySnapshot(
+            source=ExtensionSourceSnapshot(
+                id=self._config.id,
+                type=self._config.type,
+                trust=self._config.trust,
+                health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
+            ),
+            skills=self._directory.load_all(),
+        )
+
+
 class ExtensionSourceFactory:
     def create(self, config: ExtensionSourceConfigInput) -> ExtensionSource:
         try:
@@ -83,6 +107,8 @@ class ExtensionSourceFactory:
             raise ExtensionConfigError(str(error)) from error
         if parsed.type is ExtensionSourceType.STATIC:
             return StaticExtensionSource(parsed)
+        if parsed.type is ExtensionSourceType.SKILL_DIRECTORY:
+            return SkillDirectoryExtensionSource(parsed)
         raise ExtensionConfigError(f"Unsupported extension source type: {parsed.type}")
 
 
