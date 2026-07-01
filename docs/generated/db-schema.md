@@ -186,6 +186,7 @@ Generated from SQLAlchemy metadata.
 | `depth` | `INTEGER` | no |
 | `child_role` | `VARCHAR(64)` | yes |
 | `runtime_route` | `VARCHAR(128)` | yes |
+| `extension_catalog_version` | `VARCHAR(128)` | yes |
 | `dispatch_status` | `VARCHAR(32)` | no |
 | `available_at` | `DATETIME` | no |
 | `current_worker_id` | `UUID` | yes |

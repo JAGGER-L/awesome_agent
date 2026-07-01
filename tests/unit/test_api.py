@@ -18,6 +18,12 @@ from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, EventType, RunMode, RunStatus
 from awesome_agent.domain.models import Agent, Repository, Run
+from awesome_agent.extensions.models import (
+    ExtensionCatalog,
+    ExtensionHealthSnapshot,
+    ExtensionSourceSnapshot,
+    ExtensionToolInventoryItem,
+)
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import (
     DurableMetric,
@@ -93,6 +99,7 @@ def _client(
     observability_facade: object | None = None,
     budget_repository: InMemoryBudgetRepository | None = None,
     tool_invocation_repository: InMemoryToolInvocationRepository | None = None,
+    extension_catalog: ExtensionCatalog | None = None,
 ) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
     repository_path = projects / "repository"
@@ -130,6 +137,9 @@ def _client(
         worktrees=worktree_manager,
         allowed_roots=[projects],
         model_resolver=_models(),
+        extension_catalog_version=(
+            extension_catalog.version if extension_catalog is not None else None
+        ),
     )
     workspace_service = WorkspaceRetentionService(
         runtime_repository=runtime_repository,
@@ -149,6 +159,7 @@ def _client(
                 tool_invocation_repository=tool_invocation_repository,
                 team_repository=team_repository,
                 workspace_service=workspace_service,
+                extension_catalog=extension_catalog,
             )
         ),
         repository,
@@ -232,6 +243,24 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     )
     assert decided.status_code == 200
     assert len(client.get(f"/runs/{run_id}/approvals").json()) == 1
+
+
+def test_create_run_pins_extension_catalog_version(tmp_path: Path) -> None:
+    catalog = ExtensionCatalog(version="ext_123")
+    client, repository = _client(tmp_path, extension_catalog=catalog)
+
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect extension pin",
+            "intent": "read_only",
+        },
+    )
+
+    assert created.status_code == 201
+    run = client.get(f"/runs/{created.json()['id']}").json()
+    assert run["extension_catalog_version"] == "ext_123"
 
 
 def test_health_endpoint_is_liveness_only(tmp_path: Path) -> None:
@@ -654,6 +683,40 @@ def test_runtime_diagnostics_returns_404_for_missing_run(tmp_path: Path) -> None
     response = client.get("/runs/00000000-0000-0000-0000-000000000000/diagnostics")
 
     assert response.status_code == 404
+
+
+def test_extension_catalog_endpoint_reports_redacted_inventory(tmp_path: Path) -> None:
+    catalog = ExtensionCatalog(
+        version="ext_123",
+        sources=[
+            ExtensionSourceSnapshot(
+                id="local-demo",
+                type="static",
+                trust="project",
+                health=ExtensionHealthSnapshot(status="healthy"),
+            )
+        ],
+        tools=[
+            ExtensionToolInventoryItem(
+                name="extension.local-demo.demo.search",
+                source_id="local-demo",
+                description="Search demo content.",
+                risk_level="low",
+                required_capabilities={"repository:read"},
+                input_schema={"type": "object"},
+            )
+        ],
+    )
+    client, _ = _client(tmp_path, extension_catalog=catalog)
+
+    response = client.get("/extensions/catalog")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == "ext_123"
+    assert body["sources"][0]["id"] == "local-demo"
+    assert body["tools"][0]["name"] == "extension.local-demo.demo.search"
+    assert "secret" not in response.text.lower()
 
 
 def test_recovery_metrics_aggregate_team_and_provider_evidence(

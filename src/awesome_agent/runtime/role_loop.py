@@ -790,6 +790,7 @@ async def _create_dynamic_subagent(
         depth=2,
         child_role=TeamAssignmentKind.SUBAGENT.value,
         runtime_route=TEAM_ROLE_ROUTE,
+        extension_catalog_version=run.extension_catalog_version,
         dispatch_status=DispatchStatus.QUEUED,
         workspace_path=run.workspace_path,
         integration_branch=run.integration_branch,

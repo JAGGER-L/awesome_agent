@@ -57,6 +57,7 @@ class RunIntakeService:
         worktrees: ManagedRunWorktreeManager,
         allowed_roots: list[Path],
         model_resolver: RoleModelResolver,
+        extension_catalog_version: str | None = None,
     ) -> None:
         self.registry = registry
         self.reservations = reservations
@@ -65,6 +66,7 @@ class RunIntakeService:
         self.worktrees = worktrees
         self.allowed_roots = allowed_roots
         self.model_resolver = model_resolver
+        self.extension_catalog_version = extension_catalog_version
 
     async def create_run(
         self,
@@ -202,6 +204,7 @@ class RunIntakeService:
             intent=reservation.intent,
             execution_kind=execution_kind,
             runtime_route=runtime_route,
+            extension_catalog_version=self.extension_catalog_version,
             dispatch_status=DispatchStatus.QUEUED,
             workspace_path=reservation.workspace_path,
             integration_branch=reservation.integration_branch,

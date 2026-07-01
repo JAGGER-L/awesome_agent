@@ -80,6 +80,7 @@ async def test_leader_creates_teammate_child_run_and_assignment() -> None:
     assert children[0].root_run_id == run.id
     assert children[0].depth == 1
     assert children[0].dispatch_status is DispatchStatus.QUEUED
+    assert children[0].extension_catalog_version == run.extension_catalog_version
     assert len(assignments) == 1
     assert assignments[0].kind is TeamAssignmentKind.TEAMMATE
     assert assignments[0].child_run_id == children[0].id
@@ -1399,6 +1400,7 @@ def _leader_run() -> tuple[Run, Agent]:
         mode=RunMode.TEAM,
         intent=RunIntent.MODIFYING,
         runtime_route=TEAM_CODING_ROUTE,
+        extension_catalog_version="ext_team",
         graph_thread_id=f"run:{uuid4()}",
     )
     leader = Agent(
