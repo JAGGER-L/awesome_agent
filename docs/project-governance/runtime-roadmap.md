@@ -138,7 +138,7 @@ Next extension-phase productization task:
 
 | Task | Phase | Status | Purpose | Exit condition |
 | --- | --- | --- | --- | --- |
-| Task 54 | Quick Start | Planned | Add a README-ready local Quick Start automation path. | `scripts/quickstart.ps1` should automate the local Windows setup, start dependencies, verify readiness with a diagnostic probe, and update README/manual docs without claiming production deployment or requiring a model key for the required success check. |
+| Task 54 | Quick Start | Done | Added a README-ready local Quick Start path. | Quick Start now explains prerequisites, `.env`, `awesome-agent.yaml`, `skills/`, local PostgreSQL, migrations, API/Worker startup, readiness, probe verification, diagnostics, and first read-only run. `scripts/quickstart.ps1` automates the local Windows path without requiring a model key for the required success check. |
 
 ## Architecture Debt Carried Forward
 

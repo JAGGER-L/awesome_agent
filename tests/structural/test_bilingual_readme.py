@@ -48,6 +48,7 @@ def test_bilingual_readmes_have_reciprocal_links_and_matching_structure() -> Non
         "AWESOME_AGENT_DEEPSEEK_API_KEY",
         r".\scripts\bootstrap.ps1",
         r".\scripts\migrate.ps1",
+        r".\scripts\quickstart.ps1",
         "awesome-agent.yaml",
         "skills/",
         "docs/README.md",
@@ -64,3 +65,20 @@ def _headings(markdown: str) -> list[str]:
         for line in markdown.splitlines()
         if line.startswith("## ")
     ]
+
+
+def test_readme_quickstart_documents_config_deploy_run() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for expected in [
+        "## Quick Start",
+        ".\\scripts\\quickstart.ps1",
+        ".env",
+        "awesome-agent.yaml",
+        "docker compose up -d postgres",
+        "awesome-agent.exe start",
+        "awesome-agent.exe probe",
+        "--read-only",
+        "/health",
+        "/ready?profile=api",
+    ]:
+        assert expected in readme

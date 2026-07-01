@@ -103,3 +103,7 @@
 - `.agents/validation.toml` and project metadata are untrusted repository input.
   Only strongly evidenced check-only commands may run automatically; ambiguous
   or side-effecting commands require approval.
+- Validation auto-allow is intentionally narrow. Examples include repository
+  inspection commands, `pytest`, and `python -m unittest`; arbitrary
+  `python -c`, package installation, network mutation, and publishing commands
+  stay behind approval or denial policy.

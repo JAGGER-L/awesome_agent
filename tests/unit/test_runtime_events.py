@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -5,8 +6,17 @@ import pytest
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
+from awesome_agent.domain.enums import (
+    ApprovalStatus,
+    DispatchStatus,
+    EventType,
+    RunStatus,
+)
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.persistence.approvals import (
+    DurableApproval,
+    InMemoryApprovalRepository,
+)
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
@@ -25,6 +35,7 @@ def _models() -> RoleModelResolver:
 class FakeCancellationDispatcher:
     def __init__(self) -> None:
         self.cancelled: list[UUID] = []
+        self.approval_requeues: list[dict[str, object]] = []
 
     async def request_cancellation(
         self,
@@ -39,6 +50,21 @@ class FakeCancellationDispatcher:
             sequence=99,
             event_type=EventType.CANCELLATION_REQUESTED,
             payload={"requested_by": requested_by, "reason": reason},
+        )
+
+    async def requeue_after_approval(
+        self,
+        *,
+        run_id: UUID,
+        approval_id: UUID,
+        reason: str,
+    ) -> None:
+        self.approval_requeues.append(
+            {
+                "run_id": run_id,
+                "approval_id": approval_id,
+                "reason": reason,
+            }
         )
 
 
@@ -124,3 +150,65 @@ async def test_dispatcher_backed_cancellation_accepts_claimed_run(
 
     assert current.dispatch_status is DispatchStatus.CLAIMED
     assert dispatcher.cancelled == [run.id]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_backed_approval_decision_requeues_waiting_run(
+    tmp_path: Path,
+) -> None:
+    repository = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    dispatcher = FakeCancellationDispatcher()
+    service = RuntimeService(
+        repository=repository,
+        events=EventStream(),
+        artifacts=LocalArtifactStore(tmp_path),
+        model_resolver=_models(),
+        approval_repository=approvals,
+        dispatcher=dispatcher,  # type: ignore[arg-type]
+    )
+    run = await service.create_run("Goal")
+    await repository.update_run(
+        run.model_copy(
+            update={
+                "status": RunStatus.PAUSED,
+                "dispatch_status": DispatchStatus.WAITING,
+            }
+        )
+    )
+    approval_id = UUID("00000000-0000-0000-0000-000000000123")
+    await approvals.upsert(
+        DurableApproval(
+            id=approval_id,
+            run_id=run.id,
+            tool_invocation_id=approval_id,
+            tool_call_id="call_shell",
+            tool_name="shell.execute",
+            tool_version="1",
+            canonical_arguments={"argv": ["wc", "-l", "index.html"]},
+            arguments_hash="hash",
+            workspace_path=str(tmp_path),
+            workspace_fingerprint="fingerprint",
+            capabilities=["shell:execute"],
+            risk_level="high",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+    )
+
+    event = await service.decide_approval(
+        run.id,
+        approval_id=approval_id,
+        approved=True,
+    )
+
+    assert event.event_type is EventType.APPROVAL_DECIDED
+    decided = await approvals.get(approval_id)
+    assert decided.status is ApprovalStatus.APPROVED
+    assert decided.decided_by == "api"
+    assert dispatcher.approval_requeues == [
+        {
+            "run_id": run.id,
+            "approval_id": approval_id,
+            "reason": "approval_decided",
+        }
+    ]

@@ -24,7 +24,7 @@ def load_validation_config(workspace: Path) -> ValidationPlan | None:
     if not path.is_file():
         raise ValidationConfigError(".agents/validation.toml is not a file.")
     try:
-        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        raw = tomllib.loads(path.read_text(encoding="utf-8-sig"))
     except tomllib.TOMLDecodeError as error:
         raise ValidationConfigError(f"Invalid validation.toml: {error}") from error
     return _parse_config(raw)

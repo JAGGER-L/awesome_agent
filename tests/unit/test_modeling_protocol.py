@@ -63,6 +63,12 @@ def test_continuation_is_checkpoint_data_not_request_dump() -> None:
     assert "continuation" not in request.model_dump(mode="json")
 
 
+def test_model_request_default_output_budget_supports_patch_tool_arguments() -> None:
+    request = ModelRequest(messages=[UserMessage(content="create a small html file")])
+
+    assert request.max_output_tokens >= 6000
+
+
 def test_reasoning_trace_joins_display_segments() -> None:
     trace = ReasoningTrace(
         status=ReasoningStatus.COMPLETED,

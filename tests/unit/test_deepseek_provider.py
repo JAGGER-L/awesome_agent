@@ -14,6 +14,8 @@ from awesome_agent.modeling import (
     ModelRequest,
     StopReason,
     ToolCall,
+    ToolChoice,
+    ToolChoiceMode,
     ToolDefinition,
     ToolResultMessage,
     TurnCompleted,
@@ -60,7 +62,7 @@ async def test_deepseek_streams_reasoning_and_native_tool_call() -> None:
     first_call = SimpleNamespace(
         index=0,
         id="call-1",
-        function=SimpleNamespace(name="repo.read", arguments='{"path":'),
+        function=SimpleNamespace(name="repo_read", arguments='{"path":'),
     )
     second_call = SimpleNamespace(
         index=0,
@@ -119,12 +121,69 @@ async def test_deepseek_streams_reasoning_and_native_tool_call() -> None:
     ]
 
     completed = next(event for event in events if isinstance(event, TurnCompleted)).turn
+    call = create.await_args
+    assert call is not None
+    assert call.kwargs["tools"][0]["function"]["name"] == "repo_read"
     assert completed.stop_reason is StopReason.TOOL_CALLS
     assert completed.reasoning is not None
     assert completed.reasoning.text == "Inspect repository. "
+    assert completed.assistant.tool_calls[0].name == "repo.read"
     assert completed.assistant.tool_calls[0].arguments_json == ('{"path":"README.md"}')
     assert completed.usage.reasoning_tokens == 4
     assert completed.continuation is not None
+
+
+@pytest.mark.asyncio
+async def test_deepseek_normalizes_tool_choice_and_assistant_tool_history() -> None:
+    create = AsyncMock(
+        return_value=AsyncEvents([_chunk(content="done", finish_reason="stop")])
+    )
+    client = cast(
+        AsyncOpenAI,
+        cast(
+            Any,
+            SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+            ),
+        ),
+    )
+    provider = DeepSeekProvider(api_key="test", model="test", client=client)
+
+    await provider.complete(
+        ModelRequest(
+            messages=[
+                UserMessage(content="modify"),
+                AssistantMessage(
+                    tool_calls=[
+                        ToolCall(
+                            call_id="call-1",
+                            name="repo.apply_patch",
+                            arguments_json="{}",
+                        )
+                    ]
+                ),
+                ToolResultMessage(call_id="call-1", content="patched"),
+            ],
+            tools=[
+                ToolDefinition(
+                    name="repo.apply_patch",
+                    input_schema={"type": "object", "properties": {}},
+                )
+            ],
+            tool_choice=ToolChoice(
+                mode=ToolChoiceMode.TOOL,
+                name="repo.apply_patch",
+            ),
+        )
+    )
+
+    call = create.await_args
+    assert call is not None
+    assert call.kwargs["tools"][0]["function"]["name"] == "repo_apply_patch"
+    assert call.kwargs["tool_choice"]["function"]["name"] == "repo_apply_patch"
+    assert call.kwargs["messages"][1]["tool_calls"][0]["function"]["name"] == (
+        "repo_apply_patch"
+    )
 
 
 @pytest.mark.asyncio

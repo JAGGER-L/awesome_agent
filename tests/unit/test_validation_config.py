@@ -52,6 +52,22 @@ def test_missing_validation_config_returns_none(tmp_path: Path) -> None:
     assert load_validation_config(tmp_path) is None
 
 
+def test_loads_validation_config_with_utf8_bom(tmp_path: Path) -> None:
+    directory = tmp_path / ".agents"
+    directory.mkdir()
+    (directory / "validation.toml").write_bytes(
+        b"\xef\xbb\xbfversion = 1\n\n"
+        b"[[gates]]\n"
+        b'id = "smoke"\n'
+        b'command = ["python", "-c", "print(1)"]\n'
+    )
+
+    plan = load_validation_config(tmp_path)
+
+    assert plan is not None
+    assert [gate.id for gate in plan.gates] == ["smoke"]
+
+
 def test_rejects_duplicate_gate_ids(tmp_path: Path) -> None:
     _write_config(
         tmp_path,

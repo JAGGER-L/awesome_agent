@@ -11,7 +11,6 @@ from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.modeling import ToolCall, ToolResultMessage
 from awesome_agent.tools.models import ApprovalRequired, ToolDenied
 from awesome_agent.tools.repository import (
-    RepositoryRecoveryRequired,
     build_modifying_executor,
     build_modifying_registry,
     build_read_only_executor,
@@ -383,8 +382,11 @@ async def test_apply_patch_reports_check_failure(tmp_path: Path) -> None:
 +new
 """
 
-    with pytest.raises(RepositoryRecoveryRequired):
-        await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
+    result = await _modifying_call(tmp_path, "repo.apply_patch", {"patch": patch})
+
+    assert result.is_error
+    assert "patch does not apply" in result.content.lower()
+    assert (tmp_path / "README.md").read_text(encoding="utf-8") == "actual\n"
 
 
 @pytest.mark.asyncio

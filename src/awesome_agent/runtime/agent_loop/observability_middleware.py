@@ -10,11 +10,13 @@ from uuid import UUID, uuid4
 from pydantic import TypeAdapter, ValidationError
 
 from awesome_agent.modeling import ModelTurn, ToolResultMessage
+from awesome_agent.modeling.errors import ModelProviderError
 from awesome_agent.observability.facade import (
     ObservabilityFacade,
     ObservabilitySpanInput,
 )
 from awesome_agent.observability.repository import DurableModelCall
+from awesome_agent.providers.routing import ModelRouteExecutionError
 from awesome_agent.runtime.agent_loop.contracts import (
     MiddlewareContext,
     MiddlewareDecision,
@@ -146,13 +148,15 @@ class ObservabilityMiddleware:
         error: Exception,
     ) -> None:
         attributes = _base_attributes(stage, context)
-        await self._safe_record_span(
+        span_id = uuid4().hex[:16] if stage is _MODEL_STAGE else None
+        span = await self._safe_record_span(
             ObservabilitySpanInput(
                 run_id=run_id,
                 name=_span_name(stage),
                 category=_span_category(stage),
                 status="failed",
                 attributes=attributes,
+                durable_span_id=span_id,
                 started_at=started_at,
                 ended_at=_now(),
                 duration_ms=duration_ms,
@@ -166,6 +170,41 @@ class ObservabilityMiddleware:
             status="failed",
             duration_ms=duration_ms,
             attributes=attributes,
+        )
+        if stage is _MODEL_STAGE:
+            await self._record_failed_model_call(
+                context=context,
+                run_id=run_id,
+                error=error,
+                duration_ms=duration_ms,
+                trace_id=getattr(span, "trace_id", run_id.hex),
+                span_id=getattr(span, "span_id", span_id),
+            )
+
+    async def _record_failed_model_call(
+        self,
+        *,
+        context: MiddlewareContext,
+        run_id: UUID,
+        error: Exception,
+        duration_ms: int,
+        trace_id: str | None,
+        span_id: str | None,
+    ) -> None:
+        fields = _failed_model_call_fields(error, context)
+        await self._safe_record_model_call(
+            DurableModelCall(
+                run_id=run_id,
+                agent_id=_uuid_or_none(context.agent_id),
+                turn=_turn_number(None, context),
+                provider=fields["provider"],
+                model=fields["model"],
+                status="failed",
+                latency_ms=duration_ms,
+                trace_id=trace_id,
+                span_id=span_id,
+                error=str(error),
+            )
         )
 
     async def _record_model_call(
@@ -618,6 +657,46 @@ def _turn_number(result: object, context: MiddlewareContext) -> int:
         if isinstance(value, int):
             return value
     return 0
+
+
+def _failed_model_call_fields(
+    error: Exception,
+    context: MiddlewareContext,
+) -> dict[str, str]:
+    if isinstance(error, ModelRouteExecutionError):
+        attempt = error.attempts[-1] if error.attempts else None
+        provider = attempt.provider if attempt is not None else None
+        model = attempt.model if attempt is not None else None
+        if provider is None:
+            provider = _provider_from_model_error(error.last_error)
+        return {
+            "provider": provider or _metadata_string(context, "provider", "unknown"),
+            "model": model or _metadata_string(context, "model", "unknown"),
+        }
+    if isinstance(error, ModelProviderError):
+        return {
+            "provider": error.info.provider,
+            "model": _metadata_string(context, "model", "unknown"),
+        }
+    return {
+        "provider": _metadata_string(context, "provider", "unknown"),
+        "model": _metadata_string(context, "model", "unknown"),
+    }
+
+
+def _provider_from_model_error(error: Exception) -> str | None:
+    info = getattr(error, "info", None)
+    provider = getattr(info, "provider", None)
+    return provider if isinstance(provider, str) else None
+
+
+def _metadata_string(
+    context: MiddlewareContext,
+    key: str,
+    default: str,
+) -> str:
+    value = context.metadata.get(key)
+    return value if isinstance(value, str) and value else default
 
 
 def _state_dict(result: object) -> dict[str, Any] | None:

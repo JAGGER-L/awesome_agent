@@ -1,3 +1,7 @@
+param(
+    [switch]$RunDoctor
+)
+
 $ErrorActionPreference = "Stop"
 
 function Invoke-Checked {
@@ -19,7 +23,16 @@ if (-not (Test-Path -LiteralPath $Uv)) {
     throw "uv was not found at $Uv. Install it from https://docs.astral.sh/uv/."
 }
 
-Invoke-Checked -Command $Uv -Arguments @("sync", "--dev")
+Invoke-Checked -Command $Uv -Arguments @(
+    "sync",
+    "--dev",
+    "--extra",
+    "postgres",
+    "--extra",
+    "observability"
+)
 
-$Doctor = Join-Path $PSScriptRoot "..\.venv\Scripts\awesome-agent.exe"
-Invoke-Checked -Command $Doctor -Arguments @("doctor")
+if ($RunDoctor) {
+    $Doctor = Join-Path $PSScriptRoot "..\.venv\Scripts\awesome-agent.exe"
+    Invoke-Checked -Command $Doctor -Arguments @("doctor")
+}

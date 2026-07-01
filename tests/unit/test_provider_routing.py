@@ -16,6 +16,7 @@ from awesome_agent.modeling import (
 )
 from awesome_agent.modeling.errors import (
     AuthenticationModelError,
+    InvalidRequestModelError,
     TransientModelError,
 )
 from awesome_agent.providers.routing import (
@@ -110,6 +111,31 @@ async def test_model_call_executor_does_not_fallback_on_authentication_error() -
     assert len(captured.value.attempts) == 1
     assert captured.value.attempts[0].error_code == "authentication"
     assert captured.value.attempts[0].fallback_reason is None
+
+
+@pytest.mark.asyncio
+async def test_model_route_execution_error_preserves_provider_failure_details() -> None:
+    decision = _decision(
+        ModelRouteCandidate("deepseek", "deepseek-v4-flash", "default")
+    )
+    executor = ModelCallExecutor(
+        lambda _: FailingProvider(
+            InvalidRequestModelError(
+                "400 Invalid 'tools[0].function.name': string does not match pattern.",
+                provider="deepseek",
+                status_code=400,
+            )
+        )
+    )
+
+    with pytest.raises(ModelRouteExecutionError) as captured:
+        await executor.complete(decision, _request())
+
+    message = str(captured.value)
+    assert "deepseek/deepseek-v4-flash" in message
+    assert "invalid_request" in message
+    assert "status=400" in message
+    assert "tools[0].function.name" in message
 
 
 @pytest.mark.asyncio

@@ -58,6 +58,7 @@ from awesome_agent.observability.repository import (
     ObservabilityRepository,
     PostgresObservabilityRepository,
 )
+from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.budget import BudgetRepository, PostgresBudgetRepository
 from awesome_agent.persistence.database import (
@@ -88,6 +89,7 @@ from awesome_agent.persistence.worker_heartbeats import (
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
+from awesome_agent.runtime.asyncio import configure_event_loop_policy
 from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
 from awesome_agent.runtime.diagnostics import RunDiagnosticsService
 from awesome_agent.runtime.dispatch import DispatchConflict
@@ -108,6 +110,8 @@ from awesome_agent.settings import Settings
 
 logger = logging.getLogger(__name__)
 _NIL_RUN_ID = UUID(int=0)
+
+configure_event_loop_policy()
 
 
 def create_app(
@@ -206,6 +210,7 @@ def create_app(
             events=event_stream,
             artifacts=LocalArtifactStore(settings.artifact_root),
             artifact_repository=PostgresArtifactMetadataRepository(sessions),
+            approval_repository=PostgresApprovalRepository(sessions),
             dispatcher=dispatcher,
             model_resolver=RoleModelResolver.from_settings(settings),
             event_poll_interval=settings.event_poll_interval_seconds,
@@ -720,6 +725,8 @@ def create_app(
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found.") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         return event.model_dump(mode="json")
 
     @app.get("/runs/{run_id}/verification")
