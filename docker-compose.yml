@@ -15,6 +15,40 @@ services:
     volumes:
       - awesome_agent_postgres:/var/lib/postgresql/data
 
+  api:
+    build: .
+    command: ["awesome-agent", "serve", "--host", "0.0.0.0"]
+    env_file: .env
+    environment:
+      AWESOME_AGENT_API_HOST: "0.0.0.0"
+      AWESOME_AGENT_UNSAFE_BIND_PUBLIC: "true"
+      AWESOME_AGENT_DATABASE_URL: "postgresql+asyncpg://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
+      AWESOME_AGENT_CHECKPOINT_DATABASE_URL: "postgresql://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
+      AWESOME_AGENT_ARTIFACT_ROOT: "/var/lib/awesome-agent/runs"
+      AWESOME_AGENT_LOCAL_CONFIG_PATH: "/var/lib/awesome-agent/config.toml"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - awesome_agent_runtime:/var/lib/awesome-agent
+
+  worker:
+    build: .
+    command: ["awesome-agent", "worker"]
+    env_file: .env
+    environment:
+      AWESOME_AGENT_DATABASE_URL: "postgresql+asyncpg://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
+      AWESOME_AGENT_CHECKPOINT_DATABASE_URL: "postgresql://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
+      AWESOME_AGENT_ARTIFACT_ROOT: "/var/lib/awesome-agent/runs"
+      AWESOME_AGENT_LOCAL_CONFIG_PATH: "/var/lib/awesome-agent/config.toml"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - awesome_agent_runtime:/var/lib/awesome-agent
+
 volumes:
   awesome_agent_postgres:
-
+  awesome_agent_runtime:

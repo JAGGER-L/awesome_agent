@@ -110,6 +110,12 @@ approval, observability, and durable audit evidence.
 The phase design is specified in
 [`extension-architecture.md`](../design-docs/extension-architecture.md).
 
+Current local product-surface work:
+
+| Task | Phase | Status | Purpose | Exit condition |
+| --- | --- | --- | --- | --- |
+| Task 55 | Quickstart | Active | Add a verified local/Docker quickstart matrix across CLI and API/Web inspection lanes. | README and detailed quickstart document Local CLI, Local API, Docker CLI, and Docker API/Web modes; Docker Compose starts PostgreSQL, API, and Worker; production hosting, auth, TLS, and hosted web UI remain future work. |
+
 Completed post-kernel setup:
 
 | Task | Phase | Status | Purpose | Exit condition |

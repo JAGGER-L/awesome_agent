@@ -85,3 +85,13 @@ def test_bootstrap_supports_dependency_sync_without_doctor() -> None:
     assert '"postgres"' in text
     assert '"observability"' in text
     assert 'if ($RunDoctor)' in text
+
+
+def test_docker_quickstart_script_exists_and_has_plan_mode() -> None:
+    script = ROOT / "scripts" / "docker-quickstart.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    assert "param(" in text
+    assert "[switch]$PlanOnly" in text
+    assert "docker compose up" in text
+    assert "/ready?profile=api" in text
