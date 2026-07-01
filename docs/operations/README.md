@@ -49,3 +49,16 @@ docker compose down
 The Docker API service binds to `0.0.0.0` inside the container so the host can
 reach `http://127.0.0.1:8000`. Keep it local unless an external authentication
 and network boundary is added.
+
+## TUI
+
+The TUI requires the local API to be reachable. Start the runtime first, then
+open the terminal operator console:
+
+```powershell
+awesome-agent start
+awesome-agent tui --api-url http://127.0.0.1:8000
+```
+
+Use the TUI for local Run inspection, diagnostics, recent events, and approval
+decisions. It uses API endpoints rather than direct database access.

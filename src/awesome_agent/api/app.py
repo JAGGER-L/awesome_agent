@@ -437,6 +437,17 @@ def create_app(
                 attributes["http.status_code"] = 503
             return _readiness_report_response(report)
 
+    @app.get("/runs")
+    async def list_runs(
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> list[dict[str, object]]:
+        attributes = _api_attributes("GET", "/runs", 200)
+        async with api_span("api.runs.list", attributes=attributes):
+            return [
+                run.model_dump(mode="json")
+                for run in await runtime().list_runs(limit=limit)
+            ]
+
     @app.post("/runs", status_code=201)
     async def create_run(request: CreateRunRequest) -> dict[str, object]:
         span_run_id = _NIL_RUN_ID

@@ -78,6 +78,15 @@ class RuntimeService:
     async def get_run(self, run_id: UUID) -> Run:
         return await self.repository.get_run(run_id)
 
+    async def list_runs(self, *, limit: int = 50) -> list[Run]:
+        runs = await self.repository.list_runs()
+        recent = sorted(
+            runs,
+            key=lambda run: (run.created_at, run.id.hex),
+            reverse=True,
+        )
+        return recent[:limit]
+
     async def cancel_run(self, run_id: UUID) -> Run:
         if self.dispatcher is None:
             run, event = await self.repository.cancel_run(run_id)
