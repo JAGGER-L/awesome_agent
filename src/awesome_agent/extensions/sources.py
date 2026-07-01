@@ -4,6 +4,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
+from awesome_agent.extensions.community import CommunityToolPackageSource
 from awesome_agent.extensions.mcp import McpStdioSource, McpStreamableHttpSource
 from awesome_agent.extensions.models import (
     ExtensionConfigError,
@@ -114,6 +115,15 @@ class ExtensionSourceFactory:
             return McpStdioSource(parsed)
         if parsed.type is ExtensionSourceType.MCP_STREAMABLE_HTTP:
             return McpStreamableHttpSource(parsed)
+        if parsed.type is ExtensionSourceType.COMMUNITY_TOOL_PACKAGE:
+            if parsed.path is None:
+                raise ExtensionConfigError(
+                    "community_tool_package source requires path."
+                )
+            return CommunityToolPackageSource(
+                root=parsed.path,
+                allowlisted_roots=[parsed.path],
+            )
         raise ExtensionConfigError(f"Unsupported extension source type: {parsed.type}")
 
 

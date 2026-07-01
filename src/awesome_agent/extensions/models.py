@@ -24,6 +24,7 @@ class ExtensionSourceType(StrEnum):
     SKILL_DIRECTORY = "skill_directory"
     MCP_STDIO = "mcp_stdio"
     MCP_STREAMABLE_HTTP = "mcp_streamable_http"
+    COMMUNITY_TOOL_PACKAGE = "community_tool_package"
 
 
 class ExtensionTrustLevel(StrEnum):
