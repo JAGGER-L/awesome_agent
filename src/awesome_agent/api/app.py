@@ -30,6 +30,8 @@ from awesome_agent.api.schemas import (
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.extensions.catalog import empty_extension_catalog
+from awesome_agent.extensions.models import ExtensionCatalog
 from awesome_agent.health import (
     HealthCheck,
     HealthStatus,
@@ -118,8 +120,10 @@ def create_app(
     team_repository: TeamRepository | None = None,
     workspace_service: WorkspaceRetentionService | None = None,
     worker_heartbeat_repository: object | None = None,
+    extension_catalog: ExtensionCatalog | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    active_extension_catalog = extension_catalog or empty_extension_catalog()
     bind_check = bind_policy_check(settings.api_host, settings.unsafe_bind_public)
     if bind_check.status is HealthStatus.UNHEALTHY:
         raise RuntimeError(bind_check.detail)
@@ -130,6 +134,7 @@ def create_app(
             app.state.runtime = service
             app.state.intake = intake
             app.state.registry = registry
+            app.state.extension_catalog = active_extension_catalog
             if workspace_service is not None:
                 app.state.workspaces = workspace_service
             if validation_repository is not None:
@@ -192,6 +197,7 @@ def create_app(
             model_resolver=RoleModelResolver.from_settings(settings),
             event_poll_interval=settings.event_poll_interval_seconds,
         )
+        app.state.extension_catalog = active_extension_catalog
         app.state.registry = repository_registry
         app.state.validation_repository = validation
         app.state.worker_heartbeats = worker_heartbeats
@@ -221,6 +227,7 @@ def create_app(
             worktrees=worktree_manager,
             allowed_roots=local_config.allowed_roots,
             model_resolver=RoleModelResolver.from_settings(settings),
+            extension_catalog_version=active_extension_catalog.version,
         )
         app.state.workspaces = WorkspaceRetentionService(
             runtime_repository=runtime_repository,
@@ -240,6 +247,7 @@ def create_app(
         app.state.intake = intake
     if registry is not None:
         app.state.registry = registry
+    app.state.extension_catalog = active_extension_catalog
     if workspace_service is not None:
         app.state.workspaces = workspace_service
     if validation_repository is not None:
@@ -336,6 +344,9 @@ def create_app(
     def workspaces() -> WorkspaceRetentionService:
         return cast(WorkspaceRetentionService, app.state.workspaces)
 
+    def extensions_catalog() -> ExtensionCatalog:
+        return cast(ExtensionCatalog, app.state.extension_catalog)
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         async with api_span(
@@ -343,6 +354,10 @@ def create_app(
             attributes=_api_attributes("GET", "/health", 200),
         ):
             return {"status": "ok"}
+
+    @app.get("/extensions/catalog")
+    async def get_extensions_catalog() -> dict[str, object]:
+        return cast(dict[str, object], extensions_catalog().model_dump(mode="json"))
 
     @app.get("/ready")
     async def ready(

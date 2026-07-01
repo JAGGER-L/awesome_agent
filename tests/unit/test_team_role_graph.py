@@ -129,6 +129,10 @@ async def test_teammate_can_create_limited_subagents() -> None:
 
     assert len(subagents) == 2
     assert all(child.depth == 2 for child in subagents)
+    assert all(
+        child.extension_catalog_version == run.extension_catalog_version
+        for child in subagents
+    )
     assert [item.kind for item in subagent_assignments] == [
         TeamAssignmentKind.SUBAGENT,
         TeamAssignmentKind.SUBAGENT,
@@ -1980,6 +1984,7 @@ def _role_run(kind: TeamAssignmentKind) -> tuple[Run, Agent]:
         depth=(1 if kind is TeamAssignmentKind.TEAMMATE else 2),
         child_role=kind.value,
         runtime_route=TEAM_ROLE_ROUTE,
+        extension_catalog_version="ext_team",
     )
     agent = Agent(
         run_id=run.id,

@@ -44,10 +44,12 @@ config_app = typer.Typer(help="Manage local configuration.")
 root_app = typer.Typer(help="Manage allowed repository roots.")
 repo_app = typer.Typer(help="Manage registered Git repositories.")
 workspace_app = typer.Typer(help="Inspect and clean managed run workspaces.")
+extensions_app = typer.Typer(help="Inspect extension catalogs.")
 config_app.add_typer(root_app, name="root")
 app.add_typer(config_app, name="config")
 app.add_typer(repo_app, name="repo")
 app.add_typer(workspace_app, name="workspace")
+app.add_typer(extensions_app, name="extensions")
 
 
 @app.command()
@@ -143,6 +145,32 @@ def recovery_metrics(
     )
     for warning in body.get("warnings", []):
         typer.echo(f"warning={warning['kind']} {warning['message']}")
+
+
+@extensions_app.command("catalog")
+def extensions_catalog(
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Print the active extension catalog inventory summary."""
+    response = httpx.get(f"{api_url}/extensions/catalog", timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    sources = body.get("sources", [])
+    tools = body.get("tools", [])
+    skills = body.get("skills", [])
+    typer.echo(
+        " ".join(
+            [
+                f"version={body['version']}",
+                f"sources={len(sources)}",
+                f"tools={len(tools)}",
+                f"skills={len(skills)}",
+            ]
+        )
+    )
+    for source in sources:
+        health = source.get("health") or {}
+        typer.echo(f"source={source['id']} status={health.get('status')}")
 
 
 @app.command("context-compactions")

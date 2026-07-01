@@ -622,6 +622,50 @@ def test_recovery_metrics_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> 
     assert "warning=route_attempt_evidence_missing" in result.stdout
 
 
+def test_extensions_catalog_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "version": "ext_123",
+                "sources": [
+                    {
+                        "id": "local-demo",
+                        "type": "static",
+                        "trust": "project",
+                        "health": {"status": "healthy"},
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "extension.local-demo.demo.search",
+                        "source_id": "local-demo",
+                    }
+                ],
+                "skills": [],
+            }
+
+    def get(url: str, timeout: int) -> Response:
+        calls.append(url)
+        assert timeout == 30
+        return Response()
+
+    monkeypatch.setattr(cli_module.httpx, "get", get)
+
+    result = runner.invoke(app, ["extensions", "catalog"])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith("/extensions/catalog")
+    assert "version=ext_123" in result.stdout
+    assert "sources=1" in result.stdout
+    assert "tools=1" in result.stdout
+    assert "source=local-demo status=healthy" in result.stdout
+
+
 def test_context_compactions_command_reads_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -59,6 +59,14 @@ def test_run_record_round_trips_workspace_retention_projection() -> None:
     assert restored.workspace_cleanup_reason == "user requested cleanup"
 
 
+def test_run_record_round_trips_extension_catalog_version() -> None:
+    run = Run(goal="Inspect catalog", extension_catalog_version="ext_123")
+
+    restored = _run_from_record(_run_to_record(run))
+
+    assert restored.extension_catalog_version == "ext_123"
+
+
 def test_artifact_record_round_trips_metadata(tmp_path: Path) -> None:
     metadata = ArtifactMetadata(
         run_id=uuid4(),
