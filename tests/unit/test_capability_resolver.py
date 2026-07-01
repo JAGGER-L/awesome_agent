@@ -1,5 +1,14 @@
 from uuid import uuid4
 
+import pytest
+
+from awesome_agent.domain.enums import RiskLevel
+from awesome_agent.extensions.models import (
+    ExtensionCatalog,
+    ExtensionSourceSnapshot,
+    ExtensionToolInventoryItem,
+)
+from awesome_agent.modeling import ToolCall
 from awesome_agent.runtime.capabilities import (
     ALL_TEAM_TOOLS,
     WRITE_TEAM_TOOLS,
@@ -9,6 +18,11 @@ from awesome_agent.runtime.capabilities import (
 )
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
 from awesome_agent.runtime.team_planning import TeamPlanTeammate
+from awesome_agent.runtime.tool_exposure import (
+    ToolExposureSet,
+    before_tool_call,
+    resolve_tool_exposure,
+)
 
 
 def test_team_policy_hides_deferred_and_reports_capabilities() -> None:
@@ -179,6 +193,63 @@ def test_unknown_tools_are_denied_with_reason() -> None:
     assert policy.denied_reason("unknown.tool") is ToolDecisionReason.UNKNOWN_TOOL
 
 
+def test_extension_tool_hidden_without_assignment_grant() -> None:
+    exposure = resolve_tool_exposure(
+        policy=CapabilityResolver().resolve_team_assignment(
+            _assignment(allowed_tools=["repo.search"]),
+            purpose=CapabilityPurpose.ROLE_EXECUTION,
+        ),
+        catalog=_catalog_with_tool("extension.local-demo.demo.search"),
+    )
+
+    assert not exposure.allows("extension.local-demo.demo.search")
+    assert (
+        exposure.denied_reason("extension.local-demo.demo.search")
+        is ToolDecisionReason.NOT_ASSIGNED
+    )
+
+
+def test_extension_tool_exposed_with_assignment_grant_and_catalog_inventory() -> None:
+    catalog = _catalog_with_tool("extension.local-demo.demo.search")
+    exposure = resolve_tool_exposure(
+        policy=CapabilityResolver().resolve_team_assignment(
+            _assignment(allowed_tools=["extension.local-demo.demo.search"]),
+            purpose=CapabilityPurpose.ROLE_EXECUTION,
+            catalog=catalog,
+        ),
+        catalog=catalog,
+    )
+
+    assert exposure.allows("extension.local-demo.demo.search")
+    assert exposure.capabilities_for(
+        "extension.local-demo.demo.search"
+    ) == frozenset({"repository:read"})
+    assert [tool.name for tool in exposure.tool_definitions] == [
+        "extension.local-demo.demo.search"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_call_denies_not_exposed_tool() -> None:
+    exposure = ToolExposureSet(
+        catalog_version="ext_123",
+        decisions=(),
+        tool_definitions=(),
+    )
+
+    result = await before_tool_call(
+        ToolCall(
+            call_id="call-1",
+            name="extension.local-demo.demo.search",
+            arguments_json="{}",
+        ),
+        exposure,
+    )
+
+    assert result.status == "denied"
+    assert result.reason == "not_exposed"
+
+
 def test_team_planning_uses_shared_capability_catalog() -> None:
     teammate = TeamPlanTeammate(
         role_profile="backend",
@@ -195,6 +266,25 @@ def test_team_planning_uses_shared_capability_catalog() -> None:
     assert "team.mailbox_send" in ALL_TEAM_TOOLS
     assert "repo.apply_patch" in WRITE_TEAM_TOOLS
     assert teammate.allowed_tools == ["repo.read", "team.mailbox_send"]
+
+
+def _catalog_with_tool(tool_name: str) -> ExtensionCatalog:
+    return ExtensionCatalog(
+        version="ext_123",
+        sources=[
+            ExtensionSourceSnapshot(id="local-demo", type="static", trust="project")
+        ],
+        tools=[
+            ExtensionToolInventoryItem(
+                name=tool_name,
+                source_id="local-demo",
+                description="Search demo content.",
+                risk_level=RiskLevel.LOW,
+                required_capabilities={"repository:read"},
+                input_schema={"type": "object"},
+            )
+        ],
+    )
 
 
 def _assignment(

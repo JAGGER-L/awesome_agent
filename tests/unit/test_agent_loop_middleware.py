@@ -108,6 +108,28 @@ async def test_middleware_stack_runs_in_registration_order() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_exposure_stage_is_independent_from_model_stage() -> None:
+    events: list[str] = []
+    stack = MiddlewareStack([RecordingMiddleware("exposure", events)])
+
+    decision = await stack.run_stage(
+        MiddlewareStage.BEFORE_TOOL_EXPOSURE,
+        MiddlewareContext(
+            run_id="run",
+            agent_id="agent",
+            runtime_route="team-role",
+            messages=[SystemMessage(content="hello")],
+        ),
+    )
+
+    assert decision.continue_loop
+    assert events == [
+        "exposure:enter:before_tool_exposure",
+        "exposure:exit:before_tool_exposure",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_middleware_stack_can_short_circuit_stage() -> None:
     events: list[str] = []
     stack = MiddlewareStack(

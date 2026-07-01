@@ -84,6 +84,7 @@ from awesome_agent.runtime.token_accounting import (
     TokenAccountant,
     default_token_accountant,
 )
+from awesome_agent.runtime.tool_exposure import expose_builtin_tools
 from awesome_agent.runtime.validation.config import load_validation_config
 from awesome_agent.runtime.validation.detection import detect_validation_plan
 from awesome_agent.runtime.validation.executor import execute_validation_plan
@@ -467,12 +468,16 @@ class ModifyingCodingGraph:
             else None
         )
         provider = self.provider_resolver(agent.model)
+        tool_exposure = expose_builtin_tools(
+            catalog_version=run.extension_catalog_version or "builtin",
+            tool_definitions=model_tool_definitions(self.registry),
+        )
         started = monotonic()
         try:
             turn = await provider.complete(
                 ModelRequest(
                     messages=request_messages,
-                    tools=[] if force_final else model_tool_definitions(self.registry),
+                    tools=[] if force_final else list(tool_exposure.tool_definitions),
                     tool_choice=ToolChoice(
                         mode=(
                             ToolChoiceMode.NONE if force_final else ToolChoiceMode.AUTO

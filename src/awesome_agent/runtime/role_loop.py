@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import monotonic
 from uuid import UUID
@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.extensions.catalog import empty_extension_catalog
 from awesome_agent.modeling import (
     ModelMessage,
     ModelProvider,
@@ -60,6 +61,11 @@ from awesome_agent.runtime.team_role_artifacts import (
     role_changed_files,
     role_git_diff,
 )
+from awesome_agent.runtime.tool_exposure import (
+    ToolExposureSet,
+    before_tool_call,
+    resolve_tool_exposure,
+)
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
@@ -103,7 +109,7 @@ class RoleLoopPolicy:
     allowed_skills: list[str]
     can_write: bool
     acceptance_criteria: list[str]
-    effective_tools: EffectiveToolPolicy | None = None
+    effective_tools: EffectiveToolPolicy | ToolExposureSet | None = None
     max_model_turns: int = 20
     max_tool_calls: int = 60
 
@@ -160,17 +166,39 @@ class RoleLoop:
     ) -> RoleLoopResult:
         registry = build_modifying_registry()
         executor = build_modifying_executor(registry)
-        tool_definitions = _filter_tool_definitions(
-            model_tool_definitions(registry),
-            policy.tool_names,
+        candidate_tool_definitions = [
+            *model_tool_definitions(registry),
+            _create_subagent_tool_definition(),
+            _mailbox_list_tool_definition(),
+            _mailbox_send_tool_definition(),
+        ]
+        base_policy = policy.effective_tools
+        if not isinstance(base_policy, EffectiveToolPolicy):
+            base_policy = CapabilityResolver().resolve_team_assignment(
+                assignment,
+                purpose=CapabilityPurpose.ROLE_EXECUTION,
+            )
+
+        async def compute_exposure(_: object) -> ToolExposureSet:
+            return resolve_tool_exposure(
+                policy=base_policy,
+                catalog=empty_extension_catalog(),
+                tool_definitions=candidate_tool_definitions,
+            )
+
+        exposure = await self.team_loop.expose_tools(
+            object(),
+            run=run,
+            agent=agent,
+            messages=[],
+            assignment_id=assignment.id,
+            team_role=assignment.kind.value,
+            agent_kind=agent.kind.value,
+            metadata={"team_operation": "tool_exposure"},
+            handler=compute_exposure,
         )
-        if _TEAM_CREATE_SUBAGENT in policy.tool_names:
-            tool_definitions.append(_create_subagent_tool_definition())
-        if assignment.kind is TeamAssignmentKind.TEAMMATE:
-            if TEAM_MAILBOX_LIST_TOOL in policy.tool_names:
-                tool_definitions.append(_mailbox_list_tool_definition())
-            if TEAM_MAILBOX_SEND_TOOL in policy.tool_names:
-                tool_definitions.append(_mailbox_send_tool_definition())
+        policy = _with_effective_tools(policy, exposure)
+        tool_definitions = list(exposure.tool_definitions)
         provider = self.provider_resolver(agent.model)
         mailbox_directory = await _mailbox_directory(
             assignment=assignment,
@@ -359,6 +387,15 @@ async def _execute_call(
     event_sink: RoleEventSink | None,
 ) -> ToolResultMessage:
     started = monotonic()
+    if not isinstance(policy.effective_tools, ToolExposureSet):
+        raise PermanentExecutionError("team_role_tool_exposure_missing")
+    exposure_decision = await before_tool_call(call, policy.effective_tools)
+    if exposure_decision.status == "denied":
+        return ToolResultMessage(
+            call_id=call.call_id,
+            content=f"Tool {call.name} is not exposed for this assignment.",
+            is_error=True,
+        )
     if call.name == _TEAM_CREATE_SUBAGENT:
         await _create_dynamic_subagent(
             run=run,
@@ -971,6 +1008,13 @@ def _filter_tool_definitions(
 ) -> list[ToolDefinition]:
     allowed = set(allowed_tools)
     return [definition for definition in definitions if definition.name in allowed]
+
+
+def _with_effective_tools(
+    policy: RoleLoopPolicy,
+    exposure: ToolExposureSet,
+) -> RoleLoopPolicy:
+    return replace(policy, effective_tools=exposure)
 
 
 def _policy_allows(policy: RoleLoopPolicy, tool_name: str) -> bool:

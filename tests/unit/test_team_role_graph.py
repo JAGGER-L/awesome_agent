@@ -1287,7 +1287,9 @@ async def test_teammate_can_create_dynamic_subagent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_subagent_cannot_create_dynamic_subagent(tmp_path: Path) -> None:
+async def test_subagent_cannot_call_unexposed_dynamic_subagent_tool(
+    tmp_path: Path,
+) -> None:
     workspace = _git_workspace(tmp_path)
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
@@ -1307,7 +1309,18 @@ async def test_subagent_cannot_create_dynamic_subagent(tmp_path: Path) -> None:
                     )
                 ],
                 stop_reason=StopReason.TOOL_CALLS,
-            )
+            ),
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Recovered after hidden delegation tool denial."),
         ]
     )
     graph = TeamRoleGraph(team_repository=teams, provider_resolver=lambda _: provider)
@@ -1322,8 +1335,12 @@ async def test_subagent_cannot_create_dynamic_subagent(tmp_path: Path) -> None:
         )
     )
 
-    with pytest.raises(PermanentExecutionError, match="only teammates can create"):
-        await graph.execute(run, agent, repository=runtime)
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    assert state["phase"] == "completed"
+    assert await runtime.list_child_runs(run.id) == []
+    tool_text = "\n".join(message.content for message in provider.requests[1].messages)
+    assert "Tool team.create_subagent is not exposed for this assignment." in tool_text
 
 
 @pytest.mark.asyncio
@@ -1771,7 +1788,7 @@ async def test_subagent_cannot_use_mailbox_tool_even_if_granted(
     assert state["phase"] == "completed"
     assert await teams.list_mailbox_messages(run.root_run_id or run.id) == []
     tool_text = "\n".join(message.content for message in provider.requests[1].messages)
-    assert "Tool team.mailbox_send is not allowed for this assignment." in tool_text
+    assert "Tool team.mailbox_send is not exposed for this assignment." in tool_text
 
 
 @pytest.mark.asyncio

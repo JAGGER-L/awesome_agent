@@ -19,6 +19,8 @@ class AgentLoopStatus(StrEnum):
 
 class MiddlewareStage(StrEnum):
     BEFORE_AGENT = "before_agent"
+    BEFORE_TOOL_EXPOSURE = "before_tool_exposure"
+    AFTER_TOOL_EXPOSURE = "after_tool_exposure"
     BEFORE_MODEL = "before_model"
     WRAP_MODEL_CALL = "wrap_model_call"
     AFTER_MODEL = "after_model"
