@@ -101,6 +101,7 @@ def _client(
     tool_invocation_repository: InMemoryToolInvocationRepository | None = None,
     extension_catalog: ExtensionCatalog | None = None,
     extension_catalog_history: list[ExtensionCatalog] | None = None,
+    project_root: Path | None = None,
 ) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
     repository_path = projects / "repository"
@@ -162,6 +163,7 @@ def _client(
                 workspace_service=workspace_service,
                 extension_catalog=extension_catalog,
                 extension_catalog_history=extension_catalog_history,
+                project_root=project_root,
             )
         ),
         repository,
@@ -813,6 +815,32 @@ def test_extension_catalog_endpoint_reports_redacted_inventory(tmp_path: Path) -
     assert body["sources"][0]["id"] == "local-demo"
     assert body["tools"][0]["name"] == "extension.local-demo.demo.search"
     assert "secret" not in response.text.lower()
+
+
+def test_extension_catalog_endpoint_loads_project_skills(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "skills" / "repository-inspection"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+id: repository-inspection
+version: "1"
+requested_tools: ["repo.read"]
+---
+
+# Repository Inspection
+
+Read bounded repository evidence.
+""",
+        encoding="utf-8",
+    )
+    client, _ = _client(tmp_path, project_root=tmp_path)
+
+    response = client.get("/extensions/catalog")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sources"][0]["id"] == "project-skills"
+    assert body["skills"][0]["id"] == "repository-inspection"
 
 
 def test_recovery_metrics_aggregate_team_and_provider_evidence(

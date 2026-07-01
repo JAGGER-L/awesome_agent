@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import subprocess
 import threading
@@ -77,6 +78,7 @@ class McpStdioSource:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=_stdio_env(self._config),
         )
         stdout = _LineReader(process.stdout)
         deadline = time.monotonic() + self._config.discovery_timeout_seconds
@@ -201,6 +203,7 @@ class McpStdioToolHandler:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=_stdio_env(self._config),
         )
         stdout = _LineReader(process.stdout)
         deadline = time.monotonic() + self._config.discovery_timeout_seconds
@@ -421,6 +424,16 @@ def _redacted_error(error: Exception, *, command: str) -> str:
     if isinstance(error, (McpProtocolError, OSError)):
         return f"MCP stdio discovery failed for {command}: {error}"
     return f"MCP stdio discovery failed for {command}: {type(error).__name__}"
+
+
+def _stdio_env(config: ExtensionSourceConfig) -> dict[str, str] | None:
+    if config.env is None or not config.env.pass_names:
+        return None
+    return {
+        name: value
+        for name in config.env.pass_names
+        if (value := os.environ.get(name)) is not None
+    }
 
 
 def _source_tool_name(source_id: str, namespaced_tool_name: str) -> str:

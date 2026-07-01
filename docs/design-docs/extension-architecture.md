@@ -224,6 +224,11 @@ skill instructions may still be injected when compatible, but the requested
 tool remains hidden. Diagnostics must show the requested tool and the denial
 reason.
 
+Repository-root `skills/` is the default project skill root. Each immediate
+child directory is a skill package containing `SKILL.md`. Automatic discovery
+publishes these manifests into the catalog as source id `project-skills`; it
+does not add the skill to `allowed_skills` and does not grant requested tools.
+
 ## MCP
 
 MCP servers are external tool sources. Discovery produces inventory only.
@@ -249,27 +254,52 @@ MCP execution must preserve approval, timeout, cancellation, observability,
 durable tool invocation records, bounded result serialization, and artifact
 offload. MCP errors are tool errors, not provider fallback events.
 
+MCP does not require Node.js as a protocol requirement. Node.js is required only
+for MCP servers that are distributed as npm packages and launched with commands
+such as `npx`. Python, local binary, Docker, and remote HTTP MCP servers remain
+valid as long as they enter through an allowlisted source adapter.
+
 ## Configuration
 
-Extension configuration is declarative and uses allowlisted source types:
+Project extension configuration lives in `awesome-agent.yaml` at the repository
+root. It is declarative and uses allowlisted source types:
 
 ```yaml
+version: 1
+
 extensions:
+  skills:
+    auto_discover_project_skills: true
+    roots:
+      - skills
+
   sources:
-    - id: local-skills
-      type: skill_directory
-      path: .agents/skills
-      trust: project
     - id: playwright
       type: mcp_stdio
       command: npx
       args: ["@playwright/mcp"]
       trust: user
+      required: false
+      env:
+        pass:
+          - PLAYWRIGHT_BROWSERS_PATH
+    - id: github
+      type: mcp_streamable_http
+      url: https://mcp.example.test/mcp
+      trust: user
+      required: false
+      auth:
+        type: bearer_token_env
+        env: GITHUB_MCP_TOKEN
 ```
 
 The runtime may reject a source when the type is unknown, the trust level is
 insufficient, the path escapes allowed roots, the command is disallowed, or
 the manifest cannot be normalized into the shared contracts.
+
+Configuration stores environment variable names only. Secret values are read
+from the process environment at transport execution time and must not appear in
+`awesome-agent.yaml`, source health details, diagnostics, or command args.
 
 ## Durable Evidence
 
@@ -299,6 +329,7 @@ The extension phase proceeds in this order:
 7. Task 49: MCP Streamable HTTP/SSE-compatible transport and auth expansion.
 8. Task 50: Community tool packages.
 9. Task 51: Extension operations hardening.
+10. Task 52: Project extension config and default skill root.
 
 Each task must be independently testable and must not weaken existing graph,
 AgentLoop, capability, observability, token-budget, approval, or team

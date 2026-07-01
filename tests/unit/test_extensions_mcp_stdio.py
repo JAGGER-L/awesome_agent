@@ -123,6 +123,30 @@ def test_optional_mcp_stdio_failure_records_redacted_unhealthy_source(
     assert "<redacted>" in detail
 
 
+def test_mcp_stdio_env_passes_only_declared_names(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_server = _fake_mcp_env_server(tmp_path)
+    monkeypatch.setenv("VISIBLE_TOKEN", "visible-fixture")
+    monkeypatch.setenv("HIDDEN_TOKEN", "hidden-fixture")
+    source = McpStdioSource(
+        McpStdioSourceConfig(
+            id="envcheck",
+            type="mcp_stdio",
+            command=sys.executable,
+            args=[str(fake_server)],
+            trust="user",
+            env={"pass": ["VISIBLE_TOKEN"]},
+        )
+    )
+
+    snapshot = asyncio.run(source.discover())
+
+    assert snapshot.source.health.status == "healthy"
+    assert snapshot.tools[0].description == "visible=visible-fixture hidden="
+
+
 async def test_mcp_tool_call_denied_when_not_exposed(tmp_path: Path) -> None:
     fake_server = _fake_mcp_server(tmp_path)
     config = _mcp_config(fake_server)
@@ -258,6 +282,52 @@ for line in sys.stdin:
                     "text": "opened " + arguments.get("url", "")
                 }],
                 "isError": False
+            }
+        }) + "\\n")
+        sys.stdout.flush()
+""",
+        encoding="utf-8",
+    )
+    return server
+
+
+def _fake_mcp_env_server(tmp_path: Path) -> Path:
+    server = tmp_path / "fake_mcp_env_server.py"
+    server.write_text(
+        """
+import json
+import os
+import sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        sys.stdout.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message["id"],
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fake-mcp", "version": "1"}
+            }
+        }) + "\\n")
+        sys.stdout.flush()
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/list":
+        sys.stdout.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message["id"],
+            "result": {
+                "tools": [{
+                    "name": "check_env",
+                    "description": (
+                        "visible=" + os.environ.get("VISIBLE_TOKEN", "") +
+                        " hidden=" + os.environ.get("HIDDEN_TOKEN", "")
+                    ),
+                    "inputSchema": {"type": "object", "properties": {}}
+                }]
             }
         }) + "\\n")
         sys.stdout.flush()
