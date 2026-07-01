@@ -7,6 +7,15 @@
 - The tool registry is not an authorization boundary. It is inventory; runtime
   routes and API inspection use `EffectiveToolPolicy` to decide visible and
   executable tools.
+- Extension discovery is not an authorization boundary. Skill, MCP, and
+  community package discovery can add catalog inventory only; visibility still
+  depends on tool exposure policy and execution still goes through
+  `ToolExecutor`.
+- Community tool packages must live under allowlisted local roots. Package
+  manifests are declarative inventory and may use only allowlisted handler
+  adapter types, currently `subprocess_json`. Arbitrary Python imports,
+  reflection entrypoints, remote marketplace installation, and unallowlisted
+  package roots are rejected.
 - Tool execution denies an invocation that is outside the provided effective
   policy even if the invocation carries enough raw capabilities for the tool
   descriptor.
