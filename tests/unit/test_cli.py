@@ -666,6 +666,97 @@ def test_extensions_catalog_command_reads_api(monkeypatch: pytest.MonkeyPatch) -
     assert "source=local-demo status=healthy" in result.stdout
 
 
+def test_extensions_diagnostics_command_reads_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "active_catalog_version": "ext_123",
+                "catalog": {"sources": 1, "tools": 2, "skills": 0},
+                "unhealthy_sources": [
+                    {"source_id": "github", "status": "unhealthy"},
+                ],
+                "denials": [{"tool": "mcp.github.search", "reason": "not_assigned"}],
+                "invocation_denials": [
+                    {"tool": "mcp.github.search", "reason": "not_exposed"},
+                ],
+                "execution_errors": [
+                    {"tool": "community.web.search", "error": "tool failed"},
+                ],
+                "warnings": [
+                    {
+                        "kind": "stale_extension_catalog",
+                        "message": "Run uses stale extension catalog.",
+                    }
+                ],
+            }
+
+    def get(url: str, timeout: int) -> Response:
+        calls.append(url)
+        assert timeout == 30
+        return Response()
+
+    monkeypatch.setattr(cli_module.httpx, "get", get)
+
+    result = runner.invoke(app, ["extensions", "diagnostics"])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith("/extensions/diagnostics")
+    assert "version=ext_123" in result.stdout
+    assert "unhealthy_sources=1" in result.stdout
+    assert "denials=1" in result.stdout
+    assert "warning=stale_extension_catalog" in result.stdout
+
+
+def test_extensions_catalog_diff_command_reads_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "from_version": "ext_a",
+                "to_version": "ext_b",
+                "added_tools": ["mcp.github.search"],
+                "removed_tools": [],
+                "changed_tools": [],
+                "added_sources": [],
+                "removed_sources": [],
+                "changed_sources": [],
+            }
+
+    def get(url: str, timeout: int) -> Response:
+        calls.append(url)
+        assert timeout == 30
+        return Response()
+
+    monkeypatch.setattr(cli_module.httpx, "get", get)
+
+    result = runner.invoke(
+        app,
+        ["extensions", "catalog-diff", "ext_a", "ext_b"],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(
+        "/extensions/catalog-diff?from_version=ext_a&to_version=ext_b"
+    )
+    assert "from=ext_a" in result.stdout
+    assert "to=ext_b" in result.stdout
+    assert "added_tools=1" in result.stdout
+    assert "mcp.github.search" in result.stdout
+
+
 def test_context_compactions_command_reads_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

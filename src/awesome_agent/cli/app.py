@@ -173,6 +173,69 @@ def extensions_catalog(
         typer.echo(f"source={source['id']} status={health.get('status')}")
 
 
+@extensions_app.command("diagnostics")
+def extensions_diagnostics(
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Print redacted extension operational diagnostics."""
+    response = httpx.get(f"{api_url}/extensions/diagnostics", timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    catalog = body.get("catalog") or {}
+    typer.echo(
+        " ".join(
+            [
+                f"version={body['active_catalog_version']}",
+                f"sources={catalog.get('sources', 0)}",
+                f"tools={catalog.get('tools', 0)}",
+                f"skills={catalog.get('skills', 0)}",
+                f"unhealthy_sources={len(body.get('unhealthy_sources', []))}",
+                f"denials={len(body.get('denials', []))}",
+                f"invocation_denials={len(body.get('invocation_denials', []))}",
+                f"execution_errors={len(body.get('execution_errors', []))}",
+            ]
+        )
+    )
+    for warning in body.get("warnings", []):
+        typer.echo(f"warning={warning['kind']} {warning['message']}")
+
+
+@extensions_app.command("catalog-diff")
+def extensions_catalog_diff(
+    from_version: str,
+    to_version: str,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Print a redacted diff between two extension catalog versions."""
+    response = httpx.get(
+        (
+            f"{api_url}/extensions/catalog-diff?"
+            f"from_version={from_version}&to_version={to_version}"
+        ),
+        timeout=30,
+    )
+    response.raise_for_status()
+    body = response.json()
+    typer.echo(
+        " ".join(
+            [
+                f"from={body['from_version']}",
+                f"to={body['to_version']}",
+                f"added_tools={len(body.get('added_tools', []))}",
+                f"removed_tools={len(body.get('removed_tools', []))}",
+                f"changed_tools={len(body.get('changed_tools', []))}",
+                f"added_sources={len(body.get('added_sources', []))}",
+                f"removed_sources={len(body.get('removed_sources', []))}",
+                f"changed_sources={len(body.get('changed_sources', []))}",
+            ]
+        )
+    )
+    for tool_name in body.get("added_tools", []):
+        typer.echo(f"added_tool={tool_name}")
+    for tool_name in body.get("removed_tools", []):
+        typer.echo(f"removed_tool={tool_name}")
+
+
 @app.command("context-compactions")
 def context_compactions(
     run_id: UUID,
