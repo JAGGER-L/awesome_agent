@@ -14,4 +14,5 @@ boundaries. Development-agent plans and handoffs belong in ignored `.codex/`.
 - [Task and verification model](task-and-verification-model.md)
 - [Memory architecture](memory-architecture.md)
 - [Observability](observability.md)
+- [Extension architecture](extension-architecture.md)
 - [ThinGraph, AgentLoop, and middleware contracts](thin-graph-agent-loop-middleware.md)

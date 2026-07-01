@@ -99,32 +99,38 @@ This ordering prevents later provider, MCP, skills, and product work from
 amplifying weak observability, weak permissions, or metadata-heavy middleware
 contracts.
 
-## Current Kernel Phase
+## Current Extension Phase
 
-Task 35 is complete and closes TD-024 as a deliberate non-goal: the runtime
-kernel does not implement amount-derived budgets, ledgers, or compatibility
-fields.
+The runtime kernel and post-kernel operational evidence sequence are complete
+through Task 42. The active phase is now extension architecture: MCP, skills,
+and community tools must enter through versioned catalogs, independent tool
+exposure, shared capability resolution, `ToolExecutor`, token budgets,
+approval, observability, and durable audit evidence.
 
-The active kernel completion sequence is:
+The phase design is specified in
+[`extension-architecture.md`](../design-docs/extension-architecture.md).
 
-| Task | Phase | Status | Purpose | Exit condition |
-| --- | --- | --- | --- | --- |
-| Task 36 | Observability | Done | Production observability is now an AgentLoop middleware capability as well as durable query-table evidence. | TD-033 closed: agent/model/tool spans, count/latency/token metrics, OTel metrics SDK export, dashboard dimensions, alert guidance, and trace visualization paths are documented; Worker-only projection is not the only observability path. |
-| Task 37 | Middleware | Done | `MiddlewareContext` now carries focused typed extension envelopes. | Middleware receives typed trace, capability, assignment, token budget, handoff, and error-classification context without forcing unrelated middleware to depend on a monolithic context. |
-| Task 38 | Governance | Done | Effective tool policy now reaches API inspection, team-role exposure, typed capability context, and executor enforcement. | Registry inventory and raw capability sets are no longer sufficient to execute a tool when an effective policy is provided; extension surfaces must reuse the same resolver/executor contract. |
-| Task 39 | Provider | Done | Added the provider routing/fallback contract and candidate-aware provider factory boundary. | Model routing can express ordered candidates, check token budget before each attempt, record token usage after completed turns, fall back only on retryable provider errors, and preserve token-only governance with no monetary fields. |
-
-The runtime kernel is stable after Task 39. Future provider, MCP, skill, and
-product work should reuse the kernel boundaries instead of reopening graph,
-middleware, capability, observability, or token-budget ownership.
-
-## Post-Kernel Execution Tasks
+Completed post-kernel setup:
 
 | Task | Phase | Status | Purpose | Exit condition |
 | --- | --- | --- | --- | --- |
 | Task 40 | Operations | Done | Added a redacted runtime diagnostics surface over existing durable evidence. | `GET /runs/{run_id}/diagnostics` and `awesome-agent diagnostics <run-id>` summarize run status, dispatch, events, agents, token ledgers, model calls, tool invocations, validation reports, team child evidence, and observability evidence without creating a parallel state machine or exposing raw prompts, secrets, full tool output, or monetary fields. |
 | Task 41 | Provider | Done | Wired provider routing into production Worker runtime graph construction. | Solo read-only, solo modifying, scoped team, distributed Leader, team-role, and team-verifier production paths receive route-aware provider resolvers while graph modules keep the provider-resolver injection boundary and tests can still inject direct fake providers. |
 | Task 42 | Team Intelligence | Done | Added recovery metrics and team tuning evidence as a read-only operational projection. | `GET /runs/{run_id}/recovery-metrics` and `awesome-agent recovery-metrics <run-id>` summarize recovery actions, failure kinds, team roles, Verifier rework, provider/model outcomes, and token budget pressure without automatic recovery-policy mutation, provider ranking, or monetary fields. |
+
+Planned extension sequence:
+
+| Task | Phase | Status | Purpose | Exit condition |
+| --- | --- | --- | --- | --- |
+| Task 43 | Extension | Planned | Add the extension catalog and lifecycle substrate. | Fake/local extension sources can publish versioned catalog inventory, Runs pin an `extension_catalog_version`, catalog inspection works, and refreshed catalogs affect new Runs without changing running Runs. |
+| Task 44 | Extension | Planned | Add an independent tool exposure hook and extension-aware capability resolution. | `before_tool_exposure` produces a `ToolExposureSet`; `before_model_call` consumes it without recomputing authorization; `before_tool_call` cannot execute tools outside the exposure set; denied exposure reasons are inspectable. |
+| Task 45 | Skills | Planned | Turn `allowed_skills` into parsed skill manifests and runtime views. | Skill packages can declare instructions, context refs, requested tools, required capabilities, actor/route compatibility, and risk; skills request capabilities but never grant execution authority. |
+| Task 46 | Skills | Planned | Inject skill context through AgentLoop hooks with budget and observability controls. | Compatible skill instructions/context enter model requests through `before_model_call`, large context is bounded or offloaded, skill ids/versions are observable, and requested tools still require explicit grants. |
+| Task 47 | MCP | Planned | Add MCP stdio discovery as an extension source. | Configured stdio MCP servers can be discovered into namespaced catalog tool inventory, default visibility is denied, source health is inspectable, and no MCP tool executes yet. |
+| Task 48 | MCP | Planned | Execute granted MCP stdio tools through `ToolExecutor`. | Granted MCP tools execute only after exposure and invocation checks, with approval, timeout, cancellation, durable invocation records, bounded results, and observability. |
+| Task 49 | MCP | Planned | Expand MCP transports and authentication. | Stdio and Streamable HTTP/SSE-compatible MCP sources share the same catalog/exposure/executor model, secrets are redacted, source health uses background checks, and reconnect/backoff behavior is bounded. |
+| Task 50 | Community Tools | Planned | Add packaged community tool sources. | Allowlisted local tool packages can declare tools that normalize into catalog inventory and execute through the same exposure, capability, approval, and `ToolExecutor` path. |
+| Task 51 | Operations | Planned | Harden extension operations and diagnostics. | Operators can inspect catalog diffs, source health history, extension denial/error metrics, stale catalog warnings, and structural tests prove extensions cannot bypass resolver/executor boundaries. |
 
 ## Architecture Debt Carried Forward
 
@@ -135,14 +141,13 @@ middleware, capability, observability, or token-budget ownership.
 | P4: unified tool permission | Complete for the kernel phase. Task 31 added the resolver foundation; Task 38 made effective policy visible through API inspection/team contexts and enforceable at the shared executor boundary. | Future tools, MCP, skills, provider-side tools, and temporary grants must enter through resolver inputs and pass `EffectiveToolPolicy` to exposure and execution helpers. |
 | P5: team hardening | Complete for local validation, same-child validation rework, patch conflict recovery, stress coverage, mailbox collaboration, bounded Leader plan repair, policy-backed recovery budgets, and read-only recovery metrics. | Continue with production evidence collection and explicit calibration changes only after recovery metrics show stable provider/model and team-role patterns. |
 
-## Post-Kernel Long-Term Plan
+## Post-Extension Long-Term Plan
 
 The following phases are directional. They are not committed task numbers until
 this roadmap is updated through change control.
 
 | Phase | Direction | Entry criteria | Exit shape |
 | --- | --- | --- | --- |
-| Extension Phase | Add MCP, skills, and external tool ecosystems. | Task 38 complete; extension surfaces can call the shared capability resolver. | External tools use the same effective policy, audit records, token budgets, approval gates, and AgentLoop observability as built-in tools. |
 | Provider Ecosystem Phase | Expand provider routing, fallback, model profiles, and provider-quality feedback. | Task 41 and Task 42 complete; production runtime graph construction uses route-aware provider resolvers and recovery outcomes are measurable. | Provider decisions are reliable, explainable, retry-safe, and tuned by measured runtime outcomes rather than hard-coded optimism. |
 | Operations Phase | Improve dashboards, alerts, trace exploration, recovery metrics, and readiness diagnostics. | Task 40 and Task 42 complete; durable evidence can be inspected through redacted diagnostics and recovery-metrics projections. | Operators can diagnose latency, failure class, budget pressure, provider quality, recovery behavior, and worker health without reading raw logs. |
 | Productization Phase | Build higher-level user workflows and UI/API surfaces. | Kernel boundaries stable; roadmap change defines target users and workflows. | Product surfaces inspect and control Runs without bypassing approvals, cancellation, capability policy, or durable evidence. |
@@ -160,6 +165,7 @@ Detailed historical task notes are archived in
 | Tasks 13-18 | Team and operations foundation | Real team E2E, managed workspace cleanup, readiness checks, context compaction, distributed child-run skeleton, root-aware team budgets, and payload compaction. |
 | Tasks 19-24 | AgentLoop architecture migration | Graph-version removal, ThinGraph/AgentLoop contracts, solo and team AgentLoop middleware migration, OTel span instrumentation, and durable graph versus policy boundary cleanup. |
 | Tasks 25-35 | Distributed team hardening and governance | Teammate-local validation, same-child rework, patch conflict recovery, multi-worker stress, mailbox collaboration, roadmap lock, capability resolver foundation, bounded Leader replanning, policy-backed recovery budgets, provider-aware token accounting, and token-only budget governance. |
+| Tasks 36-42 | Kernel completion and operational evidence | AgentLoop observability, typed middleware context, capability-policy convergence, provider routing/fallback, runtime diagnostics, production provider routing integration, and recovery metrics. |
 
 ## Change Control
 
