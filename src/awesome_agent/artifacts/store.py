@@ -39,7 +39,7 @@ class LocalArtifactStore:
     ) -> ArtifactMetadata:
         safe_name = Path(filename).name
         artifact_id = uuid4()
-        directory = self._root / str(run_id) / artifact_type
+        directory = self._root / str(run_id) / "artifacts" / artifact_type
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{artifact_id}-{safe_name}"
         path.write_bytes(content)

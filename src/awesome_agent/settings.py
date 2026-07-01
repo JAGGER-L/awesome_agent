@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     unsafe_bind_public: bool = False
     artifact_root: Path = Field(
-        default_factory=lambda: Path.home() / ".awesome-agent" / "artifacts"
+        default_factory=lambda: Path.home() / ".awesome-agent" / "runs"
     )
     local_config_path: Path = Field(
         default_factory=lambda: Path.home() / ".awesome-agent" / "config.toml"

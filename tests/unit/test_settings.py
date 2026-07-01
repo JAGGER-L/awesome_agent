@@ -22,6 +22,8 @@ def test_settings_use_confirmed_concurrency_defaults() -> None:
     assert settings.otel_service_name == "awesome-agent"
     assert settings.otel_console_exporter_enabled is True
     assert settings.otel_otlp_endpoint is None
+    assert settings.artifact_root.name == "runs"
+    assert settings.artifact_root.parent.name == ".awesome-agent"
     assert settings.team_verifier_model_output_attempts == 2
     assert settings.team_verifier_model_rejection_budget == 10
     assert settings.team_verifier_external_retry_budget == 1
