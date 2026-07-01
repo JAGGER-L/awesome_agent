@@ -5,9 +5,16 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.extensions.catalog import publish_catalog
-from awesome_agent.extensions.mcp import McpStdioSource, McpStdioSourceConfig
+from awesome_agent.extensions.mcp import (
+    McpStdioSource,
+    McpStdioSourceConfig,
+    McpStdioToolHandler,
+    register_mcp_stdio_tools,
+)
 from awesome_agent.extensions.models import (
     ExtensionCatalog,
     ExtensionToolInventoryItem,
@@ -20,6 +27,10 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentKind,
 )
 from awesome_agent.runtime.tool_exposure import resolve_tool_exposure
+from awesome_agent.tools.approval import ApprovalPolicy
+from awesome_agent.tools.executor import ToolExecutor
+from awesome_agent.tools.models import ToolDenied, ToolInvocation, ToolSpec
+from awesome_agent.tools.registry import ToolRegistry
 
 
 def test_mcp_stdio_discovery_normalizes_tools(tmp_path: Path) -> None:
@@ -112,6 +123,91 @@ def test_optional_mcp_stdio_failure_records_redacted_unhealthy_source(
     assert "<redacted>" in detail
 
 
+async def test_mcp_tool_call_denied_when_not_exposed(tmp_path: Path) -> None:
+    fake_server = _fake_mcp_server(tmp_path)
+    config = _mcp_config(fake_server)
+    tool = _mcp_tool("mcp.playwright.open_page")
+    handler = McpStdioToolHandler(
+        config=config,
+        tool=tool,
+        catalog_version="ext_123",
+    )
+    registry = ToolRegistry()
+    registry.register(
+        _tool_spec(tool.name),
+        handler,
+    )
+    executor = ToolExecutor(registry, ApprovalPolicy())
+
+    with pytest.raises(ToolDenied):
+        await executor.execute(
+            ToolInvocation(
+                tool_name="mcp.playwright.open_page",
+                agent_id=uuid4(),
+                profile="teammate",
+                effective_tool_names=set(),
+                capabilities={"browser:control"},
+                arguments={"url": "https://example.test"},
+            )
+        )
+
+
+async def test_mcp_tool_call_executes_through_executor(tmp_path: Path) -> None:
+    fake_server = _fake_mcp_server(tmp_path)
+    config = _mcp_config(fake_server)
+    catalog = _catalog_with_mcp_tool("mcp.playwright.open_page")
+    registry = ToolRegistry()
+    register_mcp_stdio_tools(
+        registry,
+        config=config,
+        catalog=catalog,
+        exposed_tool_names={"mcp.playwright.open_page"},
+    )
+    executor = ToolExecutor(registry, ApprovalPolicy())
+
+    result = await executor.execute(
+        ToolInvocation(
+            tool_name="mcp.playwright.open_page",
+            agent_id=uuid4(),
+            profile="teammate",
+            effective_tool_names={"mcp.playwright.open_page"},
+            capabilities={"browser:control"},
+            arguments={"url": "https://example.test"},
+        )
+    )
+
+    assert result.output["status"] == "ok"
+    assert result.output["content"] == "opened https://example.test"
+    assert result.output["extension"] == {
+        "source_id": "playwright",
+        "catalog_version": catalog.version,
+    }
+    assert result.output["mcp"] == {"tool": "open_page", "is_error": False}
+
+
+def test_mcp_stdio_registration_only_registers_exposed_tools(tmp_path: Path) -> None:
+    catalog = publish_catalog(
+        sources=[],
+        tools=[
+            _mcp_tool("mcp.playwright.open_page"),
+            _mcp_tool("mcp.playwright.close_page"),
+        ],
+        skills=[],
+    )
+    registry = ToolRegistry()
+
+    register_mcp_stdio_tools(
+        registry,
+        config=_mcp_config(_fake_mcp_server(tmp_path)),
+        catalog=catalog,
+        exposed_tool_names={"mcp.playwright.open_page"},
+    )
+
+    assert [spec.name for spec in registry.list_specs()] == [
+        "mcp.playwright.open_page"
+    ]
+
+
 def _fake_mcp_server(tmp_path: Path) -> Path:
     server = tmp_path / "fake_mcp_server.py"
     server.write_text(
@@ -151,6 +247,20 @@ for line in sys.stdin:
             }
         }) + "\\n")
         sys.stdout.flush()
+    elif method == "tools/call":
+        arguments = message.get("params", {}).get("arguments", {})
+        sys.stdout.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message["id"],
+            "result": {
+                "content": [{
+                    "type": "text",
+                    "text": "opened " + arguments.get("url", "")
+                }],
+                "isError": False
+            }
+        }) + "\\n")
+        sys.stdout.flush()
 """,
         encoding="utf-8",
     )
@@ -160,17 +270,49 @@ for line in sys.stdin:
 def _catalog_with_mcp_tool(tool_name: str) -> ExtensionCatalog:
     return publish_catalog(
         sources=[],
-        tools=[
-            ExtensionToolInventoryItem(
-                name=tool_name,
-                source_id="playwright",
-                description="Open a browser page.",
-                risk_level=RiskLevel.MEDIUM,
-                required_capabilities={"browser:control"},
-                input_schema={"type": "object"},
-            )
-        ],
+        tools=[_mcp_tool(tool_name)],
         skills=[],
+    )
+
+
+def _mcp_tool(tool_name: str) -> ExtensionToolInventoryItem:
+    return ExtensionToolInventoryItem(
+        name=tool_name,
+        source_id="playwright",
+        description="Open a browser page.",
+        risk_level=RiskLevel.MEDIUM,
+        required_capabilities={"browser:control"},
+        input_schema={
+            "type": "object",
+            "properties": {"url": {"type": "string"}},
+            "required": ["url"],
+        },
+    )
+
+
+def _mcp_config(fake_server: Path) -> McpStdioSourceConfig:
+    return McpStdioSourceConfig(
+        id="playwright",
+        type="mcp_stdio",
+        command=sys.executable,
+        args=[str(fake_server)],
+        trust="user",
+        discovery_timeout_seconds=2.0,
+    )
+
+
+def _tool_spec(tool_name: str) -> ToolSpec:
+    return ToolSpec(
+        name=tool_name,
+        description="Open a browser page.",
+        risk_level=RiskLevel.MEDIUM,
+        required_capabilities={"browser:control"},
+        timeout_seconds=2.0,
+        input_schema={
+            "type": "object",
+            "properties": {"url": {"type": "string"}},
+            "required": ["url"],
+        },
     )
 
 
