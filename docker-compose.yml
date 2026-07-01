@@ -17,7 +17,8 @@ services:
 
   api:
     build: .
-    command: ["awesome-agent", "serve", "--host", "0.0.0.0"]
+    command:
+      ["awesome-agent", "serve", "--host", "0.0.0.0", "--unsafe-bind-public"]
     env_file: .env
     environment:
       AWESOME_AGENT_API_HOST: "0.0.0.0"
