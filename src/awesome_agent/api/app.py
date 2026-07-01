@@ -88,6 +88,7 @@ from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
 from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_ROUTE
+from awesome_agent.runtime.recovery_metrics import RecoveryMetricsService
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.runtime.workspaces import (
     WorkspaceCandidate,
@@ -717,6 +718,30 @@ def create_app(
             )
             try:
                 return (await diagnostics.summarize(run_id)).model_dump(mode="json")
+            except KeyError as error:
+                attributes["http.status_code"] = 404
+                raise HTTPException(status_code=404, detail="Run not found.") from error
+
+    @app.get("/runs/{run_id}/recovery-metrics")
+    async def get_run_recovery_metrics(run_id: UUID) -> dict[str, object]:
+        attributes = _api_attributes("GET", "/runs/{run_id}/recovery-metrics", 200)
+        attributes["run_id"] = str(run_id)
+        async with api_span(
+            "api.runs.recovery_metrics",
+            run_id=run_id,
+            attributes=attributes,
+        ):
+            recovery_metrics = RecoveryMetricsService(
+                runtime_repository=runtime().repository,
+                observability_repository=observability(),
+                budget_repository=budgets(),
+                validation_repository=validation_reports(),
+                team_repository=team_repository_state(),
+            )
+            try:
+                return (
+                    await recovery_metrics.report_for_run(run_id)
+                ).model_dump(mode="json")
             except KeyError as error:
                 attributes["http.status_code"] = 404
                 raise HTTPException(status_code=404, detail="Run not found.") from error

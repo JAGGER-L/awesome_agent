@@ -573,6 +573,55 @@ def test_diagnostics_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "warning=observability_missing" in result.stdout
 
 
+def test_recovery_metrics_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = uuid4()
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "run_id": str(run_id),
+                "totals": {
+                    "actions": 2,
+                    "model_calls": 1,
+                    "failed_model_calls": 1,
+                },
+                "by_action": [
+                    {"key": "verifier_rework", "count": 1},
+                    {"key": "budget_exhausted", "count": 1},
+                ],
+                "budgets": {
+                    "total_tokens": 150,
+                    "threshold_status": "exhausted",
+                },
+                "verifier": {"rework_requests": 1},
+                "warnings": [
+                    {
+                        "kind": "route_attempt_evidence_missing",
+                        "message": "Route attempts are not separately durable.",
+                    }
+                ],
+            }
+
+    def get(url: str, timeout: int) -> Response:
+        calls.append(url)
+        assert timeout == 30
+        return Response()
+
+    monkeypatch.setattr(cli_module.httpx, "get", get)
+
+    result = runner.invoke(app, ["recovery-metrics", str(run_id)])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(f"/runs/{run_id}/recovery-metrics")
+    assert "actions=2" in result.stdout
+    assert "verifier_rework:1" in result.stdout
+    assert "warning=route_attempt_evidence_missing" in result.stdout
+
+
 def test_context_compactions_command_reads_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

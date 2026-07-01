@@ -230,8 +230,13 @@ class ObservabilityDiagnosticSummary(BaseModel):
     latest_metric_name: str | None
 
 
+class RelatedDiagnosticLinks(BaseModel):
+    recovery_metrics: str
+
+
 class RunDiagnosticSummary(BaseModel):
     run_id: UUID
+    related: RelatedDiagnosticLinks
     status: RunStatusDiagnostic
     dispatch: DispatchDiagnostic
     timeline: list[RunTimelineEntry]
@@ -278,6 +283,9 @@ class RunDiagnosticsService:
 
         return RunDiagnosticSummary(
             run_id=run.id,
+            related=RelatedDiagnosticLinks(
+                recovery_metrics=f"/runs/{run.id}/recovery-metrics",
+            ),
             status=_status(run),
             dispatch=_dispatch(run),
             timeline=[_timeline_entry(event) for event in events],

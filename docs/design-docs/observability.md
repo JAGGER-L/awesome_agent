@@ -63,6 +63,7 @@ GET /runs/{run_id}/trace
 GET /runs/{run_id}/metrics
 GET /runs/{run_id}/model-calls
 GET /runs/{run_id}/diagnostics
+GET /runs/{run_id}/recovery-metrics
 ```
 
 `GET /runs/{run_id}/diagnostics` is a read-only operational projection over
@@ -76,6 +77,14 @@ The diagnostics response is bounded and redacted. It reports identifiers,
 statuses, token counts, hashes, summaries, artifact references, and boolean
 error presence. It does not include raw prompts, secrets, provider
 continuation payloads, full tool result content, or validation stdout/stderr.
+
+`GET /runs/{run_id}/recovery-metrics` is a read-only analytics projection over
+existing runtime events, model-call rows, token ledgers, validation reports,
+and team child evidence. It summarizes recovery actions, failure kinds,
+Verifier rework, provider/model outcomes, and token budget pressure so recovery
+budgets and provider behavior can be evaluated from durable facts. It does not
+mutate `TeamRecoveryPolicy`, provider ranking, model routing, retry budgets, or
+rework limits.
 
 Dashboard and alert definitions should use these dimensions:
 

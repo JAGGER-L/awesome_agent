@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace.export import (
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, RunMode, RunStatus
+from awesome_agent.domain.enums import AgentKind, EventType, RunMode, RunStatus
 from awesome_agent.domain.models import Agent, Repository, Run
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import (
@@ -566,6 +566,7 @@ def test_runtime_diagnostics_summarizes_run_evidence_and_redacts(
     assert response.status_code == 200
     body = response.json()
     assert body["run_id"] == str(run_id)
+    assert body["related"]["recovery_metrics"] == f"/runs/{run_id}/recovery-metrics"
     assert body["status"]["status"] == "completed"
     assert body["dispatch"]["status"] == "queued"
     assert body["agents"]["total"] == 1
@@ -651,6 +652,152 @@ def test_runtime_diagnostics_returns_404_for_missing_run(tmp_path: Path) -> None
     client, _ = _client(tmp_path)
 
     response = client.get("/runs/00000000-0000-0000-0000-000000000000/diagnostics")
+
+    assert response.status_code == 404
+
+
+def test_recovery_metrics_aggregate_team_and_provider_evidence(
+    tmp_path: Path,
+) -> None:
+    observability = InMemoryObservabilityRepository()
+    budget_repository = InMemoryBudgetRepository()
+    validation_repository = InMemoryValidationRepository()
+    client, repository = _client(
+        tmp_path,
+        observability_repository=observability,
+        budget_repository=budget_repository,
+        validation_repository=validation_repository,
+    )
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Recover this team run",
+            "mode": "team",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+    app = cast(Any, client.app)
+    runtime_repository = app.state.runtime.repository
+    teams = app.state.team_repository
+    leader = asyncio.run(runtime_repository.list_agents(run_id))[0]
+    assignment = TeamAssignment(
+        root_run_id=run_id,
+        parent_run_id=run_id,
+        child_run_id=uuid4(),
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="teammate",
+        runtime_route="team-role",
+        goal="repair",
+    )
+    asyncio.run(teams.create_assignment(assignment))
+    asyncio.run(
+        teams.record_child_result(
+            TeamChildResult(
+                assignment_id=assignment.id,
+                child_run_id=assignment.child_run_id,
+                parent_run_id=run_id,
+                root_run_id=run_id,
+                status="failed",
+                summary="validation failed",
+                failure_kind="validation_failed",
+            )
+        )
+    )
+    asyncio.run(
+        runtime_repository.append_event(
+            run_id=run_id,
+            event_type=EventType.TEAM_REWORK_REQUESTED,
+            payload={"failure_kind": "validation_failed"},
+        )
+    )
+    asyncio.run(
+        runtime_repository.append_event(
+            run_id=run_id,
+            event_type=EventType.BUDGET_EXHAUSTED,
+            payload={},
+        )
+    )
+    asyncio.run(
+        observability.record_model_call(
+            DurableModelCall(
+                run_id=run_id,
+                agent_id=leader.id,
+                turn=1,
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                status="failed",
+            )
+        )
+    )
+    asyncio.run(
+        budget_repository.upsert_ledger(
+            RunBudgetLedgerRecord(
+                run_id=run_id,
+                total_input_tokens=100,
+                total_output_tokens=50,
+                total_reasoning_tokens=10,
+                active_seconds=12,
+                model_call_count=1,
+                threshold_status="exhausted",
+            )
+        )
+    )
+    report = DurableValidationReport(
+        run_id=run_id,
+        agent_id=leader.id,
+        attempt=1,
+        status="failed",
+        summary="failed",
+    )
+    asyncio.run(
+        validation_repository.record_report(
+            report,
+            gates=[
+                DurableValidationGateResult(
+                    report_id=report.id,
+                    run_id=run_id,
+                    gate_id="pytest",
+                    name="pytest",
+                    command=["pytest"],
+                    required=True,
+                    status="failed",
+                    failure_kind="validation_failed",
+                )
+            ],
+        )
+    )
+
+    response = client.get(f"/runs/{run_id}/recovery-metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    actions = {item["key"]: item["count"] for item in body["by_action"]}
+    failures = {item["key"]: item["count"] for item in body["by_failure_kind"]}
+    assert actions["verifier_rework"] == 1
+    assert actions["same_child_validation_rework"] >= 1
+    assert actions["budget_exhausted"] == 1
+    assert failures["validation_failed"] >= 1
+    assert body["by_role"][0]["key"] == "teammate"
+    assert body["by_provider_model"][0]["failed"] == 1
+    assert body["budgets"]["total_tokens"] == 150
+    assert body["verifier"]["failed_validation_reports"] == 1
+    assert body["recommendations"]
+    assert "route_attempt_evidence_missing" in {
+        warning["kind"] for warning in body["warnings"]
+    }
+    serialized = response.text.lower()
+    assert "cost" not in serialized
+    assert "price" not in serialized
+    assert "currency" not in serialized
+
+
+def test_recovery_metrics_returns_404_for_missing_run(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    response = client.get(
+        "/runs/00000000-0000-0000-0000-000000000000/recovery-metrics"
+    )
 
     assert response.status_code == 404
 
