@@ -2,7 +2,7 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol
 from uuid import UUID
 
 import httpx
@@ -34,6 +34,21 @@ from awesome_agent.settings import Settings
 configure_event_loop_policy()
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+class _TuiApp(Protocol):
+    def __init__(
+        self,
+        *,
+        api_url: str,
+        run_id: str | None,
+        refresh_interval: float,
+    ) -> None: ...
+
+    def run(self) -> object: ...
+
+
+AwesomeAgentTui: type[_TuiApp] | None = None
 
 app = typer.Typer(
     name="awesome-agent",
@@ -703,6 +718,25 @@ def approve(
     typer.echo("approved" if approved else "denied")
 
 
+@app.command()
+def tui(
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+    run_id: Annotated[str | None, typer.Option()] = None,
+    refresh_interval: Annotated[
+        float,
+        typer.Option(min=0.5, max=60.0),
+    ] = 2.0,
+) -> None:
+    """Open the local terminal operator console."""
+    app_type = _load_tui_app()
+    tui_app = app_type(
+        api_url=api_url,
+        run_id=run_id,
+        refresh_interval=refresh_interval,
+    )
+    tui_app.run()
+
+
 def _print_workspace_candidates(candidates: list[dict[str, Any]]) -> None:
     typer.echo("run_id status can_cleanup dirty reason")
     for candidate in candidates:
@@ -731,6 +765,15 @@ def _run_with_repository_service[T](
             await engine.dispose()
 
     return asyncio.run(execute())
+
+
+def _load_tui_app() -> type[_TuiApp]:
+    global AwesomeAgentTui
+    if AwesomeAgentTui is None:
+        from awesome_agent.tui.app import AwesomeAgentTui as LoadedTui
+
+        AwesomeAgentTui = LoadedTui
+    return AwesomeAgentTui
 
 
 def _reject_public_bind_without_consent(

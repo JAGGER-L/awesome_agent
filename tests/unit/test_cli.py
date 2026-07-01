@@ -31,6 +31,48 @@ def test_version_command() -> None:
     assert result.stdout.strip() == "0.1.0"
 
 
+def test_tui_command_launches_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    launched: dict[str, object] = {}
+
+    class FakeTui:
+        def __init__(
+            self,
+            *,
+            api_url: str,
+            run_id: str | None,
+            refresh_interval: float,
+        ) -> None:
+            launched["api_url"] = api_url
+            launched["run_id"] = run_id
+            launched["refresh_interval"] = refresh_interval
+
+        def run(self) -> None:
+            launched["ran"] = True
+
+    monkeypatch.setattr(cli_module, "AwesomeAgentTui", FakeTui)
+
+    result = runner.invoke(
+        app,
+        [
+            "tui",
+            "--api-url",
+            "http://127.0.0.1:9000",
+            "--run-id",
+            "00000000-0000-0000-0000-000000000001",
+            "--refresh-interval",
+            "3.5",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert launched == {
+        "api_url": "http://127.0.0.1:9000",
+        "run_id": "00000000-0000-0000-0000-000000000001",
+        "refresh_interval": 3.5,
+        "ran": True,
+    }
+
+
 def test_doctor_can_skip_docker(monkeypatch: pytest.MonkeyPatch) -> None:
     async def collect_readiness(*args: Any, **kwargs: Any) -> ReadinessReport:
         assert kwargs["check_docker"] is False

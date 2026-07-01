@@ -190,6 +190,16 @@ Useful local operations:
 .\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id>
 ```
 
+Open the local TUI operator console:
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe tui
+.\.venv\Scripts\awesome-agent.exe tui --run-id <run-id>
+```
+
+The TUI is a local API-backed inspection and control surface for Runs,
+diagnostics, events, and approvals. It is not a hosted web dashboard.
+
 `awesome-agent start` supervises API and Worker processes together. Use
 `awesome-agent serve` and `awesome-agent worker` separately when another
 process manager should own them. The local API is unauthenticated and binds to

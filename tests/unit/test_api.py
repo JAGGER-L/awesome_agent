@@ -274,6 +274,34 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
     assert len(client.get(f"/runs/{run_id}/approvals").json()) == 1
 
 
+def test_list_runs_returns_recent_runs(tmp_path: Path) -> None:
+    client, repository = _client(tmp_path)
+    first = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect alpha",
+            "intent": "read_only",
+        },
+    ).json()
+    second = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect beta",
+            "intent": "read_only",
+        },
+    ).json()
+
+    response = client.get("/runs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [run["id"] for run in body[:2]] == [second["id"], first["id"]]
+    assert body[0]["goal"] == "Inspect beta"
+    assert body[0]["status"] == "created"
+
+
 def test_create_run_pins_extension_catalog_version(tmp_path: Path) -> None:
     catalog = ExtensionCatalog(version="ext_123")
     client, repository = _client(tmp_path, extension_catalog=catalog)
