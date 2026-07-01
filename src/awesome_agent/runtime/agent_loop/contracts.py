@@ -6,6 +6,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
+from awesome_agent.extensions.skills import SkillRuntimeView
 from awesome_agent.modeling import ModelMessage
 
 
@@ -90,6 +91,7 @@ class MiddlewareContext:
     budget: TokenBudgetContext | None = None
     handoff: HandoffContext | None = None
     error: ErrorClassificationContext | None = None
+    skill_runtime_view: SkillRuntimeView | None = None
 
     def __post_init__(self) -> None:
         self.metadata = MappingProxyType(dict(self.metadata))
