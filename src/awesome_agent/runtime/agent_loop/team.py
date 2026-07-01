@@ -103,6 +103,45 @@ class TeamAgentLoop:
             metadata=metadata,
         )
 
+    async def expose_tools(
+        self,
+        state: StateT,
+        *,
+        run: Run,
+        agent: Agent,
+        messages: Sequence[ModelMessage],
+        handler: Callable[[StateT], Awaitable[ResultT]],
+        assignment_id: object | None = None,
+        team_role: str | None = None,
+        agent_kind: str | None = None,
+        metadata: Mapping[str, object] | None = None,
+    ) -> ResultT:
+        exposed = await self._run_stage(
+            MiddlewareStage.BEFORE_TOOL_EXPOSURE,
+            state,
+            run=run,
+            agent=agent,
+            messages=messages,
+            handler=handler,
+            assignment_id=assignment_id,
+            team_role=team_role,
+            agent_kind=agent_kind,
+            metadata=metadata,
+        )
+        await self._run_stage(
+            MiddlewareStage.AFTER_TOOL_EXPOSURE,
+            exposed,
+            run=run,
+            agent=agent,
+            messages=messages,
+            handler=_after_tool_exposure_identity,
+            assignment_id=assignment_id,
+            team_role=team_role,
+            agent_kind=agent_kind,
+            metadata=metadata,
+        )
+        return exposed
+
     async def wrap_tool_call(
         self,
         state: StateT,
@@ -254,3 +293,7 @@ def _string_tuple(value: object) -> tuple[str, ...]:
 
 def _string_or_none(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+async def _after_tool_exposure_identity[T](value: T) -> T:
+    return value

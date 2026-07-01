@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from awesome_agent.extensions.models import ExtensionCatalog
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
 
 READ_ONLY_TEAM_TOOLS = frozenset(
@@ -58,6 +59,9 @@ class ToolDecisionReason(StrEnum):
     ACTOR_KIND_DENIED = "actor_kind_denied"
     SUBAGENT_SCOPE = "subagent_scope"
     VERIFIER_SCOPE = "verifier_scope"
+    NOT_EXPOSED = "not_exposed"
+    SOURCE_UNHEALTHY = "source_unhealthy"
+    CATALOG_MISSING = "catalog_missing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +132,7 @@ class TeamCapabilityRequest:
     assignment: TeamAssignment
     purpose: CapabilityPurpose = CapabilityPurpose.ROLE_EXECUTION
     requested_tools: Sequence[str] | None = None
+    catalog: ExtensionCatalog | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,11 +145,13 @@ class CapabilityResolver:
         *,
         purpose: CapabilityPurpose = CapabilityPurpose.ROLE_EXECUTION,
         requested_tools: Sequence[str] | None = None,
+        catalog: ExtensionCatalog | None = None,
     ) -> EffectiveToolPolicy:
         request = TeamCapabilityRequest(
             assignment=assignment,
             purpose=purpose,
             requested_tools=requested_tools,
+            catalog=catalog,
         )
         return EffectiveToolPolicy(
             tuple(
@@ -159,8 +166,15 @@ class CapabilityResolver:
         tool_name: str,
     ) -> ToolPolicyDecision:
         assignment = request.assignment
-        if tool_name not in self.known_team_tools:
-            return _denied(tool_name, ToolDecisionReason.UNKNOWN_TOOL)
+        if tool_name not in self.known_team_tools and not _catalog_has_tool(
+            request.catalog,
+            tool_name,
+        ):
+            return _denied(
+                tool_name,
+                ToolDecisionReason.UNKNOWN_TOOL,
+                catalog=request.catalog,
+            )
 
         effective_grants = set(_effective_grants(assignment))
         if tool_name not in effective_grants:
@@ -170,18 +184,26 @@ class CapabilityResolver:
                 if tool_name in hidden
                 else ToolDecisionReason.NOT_ASSIGNED
             )
-            return _denied(tool_name, reason)
+            return _denied(tool_name, reason, catalog=request.catalog)
 
         if (
             request.purpose is CapabilityPurpose.SUBAGENT_GRANT
             and tool_name not in READ_ONLY_TEAM_TOOLS
         ):
-            return _denied(tool_name, ToolDecisionReason.SUBAGENT_SCOPE)
+            return _denied(
+                tool_name,
+                ToolDecisionReason.SUBAGENT_SCOPE,
+                catalog=request.catalog,
+            )
         if (
             request.purpose is CapabilityPurpose.VERIFIER_REVIEW
             and tool_name not in VERIFIER_REVIEW_TOOLS
         ):
-            return _denied(tool_name, ToolDecisionReason.VERIFIER_SCOPE)
+            return _denied(
+                tool_name,
+                ToolDecisionReason.VERIFIER_SCOPE,
+                catalog=request.catalog,
+            )
         if assignment.kind is TeamAssignmentKind.SUBAGENT and (
             tool_name not in READ_ONLY_TEAM_TOOLS
         ):
@@ -190,14 +212,22 @@ class CapabilityResolver:
                 if tool_name in WRITE_TEAM_TOOLS
                 else ToolDecisionReason.ACTOR_KIND_DENIED
             )
-            return _denied(tool_name, reason)
+            return _denied(tool_name, reason, catalog=request.catalog)
         if (
             assignment.kind is TeamAssignmentKind.VERIFIER
             and tool_name not in VERIFIER_REVIEW_TOOLS
         ):
-            return _denied(tool_name, ToolDecisionReason.VERIFIER_SCOPE)
+            return _denied(
+                tool_name,
+                ToolDecisionReason.VERIFIER_SCOPE,
+                catalog=request.catalog,
+            )
         if tool_name in WRITE_TEAM_TOOLS and not assignment.can_write:
-            return _denied(tool_name, ToolDecisionReason.REQUIRES_WRITE)
+            return _denied(
+                tool_name,
+                ToolDecisionReason.REQUIRES_WRITE,
+                catalog=request.catalog,
+            )
         if tool_name == "team.create_subagent" and (
             assignment.kind is not TeamAssignmentKind.TEAMMATE
             or not assignment.can_delegate
@@ -208,17 +238,24 @@ class CapabilityResolver:
                 if assignment.kind is not TeamAssignmentKind.TEAMMATE
                 else ToolDecisionReason.REQUIRES_DELEGATION
             )
-            return _denied(tool_name, reason)
+            return _denied(tool_name, reason, catalog=request.catalog)
         if (
             tool_name in TEAM_MAILBOX_TOOLS
             and assignment.kind is not TeamAssignmentKind.TEAMMATE
         ):
-            return _denied(tool_name, ToolDecisionReason.ACTOR_KIND_DENIED)
+            return _denied(
+                tool_name,
+                ToolDecisionReason.ACTOR_KIND_DENIED,
+                catalog=request.catalog,
+            )
         return ToolPolicyDecision(
             tool_name=tool_name,
             allowed=True,
             reason=ToolDecisionReason.GRANTED,
-            required_capabilities=_TOOL_CAPABILITIES[tool_name],
+            required_capabilities=_tool_capabilities(
+                tool_name,
+                catalog=request.catalog,
+            ),
         )
 
 
@@ -249,10 +286,33 @@ def _unique_tools(tool_names: Sequence[str]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def _denied(tool_name: str, reason: ToolDecisionReason) -> ToolPolicyDecision:
+def _catalog_has_tool(catalog: ExtensionCatalog | None, tool_name: str) -> bool:
+    return catalog is not None and any(tool.name == tool_name for tool in catalog.tools)
+
+
+def _tool_capabilities(
+    tool_name: str,
+    *,
+    catalog: ExtensionCatalog | None,
+) -> frozenset[str]:
+    if tool_name in _TOOL_CAPABILITIES:
+        return _TOOL_CAPABILITIES[tool_name]
+    if catalog is not None:
+        for tool in catalog.tools:
+            if tool.name == tool_name:
+                return frozenset(tool.required_capabilities)
+    return frozenset()
+
+
+def _denied(
+    tool_name: str,
+    reason: ToolDecisionReason,
+    *,
+    catalog: ExtensionCatalog | None = None,
+) -> ToolPolicyDecision:
     return ToolPolicyDecision(
         tool_name=tool_name,
         allowed=False,
         reason=reason,
-        required_capabilities=_TOOL_CAPABILITIES.get(tool_name, frozenset()),
+        required_capabilities=_tool_capabilities(tool_name, catalog=catalog),
     )
