@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from openai import AsyncOpenAI
@@ -42,6 +45,8 @@ from awesome_agent.modeling.messages import (
 )
 from awesome_agent.providers.errors import classify_openai_error
 
+_DEEPSEEK_TOOL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_-]")
+
 
 class DeepSeekProvider(StructuredModelProvider):
     def __init__(
@@ -66,12 +71,13 @@ class DeepSeekProvider(StructuredModelProvider):
         self,
         request: StructuredModelRequest,
     ) -> AsyncIterator[ModelStreamEvent]:
+        tool_names = _deepseek_tool_names(request)
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
-                messages=cast(Any, _deepseek_messages(request)),
-                tools=cast(Any, _deepseek_tools(request)),
-                tool_choice=cast(Any, _deepseek_tool_choice(request)),
+                messages=cast(Any, _deepseek_messages(request, tool_names)),
+                tools=cast(Any, _deepseek_tools(request, tool_names)),
+                tool_choice=cast(Any, _deepseek_tool_choice(request, tool_names)),
                 max_tokens=request.max_output_tokens,
                 reasoning_effort=cast(Any, self._reasoning_effort),
                 extra_body={
@@ -123,7 +129,11 @@ class DeepSeekProvider(StructuredModelProvider):
                     arguments = getattr(function, "arguments", None)
                     if call_id or name:
                         state["call_id"] = call_id or state["call_id"]
-                        state["name"] = name or state["name"]
+                        state["name"] = (
+                            tool_names.wire_to_model.get(name, name)
+                            if name
+                            else state["name"]
+                        )
                         yield ToolCallStarted(
                             index=index,
                             call_id=state["call_id"],
@@ -184,7 +194,46 @@ class DeepSeekProvider(StructuredModelProvider):
             )
 
 
-def _deepseek_messages(request: StructuredModelRequest) -> list[dict[str, Any]]:
+@dataclass(frozen=True, slots=True)
+class _DeepSeekToolNames:
+    model_to_wire: dict[str, str]
+    wire_to_model: dict[str, str]
+
+
+def _deepseek_tool_names(request: StructuredModelRequest) -> _DeepSeekToolNames:
+    model_to_wire: dict[str, str] = {}
+    wire_to_model: dict[str, str] = {}
+    for tool in request.tools:
+        wire = _unique_deepseek_tool_name(tool.name, wire_to_model)
+        model_to_wire[tool.name] = wire
+        wire_to_model[wire] = tool.name
+    return _DeepSeekToolNames(model_to_wire=model_to_wire, wire_to_model=wire_to_model)
+
+
+def _unique_deepseek_tool_name(
+    model_name: str,
+    wire_to_model: dict[str, str],
+) -> str:
+    candidate = _deepseek_wire_tool_name(model_name)
+    if candidate not in wire_to_model or wire_to_model[candidate] == model_name:
+        return candidate
+    suffix = hashlib.sha1(model_name.encode()).hexdigest()[:8]
+    candidate = f"{candidate}_{suffix}"
+    while candidate in wire_to_model and wire_to_model[candidate] != model_name:
+        suffix = hashlib.sha1(f"{model_name}:{suffix}".encode()).hexdigest()[:8]
+        candidate = f"{_deepseek_wire_tool_name(model_name)}_{suffix}"
+    return candidate
+
+
+def _deepseek_wire_tool_name(model_name: str) -> str:
+    normalized = _DEEPSEEK_TOOL_NAME_PATTERN.sub("_", model_name)
+    return normalized or "tool"
+
+
+def _deepseek_messages(
+    request: StructuredModelRequest,
+    tool_names: _DeepSeekToolNames,
+) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     continuation_reasoning = _deepseek_continuation_reasoning(request)
     assistant_indexes = [
@@ -207,7 +256,10 @@ def _deepseek_messages(request: StructuredModelRequest) -> list[dict[str, Any]]:
                         "id": call.call_id,
                         "type": "function",
                         "function": {
-                            "name": call.name,
+                            "name": tool_names.model_to_wire.get(
+                                call.name,
+                                _deepseek_wire_tool_name(call.name),
+                            ),
                             "arguments": call.arguments_json,
                         },
                     }
@@ -242,14 +294,17 @@ def _deepseek_continuation_reasoning(
     return value if isinstance(value, str) else None
 
 
-def _deepseek_tools(request: StructuredModelRequest) -> list[dict[str, Any]] | None:
+def _deepseek_tools(
+    request: StructuredModelRequest,
+    tool_names: _DeepSeekToolNames,
+) -> list[dict[str, Any]] | None:
     if not request.tools:
         return None
     return [
         {
             "type": "function",
             "function": {
-                "name": tool.name,
+                "name": tool_names.model_to_wire[tool.name],
                 "description": tool.description,
                 "parameters": tool.input_schema,
             },
@@ -258,10 +313,22 @@ def _deepseek_tools(request: StructuredModelRequest) -> list[dict[str, Any]] | N
     ]
 
 
-def _deepseek_tool_choice(request: StructuredModelRequest) -> object:
+def _deepseek_tool_choice(
+    request: StructuredModelRequest,
+    tool_names: _DeepSeekToolNames,
+) -> object:
     choice = request.tool_choice
     if choice.mode is ToolChoiceMode.TOOL:
-        return {"type": "function", "function": {"name": choice.name}}
+        name = choice.name or ""
+        return {
+            "type": "function",
+            "function": {
+                "name": tool_names.model_to_wire.get(
+                    name,
+                    _deepseek_wire_tool_name(name),
+                )
+            },
+        }
     return choice.mode.value
 
 

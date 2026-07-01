@@ -108,7 +108,7 @@ class ModelRouteExecutionError(RuntimeError):
         attempts: tuple[ModelRouteAttempt, ...],
         last_error: Exception,
     ) -> None:
-        super().__init__(message)
+        super().__init__(_route_execution_message(message, attempts, last_error))
         self.attempts = attempts
         self.last_error = last_error
 
@@ -225,3 +225,21 @@ def _route_id(
     role = request.agent_role or "default"
     task = request.task_kind or "coding"
     return f"{request.runtime_route}:{role}:{task}:{candidate_key}"
+
+
+def _route_execution_message(
+    message: str,
+    attempts: tuple[ModelRouteAttempt, ...],
+    last_error: Exception,
+) -> str:
+    if not attempts:
+        return f"{message} {last_error}"
+    attempt = attempts[-1]
+    detail = str(last_error)
+    status_code = getattr(getattr(last_error, "info", None), "status_code", None)
+    status = f" status={status_code}" if status_code is not None else ""
+    error_code = f" error={attempt.error_code}" if attempt.error_code else ""
+    return (
+        f"{message} last_attempt={attempt.provider}/{attempt.model}"
+        f"{error_code}{status}: {detail}"
+    )

@@ -58,6 +58,7 @@ from awesome_agent.observability.repository import (
     ObservabilityRepository,
     PostgresObservabilityRepository,
 )
+from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.budget import BudgetRepository, PostgresBudgetRepository
 from awesome_agent.persistence.database import (
@@ -209,6 +210,7 @@ def create_app(
             events=event_stream,
             artifacts=LocalArtifactStore(settings.artifact_root),
             artifact_repository=PostgresArtifactMetadataRepository(sessions),
+            approval_repository=PostgresApprovalRepository(sessions),
             dispatcher=dispatcher,
             model_resolver=RoleModelResolver.from_settings(settings),
             event_poll_interval=settings.event_poll_interval_seconds,
@@ -723,6 +725,8 @@ def create_app(
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Run not found.") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         return event.model_dump(mode="json")
 
     @app.get("/runs/{run_id}/verification")

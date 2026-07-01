@@ -13,6 +13,7 @@ from awesome_agent.tools.shell import _execute, classify_command
 
 def test_shell_policy_classifies_allow_ask_and_deny() -> None:
     assert classify_command(["pytest"]) == "allow"
+    assert classify_command(["python", "-m", "unittest", "discover"]) == "allow"
     assert classify_command(["git", "diff"]) == "allow"
     assert classify_command(["git", "push"]) == "deny"
     assert classify_command(["git", "status"]) == "allow"

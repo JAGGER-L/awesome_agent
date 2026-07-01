@@ -99,6 +99,11 @@ def classify_command(argv: list[str]) -> Literal["allow", "ask", "deny"]:
             return "allow"
     if executable == "pytest":
         return "allow"
+    if executable == "python" and len(lowered) > 2 and lowered[1:3] == [
+        "-m",
+        "unittest",
+    ]:
+        return "allow"
     if executable == "ruff" and len(lowered) > 1 and lowered[1] == "check":
         return "allow"
     if executable == "mypy":

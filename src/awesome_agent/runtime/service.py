@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from uuid import UUID
 
 from awesome_agent.agents.profiles import RoleModelResolver
@@ -17,6 +18,7 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
+from awesome_agent.persistence.approvals import ApprovalExpired, ApprovalRepository
 from awesome_agent.runtime.dispatch import RunDispatcher
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.repository import RuntimeRepository
@@ -31,6 +33,7 @@ class RuntimeService:
         artifacts: LocalArtifactStore,
         model_resolver: RoleModelResolver,
         artifact_repository: ArtifactMetadataRepository | None = None,
+        approval_repository: ApprovalRepository | None = None,
         dispatcher: RunDispatcher | None = None,
         event_poll_interval: float = 0.5,
     ) -> None:
@@ -40,6 +43,7 @@ class RuntimeService:
         self.artifact_repository = (
             artifact_repository or InMemoryArtifactMetadataRepository()
         )
+        self.approval_repository = approval_repository
         self.model_resolver = model_resolver
         self.dispatcher = dispatcher
         self.event_poll_interval = event_poll_interval
@@ -116,7 +120,18 @@ class RuntimeService:
         approved: bool,
     ) -> RuntimeEvent:
         await self.get_run(run_id)
-        return await self._emit(
+        if self.approval_repository is not None:
+            try:
+                await self.approval_repository.decide(
+                    approval_id,
+                    approved=approved,
+                    decided_by="api",
+                    reason="api_decision",
+                    now=datetime.now(UTC),
+                )
+            except ApprovalExpired as error:
+                raise ValueError(str(error)) from error
+        event = await self._emit(
             run_id,
             EventType.APPROVAL_DECIDED,
             {
@@ -124,6 +139,13 @@ class RuntimeService:
                 "approved": approved,
             },
         )
+        if self.dispatcher is not None:
+            await self.dispatcher.requeue_after_approval(
+                run_id=run_id,
+                approval_id=approval_id,
+                reason="approval_decided",
+            )
+        return event
 
     async def list_agents(self, run_id: UUID) -> list[Agent]:
         return await self.repository.list_agents(run_id)

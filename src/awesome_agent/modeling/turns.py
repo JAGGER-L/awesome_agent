@@ -56,7 +56,7 @@ class ModelRequest(BaseModel):
     messages: list[ModelMessage] = Field(min_length=1)
     tools: list[ToolDefinition] = Field(default_factory=list)
     tool_choice: ToolChoice = Field(default_factory=ToolChoice)
-    max_output_tokens: int = Field(default=2000, ge=1)
+    max_output_tokens: int = Field(default=6000, ge=1)
     continuation: ContinuationState | None = Field(
         default=None,
         exclude=True,

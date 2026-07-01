@@ -15,6 +15,7 @@ from opentelemetry.sdk.trace.export import (
 from awesome_agent.modeling import (
     AssistantMessage,
     ContinuationState,
+    InvalidRequestModelError,
     ModelTurn,
     ModelUsage,
     StopReason,
@@ -24,6 +25,10 @@ from awesome_agent.modeling import (
 )
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import InMemoryObservabilityRepository
+from awesome_agent.providers.routing import (
+    ModelRouteAttempt,
+    ModelRouteExecutionError,
+)
 from awesome_agent.runtime.agent_loop import (
     AgentLoopStatus,
     AssignmentContext,
@@ -346,6 +351,70 @@ async def test_observability_middleware_records_safe_tool_call_span() -> None:
         ("tool.call.latency_ms", "ms"),
     }
     assert exporter.spans[0].name == "tool.call"
+
+
+@pytest.mark.asyncio
+async def test_observability_middleware_records_failed_model_call_row() -> None:
+    repository = InMemoryObservabilityRepository()
+    exporter = RecordingExporter()
+    stack = MiddlewareStack([ObservabilityMiddleware(_facade(repository, exporter))])
+    run_id = uuid4()
+    agent_id = uuid4()
+    provider_error = InvalidRequestModelError(
+        "400 Invalid 'tools[0].function.name': string does not match pattern.",
+        provider="deepseek",
+        status_code=400,
+    )
+    route_error = ModelRouteExecutionError(
+        "Model route execution failed.",
+        attempts=(
+            ModelRouteAttempt(
+                route_id="solo-modifying:leader:coding:deepseek:deepseek-v4-flash",
+                attempt_number=1,
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                outcome="failed",
+                error_code="invalid_request",
+            ),
+        ),
+        last_error=provider_error,
+    )
+
+    async def operation() -> dict[str, Any]:
+        raise route_error
+
+    with pytest.raises(ModelRouteExecutionError):
+        await stack.run_operation(
+            MiddlewareStage.WRAP_MODEL_CALL,
+            MiddlewareContext(
+                run_id=str(run_id),
+                agent_id=str(agent_id),
+                runtime_route="solo-modifying",
+                messages=[SystemMessage(content="prompt text must stay private")],
+                metadata={
+                    "turn": 1,
+                    "model": "deepseek-v4-flash",
+                },
+            ),
+            operation,
+        )
+
+    durable_spans = await repository.list_spans_for_run(run_id)
+    model_calls = await repository.list_model_calls_for_run(run_id)
+    metrics = await repository.list_metrics_for_run(run_id)
+
+    assert durable_spans[0].name == "model.call"
+    assert durable_spans[0].status == "failed"
+    assert "tools[0].function.name" in (durable_spans[0].error or "")
+    assert len(model_calls) == 1
+    assert model_calls[0].agent_id == agent_id
+    assert model_calls[0].turn == 1
+    assert model_calls[0].provider == "deepseek"
+    assert model_calls[0].model == "deepseek-v4-flash"
+    assert model_calls[0].status == "failed"
+    assert model_calls[0].error is not None
+    assert "tools[0].function.name" in model_calls[0].error
+    assert any(metric.name == "model.call.count" for metric in metrics)
 
 
 @pytest.mark.asyncio

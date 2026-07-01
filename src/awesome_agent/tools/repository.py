@@ -460,10 +460,8 @@ async def _apply_patch(invocation: ToolInvocation, _: object) -> ToolResult:
                     "postimage_hashes": _file_hashes(workspace, paths),
                 },
             )
-        raise RepositoryRecoveryRequired(
-            "Patch state is ambiguous. It does not match the preimage and cannot "
-            "be proven to match the postimage."
-        )
+        detail = checked.stderr or checked.stdout or "git apply --check failed"
+        raise RepositoryToolError(f"Patch does not apply: {detail.strip()}")
     applied = await _git_apply(workspace, arguments.patch, check=False)
     if applied.returncode != 0:
         raise RepositoryRecoveryRequired(applied.stderr or applied.stdout)
