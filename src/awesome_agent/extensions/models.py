@@ -23,6 +23,7 @@ class ExtensionSourceType(StrEnum):
     STATIC = "static"
     SKILL_DIRECTORY = "skill_directory"
     MCP_STDIO = "mcp_stdio"
+    MCP_STREAMABLE_HTTP = "mcp_streamable_http"
 
 
 class ExtensionTrustLevel(StrEnum):
@@ -36,6 +37,15 @@ class ExtensionHealthStatus(StrEnum):
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
     UNKNOWN = "unknown"
+
+
+class ExtensionAuthType(StrEnum):
+    BEARER_TOKEN_ENV = "bearer_token_env"
+
+
+class ExtensionAuthConfig(BaseModel):
+    type: ExtensionAuthType
+    env: str = Field(min_length=1, max_length=128)
 
 
 class ExtensionHealthSnapshot(BaseModel):
@@ -66,6 +76,9 @@ class ExtensionSourceConfig(BaseModel):
     path: Path | None = None
     command: str | None = Field(default=None, min_length=1, max_length=1024)
     args: list[str] = Field(default_factory=list)
+    url: str | None = Field(default=None, min_length=1, max_length=2048)
+    auth: ExtensionAuthConfig | None = None
+    max_concurrency: int = Field(default=4, ge=1, le=64)
     required: bool = True
     discovery_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
     secret_arg_indexes: set[int] = Field(default_factory=set)
