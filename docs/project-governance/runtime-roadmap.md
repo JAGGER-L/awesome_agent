@@ -132,6 +132,13 @@ Extension sequence:
 | Task 50 | Community Tools | Done | Added packaged community tool sources. | Allowlisted local tool packages can declare tools that normalize into catalog inventory and execute through the same exposure, capability, approval, and `ToolExecutor` path. |
 | Task 51 | Operations | Done | Hardened extension operations and diagnostics. | Operators can inspect catalog diffs, source health history, extension denial/error metrics, stale catalog warnings, and structural tests prove extensions cannot bypass resolver/executor boundaries. |
 | Task 52 | Extension Config | Done | Added project-level extension configuration and the default project skill root. | `awesome-agent.yaml` can declare skill roots and MCP sources, repository-root `skills/` auto-discovers project skills, stdio MCP env pass-through stores env names only, and discovered extensions still do not grant tool authority. |
+| Task 53 | Documentation | Done | Reset documentation governance and public README entry points. | Docs have a reader-oriented map, documentation governance rules, rewritten bilingual README entry points, and a manual quickstart path without changing runtime behavior. |
+
+Next extension-phase productization task:
+
+| Task | Phase | Status | Purpose | Exit condition |
+| --- | --- | --- | --- | --- |
+| Task 54 | Quick Start | Planned | Add a README-ready local Quick Start automation path. | `scripts/quickstart.ps1` should automate the local Windows setup, start dependencies, verify readiness with a diagnostic probe, and update README/manual docs without claiming production deployment or requiring a model key for the required success check. |
 
 ## Architecture Debt Carried Forward
 

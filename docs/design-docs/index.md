@@ -3,6 +3,10 @@
 Design documents describe durable `awesome_agent` product behavior and
 boundaries. Development-agent plans and handoffs belong in ignored `.codex/`.
 
+For user-facing setup and operation, start with [the README](../../README.md)
+and [the quickstart](../getting-started/quickstart.md). This index is for
+durable architecture contracts.
+
 - [Core beliefs](core-beliefs.md)
 - [Runtime agent harness](runtime-agent-harness.md)
 - [Durable execution](durable-execution.md)

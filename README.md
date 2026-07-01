@@ -1,319 +1,190 @@
-﻿# awesome_agent
+# awesome_agent
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`awesome_agent` is a local-first Python coding agent runtime being built toward
-three goals: **durable** execution that survives process failure and approval
-waits, **observable** runs, and a **multi-agent** Leader/Teammate/Subagent
-organization with an independent Verifier.
+`awesome_agent` is a local-first coding-agent runtime for durable, observable,
+permissioned coding runs.
 
-This README describes what works today and what is still prototype or planned,
-so the project's actual capability is not overstated.
+## What It Is
 
-## Current Status
+`awesome_agent` runs coding tasks against local Git repositories through a Typer
+CLI, a local FastAPI API, PostgreSQL-backed durable state, and Worker processes.
+It supports solo read-only runs, solo modifying runs, and an explicit
+Leader/Teammate/Subagent team runtime with an independent Verifier.
 
-### Durable runtime (implemented)
+The project is a runtime kernel first: it focuses on crash recovery, auditable
+side effects, bounded model/tool loops, local repository safety, and inspection
+surfaces before higher-level product UI.
 
-The durable execution foundation is real and integration-tested against
-PostgreSQL:
+## Why It Exists
 
-- repository-aware Run intake: CLI `--repo PATH` resolves to a registered
-  repository UUID, allowed-root policy, clean-base named Git worktree per Run,
-  crash-recoverable intake reservations;
-- PostgreSQL dispatch queue with `FOR UPDATE SKIP LOCKED` claims, leases,
-  heartbeats, monotonically increasing fencing tokens, delayed retry, and
-  expired-lease recovery to `recovery_required`;
-- a durable Worker that executes at most one Run at a time, checkpoints with
-  `AsyncPostgresSaver`, heartbeats the lease, and resumes from the checkpoint
-  after a process crash (verified by a real subprocess-crash recovery test);
-- a provider-neutral structured model turn protocol (messages, native tool
-  calls, streamed reasoning/text deltas, stop reasons, usage, private
-  checkpoint-only continuation) mapped for DeepSeek Chat Completions and OpenAI
-  Responses; provider SDK objects never cross adapter boundaries;
-- cross-process SSE backed by ordered PostgreSQL event polling, not process-local
-  state.
-- frontend-ready Run, Agent, and Todo lifecycle projections: visible status
-  transitions update projection rows, Agent/Todo revisions, timestamps, and
-  matching runtime events together.
-- managed execution workspace retention: `workspace list` and explicit
-  dry-run-first `workspace cleanup` inspect and safely remove owned inactive
-  worktrees and integration branches.
-- dependency-aware readiness: `/health` remains cheap process liveness, while
-  `/ready?profile=api`, `/ready?profile=runtime`, and `doctor --profile`
-  verify PostgreSQL, Alembic migrations, LangGraph checkpointing, workspace
-  writability, provider configuration, model routes, API bind policy, and fresh
-  Worker heartbeat evidence.
+Most coding-agent prototypes are easy to start and hard to trust after
+something goes wrong. This project optimizes for the other half of the problem:
+recoverability, least-privilege tool access, operator visibility, and local
+control.
 
-### Coding execution (implemented)
+The runtime is designed so a Run can be inspected after a crash, approval wait,
+validation failure, cancellation, or team rework without relying on hidden
+process memory.
 
-- **Read-only Coding Runs** execute through the checkpointed `solo-readonly`
-  Agent loop with bounded repository tools (`repo.status`, `repo.list`,
-  `repo.search`, `repo.read`, `repo.instructions`), up to four concurrent
-  read-only calls with deterministic order, model-driven tool/feedback back
-  edges, convergence feedback, no-progress detection, and evidence-gated
-  completion. A deterministic PostgreSQL + fake-provider E2E test covers the
-  full loop.
-- **Modifying Coding Runs** route to `solo-modifying`, add `repo.apply_patch`,
-  `repo.diff`, Docker-backed `shell.execute`, and `artifact.read`, execute
-  writes sequentially, offload oversized tool output to artifact storage, and
-  persist side-effecting tool invocations with idempotency metadata. Completion
-  requires at least one applied patch, a `repo.diff` after the last write, and
-  passing required validation gates from `.agents/validation.toml` or
-  conservative project detection. Failed required gates feed a bounded rework
-  loop; exhausted or non-reworkable validation failure marks the Run failed.
-- **Explicit Team Coding Runs** are selected with CLI `--team` or API
-  `mode: "team"`. Two team runtimes exist today: scoped `team-coding-scoped`
-  keeps one Run and one checkpoint thread while creating internal durable role
-  records; distributed `team-coding` creates Teammate and Verifier child Runs
-  that independent Workers can claim through PostgreSQL dispatch. The
-  distributed Leader now asks the model for a validated structured `TeamPlan`
-  before creating 1-3 Teammates. Teammate child Runs now execute
-  assignment-scoped model/tool loops with only the Leader-granted effective
-  tools, and Teammates with delegation permission can create read-only
-  Subagent child Runs. Verifier child Runs now use a structured model decision;
-  targeted rework creates replacement Teammate child Runs while preserving
-  original attempts.
+## Core Capabilities
 
-### Approval (implemented for solo modifying runs)
+- Durable Run intake, dispatch leases, Worker heartbeats, retries, cancellation,
+  and checkpoint resume through PostgreSQL and LangGraph checkpointing.
+- Repository-aware execution with allowed roots, registered repositories, clean
+  base commits, and managed per-Run worktrees.
+- Solo read-only and modifying AgentLoop routes with bounded repository tools,
+  Docker-backed shell execution for mutation, approval interrupts, validation
+  gates, and rework.
+- Distributed team mode with model-planned Teammates, assignment-scoped tools,
+  Teammate-owned read-only Subagents, independent Verifier review, and targeted
+  rework.
+- Token and active-time budget ledgers. The runtime intentionally does not
+  enforce money-based limits.
+- Durable observability through query-table spans, model-call summaries,
+  metrics, diagnostics, recovery metrics, trace IDs, and redacted API/CLI
+  inspection.
+- Extension catalog foundations for project `skills/`, `awesome-agent.yaml`,
+  MCP sources, and community tool packages, all gated by capability resolution.
 
-Durable approval interrupt and resume is wired into `solo-modifying` for one
-exact invocation at a time. Ambiguous shell commands create an `approvals`
-record, checkpoint the graph, release the worker lease as `paused + waiting`,
-and resume through `Command(resume=...)` after the API or CLI approves or
-denies the request. Unsafe shell commands are denied without creating an
-approval.
+## Quick Start
 
-### Multi-agent (implemented as scoped and distributed runtimes)
+For the full manual path, see
+[docs/getting-started/quickstart.md](docs/getting-started/quickstart.md).
+Task 54 will add an automated `scripts\quickstart.ps1` path; until then, use
+the commands below.
 
-The durable team runtime is explicit. Intake starts with only the Leader. When
-`--team` or API `mode: "team"` is selected, current intake routes to
-distributed `team-coding`. The Leader creates a model-generated structured
-`TeamPlan`, validates it, and creates Teammate child Runs from that plan. The
-Leader does not create Subagents or describe Subagent task direction. The
-Leader creates an independent Verifier child Run before finalization.
-Teammates may create read-only Subagent child Runs only when the Leader granted
-`can_delegate` and `max_subagents`; the Leader still cannot describe Subagent
-task direction. The Verifier must pass the work before the Leader can complete
-the root Run.
+Prerequisites:
 
-The older scoped `team-coding-scoped` runtime remains documented and tested,
-but the new distributed path is the forward architecture. Model-driven Leader
-planning, assignment-scoped Teammate role loops, and Teammate-owned Subagent
-delegation have started, Verifier review is model-driven, and targeted rework
-creates replacement Teammate child Runs with immutable attempt lineage.
-Distributed team assignments support deferred tool exposure, root-aware
-token/active-time budget checks, and artifact-backed compaction for large
-handoff, child-result, and verifier evidence payloads.
+- Python 3.12
+- `uv`
+- Git
+- Docker Desktop or a compatible Docker engine
+- Windows PowerShell for the current helper scripts
 
-### Observability (implemented)
-
-Runtime observability now records durable query-table evidence for
-run/graph/model/tool/sandbox spans, model-call summaries, and metrics such as
-run, model, and tool latency. Runtime events receive a stable Run-scoped
-`trace_id`, and FastAPI exposes `GET /runs/{run_id}/trace`,
-`GET /runs/{run_id}/metrics`, `GET /runs/{run_id}/model-calls`,
-`GET /runs/{run_id}/diagnostics`, and
-`GET /runs/{run_id}/recovery-metrics` for frontend and operator inspection. The
-diagnostics endpoint is a redacted read-only projection over runtime state,
-dispatch metadata, events, token ledgers, model calls, tool invocations,
-validation reports, team child evidence, and observability query tables. The
-recovery metrics endpoint is a read-only projection over recovery actions,
-verifier rework, token budget pressure, provider/model outcomes, and team
-failure kinds; it does not tune policy automatically.
-The API, Worker graph boundaries, and migrated solo AgentLoop model/tool stages
-also create real OpenTelemetry spans through a failure-isolated observability
-facade. OTel metrics and dashboards remain later work.
-
-### Context and budget management (implemented)
-
-Solo read-only and modifying graphs now bound prompt/checkpoint growth with a
-deterministic context manager. When the soft context limit is crossed, older
-messages and oversized tool observations are preserved as artifacts, the
-checkpoint keeps a compact summary plus recent evidence, and runtime events
-record `context.compacted`. Hard context pressure forces a bounded final
-no-tool answer. Per-Run token ledgers track input, output, reasoning tokens,
-model-call count, and active Worker execution seconds. FastAPI exposes
-`GET /runs/{run_id}/budget` and
-`GET /runs/{run_id}/context-compactions`; the CLI mirrors them with
-`awesome-agent budget <run-id>` and
-`awesome-agent context-compactions <run-id>`.
-
-Distributed Team Runs add root-aware budget checks across the Leader,
-Teammates, Verifier, and Subagents. Large team handoff, child-result, and
-verifier evidence payloads are offloaded to artifacts and recorded through
-`context_compactions`. The runtime intentionally does not enforce amount-based
-limits; token and active-time budgets are the built-in resource controls.
-
-## Stack
-
-- Python 3.12 and `uv`
-- LangGraph with project-owned orchestration and provider interfaces
-- DeepSeek Chat Completions as the default model provider (OpenAI Responses also mapped)
-- PostgreSQL and LangGraph PostgreSQL checkpointing
-- Typer CLI and local FastAPI API
-- Docker sandbox with explicit trusted-local opt-in
-- durable query-table observability without LangSmith
-- optional built-in memory and optional Mem0 Platform integration
-
-## Model Configuration
-
-The committed defaults are:
-
-| Role | Model |
-| --- | --- |
-| Leader | `deepseek-v4-pro` |
-| Teammate | `deepseek-v4-flash` |
-| Verifier | `deepseek-v4-flash` |
-| Subagent | `deepseek-v4-flash` |
-
-Assignments can be changed with `AWESOME_AGENT_LEADER_MODEL`,
-`AWESOME_AGENT_TEAMMATE_MODEL`, `AWESOME_AGENT_VERIFIER_MODEL`,
-`AWESOME_AGENT_SUBAGENT_MODEL`, or profile-specific JSON in
-`AWESOME_AGENT_ROLE_MODEL_OVERRIDES`. Coding claims are disabled when no
-DeepSeek API key is configured.
-
-## Local Setup
+Start the local runtime:
 
 ```powershell
 .\scripts\bootstrap.ps1
 Copy-Item .env.example .env
 docker compose up -d postgres
 .\scripts\migrate.ps1
-.\scripts\check.ps1
-.\scripts\system-test.ps1
 .\.venv\Scripts\awesome-agent.exe doctor --profile api
 .\.venv\Scripts\awesome-agent.exe start
 ```
 
-Before creating a Run, authorize a local parent directory and register a clean
-primary Git checkout:
+The API binds to `http://127.0.0.1:8000` by default. Use `/health` for process
+liveness and `/ready?profile=api` or `/ready?profile=runtime` for dependency
+readiness.
+
+## First Run
+
+Authorize a parent directory and register a clean Git checkout:
 
 ```powershell
-.\.venv\Scripts\awesome-agent.exe config root add E:\projects
-.\.venv\Scripts\awesome-agent.exe repo add E:\projects\example
-.\.venv\Scripts\awesome-agent.exe run "Inspect the parser" --repo E:\projects\example --read-only
-.\.venv\Scripts\awesome-agent.exe run "Implement the feature with a team" --repo E:\projects\example --team
+.\.venv\Scripts\awesome-agent.exe config root add <parent-directory>
+.\.venv\Scripts\awesome-agent.exe repo add <repository-path>
 ```
 
-`run --repo` may register or refresh the repository only when it is already
-under an allowed root. The CLI sends a repository UUID to FastAPI; the API does
-not accept filesystem paths. Both read-only and modifying Runs require a clean
-checkout and receive a stable worktree at the captured base commit. Normal
-`run` commands create modifying Coding Runs; use `--read-only` to deny mutation
-tools. Modifying Runs complete only after required validation gates pass.
-
-Use a diagnostic probe to verify the Worker, lease, LangGraph checkpoint, and
-cross-process event path without executing a coding goal:
+Verify the durable runtime without a model key:
 
 ```powershell
-.\.venv\Scripts\awesome-agent.exe probe --repo E:\projects\example
-```
-
-Inspect one Run's redacted operational evidence with:
-
-```powershell
+.\.venv\Scripts\awesome-agent.exe probe --repo <repository-path>
 .\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
-.\.venv\Scripts\awesome-agent.exe recovery-metrics <run-id>
 ```
 
-`awesome-agent start` supervises independent API and Worker child processes.
-`serve` and `worker` remain available when the processes should be managed
-separately. The local FastAPI API is unauthenticated and binds to `127.0.0.1`
-by default. Binding `serve` or `start` to a non-loopback host requires the
-explicit `--unsafe-bind-public` flag. The same bind policy is also checked by
-the API settings path, so direct ASGI hosting must set
-`AWESOME_AGENT_API_HOST` and `AWESOME_AGENT_UNSAFE_BIND_PUBLIC=true` before
-binding publicly.
+Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the runtime, then run a
+read-only coding task:
 
-Health and readiness endpoints are split deliberately:
-
-```text
-GET /health                  # process liveness, 200 when the API responds
-GET /ready?profile=api       # API dependency readiness
-GET /ready?profile=runtime   # API readiness plus provider/model/Worker checks
+```powershell
+.\.venv\Scripts\awesome-agent.exe run "Inspect this repository" --repo <repository-path> --read-only
 ```
 
-`healthy` and `degraded` readiness return HTTP 200. `unhealthy` readiness
-returns HTTP 503. CLI diagnostics use the same checks:
+Committed defaults route Leader work to `deepseek-v4-pro` and Teammate,
+Verifier, and Subagent work to `deepseek-v4-flash`. Override them with
+`AWESOME_AGENT_LEADER_MODEL`, `AWESOME_AGENT_TEAMMATE_MODEL`,
+`AWESOME_AGENT_VERIFIER_MODEL`, and `AWESOME_AGENT_SUBAGENT_MODEL`.
+
+Use `--team` when you want the distributed Leader, Teammate, and Verifier
+runtime.
+
+## Extensions
+
+Project extension configuration lives in `awesome-agent.yaml`. It is for
+extension sources such as project skill roots and MCP sources, not for secrets.
+Keep provider keys and runtime settings in `.env` or environment variables.
+
+Project skills live under `skills/`; each skill package contains a `SKILL.md`.
+Skills can request instructions, context, and tool capabilities, but they do
+not grant execution authority by themselves. MCP and community tools enter
+through the extension catalog and still pass through exposure, capability,
+approval, budget, execution, and observability boundaries.
+
+## Operations
+
+Useful local operations:
 
 ```powershell
 .\.venv\Scripts\awesome-agent.exe doctor --profile api --no-docker
 .\.venv\Scripts\awesome-agent.exe doctor --profile runtime
-```
-
-`doctor` exits 0 for `healthy` and `degraded`, and exits 1 for `unhealthy`.
-
-Dispatch state is available at `GET /runs/{run_id}/dispatch`. Queued,
-retry-scheduled, waiting-approval, claimed, and executing solo Runs accept
-durable cancellation. Active cancellation is recorded as a request, observed by
-the owning Worker, and committed as `cancelled + terminal` once the graph and
-subprocess boundary stops cleanly.
-
-Managed execution workspaces can be inspected and cleaned explicitly:
-
-```powershell
+.\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
+.\.venv\Scripts\awesome-agent.exe recovery-metrics <run-id>
+.\.venv\Scripts\awesome-agent.exe budget <run-id>
+.\.venv\Scripts\awesome-agent.exe context-compactions <run-id>
 .\.venv\Scripts\awesome-agent.exe workspace list
 .\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id>
-.\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id> --apply
-.\.venv\Scripts\awesome-agent.exe workspace cleanup --older-than 14d --apply
 ```
 
-Cleanup defaults to preview. Normal cleanup removes only clean managed
-workspaces for terminal completed or cancelled Runs. Failed or dirty workspaces
-require `--force --reason`; `recovery_required` workspaces are retained as
-recovery evidence.
+`awesome-agent start` supervises API and Worker processes together. Use
+`awesome-agent serve` and `awesome-agent worker` separately when another
+process manager should own them. The local API is unauthenticated and binds to
+loopback by default; non-loopback binding requires explicit unsafe consent.
 
-Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the ignored local `.env` before real
-model calls. Built-in memory and Mem0 are disabled in committed defaults. Enable
-them locally with `AWESOME_AGENT_BUILTIN_MEMORY_ENABLED=true` and
-`AWESOME_AGENT_MEM0_ENABLED=true`; Mem0 also requires
-`AWESOME_AGENT_MEM0_API_KEY`.
+## Architecture At A Glance
 
-## Frontend Demo
+The target architecture is a small durable kernel surrounded by policy and
+extension layers:
 
-The standalone interface demonstration does not connect to the backend:
+- API and CLI own intake, inspection, approval, cancellation, and operator
+  commands.
+- Worker and dispatch own claims, leases, heartbeats, retries, and execution
+  ownership.
+- Graph modules own durable state transitions, checkpoints, interrupts,
+  resume, child-run coordination, and terminal projections.
+- AgentLoop owns one bounded model-to-tool loop for one agent role.
+- Middleware and hooks own context assembly, observability, budget checks,
+  permission checks, tool exposure, retries, error classification, validation,
+  and artifact offload.
+- Capability resolution is the authority for tool exposure and execution.
 
-```powershell
-.\.venv\Scripts\python.exe -m http.server 4173 -d demo
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) and
+[docs/design-docs/index.md](docs/design-docs/index.md) for the detailed
+contracts.
 
-Open `http://127.0.0.1:4173`. The demo includes mock Agent topology, Todos,
-event trace, per-Agent context, command approval, artifacts, and responsive
-mobile navigation. It is a UI mockup, not a running multi-agent system.
+## Current Maturity
 
-Local PostgreSQL defaults:
+The project is suitable for local development and runtime-kernel iteration. It
+has real durable execution, repository registration, Worker recovery, solo and
+team runtime paths, diagnostics, budgets, and extension catalog foundations.
 
-```text
-database: awesome_agent
-username: awesome_agent
-password: awesome_agent
-host port: 54329
-container port: 5432
-```
-
-## Roadmap
-
-Durable runtime work is tracked in
-[docs/project-governance/runtime-roadmap.md](docs/project-governance/runtime-roadmap.md).
-Highlights of what is planned but not yet implemented:
-
-- richer team mailbox collaboration policy.
-- dashboards and production observability workflows.
+It is not a hosted multi-user service. Production deployment, dashboards, and
+hosted product workflows remain future work tracked in the roadmap.
 
 ## Documentation
 
-- [Agent instructions](AGENTS.md)
+- [Documentation map](docs/README.md)
+- [Quickstart](docs/getting-started/quickstart.md)
+- [User guide](docs/user-guide/README.md)
+- [Operations guide](docs/operations/README.md)
 - [Architecture](ARCHITECTURE.md)
 - [Design documents](docs/design-docs/index.md)
-- [Engineering harness](docs/engineering/engineering-harness.md)
-- [Runtime agent harness](docs/design-docs/runtime-agent-harness.md)
-- [Frontend demo specification](docs/FRONTEND.md)
-- [Project governance](docs/project-governance/README.md)
-- [Product specification](docs/product-specs/local-coding-agent.md)
-- [Quality](docs/QUALITY_SCORE.md)
-- [Reliability](docs/RELIABILITY.md)
 - [Security](docs/SECURITY.md)
+- [Reliability](docs/RELIABILITY.md)
 - [Runtime roadmap](docs/project-governance/runtime-roadmap.md)
 - [Technical debt tracker](docs/project-governance/tech-debt-tracker.md)
 
-English and Chinese READMEs are maintained together.
+## Security Note
+
+Keep secrets out of committed files. Use `.env` for local provider keys and
+machine-specific runtime settings. Run untrusted code through Docker-backed
+sandboxing; host execution requires explicit trusted-local consent.
