@@ -48,7 +48,7 @@ Use an already running API + Worker:
 | `awesome-agent.yaml` | Project extension sources such as skills and MCP. Do not store secrets here. |
 | `skills/` | Project skill packages containing `SKILL.md`. |
 | `~/.awesome-agent/config.toml` | Local allowed-root state managed by `awesome-agent config root add/list/remove`. |
-| `~/.awesome-agent/artifacts/` | Default local artifact storage unless `AWESOME_AGENT_ARTIFACT_ROOT` overrides it. |
+| `~/.awesome-agent/runs/<run_id>/artifacts/` | Default local artifact storage. `AWESOME_AGENT_ARTIFACT_ROOT` overrides the runs root, not the per-run suffix. |
 
 Model provider settings currently use `AWESOME_AGENT_DEEPSEEK_*` values in
 `.env`. The default role models are `deepseek-v4-pro` for Leader and

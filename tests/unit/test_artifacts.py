@@ -32,6 +32,7 @@ def test_artifact_store_writes_hashes_and_deletes_run(tmp_path: Path) -> None:
         mime_type="text/plain",
     )
 
+    assert metadata.path.parent == tmp_path / str(run_id) / "artifacts" / "logs"
     assert metadata.path.name.endswith("-test.log")
     assert metadata.sha256 == (
         "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -40,6 +41,7 @@ def test_artifact_store_writes_hashes_and_deletes_run(tmp_path: Path) -> None:
 
     store.delete_run(run_id)
     assert not metadata.path.exists()
+    assert not (tmp_path / str(run_id)).exists()
 
 
 @pytest.mark.asyncio
