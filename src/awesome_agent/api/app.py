@@ -31,6 +31,10 @@ from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.extensions.catalog import empty_extension_catalog
+from awesome_agent.extensions.diagnostics import (
+    ExtensionDiagnosticsService,
+    diff_extension_catalogs,
+)
 from awesome_agent.extensions.models import ExtensionCatalog
 from awesome_agent.health import (
     HealthCheck,
@@ -121,9 +125,14 @@ def create_app(
     workspace_service: WorkspaceRetentionService | None = None,
     worker_heartbeat_repository: object | None = None,
     extension_catalog: ExtensionCatalog | None = None,
+    extension_catalog_history: list[ExtensionCatalog] | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     active_extension_catalog = extension_catalog or empty_extension_catalog()
+    extension_catalogs_by_version = {
+        catalog.version: catalog
+        for catalog in [*(extension_catalog_history or []), active_extension_catalog]
+    }
     bind_check = bind_policy_check(settings.api_host, settings.unsafe_bind_public)
     if bind_check.status is HealthStatus.UNHEALTHY:
         raise RuntimeError(bind_check.detail)
@@ -135,6 +144,7 @@ def create_app(
             app.state.intake = intake
             app.state.registry = registry
             app.state.extension_catalog = active_extension_catalog
+            app.state.extension_catalogs_by_version = extension_catalogs_by_version
             if workspace_service is not None:
                 app.state.workspaces = workspace_service
             if validation_repository is not None:
@@ -198,6 +208,7 @@ def create_app(
             event_poll_interval=settings.event_poll_interval_seconds,
         )
         app.state.extension_catalog = active_extension_catalog
+        app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry
         app.state.validation_repository = validation
         app.state.worker_heartbeats = worker_heartbeats
@@ -248,6 +259,7 @@ def create_app(
     if registry is not None:
         app.state.registry = registry
     app.state.extension_catalog = active_extension_catalog
+    app.state.extension_catalogs_by_version = extension_catalogs_by_version
     if workspace_service is not None:
         app.state.workspaces = workspace_service
     if validation_repository is not None:
@@ -347,6 +359,12 @@ def create_app(
     def extensions_catalog() -> ExtensionCatalog:
         return cast(ExtensionCatalog, app.state.extension_catalog)
 
+    def extension_catalog_history_state() -> dict[str, ExtensionCatalog]:
+        return cast(
+            dict[str, ExtensionCatalog],
+            app.state.extension_catalogs_by_version,
+        )
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         async with api_span(
@@ -358,6 +376,37 @@ def create_app(
     @app.get("/extensions/catalog")
     async def get_extensions_catalog() -> dict[str, object]:
         return cast(dict[str, object], extensions_catalog().model_dump(mode="json"))
+
+    @app.get("/extensions/diagnostics")
+    async def get_extensions_diagnostics() -> dict[str, object]:
+        diagnostics = ExtensionDiagnosticsService(
+            active_catalog=extensions_catalog(),
+            runtime_repository=runtime().repository,
+            tool_invocation_repository=tool_invocations(),
+        )
+        return cast(
+            dict[str, object],
+            (await diagnostics.summarize()).model_dump(mode="json"),
+        )
+
+    @app.get("/extensions/catalog-diff")
+    async def get_extensions_catalog_diff(
+        from_version: str,
+        to_version: str,
+    ) -> dict[str, object]:
+        catalogs = extension_catalog_history_state()
+        try:
+            before = catalogs[from_version]
+            after = catalogs[to_version]
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404,
+                detail="Catalog version not found.",
+            ) from error
+        return cast(
+            dict[str, object],
+            diff_extension_catalogs(before, after).model_dump(mode="json"),
+        )
 
     @app.get("/ready")
     async def ready(

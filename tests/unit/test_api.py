@@ -100,6 +100,7 @@ def _client(
     budget_repository: InMemoryBudgetRepository | None = None,
     tool_invocation_repository: InMemoryToolInvocationRepository | None = None,
     extension_catalog: ExtensionCatalog | None = None,
+    extension_catalog_history: list[ExtensionCatalog] | None = None,
 ) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
     repository_path = projects / "repository"
@@ -160,6 +161,7 @@ def _client(
                 team_repository=team_repository,
                 workspace_service=workspace_service,
                 extension_catalog=extension_catalog,
+                extension_catalog_history=extension_catalog_history,
             )
         ),
         repository,
@@ -181,6 +183,31 @@ class RecordingExporter(SpanExporter):
 class FailingFacade:
     async def record_span(self, *_: object, **__: object) -> object:
         raise RuntimeError("observability unavailable")
+
+
+def _extension_catalog(version: str, tools: list[str]) -> ExtensionCatalog:
+    return ExtensionCatalog(
+        version=version,
+        sources=[
+            ExtensionSourceSnapshot(
+                id="github",
+                type="mcp_stdio",
+                trust="user",
+                health=ExtensionHealthSnapshot(status="healthy"),
+            )
+        ],
+        tools=[
+            ExtensionToolInventoryItem(
+                name=tool,
+                source_id="github",
+                description="Search GitHub.",
+                risk_level="medium",
+                required_capabilities={"network:request"},
+                input_schema={"type": "object"},
+            )
+            for tool in tools
+        ],
+    )
 
 
 def _facade(
@@ -261,6 +288,75 @@ def test_create_run_pins_extension_catalog_version(tmp_path: Path) -> None:
     assert created.status_code == 201
     run = client.get(f"/runs/{created.json()['id']}").json()
     assert run["extension_catalog_version"] == "ext_123"
+
+
+def test_extension_diagnostics_reports_catalog_and_denials(tmp_path: Path) -> None:
+    catalog = _extension_catalog("ext_active", ["mcp.github.search"])
+    tool_invocations = InMemoryToolInvocationRepository()
+    client, repository = _client(
+        tmp_path,
+        extension_catalog=catalog,
+        tool_invocation_repository=tool_invocations,
+    )
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Inspect extension diagnostics",
+            "intent": "read_only",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+    app = cast(Any, client.app)
+    runtime_repository = app.state.runtime.repository
+    run = asyncio.run(runtime_repository.get_run(run_id))
+    asyncio.run(
+        runtime_repository.update_run(
+            run.model_copy(update={"extension_catalog_version": "ext_old"})
+        )
+    )
+    asyncio.run(
+        tool_invocations.upsert(
+            DurableToolInvocation(
+                id=uuid4(),
+                run_id=run_id,
+                agent_id=None,
+                tool_name="mcp.github.search",
+                tool_version="1",
+                status="denied",
+                idempotency_key="tool-1",
+                arguments_hash="args",
+                risk_level="medium",
+                error="not exposed",
+            )
+        )
+    )
+
+    response = client.get("/extensions/diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["active_catalog_version"] == "ext_active"
+    assert body["denials"][0]["reason"] in {"not_assigned", "not_exposed"}
+    assert body["invocation_denials"][0]["tool"] == "mcp.github.search"
+    assert body["warnings"][0]["kind"] == "stale_extension_catalog"
+
+
+def test_extension_catalog_diff_endpoint_reports_added_tools(tmp_path: Path) -> None:
+    before = _extension_catalog("ext_before", [])
+    after = _extension_catalog("ext_after", ["mcp.github.search"])
+    client, _ = _client(
+        tmp_path,
+        extension_catalog=after,
+        extension_catalog_history=[before, after],
+    )
+
+    response = client.get(
+        "/extensions/catalog-diff?from_version=ext_before&to_version=ext_after"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["added_tools"] == ["mcp.github.search"]
 
 
 def test_health_endpoint_is_liveness_only(tmp_path: Path) -> None:
