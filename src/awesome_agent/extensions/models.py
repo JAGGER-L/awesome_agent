@@ -49,6 +49,20 @@ class ExtensionAuthConfig(BaseModel):
     env: str = Field(min_length=1, max_length=128)
 
 
+class ExtensionSourceEnvConfig(BaseModel):
+    pass_names: list[str] = Field(default_factory=list, alias="pass")
+
+    @field_validator("pass_names")
+    @classmethod
+    def _validate_pass_names(cls, value: list[str]) -> list[str]:
+        for item in value:
+            if not item or any(character.isspace() for character in item):
+                raise ValueError(
+                    "MCP env pass names cannot be empty or contain whitespace."
+                )
+        return value
+
+
 class ExtensionHealthSnapshot(BaseModel):
     status: ExtensionHealthStatus = ExtensionHealthStatus.UNKNOWN
     detail: str | None = None
@@ -79,6 +93,7 @@ class ExtensionSourceConfig(BaseModel):
     args: list[str] = Field(default_factory=list)
     url: str | None = Field(default=None, min_length=1, max_length=2048)
     auth: ExtensionAuthConfig | None = None
+    env: ExtensionSourceEnvConfig | None = None
     max_concurrency: int = Field(default=4, ge=1, le=64)
     required: bool = True
     discovery_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)

@@ -118,7 +118,7 @@ Completed post-kernel setup:
 | Task 41 | Provider | Done | Wired provider routing into production Worker runtime graph construction. | Solo read-only, solo modifying, scoped team, distributed Leader, team-role, and team-verifier production paths receive route-aware provider resolvers while graph modules keep the provider-resolver injection boundary and tests can still inject direct fake providers. |
 | Task 42 | Team Intelligence | Done | Added recovery metrics and team tuning evidence as a read-only operational projection. | `GET /runs/{run_id}/recovery-metrics` and `awesome-agent recovery-metrics <run-id>` summarize recovery actions, failure kinds, team roles, Verifier rework, provider/model outcomes, and token budget pressure without automatic recovery-policy mutation, provider ranking, or monetary fields. |
 
-Completed extension sequence:
+Extension sequence:
 
 | Task | Phase | Status | Purpose | Exit condition |
 | --- | --- | --- | --- | --- |
@@ -131,6 +131,7 @@ Completed extension sequence:
 | Task 49 | MCP | Done | Expanded MCP transports and authentication. | Stdio and Streamable HTTP/SSE-compatible MCP sources share the same catalog/exposure/executor model, secrets are redacted, source health uses background checks, and reconnect/backoff behavior is bounded. |
 | Task 50 | Community Tools | Done | Added packaged community tool sources. | Allowlisted local tool packages can declare tools that normalize into catalog inventory and execute through the same exposure, capability, approval, and `ToolExecutor` path. |
 | Task 51 | Operations | Done | Hardened extension operations and diagnostics. | Operators can inspect catalog diffs, source health history, extension denial/error metrics, stale catalog warnings, and structural tests prove extensions cannot bypass resolver/executor boundaries. |
+| Task 52 | Extension Config | Done | Added project-level extension configuration and the default project skill root. | `awesome-agent.yaml` can declare skill roots and MCP sources, repository-root `skills/` auto-discovers project skills, stdio MCP env pass-through stores env names only, and discovered extensions still do not grant tool authority. |
 
 ## Architecture Debt Carried Forward
 

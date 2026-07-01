@@ -30,7 +30,7 @@ from awesome_agent.api.schemas import (
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
-from awesome_agent.extensions.catalog import empty_extension_catalog
+from awesome_agent.extensions.config import build_project_extension_catalog_sync
 from awesome_agent.extensions.diagnostics import (
     ExtensionDiagnosticsService,
     diff_extension_catalogs,
@@ -126,9 +126,12 @@ def create_app(
     worker_heartbeat_repository: object | None = None,
     extension_catalog: ExtensionCatalog | None = None,
     extension_catalog_history: list[ExtensionCatalog] | None = None,
+    project_root: Path | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
-    active_extension_catalog = extension_catalog or empty_extension_catalog()
+    active_extension_catalog = extension_catalog
+    if active_extension_catalog is None:
+        active_extension_catalog = build_project_extension_catalog_sync(project_root)
     extension_catalogs_by_version = {
         catalog.version: catalog
         for catalog in [*(extension_catalog_history or []), active_extension_catalog]
