@@ -22,6 +22,7 @@ class ExtensionConfigError(ValueError):
 class ExtensionSourceType(StrEnum):
     STATIC = "static"
     SKILL_DIRECTORY = "skill_directory"
+    MCP_STDIO = "mcp_stdio"
 
 
 class ExtensionTrustLevel(StrEnum):
@@ -63,6 +64,14 @@ class ExtensionSourceConfig(BaseModel):
     type: ExtensionSourceType
     trust: ExtensionTrustLevel = ExtensionTrustLevel.PROJECT
     path: Path | None = None
+    command: str | None = Field(default=None, min_length=1, max_length=1024)
+    args: list[str] = Field(default_factory=list)
+    required: bool = True
+    discovery_timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
+    secret_arg_indexes: set[int] = Field(default_factory=set)
+    tool_capability_overrides: dict[str, list[str]] = Field(default_factory=dict)
+    tool_risk_overrides: dict[str, RiskLevel] = Field(default_factory=dict)
+    default_tool_risk_level: RiskLevel = RiskLevel.MEDIUM
     tools: list[ExtensionStaticToolConfig] = Field(default_factory=list)
     skills: list[ExtensionStaticSkillConfig] = Field(default_factory=list)
 
