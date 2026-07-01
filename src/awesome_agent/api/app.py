@@ -88,6 +88,7 @@ from awesome_agent.persistence.worker_heartbeats import (
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
+from awesome_agent.runtime.asyncio import configure_event_loop_policy
 from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
 from awesome_agent.runtime.diagnostics import RunDiagnosticsService
 from awesome_agent.runtime.dispatch import DispatchConflict
@@ -108,6 +109,8 @@ from awesome_agent.settings import Settings
 
 logger = logging.getLogger(__name__)
 _NIL_RUN_ID = UUID(int=0)
+
+configure_event_loop_policy()
 
 
 def create_app(

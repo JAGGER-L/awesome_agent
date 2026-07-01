@@ -16,3 +16,12 @@ This guide indexes local runtime operation and diagnosis.
 
 Use the [quickstart](../getting-started/quickstart.md) for the first local
 startup path.
+
+## Local Run Modes
+
+| Mode | Command | Use |
+| --- | --- | --- |
+| Quick Start | `.\scripts\quickstart.ps1` | First local setup and verification. |
+| Supervised local runtime | `awesome-agent start` | API + Worker in one local command. |
+| Split runtime | `awesome-agent serve` and `awesome-agent worker` | Process-manager or debugging setups. |
+| PostgreSQL dependency | `docker compose up -d postgres` | Local durable storage. |

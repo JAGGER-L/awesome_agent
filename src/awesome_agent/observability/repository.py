@@ -157,6 +157,8 @@ class PostgresObservabilityRepository:
         self._sessions = session_factory
 
     async def record_span(self, span: DurableSpan) -> DurableSpan:
+        if span.run_id.int == 0:
+            return span
         async with self._sessions.begin() as session:
             record = await session.get(ObservabilitySpanRecord, span.id)
             if record is None:

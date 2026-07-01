@@ -49,12 +49,10 @@ process memory.
 
 ## Quick Start
 
-For the full manual path, see
+For the full guide, see
 [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md).
-Task 54 will add an automated `scripts\quickstart.ps1` path; until then, use
-the commands below.
 
-Prerequisites:
+### Prerequisites
 
 - Python 3.12
 - `uv`
@@ -62,11 +60,35 @@ Prerequisites:
 - Docker Desktop or a compatible Docker engine
 - Windows PowerShell for the current helper scripts
 
-Start the local runtime:
+### Configure
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Put provider secrets in `.env`. The default model provider settings are
+`AWESOME_AGENT_DEEPSEEK_API_KEY`, `AWESOME_AGENT_DEEPSEEK_BASE_URL`,
+`AWESOME_AGENT_DEEPSEEK_PRO_MODEL`, and
+`AWESOME_AGENT_DEEPSEEK_FLASH_MODEL`.
+
+Keep extension source configuration in `awesome-agent.yaml`. Project skills
+are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
+
+### Run Automatically
+
+```powershell
+.\scripts\quickstart.ps1
+```
+
+This starts local dependencies, runs migrations, starts API + Worker, creates
+an ignored sample repository, verifies a diagnostic probe, and prints the first
+read-only run command. It does not require a model key unless you pass
+`-RunReadOnly`.
+
+### Run Manually
 
 ```powershell
 .\scripts\bootstrap.ps1
-Copy-Item .env.example .env
 docker compose up -d postgres
 .\scripts\migrate.ps1
 .\.venv\Scripts\awesome-agent.exe doctor --profile api
@@ -77,7 +99,7 @@ The API binds to `http://127.0.0.1:8000` by default. Use `/health` for process
 liveness and `/ready?profile=api` or `/ready?profile=runtime` for dependency
 readiness.
 
-## First Run
+### Verify
 
 Authorize a parent directory and register a clean Git checkout:
 
@@ -93,6 +115,8 @@ Verify the durable runtime without a model key:
 .\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
 ```
 
+### First Read-Only Run
+
 Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the runtime, then run a
 read-only coding task:
 
@@ -107,6 +131,18 @@ Verifier, and Subagent work to `deepseek-v4-flash`. Override them with
 
 Use `--team` when you want the distributed Leader, Teammate, and Verifier
 runtime.
+
+## First Run
+
+The fastest safe first run is the automated quickstart:
+
+```powershell
+.\scripts\quickstart.ps1
+```
+
+It uses a diagnostic probe for the required success check. Add `-RunReadOnly`
+only after configuring a provider key and deciding to create a model-backed
+read-only Run.
 
 ## Extensions
 
