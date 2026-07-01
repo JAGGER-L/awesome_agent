@@ -27,6 +27,7 @@ services:
       AWESOME_AGENT_CHECKPOINT_DATABASE_URL: "postgresql://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
       AWESOME_AGENT_ARTIFACT_ROOT: "/var/lib/awesome-agent/runs"
       AWESOME_AGENT_LOCAL_CONFIG_PATH: "/var/lib/awesome-agent/config.toml"
+      AWESOME_AGENT_WORKSPACE_ROOT: "/var/lib/awesome-agent/worktrees"
     ports:
       - "8000:8000"
     depends_on:
@@ -44,6 +45,7 @@ services:
       AWESOME_AGENT_CHECKPOINT_DATABASE_URL: "postgresql://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
       AWESOME_AGENT_ARTIFACT_ROOT: "/var/lib/awesome-agent/runs"
       AWESOME_AGENT_LOCAL_CONFIG_PATH: "/var/lib/awesome-agent/config.toml"
+      AWESOME_AGENT_WORKSPACE_ROOT: "/var/lib/awesome-agent/worktrees"
     depends_on:
       postgres:
         condition: service_healthy

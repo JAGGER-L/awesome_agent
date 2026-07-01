@@ -9,6 +9,8 @@ def test_docker_quickstart_services_are_declared() -> None:
     assert "  worker:" in compose
     assert "AWESOME_AGENT_ARTIFACT_ROOT" in compose
     assert "/var/lib/awesome-agent/runs" in compose
+    assert "AWESOME_AGENT_WORKSPACE_ROOT" in compose
+    assert "/var/lib/awesome-agent/worktrees" in compose
     assert '"--unsafe-bind-public"' in compose
 
 
