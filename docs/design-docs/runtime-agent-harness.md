@@ -153,6 +153,11 @@ outcome, and fallback reason for observability. Token budget checks happen
 before each attempt, and token usage recording happens after each completed
 turn. Routing data structures intentionally contain no monetary fields.
 
+Production Worker graph construction injects route-aware provider resolvers for
+`solo-readonly`, `solo-modifying`, `team-coding-scoped`, `team-coding`,
+`team-role`, and `team-verifier`. Graphs still receive a provider-resolver
+boundary and do not own provider ordering or fallback policy.
+
 ## Runtime Documentation Discipline
 
 When the product modifies a user's project, it should detect the target

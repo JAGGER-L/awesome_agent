@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from awesome_agent.modeling import ModelProvider
 from awesome_agent.providers.deepseek import DeepSeekProvider
-from awesome_agent.providers.routing import ModelRouteCandidate
+from awesome_agent.providers.routing import (
+    ModelRouteCandidate,
+    ModelRouteRequest,
+    RoutedModelProvider,
+    StaticModelRouter,
+)
 from awesome_agent.settings import Settings
 
 
@@ -30,3 +37,28 @@ class ModelProviderFactory:
         if candidate.provider != "deepseek":
             raise RuntimeError(f"Unsupported provider route: {candidate.provider}.")
         return self.create(candidate.model)
+
+    def create_routed_resolver(
+        self,
+        *,
+        runtime_route: str,
+        agent_role: str | None = None,
+        task_kind: str | None = None,
+    ) -> Callable[[str], ModelProvider]:
+        def resolve(model: str) -> ModelProvider:
+            default_candidate = ModelRouteCandidate(
+                provider="deepseek",
+                model=model,
+                reason="default",
+            )
+            return RoutedModelProvider(
+                router=StaticModelRouter(default_candidate=default_candidate),
+                route_request=ModelRouteRequest(
+                    runtime_route=runtime_route,
+                    agent_role=agent_role,
+                    task_kind=task_kind,
+                ),
+                provider_factory=self.create_candidate,
+            )
+
+        return resolve

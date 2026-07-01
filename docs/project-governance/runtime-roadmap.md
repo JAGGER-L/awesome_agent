@@ -123,6 +123,7 @@ middleware, capability, observability, or token-budget ownership.
 | Task | Phase | Status | Purpose | Exit condition |
 | --- | --- | --- | --- | --- |
 | Task 40 | Operations | Done | Added a redacted runtime diagnostics surface over existing durable evidence. | `GET /runs/{run_id}/diagnostics` and `awesome-agent diagnostics <run-id>` summarize run status, dispatch, events, agents, token ledgers, model calls, tool invocations, validation reports, team child evidence, and observability evidence without creating a parallel state machine or exposing raw prompts, secrets, full tool output, or monetary fields. |
+| Task 41 | Provider | Done | Wired provider routing into production Worker runtime graph construction. | Solo read-only, solo modifying, scoped team, distributed Leader, team-role, and team-verifier production paths receive route-aware provider resolvers while graph modules keep the provider-resolver injection boundary and tests can still inject direct fake providers. |
 
 ## Architecture Debt Carried Forward
 
@@ -141,7 +142,7 @@ this roadmap is updated through change control.
 | Phase | Direction | Entry criteria | Exit shape |
 | --- | --- | --- | --- |
 | Extension Phase | Add MCP, skills, and external tool ecosystems. | Task 38 complete; extension surfaces can call the shared capability resolver. | External tools use the same effective policy, audit records, token budgets, approval gates, and AgentLoop observability as built-in tools. |
-| Provider Ecosystem Phase | Expand provider routing, fallback, model profiles, and provider-quality feedback. | Task 39 complete; routing attempts are observable and token-accounted. | Provider decisions are reliable, explainable, retry-safe, and tuned by measured runtime outcomes rather than hard-coded optimism. |
+| Provider Ecosystem Phase | Expand provider routing, fallback, model profiles, and provider-quality feedback. | Task 41 complete; production runtime graph construction uses route-aware provider resolvers. | Provider decisions are reliable, explainable, retry-safe, and tuned by measured runtime outcomes rather than hard-coded optimism. |
 | Operations Phase | Improve dashboards, alerts, trace exploration, recovery metrics, and readiness diagnostics. | Task 40 complete; durable evidence can be inspected through a single redacted diagnostics projection. | Operators can diagnose latency, failure class, budget pressure, provider quality, recovery behavior, and worker health without reading raw logs. |
 | Productization Phase | Build higher-level user workflows and UI/API surfaces. | Kernel boundaries stable; roadmap change defines target users and workflows. | Product surfaces inspect and control Runs without bypassing approvals, cancellation, capability policy, or durable evidence. |
 | Team Intelligence Phase | Improve Leader planning, assignment quality, Verifier calibration, and recovery tuning. | P5 evidence exists across real team runs and provider metrics. | Team behavior improves through bounded, observable policy changes rather than hidden prompt growth. |
