@@ -8,11 +8,17 @@ from awesome_agent.extensions.models import (
     ExtensionCatalog,
     ExtensionConfigError,
     ExtensionDiscoverySnapshot,
+    ExtensionHealthSnapshot,
+    ExtensionHealthStatus,
     ExtensionSourceConfig,
     ExtensionSourceSnapshot,
     ExtensionStaticToolConfig,
 )
-from awesome_agent.extensions.service import ExtensionDiscoveryService
+from awesome_agent.extensions.service import (
+    ExtensionDiscoveryService,
+    ExtensionHealthMonitor,
+    ExtensionHealthMonitorConfig,
+)
 from awesome_agent.extensions.sources import (
     ExtensionSourceFactory,
     StaticExtensionSource,
@@ -134,3 +140,98 @@ def test_extension_discovery_service_emits_lifecycle_hooks() -> None:
         "before_publish",
         f"publish:{catalog.version}",
     ]
+
+
+def test_health_monitor_polls_in_background_without_publishing_catalog() -> None:
+    events: list[str] = []
+    source = CountingSource()
+
+    class RecordingHooks(ExtensionLifecycleHooks):
+        async def before_extension_discovery(self, source_id: str) -> None:
+            events.append(f"before:{source_id}")
+
+        async def on_extension_health_changed(
+            self,
+            source: ExtensionSourceSnapshot,
+        ) -> None:
+            events.append(f"health:{source.id}:{source.health.status.value}")
+
+        async def before_extension_catalog_publish(self) -> None:
+            events.append("before_publish")
+
+    async def run_monitor() -> None:
+        monitor = ExtensionHealthMonitor(
+            [source],
+            hooks=RecordingHooks(),
+            config=ExtensionHealthMonitorConfig(interval_seconds=0.01),
+        )
+        await monitor.start()
+        await asyncio.sleep(0.03)
+        await monitor.stop()
+
+    asyncio.run(run_monitor())
+
+    assert source.calls >= 1
+    assert "before:local-demo" in events
+    assert "health:local-demo:healthy" in events
+    assert "before_publish" not in events
+
+
+def test_extension_health_monitor_backs_off_after_failures_and_resets() -> None:
+    source = FlakySource()
+
+    async def run_monitor() -> tuple[float, float, float]:
+        monitor = ExtensionHealthMonitor(
+            [source],
+            config=ExtensionHealthMonitorConfig(
+                interval_seconds=1.0,
+                max_backoff_seconds=3.0,
+                failure_backoff_multiplier=2.0,
+            ),
+        )
+        await monitor.poll_once()
+        first_failure = monitor.current_backoff_seconds("local-demo")
+        await monitor.poll_once()
+        second_failure = monitor.current_backoff_seconds("local-demo")
+        await monitor.poll_once()
+        after_success = monitor.current_backoff_seconds("local-demo")
+        return first_failure, second_failure, after_success
+
+    assert asyncio.run(run_monitor()) == (2.0, 3.0, 1.0)
+
+
+class CountingSource:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def source_id(self) -> str:
+        return "local-demo"
+
+    async def discover(self) -> ExtensionDiscoverySnapshot:
+        self.calls += 1
+        return ExtensionDiscoverySnapshot(source=_healthy_source_snapshot())
+
+
+class FlakySource:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def source_id(self) -> str:
+        return "local-demo"
+
+    async def discover(self) -> ExtensionDiscoverySnapshot:
+        self.calls += 1
+        if self.calls < 3:
+            raise RuntimeError("temporary extension outage")
+        return ExtensionDiscoverySnapshot(source=_healthy_source_snapshot())
+
+
+def _healthy_source_snapshot() -> ExtensionSourceSnapshot:
+    return ExtensionSourceSnapshot(
+        id="local-demo",
+        type="static",
+        trust="project",
+        health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
+    )

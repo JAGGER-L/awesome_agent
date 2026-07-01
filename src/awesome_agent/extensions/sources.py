@@ -4,7 +4,7 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from awesome_agent.extensions.mcp import McpStdioSource
+from awesome_agent.extensions.mcp import McpStdioSource, McpStreamableHttpSource
 from awesome_agent.extensions.models import (
     ExtensionConfigError,
     ExtensionDiscoverySnapshot,
@@ -112,6 +112,8 @@ class ExtensionSourceFactory:
             return SkillDirectoryExtensionSource(parsed)
         if parsed.type is ExtensionSourceType.MCP_STDIO:
             return McpStdioSource(parsed)
+        if parsed.type is ExtensionSourceType.MCP_STREAMABLE_HTTP:
+            return McpStreamableHttpSource(parsed)
         raise ExtensionConfigError(f"Unsupported extension source type: {parsed.type}")
 
 
