@@ -74,6 +74,19 @@ Put provider secrets in `.env`. The default model provider settings are
 Keep extension source configuration in `awesome-agent.yaml`. Project skills
 are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
 
+### Choose A Run Mode
+
+| Mode | Best for | Command | Status |
+| --- | --- | --- | --- |
+| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Supported |
+| Local API | API + Worker inspection from host Python | `.\.venv\Scripts\awesome-agent.exe start` | Supported |
+| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Supported |
+| Docker API/Web | Browser/API inspection against containerized API | `docker compose up -d --build postgres api worker` | Supported |
+
+The current "Web" surface is the local FastAPI inspection surface and
+generated API docs at `/docs`. It is not yet a hosted multi-user web
+application.
+
 ### Run Automatically
 
 ```powershell
@@ -84,6 +97,12 @@ This starts local dependencies, runs migrations, starts API + Worker, creates
 an ignored sample repository, verifies a diagnostic probe, and prints the first
 read-only run command. It does not require a model key unless you pass
 `-RunReadOnly`.
+
+For the Docker lane:
+
+```powershell
+.\scripts\docker-quickstart.ps1
+```
 
 ### Run Manually
 

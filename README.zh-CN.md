@@ -48,6 +48,17 @@ Provider secrets 放在 `.env`。默认模型 provider 设置包括 `AWESOME_AGE
 
 Extension source 配置放在 `awesome-agent.yaml`。Project skills 会从 `skills/` 发现。不要把 secrets 放进 `awesome-agent.yaml`。
 
+### Run Mode Matrix
+
+| Mode | Best for | Command | Status |
+| --- | --- | --- | --- |
+| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Supported |
+| Local API | API + Worker inspection from host Python | `.\.venv\Scripts\awesome-agent.exe start` | Supported |
+| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Supported |
+| Docker API/Web | Browser/API inspection against containerized API | `docker compose up -d --build postgres api worker` | Supported |
+
+The current "Web" surface is the local FastAPI inspection surface and generated API docs at `/docs`. It is not yet a hosted multi-user web application.
+
 ### 自动启动
 
 ```powershell
@@ -55,6 +66,12 @@ Extension source 配置放在 `awesome-agent.yaml`。Project skills 会从 `skil
 ```
 
 这个脚本会启动本地依赖、执行 migrations、启动 API + Worker、创建被忽略的 sample repository、用 diagnostic probe 验证 runtime，并打印第一次只读 run 命令。除非传入 `-RunReadOnly`，否则不需要模型 key。
+
+Docker lane:
+
+```powershell
+.\scripts\docker-quickstart.ps1
+```
 
 ### 手动启动
 

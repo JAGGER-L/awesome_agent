@@ -25,3 +25,27 @@ startup path.
 | Supervised local runtime | `awesome-agent start` | API + Worker in one local command. |
 | Split runtime | `awesome-agent serve` and `awesome-agent worker` | Process-manager or debugging setups. |
 | PostgreSQL dependency | `docker compose up -d postgres` | Local durable storage. |
+| Docker runtime | `docker compose up -d --build postgres api worker` | Containerized API + Worker. |
+
+## Ports And Runtime Data
+
+| Resource | Default | Purpose |
+| --- | --- | --- |
+| API port | `127.0.0.1:8000` local, `0.0.0.0:8000` inside Docker | Local inspection API. |
+| PostgreSQL port | `54329` host, `5432` container | Durable runtime state. |
+| Runtime data | `~/.awesome-agent/runs/` local, `/var/lib/awesome-agent/runs/` Docker | Per-run artifacts and runtime evidence. |
+| Compose volume | `awesome_agent_runtime` | Container runtime state. |
+
+## Readiness And Logs
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod "http://127.0.0.1:8000/ready?profile=api"
+docker compose logs api
+docker compose logs worker
+docker compose down
+```
+
+The Docker API service binds to `0.0.0.0` inside the container so the host can
+reach `http://127.0.0.1:8000`. Keep it local unless an external authentication
+and network boundary is added.
