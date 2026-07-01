@@ -34,7 +34,7 @@ Intake 初始只创建 Leader。选择 `--team` 或 API `mode: "team"` 后，当
 
 ### 可观测性（已实现）
 
-Runtime 会记录持久化 query-table 证据，包括 run/graph/model/tool/sandbox span、model-call 摘要，以及 run/model/tool latency 等 metrics。Runtime event 会写入稳定的 Run 级 `trace_id`。FastAPI 提供 `GET /runs/{run_id}/trace`、`GET /runs/{run_id}/metrics` 和 `GET /runs/{run_id}/model-calls`。API、Worker graph 边界以及已迁移的 solo AgentLoop model/tool 阶段也会通过 failure-isolated observability facade 创建真实 OpenTelemetry spans。OTel metrics 和 dashboard 仍是后续工作。
+Runtime 会记录持久化 query-table 证据，包括 run/graph/model/tool/sandbox span、model-call 摘要，以及 run/model/tool latency 等 metrics。Runtime event 会写入稳定的 Run 级 `trace_id`。FastAPI 提供 `GET /runs/{run_id}/trace`、`GET /runs/{run_id}/metrics`、`GET /runs/{run_id}/model-calls` 和 `GET /runs/{run_id}/diagnostics`。diagnostics endpoint 是脱敏的只读 operational projection，会聚合 runtime state、dispatch metadata、events、token ledger、model call、tool invocation、validation report、team child evidence 和 observability query tables。API、Worker graph 边界以及已迁移的 solo AgentLoop model/tool 阶段也会通过 failure-isolated observability facade 创建真实 OpenTelemetry spans。OTel metrics 和 dashboard 仍是后续工作。
 
 ### 上下文与预算管理（已实现）
 
@@ -94,6 +94,7 @@ docker compose up -d postgres
 ```powershell
 .\.venv\Scripts\awesome-agent.exe probe --repo E:\projects\example
 .\.venv\Scripts\awesome-agent.exe doctor --profile runtime
+.\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
 .\.venv\Scripts\awesome-agent.exe budget <run-id>
 .\.venv\Scripts\awesome-agent.exe context-compactions <run-id>
 ```

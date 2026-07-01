@@ -81,6 +81,40 @@ def budget(
     )
 
 
+@app.command()
+def diagnostics(
+    run_id: UUID,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Print a redacted operational diagnostic summary for a Run."""
+    response = httpx.get(f"{api_url}/runs/{run_id}/diagnostics", timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    dispatch = body["dispatch"] or {}
+    team = body.get("team") or {}
+    typer.echo(
+        " ".join(
+            [
+                f"run_id={body['run_id']}",
+                f"status={body['status']['status']}",
+                f"mode={body['status']['mode']}",
+                f"dispatch={dispatch.get('status')}",
+                f"agents={body['agents']['total']}",
+                f"total_tokens={body['budgets']['total_tokens']}",
+                f"threshold={body['budgets']['threshold_status']}",
+                f"model_calls={body['models']['total']}",
+                f"model_failures={body['models']['failed']}",
+                f"tools={body['tools']['total']}",
+                f"validation_reports={body['validation']['reports_total']}",
+                f"failed_gates={body['validation']['failed_gates']}",
+                f"children={team.get('child_runs_total', 0)}",
+            ]
+        )
+    )
+    for warning in body.get("warnings", []):
+        typer.echo(f"warning={warning['kind']} {warning['message']}")
+
+
 @app.command("context-compactions")
 def context_compactions(
     run_id: UUID,

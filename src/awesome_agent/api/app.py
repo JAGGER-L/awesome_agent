@@ -67,6 +67,10 @@ from awesome_agent.persistence.repository_registry import (
 )
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.team import PostgresTeamRepository, TeamRepository
+from awesome_agent.persistence.tool_invocations import (
+    PostgresToolInvocationRepository,
+    ToolInvocationRepository,
+)
 from awesome_agent.persistence.validation import (
     PostgresValidationRepository,
     ValidationReportWithGates,
@@ -79,6 +83,7 @@ from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
+from awesome_agent.runtime.diagnostics import RunDiagnosticsService
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
@@ -108,6 +113,7 @@ def create_app(
     observability_repository: ObservabilityRepository | None = None,
     observability_facade: ObservabilityFacade | None = None,
     budget_repository: BudgetRepository | None = None,
+    tool_invocation_repository: ToolInvocationRepository | None = None,
     team_repository: TeamRepository | None = None,
     workspace_service: WorkspaceRetentionService | None = None,
     worker_heartbeat_repository: object | None = None,
@@ -137,6 +143,8 @@ def create_app(
             )
             if budget_repository is not None:
                 app.state.budget_repository = budget_repository
+            if tool_invocation_repository is not None:
+                app.state.tool_invocation_repository = tool_invocation_repository
             if team_repository is not None:
                 app.state.team_repository = team_repository
             if worker_heartbeat_repository is not None:
@@ -152,6 +160,7 @@ def create_app(
         runtime_repository = PostgresRuntimeRepository(sessions)
         dispatcher = PostgresRunDispatcher(sessions)
         validation = PostgresValidationRepository(sessions)
+        tool_invocations = PostgresToolInvocationRepository(sessions)
         worker_heartbeats = PostgresWorkerHeartbeatRepository(sessions)
         default_observability = observability_repository or (
             PostgresObservabilityRepository(sessions)
@@ -196,6 +205,9 @@ def create_app(
             metric_recorder=otel_metrics,
         )
         app.state.budget_repository = budget_repository or budgets
+        app.state.tool_invocation_repository = (
+            tool_invocation_repository or tool_invocations
+        )
         app.state.team_repository = team_repository or teams
         worktree_manager = ManagedRunWorktreeManager(
             settings.workspace_root or local_config.workspace_root
@@ -240,6 +252,8 @@ def create_app(
     )
     if budget_repository is not None:
         app.state.budget_repository = budget_repository
+    if tool_invocation_repository is not None:
+        app.state.tool_invocation_repository = tool_invocation_repository
     if team_repository is not None:
         app.state.team_repository = team_repository
 
@@ -265,6 +279,12 @@ def create_app(
         return cast(
             ObservabilityRepository,
             app.state.observability_repository,
+        )
+
+    def tool_invocations() -> ToolInvocationRepository | None:
+        return cast(
+            ToolInvocationRepository | None,
+            getattr(app.state, "tool_invocation_repository", None),
         )
 
     def telemetry() -> ObservabilityFacade:
@@ -677,6 +697,29 @@ def create_app(
                 asdict(call)
                 for call in await observability().list_model_calls_for_run(run_id)
             ]
+
+    @app.get("/runs/{run_id}/diagnostics")
+    async def get_run_diagnostics(run_id: UUID) -> dict[str, object]:
+        attributes = _api_attributes("GET", "/runs/{run_id}/diagnostics", 200)
+        attributes["run_id"] = str(run_id)
+        async with api_span(
+            "api.runs.diagnostics",
+            run_id=run_id,
+            attributes=attributes,
+        ):
+            diagnostics = RunDiagnosticsService(
+                runtime_repository=runtime().repository,
+                observability_repository=observability(),
+                budget_repository=budgets(),
+                tool_invocation_repository=tool_invocations(),
+                validation_repository=validation_reports(),
+                team_repository=team_repository_state(),
+            )
+            try:
+                return (await diagnostics.summarize(run_id)).model_dump(mode="json")
+            except KeyError as error:
+                attributes["http.status_code"] = 404
+                raise HTTPException(status_code=404, detail="Run not found.") from error
 
     @app.get("/runs/{run_id}/budget")
     async def get_budget(run_id: UUID) -> BudgetLedgerResponse:

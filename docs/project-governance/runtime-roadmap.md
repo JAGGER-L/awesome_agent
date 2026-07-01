@@ -118,6 +118,12 @@ The runtime kernel is stable after Task 39. Future provider, MCP, skill, and
 product work should reuse the kernel boundaries instead of reopening graph,
 middleware, capability, observability, or token-budget ownership.
 
+## Post-Kernel Execution Tasks
+
+| Task | Phase | Status | Purpose | Exit condition |
+| --- | --- | --- | --- | --- |
+| Task 40 | Operations | Done | Added a redacted runtime diagnostics surface over existing durable evidence. | `GET /runs/{run_id}/diagnostics` and `awesome-agent diagnostics <run-id>` summarize run status, dispatch, events, agents, token ledgers, model calls, tool invocations, validation reports, team child evidence, and observability evidence without creating a parallel state machine or exposing raw prompts, secrets, full tool output, or monetary fields. |
+
 ## Architecture Debt Carried Forward
 
 | Item | Current disposition | Forward action |
@@ -136,7 +142,7 @@ this roadmap is updated through change control.
 | --- | --- | --- | --- |
 | Extension Phase | Add MCP, skills, and external tool ecosystems. | Task 38 complete; extension surfaces can call the shared capability resolver. | External tools use the same effective policy, audit records, token budgets, approval gates, and AgentLoop observability as built-in tools. |
 | Provider Ecosystem Phase | Expand provider routing, fallback, model profiles, and provider-quality feedback. | Task 39 complete; routing attempts are observable and token-accounted. | Provider decisions are reliable, explainable, retry-safe, and tuned by measured runtime outcomes rather than hard-coded optimism. |
-| Operations Phase | Improve dashboards, alerts, trace exploration, recovery metrics, and readiness diagnostics. | Task 36 complete; durable and OTel evidence paths exist. | Operators can diagnose latency, failure class, budget pressure, provider quality, recovery behavior, and worker health without reading raw logs. |
+| Operations Phase | Improve dashboards, alerts, trace exploration, recovery metrics, and readiness diagnostics. | Task 40 complete; durable evidence can be inspected through a single redacted diagnostics projection. | Operators can diagnose latency, failure class, budget pressure, provider quality, recovery behavior, and worker health without reading raw logs. |
 | Productization Phase | Build higher-level user workflows and UI/API surfaces. | Kernel boundaries stable; roadmap change defines target users and workflows. | Product surfaces inspect and control Runs without bypassing approvals, cancellation, capability policy, or durable evidence. |
 | Team Intelligence Phase | Improve Leader planning, assignment quality, Verifier calibration, and recovery tuning. | P5 evidence exists across real team runs and provider metrics. | Team behavior improves through bounded, observable policy changes rather than hidden prompt growth. |
 

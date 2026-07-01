@@ -524,11 +524,12 @@ Migrated solo and forward distributed team AgentLoop stages record `agent.run`,
 team compatibility routes keep event-projection observability until migrated.
 Model-call records store provider, model, status, stop reason, token usage,
 latency, and trace/span IDs. FastAPI exposes `GET /runs/{run_id}/trace`,
-`GET /runs/{run_id}/metrics`, and `GET /runs/{run_id}/model-calls` for the
-future frontend.
+`GET /runs/{run_id}/metrics`, `GET /runs/{run_id}/model-calls`, and
+`GET /runs/{run_id}/diagnostics` for the future frontend and operators.
+`runtime.diagnostics` is a read-only projection over existing durable evidence;
+it does not own graph transitions, dispatch state, or recovery policy.
 
-Cost budgeting, dashboards, and dependency-aware health checks remain separate
-roadmap work.
+Dashboards and dependency-aware health checks remain separate roadmap work.
 
 ## Durable Execution Target
 

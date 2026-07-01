@@ -523,6 +523,56 @@ def test_budget_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "threshold=compact" in result.stdout
 
 
+def test_diagnostics_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = uuid4()
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "run_id": str(run_id),
+                "status": {
+                    "status": "completed",
+                    "mode": "solo",
+                    "intent": "read_only",
+                },
+                "dispatch": {"status": "terminal"},
+                "agents": {"total": 1},
+                "budgets": {
+                    "total_tokens": 30,
+                    "threshold_status": "within_budget",
+                },
+                "models": {"total": 1, "failed": 0},
+                "tools": {"total": 2},
+                "validation": {"reports_total": 1, "failed_gates": 0},
+                "team": {"child_runs_total": 0},
+                "warnings": [
+                    {
+                        "kind": "observability_missing",
+                        "message": "No observability evidence recorded.",
+                    }
+                ],
+            }
+
+    def get(url: str, timeout: int) -> Response:
+        calls.append(url)
+        assert timeout == 30
+        return Response()
+
+    monkeypatch.setattr(cli_module.httpx, "get", get)
+
+    result = runner.invoke(app, ["diagnostics", str(run_id)])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(f"/runs/{run_id}/diagnostics")
+    assert "status=completed" in result.stdout
+    assert "model_calls=1" in result.stdout
+    assert "warning=observability_missing" in result.stdout
+
+
 def test_context_compactions_command_reads_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

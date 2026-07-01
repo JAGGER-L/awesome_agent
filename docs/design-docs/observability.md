@@ -62,7 +62,20 @@ FastAPI exposes:
 GET /runs/{run_id}/trace
 GET /runs/{run_id}/metrics
 GET /runs/{run_id}/model-calls
+GET /runs/{run_id}/diagnostics
 ```
+
+`GET /runs/{run_id}/diagnostics` is a read-only operational projection over
+runtime state, dispatch metadata, events, agents, token ledgers, model-call
+summaries, tool invocation records, validation reports, team child evidence,
+and observability query tables. It is not a new durable state machine and does
+not own Run transitions. It exists so operators can diagnose a Run without
+reading raw logs or joining every inspection endpoint by hand.
+
+The diagnostics response is bounded and redacted. It reports identifiers,
+statuses, token counts, hashes, summaries, artifact references, and boolean
+error presence. It does not include raw prompts, secrets, provider
+continuation payloads, full tool result content, or validation stdout/stderr.
 
 Dashboard and alert definitions should use these dimensions:
 
