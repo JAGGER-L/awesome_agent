@@ -115,6 +115,36 @@ def diagnostics(
         typer.echo(f"warning={warning['kind']} {warning['message']}")
 
 
+@app.command("recovery-metrics")
+def recovery_metrics(
+    run_id: UUID,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Print read-only recovery and team tuning evidence for a Run."""
+    response = httpx.get(f"{api_url}/runs/{run_id}/recovery-metrics", timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    actions = ",".join(
+        f"{item['key']}:{item['count']}" for item in body.get("by_action", [])
+    )
+    typer.echo(
+        " ".join(
+            [
+                f"run_id={body['run_id']}",
+                f"actions={body['totals']['actions']}",
+                f"model_calls={body['totals']['model_calls']}",
+                f"failed_model_calls={body['totals']['failed_model_calls']}",
+                f"total_tokens={body['budgets']['total_tokens']}",
+                f"threshold={body['budgets']['threshold_status']}",
+                f"verifier_rework={body['verifier']['rework_requests']}",
+                f"actions_by_kind={actions}",
+            ]
+        )
+    )
+    for warning in body.get("warnings", []):
+        typer.echo(f"warning={warning['kind']} {warning['message']}")
+
+
 @app.command("context-compactions")
 def context_compactions(
     run_id: UUID,
