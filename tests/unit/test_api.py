@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace.export import (
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, RunMode
+from awesome_agent.domain.enums import AgentKind, RunMode, RunStatus
 from awesome_agent.domain.models import Agent, Repository, Run
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import (
@@ -32,6 +32,10 @@ from awesome_agent.persistence.budget import (
     RunBudgetLedgerRecord,
 )
 from awesome_agent.persistence.team import InMemoryTeamRepository
+from awesome_agent.persistence.tool_invocations import (
+    DurableToolInvocation,
+    InMemoryToolInvocationRepository,
+)
 from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
@@ -47,7 +51,11 @@ from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
-from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
+from awesome_agent.runtime.team_assignments import (
+    TeamAssignment,
+    TeamAssignmentKind,
+    TeamChildResult,
+)
 from awesome_agent.runtime.team_mailbox import (
     MailboxMessage,
     MailboxMessageType,
@@ -84,6 +92,7 @@ def _client(
     observability_repository: ObservabilityRepository | None = None,
     observability_facade: object | None = None,
     budget_repository: InMemoryBudgetRepository | None = None,
+    tool_invocation_repository: InMemoryToolInvocationRepository | None = None,
 ) -> tuple[TestClient, Repository]:
     projects = tmp_path / "projects"
     repository_path = projects / "repository"
@@ -137,6 +146,7 @@ def _client(
                 observability_repository=observability_repository,
                 observability_facade=observability_facade,  # type: ignore[arg-type]
                 budget_repository=budget_repository,
+                tool_invocation_repository=tool_invocation_repository,
                 team_repository=team_repository,
                 workspace_service=workspace_service,
             )
@@ -416,6 +426,233 @@ def test_observability_endpoints_return_run_trace_metrics_and_model_calls(
     assert metrics.json()[0]["name"] == "run.duration_ms"
     assert model_calls.status_code == 200
     assert model_calls.json()[0]["model"] == "deepseek-v4-flash"
+
+
+def test_runtime_diagnostics_summarizes_run_evidence_and_redacts(
+    tmp_path: Path,
+) -> None:
+    observability = InMemoryObservabilityRepository()
+    budget_repository = InMemoryBudgetRepository()
+    validation_repository = InMemoryValidationRepository()
+    tool_invocations = InMemoryToolInvocationRepository()
+    client, repository = _client(
+        tmp_path,
+        observability_repository=observability,
+        budget_repository=budget_repository,
+        validation_repository=validation_repository,
+        tool_invocation_repository=tool_invocations,
+    )
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Diagnose this run",
+            "intent": "read_only",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+    app = cast(Any, client.app)
+    runtime_repository = app.state.runtime.repository
+    run = asyncio.run(runtime_repository.get_run(run_id))
+    asyncio.run(
+        runtime_repository.update_run(
+            run.model_copy(update={"status": RunStatus.COMPLETED})
+        )
+    )
+    agent = asyncio.run(runtime_repository.list_agents(run_id))[0]
+    asyncio.run(
+        observability.record_span(
+            DurableSpan(
+                run_id=run_id,
+                trace_id=run_id.hex,
+                span_id="span-1",
+                parent_span_id=None,
+                name="run.execute",
+                category="run",
+                status="completed",
+                attributes={"prompt": "secret prompt", "runtime_route": "solo"},
+            )
+        )
+    )
+    asyncio.run(
+        observability.record_metric(
+            DurableMetric(
+                run_id=run_id,
+                name="run.duration_ms",
+                value=25,
+                unit="ms",
+                attributes={"status": "completed"},
+            )
+        )
+    )
+    asyncio.run(
+        observability.record_model_call(
+            DurableModelCall(
+                run_id=run_id,
+                agent_id=agent.id,
+                turn=1,
+                provider="deepseek",
+                model="deepseek-v4-flash",
+                status="failed",
+                input_tokens=10,
+                output_tokens=20,
+                reasoning_tokens=3,
+                error="secret provider failure",
+            )
+        )
+    )
+    asyncio.run(
+        budget_repository.upsert_ledger(
+            RunBudgetLedgerRecord(
+                run_id=run_id,
+                total_input_tokens=10,
+                total_output_tokens=20,
+                total_reasoning_tokens=3,
+                active_seconds=7,
+                model_call_count=1,
+                threshold_status="compact",
+            )
+        )
+    )
+    report = DurableValidationReport(
+        run_id=run_id,
+        agent_id=agent.id,
+        attempt=1,
+        status="failed",
+        summary="validation failed without secrets",
+    )
+    asyncio.run(
+        validation_repository.record_report(
+            report,
+            gates=[
+                DurableValidationGateResult(
+                    report_id=report.id,
+                    run_id=run_id,
+                    gate_id="unit",
+                    name="unit tests",
+                    command=["pytest"],
+                    required=True,
+                    status="failed",
+                    stdout_summary="secret stdout",
+                    stderr_summary="secret stderr",
+                    failure_kind="test_failure",
+                )
+            ],
+        )
+    )
+    asyncio.run(
+        tool_invocations.upsert(
+            DurableToolInvocation(
+                id=uuid4(),
+                run_id=run_id,
+                agent_id=agent.id,
+                tool_name="shell",
+                tool_version="1",
+                status="failed",
+                idempotency_key="tool-1",
+                arguments_hash="args-hash",
+                risk_level="medium",
+                path_refs=["README.md"],
+                result_summary="command failed safely",
+                result_content="secret tool output",
+                result_is_error=True,
+                error="secret tool error",
+            )
+        )
+    )
+
+    response = client.get(f"/runs/{run_id}/diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == str(run_id)
+    assert body["status"]["status"] == "completed"
+    assert body["dispatch"]["status"] == "queued"
+    assert body["agents"]["total"] == 1
+    assert body["budgets"]["total_tokens"] == 30
+    assert body["models"]["total"] == 1
+    assert body["models"]["failed"] == 1
+    assert body["models"]["calls"][0]["error_present"] is True
+    assert body["tools"]["total"] == 1
+    assert body["tools"]["tools"][0]["result_summary"] == "command failed safely"
+    assert body["validation"]["reports_total"] == 1
+    assert body["validation"]["failed_gates"] == 1
+    assert body["observability"]["spans_total"] >= 1
+    assert body["observability"]["metrics_total"] == 1
+    serialized = response.text.lower()
+    assert "secret" not in serialized
+    assert "cost" not in serialized
+    assert "price" not in serialized
+    assert "currency" not in serialized
+
+
+def test_runtime_diagnostics_rolls_up_team_children(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    app = cast(Any, client.app)
+    runtime_repository = app.state.runtime.repository
+    teams = app.state.team_repository
+    root = Run(goal="team", mode=RunMode.TEAM)
+    child = Run(
+        goal="child",
+        mode=RunMode.TEAM,
+        parent_run_id=root.id,
+        root_run_id=root.id,
+        depth=1,
+        child_role="teammate",
+        status=RunStatus.FAILED,
+    )
+    leader = Agent(
+        run_id=root.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake",
+    )
+    assignment = TeamAssignment(
+        root_run_id=root.id,
+        parent_run_id=root.id,
+        child_run_id=child.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile="teammate",
+        runtime_route="team-role",
+        goal="child",
+        allowed_tools=["read_file"],
+    )
+    asyncio.run(runtime_repository.create_run(root, leader))
+    asyncio.run(
+        runtime_repository.create_run(
+            child,
+            leader.model_copy(update={"run_id": child.id}),
+        )
+    )
+    asyncio.run(teams.create_assignment(assignment))
+    asyncio.run(
+        teams.record_child_result(
+            TeamChildResult(
+                assignment_id=assignment.id,
+                child_run_id=child.id,
+                parent_run_id=root.id,
+                root_run_id=root.id,
+                status="failed",
+                summary="child failed",
+                failure_kind="validation_failed",
+            )
+        )
+    )
+
+    body = client.get(f"/runs/{root.id}/diagnostics").json()
+
+    assert body["team"]["assignments_total"] == 1
+    assert body["team"]["child_runs_total"] == 1
+    assert body["team"]["child_runs"][0]["status"] == "failed"
+    assert body["team"]["child_results"][0]["failure_kind"] == "validation_failed"
+
+
+def test_runtime_diagnostics_returns_404_for_missing_run(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+
+    response = client.get("/runs/00000000-0000-0000-0000-000000000000/diagnostics")
+
+    assert response.status_code == 404
 
 
 def test_api_records_manual_endpoint_spans(tmp_path: Path) -> None:

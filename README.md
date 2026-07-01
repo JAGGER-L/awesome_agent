@@ -111,11 +111,14 @@ Runtime observability now records durable query-table evidence for
 run/graph/model/tool/sandbox spans, model-call summaries, and metrics such as
 run, model, and tool latency. Runtime events receive a stable Run-scoped
 `trace_id`, and FastAPI exposes `GET /runs/{run_id}/trace`,
-`GET /runs/{run_id}/metrics`, and `GET /runs/{run_id}/model-calls` for frontend
-inspection. The API, Worker graph boundaries, and migrated solo AgentLoop
-model/tool stages also create real OpenTelemetry spans through a
-failure-isolated observability facade. OTel metrics and dashboards remain
-later work.
+`GET /runs/{run_id}/metrics`, `GET /runs/{run_id}/model-calls`, and
+`GET /runs/{run_id}/diagnostics` for frontend and operator inspection. The
+diagnostics endpoint is a redacted read-only projection over runtime state,
+dispatch metadata, events, token ledgers, model calls, tool invocations,
+validation reports, team child evidence, and observability query tables. The
+API, Worker graph boundaries, and migrated solo AgentLoop model/tool stages
+also create real OpenTelemetry spans through a failure-isolated observability
+facade. OTel metrics and dashboards remain later work.
 
 ### Context and budget management (implemented)
 
@@ -200,6 +203,12 @@ cross-process event path without executing a coding goal:
 
 ```powershell
 .\.venv\Scripts\awesome-agent.exe probe --repo E:\projects\example
+```
+
+Inspect one Run's redacted operational evidence with:
+
+```powershell
+.\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
 ```
 
 `awesome-agent start` supervises independent API and Worker child processes.
