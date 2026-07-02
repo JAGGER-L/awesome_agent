@@ -382,7 +382,10 @@ async def test_tui_enter_executes_active_prefix_candidate() -> None:
         await pilot.press("/", "s", "enter")
         transcript = app.query_one("#transcript").render()
 
-    assert "api=ready" in str(transcript)
+    rendered = str(transcript)
+    assert "Status" in rendered
+    assert "Runtime: ready" in rendered
+    assert "Sandbox: local" in rendered
     assert "> /status" in str(transcript)
 
 
@@ -622,12 +625,11 @@ async def test_tui_new_switches_thread_without_internal_path_leak(
 
 
 @pytest.mark.asyncio
-async def test_tui_resume_switches_thread_and_loads_messages() -> None:
+async def test_tui_deleted_resume_command_is_unknown() -> None:
     client = FakeClient()
     original = client.create_thread("Original")
     restored = client.create_thread("Restored")
-    restored_id = str(restored["id"])
-    client.messages_by_thread[restored_id] = [
+    client.messages_by_thread[str(restored["id"])] = [
         {"role": "user", "content": "old question", "kind": "message"},
         {"role": "assistant", "content": "old answer", "kind": "model"},
     ]
@@ -663,11 +665,12 @@ async def test_tui_resume_switches_thread_and_loads_messages() -> None:
         transcript = app.query_one("#transcript").render()
 
     rendered = str(transcript)
-    assert app.state.backend_thread_id == restored_id
-    assert client.resumed_queries == ["restored"]
-    assert "old question" in rendered
-    assert "old answer" in rendered
-    assert "Resumed conversation: Restored" in rendered
+    assert app.state.backend_thread_id == str(original["id"])
+    assert client.resumed_queries == []
+    assert "Unknown command: /resume restored" in rendered
+    assert "Type /help" in rendered
+    assert "old question" not in rendered
+    assert "old answer" not in rendered
 
 
 @pytest.mark.asyncio
@@ -744,7 +747,7 @@ async def test_tui_status_includes_launch_context(tmp_path: Path) -> None:
         await pilot.press("/", "s", "t", "a", "t", "u", "s", "enter")
         transcript = app.query_one("#transcript").render()
 
-    assert f"workspace={tmp_path}" in str(transcript)
+    assert f"Workspace: {tmp_path}" in str(transcript)
 
 
 @pytest.mark.asyncio

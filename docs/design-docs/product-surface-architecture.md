@@ -145,7 +145,7 @@ The Product Surface Phase should proceed in this order:
 
 1. Complete the embedded local runtime host and shared surface client boundary.
 2. Make streaming, pause, cancel, and resume nonblocking and consistent.
-3. Fix thread/session UX so ordinary input, `/new`, `/threads`, and `/resume`
+3. Fix thread/session UX so ordinary input, `/new`, and `/threads`
    feel like conversation navigation.
 4. Polish transcript rendering into a compact coding-agent chat surface.
 5. Surface provider reasoning as bounded collapsible thought UI.

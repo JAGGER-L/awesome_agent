@@ -28,7 +28,6 @@ from awesome_agent.tui.chat_state import (
     ChatEventKind,
     ChatMessage,
     ChatSessionState,
-    chat_messages_from_thread_records,
     should_resume_last_run,
 )
 from awesome_agent.tui.client import HttpSurfaceClient
@@ -141,15 +140,6 @@ class AwesomeAgentTui(App[None]):
             elif parsed.kind is SlashCommandKind.QUIT:
                 self.exit()
                 return
-            elif (
-                parsed.kind is SlashCommandKind.RESUME
-                and not parsed.argument
-                and self.state.last_resumable_run_id is not None
-            ):
-                self._start_user_message(
-                    "continue",
-                    resume_run_id=self.state.last_resumable_run_id,
-                )
             else:
                 self._start_command(parsed)
         self._render()
@@ -203,7 +193,7 @@ class AwesomeAgentTui(App[None]):
                     self.client.cancel(self.state.current_run_id)
             self.state = self.state.mark_operation_paused(resumable_run_id).append(
                 ChatMessage.system(
-                    'Response paused. Type "continue" or /resume to continue.',
+                    'Response paused. Type "continue" to continue.',
                     kind=ChatEventKind.RUN,
                 )
             )
@@ -431,29 +421,6 @@ class AwesomeAgentTui(App[None]):
                     [],
                     message,
                 )
-            elif parsed.kind is SlashCommandKind.RESUME:
-                if not parsed.argument:
-                    guidance = (
-                        "Use /threads to choose a conversation or "
-                        "/resume <id-or-title>."
-                    )
-                    message = ChatMessage.system(guidance)
-                    self.call_from_thread(self._append_command_message, message)
-                else:
-                    thread = self.client.resume_thread(parsed.argument)
-                    messages = chat_messages_from_thread_records(
-                        self.client.list_thread_messages(_thread_id(thread))
-                    )
-                    message = ChatMessage.system(
-                        f"Resumed conversation: {_thread_title(thread)}",
-                        kind=ChatEventKind.RUN,
-                    )
-                    self.call_from_thread(
-                        self._switch_to_thread,
-                        thread,
-                        messages,
-                        message,
-                    )
             else:
                 message = SlashRouter(self.client).handle(parsed, state)
                 self.call_from_thread(self._append_command_message, message)
