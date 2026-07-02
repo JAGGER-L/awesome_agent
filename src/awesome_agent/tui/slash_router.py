@@ -84,17 +84,24 @@ class SlashRouter:
         if command.kind is SlashCommandKind.MODELS:
             if state.first_run_summary is not None:
                 summary = state.first_run_summary
-                suffix = (
-                    "configured"
-                    if summary.model_api_key_configured
-                    else f"missing {summary.model_api_key_env}"
+                return ChatMessage.system(
+                    _format_models(
+                        [
+                            {
+                                "role": "default",
+                                "name": summary.model_name,
+                                "provider": "deepseek",
+                                "configured": summary.model_api_key_configured,
+                                "api_key_env": summary.model_api_key_env,
+                                "api_key_present": summary.model_api_key_configured,
+                                "source": "first_run_summary",
+                            }
+                        ],
+                        state,
+                    )
                 )
-                return ChatMessage.system(f"default: {summary.model_name} ({suffix})")
             models = self.client.list_models()
-            lines = [
-                f"{item.get('role', 'model')}: {item.get('name')}" for item in models
-            ]
-            return ChatMessage.system("\n".join(lines) or "No models configured.")
+            return ChatMessage.system(_format_models(models, state))
         if command.kind is SlashCommandKind.MEMORY:
             memory = self.client.memory_summary()
             return ChatMessage.system(
@@ -245,6 +252,45 @@ def _format_tool_group(name: str, items: list[dict[str, object]]) -> str:
         _label(item, "name", suffix_keys=("risk_level", "health")) for item in items
     ]
     return f"{name}: {', '.join(rendered)}"
+
+
+def _format_models(
+    models: list[dict[str, object]],
+    state: ChatSessionState,
+) -> str:
+    if not models:
+        return "No models configured.\nlast turn: none yet"
+    lines = ["Models"]
+    for item in models:
+        configured = "yes" if item.get("configured") is True else "no"
+        provider = item.get("provider") or "unknown"
+        role = item.get("role") or "model"
+        name = item.get("name") or "-"
+        line = f"{role}: {name}  provider={provider}  configured={configured}"
+        api_key_env = item.get("api_key_env")
+        api_key_present = item.get("api_key_present")
+        if api_key_env is not None:
+            present = "yes" if api_key_present is True else "no"
+            line = f"{line}  api_key_env={api_key_env} present={present}"
+            if api_key_present is not True:
+                line = f"{line} (missing {api_key_env})"
+        lines.append(line)
+        base_url = item.get("base_url")
+        if base_url:
+            lines.append(f"base_url: {base_url}")
+    if state.last_requested_model is None:
+        lines.append("last turn: none yet")
+    else:
+        parts = [
+            f"requested={state.last_requested_model}",
+            f"response={state.last_response_model or '-'}",
+            f"provider={state.last_model_provider or '-'}",
+        ]
+        if state.last_model_response_id:
+            parts.append(f"response_id={state.last_model_response_id}")
+        lines.append(f"last turn: {' '.join(parts)}")
+    lines.append("note: model self-description is not authoritative.")
+    return "\n".join(lines)
 
 
 def _label(

@@ -78,6 +78,10 @@ class ChatSessionState:
     thought_started_at: datetime | None = None
     thought_elapsed_seconds: int | None = None
     thought_truncated: bool = False
+    last_requested_model: str | None = None
+    last_response_model: str | None = None
+    last_model_provider: str | None = None
+    last_model_response_id: str | None = None
     status_label: str = "ready"
     details_enabled: bool = False
     last_failed_user_message: str | None = None
@@ -185,6 +189,15 @@ class ChatSessionState:
 
     def note_run_started(self, run_id: str) -> ChatSessionState:
         return replace(self, current_run_id=run_id)
+
+    def note_model_metadata(self, payload: dict[str, object]) -> ChatSessionState:
+        return replace(
+            self,
+            last_requested_model=_optional_payload_str(payload, "requested_model"),
+            last_response_model=_optional_payload_str(payload, "response_model"),
+            last_model_provider=_optional_payload_str(payload, "provider"),
+            last_model_response_id=_optional_payload_str(payload, "response_id"),
+        )
 
     def append_stream_delta(self, text: str) -> ChatSessionState:
         buffer = f"{self.streaming_buffer}{text}"
@@ -311,3 +324,8 @@ def _chat_message_from_record(record: dict[str, Any]) -> ChatMessage:
     if role == "assistant":
         return ChatMessage.assistant(content)
     return ChatMessage.system(content, kind=kind)
+
+
+def _optional_payload_str(payload: dict[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None

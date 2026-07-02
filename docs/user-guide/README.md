@@ -44,7 +44,7 @@ the current Run.
 | `/resume` | Resume a thread by id or title when supported. |
 | `/status` | Show current thread/run/runtime status. |
 | `/model` | Alias for `/models`. |
-| `/models` | List configured model profiles. |
+| `/models` | List configured model profiles and last-turn routing metadata. |
 | `/skills` | Browse enabled and available skills. |
 | `/tools` | Show built-in, MCP, and sandbox tools. |
 | `/mcp` | Show MCP server status. |
@@ -62,11 +62,18 @@ Useful chat-first TUI keys:
 | Key | Action |
 | --- | --- |
 | `Ctrl+C` | Cancel the current Run when one is active. |
+| `Ctrl+O` | Expand or collapse the latest thought block when reasoning was streamed. |
 | `Ctrl+R` | Retry the last failed conversation turn. |
 
 Slash commands are CLI/TUI interaction syntax. API routes should expose
 semantic resources such as threads, runs, models, memory, readiness, and
 approvals rather than slash-command route names.
+
+Model self-descriptions are not authoritative identity evidence. Use
+`/models` to inspect configured model names, provider, base URL, API-key
+presence, and the last completed turn's requested and observed response model.
+Gateways and compatible base URLs may route aliases internally; when response
+metadata is absent, the provider did not return it.
 
 ## TUI Operator Console
 

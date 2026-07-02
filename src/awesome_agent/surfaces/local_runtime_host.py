@@ -214,7 +214,13 @@ class LocalRuntimeHost:
             {
                 "name": self.settings.leader_model,
                 "role": "leader",
+                "provider": "deepseek",
                 "configured": configured,
+                "api_key_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                "api_key_present": configured,
+                "base_url": self.settings.deepseek_base_url,
+                "source": "settings",
+                "overridden_by_env": False,
             }
         ]
 

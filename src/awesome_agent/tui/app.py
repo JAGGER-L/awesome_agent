@@ -342,6 +342,7 @@ class AwesomeAgentTui(App[None]):
             final_content = stream_event.payload.get("content")
             if isinstance(final_content, str):
                 self.state = self.state.upsert_streaming_assistant(final_content)
+            self.state = self.state.note_model_metadata(stream_event.payload)
         elif stream_event.event is ConversationStreamEventKind.ERROR:
             message = self._format_stream_error(
                 stream_event.payload,

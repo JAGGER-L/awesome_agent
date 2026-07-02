@@ -194,6 +194,13 @@ class ConversationService:
                         role=ThreadMessageRole.ASSISTANT,
                         content=final_text,
                     )
+                    completion_payload = {
+                        **assistant.model_dump(mode="json"),
+                        "requested_model": selected_model,
+                        "response_model": model_event.turn.model,
+                        "provider": model_event.turn.provider,
+                        "response_id": model_event.turn.response_id,
+                    }
                     sequence += 1
                     yield _event(
                         ConversationStreamEventKind.MESSAGE_COMPLETED,
@@ -201,7 +208,7 @@ class ConversationService:
                         turn_id=turn_id,
                         sequence=sequence,
                         trace_id=trace_id,
-                        payload=assistant.model_dump(mode="json"),
+                        payload=completion_payload,
                     )
                     sequence += 1
                     yield _event(
