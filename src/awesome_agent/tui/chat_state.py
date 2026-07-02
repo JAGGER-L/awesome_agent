@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
+from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
 
 
@@ -43,6 +44,7 @@ class ChatMessage:
 class ChatSessionState:
     thread_id: UUID
     launch_context: CliLaunchContext | None = None
+    first_run_summary: ConfigFlowSummary | None = None
     current_run_id: str | None = None
     status_label: str = "ready"
     details_enabled: bool = False
@@ -53,8 +55,13 @@ class ChatSessionState:
         cls,
         *,
         launch_context: CliLaunchContext | None = None,
+        first_run_summary: ConfigFlowSummary | None = None,
     ) -> ChatSessionState:
-        return cls(thread_id=uuid4(), launch_context=launch_context)
+        return cls(
+            thread_id=uuid4(),
+            launch_context=launch_context,
+            first_run_summary=first_run_summary,
+        )
 
     @property
     def context_label(self) -> str:

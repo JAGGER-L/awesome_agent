@@ -142,6 +142,19 @@ readiness.
 
 ### Run Local CLI
 
+For a first local CLI launch:
+
+```powershell
+awesome init
+cd E:\my-project
+awesome
+```
+
+`awesome init` creates `~/.awesome-agent/config.yaml`. The file stores model
+names and environment-variable names only. Set `AWESOME_AGENT_DEEPSEEK_API_KEY`
+in your shell, operating-system environment, password manager, or local `.env`
+file before model-backed use.
+
 ```powershell
 cd E:\my-project
 awesome

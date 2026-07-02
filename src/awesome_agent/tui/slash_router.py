@@ -74,6 +74,14 @@ class SlashRouter:
                 kind=ChatEventKind.RUN,
             )
         if command.kind is SlashCommandKind.MODELS:
+            if state.first_run_summary is not None:
+                summary = state.first_run_summary
+                suffix = (
+                    "configured"
+                    if summary.model_api_key_configured
+                    else f"missing {summary.model_api_key_env}"
+                )
+                return ChatMessage.system(f"default: {summary.model_name} ({suffix})")
             models = self.client.list_models()
             lines = [
                 f"{item.get('role', 'model')}: {item.get('name')}"
@@ -142,6 +150,29 @@ class SlashRouter:
                 " ".join(f"{key}={value}" for key, value in usage.items())
             )
         if command.kind is SlashCommandKind.CONFIG:
+            if state.first_run_summary is not None:
+                summary = state.first_run_summary
+                key_status = "set" if summary.model_api_key_configured else "missing"
+                return ChatMessage.system(
+                    "\n".join(
+                        [
+                            f"home={summary.home}",
+                            (
+                                f"user_config={summary.user_config} "
+                                f"exists={summary.user_config_exists}"
+                            ),
+                            (
+                                f"project_config={summary.project_config} "
+                                f"exists={summary.project_config_exists}"
+                            ),
+                            (
+                                f"project_env={summary.project_env} "
+                                f"exists={summary.project_env_exists}"
+                            ),
+                            f"{summary.model_api_key_env}={key_status}",
+                        ]
+                    )
+                )
             config = self.client.config_summary()
             return ChatMessage.system(
                 " ".join(f"{key}={value}" for key, value in config.items())
