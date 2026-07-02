@@ -76,9 +76,15 @@ the local API and docs URLs. It does not start the CLI/TUI.
 Open the local interactive entrypoint:
 
 ```powershell
+cd E:\my-project
 awesome
 awesome commands
 ```
+
+Run `awesome` from the project directory you want the agent to work on. The
+launch directory becomes the default thread context. If it is a Git checkout,
+Runs inherit that repository. If it is not a Git checkout, the CLI uses
+workspace-only mode and still accepts ordinary chat messages.
 
 `awesome` does not require an API before launch. It defaults to the local CLI
 profile and LocalSandbox, then opens the chat-first local CLI/TUI. This is a

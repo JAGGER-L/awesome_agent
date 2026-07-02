@@ -33,6 +33,14 @@ class SlashRouter:
             return ChatMessage.system(slash_command_help())
         if command.kind is SlashCommandKind.STATUS:
             status = self.client.runtime_status()
+            context = state.launch_context
+            if context is not None:
+                status = {
+                    **status,
+                    context.context_kind: context.display_path,
+                    "thread": str(state.thread_id),
+                    "run": state.current_run_id or "-",
+                }
             return ChatMessage.system(
                 " ".join(f"{key}={value}" for key, value in status.items()),
                 kind=ChatEventKind.RUN,

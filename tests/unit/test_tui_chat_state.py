@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.tui.chat_state import (
     ChatEventKind,
     ChatMessage,
@@ -23,3 +26,12 @@ def test_chat_state_appends_user_and_system_messages() -> None:
 
     assert [message.role for message in updated.messages] == ["user", "system"]
     assert updated.messages[1].kind is ChatEventKind.RUN
+
+
+def test_chat_session_stores_launch_context(tmp_path: Path) -> None:
+    context = CliLaunchContext(project_root=tmp_path, context_kind="workspace")
+
+    state = ChatSessionState.new(launch_context=context)
+
+    assert state.launch_context == context
+    assert state.context_label == f"workspace: {tmp_path}"

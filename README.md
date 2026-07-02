@@ -143,9 +143,15 @@ readiness.
 ### Run Local CLI
 
 ```powershell
+cd E:\my-project
 awesome
 awesome commands
 ```
+
+Run `awesome` from the project directory you want the agent to work on. The
+launch directory becomes the default thread context. If it is a Git checkout,
+Runs inherit that repository. If it is not a Git checkout, the CLI uses
+workspace-only mode and still accepts ordinary chat messages.
 
 `awesome` is the default chat-first local CLI/TUI. Use `awesome-agent`
 subcommands for direct operations, diagnostics, and scripting.

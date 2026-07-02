@@ -7,6 +7,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Footer, Header, Input, Static
 
+from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.cli.slash_commands import SlashCommandKind, parse_slash_command
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 from awesome_agent.tui.client import TuiApiClient
@@ -28,13 +29,14 @@ class AwesomeAgentTui(App[None]):
         run_id: str | None = None,
         refresh_interval: float = 2.0,
         client: TuiApiClient | None = None,
+        launch_context: CliLaunchContext | None = None,
     ) -> None:
         super().__init__()
         self.api_url = api_url
         self.initial_run_id = run_id
         self.refresh_interval = refresh_interval
         self.client = client or TuiApiClient(api_url)
-        self.state = ChatSessionState.new()
+        self.state = ChatSessionState.new(launch_context=launch_context)
         if run_id is not None:
             self.state = self.state.with_run(run_id)
 
@@ -59,8 +61,11 @@ class AwesomeAgentTui(App[None]):
             self.state = self.state.append(ChatMessage.user(raw))
             self.state = self.state.append(
                 ChatMessage.system(
-                    "Select repository context to create a Run in the current thread.",
-                    kind=ChatEventKind.RUN,
+                    (
+                        f"Message received in {self.state.context_label}. "
+                        "Coding Runs will inherit this context when started."
+                    ),
+                    kind=ChatEventKind.MESSAGE,
                 )
             )
         else:

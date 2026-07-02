@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 
+from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.tui.app import AwesomeAgentTui
 
 
@@ -31,3 +34,45 @@ async def test_tui_headless_renders_help() -> None:
         transcript = app.query_one("#transcript").render()
 
     assert "/new" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_accepts_plain_message_without_repo_selection_block(
+    tmp_path: Path,
+) -> None:
+    app = AwesomeAgentTui(
+        api_url="http://127.0.0.1:8000",
+        client=FakeClient(),
+        launch_context=CliLaunchContext(
+            project_root=tmp_path,
+            context_kind="workspace",
+        ),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "hi" in rendered
+    assert "Select repository context" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_status_includes_launch_context(tmp_path: Path) -> None:
+    app = AwesomeAgentTui(
+        api_url="http://127.0.0.1:8000",
+        client=FakeClient(),
+        launch_context=CliLaunchContext(
+            project_root=tmp_path,
+            context_kind="workspace",
+        ),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "s", "t", "a", "t", "u", "s", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert f"workspace={tmp_path}" in str(transcript)
