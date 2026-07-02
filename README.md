@@ -78,41 +78,49 @@ are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
 
 ### Choose A Run Mode
 
-The current repository still supports the PowerShell quickstart scripts. The
-target startup model is being migrated to Makefile commands: Docker API uses
+The Makefile commands are the primary startup contract. Docker API mode uses
 `make docker-init` and `make docker-start`; local API development uses
 `make check`, `make install`, `make setup-sandbox`, and `make dev`; local
-interactive CLI uses `awesome`.
+interactive CLI uses `awesome` after Task 60. The existing PowerShell scripts
+remain Windows fallback entrypoints.
 
 | Mode | Best for | Command | Status |
 | --- | --- | --- | --- |
-| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Supported |
-| Local API | API + Worker inspection from host Python | `.\.venv\Scripts\awesome-agent.exe start` | Supported |
-| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Supported |
-| Docker API/Web | Browser/API inspection against containerized API | `docker compose up -d --build postgres api worker` | Supported |
+| Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | Primary |
+| Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | Primary |
+| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Fallback until `awesome` lands |
+| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Fallback |
 
 The current "Web" surface is the local FastAPI inspection surface and
 generated API docs at `/docs`. It is not yet a hosted multi-user web
 application.
 
-### Run Automatically
+### Run Local API
 
 ```powershell
-.\scripts\quickstart.ps1
+make check
+make install
+make setup-sandbox
+make dev
 ```
 
-This starts local dependencies, runs migrations, starts API + Worker, creates
-an ignored sample repository, verifies a diagnostic probe, and prints the first
-read-only run command. It does not require a model key unless you pass
-`-RunReadOnly`.
+This checks host dependencies, installs Python dependencies, prepares the AIO
+sandbox assets, runs migrations, starts API + Worker, and prints readiness
+URLs. Until Task 62 adds the AIO Dockerfile, `make setup-sandbox` fails with a
+clear Task 62 dependency message.
 
-For the Docker lane:
+### Run Docker API
 
 ```powershell
-.\scripts\docker-quickstart.ps1
+make docker-init
+make docker-start
 ```
 
-### Run Manually
+Docker mode does not start the CLI. It starts PostgreSQL, API, Worker, and the
+sandbox service after Task 63 wires it into Compose. Until then,
+`make docker-start` fails with a clear Task 63 dependency message.
+
+### PowerShell Fallback
 
 ```powershell
 .\scripts\bootstrap.ps1
@@ -120,6 +128,13 @@ docker compose up -d postgres
 .\scripts\migrate.ps1
 .\.venv\Scripts\awesome-agent.exe doctor --profile api
 .\.venv\Scripts\awesome-agent.exe start
+```
+
+The PowerShell quickstart remains available:
+
+```powershell
+.\scripts\quickstart.ps1
+.\scripts\docker-quickstart.ps1
 ```
 
 The API binds to `http://127.0.0.1:8000` by default. Use `/health` for process
