@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
+from awesome_agent.cli.repo_context import CliLaunchContext
+
 
 class ChatEventKind(StrEnum):
     MESSAGE = "message"
@@ -40,13 +42,27 @@ class ChatMessage:
 @dataclass(frozen=True, slots=True)
 class ChatSessionState:
     thread_id: UUID
+    launch_context: CliLaunchContext | None = None
     current_run_id: str | None = None
     status_label: str = "ready"
     messages: list[ChatMessage] = field(default_factory=list)
 
     @classmethod
-    def new(cls) -> ChatSessionState:
-        return cls(thread_id=uuid4())
+    def new(
+        cls,
+        *,
+        launch_context: CliLaunchContext | None = None,
+    ) -> ChatSessionState:
+        return cls(thread_id=uuid4(), launch_context=launch_context)
+
+    @property
+    def context_label(self) -> str:
+        if self.launch_context is None:
+            return "workspace: -"
+        return (
+            f"{self.launch_context.context_kind}: "
+            f"{self.launch_context.display_path}"
+        )
 
     def append(self, message: ChatMessage) -> ChatSessionState:
         return replace(self, messages=[*self.messages, message])

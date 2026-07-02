@@ -67,6 +67,18 @@ Makefile 命令是主要启动契约：Docker API 使用 `make docker-init` 和
 
 The current "Web" surface is the local FastAPI inspection surface and generated API docs at `/docs`. It is not yet a hosted multi-user web application.
 
+### Local CLI
+
+在你希望 Agent 工作的项目目录中启动：
+
+```powershell
+cd E:\my-project
+awesome
+awesome commands
+```
+
+启动目录会成为当前 thread 的默认上下文。如果该目录属于 Git 仓库，后续 Run 会继承这个 repo；如果不是 Git 仓库，CLI 会进入 workspace-only 模式，普通聊天仍然可用。
+
 ### 自动启动
 
 ```powershell
