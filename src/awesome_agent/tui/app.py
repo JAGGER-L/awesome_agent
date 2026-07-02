@@ -7,6 +7,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Input, Static
 
+from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.cli.slash_commands import SlashCommandKind, parse_slash_command
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
@@ -30,13 +31,17 @@ class AwesomeAgentTui(App[None]):
         refresh_interval: float = 2.0,
         client: TuiApiClient | None = None,
         launch_context: CliLaunchContext | None = None,
+        first_run_summary: ConfigFlowSummary | None = None,
     ) -> None:
         super().__init__()
         self.api_url = api_url
         self.initial_run_id = run_id
         self.refresh_interval = refresh_interval
         self.client = client or TuiApiClient(api_url)
-        self.state = ChatSessionState.new(launch_context=launch_context)
+        self.state = ChatSessionState.new(
+            launch_context=launch_context,
+            first_run_summary=first_run_summary,
+        )
         if run_id is not None:
             self.state = self.state.with_run(run_id)
 
@@ -93,12 +98,14 @@ class AwesomeAgentTui(App[None]):
         )
 
     def _welcome_text(self) -> str:
-        return "\n".join(
-            [
-                "+-- Awesome Agent --------------------------------------+",
-                "| Welcome back                                          |",
-                f"| cwd: {self.state.context_label}",
-                "| tips: /help, /model, /status                          |",
-                "+-------------------------------------------------------+",
-            ]
-        )
+        lines = [
+            "+-- Awesome Agent --------------------------------------+",
+            "| Welcome back                                          |",
+            f"| cwd: {self.state.context_label}",
+            "| tips: /help, /model, /status                          |",
+        ]
+        summary = self.state.first_run_summary
+        if summary is not None and summary.needs_model_setup:
+            lines.append(f"| setup: run awesome init; set {summary.model_api_key_env}")
+        lines.append("+-------------------------------------------------------+")
+        return "\n".join(lines)

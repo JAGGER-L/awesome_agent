@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from os import environ
 from pathlib import Path
 from typing import Annotated, Protocol
 
 import typer
 
+from awesome_agent.cli.config_flow import (
+    ConfigFlowSummary,
+    create_default_user_config,
+    inspect_config_flow,
+)
 from awesome_agent.cli.first_run import inspect_first_run_state
 from awesome_agent.cli.profile import local_cli_profile
 from awesome_agent.cli.repo_context import CliLaunchContext, discover_launch_context
@@ -18,6 +24,7 @@ class _ChatTui(Protocol):
         api_url: str,
         run_id: str | None = None,
         launch_context: CliLaunchContext | None = None,
+        first_run_summary: ConfigFlowSummary | None = None,
     ) -> None: ...
 
     def run(self) -> object: ...
@@ -51,6 +58,11 @@ def launch(
         project_root=launch_context.project_root,
         home=Path.home(),
     )
+    config_summary = inspect_config_flow(
+        home=Path.home(),
+        project_root=launch_context.project_root,
+        environ=environ,
+    )
     typer.echo(f"awesome.profile={profile.name}")
     typer.echo(f"awesome.sandbox={profile.default_sandbox_backend}")
     typer.echo(
@@ -62,6 +74,7 @@ def launch(
         api_url=api_url,
         run_id=None,
         launch_context=launch_context,
+        first_run_summary=config_summary,
     ).run()
 
 
@@ -69,6 +82,17 @@ def launch(
 def commands() -> None:
     """Print slash commands supported by the interactive CLI."""
     typer.echo(slash_command_help())
+
+
+@app.command("init")
+def init_config() -> None:
+    """Create the default user config without storing secrets."""
+    path = create_default_user_config(Path.home())
+    typer.echo(f"Created or verified {path}")
+    typer.echo(
+        "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment "
+        "or project .env."
+    )
 
 
 def main() -> None:

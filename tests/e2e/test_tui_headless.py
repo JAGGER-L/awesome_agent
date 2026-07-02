@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.tui.app import AwesomeAgentTui
 
@@ -109,3 +110,31 @@ async def test_tui_details_toggles_verbose_state() -> None:
 
     assert app.state.details_enabled is True
     assert "Details enabled" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_welcome_shows_first_run_model_guidance(tmp_path: Path) -> None:
+    summary = ConfigFlowSummary(
+        home=tmp_path,
+        project_root=tmp_path / "project",
+        user_config=tmp_path / ".awesome-agent" / "config.yaml",
+        project_config=tmp_path / "project" / "awesome-agent.yaml",
+        project_env=tmp_path / "project" / ".env",
+        user_config_exists=False,
+        project_config_exists=False,
+        project_env_exists=False,
+        model_name="deepseek-v4-pro",
+        model_api_key_env="AWESOME_AGENT_DEEPSEEK_API_KEY",
+        model_api_key_configured=False,
+    )
+    app = AwesomeAgentTui(
+        api_url="http://127.0.0.1:8000",
+        client=FakeClient(),
+        first_run_summary=summary,
+    )
+
+    async with app.run_test():
+        welcome = app.query_one("#welcome").render()
+
+    assert "awesome init" in str(welcome)
+    assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in str(welcome)

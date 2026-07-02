@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -33,6 +35,20 @@ def test_awesome_commands_lists_slash_commands() -> None:
     assert "/help" in result.output
 
 
+def test_awesome_init_creates_user_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".awesome-agent" / "config.yaml").exists()
+    assert "Created or verified" in result.output
+    assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in result.output
+
+
 def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
     launched: dict[str, object] = {}
 
@@ -43,10 +59,12 @@ def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
             api_url: str,
             run_id: str | None = None,
             launch_context: object | None = None,
+            first_run_summary: object | None = None,
         ) -> None:
             launched["api_url"] = api_url
             launched["run_id"] = run_id
             launched["launch_context"] = launch_context
+            launched["first_run_summary"] = first_run_summary
 
         def run(self) -> None:
             launched["ran"] = True
@@ -60,6 +78,8 @@ def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
         "api_url": "http://127.0.0.1:9000",
         "run_id": None,
         "launch_context": launched["launch_context"],
+        "first_run_summary": launched["first_run_summary"],
         "ran": True,
     }
     assert launched["launch_context"] is not None
+    assert launched["first_run_summary"] is not None

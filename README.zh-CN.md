@@ -69,6 +69,16 @@ The current "Web" surface is the local FastAPI inspection surface and generated 
 
 ### Local CLI
 
+首次启动本地 CLI：
+
+```powershell
+awesome init
+cd E:\my-project
+awesome
+```
+
+`awesome init` 会创建 `~/.awesome-agent/config.yaml`。这个文件只保存模型名称和环境变量名称，不保存真实 API key。模型调用前，请把 `AWESOME_AGENT_DEEPSEEK_API_KEY` 设置在 shell、操作系统环境变量、密码管理器或本地 `.env` 文件中。
+
 在你希望 Agent 工作的项目目录中启动：
 
 ```powershell
