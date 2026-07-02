@@ -19,6 +19,42 @@ class TuiApiClient:
     def close(self) -> None:
         self._client.close()
 
+    def create_thread(self, title: str) -> dict[str, Any]:
+        response = self._client.post(f"{self.api_url}/threads", json={"title": title})
+        response.raise_for_status()
+        return dict(response.json())
+
+    def runtime_status(self) -> dict[str, object]:
+        response = self._client.get(
+            f"{self.api_url}/ready",
+            params={"profile": "api"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Expected object response from /ready.")
+        return {"api": payload.get("status", "unknown")}
+
+    def list_models(self) -> list[dict[str, Any]]:
+        response = self._client.get(f"{self.api_url}/models")
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
+            raise ValueError("Expected list response from /models.")
+        return [dict(item) for item in payload]
+
+    def memory_summary(self) -> dict[str, object]:
+        response = self._client.get(f"{self.api_url}/memory")
+        if response.status_code == 404:
+            return {"enabled": False, "source": "not_configured"}
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Expected object response from /memory.")
+        return dict(payload)
+
     def list_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._get_list("/runs", params={"limit": limit})
 

@@ -1,3 +1,4 @@
+import pytest
 from typer.testing import CliRunner
 
 from awesome_agent.cli.interactive import app
@@ -30,3 +31,26 @@ def test_awesome_commands_lists_slash_commands() -> None:
     assert "/models" in result.output
     assert "/memory" in result.output
     assert "/help" in result.output
+
+
+def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
+    launched: dict[str, object] = {}
+
+    class FakeTui:
+        def __init__(self, *, api_url: str, run_id: str | None = None) -> None:
+            launched["api_url"] = api_url
+            launched["run_id"] = run_id
+
+        def run(self) -> None:
+            launched["ran"] = True
+
+    monkeypatch.setattr("awesome_agent.cli.interactive.AwesomeAgentTui", FakeTui)
+
+    result = runner.invoke(app, ["--api-url", "http://127.0.0.1:9000"])
+
+    assert result.exit_code == 0
+    assert launched == {
+        "api_url": "http://127.0.0.1:9000",
+        "run_id": None,
+        "ran": True,
+    }

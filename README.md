@@ -149,9 +149,8 @@ awesome
 awesome commands
 ```
 
-`awesome` is the local interactive entrypoint. In this phase it prints a safe
-bootstrap summary and the supported slash-command model; Task 61 replaces the
-inside with the chat-first TUI.
+`awesome` is the default chat-first local CLI/TUI. Use `awesome-agent`
+subcommands for direct operations, diagnostics, and scripting.
 
 | Command | Purpose |
 | --- | --- |
