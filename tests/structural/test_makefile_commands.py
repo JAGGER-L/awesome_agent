@@ -40,3 +40,15 @@ def test_docker_start_docs_do_not_start_cli() -> None:
     assert "make docker-init" in quickstart
     assert "make docker-start" in quickstart
     assert "Docker mode does not start the CLI" in quickstart
+
+
+def test_docker_scripts_include_sandbox_service() -> None:
+    docker_init = Path("scripts/make/docker_init.py").read_text(encoding="utf-8")
+    docker_start = Path("scripts/make/docker_start.py").read_text(encoding="utf-8")
+    setup_sandbox = Path("scripts/make/setup_sandbox.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"sandbox"' in docker_init
+    assert '"sandbox"' in docker_start
+    assert "awesome-agent-sandbox:aio" in setup_sandbox

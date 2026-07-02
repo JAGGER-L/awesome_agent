@@ -15,6 +15,27 @@ services:
     volumes:
       - awesome_agent_postgres:/var/lib/postgresql/data
 
+  sandbox:
+    build:
+      context: .
+      dockerfile: sandbox/aio/Dockerfile
+    image: awesome-agent-sandbox:aio
+    ports:
+      - "8765:8765"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=2)",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - awesome_agent_user_data:/mnt/user-data
+
   api:
     build: .
     command:
@@ -27,14 +48,19 @@ services:
       AWESOME_AGENT_CHECKPOINT_DATABASE_URL: "postgresql://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
       AWESOME_AGENT_ARTIFACT_ROOT: "/var/lib/awesome-agent/runs"
       AWESOME_AGENT_LOCAL_CONFIG_PATH: "/var/lib/awesome-agent/config.toml"
-      AWESOME_AGENT_WORKSPACE_ROOT: "/var/lib/awesome-agent/worktrees"
+      AWESOME_AGENT_WORKSPACE_ROOT: "/mnt/user-data/workspace"
+      AWESOME_AGENT_SANDBOX_BACKEND: "aio-docker"
+      AWESOME_AGENT_AIO_SANDBOX_URL: "http://sandbox:8765"
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      sandbox:
+        condition: service_healthy
     volumes:
       - awesome_agent_runtime:/var/lib/awesome-agent
+      - awesome_agent_user_data:/mnt/user-data
 
   worker:
     build: .
@@ -45,13 +71,19 @@ services:
       AWESOME_AGENT_CHECKPOINT_DATABASE_URL: "postgresql://awesome_agent:awesome_agent@postgres:5432/awesome_agent"
       AWESOME_AGENT_ARTIFACT_ROOT: "/var/lib/awesome-agent/runs"
       AWESOME_AGENT_LOCAL_CONFIG_PATH: "/var/lib/awesome-agent/config.toml"
-      AWESOME_AGENT_WORKSPACE_ROOT: "/var/lib/awesome-agent/worktrees"
+      AWESOME_AGENT_WORKSPACE_ROOT: "/mnt/user-data/workspace"
+      AWESOME_AGENT_SANDBOX_BACKEND: "aio-docker"
+      AWESOME_AGENT_AIO_SANDBOX_URL: "http://sandbox:8765"
     depends_on:
       postgres:
         condition: service_healthy
+      sandbox:
+        condition: service_healthy
     volumes:
       - awesome_agent_runtime:/var/lib/awesome-agent
+      - awesome_agent_user_data:/mnt/user-data
 
 volumes:
   awesome_agent_postgres:
   awesome_agent_runtime:
+  awesome_agent_user_data:

@@ -66,8 +66,8 @@ make setup-sandbox
 make dev
 ```
 
-`make setup-sandbox` prepares the AIO Docker sandbox assets. Until Task 62 adds
-`sandbox/aio/Dockerfile`, it fails clearly with a Task 62 dependency message.
+`make setup-sandbox` builds the AIO Docker sandbox service image
+`awesome-agent-sandbox:aio`.
 `make dev` starts PostgreSQL, runs migrations, starts API + Worker, and prints
 the local API and docs URLs. It does not start the CLI/TUI.
 
@@ -147,8 +147,8 @@ make docker-start
 ```
 
 Docker mode does not start the CLI. Use `awesome` locally for CLI/TUI after
-Task 60. Until Task 63 wires the sandbox service into Compose,
-`make docker-start` fails clearly with a Task 63 dependency message.
+Task 60. Docker Compose starts PostgreSQL, the AIO sandbox service, API, and
+Worker. Open `http://127.0.0.1:8000/docs` after startup.
 
 ## Docker CLI Fallback
 
@@ -165,7 +165,7 @@ Preview the Docker steps:
 ```
 
 The script ensures `.env` exists, runs
-`docker compose up -d --build postgres api worker`, waits for API readiness,
+`docker compose up -d --build postgres sandbox api worker`, waits for API readiness,
 and prints CLI next steps that target the containerized API with `--api-url`.
 
 ## Manual Docker API Fallback
@@ -173,7 +173,7 @@ and prints CLI next steps that target the containerized API with `--api-url`.
 Start the Docker services directly:
 
 ```powershell
-docker compose up -d --build postgres api worker
+docker compose up -d --build postgres sandbox api worker
 ```
 
 Inspect the API:
@@ -187,7 +187,8 @@ Open `http://127.0.0.1:8000/docs` for generated FastAPI documentation.
 
 Docker runtime data lives in the `awesome_agent_runtime` volume. Per-run
 artifacts are stored under `/var/lib/awesome-agent/runs/<run_id>/artifacts/`
-inside the container.
+inside the container. Model-visible workspace files live in the
+`awesome_agent_user_data` volume and are mounted as `/mnt/user-data/workspace/`.
 
 ## Verify Without A Model Key
 

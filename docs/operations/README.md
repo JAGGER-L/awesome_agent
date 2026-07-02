@@ -22,7 +22,7 @@ The Makefile commands are the primary startup contract. The existing
 PowerShell scripts remain Windows fallback entrypoints. Docker API mode uses
 `make docker-init` and `make docker-start`; local API development uses
 `make check`, `make install`, `make setup-sandbox`, and `make dev`; local
-interactive CLI uses `awesome` after Task 60.
+interactive CLI uses `awesome`.
 
 See [runtime profiles and startup](../design-docs/runtime-profiles-and-startup.md)
 for the durable startup, sandbox, and workspace contract.
@@ -37,7 +37,7 @@ for the durable startup, sandbox, and workspace contract.
 | Supervised local runtime fallback | `awesome-agent start` | API + Worker in one local command. |
 | Split runtime | `awesome-agent serve` and `awesome-agent worker` | Process-manager or debugging setups. |
 | PostgreSQL dependency | `docker compose up -d postgres` | Local durable storage. |
-| Docker runtime fallback | `docker compose up -d --build postgres api worker` | Containerized API + Worker without sandbox service wiring. |
+| Docker runtime fallback | `docker compose up -d --build postgres sandbox api worker` | Containerized API + Worker + AIO sandbox without Makefile helpers. |
 
 ## Ports And Runtime Data
 
@@ -45,9 +45,11 @@ for the durable startup, sandbox, and workspace contract.
 | --- | --- | --- |
 | API port | `127.0.0.1:8000` local, `0.0.0.0:8000` inside Docker | Local inspection API. |
 | PostgreSQL port | `54329` host, `5432` container | Durable runtime state. |
+| AIO sandbox port | `127.0.0.1:8765` host, `8765` container | Sandbox service health and command execution. |
 | Runtime data | `~/.awesome-agent/runs/` local, `/var/lib/awesome-agent/runs/` Docker | Per-run artifacts and runtime evidence. |
 | Thread workspace | `~/.awesome-agent/threads/<thread_id>/workspace/` local, `/mnt/user-data/workspace/` in AIO Docker | Model-visible generated files and per-thread `.venv`. |
 | Compose volume | `awesome_agent_runtime` | Container runtime state. |
+| Compose user-data volume | `awesome_agent_user_data` | Model-visible workspace mounted into API, Worker, and sandbox. |
 
 ## Readiness And Logs
 
@@ -56,6 +58,7 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod "http://127.0.0.1:8000/ready?profile=api"
 docker compose logs api
 docker compose logs worker
+docker compose logs sandbox
 docker compose down
 ```
 
@@ -63,10 +66,10 @@ The Docker API service binds to `0.0.0.0` inside the container so the host can
 reach `http://127.0.0.1:8000`. Keep it local unless an external authentication
 and network boundary is added.
 
-API-created Runs default to the `aio-docker` sandbox provider. Until the AIO
-HTTP sandbox service lands in Task 62, that provider fails clearly instead of
-falling back to host execution or a one-shot Docker container. LocalSandbox is
-reserved for the local CLI/TUI profile or explicit trusted local operation.
+API-created Runs default to the `aio-docker` sandbox provider. That provider
+calls the long-lived AIO HTTP sandbox service and never falls back to host
+execution or a one-shot Docker container. LocalSandbox is reserved for the
+local CLI/TUI profile or explicit trusted local operation.
 
 ## TUI
 
