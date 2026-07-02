@@ -22,7 +22,13 @@ from awesome_agent.modeling.errors import (
 )
 from awesome_agent.modeling.messages import AssistantMessage, SystemMessage, UserMessage
 from awesome_agent.modeling.provider import ModelProvider
-from awesome_agent.modeling.stream import TextDelta, TurnCompleted, TurnFailed
+from awesome_agent.modeling.stream import (
+    ReasoningDelta,
+    ReasoningStarted,
+    TextDelta,
+    TurnCompleted,
+    TurnFailed,
+)
 from awesome_agent.modeling.turns import ModelRequest, ModelUsage
 
 
@@ -89,11 +95,45 @@ class ConversationService:
         )
 
         assistant_text = ""
+        reasoning_active = False
         try:
             provider = self._provider_factory(selected_model)
             request = await self._model_request(thread_id)
             async for model_event in provider.stream(request):
-                if isinstance(model_event, TextDelta):
+                if isinstance(model_event, ReasoningStarted):
+                    if not reasoning_active:
+                        reasoning_active = True
+                        sequence += 1
+                        yield _event(
+                            ConversationStreamEventKind.REASONING_STARTED,
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            sequence=sequence,
+                            trace_id=trace_id,
+                            payload={},
+                        )
+                elif isinstance(model_event, ReasoningDelta):
+                    if not reasoning_active:
+                        reasoning_active = True
+                        sequence += 1
+                        yield _event(
+                            ConversationStreamEventKind.REASONING_STARTED,
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            sequence=sequence,
+                            trace_id=trace_id,
+                            payload={},
+                        )
+                    sequence += 1
+                    yield _event(
+                        ConversationStreamEventKind.REASONING_DELTA,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        sequence=sequence,
+                        trace_id=trace_id,
+                        payload={"text": model_event.text},
+                    )
+                elif isinstance(model_event, TextDelta):
                     assistant_text += model_event.text
                     sequence += 1
                     yield _event(
@@ -105,6 +145,17 @@ class ConversationService:
                         payload={"text": model_event.text},
                     )
                 elif isinstance(model_event, TurnFailed):
+                    if reasoning_active:
+                        sequence += 1
+                        yield _event(
+                            ConversationStreamEventKind.REASONING_COMPLETED,
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            sequence=sequence,
+                            trace_id=trace_id,
+                            payload={"failed": True},
+                        )
+                        reasoning_active = False
                     sequence += 1
                     yield _error_event(
                         thread_id=thread_id,
@@ -117,6 +168,17 @@ class ConversationService:
                 elif isinstance(model_event, TurnCompleted):
                     final_text = model_event.turn.assistant.content or assistant_text
                     usage = model_event.turn.usage
+                    if reasoning_active:
+                        sequence += 1
+                        yield _event(
+                            ConversationStreamEventKind.REASONING_COMPLETED,
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            sequence=sequence,
+                            trace_id=trace_id,
+                            payload={"failed": False},
+                        )
+                        reasoning_active = False
                     if _has_usage(usage):
                         sequence += 1
                         yield _event(
@@ -152,6 +214,16 @@ class ConversationService:
                     )
                     return
         except ModelProviderError as error:
+            if reasoning_active:
+                sequence += 1
+                yield _event(
+                    ConversationStreamEventKind.REASONING_COMPLETED,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    sequence=sequence,
+                    trace_id=trace_id,
+                    payload={"failed": True},
+                )
             sequence += 1
             yield _error_event(
                 thread_id=thread_id,
@@ -162,6 +234,16 @@ class ConversationService:
             )
             return
         except Exception as error:
+            if reasoning_active:
+                sequence += 1
+                yield _event(
+                    ConversationStreamEventKind.REASONING_COMPLETED,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    sequence=sequence,
+                    trace_id=trace_id,
+                    payload={"failed": True},
+                )
             sequence += 1
             yield _error_event(
                 thread_id=thread_id,

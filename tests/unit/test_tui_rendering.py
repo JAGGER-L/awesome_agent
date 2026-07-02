@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage
-from awesome_agent.tui.rendering import render_message, render_transcript
+from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
+from awesome_agent.tui.rendering import (
+    render_message,
+    render_thought,
+    render_transcript,
+)
 
 
 def test_user_message_uses_prompt_marker() -> None:
@@ -46,3 +50,31 @@ def test_transcript_separates_messages_with_blank_lines() -> None:
     ).plain
 
     assert transcript == "> hi\n\nassistant\nhello"
+
+
+def test_collapsed_thought_hides_reasoning_text() -> None:
+    rendered = render_thought(
+        ThoughtBlock(
+            text="private reasoning",
+            active=False,
+            collapsed=True,
+            elapsed_seconds=1,
+        )
+    ).plain
+
+    assert rendered == "Thought for 1s (ctrl+o to expand)"
+    assert "private reasoning" not in rendered
+
+
+def test_expanded_thought_shows_reasoning_text() -> None:
+    rendered = render_thought(
+        ThoughtBlock(
+            text="bounded reasoning",
+            active=False,
+            collapsed=False,
+            elapsed_seconds=1,
+        )
+    ).plain
+
+    assert "ctrl+o to collapse" in rendered
+    assert "bounded reasoning" in rendered
