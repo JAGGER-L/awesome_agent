@@ -4,9 +4,8 @@
 - LocalSandbox is available only for the local CLI/TUI profile or explicit
   trusted local execution.
 - API-created Runs must not silently use LocalSandbox.
-- Until Task 62 implements the AIO Docker HTTP sandbox service, selecting
-  `aio-docker` fails clearly instead of falling back to host execution or a
-  one-shot Docker container.
+- The `aio-docker` backend calls the long-lived AIO HTTP sandbox service and
+  must not fall back to host execution or a one-shot Docker container.
 - Tools use least-privilege capability grants.
 - The tool registry is not an authorization boundary. It is inventory; runtime
   routes and API inspection use `EffectiveToolPolicy` to decide visible and

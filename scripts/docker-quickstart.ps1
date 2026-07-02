@@ -82,13 +82,14 @@ else {
 Write-Step "compose_up"
 Push-Location $Root
 try {
-    # Equivalent command: docker compose up -d --build postgres api worker
+    # Equivalent command: docker compose up -d --build postgres sandbox api worker
     Invoke-Checked -Command "docker" -Arguments @(
         "compose",
         "up",
         "-d",
         "--build",
         "postgres",
+        "sandbox",
         "api",
         "worker"
     )
@@ -106,7 +107,7 @@ Write-Output "docker-quickstart.api=$ApiUrl"
 Write-Output "docker-quickstart.api_docs=$ApiUrl/docs"
 Write-Output "docker-quickstart.next=probe .\.venv\Scripts\awesome-agent.exe probe --repo <repository-path> --api-url $ApiUrl"
 Write-Output "docker-quickstart.next=diagnostics .\.venv\Scripts\awesome-agent.exe diagnostics <run-id> --api-url $ApiUrl"
-Write-Output "docker-quickstart.next=logs docker compose logs api worker"
+Write-Output "docker-quickstart.next=logs docker compose logs sandbox api worker"
 if ($KeepRuntime) {
     Write-Output "docker-quickstart.shutdown=manual docker compose down"
 }

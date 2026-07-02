@@ -28,9 +28,11 @@ is not the default backend for API-created Runs. Current LocalSandbox command
 policy is intentionally permissive for trusted local use and must be hardened
 in a later security task.
 
-`AIO Docker` is a long-lived Linux development container with Python, Node,
-common command-line tools, a thread-mounted workspace directory, and an
-`agent-sandbox` HTTP service. API profiles use AIO Docker by default.
+`AIO Docker` is a long-lived Linux development container with a
+thread-mounted workspace directory and an `agent-sandbox` HTTP service. API
+profiles use AIO Docker by default. The current service foundation executes
+Python commands; full Node/npm/ripgrep toolchain hardening is tracked as the
+next sandbox hardening step.
 
 ## Storage Contract
 
@@ -52,12 +54,12 @@ Run audit evidence remains separate:
 ~/.awesome-agent/runs/<run_id>/artifacts/
 ```
 
-AIO Docker maps host `~/.awesome-agent/threads/<thread_id>/` to container
-`/mnt/user-data/` through a bind mount, so files written to
-`/mnt/user-data/workspace/` land directly in the thread workspace. LocalSandbox
-uses a path mapper to translate the same logical path to the host thread
-workspace before command execution. Repository-root `output/` and
-`e2e-output/` are not formal runtime output locations.
+Docker API mode mounts the shared `awesome_agent_user_data` volume at
+`/mnt/user-data/` in API, Worker, and sandbox containers, so files written to
+`/mnt/user-data/workspace/` are visible to all three services. LocalSandbox uses
+a path mapper to translate the same logical path to the host thread workspace
+before command execution. Repository-root `output/` and `e2e-output/` are not
+formal runtime output locations.
 
 ## Command Targets
 

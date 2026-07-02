@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 from pydantic import SecretStr
 
 from awesome_agent.health import (
@@ -12,6 +13,7 @@ from awesome_agent.health import (
     HealthStatus,
     ReadinessProfile,
     _docker_health,
+    aio_sandbox_check,
     bind_policy_check,
     collect_health,
     is_healthy,
@@ -211,3 +213,31 @@ def test_bind_policy_accepts_loopback_without_unsafe_consent() -> None:
     check = bind_policy_check("127.0.0.1", unsafe_bind_public=False)
 
     assert check.status is HealthStatus.HEALTHY
+
+
+async def test_aio_sandbox_check_reports_healthy() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/health"
+        return httpx.Response(200, json={"status": "healthy"})
+
+    check = await aio_sandbox_check(
+        "http://sandbox:8765",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert check.name == "aio_sandbox"
+    assert check.status is HealthStatus.HEALTHY
+
+
+async def test_aio_sandbox_check_reports_unreachable() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    check = await aio_sandbox_check(
+        "http://sandbox:8765",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert check.name == "aio_sandbox"
+    assert check.status is HealthStatus.UNHEALTHY
+    assert "connection refused" in check.detail

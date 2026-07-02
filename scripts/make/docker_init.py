@@ -4,9 +4,8 @@ import subprocess
 
 
 def main() -> None:
-    subprocess.run(["docker", "compose", "build", "api", "worker"], check=True)
     subprocess.run(
-        ["uv", "run", "python", "scripts/make/setup_sandbox.py"],
+        ["docker", "compose", "build", "sandbox", "api", "worker"],
         check=True,
     )
     print("docker-init.status=completed")

@@ -10,6 +10,7 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 
+import httpx
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
@@ -202,6 +203,32 @@ async def checkpoint_check(checkpoint_database_url: str) -> HealthCheck:
     return HealthCheck("checkpoint", HealthStatus.HEALTHY, "checkpoint store ready")
 
 
+async def aio_sandbox_check(
+    base_url: str,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> HealthCheck:
+    async with httpx.AsyncClient(
+        base_url=base_url.rstrip("/"),
+        transport=transport,
+        timeout=5,
+    ) as client:
+        try:
+            response = await client.get("/health")
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            return HealthCheck(
+                "aio_sandbox",
+                HealthStatus.UNHEALTHY,
+                f"AIO sandbox health check failed: {error}",
+                remediation=(
+                    "Start the AIO sandbox service and verify "
+                    "AWESOME_AGENT_AIO_SANDBOX_URL."
+                ),
+            )
+    return HealthCheck("aio_sandbox", HealthStatus.HEALTHY, "reachable")
+
+
 def workspace_root_check(path: Path) -> HealthCheck:
     try:
         path.mkdir(parents=True, exist_ok=True)
@@ -317,6 +344,8 @@ async def collect_readiness(
             await checkpoint_check(settings.checkpoint_database_url),
         ]
     )
+    if settings.sandbox_backend == "aio-docker":
+        checks.append(await aio_sandbox_check(settings.aio_sandbox_url))
     if profile is ReadinessProfile.RUNTIME:
         checks.append(
             await _runtime_worker_heartbeat_check(
