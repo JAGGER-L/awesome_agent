@@ -32,6 +32,7 @@ from awesome_agent.tui.chat_state import (
 )
 from awesome_agent.tui.client import HttpSurfaceClient
 from awesome_agent.tui.command_palette import CommandPaletteState, is_command_prefix
+from awesome_agent.tui.pickers import PickerItem, PickerState
 from awesome_agent.tui.rendering import render_transcript
 from awesome_agent.tui.slash_router import SlashRouter
 
@@ -140,6 +141,13 @@ class AwesomeAgentTui(App[None]):
             elif parsed.kind is SlashCommandKind.QUIT:
                 self.exit()
                 return
+            elif parsed.kind in {
+                SlashCommandKind.MODEL,
+                SlashCommandKind.THINKING,
+                SlashCommandKind.MEMORY,
+                SlashCommandKind.SKILLS,
+            }:
+                self._open_picker(parsed)
             else:
                 self._start_command(parsed)
         self._render()
@@ -150,6 +158,30 @@ class AwesomeAgentTui(App[None]):
         self._render_palette()
 
     def on_key(self, event: events.Key) -> None:
+        if self.state.active_picker is not None:
+            if event.key == "escape":
+                self.state = self.state.close_picker()
+                self._render()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key in {"down", "ctrl+n"}:
+                self.state = self.state.open_picker(self.state.active_picker.move(1))
+                self._render()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key in {"up", "ctrl+p"}:
+                self.state = self.state.open_picker(self.state.active_picker.move(-1))
+                self._render()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key == "enter":
+                self._apply_picker()
+                event.prevent_default()
+                event.stop()
+                return
         if not self.command_palette.is_open:
             return
         if event.key == "escape":
@@ -257,6 +289,11 @@ class AwesomeAgentTui(App[None]):
         self._focus_prompt()
 
     def _render_palette(self) -> None:
+        if self.state.active_picker is not None:
+            self.query_one("#command-palette", Static).update(
+                self.state.active_picker.render()
+            )
+            return
         self.query_one("#command-palette", Static).update(self.command_palette.render())
 
     def _active_command_value(self, raw: str) -> str:
@@ -315,6 +352,13 @@ class AwesomeAgentTui(App[None]):
             for stream_event in self.client.stream_turn(
                 thread_id,
                 content,
+                model=self.state.current_model,
+                thinking=self.state.thinking_mode,
+                memory={
+                    "local_enabled": self.state.local_memory_enabled,
+                    "provider": self.state.provider_memory,
+                },
+                skill_ids=self.state.staged_skill_ids,
                 resume_run_id=resume_run_id,
             ):
                 if stream_event.event is ConversationStreamEventKind.ERROR:
@@ -375,6 +419,7 @@ class AwesomeAgentTui(App[None]):
         self.state = self.state.finish_operation(
             status_label="error" if failed else "ready"
         )
+        self.state = self.state.clear_staged_skills()
         self.state = self.state.with_last_failed_user_message(
             content if failed else None
         )
@@ -396,6 +441,185 @@ class AwesomeAgentTui(App[None]):
             lambda: self._command_worker(parsed, state_snapshot),
             thread=True,
             name=f"command-{self.state.active_operation_id}",
+        )
+
+    def _open_picker(self, parsed: SlashCommand) -> None:
+        if parsed.argument:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    (
+                        f"/{parsed.kind.value} does not take arguments. "
+                        "Use the picker to choose a value."
+                    ),
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        if parsed.kind is SlashCommandKind.MODEL:
+            models = self.client.list_models()
+            items = [
+                PickerItem(
+                    id=str(item.get("name") or item.get("id") or "model"),
+                    label=str(
+                        item.get("display_name")
+                        or item.get("name")
+                        or item.get("id")
+                        or "Model"
+                    ),
+                    disabled=item.get("configured") is False,
+                )
+                for item in models
+            ] or [
+                PickerItem(id=self.state.current_model, label=self.state.current_model)
+            ]
+            self.state = self.state.open_picker(
+                PickerState.open(
+                    kind="model",
+                    title="Select model for this conversation",
+                    items=items,
+                    selected_id=self.state.current_model,
+                )
+            )
+            return
+        if parsed.kind is SlashCommandKind.THINKING:
+            self.state = self.state.open_picker(
+                PickerState.open(
+                    kind="thinking",
+                    title="Thinking mode",
+                    items=[
+                        PickerItem(id="on_high", label="On - high"),
+                        PickerItem(id="on_max", label="On - max"),
+                        PickerItem(id="off", label="Off"),
+                    ],
+                    selected_id=self.state.thinking_mode,
+                )
+            )
+            return
+        if parsed.kind is SlashCommandKind.MEMORY:
+            self.state = self.state.open_picker(
+                PickerState.open(
+                    kind="memory_root",
+                    title="Memory",
+                    items=[
+                        PickerItem(id="local", label="Local memory"),
+                        PickerItem(id="provider", label="Provider memory"),
+                    ],
+                )
+            )
+            return
+        if parsed.kind is SlashCommandKind.SKILLS:
+            skills = self.client.list_skills()
+            items = [
+                PickerItem(
+                    id=str(item.get("id") or item.get("name")),
+                    label=str(item.get("name") or item.get("id")),
+                )
+                for item in skills
+                if item.get("id") or item.get("name")
+            ] or [
+                PickerItem(id="none", label="No skills available", disabled=True)
+            ]
+            self.state = self.state.open_picker(
+                PickerState.open(
+                    kind="skills",
+                    title="Skills for next turn",
+                    items=items,
+                )
+            )
+
+    def _apply_picker(self) -> None:
+        picker = self.state.active_picker
+        if picker is None:
+            return
+        item = picker.apply()
+        if item is None:
+            self.state = self.state.close_picker()
+            self._render()
+            return
+        if picker.kind == "model":
+            self.state = self.state.with_model(item.id).close_picker()
+            self.state = self.state.append(
+                ChatMessage.system(
+                    f"Model changed to: {item.label}\nApplies to this conversation."
+                )
+            )
+        elif picker.kind == "thinking":
+            self.state = self.state.with_thinking(item.id).close_picker()
+            self.state = self.state.append(
+                ChatMessage.system(
+                    f"Thinking changed to: {item.label}\nApplies to this conversation."
+                )
+            )
+        elif picker.kind == "memory_root":
+            self._open_memory_picker(item.id)
+        elif picker.kind == "memory_local":
+            self._apply_local_memory_picker(item)
+        elif picker.kind == "memory_provider":
+            provider = None if item.id == "disabled" else item.id
+            self.state = self.state.with_provider_memory(provider).close_picker()
+            self.state = self.state.append(
+                ChatMessage.system(f"Provider memory changed to: {item.label}")
+            )
+        elif picker.kind == "skills":
+            if item.id in self.state.staged_skill_ids:
+                self.state = self.state.unstage_skill(item.id).close_picker()
+                self.state = self.state.append(
+                    ChatMessage.system(f"Skill removed from next turn: {item.label}")
+                )
+            else:
+                self.state = self.state.stage_skill(item.id).close_picker()
+                self.state = self.state.append(
+                    ChatMessage.system(
+                        f"Skill staged for next turn: {item.label}\n"
+                        "It will be cleared after the next response."
+                    )
+                )
+        self._render()
+        self._focus_prompt()
+
+    def _open_memory_picker(self, item_id: str) -> None:
+        if item_id == "local":
+            self.state = self.state.open_picker(
+                PickerState.open(
+                    kind="memory_local",
+                    title="Local memory",
+                    items=[
+                        PickerItem(id="enabled", label="Enabled"),
+                        PickerItem(id="disabled", label="Disabled"),
+                        PickerItem(id="view", label="View remembered facts"),
+                    ],
+                    selected_id=(
+                        "enabled" if self.state.local_memory_enabled else "disabled"
+                    ),
+                )
+            )
+            return
+        self.state = self.state.open_picker(
+            PickerState.open(
+                kind="memory_provider",
+                title="Provider memory",
+                items=[
+                    PickerItem(id="disabled", label="Disabled"),
+                    PickerItem(id="mem0", label="Mem0"),
+                ],
+                selected_id=self.state.provider_memory or "disabled",
+            )
+        )
+
+    def _apply_local_memory_picker(self, item: PickerItem) -> None:
+        if item.id == "view":
+            self.state = self.state.close_picker().append(
+                ChatMessage.system(
+                    "Remembered facts\n\nNo local memory facts for this conversation."
+                )
+            )
+            return
+        enabled = item.id == "enabled"
+        self.state = self.state.with_local_memory(enabled).close_picker()
+        self.state = self.state.append(
+            ChatMessage.system(
+                f"Local memory changed to: {'Enabled' if enabled else 'Disabled'}"
+            )
         )
 
     def _command_worker(

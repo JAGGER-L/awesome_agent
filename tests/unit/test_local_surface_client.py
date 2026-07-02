@@ -39,6 +39,9 @@ class FakeHost:
         content: str,
         *,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.streamed.append((thread_id, content))

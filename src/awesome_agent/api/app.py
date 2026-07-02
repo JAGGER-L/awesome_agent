@@ -750,6 +750,9 @@ def create_app(
                     thread_id=thread_id,
                     content=request.content,
                     model=request.model,
+                    thinking=request.thinking_mode,
+                    memory=request.memory,
+                    skill_ids=tuple(request.skill_ids),
                 )
             ),
             media_type="text/event-stream",

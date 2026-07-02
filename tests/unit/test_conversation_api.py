@@ -55,8 +55,39 @@ def test_conversation_turn_error_does_not_persist_assistant_message() -> None:
     assert [message["role"] for message in messages] == ["user"]
 
 
-def _client(provider: object) -> TestClient:
+def test_conversation_turn_accepts_runtime_options() -> None:
     repository = InMemoryConversationRepository()
+    client = _client(FakeStreamingProvider(), repository=repository)
+    thread = client.post("/threads", json={"title": "Options"}).json()
+
+    response = client.post(
+        f"/threads/{thread['id']}/turns",
+        json={
+            "content": "hello?",
+            "model": "alternate-model",
+            "thinking_mode": "off",
+            "memory": {"local_enabled": True, "provider": "mem0"},
+            "skill_ids": ["repository-inspection"],
+        },
+    )
+
+    assert response.status_code == 200
+    messages = client.get(f"/threads/{thread['id']}/messages").json()
+    user_options = messages[0]["metadata"]["turn_options"]
+    assert user_options == {
+        "model": "alternate-model",
+        "thinking": "off",
+        "memory": {"local_enabled": True, "provider": "mem0"},
+        "skill_ids": ["repository-inspection"],
+    }
+
+
+def _client(
+    provider: object,
+    *,
+    repository: InMemoryConversationRepository | None = None,
+) -> TestClient:
+    repository = repository or InMemoryConversationRepository()
     conversation = ConversationService(
         repository=repository,
         runtime_repository=InMemoryRuntimeRepository(),

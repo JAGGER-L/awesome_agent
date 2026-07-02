@@ -95,3 +95,25 @@ def test_toggle_thought_toggles_current_or_latest_thought() -> None:
     assert collapsed_thought is not None
     assert expanded_thought.collapsed is False
     assert collapsed_thought.collapsed is True
+
+
+def test_staged_skills_clear_after_turn() -> None:
+    state = ChatSessionState.new().stage_skill("repository-inspection")
+
+    assert state.staged_skill_ids == ("repository-inspection",)
+    assert state.clear_staged_skills().staged_skill_ids == ()
+
+
+def test_conversation_controls_update_state() -> None:
+    state = (
+        ChatSessionState.new()
+        .with_model("deepseek-v4-flash")
+        .with_thinking("off")
+        .with_local_memory(True)
+        .with_provider_memory("mem0")
+    )
+
+    assert state.current_model == "deepseek-v4-flash"
+    assert state.thinking_mode == "off"
+    assert state.local_memory_enabled is True
+    assert state.provider_memory == "mem0"

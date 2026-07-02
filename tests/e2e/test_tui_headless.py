@@ -32,6 +32,7 @@ class FakeClient:
         self.threads: list[dict[str, object]] = []
         self.messages_by_thread: dict[str, list[dict[str, object]]] = {}
         self.resumed_queries: list[str] = []
+        self.turn_options: list[dict[str, object]] = []
 
     def create_thread(
         self,
@@ -86,9 +87,20 @@ class FakeClient:
         content: str,
         *,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
     ) -> list[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
+        self.turn_options.append(
+            {
+                "model": model,
+                "thinking": thinking,
+                "memory": memory,
+                "skill_ids": skill_ids,
+            }
+        )
         self.messages_by_thread.setdefault(thread_id, []).append(
             {"role": "user", "content": content, "kind": "message"}
         )
@@ -157,6 +169,28 @@ class FakeClient:
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
 
+    def list_skills(self) -> list[dict[str, object]]:
+        return [
+            {"id": "repository-inspection", "name": "repository-inspection"},
+            {"id": "patch-authoring", "name": "patch-authoring"},
+        ]
+
+    def list_tools(self) -> dict[str, list[dict[str, object]]]:
+        return {"Files": [], "Terminal": [], "MCP": []}
+
+    def mcp_status(self) -> list[dict[str, object]]:
+        return []
+
+    def usage_summary(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> dict[str, object]:
+        return {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+
+    def config_summary(self) -> dict[str, object]:
+        return {"mode": "embedded", "default_model": "deepseek-v4-pro"}
+
     def cancel(self, run_id: str) -> dict[str, object]:
         self.cancelled_runs.append(run_id)
         return {"id": run_id, "status": "cancelled"}
@@ -192,6 +226,9 @@ class SlowStreamingClient(FakeClient):
         content: str,
         *,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
@@ -227,6 +264,9 @@ class ReasoningStreamingClient(FakeClient):
         content: str,
         *,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
@@ -279,6 +319,9 @@ class MultiReasoningStreamingClient(FakeClient):
         content: str,
         *,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.calls += 1
@@ -674,6 +717,80 @@ async def test_tui_deleted_resume_command_is_unknown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_model_picker_changes_model_for_next_turn() -> None:
+    class ModelClient(FakeClient):
+        def list_models(self) -> list[dict[str, object]]:
+            return [
+                {"name": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro"},
+                {"name": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash"},
+            ]
+
+    client = ModelClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "m", "o", "d", "e", "l", "enter")
+        assert "Select model for this conversation" in str(
+            app.query_one("#command-palette").render()
+        )
+        await pilot.press("down", "enter")
+        await pilot.press("h", "i", "enter")
+
+    assert app.state.current_model == "deepseek-v4-flash"
+    assert client.turn_options[-1]["model"] == "deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+async def test_tui_thinking_picker_passes_mode_to_next_turn() -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "t", "h", "i", "n", "k", "i", "n", "g", "enter")
+        await pilot.press("down", "down", "enter")
+        await pilot.press("h", "i", "enter")
+
+    assert app.state.thinking_mode == "off"
+    assert client.turn_options[-1]["thinking"] == "off"
+
+
+@pytest.mark.asyncio
+async def test_tui_memory_picker_passes_memory_to_next_turn() -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "m", "e", "m", "o", "r", "y", "enter")
+        await pilot.press("enter", "up", "enter")
+        await pilot.press("h", "i", "enter")
+
+    assert app.state.local_memory_enabled is True
+    assert client.turn_options[-1]["memory"] == {
+        "local_enabled": True,
+        "provider": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_tui_skills_picker_stages_next_turn_only() -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "s", "k", "i", "l", "l", "s", "enter")
+        await pilot.press("enter")
+        assert app.state.staged_skill_ids == ("repository-inspection",)
+        await pilot.press("h", "i", "enter")
+
+    assert client.turn_options[-1]["skill_ids"] == ("repository-inspection",)
+    assert app.state.staged_skill_ids == ()
+
+
+@pytest.mark.asyncio
 async def test_tui_threads_lists_current_thread_without_internal_paths() -> None:
     client = FakeClient()
     current = client.create_thread(
@@ -841,13 +958,23 @@ async def test_tui_retry_resends_last_failed_message() -> None:
             content: str,
             *,
             model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
             resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.calls += 1
             if self.calls == 1:
                 self.turns.append((thread_id, content))
                 raise RuntimeError("temporary model failure")
-            return super().stream_turn(thread_id, content, model=model)
+            return super().stream_turn(
+                thread_id,
+                content,
+                model=model,
+                thinking=thinking,
+                memory=memory,
+                skill_ids=skill_ids,
+            )
 
     client = FailingOnceClient()
     app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=client)
@@ -890,6 +1017,9 @@ async def test_tui_renders_approval_required_stream_error_as_actionable() -> Non
             content: str,
             *,
             model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
             resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
