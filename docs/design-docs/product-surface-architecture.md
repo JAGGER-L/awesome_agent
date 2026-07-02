@@ -22,6 +22,11 @@ observability authority must come from shared backend contracts.
 The local `awesome` command remains a full-screen TUI. This phase intentionally
 does not introduce an inline terminal chat mode.
 
+Ordinary input is the primary product entry. Users should not need to know
+whether a response is a lightweight model turn, a tool-capable coding
+execution, or a background runtime task. The system creates the appropriate
+durable Run semantics behind the conversation turn.
+
 The full-screen TUI may own:
 
 - input widgets, focus, keyboard bindings, scrolling, and layout;
@@ -44,49 +49,60 @@ The full-screen TUI must not own:
 | --- | --- | --- |
 | Full-screen TUI | Presentation, focus, keyboard interaction, scrollback, autocomplete UI, command display, and local render state. | Model calls, AgentLoop imports, provider routing, tool policy, durable state, or backend-only resource decisions. |
 | Future Web frontend | Browser presentation, Web-specific navigation, and rendering of the same stream and command metadata. | A separate chat engine, Web-only AgentLoop path, or duplicated command semantics. |
-| Shared client / surface layer | API clients, stream parsing, command metadata, command validation, error formatting, and client-side adapters. | Textual widgets, Web components, provider calls, graph state transitions, or tool execution. |
-| API / service layer | Threads, messages, conversation turns, Run creation, model-backed turns, semantic inspection resources, structured errors, request ids, and stream contracts. | Textual behavior, Web layout, prompt widgets, or direct UI state. |
+| Shared client / surface layer | API clients, embedded local clients, stream parsing, command metadata, command validation, error formatting, and client-side adapters. | Textual widgets, Web components, provider calls, graph state transitions, or tool execution. |
+| Embedded local runtime host | Local composition of services for the `awesome` TUI profile, including thread context, model/runtime service access, LocalSandbox defaults, and foreground execution ownership. | Textual widgets, Web components, direct UI rendering, hidden global daemons, or a separate chat engine. |
+| API / service layer | Threads, messages, conversation turns, Run creation, model-backed turns, semantic inspection resources, structured errors, request ids, and stream contracts for HTTP/Web/remote clients. | Textual behavior, Web layout, prompt widgets, or direct UI state. |
 | Runtime / AgentLoop | Bounded model-to-tool execution, middleware, hooks, budget checks, capability checks, observability, and durable Run transitions. | UI layout, slash-command parsing, client autocomplete, or frontend-specific response shaping. |
 | Provider layer | Provider-neutral model calls, streaming, usage, routing, fallback, and error classification. | UI state, tool grants, durable graph authority, or conversation storage. |
 | Persistence | Durable thread, message, Run, tool, artifact, budget, trace, and extension state. | Per-widget scratch state or transient render buffers. |
 
 ## Conversation Flow
 
-The normal chat flow is:
+The normal local TUI flow is:
 
 1. The TUI accepts user input in the active thread.
-2. The TUI calls the shared conversation client.
-3. The shared client sends a semantic request to the API.
-4. The API service persists the user message and starts a conversation turn.
-5. Backend service code invokes the configured provider or runtime path.
-6. The API streams normalized events such as `message.delta`,
-   `message.completed`, `usage.updated`, and `error`.
-7. The shared client parses the stream and passes typed events to the TUI.
+2. The TUI calls the shared surface client.
+3. The surface client is either embedded local mode or explicit HTTP mode.
+4. The shared service layer records the user message and starts a turn.
+5. A planner chooses the execution mode: lightweight model turn,
+   tool-capable coding Run, background Run, or resume of an interrupted Run.
+6. Runtime/provider services stream normalized events such as
+   `run.started`, `reasoning.delta`, `message.delta`, `tool.completed`,
+   `artifact.created`, `message.completed`, `usage.updated`, and `error`.
+7. The surface client passes typed events to the TUI.
 8. The TUI renders those events and keeps only presentation state locally.
-9. The backend persists the final assistant message and usage evidence.
+9. Services persist final messages, usage, Run evidence, and artifact links.
 
 The TUI must be able to reconnect or resume from persisted thread messages
 instead of relying on its local transcript cache.
 
-## Coding Run Bridge Flow
+## Run Semantics
 
-A Coding Run is an explicit execution mode inside a thread, not the default
-representation of every ordinary chat turn.
+Every user turn has durable Run semantics, but not every turn is a heavy coding
+execution. A simple question may create a lightweight Run that only records
+model streaming, interruption, usage, and completion evidence. A coding request
+may create a tool-capable Run that uses AgentLoop, tools, sandbox execution,
+validation, approvals, artifacts, and recovery. A long-running request may run
+in the background.
 
-The Run bridge flow is:
+The Run flow is:
 
-1. A user command, model-mediated confirmation, or future Web action requests a
-   Coding Run from the current thread context.
-2. The API validates the thread context, repository/workspace, model profile,
+1. A user input, continuation request, explicit `/run`, or future Web action
+   requests execution from the current thread context.
+2. Services validate the thread context, repository/workspace, model profile,
    sandbox profile, and capability policy.
-3. The API delegates Run creation to the existing Run intake/runtime services.
+3. The planner selects lightweight chat, foreground coding, background coding,
+   or resume.
 4. Runtime events remain the execution source of truth.
-5. Conversation services project high-level Run lifecycle events into the
+5. Conversation services project user-meaningful Run lifecycle events into the
    thread transcript.
 6. Artifacts remain run-scoped for audit but become discoverable from the
    containing thread.
-7. Cancellation, approvals, retries, validation, and recovery stay API/runtime
-   owned.
+7. Cancellation, pause, resume, approvals, retries, validation, and recovery
+   stay service/runtime owned.
+
+`/run` is an advanced/manual command for forcing or inspecting execution mode.
+It is not the ordinary way to make the agent work.
 
 ## Slash-Command Metadata
 
@@ -114,19 +130,20 @@ meaning.
 - Let the TUI call model providers directly.
 - Let the TUI import AgentLoop or graph modules.
 - Add Web-specific backend forks.
-- Treat every chat message as a Coding Run.
+- Require `/run` for normal coding-agent work.
+- Treat every ordinary question as a heavy tool-capable coding execution.
 - Create slash-command-named API routes.
 
 ## Task Dependency Order
 
 The Product Surface Phase should proceed in this order:
 
-1. Lock this architecture contract and structural guardrails.
-2. Add durable conversation state and API endpoints.
-3. Add model-backed conversation streaming.
-4. Connect the full-screen TUI to real conversation streaming.
-5. Promote command metadata into a shared registry and add autocomplete.
-6. Bridge conversation threads to explicit Coding Runs.
-7. Replace surface command stubs with real capability APIs.
-8. Harden structured errors, cancellation, retry, diagnostics, and E2E.
-
+1. Complete the embedded local runtime host and shared surface client boundary.
+2. Make streaming, pause, cancel, and resume nonblocking and consistent.
+3. Fix thread/session UX so ordinary input, `/new`, `/threads`, and `/resume`
+   feel like conversation navigation.
+4. Polish transcript rendering into a compact coding-agent chat surface.
+5. Surface provider reasoning as bounded collapsible thought UI.
+6. Make model routing explainable through structured metadata.
+7. Align startup docs and CLI help around `awesome`, `make dev`, and Docker API
+   profiles.

@@ -243,3 +243,12 @@ TUI 是基于本地 API 的 Run、诊断、事件和审批检查/控制界面，
 
 不要把 secrets 提交进仓库。Provider keys 和本机 runtime settings 放在 `.env`。API 创建的 Runs 目标默认使用 `aio-docker` sandbox；LocalSandbox 只用于本地 CLI/TUI 或显式可信本地执行。
 Thread workspaces persist under `~/.awesome-agent/threads/<thread_id>/workspace/`. Run artifacts persist under `~/.awesome-agent/runs/<run_id>/artifacts/`. LocalSandbox is trusted-local only.
+
+## Task 76 Startup Note
+
+Local CLI/TUI uses `awesome` directly and defaults to embedded local runtime
+mode. It does not require a running API server for ordinary local use. Use
+`awesome --api-url http://127.0.0.1:8000` only when you explicitly want the TUI
+to connect to an API server. Ordinary input is the main execution entry; `/run`
+is an advanced/manual execution command, not the normal way to make the agent
+work.

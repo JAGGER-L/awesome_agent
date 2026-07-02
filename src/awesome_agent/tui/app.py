@@ -13,8 +13,9 @@ from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.cli.slash_commands import SlashCommandKind, parse_slash_command
 from awesome_agent.client.conversation import ConversationHttpError
 from awesome_agent.conversation.events import ConversationStreamEventKind
+from awesome_agent.surfaces.client import SurfaceClient, SurfaceThread
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
-from awesome_agent.tui.client import TuiApiClient
+from awesome_agent.tui.client import HttpSurfaceClient
 from awesome_agent.tui.command_palette import CommandPaletteState, is_command_prefix
 from awesome_agent.tui.rendering import render_message
 from awesome_agent.tui.slash_router import SlashRouter
@@ -54,10 +55,10 @@ class AwesomeAgentTui(App[None]):
     def __init__(
         self,
         *,
-        api_url: str,
+        api_url: str | None = None,
         run_id: str | None = None,
         refresh_interval: float = 2.0,
-        client: TuiApiClient | None = None,
+        client: SurfaceClient | None = None,
         launch_context: CliLaunchContext | None = None,
         first_run_summary: ConfigFlowSummary | None = None,
     ) -> None:
@@ -65,7 +66,14 @@ class AwesomeAgentTui(App[None]):
         self.api_url = api_url
         self.initial_run_id = run_id
         self.refresh_interval = refresh_interval
-        self.client = client or TuiApiClient(api_url)
+        if client is None:
+            if api_url is None:
+                from awesome_agent.surfaces.local_client import LocalSurfaceClient
+
+                client = LocalSurfaceClient()
+            else:
+                client = HttpSurfaceClient(api_url)
+        self.client = client
         self.command_palette = CommandPaletteState()
         self.state = ChatSessionState.new(
             launch_context=launch_context,
@@ -270,7 +278,7 @@ class AwesomeAgentTui(App[None]):
             context_kind=context.context_kind if context is not None else None,
             context_path=context.display_path if context is not None else None,
         )
-        thread_id = str(thread["id"])
+        thread_id = _thread_id(thread)
         self.state = self.state.with_backend_thread(thread_id)
         return thread_id
 
@@ -287,11 +295,18 @@ class AwesomeAgentTui(App[None]):
             if context is not None and context.context_kind == "repo"
             else None
         )
-        run = self.client.create_thread_run(
-            thread_id,
-            goal,
-            repository_path=repository_path,
-        )
+        if hasattr(self.client, "start_explicit_run"):
+            run = self.client.start_explicit_run(
+                thread_id,
+                goal,
+                repository_path=repository_path,
+            )
+        else:
+            run = self.client.create_thread_run(  # type: ignore[attr-defined]
+                thread_id,
+                goal,
+                repository_path=repository_path,
+            )
         self.state = self.state.with_run(
             str(run["id"]), status_label=str(run["status"])
         )
@@ -357,3 +372,9 @@ class AwesomeAgentTui(App[None]):
             lines.append(f"| setup: run awesome init; set {summary.model_api_key_env}")
         lines.append("+-------------------------------------------------------+")
         return "\n".join(lines)
+
+
+def _thread_id(thread: SurfaceThread | dict[str, object]) -> str:
+    if isinstance(thread, SurfaceThread):
+        return thread.id
+    return str(thread["id"])

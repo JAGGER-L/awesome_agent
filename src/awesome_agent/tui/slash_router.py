@@ -7,11 +7,12 @@ from awesome_agent.cli.slash_commands import (
     SlashCommandKind,
     slash_command_help,
 )
+from awesome_agent.surfaces.client import SurfaceThread
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 
 
 class ChatSemanticClient(Protocol):
-    def create_thread(self, title: str) -> dict[str, object]: ...
+    def create_thread(self, title: str) -> SurfaceThread | dict[str, object]: ...
 
     def runtime_status(self) -> dict[str, object]: ...
 
@@ -19,7 +20,7 @@ class ChatSemanticClient(Protocol):
 
     def memory_summary(self) -> dict[str, object]: ...
 
-    def list_threads(self) -> list[dict[str, object]]: ...
+    def list_threads(self) -> list[SurfaceThread | dict[str, object]]: ...
 
     def list_skills(self) -> list[dict[str, object]]: ...
 
@@ -58,9 +59,9 @@ class SlashRouter:
         if command.kind is SlashCommandKind.THREADS:
             threads = self.client.list_threads()
             if not threads:
-                return ChatMessage.system("No API-backed threads found.")
+                return ChatMessage.system("No threads found.")
             return ChatMessage.system(
-                "\n".join(str(item.get("title") or item.get("id")) for item in threads)
+                "\n".join(_thread_label(item) for item in threads)
             )
         if command.kind is SlashCommandKind.RESUME:
             target = command.argument or "<thread id or title>"
@@ -194,16 +195,8 @@ class SlashRouter:
         if command.kind is SlashCommandKind.NEW:
             target = command.argument or "New conversation"
             thread = self.client.create_thread(target)
-            logical_workspace = (
-                thread.get("logical_workspace_path")
-                or thread.get("logical_workspace")
-                or "/mnt/user-data/workspace/"
-            )
             return ChatMessage.system(
-                (
-                    f"Started thread {thread['id']}: {thread.get('title', target)}\n"
-                    f"workspace={logical_workspace}"
-                ),
+                f"New conversation started: {_thread_label(thread)}",
                 kind=ChatEventKind.RUN,
             )
         return ChatMessage.system(
@@ -236,3 +229,12 @@ def _label(
     if not suffix:
         return label
     return f"{label} ({', '.join(suffix)})"
+
+
+def _thread_label(thread: SurfaceThread | dict[str, object]) -> str:
+    if isinstance(thread, SurfaceThread):
+        context = f" {thread.context_label}" if thread.context_label else ""
+        return f"{thread.title} {thread.short_id}{context}".strip()
+    thread_id = str(thread.get("id") or "-")
+    title = str(thread.get("title") or thread_id)
+    return f"{title} {thread_id[:8]}".strip()
