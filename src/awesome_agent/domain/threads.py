@@ -14,6 +14,7 @@ class Thread(BaseModel):
     title: str
     context_kind: str = "workspace"
     context_path: str | None = None
+    repository_id: UUID | None = None
     default_model: str | None = None
     sandbox_profile: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

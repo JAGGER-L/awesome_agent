@@ -8,6 +8,7 @@ class SlashCommandKind(StrEnum):
     NEW = "new"
     THREADS = "threads"
     RESUME = "resume"
+    RUN = "run"
     STATUS = "status"
     MODELS = "models"
     SKILLS = "skills"
@@ -69,6 +70,16 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
         description="Resume a thread by id or title.",
         category="thread",
         argument_hint="<id-or-title>",
+    ),
+    SlashCommandDefinition(
+        name="run",
+        kind=SlashCommandKind.RUN,
+        description="Start a Coding Run from the current thread context.",
+        category="run",
+        argument_hint="<goal>",
+        requires_thread=True,
+        executor="api",
+        output_kind="run",
     ),
     SlashCommandDefinition(
         name="status",

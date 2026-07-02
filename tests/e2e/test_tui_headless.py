@@ -17,6 +17,7 @@ class FakeClient:
     def __init__(self) -> None:
         self.thread_id = str(uuid4())
         self.turns: list[tuple[str, str]] = []
+        self.runs: list[dict[str, object]] = []
 
     def create_thread(
         self,
@@ -24,6 +25,7 @@ class FakeClient:
         *,
         context_kind: str | None = None,
         context_path: str | None = None,
+        repository_id: str | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
     ) -> dict[str, object]:
@@ -32,6 +34,7 @@ class FakeClient:
             "title": title,
             "context_kind": context_kind or "workspace",
             "context_path": context_path,
+            "repository_id": repository_id,
             "default_model": default_model,
             "sandbox_profile": sandbox_profile,
             "logical_workspace_path": "/mnt/user-data/workspace/",
@@ -73,6 +76,30 @@ class FakeClient:
                 payload={"content": "hello world"},
             ),
         ]
+
+    def create_thread_run(
+        self,
+        thread_id: str,
+        goal: str,
+        *,
+        intent: str = "modifying",
+        mode: str = "solo",
+        repository_id: str | None = None,
+        repository_path: str | None = None,
+    ) -> dict[str, object]:
+        run_id = str(uuid4())
+        payload = {
+            "id": run_id,
+            "thread_id": thread_id,
+            "goal": goal,
+            "intent": intent,
+            "mode": mode,
+            "repository_id": repository_id,
+            "repository_path": repository_path,
+            "status": "created",
+        }
+        self.runs.append(payload)
+        return payload
 
     def runtime_status(self) -> dict[str, object]:
         return {"api": "ready", "sandbox": "local"}
@@ -225,6 +252,39 @@ async def test_tui_status_includes_launch_context(tmp_path: Path) -> None:
         transcript = app.query_one("#transcript").render()
 
     assert f"workspace={tmp_path}" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_run_uses_current_repo_context(tmp_path: Path) -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(
+        api_url="http://127.0.0.1:8000",
+        client=client,
+        launch_context=CliLaunchContext(
+            project_root=tmp_path / "nested",
+            context_kind="repo",
+            git_root=tmp_path,
+        ),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "r", "u", "n", " ", "b", "u", "i", "l", "d", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert "Started Coding Run" in str(transcript)
+    assert client.runs == [
+        {
+            "id": app.state.current_run_id,
+            "thread_id": client.thread_id,
+            "goal": "build",
+            "intent": "modifying",
+            "mode": "solo",
+            "repository_id": None,
+            "repository_path": str(tmp_path),
+            "status": "created",
+        }
+    ]
 
 
 @pytest.mark.asyncio

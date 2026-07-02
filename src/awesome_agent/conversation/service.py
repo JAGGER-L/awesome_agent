@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
+from typing import Protocol
 from uuid import UUID, uuid4
 
 from awesome_agent.conversation.events import (
@@ -12,6 +13,8 @@ from awesome_agent.conversation.models import (
     ThreadMessageRole,
 )
 from awesome_agent.conversation.repository import ConversationRepository
+from awesome_agent.domain.enums import RunIntent, RunMode
+from awesome_agent.domain.models import Run
 from awesome_agent.modeling.errors import (
     ModelErrorCode,
     ModelErrorInfo,
@@ -21,6 +24,22 @@ from awesome_agent.modeling.messages import AssistantMessage, SystemMessage, Use
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.modeling.stream import TextDelta, TurnCompleted, TurnFailed
 from awesome_agent.modeling.turns import ModelRequest, ModelUsage
+
+
+class ThreadRunIntake(Protocol):
+    async def create_run(
+        self,
+        *,
+        repository_id: UUID,
+        goal: str,
+        intent: RunIntent,
+        mode: RunMode = RunMode.SOLO,
+    ) -> Run:
+        pass
+
+
+class MissingThreadRepositoryContext(RuntimeError):
+    pass
 
 
 class ConversationService:
@@ -157,6 +176,64 @@ class ConversationService:
                 ),
             )
             return
+
+    async def create_thread_run(
+        self,
+        *,
+        thread_id: UUID,
+        goal: str,
+        intent: RunIntent,
+        mode: RunMode,
+        run_intake: ThreadRunIntake,
+        repository_id: UUID | None = None,
+    ) -> Run:
+        thread = await self._repository.get_thread(thread_id)
+        effective_repository_id = thread.repository_id or repository_id
+        if effective_repository_id is None:
+            raise MissingThreadRepositoryContext(
+                "Thread does not have a repository_id; register a repository "
+                "context before starting a Coding Run."
+            )
+        if thread.repository_id is None:
+            thread = await self._repository.bind_repository(
+                thread_id,
+                effective_repository_id,
+            )
+        run = await run_intake.create_run(
+            repository_id=thread.repository_id or effective_repository_id,
+            goal=goal,
+            intent=intent,
+            mode=mode,
+        )
+        await self._repository.append_message(
+            thread_id=thread_id,
+            role=ThreadMessageRole.SYSTEM,
+            content=f"Started Coding Run {run.id}: {goal}",
+            kind=ThreadMessageKind.RUN,
+            run_id=run.id,
+            metadata={
+                "run_id": str(run.id),
+                "goal": goal,
+                "status": run.status.value,
+                "intent": run.intent.value,
+                "mode": run.mode.value,
+            },
+        )
+        return run
+
+    async def list_thread_runs(self, thread_id: UUID) -> list[dict[str, object]]:
+        messages = await self._repository.list_messages(thread_id)
+        runs = [
+            {
+                **message.metadata,
+                "message_id": str(message.id),
+                "run_id": str(message.run_id),
+                "created_at": message.created_at.isoformat(),
+            }
+            for message in messages
+            if message.kind is ThreadMessageKind.RUN and message.run_id is not None
+        ]
+        return list(reversed(runs))
 
     async def _model_request(self, thread_id: UUID) -> ModelRequest:
         messages = []

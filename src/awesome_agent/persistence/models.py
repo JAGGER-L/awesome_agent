@@ -44,6 +44,11 @@ class ThreadRecord(Base):
     title: Mapped[str] = mapped_column(String(200), index=True)
     context_kind: Mapped[str] = mapped_column(String(32), default="workspace")
     context_path: Mapped[str | None] = mapped_column(Text)
+    repository_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("repositories.id", ondelete="SET NULL"),
+        index=True,
+    )
     default_model: Mapped[str | None] = mapped_column(String(128))
     sandbox_profile: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

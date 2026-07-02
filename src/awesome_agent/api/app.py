@@ -24,6 +24,7 @@ from awesome_agent.api.schemas import (
     CreateRunRequest,
     CreateThreadMessageRequest,
     CreateThreadRequest,
+    CreateThreadRunRequest,
     DispatchResponse,
     HealthCheckResponse,
     ReadinessReportResponse,
@@ -33,7 +34,10 @@ from awesome_agent.api.schemas import (
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.conversation.repository import ConversationRepository
-from awesome_agent.conversation.service import ConversationService
+from awesome_agent.conversation.service import (
+    ConversationService,
+    MissingThreadRepositoryContext,
+)
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.extensions.config import build_project_extension_catalog_sync
@@ -99,6 +103,7 @@ from awesome_agent.persistence.worker_heartbeats import (
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
+from awesome_agent.repositories.service import RepositoryService
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.asyncio import configure_event_loop_policy
 from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
@@ -480,6 +485,7 @@ def create_app(
             title=request.title,
             context_kind=request.context_kind,
             context_path=request.context_path,
+            repository_id=request.repository_id,
             default_model=request.default_model,
             sandbox_profile=request.sandbox_profile,
         )
@@ -545,6 +551,54 @@ def create_app(
                 )
             ),
             media_type="text/event-stream",
+        )
+
+    @app.post("/threads/{thread_id}/runs", status_code=201)
+    async def create_thread_run(
+        thread_id: UUID,
+        request: CreateThreadRunRequest,
+    ) -> dict[str, object]:
+        if request.repository_id is not None and request.repository_path is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="Provide either repository_id or repository_path, not both.",
+            )
+        repository_id = request.repository_id
+        if request.repository_path is not None:
+            try:
+                repository = await RepositoryService(
+                    registry=repositories(),
+                    config=LocalRepositoryConfigStore(settings.local_config_path),
+                ).register(Path(request.repository_path))
+            except ValueError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            repository_id = repository.id
+        try:
+            run = await conversations().create_thread_run(
+                thread_id=thread_id,
+                goal=request.goal,
+                intent=request.intent,
+                mode=request.mode,
+                run_intake=run_intake(),
+                repository_id=repository_id,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        except MissingThreadRepositoryContext as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (RunIntakeError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return run.model_dump(mode="json")
+
+    @app.get("/threads/{thread_id}/runs")
+    async def list_thread_runs(thread_id: UUID) -> list[dict[str, object]]:
+        try:
+            projections = await conversations().list_thread_runs(thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return await _thread_run_projection_response(
+            projections,
+            getattr(app.state, "runtime", None),
         )
 
     @app.get("/runs")
@@ -1124,6 +1178,31 @@ def _workspace_candidate_response(
         dirty=candidate.dirty,
         can_cleanup=candidate.can_cleanup,
     )
+
+
+async def _thread_run_projection_response(
+    projections: list[dict[str, object]],
+    runtime_service: object | None,
+) -> list[dict[str, object]]:
+    get_run = getattr(runtime_service, "get_run", None)
+    list_artifacts = getattr(runtime_service, "list_artifacts", None)
+    if not callable(get_run) or not callable(list_artifacts):
+        return projections
+    enriched: list[dict[str, object]] = []
+    for projection in projections:
+        item = dict(projection)
+        try:
+            run_id = UUID(str(item["run_id"]))
+            run = await get_run(run_id)
+            artifacts = await list_artifacts(run_id)
+        except (KeyError, TypeError, ValueError):
+            enriched.append(item)
+            continue
+        item["status"] = run.status.value
+        item["result_text"] = run.result_text
+        item["artifacts"] = [artifact.model_dump(mode="json") for artifact in artifacts]
+        enriched.append(item)
+    return enriched
 
 
 app = create_app()
