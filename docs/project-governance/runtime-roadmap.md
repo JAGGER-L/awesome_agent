@@ -5,7 +5,7 @@ This roadmap is the durable product and architecture roadmap for the
 execution plan.
 
 Local agent plans under `.codex/exec-plans/` may decompose work, record
-evidence, and guide one implementation branch. They must not silently change
+evidence, and guide one implementation effort. They must not silently change
 the durable roadmap, architecture direction, phase ordering, or exit
 conditions in this file.
 
@@ -99,22 +99,37 @@ This ordering prevents later provider, MCP, skills, and product work from
 amplifying weak observability, weak permissions, or metadata-heavy middleware
 contracts.
 
-## Current Extension Phase
+## Productization And Sandbox Phase
 
-The runtime kernel and post-kernel operational evidence sequence are complete
-through Task 42. The active phase is now extension architecture: MCP, skills,
-and community tools must enter through versioned catalogs, independent tool
-exposure, shared capability resolution, `ToolExecutor`, token budgets,
-approval, observability, and durable audit evidence.
+The runtime kernel, extension architecture sequence, and initial quickstart/TUI
+setup are complete through Task 56. The active phase now turns those kernel
+boundaries into a coherent local product surface:
+
+- Docker API and local API development profiles default to AIO Docker.
+- Local `awesome` CLI/TUI defaults to LocalSandbox for trusted local use.
+- Model-visible generated files use `/mnt/user-data/workspace/`.
+- Host thread workspaces persist under
+  `~/.awesome-agent/threads/<thread_id>/workspace/`.
+- Run audit artifacts persist under
+  `~/.awesome-agent/runs/<run_id>/artifacts/`.
+- Repository-root `output/` and `e2e-output/` are not formal runtime output
+  locations.
 
 The phase design is specified in
-[`extension-architecture.md`](../design-docs/extension-architecture.md).
+[`runtime-profiles-and-startup.md`](../design-docs/runtime-profiles-and-startup.md).
 
-Current local product-surface work:
+Current productization and sandbox sequence:
 
 | Task | Phase | Status | Purpose | Exit condition |
 | --- | --- | --- | --- | --- |
-| Task 55 | Quickstart | Active | Add a verified local/Docker quickstart matrix across CLI and API/Web inspection lanes. | README and detailed quickstart document Local CLI, Local API, Docker CLI, and Docker API/Web modes; Docker Compose starts PostgreSQL, API, and Worker; production hosting, auth, TLS, and hosted web UI remain future work. |
+| Task 57 | Productization | Active | Lock runtime profiles, startup UX, workspace storage, and sandbox defaults in durable design docs and roadmap. | Roadmap and design docs define Docker API, Local API development, and Local CLI/TUI profiles, including sandbox defaults, workspace/artifact storage, and non-goals. |
+| Task 58 | Sandbox | Planned | Refactor sandbox provider contracts around LocalSandbox and AIO Docker, deleting the old one-shot Docker backend instead of preserving compatibility. | Shell execution and validation select only `local` or `aio-docker`; tests prove API cannot silently use LocalSandbox and no `docker-run` backend remains. |
+| Task 59 | Startup | Planned | Add cross-platform Makefile-driven Docker and local API startup commands. | `make docker-init`, `make docker-start`, `make check`, `make install`, `make setup-sandbox`, and `make dev` exist, delegate to cross-platform helpers where possible, and docs reference them as the primary API startup path. |
+| Task 60 | CLI | Planned | Define durable Thread/Conversation state and scaffold the `awesome` interactive CLI entrypoint and semantic slash-command model. | `awesome` launches the local interactive surface, `/new` maps to durable thread/conversation creation, first-run configuration is reachable, and slash commands map to semantic operations. |
+| Task 61 | TUI | Planned | Replace the operator-console layout with a chat-first local coding-agent TUI. | The TUI supports `/new`, `/status`, `/models`, `/memory`, and `/help`, streams tool/model activity, and keeps API operations semantic. |
+| Task 62 | Sandbox | Planned | Implement the standalone AIO Docker sandbox image and HTTP service. | The sandbox service builds, exposes `/health` and `/execute`, runs commands inside `/mnt/user-data/workspace`, bounds output, handles timeouts, and preserves thread-scoped workspace state in service-level tests. |
+| Task 63 | Sandbox Integration | Planned | Wire AIO Docker into runtime, Compose, Makefile, and health checks as the default API sandbox. | API/Worker profiles execute shell tools through the AIO HTTP client, Compose starts the sandbox service, and `make docker-init` / `make docker-start` prepare and run it. |
+| Task 64 | Verification | Planned | Add full AIO sandbox E2E evidence, clean up old one-shot Docker assumptions, and record LocalSandbox security debt. | Local API, Docker API, and chat-first CLI/TUI flows can generate and preserve a simple HTML snake game; no one-shot Docker backend remains; LocalSandbox unrestricted execution is tracked as explicit technical debt. |
 
 Completed post-kernel setup:
 
@@ -139,12 +154,9 @@ Extension sequence:
 | Task 51 | Operations | Done | Hardened extension operations and diagnostics. | Operators can inspect catalog diffs, source health history, extension denial/error metrics, stale catalog warnings, and structural tests prove extensions cannot bypass resolver/executor boundaries. |
 | Task 52 | Extension Config | Done | Added project-level extension configuration and the default project skill root. | `awesome-agent.yaml` can declare skill roots and MCP sources, repository-root `skills/` auto-discovers project skills, stdio MCP env pass-through stores env names only, and discovered extensions still do not grant tool authority. |
 | Task 53 | Documentation | Done | Reset documentation governance and public README entry points. | Docs have a reader-oriented map, documentation governance rules, rewritten bilingual README entry points, and a manual quickstart path without changing runtime behavior. |
-
-Next extension-phase productization task:
-
-| Task | Phase | Status | Purpose | Exit condition |
-| --- | --- | --- | --- | --- |
 | Task 54 | Quick Start | Done | Added a README-ready local Quick Start path. | Quick Start now explains prerequisites, `.env`, `awesome-agent.yaml`, `skills/`, local PostgreSQL, migrations, API/Worker startup, readiness, probe verification, diagnostics, and first read-only run. `scripts/quickstart.ps1` automates the local Windows path without requiring a model key for the required success check. |
+| Task 55 | Quickstart | Done | Added Docker/API/Web quickstart matrix and documented current local/Docker inspection lanes. | README, quickstart, operations docs, Docker Compose API/Worker services, and structural tests cover the supported lanes. |
+| Task 56 | TUI | Done | Added the first API-backed local TUI operator console. | `awesome-agent tui` can inspect Runs through API endpoints without direct database writes. |
 
 ## Architecture Debt Carried Forward
 

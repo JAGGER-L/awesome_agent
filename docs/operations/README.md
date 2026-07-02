@@ -17,6 +17,15 @@ This guide indexes local runtime operation and diagnosis.
 Use the [quickstart](../getting-started/quickstart.md) for the first local
 startup path.
 
+The current repository still supports the PowerShell quickstart scripts. The
+target startup model is being migrated to Makefile commands: Docker API uses
+`make docker-init` and `make docker-start`; local API development uses
+`make check`, `make install`, `make setup-sandbox`, and `make dev`; local
+interactive CLI uses `awesome`.
+
+See [runtime profiles and startup](../design-docs/runtime-profiles-and-startup.md)
+for the durable startup, sandbox, and workspace contract.
+
 ## Local Run Modes
 
 | Mode | Command | Use |
@@ -34,6 +43,7 @@ startup path.
 | API port | `127.0.0.1:8000` local, `0.0.0.0:8000` inside Docker | Local inspection API. |
 | PostgreSQL port | `54329` host, `5432` container | Durable runtime state. |
 | Runtime data | `~/.awesome-agent/runs/` local, `/var/lib/awesome-agent/runs/` Docker | Per-run artifacts and runtime evidence. |
+| Thread workspace | `~/.awesome-agent/threads/<thread_id>/workspace/` local, `/mnt/user-data/workspace/` in AIO Docker | Model-visible generated files and per-thread `.venv`. |
 | Compose volume | `awesome_agent_runtime` | Container runtime state. |
 
 ## Readiness And Logs

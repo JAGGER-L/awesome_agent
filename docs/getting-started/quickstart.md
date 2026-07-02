@@ -6,6 +6,15 @@ through local CLI, local API, Docker CLI, and Docker API/Web lanes.
 The current "Web" surface is the local FastAPI inspection surface and generated
 API docs. It is not yet a hosted multi-user web application.
 
+The current repository still supports the PowerShell quickstart scripts. The
+target startup model is being migrated to Makefile commands: Docker API uses
+`make docker-init` and `make docker-start`; local API development uses
+`make check`, `make install`, `make setup-sandbox`, and `make dev`; local
+interactive CLI uses `awesome`.
+
+The durable profile and storage contract is defined in
+[runtime profiles and startup](../design-docs/runtime-profiles-and-startup.md).
+
 ## Prerequisites
 
 - Python 3.12
@@ -22,6 +31,7 @@ API docs. It is not yet a hosted multi-user web application.
 | `awesome-agent.yaml` | Project extension sources such as skills and MCP. Do not store secrets here. |
 | `skills/` | Project skill packages containing `SKILL.md`. |
 | `~/.awesome-agent/config.toml` | Local allowed-root state managed by `awesome-agent config root add/list/remove`. |
+| `~/.awesome-agent/threads/<thread_id>/workspace/` | Durable model-visible workspace for a Thread/Conversation. AIO Docker sees this as `/mnt/user-data/workspace/`. |
 | `~/.awesome-agent/runs/<run_id>/artifacts/` | Default local artifact storage. `AWESOME_AGENT_ARTIFACT_ROOT` overrides the runs root, not the per-run suffix. |
 
 Create local configuration:

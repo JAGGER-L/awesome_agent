@@ -80,6 +80,29 @@ silently duplicating side effects.
 An irreconcilable checkpoint/projection mismatch places the Run in
 `recovery_required` and preserves its workspace and evidence.
 
+## Runtime Profiles
+
+The target user-facing startup profiles are:
+
+- Docker API profile: `make docker-init` prepares the AIO Docker sandbox image,
+  and `make docker-start` starts API, Worker, PostgreSQL, and sandbox services.
+  It does not start the CLI.
+- Local API development profile: `make check`, `make install`,
+  `make setup-sandbox`, and `make dev` prepare and run the local API/Worker
+  stack. Its default sandbox is AIO Docker.
+- Local CLI/TUI profile: `awesome` starts the interactive local coding-agent
+  surface. It defaults to LocalSandbox and lets the user configure provider,
+  repository, and sandbox settings in-product.
+
+API semantics should be resource-oriented. CLI/TUI slash commands are a local
+interaction layer over semantic API/runtime operations, not API route names.
+
+Model-visible generated files use `/mnt/user-data/workspace/` as the logical
+workspace path. On the host, that workspace persists under
+`~/.awesome-agent/threads/<thread_id>/workspace/`. Run audit evidence remains
+under `~/.awesome-agent/runs/<run_id>/artifacts/`. AIO Docker gets path
+equivalence through bind mounts; LocalSandbox gets it through path mapping.
+
 ## Repository and Validation Policy
 
 All Runs require a clean primary Git base and execute in a retained Run
