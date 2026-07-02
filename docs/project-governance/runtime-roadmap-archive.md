@@ -65,6 +65,13 @@ future sequencing, architecture direction, and change control.
 | Task 34 | Budget checks, context compaction, team payload compaction, and model-request estimates used `TokenAccountant` profiles with estimator provenance and documented fallback error margins while provider-reported usage remained the durable ledger source. |
 | Task 35 | TD-024 was closed as a deliberate non-goal: runtime budgets remain token, reasoning-token, active-time, call-count, retry, and rework limits without amount-derived gates or ledgers. |
 
+## Historical Product Surface Setup
+
+| Task | Historical exit evidence |
+| --- | --- |
+| Task 55 | README, quickstart, operations docs, Docker Compose API/Worker services, and structural tests covered Local CLI, Local API, Docker CLI, and Docker API/Web inspection lanes. |
+| Task 56 | `awesome-agent tui` added a first API-backed local operator console for Run discovery, diagnostics, recent events, and approvals without direct database writes. |
+
 ## Task 07 Historical Detail
 
 Task 07 made modifying solo Runs executable without weakening the runtime

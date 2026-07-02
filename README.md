@@ -51,6 +51,8 @@ process memory.
 
 For the full guide, see
 [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md).
+The target startup profile contract is defined in
+[docs/design-docs/runtime-profiles-and-startup.md](docs/design-docs/runtime-profiles-and-startup.md).
 
 ### Prerequisites
 
@@ -75,6 +77,12 @@ Keep extension source configuration in `awesome-agent.yaml`. Project skills
 are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
 
 ### Choose A Run Mode
+
+The current repository still supports the PowerShell quickstart scripts. The
+target startup model is being migrated to Makefile commands: Docker API uses
+`make docker-init` and `make docker-start`; local API development uses
+`make check`, `make install`, `make setup-sandbox`, and `make dev`; local
+interactive CLI uses `awesome`.
 
 | Mode | Best for | Command | Status |
 | --- | --- | --- | --- |
