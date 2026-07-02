@@ -97,6 +97,75 @@ async def test_tui_headless_renders_help() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_slash_opens_command_suggestions() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/")
+        palette = app.query_one("#command-palette").render()
+
+    rendered = str(palette)
+    assert "/new" in rendered
+    assert "/status" in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_slash_prefix_filters_command_suggestions() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "s")
+        palette = app.query_one("#command-palette").render()
+
+    rendered = str(palette)
+    assert "/status" in rendered
+    assert "/skills" in rendered
+    assert "/new" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_tab_completes_active_command() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "s", "tab")
+        prompt = app.query_one("#prompt", Input)
+        palette = app.query_one("#command-palette").render()
+
+    assert prompt.value == "/status "
+    assert str(palette) == ""
+
+
+@pytest.mark.asyncio
+async def test_tui_enter_executes_active_prefix_candidate() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "s", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert "api=ready" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_escape_closes_command_suggestions() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/")
+        assert "/new" in str(app.query_one("#command-palette").render())
+        await pilot.press("escape")
+        palette = app.query_one("#command-palette").render()
+
+    assert str(palette) == ""
+
+
+@pytest.mark.asyncio
 async def test_tui_help_keeps_prompt_focused_and_allows_next_message() -> None:
     app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
 
