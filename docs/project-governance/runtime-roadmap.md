@@ -101,27 +101,31 @@ contracts.
 
 ## Product Surface Phase
 
-Tasks 57-75 completed the startup, sandbox, first-run configuration,
+Tasks 57-82 completed the startup, sandbox, first-run configuration,
 conversation API, first real full-screen TUI chat, slash-command registry,
-thread-scoped Run bridge, surface capability APIs, and product-hardening
-groundwork. The active phase now corrects the remaining product gap: local
-`awesome` must behave like a complete coding-agent product entry, not like a
-thin shell that requires users to understand API servers, Workers, or `/run`
-before ordinary work can begin.
+thread-scoped Run bridge, surface capability APIs, embedded local runtime host,
+nonblocking streaming, thread UX, transcript rendering, reasoning display,
+model diagnostics, and startup-contract cleanup. The remaining product gap is
+now quality and semantic consistency: local `awesome` must behave like a
+complete coding-agent product, not like a thin shell over diagnostic endpoints
+or a split between ordinary chat and coding Runs.
 
 This phase keeps `awesome` as a full-screen TUI. It intentionally does not add
 an inline terminal chat mode. Ordinary text input is the primary execution
-entry. Every user turn should have durable Run semantics, from lightweight
-model chat to tool-capable coding execution. `/run` remains available only as
-an advanced/manual execution control, not the required path for normal agent
-work.
+entry and should enter the Leader AgentLoop by default. Simple questions are
+leader turns with no tool calls; coding tasks are leader turns that may call
+tools; complex work may create teammates, subagents, and verifier work under
+runtime policy. `/run` remains available only as an advanced/manual execution
+control, not the required path for normal agent work.
 
 The architectural requirement is to keep the TUI thin while making the local
-product complete: the TUI may own presentation, focus, shortcut handling, and
-command suggestions, but it must not own model chat, AgentLoop, tool calling,
-durable conversation history, or product policy. Local embedded TUI mode and
-HTTP API mode must reuse the same service/runtime contracts; they differ by
-transport and execution ownership, not by product semantics.
+product complete: the TUI may own presentation, focus, scrollback, shortcut
+handling, interactive pickers, command echo, and command suggestions, but it
+must not own model chat, AgentLoop, tool calling, durable conversation history,
+tool authorization, workspace output policy, team policy, or product execution
+policy. Local embedded TUI mode and HTTP API mode must reuse the same
+service/runtime contracts; they differ by transport and execution ownership,
+not by product semantics.
 
 The profile and storage baseline remains specified in
 [`runtime-profiles-and-startup.md`](../design-docs/runtime-profiles-and-startup.md):
@@ -135,6 +139,10 @@ The profile and storage baseline remains specified in
   `~/.awesome-agent/runs/<run_id>/artifacts/`.
 - Repository-root `output/` and `e2e-output/` are not formal runtime output
   locations.
+- User-visible generated files belong in the launch workspace/project, with
+  changed-file summaries shown in the transcript. Run-scoped audit evidence may
+  remain under `~/.awesome-agent/runs/<run_id>/artifacts/` but is not exposed as
+  a first-class user slash-command surface.
 
 Current product surface sequence:
 
@@ -147,6 +155,14 @@ Current product surface sequence:
 | Task 80 | Reasoning Thought UI | Done | Surface provider reasoning as a compact collapsible thought block. | Provider reasoning events normalize into stream events; TUI shows active thought, collapsed completion timing, and `Ctrl+O` expansion; reasoning remains bounded, optional, and separate from assistant answer text. |
 | Task 81 | Model Routing Diagnostics | Done | Make configured/requested/observed model routing explainable. | `/models` and turn completion metadata show configured model, provider, base URL, env key presence, requested model, response model, and response id where available; model self-description is not treated as authority; no price/cost fields appear. |
 | Task 82 | Startup Contract Cleanup | Done | Align docs, CLI help, quickstart, and roadmap with product startup semantics. | `awesome` is documented as the local full-screen TUI entry; `make dev` is local API development; `make docker-start` is Docker API deployment; `awesome-agent start` is fallback/debug only; `/run` is not documented as required for normal work. |
+| Task 83 | Leader AgentLoop Primary Turn Path | Planned | Remove the ordinary-chat provider bypass and make every normal TUI/API conversation turn enter a durable Leader AgentLoop path. | Ordinary input creates a durable turn/run with a leader agent; simple questions complete without tool calls; coding requests can use leader-visible tools; complex requests can create teammates/subagents/verifier; `ConversationService` no longer directly owns provider execution for normal turns. |
+| Task 84 | Transcript Scrollback And Per-Turn Thought | Planned | Make the TUI transcript usable for long, multi-turn sessions. | Transcript auto-scrolls to the newest content, mouse/keyboard scrollback works, slash commands echo before results, thought blocks attach to the correct turn, and `Ctrl+O` toggles the current/recent thought without overwriting prior turns. |
+| Task 85 | Slash Command Surface Cleanup | Planned | Reduce slash commands to the product control surface and delete obsolete commands without compatibility shims. | `/resume`, `/models`, `/uploads`, `/artifacts`, and `/switch` are removed from parsing, help, autocomplete, docs, and tests; retained commands render concrete user-facing content rather than raw backend dictionaries. |
+| Task 86 | Model, Thinking, Memory, And Skill Pickers | Planned | Convert model, thinking, memory, and skill controls into interactive conversation/turn controls. | `/model` selects the conversation model; `/thinking` selects Off/On high/On max; `/memory` manages local and provider memory; `/skills` stages skills for the next turn only and clears them after use. |
+| Task 87 | Tools, Approval, And Team Event Rendering | Planned | Show leader tools, file/command approvals, tool calls, team activity, and verifier output in a compact collapsible form. | Leader-visible tools are grouped by user concepts; file edits and risky commands ask by default; session-only allow rules are visible; tool/team/subagent/verifier events are folded by default and expanded by `/details`. |
+| Task 88 | Workspace Outputs And Changed Files | Planned | Make user-visible generated files belong to the launch workspace and replace the `/artifacts` user surface with changed-file summaries. | Outputs are written to the active workspace/project, run audit artifacts remain internal evidence, task completion shows created/updated/deleted files, and `/threads` shows changed-file counts ordered by most recent conversation activity. |
+| Task 89 | Local Durable Sessions And Threads | Planned | Persist embedded local TUI conversations across process restarts. | Local `awesome` uses a durable local conversation store, `/threads` lists previous conversations after restart, thread selection restores transcript/model/thinking/memory metadata, and no HTTP API is required for local persistence. |
+| Task 90 | CLI Product Polish E2E | Planned | Verify the full-screen TUI as a usable local coding-agent product. | Headless and product-path E2E cover long transcript scrolling, command echo, model/thinking/memory/skill pickers, approvals, changed files, team event rendering, local restart recovery, and a simple HTML game generated through ordinary input. |
 
 Completed productization groundwork:
 
