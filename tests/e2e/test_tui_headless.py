@@ -1,4 +1,6 @@
+from collections.abc import Iterable
 from pathlib import Path
+from time import sleep
 from uuid import uuid4
 
 import pytest
@@ -53,6 +55,7 @@ class FakeClient:
         content: str,
         *,
         model: str | None = None,
+        resume_run_id: str | None = None,
     ) -> list[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         turn_id = uuid4()
@@ -120,6 +123,64 @@ class FakeClient:
     def cancel(self, run_id: str) -> dict[str, object]:
         self.cancelled_runs.append(run_id)
         return {"id": run_id, "status": "cancelled"}
+
+
+class SlowStatusClient(FakeClient):
+    def __init__(self, *, delay_seconds: float) -> None:
+        super().__init__()
+        self.delay_seconds = delay_seconds
+
+    def runtime_status(self) -> dict[str, object]:
+        sleep(self.delay_seconds)
+        return super().runtime_status()
+
+
+class SlowStreamingClient(FakeClient):
+    def __init__(
+        self,
+        deltas: list[str],
+        *,
+        run_id: str | None = None,
+        delay_seconds: float = 0.05,
+    ) -> None:
+        super().__init__()
+        self.deltas = deltas
+        self.run_id = run_id
+        self.delay_seconds = delay_seconds
+        self.resume_run_ids: list[str | None] = []
+
+    def stream_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        model: str | None = None,
+        resume_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        self.turns.append((thread_id, content))
+        self.resume_run_ids.append(resume_run_id)
+        turn_id = uuid4()
+        for sequence, delta in enumerate(self.deltas, start=1):
+            sleep(self.delay_seconds)
+            payload: dict[str, object] = {"text": delta}
+            if self.run_id is not None and sequence == 1:
+                payload["run_id"] = self.run_id
+            yield ConversationStreamEvent(
+                event=ConversationStreamEventKind.MESSAGE_DELTA,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=sequence,
+                trace_id="trace-slow",
+                payload=payload,
+            )
+        yield ConversationStreamEvent(
+            event=ConversationStreamEventKind.MESSAGE_COMPLETED,
+            thread_id=uuid4(),
+            turn_id=turn_id,
+            sequence=len(self.deltas) + 1,
+            trace_id="trace-slow",
+            payload={"content": "".join(self.deltas)},
+        )
 
 
 class FakeProvider(StructuredModelProvider):
@@ -200,6 +261,76 @@ async def test_tui_enter_executes_active_prefix_candidate() -> None:
         transcript = app.query_one("#transcript").render()
 
     assert "api=ready" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_status_does_not_block_input_focus() -> None:
+    app = AwesomeAgentTui(client=SlowStatusClient(delay_seconds=0.2))
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "s", "t", "a", "t", "u", "s", "enter")
+        prompt = app.query_one("#prompt", Input)
+        assert prompt.has_focus
+        await pilot.press("h", "i")
+
+    assert prompt.value == "hi"
+
+
+@pytest.mark.asyncio
+async def test_tui_streams_first_delta_before_completion() -> None:
+    app = AwesomeAgentTui(
+        client=SlowStreamingClient(["hello", " world"], run_id="run-1")
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        await pilot.pause(0.1)
+        transcript = app.query_one("#transcript").render()
+
+    assert "hello" in str(transcript)
+    assert app.state.current_run_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_pauses_active_stream_and_keeps_prompt() -> None:
+    client = SlowStreamingClient(
+        ["hello", " world"],
+        run_id="run-1",
+        delay_seconds=0.5,
+    )
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        await pilot.pause(0.65)
+        await pilot.press("ctrl+c")
+        await pilot.pause()
+        transcript = app.query_one("#transcript").render()
+        prompt = app.query_one("#prompt", Input)
+        await pilot.press("x")
+
+    rendered = str(transcript)
+    assert "hello" in rendered
+    assert "Response paused" in rendered
+    assert app.state.last_resumable_run_id is not None
+    assert prompt.value == "x"
+
+
+@pytest.mark.asyncio
+async def test_continue_resumes_last_resumable_run() -> None:
+    client = SlowStreamingClient(["continued"], run_id="run-1")
+    app = AwesomeAgentTui(client=client)
+    app.state = app.state.mark_operation_paused("run-1")
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("c", "o", "n", "t", "i", "n", "u", "e", "enter")
+        await pilot.pause(0.1)
+
+    assert client.resume_run_ids == ["run-1"]
 
 
 @pytest.mark.asyncio
@@ -387,6 +518,7 @@ async def test_tui_retry_resends_last_failed_message() -> None:
             content: str,
             *,
             model: str | None = None,
+            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.calls += 1
             if self.calls == 1:
@@ -435,6 +567,7 @@ async def test_tui_renders_approval_required_stream_error_as_actionable() -> Non
             content: str,
             *,
             model: str | None = None,
+            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             return [

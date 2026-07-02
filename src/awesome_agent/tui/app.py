@@ -1,18 +1,28 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import ClassVar
+from uuid import uuid4
 
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Input, Static
+from textual.worker import Worker
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
-from awesome_agent.cli.slash_commands import SlashCommandKind, parse_slash_command
+from awesome_agent.cli.slash_commands import (
+    SlashCommand,
+    SlashCommandKind,
+    parse_slash_command,
+)
 from awesome_agent.client.conversation import ConversationHttpError
-from awesome_agent.conversation.events import ConversationStreamEventKind
+from awesome_agent.conversation.events import (
+    ConversationStreamEvent,
+    ConversationStreamEventKind,
+)
 from awesome_agent.surfaces.client import SurfaceClient, SurfaceThread
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 from awesome_agent.tui.client import HttpSurfaceClient
@@ -81,6 +91,7 @@ class AwesomeAgentTui(App[None]):
         )
         if run_id is not None:
             self.state = self.state.with_run(run_id)
+        self._active_worker: Worker[object] | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-root"):
@@ -102,26 +113,31 @@ class AwesomeAgentTui(App[None]):
             return
         parsed = parse_slash_command(raw)
         if parsed.kind is SlashCommandKind.USER_MESSAGE:
-            self._send_user_message(raw)
+            resume_run_id = (
+                self.state.last_resumable_run_id
+                if raw.casefold() in {"continue", "resume", "\u7ee7\u7eed"}
+                else None
+            )
+            self._start_user_message(raw, resume_run_id=resume_run_id)
         else:
-            try:
-                if parsed.kind is SlashCommandKind.DETAILS:
-                    self.state = self.state.toggle_details()
-                    label = "enabled" if self.state.details_enabled else "disabled"
-                    message = ChatMessage.system(f"Details {label}.")
-                elif parsed.kind is SlashCommandKind.RUN:
-                    message = self._start_coding_run(parsed.argument)
-                elif parsed.kind is SlashCommandKind.QUIT:
-                    self.exit()
-                    return
-                else:
-                    message = SlashRouter(self.client).handle(parsed, self.state)
-            except Exception as error:
-                message = ChatMessage.system(
-                    str(error),
-                    kind=ChatEventKind.ERROR,
+            if parsed.kind is SlashCommandKind.DETAILS:
+                self.state = self.state.toggle_details()
+                label = "enabled" if self.state.details_enabled else "disabled"
+                self.state = self.state.append(ChatMessage.system(f"Details {label}."))
+            elif parsed.kind is SlashCommandKind.QUIT:
+                self.exit()
+                return
+            elif (
+                parsed.kind is SlashCommandKind.RESUME
+                and not parsed.argument
+                and self.state.last_resumable_run_id is not None
+            ):
+                self._start_user_message(
+                    "continue",
+                    resume_run_id=self.state.last_resumable_run_id,
                 )
-            self.state = self.state.append(message)
+            else:
+                self._start_command(parsed)
         self._render()
         self._focus_prompt()
 
@@ -162,7 +178,22 @@ class AwesomeAgentTui(App[None]):
                 event.stop()
 
     def action_cancel(self) -> None:
-        if self.state.current_run_id is not None:
+        if self.state.active_operation_id is not None:
+            if self._active_worker is not None:
+                self._active_worker.cancel()
+            resumable_run_id = (
+                self.state.current_run_id or self.state.active_operation_id
+            )
+            if self.state.current_run_id is not None:
+                with suppress(Exception):
+                    self.client.cancel(self.state.current_run_id)
+            self.state = self.state.mark_operation_paused(resumable_run_id).append(
+                ChatMessage.system(
+                    'Response paused. Type "continue" or /resume to continue.',
+                    kind=ChatEventKind.RUN,
+                )
+            )
+        elif self.state.current_run_id is not None:
             try:
                 cancelled = self.client.cancel(self.state.current_run_id)
                 status = cancelled.get("status", "cancelled")
@@ -178,13 +209,6 @@ class AwesomeAgentTui(App[None]):
                         kind=ChatEventKind.ERROR,
                     )
                 )
-        elif self.state.status_label == "streaming":
-            self.state = self.state.with_status("cancelled").append(
-                ChatMessage.system(
-                    "Cancel requested for the current conversation turn.",
-                    kind=ChatEventKind.ERROR,
-                )
-            )
         else:
             self.state = self.state.append(ChatMessage.system("No active Run."))
         self._render()
@@ -203,7 +227,7 @@ class AwesomeAgentTui(App[None]):
             self._focus_prompt()
             return
         self.state = self.state.append(ChatMessage.system(f"Retrying: {content}"))
-        self._send_user_message(content)
+        self._start_user_message(content)
         self._render()
         self._focus_prompt()
 
@@ -225,42 +249,33 @@ class AwesomeAgentTui(App[None]):
             return raw
         return f"/{active.name}"
 
-    def _send_user_message(self, content: str) -> None:
+    def _start_user_message(
+        self,
+        content: str,
+        *,
+        resume_run_id: str | None = None,
+    ) -> None:
+        if self.state.active_operation_id is not None:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    "Finish or pause the current response first.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
         self.state = self.state.append(ChatMessage.user(content))
-        self.state = self.state.with_status("streaming")
+        self.state = self.state.begin_operation(str(uuid4()), "streaming")
         self._render()
-        failed = False
         try:
             thread_id = self._ensure_backend_thread(content)
-            assistant_buffer = ""
-            for stream_event in self.client.stream_turn(thread_id, content):
-                if stream_event.event is ConversationStreamEventKind.MESSAGE_DELTA:
-                    text = stream_event.payload.get("text")
-                    if isinstance(text, str):
-                        assistant_buffer += text
-                        self.state = self.state.upsert_streaming_assistant(
-                            assistant_buffer
-                        )
-                        self._render()
-                elif (
-                    stream_event.event is ConversationStreamEventKind.MESSAGE_COMPLETED
-                ):
-                    final_content = stream_event.payload.get("content")
-                    if isinstance(final_content, str):
-                        assistant_buffer = final_content
-                    self.state = self.state.upsert_streaming_assistant(assistant_buffer)
-                elif stream_event.event is ConversationStreamEventKind.ERROR:
-                    failed = True
-                    message = self._format_stream_error(
-                        stream_event.payload,
-                        fallback="Conversation failed.",
-                    )
-                    self.state = self.state.append(
-                        ChatMessage.system(str(message), kind=ChatEventKind.ERROR)
-                    )
-            self.state = self.state.with_status("error" if failed else "ready")
-            self.state = self.state.with_last_failed_user_message(
-                content if failed else None
+            self._active_worker = self.run_worker(
+                lambda: self._conversation_worker(
+                    thread_id,
+                    content,
+                    resume_run_id,
+                ),
+                thread=True,
+                name=f"conversation-{self.state.active_operation_id}",
             )
         except Exception as error:
             self.state = self.state.with_status("error")
@@ -268,6 +283,150 @@ class AwesomeAgentTui(App[None]):
             self.state = self.state.append(
                 ChatMessage.system(self._format_error(error), kind=ChatEventKind.ERROR)
             )
+
+    def _conversation_worker(
+        self,
+        thread_id: str,
+        content: str,
+        resume_run_id: str | None,
+    ) -> None:
+        failed = False
+        try:
+            for stream_event in self.client.stream_turn(
+                thread_id,
+                content,
+                resume_run_id=resume_run_id,
+            ):
+                if stream_event.event is ConversationStreamEventKind.ERROR:
+                    failed = True
+                self.call_from_thread(self._apply_stream_event, stream_event)
+        except Exception as error:
+            failed = True
+            self.call_from_thread(self._record_stream_exception, content, error)
+        finally:
+            self.call_from_thread(
+                self._finish_stream_worker,
+                content,
+                failed=failed,
+            )
+
+    def _apply_stream_event(self, stream_event: ConversationStreamEvent) -> None:
+        run_id = stream_event.payload.get("run_id")
+        if isinstance(run_id, str):
+            self.state = self.state.note_run_started(run_id)
+        if stream_event.event is ConversationStreamEventKind.MESSAGE_DELTA:
+            text = stream_event.payload.get("text")
+            if isinstance(text, str):
+                self.state = self.state.append_stream_delta(text)
+        elif stream_event.event is ConversationStreamEventKind.MESSAGE_COMPLETED:
+            final_content = stream_event.payload.get("content")
+            if isinstance(final_content, str):
+                self.state = self.state.upsert_streaming_assistant(final_content)
+        elif stream_event.event is ConversationStreamEventKind.ERROR:
+            message = self._format_stream_error(
+                stream_event.payload,
+                fallback="Conversation failed.",
+            )
+            self.state = self.state.append(
+                ChatMessage.system(str(message), kind=ChatEventKind.ERROR)
+            )
+        self._render()
+        self._focus_prompt()
+
+    def _record_stream_exception(self, content: str, error: Exception) -> None:
+        self.state = self.state.with_last_failed_user_message(content)
+        self.state = self.state.append(
+            ChatMessage.system(self._format_error(error), kind=ChatEventKind.ERROR)
+        )
+        self._render()
+        self._focus_prompt()
+
+    def _finish_stream_worker(self, content: str, *, failed: bool) -> None:
+        self._active_worker = None
+        self.state = self.state.finish_operation(
+            status_label="error" if failed else "ready"
+        )
+        self.state = self.state.with_last_failed_user_message(
+            content if failed else None
+        )
+        self._render()
+        self._focus_prompt()
+
+    def _start_command(self, parsed: SlashCommand) -> None:
+        if self.state.active_operation_id is not None:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    "Finish or pause the current response first.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        self.state = self.state.begin_operation(str(uuid4()), "command")
+        state_snapshot = self.state
+        self._active_worker = self.run_worker(
+            lambda: self._command_worker(parsed, state_snapshot),
+            thread=True,
+            name=f"command-{self.state.active_operation_id}",
+        )
+
+    def _command_worker(
+        self,
+        parsed: SlashCommand,
+        state: ChatSessionState,
+    ) -> None:
+        failed = False
+        try:
+            if parsed.kind is SlashCommandKind.RUN:
+                backend_thread_id, run, message = self._start_coding_run(parsed, state)
+                self.call_from_thread(
+                    self._append_coding_run_message,
+                    backend_thread_id,
+                    run,
+                    message,
+                )
+            else:
+                message = SlashRouter(self.client).handle(parsed, state)
+                self.call_from_thread(self._append_command_message, message)
+        except Exception as error:
+            failed = True
+            self.call_from_thread(
+                self._append_command_message,
+                ChatMessage.system(str(error), kind=ChatEventKind.ERROR),
+            )
+        finally:
+            self.call_from_thread(
+                self._finish_command_worker,
+                failed=failed,
+            )
+
+    def _append_command_message(self, message: ChatMessage) -> None:
+        self.state = self.state.append(message)
+        self._render()
+        self._focus_prompt()
+
+    def _append_coding_run_message(
+        self,
+        backend_thread_id: str | None,
+        run: dict[str, object] | None,
+        message: ChatMessage,
+    ) -> None:
+        if backend_thread_id is not None:
+            self.state = self.state.with_backend_thread(backend_thread_id)
+        if run is not None:
+            self.state = self.state.with_run(
+                str(run["id"]), status_label=str(run["status"])
+            )
+        self.state = self.state.append(message)
+        self._render()
+        self._focus_prompt()
+
+    def _finish_command_worker(self, *, failed: bool) -> None:
+        self._active_worker = None
+        self.state = self.state.finish_operation(
+            status_label="error" if failed else "ready"
+        )
+        self._render()
+        self._focus_prompt()
 
     def _ensure_backend_thread(self, title_seed: str) -> str:
         if self.state.backend_thread_id is not None:
@@ -282,14 +441,33 @@ class AwesomeAgentTui(App[None]):
         self.state = self.state.with_backend_thread(thread_id)
         return thread_id
 
-    def _start_coding_run(self, goal: str) -> ChatMessage:
+    def _start_coding_run(
+        self,
+        parsed: SlashCommand,
+        state: ChatSessionState,
+    ) -> tuple[str | None, dict[str, object] | None, ChatMessage]:
+        goal = parsed.argument
         if not goal:
-            return ChatMessage.system(
-                "Usage: /run <goal>",
-                kind=ChatEventKind.ERROR,
+            return (
+                None,
+                None,
+                ChatMessage.system(
+                    "Usage: /run <goal>",
+                    kind=ChatEventKind.ERROR,
+                ),
             )
-        thread_id = self._ensure_backend_thread(goal)
-        context = self.state.launch_context
+        thread_id = state.backend_thread_id
+        new_backend_thread_id: str | None = None
+        if thread_id is None:
+            context = state.launch_context
+            thread = self.client.create_thread(
+                title=goal[:80] or "New conversation",
+                context_kind=context.context_kind if context is not None else None,
+                context_path=context.display_path if context is not None else None,
+            )
+            thread_id = _thread_id(thread)
+            new_backend_thread_id = thread_id
+        context = state.launch_context
         repository_path = (
             context.display_path
             if context is not None and context.context_kind == "repo"
@@ -307,12 +485,16 @@ class AwesomeAgentTui(App[None]):
                 goal,
                 repository_path=repository_path,
             )
-        self.state = self.state.with_run(
-            str(run["id"]), status_label=str(run["status"])
-        )
-        return ChatMessage.system(
-            (f"Started Coding Run {run['id']}: {run['goal']} status={run['status']}"),
-            kind=ChatEventKind.RUN,
+        return (
+            new_backend_thread_id,
+            run,
+            ChatMessage.system(
+                (
+                    f"Started Coding Run {run['id']}: "
+                    f"{run['goal']} status={run['status']}"
+                ),
+                kind=ChatEventKind.RUN,
+            ),
         )
 
     def _focus_prompt(self) -> None:
