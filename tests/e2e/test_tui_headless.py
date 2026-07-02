@@ -649,6 +649,18 @@ async def test_tui_renders_minimal_welcome_card(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_hides_welcome_after_first_message() -> None:
+    app = AwesomeAgentTui(client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        welcome = app.query_one("#welcome").render()
+
+    assert str(welcome) == ""
+
+
+@pytest.mark.asyncio
 async def test_tui_details_toggles_verbose_state() -> None:
     app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
 

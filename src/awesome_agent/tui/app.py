@@ -33,7 +33,7 @@ from awesome_agent.tui.chat_state import (
 )
 from awesome_agent.tui.client import HttpSurfaceClient
 from awesome_agent.tui.command_palette import CommandPaletteState, is_command_prefix
-from awesome_agent.tui.rendering import render_message
+from awesome_agent.tui.rendering import render_transcript
 from awesome_agent.tui.slash_router import SlashRouter
 
 
@@ -240,7 +240,7 @@ class AwesomeAgentTui(App[None]):
     def _render(self) -> None:
         self.query_one("#welcome", Static).update(self._welcome_text())
         self.query_one("#transcript", Static).update(
-            "\n\n".join(render_message(message) for message in self.state.messages)
+            render_transcript(self.state.messages)
         )
         self._render_palette()
 
@@ -620,6 +620,8 @@ class AwesomeAgentTui(App[None]):
         return " | ".join(parts)
 
     def _welcome_text(self) -> str:
+        if self.state.messages:
+            return ""
         lines = [
             "+-- Awesome Agent --------------------------------------+",
             "| Welcome back                                          |",
