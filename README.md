@@ -78,11 +78,12 @@ are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
 
 ### Choose A Run Mode
 
-The Makefile commands are the primary startup contract. Docker API mode uses
-`make docker-init` and `make docker-start`; local API development uses
-`make check`, `make install`, `make setup-sandbox`, and `make dev`; local
-interactive CLI uses `awesome` after Task 60. The existing PowerShell scripts
-remain Windows fallback entrypoints.
+The Makefile commands are the primary API startup contract. Docker API mode
+uses `make docker-init` and `make docker-start`; local API development uses
+`make check`, `make install`, `make setup-sandbox`, and `make dev`. Local
+interactive CLI/TUI mode uses `awesome` directly and defaults to embedded local
+runtime mode; it does not require a running API server for ordinary local use.
+The existing PowerShell scripts remain Windows fallback entrypoints.
 
 | Mode | Best for | Command | Status |
 | --- | --- | --- | --- |
@@ -168,6 +169,13 @@ workspace-only mode and still accepts ordinary chat messages.
 
 `awesome` is the default chat-first local CLI/TUI. Use `awesome-agent`
 subcommands for direct operations, diagnostics, and scripting.
+
+Ordinary input is the main execution entry. Simple questions use a lightweight
+local runtime turn; coding requests can be planned as coding execution from the
+same conversation context. Use `awesome --api-url http://127.0.0.1:8000` only
+when you explicitly want the TUI to connect to a local, Docker, or remote API
+server. `/run` is an advanced/manual execution command, not the normal way to
+make the agent work.
 
 The local TUI is intentionally chat-first. It shows a welcome panel at launch,
 then keeps the main screen focused on the transcript and input prompt. Runtime
@@ -281,8 +289,9 @@ Open the local TUI operator console:
 The TUI is a local API-backed inspection and control surface for Runs,
 diagnostics, events, and approvals. It is not a hosted web dashboard.
 
-`awesome-agent start` supervises API and Worker processes together. Use
-`awesome-agent serve` and `awesome-agent worker` separately when another
+`awesome-agent start` is a fallback/debug supervisor for API and Worker
+processes together. Use `make dev` for the normal local API development path,
+or use `awesome-agent serve` and `awesome-agent worker` separately when another
 process manager should own them. The local API is unauthenticated and binds to
 loopback by default; non-loopback binding requires explicit unsafe consent.
 

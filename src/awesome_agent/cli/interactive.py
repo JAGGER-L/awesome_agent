@@ -21,7 +21,7 @@ class _ChatTui(Protocol):
     def __init__(
         self,
         *,
-        api_url: str,
+        api_url: str | None = None,
         run_id: str | None = None,
         launch_context: CliLaunchContext | None = None,
         first_run_summary: ConfigFlowSummary | None = None,
@@ -42,7 +42,13 @@ app = typer.Typer(
 @app.callback(invoke_without_command=True)
 def launch(
     ctx: typer.Context,
-    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+    api_url: Annotated[
+        str | None,
+        typer.Option(
+            "--api-url",
+            help="Connect to an API server instead of embedded local runtime mode.",
+        ),
+    ] = None,
     project_root: Annotated[
         Path | None,
         typer.Option("--project-root", exists=True, file_okay=False),
@@ -65,6 +71,10 @@ def launch(
     )
     typer.echo(f"awesome.profile={profile.name}")
     typer.echo(f"awesome.sandbox={profile.default_sandbox_backend}")
+    typer.echo(
+        "awesome.transport="
+        + (f"http:{api_url}" if api_url is not None else "embedded")
+    )
     typer.echo(
         f"awesome.context={launch_context.context_kind}:"
         f"{launch_context.display_path}"

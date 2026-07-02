@@ -7,9 +7,10 @@ import httpx
 
 from awesome_agent.client.conversation import ConversationClient
 from awesome_agent.conversation.events import ConversationStreamEvent
+from awesome_agent.surfaces.client import SurfaceThread, surface_thread_from_mapping
 
 
-class TuiApiClient:
+class HttpSurfaceClient:
     def __init__(
         self,
         api_url: str,
@@ -32,7 +33,7 @@ class TuiApiClient:
         repository_id: str | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> SurfaceThread:
         payload: dict[str, object] = {"title": title}
         if context_kind is not None:
             payload["context_kind"] = context_kind
@@ -46,7 +47,7 @@ class TuiApiClient:
             payload["sandbox_profile"] = sandbox_profile
         response = self._client.post(f"{self.api_url}/threads", json=payload)
         response.raise_for_status()
-        return dict(response.json())
+        return surface_thread_from_mapping(dict(response.json()))
 
     def stream_turn(
         self,
@@ -54,6 +55,7 @@ class TuiApiClient:
         content: str,
         *,
         model: str | None = None,
+        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         return self._conversation.stream_turn(
             thread_id=thread_id,
@@ -61,7 +63,7 @@ class TuiApiClient:
             model=model,
         )
 
-    def create_thread_run(
+    def start_explicit_run(
         self,
         thread_id: str,
         goal: str,
@@ -82,6 +84,25 @@ class TuiApiClient:
         )
         response.raise_for_status()
         return dict(response.json())
+
+    def create_thread_run(
+        self,
+        thread_id: str,
+        goal: str,
+        *,
+        intent: str = "modifying",
+        mode: str = "solo",
+        repository_id: str | None = None,
+        repository_path: str | None = None,
+    ) -> dict[str, Any]:
+        return self.start_explicit_run(
+            thread_id,
+            goal,
+            intent=intent,
+            mode=mode,
+            repository_id=repository_id,
+            repository_path=repository_path,
+        )
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:
         return self._get_list(f"/threads/{thread_id}/runs")
@@ -115,8 +136,26 @@ class TuiApiClient:
             raise ValueError("Expected object response from /memory.")
         return dict(payload)
 
-    def list_threads(self) -> list[dict[str, Any]]:
-        return self._get_list_or_empty("/threads")
+    def list_threads(self) -> list[SurfaceThread]:
+        return [
+            surface_thread_from_mapping(item)
+            for item in self._get_list_or_empty("/threads")
+        ]
+
+    def resume_thread(self, query: str) -> SurfaceThread:
+        threads = self.list_threads()
+        query_normalized = query.casefold()
+        for thread in threads:
+            if (
+                thread.id == query
+                or thread.short_id == query
+                or query_normalized in thread.title.casefold()
+            ):
+                return thread
+        raise ValueError(f"Thread not found: {query}")
+
+    def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]:
+        return self._get_list_or_empty(f"/threads/{thread_id}/messages")
 
     def list_skills(self) -> list[dict[str, Any]]:
         return self._get_items_object("/extensions/skills")
@@ -273,3 +312,6 @@ class TuiApiClient:
         if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
             raise ValueError(f"Expected items list response from {path}.")
         return [dict(item) for item in items]
+
+
+TuiApiClient = HttpSurfaceClient

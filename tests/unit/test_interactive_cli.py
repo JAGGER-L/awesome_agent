@@ -83,3 +83,36 @@ def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
     }
     assert launched["launch_context"] is not None
     assert launched["first_run_summary"] is not None
+
+
+def test_awesome_defaults_to_embedded_local_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launched: dict[str, object] = {}
+
+    class FakeTui:
+        def __init__(
+            self,
+            *,
+            api_url: str | None = None,
+            run_id: str | None = None,
+            launch_context: object | None = None,
+            first_run_summary: object | None = None,
+        ) -> None:
+            launched["api_url"] = api_url
+            launched["run_id"] = run_id
+            launched["launch_context"] = launch_context
+            launched["first_run_summary"] = first_run_summary
+
+        def run(self) -> None:
+            launched["ran"] = True
+
+    monkeypatch.setattr("awesome_agent.cli.interactive.AwesomeAgentTui", FakeTui)
+
+    result = runner.invoke(app, [])
+
+    assert result.exit_code == 0
+    assert launched["api_url"] is None
+    assert launched["run_id"] is None
+    assert launched["ran"] is True
+    assert "awesome.transport=embedded" in result.output

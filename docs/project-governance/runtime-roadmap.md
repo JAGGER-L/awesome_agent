@@ -101,16 +101,27 @@ contracts.
 
 ## Product Surface Phase
 
-Tasks 57-67 completed the startup, sandbox, first-run configuration, and
-chat-first full-screen TUI groundwork. The active phase now turns that local
-surface into a real product client over shared backend conversation, Run,
-tool, extension, artifact, memory, and observability services.
+Tasks 57-75 completed the startup, sandbox, first-run configuration,
+conversation API, first real full-screen TUI chat, slash-command registry,
+thread-scoped Run bridge, surface capability APIs, and product-hardening
+groundwork. The active phase now corrects the remaining product gap: local
+`awesome` must behave like a complete coding-agent product entry, not like a
+thin shell that requires users to understand API servers, Workers, or `/run`
+before ordinary work can begin.
 
 This phase keeps `awesome` as a full-screen TUI. It intentionally does not add
-an inline terminal chat mode. The architectural requirement is instead to make
-the full-screen TUI thin: it may own presentation, focus, shortcut handling,
-and command suggestions, but it must not own model chat, AgentLoop, tool
-calling, durable conversation history, or product policy.
+an inline terminal chat mode. Ordinary text input is the primary execution
+entry. Every user turn should have durable Run semantics, from lightweight
+model chat to tool-capable coding execution. `/run` remains available only as
+an advanced/manual execution control, not the required path for normal agent
+work.
+
+The architectural requirement is to keep the TUI thin while making the local
+product complete: the TUI may own presentation, focus, shortcut handling, and
+command suggestions, but it must not own model chat, AgentLoop, tool calling,
+durable conversation history, or product policy. Local embedded TUI mode and
+HTTP API mode must reuse the same service/runtime contracts; they differ by
+transport and execution ownership, not by product semantics.
 
 The profile and storage baseline remains specified in
 [`runtime-profiles-and-startup.md`](../design-docs/runtime-profiles-and-startup.md):
@@ -129,14 +140,13 @@ Current product surface sequence:
 
 | Task | Phase | Status | Purpose | Exit condition |
 | --- | --- | --- | --- | --- |
-| Task 68 | Product Surface Architecture | Planned | Lock the CLI/TUI/API/Web product-surface boundary and explicitly retain full-screen TUI as the local client. | Design docs and roadmap define TUI as presentation, shared client as protocol adapter, API/services as conversation authority, and AgentLoop/runtime as execution authority; no UI path calls provider or AgentLoop internals directly. |
-| Task 69 | Conversation State And API | Planned | Add durable thread, message, and conversation-turn state that can serve TUI now and Web later. | API can list/create/get threads, persist launch repo/workspace/model/sandbox context, append/list thread messages, and resume by id or title through a repository-backed service rather than process-local state. |
-| Task 70 | Conversation Streaming Service | Planned | Add model-backed conversation turns with a stable client stream event contract. | A conversation turn persists the user message, invokes the configured model through backend service code, streams `message.delta` / completion / error events, records usage and trace ids, and persists the assistant response without involving TUI-specific logic. |
-| Task 71 | Full-Screen TUI Real Chat | Planned | Connect the full-screen TUI to the shared conversation client and remove fake local chat acknowledgements. | Ordinary TUI messages create backend conversation turns, render streamed model responses, keep the input visible and focused after long command output such as `/help`, and pass headless layout/focus tests. |
-| Task 72 | Shared Slash Command Registry | Planned | Promote slash-command metadata into a reusable surface contract with autocomplete. | `/help`, parsing, validation, aliases, keyboard autocomplete, and command execution use one shared registry; typing `/` and filtered prefixes show selectable suggestions; future Web can consume the same command metadata. |
-| Task 73 | Conversation-Scoped Coding Runs | Planned | Make Coding Runs an explicit execution mode inside a conversation thread. | The TUI can start a Run from the current thread context, Run events project back into the thread transcript, artifacts remain run-scoped but thread-discoverable, and cancellation/status stay API-owned. |
-| Task 74 | Surface Capability APIs | Planned | Replace TUI command stubs with real API-backed status for models, tools, skills, MCP, memory, uploads, artifacts, usage, and config. | Slash commands read shared client/API resources instead of hard-coded empty values, and API inspection surfaces expose enabled/disabled state, health, grants, and redacted configuration. |
-| Task 75 | Product Hardening And E2E | Planned | Add the product reliability layer around the full-screen TUI and conversation APIs. | Structured errors, request/trace ids, cancel/retry/interrupt, `awesome doctor`, contract tests, TUI focus/layout tests, and local/Docker E2E prove the TUI/API path can create a simple HTML artifact through the real product path. |
+| Task 76 | Embedded Local Runtime Host | Active | Make `awesome` default to an embedded local runtime host where ordinary input can create resumable durable Runs without a running HTTP API. | TUI talks through `SurfaceClient`; local mode uses `LocalRuntimeHost`; HTTP mode remains explicit via `--api-url`; ordinary input is the primary execution entry; `/run` is advanced/manual; no TUI path imports provider, graph, or AgentLoop internals. |
+| Task 77 | Nonblocking Streaming And Resume | Planned | Make local and HTTP execution stream incrementally without freezing the TUI, and make interrupted ordinary turns resumable. | Message deltas repaint before completion, slow commands run outside Textual handlers, `Ctrl+C` pauses/cancels active execution with partial output preserved, and `continue` / `继续` / `/resume` resumes the last resumable Run when available. |
+| Task 78 | Thread Session And Continuation UX | Planned | Make thread navigation feel like conversation management instead of backend state dumping. | First ordinary input auto-creates a thread from launch context; `/new`, `/threads`, and `/resume` switch/load conversations cleanly; duplicate titles are distinguishable; full UUIDs and container paths stay out of normal transcript output. |
+| Task 79 | Transcript UI Redesign | Planned | Make the full-screen TUI read like a coding-agent chat product rather than a raw log or operator dashboard. | User input, assistant output, command results, system notices, errors, run/tool events, and artifacts have distinct compact rendering; welcome chrome stays minimal; `/help` and long output never remove the input box. |
+| Task 80 | Reasoning Thought UI | Planned | Surface provider reasoning as a compact collapsible thought block. | Provider reasoning events normalize into stream events; TUI shows active thought, collapsed completion timing, and `Ctrl+O` expansion; reasoning remains bounded, optional, and separate from assistant answer text. |
+| Task 81 | Model Routing Diagnostics | Planned | Make configured/requested/observed model routing explainable. | `/models` and turn completion metadata show configured model, provider, base URL, env key presence, requested model, response model, and response id where available; model self-description is not treated as authority; no price/cost fields appear. |
+| Task 82 | Startup Contract Cleanup | Planned | Align docs, CLI help, quickstart, and roadmap with product startup semantics. | `awesome` is documented as the local full-screen TUI entry; `make dev` is local API development; `make docker-start` is Docker API deployment; `awesome-agent start` is fallback/debug only; `/run` is not documented as required for normal work. |
 
 Completed productization groundwork:
 
@@ -153,6 +163,14 @@ Completed productization groundwork:
 | Task 65 | CLI Context | Done | Made `awesome` usable from any user project directory by treating launch cwd as the default thread context. | The TUI starts with the launch repo/workspace context and ordinary input no longer blocks on manual repository selection. |
 | Task 66 | TUI Commands | Done | Simplified the full-screen TUI toward a Claude/Codex-style command surface. | The TUI exposes the accepted slash-command set and keeps the surface chat-first rather than an operator dashboard. |
 | Task 67 | First Run | Done | Added first-run model/config guidance for the local TUI. | `awesome init`, `/config`, `/models`, and welcome guidance explain resolved config paths and missing API-key env vars without writing secrets. |
+| Task 68 | Product Surface Architecture | Done | Locked the CLI/TUI/API/Web product-surface boundary and retained full-screen TUI as the local client. | Design docs and roadmap define TUI as presentation, shared client as protocol adapter, API/services as conversation authority, and AgentLoop/runtime as execution authority; no UI path calls provider or AgentLoop internals directly. |
+| Task 69 | Conversation State And API | Done | Added durable thread, message, and conversation-turn state that can serve TUI now and Web later. | API can list/create/get threads, persist launch repo/workspace/model/sandbox context, append/list thread messages, and resume by id or title through a repository-backed service rather than process-local state. |
+| Task 70 | Conversation Streaming Service | Done | Added model-backed conversation turns with a stable client stream event contract. | A conversation turn persists the user message, invokes the configured model through backend service code, streams `message.delta` / completion / error events, records usage and trace ids, and persists the assistant response without involving TUI-specific logic. |
+| Task 71 | Full-Screen TUI Real Chat | Done | Connected the full-screen TUI to the shared conversation client and removed fake local chat acknowledgements. | Ordinary TUI messages create backend conversation turns, render streamed model responses, keep the input visible and focused after long command output such as `/help`, and pass headless layout/focus tests. |
+| Task 72 | Shared Slash Command Registry | Done | Promoted slash-command metadata into a reusable surface contract with autocomplete. | `/help`, parsing, validation, aliases, keyboard autocomplete, and command execution use one shared registry; typing `/` and filtered prefixes show selectable suggestions; future Web can consume the same command metadata. |
+| Task 73 | Conversation-Scoped Coding Runs | Done | Made Coding Runs an explicit execution mode inside a conversation thread. | The TUI can start a Run from the current thread context, Run events project back into the thread transcript, artifacts remain run-scoped but thread-discoverable, and cancellation/status stay API-owned. |
+| Task 74 | Surface Capability APIs | Done | Replaced TUI command stubs with real API-backed status for models, tools, skills, MCP, memory, uploads, artifacts, usage, and config. | Slash commands read shared client/API resources instead of hard-coded empty values, and API inspection surfaces expose enabled/disabled state, health, grants, and redacted configuration. |
+| Task 75 | Product Hardening And E2E | Done | Added the product reliability layer around the full-screen TUI and conversation APIs. | Structured errors, request/trace ids, cancel/retry/interrupt, `awesome doctor`, contract tests, TUI focus/layout tests, and local/Docker E2E prove the TUI/API path can create a simple HTML artifact through the real product path. |
 
 Completed post-kernel setup:
 
@@ -218,6 +236,7 @@ Detailed historical task notes are archived in
 | Tasks 43-52 | Extension architecture | Versioned extension catalogs, independent tool exposure hooks, skill manifests/context injection, MCP discovery/execution/transports, community tools, diagnostics, project extension config, and repository-root `skills/` discovery. |
 | Tasks 53-56 | Documentation, quickstart, and first TUI | Documentation governance, bilingual README entry points, local Quick Start, Docker/API/Web quickstart matrix, and the first API-backed local TUI operator console. |
 | Tasks 57-67 | Productization groundwork | Runtime profiles, sandbox defaults, Makefile startup, AIO Docker sandbox service/integration, local TUI entrypoint, cwd repo/workspace context, simplified full-screen slash-command surface, and first-run config guidance. |
+| Tasks 68-75 | API-backed product surface | Product-surface architecture, durable conversation state, model-backed conversation streaming, real full-screen TUI chat, shared slash-command registry, thread-scoped Run bridge, surface capability APIs, structured errors, request ids, cancel/retry, diagnostics, and product E2E. |
 
 ## Change Control
 

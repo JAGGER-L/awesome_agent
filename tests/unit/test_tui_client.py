@@ -61,10 +61,10 @@ def test_tui_client_reads_runtime_status_models_and_memory() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    assert client.create_thread("Snake game") == {
-        "id": "thread-1",
-        "title": "Snake game",
-    }
+    thread = client.create_thread("Snake game")
+    assert thread.id == "thread-1"
+    assert thread.title == "Snake game"
+    assert thread.short_id == "thread-1"
     assert client.runtime_status()["api"] == "healthy"
     assert client.list_models() == [{"name": "deepseek-v4-pro"}]
     assert client.memory_summary() == {"enabled": False}

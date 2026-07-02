@@ -10,6 +10,12 @@ from awesome_agent.conversation.events import (
     ConversationStreamEvent,
     ConversationStreamEventKind,
 )
+from awesome_agent.modeling.messages import AssistantMessage
+from awesome_agent.modeling.provider import StructuredModelProvider
+from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
+from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
+from awesome_agent.surfaces.local_client import LocalSurfaceClient
+from awesome_agent.surfaces.local_runtime_host import LocalRuntimeHost
 from awesome_agent.tui.app import AwesomeAgentTui
 
 
@@ -114,6 +120,19 @@ class FakeClient:
     def cancel(self, run_id: str) -> dict[str, object]:
         self.cancelled_runs.append(run_id)
         return {"id": run_id, "status": "cancelled"}
+
+
+class FakeProvider(StructuredModelProvider):
+    async def stream(self, request: ModelRequest) -> ModelStreamEvent:
+        yield TextDelta(text="embedded")
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="embedded"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -238,6 +257,36 @@ async def test_tui_accepts_plain_message_without_repo_selection_block(
     assert "hello world" in rendered
     assert client.turns == [(client.thread_id, "hi")]
     assert "Select repository context" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_can_answer_without_http_server() -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert "hello world" in str(transcript)
+    assert client.turns == [(client.thread_id, "hi")]
+
+
+@pytest.mark.asyncio
+async def test_tui_can_answer_with_real_local_surface_client() -> None:
+    host = LocalRuntimeHost(
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    app = AwesomeAgentTui(client=LocalSurfaceClient(host=host))
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert "embedded" in str(transcript)
 
 
 @pytest.mark.asyncio
