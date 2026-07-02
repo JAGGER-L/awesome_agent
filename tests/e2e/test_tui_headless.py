@@ -1,19 +1,78 @@
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+from textual.widgets import Input
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
+from awesome_agent.conversation.events import (
+    ConversationStreamEvent,
+    ConversationStreamEventKind,
+)
 from awesome_agent.tui.app import AwesomeAgentTui
 
 
 class FakeClient:
-    def create_thread(self, title: str) -> dict[str, object]:
+    def __init__(self) -> None:
+        self.thread_id = str(uuid4())
+        self.turns: list[tuple[str, str]] = []
+
+    def create_thread(
+        self,
+        title: str,
+        *,
+        context_kind: str | None = None,
+        context_path: str | None = None,
+        default_model: str | None = None,
+        sandbox_profile: str | None = None,
+    ) -> dict[str, object]:
         return {
-            "id": "thread-1",
+            "id": self.thread_id,
             "title": title,
+            "context_kind": context_kind or "workspace",
+            "context_path": context_path,
+            "default_model": default_model,
+            "sandbox_profile": sandbox_profile,
             "logical_workspace_path": "/mnt/user-data/workspace/",
         }
+
+    def stream_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        model: str | None = None,
+    ) -> list[ConversationStreamEvent]:
+        self.turns.append((thread_id, content))
+        turn_id = uuid4()
+        trace_id = "trace-test"
+        return [
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.MESSAGE_DELTA,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=1,
+                trace_id=trace_id,
+                payload={"text": "hello"},
+            ),
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.MESSAGE_DELTA,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=2,
+                trace_id=trace_id,
+                payload={"text": " world"},
+            ),
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.MESSAGE_COMPLETED,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=3,
+                trace_id=trace_id,
+                payload={"content": "hello world"},
+            ),
+        ]
 
     def runtime_status(self) -> dict[str, object]:
         return {"api": "ready", "sandbox": "local"}
@@ -38,12 +97,30 @@ async def test_tui_headless_renders_help() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_help_keeps_prompt_focused_and_allows_next_message() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "h", "e", "l", "p", "enter")
+        prompt = app.query_one("#prompt", Input)
+        assert prompt.has_focus
+        await pilot.press("h", "i", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "/new" in rendered
+    assert "hello world" in rendered
+
+
+@pytest.mark.asyncio
 async def test_tui_accepts_plain_message_without_repo_selection_block(
     tmp_path: Path,
 ) -> None:
+    client = FakeClient()
     app = AwesomeAgentTui(
         api_url="http://127.0.0.1:8000",
-        client=FakeClient(),
+        client=client,
         launch_context=CliLaunchContext(
             project_root=tmp_path,
             context_kind="workspace",
@@ -57,6 +134,8 @@ async def test_tui_accepts_plain_message_without_repo_selection_block(
 
     rendered = str(transcript)
     assert "hi" in rendered
+    assert "hello world" in rendered
+    assert client.turns == [(client.thread_id, "hi")]
     assert "Select repository context" not in rendered
 
 

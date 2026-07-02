@@ -5,6 +5,9 @@ from typing import Any
 
 import httpx
 
+from awesome_agent.client.conversation import ConversationClient
+from awesome_agent.conversation.events import ConversationStreamEvent
+
 
 class TuiApiClient:
     def __init__(
@@ -15,14 +18,45 @@ class TuiApiClient:
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self._client = httpx.Client(timeout=30, transport=transport)
+        self._conversation = ConversationClient(self.api_url, client=self._client)
 
     def close(self) -> None:
         self._client.close()
 
-    def create_thread(self, title: str) -> dict[str, Any]:
-        response = self._client.post(f"{self.api_url}/threads", json={"title": title})
+    def create_thread(
+        self,
+        title: str,
+        *,
+        context_kind: str | None = None,
+        context_path: str | None = None,
+        default_model: str | None = None,
+        sandbox_profile: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, object] = {"title": title}
+        if context_kind is not None:
+            payload["context_kind"] = context_kind
+        if context_path is not None:
+            payload["context_path"] = context_path
+        if default_model is not None:
+            payload["default_model"] = default_model
+        if sandbox_profile is not None:
+            payload["sandbox_profile"] = sandbox_profile
+        response = self._client.post(f"{self.api_url}/threads", json=payload)
         response.raise_for_status()
         return dict(response.json())
+
+    def stream_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        model: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        return self._conversation.stream_turn(
+            thread_id=thread_id,
+            content=content,
+            model=model,
+        )
 
     def runtime_status(self) -> dict[str, object]:
         response = self._client.get(
