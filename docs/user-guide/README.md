@@ -3,6 +3,7 @@
 This guide indexes user-facing runtime surfaces. Detailed pages can be split
 out as those surfaces mature.
 
+- Interactive CLI: `awesome`, `awesome commands`, and slash commands.
 - Runs: `awesome-agent run`, `status`, `agents`, and `todos`.
 - Team mode: `awesome-agent run --team`, child Runs, assignments, and mailbox.
 - Approvals: `approve`, `resume`, and durable approval records.
@@ -12,6 +13,30 @@ out as those surfaces mature.
 
 Start with the [quickstart](../getting-started/quickstart.md) before creating
 real coding Runs.
+
+## Interactive CLI
+
+Use `awesome` when you want the local coding-agent entrypoint without first
+choosing API topology:
+
+```powershell
+awesome
+awesome commands
+```
+
+The required slash commands are:
+
+| Command | Purpose |
+| --- | --- |
+| `/new` | Start a new durable local conversation/thread. |
+| `/status` | Show current thread/run/runtime status. |
+| `/models` | List configured model profiles. |
+| `/memory` | Show memory configuration and current memory summary. |
+| `/help` | Show help. |
+
+Slash commands are CLI/TUI interaction syntax. API routes should expose
+semantic resources such as threads, runs, models, memory, readiness, and
+approvals rather than slash-command route names.
 
 ## TUI Operator Console
 

@@ -59,9 +59,10 @@ Makefile 命令是主要启动契约：Docker API 使用 `make docker-init` 和
 
 | Mode | Best for | Command | Status |
 | --- | --- | --- | --- |
+| Local CLI | Interactive local coding-agent entrypoint | `awesome`, `awesome commands` | Primary |
 | Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | Primary |
 | Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | Primary |
-| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Fallback |
+| Local CLI fallback | First local run and development | `.\scripts\quickstart.ps1` | Fallback |
 | Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Fallback |
 
 The current "Web" surface is the local FastAPI inspection surface and generated API docs at `/docs`. It is not yet a hosted multi-user web application.

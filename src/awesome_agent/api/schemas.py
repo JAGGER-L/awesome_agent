@@ -22,6 +22,12 @@ class CreateProbeRequest(BaseModel):
     goal: str = Field(default="Verify durable runtime", min_length=1)
 
 
+class CreateThreadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="Untitled thread", min_length=1, max_length=200)
+
+
 class ApprovalDecisionRequest(BaseModel):
     approved: bool
 

@@ -21,6 +21,7 @@ from awesome_agent.api.schemas import (
     ContextCompactionResponse,
     CreateProbeRequest,
     CreateRunRequest,
+    CreateThreadRequest,
     DispatchResponse,
     HealthCheckResponse,
     ReadinessReportResponse,
@@ -74,6 +75,7 @@ from awesome_agent.persistence.repository_registry import (
 )
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.team import PostgresTeamRepository, TeamRepository
+from awesome_agent.persistence.threads import InMemoryThreadRepository
 from awesome_agent.persistence.tool_invocations import (
     PostgresToolInvocationRepository,
     ToolInvocationRepository,
@@ -131,8 +133,10 @@ def create_app(
     extension_catalog: ExtensionCatalog | None = None,
     extension_catalog_history: list[ExtensionCatalog] | None = None,
     project_root: Path | None = None,
+    thread_repository: InMemoryThreadRepository | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
+    threads_repository = thread_repository or InMemoryThreadRepository()
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
         active_extension_catalog = build_project_extension_catalog_sync(project_root)
@@ -151,6 +155,7 @@ def create_app(
             app.state.intake = intake
             app.state.registry = registry
             app.state.extension_catalog = active_extension_catalog
+            app.state.threads = threads_repository
             app.state.extension_catalogs_by_version = extension_catalogs_by_version
             if workspace_service is not None:
                 app.state.workspaces = workspace_service
@@ -216,6 +221,7 @@ def create_app(
             event_poll_interval=settings.event_poll_interval_seconds,
         )
         app.state.extension_catalog = active_extension_catalog
+        app.state.threads = threads_repository
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry
         app.state.validation_repository = validation
@@ -267,6 +273,7 @@ def create_app(
     if registry is not None:
         app.state.registry = registry
     app.state.extension_catalog = active_extension_catalog
+    app.state.threads = threads_repository
     app.state.extension_catalogs_by_version = extension_catalogs_by_version
     if workspace_service is not None:
         app.state.workspaces = workspace_service
@@ -373,6 +380,9 @@ def create_app(
             app.state.extension_catalogs_by_version,
         )
 
+    def threads() -> InMemoryThreadRepository:
+        return cast(InMemoryThreadRepository, app.state.threads)
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         async with api_span(
@@ -436,6 +446,19 @@ def create_app(
                 response.status_code = 503
                 attributes["http.status_code"] = 503
             return _readiness_report_response(report)
+
+    @app.post("/threads")
+    async def create_thread(request: CreateThreadRequest) -> dict[str, object]:
+        thread = await threads().create(title=request.title)
+        return thread.api_payload()
+
+    @app.get("/threads/{thread_id}")
+    async def get_thread(thread_id: UUID) -> dict[str, object]:
+        try:
+            thread = await threads().get(thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return thread.api_payload()
 
     @app.get("/runs")
     async def list_runs(

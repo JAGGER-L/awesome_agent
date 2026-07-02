@@ -49,9 +49,10 @@ Model provider settings currently use `AWESOME_AGENT_DEEPSEEK_*` values in
 
 | Mode | Best for | Command | Success signal |
 | --- | --- | --- | --- |
+| Local CLI | Interactive local coding-agent entrypoint | `awesome`, `awesome commands` | Slash commands print without a running API. |
 | Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | `/health` and `/ready?profile=api` return healthy JSON. |
 | Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | `http://127.0.0.1:8000/docs` opens the FastAPI docs. |
-| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Probe Run completes and diagnostics are printable. |
+| Local CLI fallback | First local run and development | `.\scripts\quickstart.ps1` | Probe Run completes and diagnostics are printable. |
 | Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Docker API becomes ready and CLI can point at `--api-url`. |
 
 ## Local API
@@ -69,6 +70,19 @@ make dev
 `sandbox/aio/Dockerfile`, it fails clearly with a Task 62 dependency message.
 `make dev` starts PostgreSQL, runs migrations, starts API + Worker, and prints
 the local API and docs URLs. It does not start the CLI/TUI.
+
+## Local CLI
+
+Open the local interactive entrypoint:
+
+```powershell
+awesome
+awesome commands
+```
+
+`awesome` does not require an API before launch. It defaults to the local CLI
+profile and LocalSandbox, reports first-run setup state, and lists the stable
+slash commands that Task 61 will use in the chat-first TUI.
 
 ## Local CLI Fallback
 

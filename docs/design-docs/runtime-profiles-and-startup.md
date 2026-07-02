@@ -19,7 +19,7 @@ Startup commands should map to user intent:
 | --- | --- | --- | --- | --- | --- |
 | Docker API profile | User/operator who wants containerized services | `make docker-init`, then `make docker-start` | Yes | No | AIO Docker |
 | Local API development profile | Runtime developer | `make check`, `make install`, `make setup-sandbox`, `make dev` | Yes | No | AIO Docker |
-| Local CLI/TUI profile | Local coding-agent user | `awesome` | On demand or connected to configured API | Yes | LocalSandbox |
+| Local CLI/TUI profile | Local coding-agent user | `awesome`, `awesome commands` | On demand or connected to configured API | Yes | LocalSandbox |
 
 ## Sandbox Targets
 
@@ -81,7 +81,14 @@ Local CLI/TUI:
 
 ```bash
 awesome
+awesome commands
 ```
+
+The local CLI/TUI profile defaults to LocalSandbox and may launch before the
+API is running. Slash commands such as `/new`, `/status`, `/models`, `/memory`,
+and `/help` are local interaction syntax over semantic runtime operations. The
+API remains resource-oriented: `POST /threads`, `POST /runs`, readiness,
+models, memory, and approval resources, not slash-command route names.
 
 ## Non-Goals
 
