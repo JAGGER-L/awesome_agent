@@ -7,7 +7,7 @@ from uuid import uuid4
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Input, Static
 from textual.worker import Worker
 
@@ -45,9 +45,13 @@ class AwesomeAgentTui(App[None]):
         height: 100%;
     }
 
-    #transcript {
+    #transcript-scroll {
         height: 1fr;
         overflow-y: auto;
+    }
+
+    #transcript {
+        width: 100%;
     }
 
     #prompt {
@@ -103,7 +107,8 @@ class AwesomeAgentTui(App[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-root"):
             yield Static("", id="welcome")
-            yield Static("", id="transcript")
+            with VerticalScroll(id="transcript-scroll"):
+                yield Static("", id="transcript")
             yield Static("", id="command-palette")
             yield Input(placeholder="Ask Awesome Agent, or type /help", id="prompt")
             yield Static("? for shortcuts - /help for commands", id="shortcuts")
@@ -127,6 +132,8 @@ class AwesomeAgentTui(App[None]):
             )
             self._start_user_message(raw, resume_run_id=resume_run_id)
         else:
+            if parsed.kind is not SlashCommandKind.QUIT:
+                self.state = self.state.append(ChatMessage.command(raw))
             if parsed.kind is SlashCommandKind.DETAILS:
                 self.state = self.state.toggle_details()
                 label = "enabled" if self.state.details_enabled else "disabled"
@@ -243,12 +250,21 @@ class AwesomeAgentTui(App[None]):
         self._render()
         self._focus_prompt()
 
-    def _render(self) -> None:
+    def _render(self, *, follow: bool = True) -> None:
         self.query_one("#welcome", Static).update(self._welcome_text())
         self.query_one("#transcript", Static).update(
-            render_transcript(self.state.messages, thought=self.state.thought_block())
+            render_transcript(
+                self.state.messages,
+                thought_blocks=self.state.thought_blocks,
+            )
         )
         self._render_palette()
+        if follow:
+            self.call_after_refresh(self._scroll_transcript_end)
+
+    def _scroll_transcript_end(self) -> None:
+        self.query_one("#transcript-scroll", VerticalScroll).scroll_end(animate=False)
+        self._focus_prompt()
 
     def _render_palette(self) -> None:
         self.query_one("#command-palette", Static).update(self.command_palette.render())
@@ -275,8 +291,10 @@ class AwesomeAgentTui(App[None]):
                 )
             )
             return
-        self.state = self.state.append(ChatMessage.user(content))
-        self.state = self.state.begin_operation(str(uuid4()), "streaming")
+        turn_id = str(uuid4())
+        self.state = self.state.begin_operation(turn_id, "streaming")
+        self.state = self.state.begin_turn(turn_id)
+        self.state = self.state.append(ChatMessage.user(content, turn_id=turn_id))
         self._render()
         try:
             thread_id = self._ensure_backend_thread(content)

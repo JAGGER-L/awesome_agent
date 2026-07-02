@@ -4,6 +4,7 @@ from time import sleep
 from uuid import uuid4
 
 import pytest
+from textual.containers import VerticalScroll
 from textual.widgets import Input
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
@@ -267,6 +268,42 @@ class ReasoningStreamingClient(FakeClient):
             )
 
 
+class MultiReasoningStreamingClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def stream_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        model: str | None = None,
+        resume_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        self.calls += 1
+        self.turns.append((thread_id, content))
+        turn_id = uuid4()
+        thought = "first thought" if self.calls == 1 else "second thought"
+        answer = "first answer" if self.calls == 1 else "second answer"
+        events = [
+            (ConversationStreamEventKind.REASONING_STARTED, {}),
+            (ConversationStreamEventKind.REASONING_DELTA, {"text": thought}),
+            (ConversationStreamEventKind.MESSAGE_DELTA, {"text": answer}),
+            (ConversationStreamEventKind.REASONING_COMPLETED, {}),
+            (ConversationStreamEventKind.MESSAGE_COMPLETED, {"content": answer}),
+        ]
+        for sequence, (event, payload) in enumerate(events, start=1):
+            yield ConversationStreamEvent(
+                event=event,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=sequence,
+                trace_id=f"trace-{self.calls}",
+                payload=payload,
+            )
+
+
 class FakeProvider(StructuredModelProvider):
     async def stream(self, request: ModelRequest) -> ModelStreamEvent:
         yield TextDelta(text="embedded")
@@ -290,6 +327,7 @@ async def test_tui_headless_renders_help() -> None:
         transcript = app.query_one("#transcript").render()
 
     assert "/new" in str(transcript)
+    assert "> /help" in str(transcript)
 
 
 @pytest.mark.asyncio
@@ -345,6 +383,7 @@ async def test_tui_enter_executes_active_prefix_candidate() -> None:
         transcript = app.query_one("#transcript").render()
 
     assert "api=ready" in str(transcript)
+    assert "> /status" in str(transcript)
 
 
 @pytest.mark.asyncio
@@ -438,6 +477,48 @@ async def test_tui_reasoning_thought_collapses_and_toggles() -> None:
     assert "inspect context. choose answer." in expanded
     assert "ctrl+o to collapse" in expanded
     assert "inspect context" not in collapsed_again
+
+
+@pytest.mark.asyncio
+async def test_tui_keeps_thoughts_attached_to_each_turn() -> None:
+    app = AwesomeAgentTui(client=MultiReasoningStreamingClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("f", "i", "r", "s", "t", "enter")
+        await pilot.pause()
+        await pilot.press("ctrl+o")
+        first_expanded = str(app.query_one("#transcript").render())
+        await pilot.press("s", "e", "c", "o", "n", "d", "enter")
+        await pilot.pause()
+        await pilot.press("ctrl+o")
+        second_expanded = str(app.query_one("#transcript").render())
+
+    assert "first thought" in first_expanded
+    assert "first thought" in second_expanded
+    assert "second thought" in second_expanded
+    assert second_expanded.index("first thought") < second_expanded.index(
+        "first answer"
+    )
+    assert second_expanded.index("second thought") < second_expanded.index(
+        "second answer"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tui_uses_scrollable_transcript_and_keeps_prompt_after_help() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "h", "e", "l", "p", "enter")
+        transcript_scroll = app.query_one("#transcript-scroll", VerticalScroll)
+        prompt = app.query_one("#prompt", Input)
+        assert prompt.has_focus
+        transcript_scroll.scroll_end(animate=False)
+        await pilot.pause()
+
+    assert transcript_scroll.can_focus
 
 
 @pytest.mark.asyncio

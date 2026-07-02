@@ -8,6 +8,8 @@ from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBloc
 
 
 def render_message(message: ChatMessage) -> Text:
+    if message.kind is ChatEventKind.COMMAND:
+        return Text.assemble(("> ", "bold magenta"), (message.content, "bold"))
     if message.role == "user":
         return Text.assemble(("> ", "bold cyan"), (message.content, "bold"))
     if message.role == "assistant":
@@ -29,19 +31,36 @@ def render_transcript(
     messages: Iterable[ChatMessage],
     *,
     thought: ThoughtBlock | None = None,
+    thought_blocks: dict[str, ThoughtBlock] | None = None,
 ) -> Text:
     rendered = Text()
     message_list = list(messages)
-    thought_inserted = False
+    legacy_thought_inserted = False
+    turn_thoughts = thought_blocks or {}
+    rendered_thought_turns: set[str] = set()
     for index, message in enumerate(message_list):
         if index:
             rendered.append("\n\n")
         rendered.append_text(render_message(message))
-        if thought is not None and not thought_inserted and message.role == "user":
+        if (
+            message.role == "user"
+            and message.turn_id is not None
+            and message.turn_id in turn_thoughts
+            and message.turn_id not in rendered_thought_turns
+        ):
+            rendered.append("\n\n")
+            rendered.append_text(render_thought(turn_thoughts[message.turn_id]))
+            rendered_thought_turns.add(message.turn_id)
+        elif (
+            thought is not None
+            and not turn_thoughts
+            and not legacy_thought_inserted
+            and message.role == "user"
+        ):
             rendered.append("\n\n")
             rendered.append_text(render_thought(thought))
-            thought_inserted = True
-    if thought is not None and not thought_inserted:
+            legacy_thought_inserted = True
+    if thought is not None and not turn_thoughts and not legacy_thought_inserted:
         if message_list:
             rendered.append("\n\n")
         rendered.append_text(render_thought(thought))
