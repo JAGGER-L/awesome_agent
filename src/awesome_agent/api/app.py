@@ -9,10 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException, Query, Response
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.schemas import (
@@ -27,6 +28,7 @@ from awesome_agent.api.schemas import (
     CreateThreadRequest,
     CreateThreadRunRequest,
     DispatchResponse,
+    ErrorResponse,
     ExtensionSkillsResponse,
     HealthCheckResponse,
     McpServersResponse,
@@ -137,6 +139,7 @@ from awesome_agent.tools.repository import build_modifying_registry
 
 logger = logging.getLogger(__name__)
 _NIL_RUN_ID = UUID(int=0)
+_REQUEST_ID_HEADER = "x-request-id"
 
 configure_event_loop_policy()
 
@@ -304,6 +307,56 @@ def create_app(
             await engine.dispose()
 
     app = FastAPI(title="awesome_agent", version="0.1.0", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next) -> Response:
+        request_id = request.headers.get(_REQUEST_ID_HEADER) or uuid4().hex
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers[_REQUEST_ID_HEADER] = request_id
+        return response
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(
+        request: Request,
+        error: HTTPException,
+    ) -> JSONResponse:
+        return _structured_error_response(
+            request,
+            status_code=error.status_code,
+            detail=error.detail,
+            headers=error.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(
+        request: Request,
+        error: RequestValidationError,
+    ) -> JSONResponse:
+        return _structured_error_response(
+            request,
+            status_code=422,
+            detail=str(error),
+            code="validation_error",
+            hint="Check request path, query parameters, and JSON body shape.",
+            recoverable=False,
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        request: Request,
+        error: Exception,
+    ) -> JSONResponse:
+        logger.exception("Unhandled API request failed.", exc_info=error)
+        return _structured_error_response(
+            request,
+            status_code=500,
+            detail="Internal server error.",
+            code="internal_error",
+            hint="Check API logs with the returned request_id.",
+            recoverable=True,
+        )
+
     if service is not None:
         app.state.runtime = service
     if intake is not None:
@@ -1213,6 +1266,105 @@ async def _conversation_sse(
     async for event in events:
         data = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
         yield f"id: {event.sequence}\nevent: {event.event.value}\ndata: {data}\n\n"
+
+
+def _structured_error_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: object,
+    code: str | None = None,
+    hint: str | None = None,
+    recoverable: bool | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    message = _error_message(detail)
+    classified_code = code or _classify_error(status_code, message)
+    request_id = str(getattr(request.state, "request_id", "") or uuid4().hex)
+    payload = ErrorResponse(
+        code=classified_code,
+        message=message,
+        detail=message,
+        hint=hint or _error_hint(classified_code, status_code),
+        request_id=request_id,
+        trace_id=request.headers.get("traceparent"),
+        recoverable=(
+            recoverable if recoverable is not None else _is_recoverable(classified_code)
+        ),
+    )
+    response_headers = dict(headers or {})
+    response_headers[_REQUEST_ID_HEADER] = request_id
+    return JSONResponse(
+        status_code=status_code,
+        content=payload.model_dump(mode="json"),
+        headers=response_headers,
+    )
+
+
+def _error_message(detail: object) -> str:
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict):
+        message = detail.get("message") or detail.get("detail")
+        if isinstance(message, str):
+            return message
+    return str(detail)
+
+
+def _classify_error(status_code: int, message: str) -> str:
+    normalized = message.casefold()
+    if status_code == 404:
+        return "not_found"
+    if status_code == 422:
+        return "validation_error"
+    if status_code in {401, 403}:
+        return "permission_error"
+    if "mcp" in normalized:
+        return "mcp_error"
+    if "sandbox" in normalized or "aio" in normalized:
+        return "sandbox_error"
+    if "model" in normalized or "provider" in normalized or "api key" in normalized:
+        return "model_error"
+    if "config" in normalized or "configured" in normalized:
+        return "config_error"
+    if "repository" in normalized or "worktree" in normalized:
+        return "repository_error"
+    if status_code == 409:
+        return "conflict"
+    if status_code >= 500:
+        return "internal_error"
+    return "request_error"
+
+
+def _error_hint(code: str, status_code: int) -> str | None:
+    if code == "model_error":
+        return "Check model configuration and provider API key environment variables."
+    if code == "sandbox_error":
+        return "Check sandbox configuration and sandbox service health."
+    if code == "mcp_error":
+        return "Check configured MCP servers and their health status."
+    if code == "config_error":
+        return "Run awesome doctor and verify resolved config paths."
+    if code == "validation_error":
+        return "Check request path, query parameters, and JSON body shape."
+    if code == "repository_error":
+        return "Register or bind a valid repository context before starting a Run."
+    if code == "not_found":
+        return "Verify the requested resource id still exists."
+    if status_code >= 500:
+        return "Check API logs with the returned request_id."
+    return None
+
+
+def _is_recoverable(code: str) -> bool:
+    return code in {
+        "conflict",
+        "model_error",
+        "sandbox_error",
+        "mcp_error",
+        "config_error",
+        "internal_error",
+    }
 
 
 def _format_sse(event: RuntimeEvent) -> str:

@@ -22,10 +22,16 @@ class ConversationHttpError(ConversationClientError):
         *,
         status_code: int,
         request_id: str | None = None,
+        code: str | None = None,
+        hint: str | None = None,
+        recoverable: bool = False,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.request_id = request_id
+        self.code = code
+        self.hint = hint
+        self.recoverable = recoverable
 
 
 class ConversationClient:
@@ -94,10 +100,30 @@ def _http_error(response: httpx.Response) -> ConversationHttpError:
         payload = response.json()
     except ValueError:
         payload = {}
-    detail = payload.get("detail") if isinstance(payload, dict) else None
-    message = detail if isinstance(detail, str) else response.text
+    message = response.text
+    code = None
+    hint = None
+    recoverable = False
+    if isinstance(payload, dict):
+        structured_message = payload.get("message")
+        detail = payload.get("detail")
+        if isinstance(structured_message, str):
+            message = structured_message
+        elif isinstance(detail, str):
+            message = detail
+        payload_code = payload.get("code")
+        payload_hint = payload.get("hint")
+        payload_recoverable = payload.get("recoverable")
+        code = payload_code if isinstance(payload_code, str) else None
+        hint = payload_hint if isinstance(payload_hint, str) else None
+        recoverable = (
+            payload_recoverable if isinstance(payload_recoverable, bool) else False
+        )
     return ConversationHttpError(
         message or f"HTTP {response.status_code}",
         status_code=response.status_code,
         request_id=request_id,
+        code=code,
+        hint=hint,
+        recoverable=recoverable,
     )
