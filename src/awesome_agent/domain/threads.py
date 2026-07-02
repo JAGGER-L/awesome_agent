@@ -12,6 +12,10 @@ LOGICAL_THREAD_WORKSPACE = "/mnt/user-data/workspace/"
 class Thread(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     title: str
+    context_kind: str = "workspace"
+    context_path: str | None = None
+    default_model: str | None = None
+    sandbox_profile: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
