@@ -36,6 +36,10 @@ class ChatMessage:
         return cls(role="assistant", content=content, kind=ChatEventKind.MODEL)
 
     @classmethod
+    def error(cls, content: str) -> ChatMessage:
+        return cls(role="system", content=content, kind=ChatEventKind.ERROR)
+
+    @classmethod
     def system(
         cls,
         content: str,
