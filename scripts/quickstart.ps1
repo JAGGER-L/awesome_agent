@@ -106,7 +106,7 @@ if ($PlanOnly) {
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Agent = Join-Path $Root ".venv\Scripts\awesome-agent.exe"
-$QuickstartRoot = Join-Path $Root "output\quickstart"
+$QuickstartRoot = Join-Path $HOME ".awesome-agent\runs\quickstart"
 if (-not $SampleRepoPath) {
     $SampleRepoPath = Join-Path $QuickstartRoot "sample-repo"
 }

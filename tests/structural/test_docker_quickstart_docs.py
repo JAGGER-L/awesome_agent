@@ -11,12 +11,20 @@ def test_docker_quickstart_services_are_declared() -> None:
     assert "awesome-agent-sandbox:aio" in compose
     assert "8765:8765" in compose
     assert "AWESOME_AGENT_AIO_SANDBOX_URL" in compose
+    assert "AWESOME_AGENT_READINESS_CHECK_DOCKER" in compose
     assert "awesome_agent_user_data" in compose
     assert "AWESOME_AGENT_ARTIFACT_ROOT" in compose
     assert "/var/lib/awesome-agent/runs" in compose
     assert "AWESOME_AGENT_WORKSPACE_ROOT" in compose
     assert "/mnt/user-data/workspace" in compose
     assert '"--unsafe-bind-public"' in compose
+
+
+def test_docker_image_contains_migration_files() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY alembic.ini" in dockerfile
+    assert "COPY migrations" in dockerfile
 
 
 def test_docker_quickstart_documented_commands_are_implemented() -> None:

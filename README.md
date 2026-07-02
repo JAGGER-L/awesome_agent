@@ -105,10 +105,9 @@ make setup-sandbox
 make dev
 ```
 
-This checks host dependencies, installs Python dependencies, prepares the AIO
-sandbox assets, runs migrations, starts API + Worker, and prints readiness
-URLs. Until Task 62 adds the AIO Dockerfile, `make setup-sandbox` fails with a
-clear Task 62 dependency message.
+This checks host dependencies, installs Python dependencies, builds the AIO
+sandbox service image, runs migrations, starts API + Worker, and prints
+readiness URLs.
 
 ### Run Docker API
 
@@ -117,9 +116,8 @@ make docker-init
 make docker-start
 ```
 
-Docker mode does not start the CLI. It starts PostgreSQL, API, Worker, and the
-sandbox service after Task 63 wires it into Compose. Until then,
-`make docker-start` fails with a clear Task 63 dependency message.
+Docker mode does not start the CLI. It starts PostgreSQL, the AIO sandbox
+service, API, and Worker.
 
 ### PowerShell Fallback
 
@@ -300,3 +298,7 @@ Keep secrets out of committed files. Use `.env` for local provider keys and
 machine-specific runtime settings. Run untrusted code through Docker-backed
 `aio-docker` sandboxing for API-created Runs. LocalSandbox is reserved for the
 local CLI/TUI profile or explicit trusted local operation.
+
+Thread workspaces persist under
+`~/.awesome-agent/threads/<thread_id>/workspace/`. Run artifacts persist under
+`~/.awesome-agent/runs/<run_id>/artifacts/`.

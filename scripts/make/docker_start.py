@@ -5,6 +5,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from http.client import RemoteDisconnected
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -18,10 +19,12 @@ def main() -> None:
             "Docker Compose sandbox service is not present yet. Execute Task 63 "
             "before using make docker-start."
         )
+    subprocess.run(["docker", "compose", "up", "-d", "postgres", "sandbox"], check=True)
     subprocess.run(
-        ["docker", "compose", "up", "-d", "postgres", "sandbox", "api", "worker"],
+        ["docker", "compose", "run", "--rm", "api", "alembic", "upgrade", "head"],
         check=True,
     )
+    subprocess.run(["docker", "compose", "up", "-d", "api", "worker"], check=True)
     _wait_for(f"{API_URL}/health")
     _wait_for(f"{API_URL}/ready?profile=api")
     print(f"docker-start.api={API_URL}")
@@ -56,7 +59,7 @@ def _wait_for(url: str, *, timeout_seconds: float = 60.0) -> None:
                 if response.status < 500:
                     print(f"docker-start.ready={url}")
                     return
-        except (urllib.error.URLError, TimeoutError):
+        except (RemoteDisconnected, urllib.error.URLError, TimeoutError):
             time.sleep(1)
     raise SystemExit(f"Timed out waiting for {url}")
 

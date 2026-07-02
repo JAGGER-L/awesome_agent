@@ -3,6 +3,9 @@
 - AIO Docker is the target default execution boundary for API-created Runs.
 - LocalSandbox is available only for the local CLI/TUI profile or explicit
   trusted local execution.
+- LocalSandbox is a local-trust convenience backend for the local CLI/TUI
+  profile. It currently executes arbitrary local commands by design. This is
+  tracked as technical debt and must not be used as the default API sandbox.
 - API-created Runs must not silently use LocalSandbox.
 - The `aio-docker` backend calls the long-lived AIO HTTP sandbox service and
   must not fall back to host execution or a one-shot Docker container.
