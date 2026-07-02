@@ -18,6 +18,7 @@ from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.schemas import (
     ApprovalDecisionRequest,
     BudgetLedgerResponse,
+    ConfigStatusResponse,
     ContextCompactionResponse,
     CreateConversationTurnRequest,
     CreateProbeRequest,
@@ -26,8 +27,17 @@ from awesome_agent.api.schemas import (
     CreateThreadRequest,
     CreateThreadRunRequest,
     DispatchResponse,
+    ExtensionSkillsResponse,
     HealthCheckResponse,
+    McpServersResponse,
+    MemoryStatusResponse,
+    ModelProfileResponse,
     ReadinessReportResponse,
+    SurfaceToolItemResponse,
+    SurfaceToolsResponse,
+    ThreadArtifactsResponse,
+    ThreadUploadsResponse,
+    ThreadUsageResponse,
     WorkspaceCandidateResponse,
     WorkspaceCleanupRequest,
 )
@@ -123,6 +133,7 @@ from awesome_agent.runtime.workspaces import (
     WorkspaceCleanupRequest as RuntimeWorkspaceCleanupRequest,
 )
 from awesome_agent.settings import Settings
+from awesome_agent.tools.repository import build_modifying_registry
 
 logger = logging.getLogger(__name__)
 _NIL_RUN_ID = UUID(int=0)
@@ -479,6 +490,92 @@ def create_app(
                 attributes["http.status_code"] = 503
             return _readiness_report_response(report)
 
+    @app.get("/models")
+    async def list_model_profiles() -> list[ModelProfileResponse]:
+        return _model_profiles(settings)
+
+    @app.get("/surface/tools")
+    async def get_surface_tools() -> SurfaceToolsResponse:
+        return _surface_tools_response(extensions_catalog())
+
+    @app.get("/extensions/skills")
+    async def get_extension_skills() -> ExtensionSkillsResponse:
+        skills = [
+            {
+                "id": skill.id,
+                "source_id": skill.source_id,
+                "version": skill.version,
+                "requested_tools": skill.requested_tools,
+                "required_capabilities": sorted(skill.required_capabilities),
+                "risk_level": skill.risk_level.value,
+            }
+            for skill in extensions_catalog().skills
+        ]
+        return ExtensionSkillsResponse(configured=bool(skills), items=skills)
+
+    @app.get("/extensions/mcp")
+    async def get_mcp_status() -> McpServersResponse:
+        sources = [
+            {
+                "id": source.id,
+                "type": source.type.value,
+                "trust": source.trust.value,
+                "status": source.health.status.value,
+                "detail": source.health.detail,
+                "checked_at": source.health.checked_at.isoformat(),
+            }
+            for source in extensions_catalog().sources
+            if source.type.value.startswith("mcp_")
+        ]
+        return McpServersResponse(configured=bool(sources), items=sources)
+
+    @app.get("/memory")
+    async def get_memory_status() -> MemoryStatusResponse:
+        if settings.mem0_enabled:
+            return MemoryStatusResponse(
+                enabled=True,
+                provider="mem0",
+                configured=settings.mem0_api_key is not None,
+                source="mem0",
+                hint=(
+                    None
+                    if settings.mem0_api_key is not None
+                    else "Set AWESOME_AGENT_MEM0_API_KEY to enable mem0 memory."
+                ),
+            )
+        if settings.builtin_memory_enabled:
+            return MemoryStatusResponse(
+                enabled=True,
+                provider="builtin",
+                configured=True,
+                source="builtin",
+            )
+        return MemoryStatusResponse(
+            enabled=False,
+            provider="none",
+            configured=False,
+            source="not_configured",
+            hint="Enable builtin_memory_enabled or mem0_enabled to inject memory.",
+        )
+
+    @app.get("/config")
+    async def get_config_status() -> ConfigStatusResponse:
+        return ConfigStatusResponse(
+            api_host=settings.api_host,
+            local_config_path=str(settings.local_config_path),
+            artifact_root=str(settings.artifact_root),
+            workspace_root=(
+                str(settings.workspace_root)
+                if settings.workspace_root is not None
+                else None
+            ),
+            sandbox_backend=settings.sandbox_backend,
+            local_cli_sandbox_backend=settings.local_cli_sandbox_backend,
+            observability_enabled=settings.observability_enabled,
+            deepseek_api_key_configured=settings.deepseek_api_key is not None,
+            mem0_api_key_configured=settings.mem0_api_key is not None,
+        )
+
     @app.post("/threads")
     async def create_thread(request: CreateThreadRequest) -> dict[str, object]:
         thread = await threads().create_thread(
@@ -536,6 +633,49 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
         return [message.model_dump(mode="json") for message in messages]
+
+    @app.get("/threads/{thread_id}/uploads")
+    async def list_thread_uploads(thread_id: UUID) -> ThreadUploadsResponse:
+        try:
+            await threads().get_thread(thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return ThreadUploadsResponse(thread_id=thread_id, configured=False, items=[])
+
+    @app.get("/threads/{thread_id}/artifacts")
+    async def list_thread_artifacts(thread_id: UUID) -> ThreadArtifactsResponse:
+        try:
+            run_ids = await _thread_run_ids(conversations(), thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return ThreadArtifactsResponse(
+            thread_id=thread_id,
+            items=await _thread_artifact_items(
+                run_ids, getattr(app.state, "runtime", None)
+            ),
+        )
+
+    @app.get("/threads/{thread_id}/usage")
+    async def get_thread_usage(thread_id: UUID) -> ThreadUsageResponse:
+        try:
+            run_ids = await _thread_run_ids(conversations(), thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        latest_run_id = run_ids[0] if run_ids else None
+        if latest_run_id is None or budgets() is None:
+            return ThreadUsageResponse(thread_id=thread_id)
+        ledger = await budgets().get_ledger(latest_run_id)  # type: ignore[union-attr]
+        return ThreadUsageResponse(
+            thread_id=thread_id,
+            run_id=latest_run_id,
+            input_tokens=ledger.total_input_tokens,
+            output_tokens=ledger.total_output_tokens,
+            total_tokens=ledger.total_input_tokens + ledger.total_output_tokens,
+            reasoning_tokens=ledger.total_reasoning_tokens,
+            active_seconds=ledger.active_seconds,
+            model_call_count=ledger.model_call_count,
+            threshold_status=ledger.threshold_status,
+        )
 
     @app.post("/threads/{thread_id}/turns")
     async def create_conversation_turn(
@@ -1178,6 +1318,121 @@ def _workspace_candidate_response(
         dirty=candidate.dirty,
         can_cleanup=candidate.can_cleanup,
     )
+
+
+def _model_profiles(settings: Settings) -> list[ModelProfileResponse]:
+    roles = [
+        ("leader", settings.leader_model),
+        ("teammate", settings.teammate_model),
+        ("verifier", settings.verifier_model),
+        ("subagent", settings.subagent_model),
+    ]
+    return [
+        ModelProfileResponse(
+            role=role,
+            name=model,
+            provider="deepseek",
+            configured=settings.deepseek_api_key is not None,
+            api_key_env="AWESOME_AGENT_DEEPSEEK_API_KEY",
+            base_url=settings.deepseek_base_url,
+        )
+        for role, model in roles
+    ]
+
+
+def _surface_tools_response(catalog: ExtensionCatalog) -> SurfaceToolsResponse:
+    builtin: list[SurfaceToolItemResponse] = []
+    sandbox: list[SurfaceToolItemResponse] = []
+    for spec in build_modifying_registry().list_specs():
+        item = SurfaceToolItemResponse(
+            name=spec.name,
+            source="builtin",
+            category=_tool_category(spec.name),
+            risk_level=spec.risk_level.value,
+            required_capabilities=sorted(spec.required_capabilities),
+            enabled=True,
+            health="healthy",
+            description=spec.description,
+        )
+        if spec.sandbox_required:
+            sandbox.append(item)
+        else:
+            builtin.append(item)
+
+    source_by_id = {source.id: source for source in catalog.sources}
+    mcp: list[SurfaceToolItemResponse] = []
+    extension: list[SurfaceToolItemResponse] = []
+    for tool in catalog.tools:
+        source = source_by_id.get(tool.source_id)
+        item = SurfaceToolItemResponse(
+            name=tool.name,
+            source=tool.source_id,
+            category="mcp" if _is_mcp_source(source) else "extension",
+            risk_level=tool.risk_level.value,
+            required_capabilities=sorted(tool.required_capabilities),
+            enabled=True,
+            health=source.health.status.value if source is not None else "unknown",
+            description=tool.description,
+        )
+        if _is_mcp_source(source):
+            mcp.append(item)
+        else:
+            extension.append(item)
+    return SurfaceToolsResponse(
+        builtin=builtin,
+        sandbox=sandbox,
+        mcp=mcp,
+        extension=extension,
+    )
+
+
+def _tool_category(tool_name: str) -> str:
+    if tool_name.startswith("repo."):
+        return "repository"
+    if tool_name.startswith("shell."):
+        return "sandbox"
+    if tool_name.startswith("artifact."):
+        return "artifact"
+    return "builtin"
+
+
+def _is_mcp_source(source: object | None) -> bool:
+    return (
+        source is not None
+        and hasattr(source, "type")
+        and str(source.type.value).startswith("mcp_")
+    )
+
+
+async def _thread_run_ids(
+    conversation_service: ConversationService,
+    thread_id: UUID,
+) -> list[UUID]:
+    projections = await conversation_service.list_thread_runs(thread_id)
+    run_ids: list[UUID] = []
+    for projection in projections:
+        try:
+            run_ids.append(UUID(str(projection["run_id"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return run_ids
+
+
+async def _thread_artifact_items(
+    run_ids: list[UUID],
+    runtime_service: object | None,
+) -> list[dict[str, object]]:
+    list_artifacts = getattr(runtime_service, "list_artifacts", None)
+    if not callable(list_artifacts):
+        return []
+    items: list[dict[str, object]] = []
+    for run_id in run_ids:
+        try:
+            artifacts = await list_artifacts(run_id)
+        except (KeyError, TypeError, ValueError):
+            continue
+        items.extend(artifact.model_dump(mode="json") for artifact in artifacts)
+    return items
 
 
 async def _thread_run_projection_response(

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import httpx
 
 from awesome_agent.tui.client import TuiApiClient
@@ -66,3 +68,65 @@ def test_tui_client_reads_runtime_status_models_and_memory() -> None:
     assert client.runtime_status()["api"] == "healthy"
     assert client.list_models() == [{"name": "deepseek-v4-pro"}]
     assert client.memory_summary() == {"enabled": False}
+
+
+def test_tui_client_reads_surface_capability_endpoints() -> None:
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        payloads = {
+            "/extensions/skills": {
+                "configured": True,
+                "items": [{"id": "repository-inspection"}],
+            },
+            "/surface/tools": {
+                "builtin": [{"name": "repo.read"}],
+                "sandbox": [{"name": "shell.execute"}],
+                "mcp": [],
+                "extension": [],
+            },
+            "/extensions/mcp": {
+                "configured": True,
+                "items": [{"id": "github", "status": "healthy"}],
+            },
+            "/threads/thread-1/uploads": {"configured": False, "items": []},
+            "/threads/thread-1/artifacts": {
+                "items": [{"path": "/mnt/user-data/workspace/snake.html"}],
+            },
+            "/threads/thread-1/usage": {
+                "thread_id": "thread-1",
+                "total_tokens": 30,
+                "threshold_status": "within_budget",
+            },
+            "/config": {
+                "api_host": "127.0.0.1",
+                "local_config_path": "/home/user/.awesome-agent/config.toml",
+                "artifact_root": "/home/user/.awesome-agent/runs",
+                "workspace_root": None,
+                "sandbox_backend": "aio-docker",
+                "local_cli_sandbox_backend": "local",
+                "observability_enabled": True,
+                "deepseek_api_key_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                "deepseek_api_key_configured": False,
+                "mem0_api_key_env": "AWESOME_AGENT_MEM0_API_KEY",
+                "mem0_api_key_configured": False,
+            },
+        }
+        return httpx.Response(200, json=payloads[request.url.path])
+
+    client = TuiApiClient(
+        "http://testserver",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.list_skills()[0]["id"] == "repository-inspection"
+    assert client.list_tools()["builtin"][0]["name"] == "repo.read"
+    assert client.mcp_status()[0]["status"] == "healthy"
+    assert client.list_uploads("thread-1") == []
+    assert client.list_current_artifacts("thread-1", None)[0]["path"].endswith(
+        "snake.html"
+    )
+    assert client.usage_summary("thread-1", None)["total_tokens"] == 30
+    assert client.config_summary()["api_url"] == "http://testserver"
+    assert "/surface/tools" in requested_paths

@@ -29,19 +29,35 @@ class FakeSemanticClient:
     def list_skills(self) -> list[dict[str, object]]:
         return [{"name": "brainstorming", "enabled": True}]
 
-    def list_tools(self) -> dict[str, list[str]]:
-        return {"builtin": ["read_file"], "mcp": [], "sandbox": ["shell"]}
+    def list_tools(self) -> dict[str, list[dict[str, object]]]:
+        return {
+            "builtin": [
+                {"name": "repo.read", "risk_level": "low", "health": "healthy"}
+            ],
+            "mcp": [],
+            "sandbox": [
+                {"name": "shell.execute", "risk_level": "medium", "health": "healthy"}
+            ],
+        }
 
     def mcp_status(self) -> list[dict[str, object]]:
         return []
 
-    def list_uploads(self) -> list[dict[str, object]]:
+    def list_uploads(self, thread_id: str | None) -> list[dict[str, object]]:
         return []
 
-    def list_current_artifacts(self, run_id: str | None) -> list[dict[str, object]]:
+    def list_current_artifacts(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> list[dict[str, object]]:
         return []
 
-    def usage_summary(self, run_id: str | None) -> dict[str, object]:
+    def usage_summary(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> dict[str, object]:
         return {"tokens": 0}
 
     def config_summary(self) -> dict[str, object]:
@@ -54,8 +70,9 @@ def test_router_handles_tools_command() -> None:
         ChatSessionState.new(),
     )
 
-    assert "builtin: read_file" in message.content
-    assert "sandbox: shell" in message.content
+    assert "builtin: repo.read" in message.content
+    assert "risk_level=low" in message.content
+    assert "sandbox: shell.execute" in message.content
 
 
 def test_router_toggles_details() -> None:

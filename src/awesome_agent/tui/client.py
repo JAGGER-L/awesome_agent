@@ -99,8 +99,6 @@ class TuiApiClient:
 
     def list_models(self) -> list[dict[str, Any]]:
         response = self._client.get(f"{self.api_url}/models")
-        if response.status_code == 404:
-            return []
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
@@ -121,27 +119,55 @@ class TuiApiClient:
         return self._get_list_or_empty("/threads")
 
     def list_skills(self) -> list[dict[str, Any]]:
-        return self._get_list_or_empty("/extensions/skills")
+        return self._get_items_object("/extensions/skills")
 
-    def list_tools(self) -> dict[str, list[str]]:
-        return {"builtin": [], "mcp": [], "sandbox": []}
+    def list_tools(self) -> dict[str, list[dict[str, Any]]]:
+        response = self._client.get(f"{self.api_url}/surface/tools")
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Expected object response from /surface/tools.")
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for name, items in payload.items():
+            if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
+                groups[str(name)] = []
+                continue
+            groups[str(name)] = [dict(item) for item in items]
+        return groups
 
     def mcp_status(self) -> list[dict[str, Any]]:
-        return []
+        return self._get_items_object("/extensions/mcp")
 
-    def list_uploads(self) -> list[dict[str, Any]]:
-        return []
-
-    def list_current_artifacts(self, run_id: str | None) -> list[dict[str, Any]]:
-        if run_id is None:
+    def list_uploads(self, thread_id: str | None) -> list[dict[str, Any]]:
+        if thread_id is None:
             return []
-        return self.artifacts(run_id)
+        return self._get_items_object(f"/threads/{thread_id}/uploads")
 
-    def usage_summary(self, run_id: str | None) -> dict[str, object]:
-        return {"run": run_id or "-", "tokens": 0}
+    def list_current_artifacts(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if thread_id is not None:
+            return self._get_items_object(f"/threads/{thread_id}/artifacts")
+        if run_id is not None:
+            return self.artifacts(run_id)
+        return []
+
+    def usage_summary(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> dict[str, object]:
+        if thread_id is not None:
+            return self._get_object(f"/threads/{thread_id}/usage")
+        if run_id is not None:
+            return self._get_object(f"/runs/{run_id}/budget")
+        return {"run_id": None, "total_tokens": 0, "threshold_status": "not_started"}
 
     def config_summary(self) -> dict[str, object]:
-        return {"api_url": self.api_url}
+        config = self._get_object("/config")
+        return {"api_url": self.api_url, **config}
 
     def list_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._get_list("/runs", params={"limit": limit})
@@ -222,3 +248,28 @@ class TuiApiClient:
         if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
             raise ValueError(f"Expected list response from {path}.")
         return [dict(item) for item in payload]
+
+    def _get_object(
+        self,
+        path: str,
+        *,
+        params: dict[str, str | int | float | bool | None] | None = None,
+    ) -> dict[str, Any]:
+        response = self._client.get(f"{self.api_url}{path}", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError(f"Expected object response from {path}.")
+        return dict(payload)
+
+    def _get_items_object(
+        self,
+        path: str,
+        *,
+        params: dict[str, str | int | float | bool | None] | None = None,
+    ) -> list[dict[str, Any]]:
+        payload = self._get_object(path, params=params)
+        items = payload.get("items", [])
+        if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
+            raise ValueError(f"Expected items list response from {path}.")
+        return [dict(item) for item in items]
