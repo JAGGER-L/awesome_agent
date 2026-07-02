@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -13,6 +14,7 @@ from awesome_agent.cli.slash_commands import SlashCommandKind, parse_slash_comma
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 from awesome_agent.tui.client import TuiApiClient
+from awesome_agent.tui.command_palette import CommandPaletteState, is_command_prefix
 from awesome_agent.tui.rendering import render_message
 from awesome_agent.tui.slash_router import SlashRouter
 
@@ -32,6 +34,10 @@ class AwesomeAgentTui(App[None]):
 
     #prompt {
         height: 3;
+    }
+
+    #command-palette {
+        max-height: 8;
     }
 
     #shortcuts {
@@ -57,6 +63,7 @@ class AwesomeAgentTui(App[None]):
         self.initial_run_id = run_id
         self.refresh_interval = refresh_interval
         self.client = client or TuiApiClient(api_url)
+        self.command_palette = CommandPaletteState()
         self.state = ChatSessionState.new(
             launch_context=launch_context,
             first_run_summary=first_run_summary,
@@ -68,6 +75,7 @@ class AwesomeAgentTui(App[None]):
         with Vertical(id="chat-root"):
             yield Static("", id="welcome")
             yield Static("", id="transcript")
+            yield Static("", id="command-palette")
             yield Input(placeholder="Ask Awesome Agent, or type /help", id="prompt")
             yield Static("? for shortcuts - /help for commands", id="shortcuts")
 
@@ -76,8 +84,9 @@ class AwesomeAgentTui(App[None]):
         self._focus_prompt()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        raw = event.value.strip()
+        raw = self._active_command_value(event.value.strip())
         event.input.value = ""
+        self.command_palette = self.command_palette.close()
         if not raw:
             return
         parsed = parse_slash_command(raw)
@@ -103,11 +112,59 @@ class AwesomeAgentTui(App[None]):
         self._render()
         self._focus_prompt()
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self.command_palette = self.command_palette.update(event.value)
+        self._render_palette()
+
+    def on_key(self, event: events.Key) -> None:
+        if not self.command_palette.is_open:
+            return
+        if event.key == "escape":
+            self.command_palette = self.command_palette.close()
+            self._render_palette()
+            event.prevent_default()
+            event.stop()
+            return
+        if event.key in {"down", "ctrl+n"}:
+            self.command_palette = self.command_palette.move(1)
+            self._render_palette()
+            event.prevent_default()
+            event.stop()
+            return
+        if event.key in {"up", "ctrl+p"}:
+            self.command_palette = self.command_palette.move(-1)
+            self._render_palette()
+            event.prevent_default()
+            event.stop()
+            return
+        if event.key == "tab":
+            active = self.command_palette.active
+            if active is not None:
+                prompt = self.query_one("#prompt", Input)
+                self.command_palette = self.command_palette.close()
+                self._render_palette()
+                prompt.value = f"/{active.name} "
+                prompt.cursor_position = len(prompt.value)
+                event.prevent_default()
+                event.stop()
+
     def _render(self) -> None:
         self.query_one("#welcome", Static).update(self._welcome_text())
         self.query_one("#transcript", Static).update(
             "\n\n".join(render_message(message) for message in self.state.messages)
         )
+        self._render_palette()
+
+    def _render_palette(self) -> None:
+        self.query_one("#command-palette", Static).update(self.command_palette.render())
+
+    def _active_command_value(self, raw: str) -> str:
+        if not is_command_prefix(raw):
+            return raw
+        active = self.command_palette.active
+        if active is None:
+            return raw
+        return f"/{active.name}"
 
     def _send_user_message(self, content: str) -> None:
         self.state = self.state.append(ChatMessage.user(content))
