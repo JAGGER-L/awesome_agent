@@ -260,4 +260,5 @@ hosted product workflows remain future work tracked in the roadmap.
 
 Keep secrets out of committed files. Use `.env` for local provider keys and
 machine-specific runtime settings. Run untrusted code through Docker-backed
-sandboxing; host execution requires explicit trusted-local consent.
+`aio-docker` sandboxing for API-created Runs. LocalSandbox is reserved for the
+local CLI/TUI profile or explicit trusted local operation.

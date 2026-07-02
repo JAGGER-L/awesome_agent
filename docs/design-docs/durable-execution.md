@@ -204,8 +204,8 @@ a public Run.
 - Both read-only and modifying Runs receive a dedicated integration branch and
   worktree from the captured full base commit.
 - The original checkout is never modified automatically.
-- `trusted-local` selects the command backend; it does not permit direct edits
-  to the original checkout.
+- LocalSandbox selects a trusted local command backend for local CLI/TUI use; it
+  does not permit direct edits to the original checkout.
 - Intent controls later tool capabilities; read-only does not bypass workspace
   isolation.
 - Team worktrees later branch from the Run integration branch.

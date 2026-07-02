@@ -1,14 +1,43 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from awesome_agent.sandbox.base import CommandResult
+from awesome_agent.sandbox.base import CommandRequest, CommandResult
 from awesome_agent.tools.models import ToolInvocation
-from awesome_agent.tools.shell import _execute, classify_command
+from awesome_agent.tools.registry import ToolRegistry
+from awesome_agent.tools.shell import _execute, classify_command, register_shell_tools
+
+
+class RecordingSandbox:
+    name = "recording"
+
+    def __init__(
+        self,
+        *,
+        exit_code: int = 0,
+        stdout: str = "ok",
+        stderr: str = "",
+        timed_out: bool = False,
+    ) -> None:
+        self.requests: list[CommandRequest] = []
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.timed_out = timed_out
+
+    async def execute(self, request: CommandRequest) -> CommandResult:
+        self.requests.append(request)
+        return CommandResult(
+            command=request.command_label,
+            exit_code=self.exit_code,
+            stdout=self.stdout,
+            stderr=self.stderr,
+            timed_out=self.timed_out,
+            sandbox=self.name,
+        )
 
 
 def test_shell_policy_classifies_allow_ask_and_deny() -> None:
@@ -30,37 +59,24 @@ def test_shell_policy_classifies_allow_ask_and_deny() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shell_execute_runs_allowed_command_in_docker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, Any]] = []
-
-    async def fake_run_process(
-        arguments: list[str],
-        *,
-        command_label: str,
-        workspace: Path,
-        timeout_seconds: float,
-    ) -> CommandResult:
-        calls.append(
-            {
-                "arguments": arguments,
-                "command_label": command_label,
-                "workspace": workspace,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
-        return CommandResult(
-            command=command_label,
-            exit_code=0,
-            stdout="ok",
-            stderr="",
-        )
-
-    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
-
+async def test_shell_execute_uses_injected_sandbox(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    sandbox = RecordingSandbox()
+    register_shell_tools(registry, sandbox=sandbox)
+    _, handler = registry.resolve("shell.execute")
     result = await _execute(
+        ToolInvocation(
+            tool_name="shell.execute",
+            agent_id=uuid4(),
+            profile="leader",
+            capabilities={"shell:execute"},
+            arguments={"argv": ["pytest"], "timeout_seconds": 5},
+            workspace=tmp_path,
+        ),
+        None,
+        sandbox=sandbox,
+    )
+    registry_result = await handler(
         ToolInvocation(
             tool_name="shell.execute",
             agent_id=uuid4(),
@@ -73,17 +89,11 @@ async def test_shell_execute_runs_allowed_command_in_docker(
     )
 
     assert result.output["status"] == "completed"
-    assert calls[0]["arguments"][:5] == [
-        "docker",
-        "run",
-        "--rm",
-        "--network",
-        "none",
-    ]
-    assert "--name" in calls[0]["arguments"]
-    assert "--label" in calls[0]["arguments"]
-    assert calls[0]["arguments"][-1] == "pytest"
-    assert calls[0]["timeout_seconds"] == 5
+    assert result.output["sandbox"] == "recording"
+    assert registry_result.output["stdout"] == "ok"
+    assert sandbox.requests[0].argv == ["pytest"]
+    assert sandbox.requests[0].workspace == tmp_path.resolve()
+    assert sandbox.requests[0].timeout_seconds == 5
 
 
 @pytest.mark.asyncio
@@ -101,30 +111,15 @@ async def test_shell_execute_requires_grant_for_ambiguous_command(
                 workspace=tmp_path,
             ),
             None,
+            sandbox=RecordingSandbox(),
         )
 
 
 @pytest.mark.asyncio
 async def test_shell_execute_runs_approved_ambiguous_command(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_process(
-        arguments: list[str],
-        *,
-        command_label: str,
-        workspace: Path,
-        timeout_seconds: float,
-    ) -> CommandResult:
-        return CommandResult(
-            command=command_label,
-            exit_code=0,
-            stdout="approved",
-            stderr="",
-        )
-
-    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
-
+    sandbox = RecordingSandbox(stdout="approved")
     result = await _execute(
         ToolInvocation(
             tool_name="shell.execute",
@@ -136,6 +131,7 @@ async def test_shell_execute_runs_approved_ambiguous_command(
             approval_granted=True,
         ),
         None,
+        sandbox=sandbox,
     )
 
     assert result.output["status"] == "completed"
@@ -155,31 +151,14 @@ async def test_shell_execute_denies_dangerous_command(tmp_path: Path) -> None:
                 workspace=tmp_path,
             ),
             None,
+            sandbox=RecordingSandbox(),
         )
 
 
 @pytest.mark.asyncio
 async def test_shell_execute_reports_failed_and_truncated_output(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_process(
-        arguments: list[str],
-        *,
-        command_label: str,
-        workspace: Path,
-        timeout_seconds: float,
-    ) -> CommandResult:
-        return CommandResult(
-            command=command_label,
-            exit_code=1,
-            stdout="x" * 1_100,
-            stderr="y" * 1_200,
-            timed_out=True,
-        )
-
-    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
-
     result = await _execute(
         ToolInvocation(
             tool_name="shell.execute",
@@ -193,6 +172,12 @@ async def test_shell_execute_reports_failed_and_truncated_output(
             workspace=tmp_path,
         ),
         None,
+        sandbox=RecordingSandbox(
+            exit_code=1,
+            stdout="x" * 1_100,
+            stderr="y" * 1_200,
+            timed_out=True,
+        ),
     )
 
     assert result.output["status"] == "failed"
@@ -215,4 +200,5 @@ async def test_shell_execute_requires_workspace() -> None:
                 arguments={"argv": ["pytest"]},
             ),
             None,
+            sandbox=RecordingSandbox(),
         )

@@ -11,8 +11,9 @@ This guide indexes local runtime operation and diagnosis.
 - Workspaces: `workspace list` and dry-run-first `workspace cleanup`.
 - Diagnostics: Run diagnostics, recovery metrics, extension diagnostics, and
   budget/context projections.
-- Security: local-only API bind by default, Docker shell sandbox, explicit
-  approvals, and no committed secrets.
+- Security: local-only API bind by default, AIO Docker target sandbox for API
+  Runs, LocalSandbox only for trusted local CLI/TUI, explicit approvals, and no
+  committed secrets.
 
 Use the [quickstart](../getting-started/quickstart.md) for the first local
 startup path.
@@ -59,6 +60,11 @@ docker compose down
 The Docker API service binds to `0.0.0.0` inside the container so the host can
 reach `http://127.0.0.1:8000`. Keep it local unless an external authentication
 and network boundary is added.
+
+API-created Runs default to the `aio-docker` sandbox provider. Until the AIO
+HTTP sandbox service lands in Task 62, that provider fails clearly instead of
+falling back to host execution or a one-shot Docker container. LocalSandbox is
+reserved for the local CLI/TUI profile or explicit trusted local operation.
 
 ## TUI
 

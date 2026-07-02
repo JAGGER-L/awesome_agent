@@ -195,4 +195,4 @@ TUI 是基于本地 API 的 Run、诊断、事件和审批检查/控制界面，
 
 ## 安全提示
 
-不要把 secrets 提交进仓库。Provider keys 和本机 runtime settings 放在 `.env`。不可信代码应通过 Docker-backed sandbox 执行；host execution 需要显式 trusted-local consent。
+不要把 secrets 提交进仓库。Provider keys 和本机 runtime settings 放在 `.env`。API 创建的 Runs 目标默认使用 `aio-docker` sandbox；LocalSandbox 只用于本地 CLI/TUI 或显式可信本地执行。

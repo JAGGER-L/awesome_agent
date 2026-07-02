@@ -8,29 +8,40 @@ import pytest
 from awesome_agent.persistence.validation import InMemoryValidationRepository
 from awesome_agent.runtime.validation.executor import execute_validation_plan
 from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
-from awesome_agent.sandbox.base import CommandResult
+from awesome_agent.sandbox.base import CommandRequest, CommandResult
+
+
+class RecordingSandbox:
+    name = "recording"
+
+    def __init__(
+        self,
+        *,
+        exit_code: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+        timed_out: bool = False,
+    ) -> None:
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.timed_out = timed_out
+
+    async def execute(self, request: CommandRequest) -> CommandResult:
+        return CommandResult(
+            command=request.command_label,
+            exit_code=self.exit_code,
+            stdout=self.stdout,
+            stderr=self.stderr,
+            timed_out=self.timed_out,
+            sandbox=self.name,
+        )
 
 
 @pytest.mark.asyncio
 async def test_validation_executor_records_passing_gate(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_process(
-        arguments: list[str],
-        *,
-        command_label: str,
-        workspace: Path,
-        timeout_seconds: float,
-    ) -> CommandResult:
-        return CommandResult(
-            command=command_label,
-            exit_code=0,
-            stdout="passed\n",
-            stderr="",
-        )
-
-    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
     repository = InMemoryValidationRepository()
     run_id = uuid4()
 
@@ -51,6 +62,7 @@ async def test_validation_executor_records_passing_gate(
         agent_id=uuid4(),
         workspace=tmp_path,
         repository=repository,
+        sandbox=RecordingSandbox(stdout="passed\n"),
     )
 
     assert result.report.status == "passed"
@@ -63,29 +75,17 @@ async def test_validation_executor_records_passing_gate(
 @pytest.mark.asyncio
 async def test_validation_executor_classifies_command_failure(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_process(
-        arguments: list[str],
-        *,
-        command_label: str,
-        workspace: Path,
-        timeout_seconds: float,
-    ) -> CommandResult:
-        return CommandResult(
-            command=command_label,
-            exit_code=1,
-            stdout="failed\n",
-            stderr="assertion error\n",
-        )
-
-    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
-
     result = await execute_validation_plan(
         _plan(["pytest", "-q"]),
         run_id=uuid4(),
         agent_id=uuid4(),
         workspace=tmp_path,
+        sandbox=RecordingSandbox(
+            exit_code=1,
+            stdout="failed\n",
+            stderr="assertion error\n",
+        ),
     )
 
     assert result.report.status == "failed"
@@ -97,30 +97,17 @@ async def test_validation_executor_classifies_command_failure(
 @pytest.mark.asyncio
 async def test_validation_executor_classifies_timeout(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_run_process(
-        arguments: list[str],
-        *,
-        command_label: str,
-        workspace: Path,
-        timeout_seconds: float,
-    ) -> CommandResult:
-        return CommandResult(
-            command=command_label,
-            exit_code=124,
-            stdout="",
-            stderr="timed out",
-            timed_out=True,
-        )
-
-    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
-
     result = await execute_validation_plan(
         _plan(["pytest", "-q"]),
         run_id=uuid4(),
         agent_id=uuid4(),
         workspace=tmp_path,
+        sandbox=RecordingSandbox(
+            exit_code=124,
+            stderr="timed out",
+            timed_out=True,
+        ),
     )
 
     assert result.report.status == "failed"

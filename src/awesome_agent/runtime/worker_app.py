@@ -8,6 +8,7 @@ from typing import Any
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.otel import (
     OTelConfig,
@@ -41,6 +42,7 @@ from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 from awesome_agent.runtime.team_verifier_graph import TeamVerifierGraph
 from awesome_agent.runtime.token_accounting import default_token_accountant
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
+from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 
 
@@ -121,6 +123,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         default_rework_budget=configured.team_default_rework_budget,
     )
     token_accountant = default_token_accountant()
+    sandbox = create_sandbox(origin=ExecutionOrigin.API, settings=configured)
     context_manager = ContextManager(
         summary_provider=DeterministicSummaryProvider(),
         artifact_store=artifact_store,
@@ -168,6 +171,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 budget_policy=budget_policy,
                 observability=observability,
                 token_accountant=token_accountant,
+                sandbox=sandbox,
             )
             if providers.coding_available
             else None
