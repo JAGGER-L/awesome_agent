@@ -89,6 +89,7 @@ from awesome_agent.runtime.validation.config import load_validation_config
 from awesome_agent.runtime.validation.detection import detect_validation_plan
 from awesome_agent.runtime.validation.executor import execute_validation_plan
 from awesome_agent.runtime.validation.models import ValidationPlan
+from awesome_agent.sandbox.base import SandboxBackend
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
@@ -99,7 +100,7 @@ _MESSAGE_ADAPTER: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
 _SYSTEM_PROMPT = """You are the solo Leader of a modifying coding agent.
 Use tools to inspect and edit only the managed Run worktree. Prefer
 repo.apply_patch for file changes. Use shell.execute only for allowed
-Docker-sandboxed check commands. Before finishing, call repo.diff after the
+sandboxed check commands. Before finishing, call repo.diff after the
 last write and summarize changed files, commands run, and unverified work.
 Do not claim validation passed; Task 10 owns deterministic validation.
 """
@@ -170,10 +171,15 @@ class ModifyingCodingGraph:
         budget_policy: BudgetPolicy | None = None,
         observability: ObservabilityFacade | None = None,
         token_accountant: TokenAccountant | None = None,
+        sandbox: SandboxBackend | None = None,
     ) -> None:
         self.saver = saver
         self.provider_resolver = provider_resolver
-        self.registry = build_modifying_registry(artifact_repository)
+        self.sandbox = sandbox
+        self.registry = build_modifying_registry(
+            artifact_repository,
+            sandbox=sandbox,
+        )
         self.executor = build_modifying_executor(self.registry)
         self.artifact_store = artifact_store
         self.artifact_repository = artifact_repository
@@ -834,6 +840,7 @@ class ModifyingCodingGraph:
             agent_id=agent.id,
             workspace=cast(Path, run.workspace_path),
             repository=self.validation_repository,
+            sandbox=self.sandbox,
         )
 
 

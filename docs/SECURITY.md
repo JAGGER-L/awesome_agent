@@ -1,8 +1,12 @@
 ﻿# Security
 
-- Docker is the default execution boundary.
-- Host execution requires explicit CLI `--trusted-local` consent.
-- FastAPI cannot select trusted-local execution.
+- AIO Docker is the target default execution boundary for API-created Runs.
+- LocalSandbox is available only for the local CLI/TUI profile or explicit
+  trusted local execution.
+- API-created Runs must not silently use LocalSandbox.
+- Until Task 62 implements the AIO Docker HTTP sandbox service, selecting
+  `aio-docker` fails clearly instead of falling back to host execution or a
+  one-shot Docker container.
 - Tools use least-privilege capability grants.
 - The tool registry is not an authorization boundary. It is inventory; runtime
   routes and API inspection use `EffectiveToolPolicy` to decide visible and
@@ -51,8 +55,8 @@
 - Registration rejects bare repositories and linked worktrees. Run intake
   rejects dirty repositories, untracked files, and in-progress Git operations.
 - Read-only and modifying Runs use isolated named worktrees from an exact clean
-  Git base. Trusted-local changes the execution backend but never authorizes
-  direct edits to the user's checkout.
+  Git base. LocalSandbox changes the execution backend for trusted local CLI
+  use but never authorizes direct edits to the user's checkout.
 - Protected worker writes require the current worker UUID and fencing token.
   Stale or expired owners cannot heartbeat, append protected events, or change
   dispatch state.

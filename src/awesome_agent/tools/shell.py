@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from awesome_agent.domain.enums import RiskLevel
-from awesome_agent.sandbox.process import run_process
+from awesome_agent.sandbox.base import CommandRequest, SandboxBackend
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 
@@ -21,24 +21,32 @@ class ShellToolError(RuntimeError):
     pass
 
 
-def register_shell_tools(registry: ToolRegistry) -> None:
+def register_shell_tools(registry: ToolRegistry, *, sandbox: SandboxBackend) -> None:
+    async def execute(invocation: ToolInvocation, progress: object) -> ToolResult:
+        return await _execute(invocation, progress, sandbox=sandbox)
+
     registry.register(
         ToolSpec(
             name="shell.execute",
             description=(
-                "Execute an approved argv-only command in the Docker sandbox with "
-                "network disabled."
+                "Execute an approved argv-only command through the configured "
+                "sandbox provider."
             ),
             risk_level=RiskLevel.MEDIUM,
             sandbox_required=True,
             required_capabilities={"shell:execute"},
             input_schema=ShellExecuteArguments.model_json_schema(),
         ),
-        _execute,
+        execute,
     )
 
 
-async def _execute(invocation: ToolInvocation, _: object) -> ToolResult:
+async def _execute(
+    invocation: ToolInvocation,
+    _: object,
+    *,
+    sandbox: SandboxBackend,
+) -> ToolResult:
     arguments = ShellExecuteArguments.model_validate(invocation.arguments)
     decision = classify_command(arguments.argv)
     if decision == "deny":
@@ -46,15 +54,13 @@ async def _execute(invocation: ToolInvocation, _: object) -> ToolResult:
     if decision == "ask" and not invocation.approval_granted:
         raise ShellToolError("Command requires durable approval before execution.")
     workspace = _workspace(invocation)
-    result = await run_process(
-        _docker_argv(
-            arguments.argv,
-            workspace,
-            container_name=f"awesome-agent-{invocation.id.hex}",
-        ),
-        command_label=" ".join(arguments.argv),
-        workspace=workspace,
-        timeout_seconds=arguments.timeout_seconds,
+    result = await sandbox.execute(
+        CommandRequest(
+            argv=arguments.argv,
+            workspace=workspace,
+            timeout_seconds=arguments.timeout_seconds,
+            max_output_chars=arguments.max_output_chars,
+        )
     )
     stdout, stdout_truncated = _bound(arguments.max_output_chars, result.stdout)
     stderr, stderr_truncated = _bound(arguments.max_output_chars, result.stderr)
@@ -69,6 +75,7 @@ async def _execute(invocation: ToolInvocation, _: object) -> ToolResult:
             "timed_out": result.timed_out,
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
+            "sandbox": result.sandbox or sandbox.name,
         },
     )
 
@@ -118,36 +125,6 @@ def classify_command(argv: list[str]) -> Literal["allow", "ask", "deny"]:
     if executable == "go" and len(lowered) > 1 and lowered[1] == "test":
         return "allow"
     return "ask"
-
-
-def _docker_argv(
-    argv: list[str],
-    workspace: Path,
-    *,
-    container_name: str,
-) -> list[str]:
-    resolved = workspace.resolve()
-    return [
-        "docker",
-        "run",
-        "--rm",
-        "--network",
-        "none",
-        "--name",
-        container_name,
-        "--label",
-        "awesome_agent.managed=true",
-        "--memory",
-        "512m",
-        "--cpus",
-        "1.0",
-        "--volume",
-        f"{resolved}:/workspace",
-        "--workdir",
-        "/workspace",
-        "python:3.12-slim",
-        *argv,
-    ]
 
 
 def _workspace(invocation: ToolInvocation) -> Path:

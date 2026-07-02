@@ -5,6 +5,7 @@ from pathlib import Path
 from time import perf_counter
 from uuid import UUID
 
+from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
@@ -13,6 +14,9 @@ from awesome_agent.persistence.validation import (
 )
 from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
 from awesome_agent.runtime.validation.summarize import summarize_output
+from awesome_agent.sandbox.base import SandboxBackend
+from awesome_agent.sandbox.factory import create_sandbox
+from awesome_agent.settings import Settings
 from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.models import ApprovalRequired, ToolDenied, ToolInvocation
@@ -28,9 +32,10 @@ async def execute_validation_plan(
     workspace: Path,
     repository: ValidationRepository | None = None,
     executor: ToolExecutor | None = None,
+    sandbox: SandboxBackend | None = None,
 ) -> ValidationReportWithGates:
     started_at = datetime.now(UTC)
-    shell_executor = executor or _default_executor()
+    shell_executor = executor or _default_executor(sandbox=sandbox)
     report = DurableValidationReport(
         run_id=run_id,
         agent_id=agent_id,
@@ -174,9 +179,13 @@ def _failed_gate(
     )
 
 
-def _default_executor() -> ToolExecutor:
+def _default_executor(*, sandbox: SandboxBackend | None = None) -> ToolExecutor:
     registry = ToolRegistry()
-    register_shell_tools(registry)
+    register_shell_tools(
+        registry,
+        sandbox=sandbox
+        or create_sandbox(origin=ExecutionOrigin.API, settings=Settings()),
+    )
     return ToolExecutor(registry, ApprovalPolicy())
 
 

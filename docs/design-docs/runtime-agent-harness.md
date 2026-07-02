@@ -34,7 +34,10 @@ load user task and project policy
 - The registry is tool inventory only. Effective tool exposure and execution
   authorization are capability-resolver decisions, represented as an
   `EffectiveToolPolicy` and enforced again at the executor boundary.
-- Untrusted commands use Docker; trusted-local requires explicit CLI consent.
+- API-created command execution uses the configured sandbox provider and must
+  not silently fall back to LocalSandbox.
+- LocalSandbox is available only for the local CLI/TUI profile or explicit
+  trusted local execution.
 - PostgreSQL stores durable run projections and LangGraph checkpoints.
 - Run business state and worker dispatch state remain separate.
 - A worker may commit protected transitions only with the current fencing
@@ -45,7 +48,7 @@ load user task and project policy
   `recovery_required`.
 - Every Run uses an isolated integration worktree from a clean captured base;
   read-only intent controls tools rather than bypassing isolation, and
-  trusted-local does not permit direct edits to the user's checkout.
+  LocalSandbox does not permit direct edits to the user's checkout.
 - API runs select a registered repository identity rather than an arbitrary
   filesystem path.
 - Approval applies to one exact canonical tool invocation and expires.
@@ -96,6 +99,13 @@ The target user-facing startup profiles are:
 
 API semantics should be resource-oriented. CLI/TUI slash commands are a local
 interaction layer over semantic API/runtime operations, not API route names.
+
+The sandbox provider contract is `CommandRequest` to `CommandResult`. The
+provider executes only after tool exposure, capability checks, and approval
+policy allow the invocation. `local` maps to LocalSandbox for trusted local
+interactive use. `aio-docker` is the target API default; until Task 62 adds the
+HTTP sandbox service, it fails with a clear unsupported-provider error rather
+than using host execution or the removed one-shot Docker backend.
 
 Model-visible generated files use `/mnt/user-data/workspace/` as the logical
 workspace path. On the host, that workspace persists under

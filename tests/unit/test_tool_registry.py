@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from awesome_agent.domain.enums import ApprovalDecision, RiskLevel
+from awesome_agent.sandbox.base import CommandRequest, CommandResult
 from awesome_agent.tools.approval import (
     ApprovalPolicy,
     CommandRule,
@@ -19,6 +20,19 @@ from awesome_agent.tools.models import (
 )
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.shell import register_shell_tools
+
+
+class RecordingSandbox:
+    name = "recording"
+
+    async def execute(self, request: CommandRequest) -> CommandResult:
+        return CommandResult(
+            command=request.command_label,
+            exit_code=0,
+            stdout="ok",
+            stderr="",
+            sandbox=self.name,
+        )
 
 
 async def _handler(invocation: ToolInvocation, progress: object) -> ToolResult:
@@ -134,7 +148,7 @@ async def test_default_policy_denies_destructive_command() -> None:
 @pytest.mark.asyncio
 async def test_shell_execute_policy_allows_asks_and_denies() -> None:
     registry = ToolRegistry()
-    register_shell_tools(registry)
+    register_shell_tools(registry, sandbox=RecordingSandbox())
     spec, _ = registry.resolve("shell.execute")
     assert (
         ApprovalPolicy()

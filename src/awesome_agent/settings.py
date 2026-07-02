@@ -42,6 +42,9 @@ class Settings(BaseSettings):
         default_factory=lambda: Path.home() / ".awesome-agent" / "config.toml"
     )
     workspace_root: Path | None = None
+    sandbox_backend: Literal["aio-docker", "local"] = "aio-docker"
+    local_cli_sandbox_backend: Literal["local", "aio-docker"] = "local"
+    aio_sandbox_url: str = "http://127.0.0.1:8765"
     lease_duration_seconds: int = Field(default=60, ge=15, le=600)
     heartbeat_interval_seconds: int = Field(default=15, ge=1)
     max_claim_attempts: int = Field(default=3, ge=1, le=100)

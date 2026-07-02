@@ -11,9 +11,12 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, Field, ValidationError
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
-from awesome_agent.domain.enums import RiskLevel
+from awesome_agent.domain.enums import ExecutionOrigin, RiskLevel
 from awesome_agent.modeling import ToolCall, ToolDefinition, ToolResultMessage
+from awesome_agent.sandbox.base import SandboxBackend
+from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.sandbox.process import run_process
+from awesome_agent.settings import Settings
 from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.artifacts import ArtifactReadArguments, register_artifact_tools
 from awesome_agent.tools.executor import ToolExecutor
@@ -149,6 +152,8 @@ def build_read_only_registry() -> ToolRegistry:
 
 def build_modifying_registry(
     artifact_repository: ArtifactMetadataRepository | None = None,
+    *,
+    sandbox: SandboxBackend | None = None,
 ) -> ToolRegistry:
     registry = build_read_only_registry()
     registry.register(
@@ -173,7 +178,7 @@ def build_modifying_registry(
         ),
         _apply_patch,
     )
-    register_shell_tools(registry)
+    register_shell_tools(registry, sandbox=sandbox or _default_api_sandbox())
     if artifact_repository is not None:
         register_artifact_tools(registry, artifact_repository)
     return registry
@@ -246,8 +251,19 @@ def build_read_only_executor(registry: ToolRegistry | None = None) -> ToolExecut
     return ToolExecutor(registry or build_read_only_registry(), ApprovalPolicy())
 
 
-def build_modifying_executor(registry: ToolRegistry | None = None) -> ToolExecutor:
-    return ToolExecutor(registry or build_modifying_registry(), ApprovalPolicy())
+def build_modifying_executor(
+    registry: ToolRegistry | None = None,
+    *,
+    sandbox: SandboxBackend | None = None,
+) -> ToolExecutor:
+    return ToolExecutor(
+        registry or build_modifying_registry(sandbox=sandbox),
+        ApprovalPolicy(),
+    )
+
+
+def _default_api_sandbox() -> SandboxBackend:
+    return create_sandbox(origin=ExecutionOrigin.API, settings=Settings())
 
 
 def _parse_arguments(call: ToolCall) -> dict[str, Any]:
