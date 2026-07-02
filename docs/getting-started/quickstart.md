@@ -81,7 +81,8 @@ awesome commands
 ```
 
 `awesome` does not require an API before launch. It defaults to the local CLI
-profile and LocalSandbox, then opens the chat-first local CLI/TUI. Use
+profile and LocalSandbox, then opens the chat-first local CLI/TUI. This is a
+trusted-local convenience mode; API profiles use AIO Docker by default. Use
 `awesome-agent` subcommands for direct operations, diagnostics, and scripting.
 
 ## Local CLI Fallback

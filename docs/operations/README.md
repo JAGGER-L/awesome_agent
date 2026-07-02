@@ -69,7 +69,9 @@ and network boundary is added.
 API-created Runs default to the `aio-docker` sandbox provider. That provider
 calls the long-lived AIO HTTP sandbox service and never falls back to host
 execution or a one-shot Docker container. LocalSandbox is reserved for the
-local CLI/TUI profile or explicit trusted local operation.
+local CLI/TUI profile or explicit trusted local operation. LocalSandbox
+currently executes arbitrary local commands by design and is tracked as
+technical debt.
 
 ## TUI
 

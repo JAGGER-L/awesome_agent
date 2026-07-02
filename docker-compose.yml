@@ -51,6 +51,7 @@ services:
       AWESOME_AGENT_WORKSPACE_ROOT: "/mnt/user-data/workspace"
       AWESOME_AGENT_SANDBOX_BACKEND: "aio-docker"
       AWESOME_AGENT_AIO_SANDBOX_URL: "http://sandbox:8765"
+      AWESOME_AGENT_READINESS_CHECK_DOCKER: "false"
     ports:
       - "8000:8000"
     depends_on:
@@ -74,6 +75,7 @@ services:
       AWESOME_AGENT_WORKSPACE_ROOT: "/mnt/user-data/workspace"
       AWESOME_AGENT_SANDBOX_BACKEND: "aio-docker"
       AWESOME_AGENT_AIO_SANDBOX_URL: "http://sandbox:8765"
+      AWESOME_AGENT_READINESS_CHECK_DOCKER: "false"
     depends_on:
       postgres:
         condition: service_healthy

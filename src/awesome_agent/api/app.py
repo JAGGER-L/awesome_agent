@@ -436,6 +436,7 @@ def create_app(
             report = await collect_readiness(
                 settings,
                 profile,
+                check_docker=settings.readiness_check_docker,
                 worker_heartbeat_repository=getattr(
                     app.state,
                     "worker_heartbeats",

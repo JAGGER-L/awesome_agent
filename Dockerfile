@@ -11,6 +11,8 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 RUN pip install --no-cache-dir ".[postgres,observability]"
 

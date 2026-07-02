@@ -16,7 +16,7 @@ def test_quickstart_script_exists_and_has_required_switches() -> None:
         "[switch]$RunReadOnly",
     ]:
         assert switch in text
-    assert "output\\quickstart" in text
+    assert ".awesome-agent\\runs\\quickstart" in text
     assert "quickstart.status=completed" in text
 
 

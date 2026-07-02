@@ -51,4 +51,5 @@ def test_docker_scripts_include_sandbox_service() -> None:
 
     assert '"sandbox"' in docker_init
     assert '"sandbox"' in docker_start
+    assert '"alembic", "upgrade", "head"' in docker_start
     assert "awesome-agent-sandbox:aio" in setup_sandbox
