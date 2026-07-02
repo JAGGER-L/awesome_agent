@@ -513,7 +513,7 @@ def start(
         ),
     ] = False,
 ) -> None:
-    """Start independent local API and Worker child processes."""
+    """Fallback supervisor for API + Worker in one local process group."""
     _reject_public_bind_without_consent(host, unsafe_bind_public)
     _set_api_bind_environment(host, unsafe_bind_public)
     result = run_supervisor(

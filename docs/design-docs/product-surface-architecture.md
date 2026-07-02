@@ -78,12 +78,12 @@ instead of relying on its local transcript cache.
 
 ## Run Semantics
 
-Every user turn has durable Run semantics, but not every turn is a heavy coding
-execution. A simple question may create a lightweight Run that only records
-model streaming, interruption, usage, and completion evidence. A coding request
-may create a tool-capable Run that uses AgentLoop, tools, sandbox execution,
-validation, approvals, artifacts, and recovery. A long-running request may run
-in the background.
+Ordinary input is the primary execution route. Every user turn has durable Run
+semantics, but not every turn is a heavy coding execution. A simple question may
+create a lightweight Run that only records model streaming, interruption, usage,
+and completion evidence. A coding request may create a tool-capable Run that
+uses AgentLoop, tools, sandbox execution, validation, approvals, artifacts, and
+recovery. A long-running request may run in the background.
 
 The Run flow is:
 

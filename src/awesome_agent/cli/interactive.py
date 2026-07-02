@@ -34,7 +34,11 @@ AwesomeAgentTui: type[_ChatTui] | None = None
 
 app = typer.Typer(
     name="awesome",
-    help="Start the interactive local coding-agent CLI.",
+    help=(
+        "Start the interactive local coding-agent CLI as the local full-screen "
+        "TUI. Uses embedded local runtime by default; pass --api-url to connect "
+        "to an API server."
+    ),
     no_args_is_help=False,
 )
 
@@ -54,7 +58,7 @@ def launch(
         typer.Option("--project-root", exists=True, file_okay=False),
     ] = None,
 ) -> None:
-    """Start the interactive local coding-agent CLI."""
+    """Start the local full-screen TUI."""
     if ctx.invoked_subcommand is not None:
         return
     resolved_project_root = project_root or Path.cwd()
