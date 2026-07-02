@@ -3,6 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from awesome_agent.conversation.models import ThreadMessageKind, ThreadMessageRole
 from awesome_agent.domain.enums import RunIntent, RunMode
 
 
@@ -26,6 +27,20 @@ class CreateThreadRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(default="Untitled thread", min_length=1, max_length=200)
+    context_kind: str = Field(default="workspace", min_length=1, max_length=32)
+    context_path: str | None = None
+    default_model: str | None = Field(default=None, max_length=128)
+    sandbox_profile: str | None = Field(default=None, max_length=64)
+
+
+class CreateThreadMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: ThreadMessageRole = ThreadMessageRole.USER
+    content: str = Field(min_length=1)
+    kind: ThreadMessageKind = ThreadMessageKind.MESSAGE
+    run_id: UUID | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class ApprovalDecisionRequest(BaseModel):

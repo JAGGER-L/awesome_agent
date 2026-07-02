@@ -21,6 +21,7 @@ from awesome_agent.api.schemas import (
     ContextCompactionResponse,
     CreateProbeRequest,
     CreateRunRequest,
+    CreateThreadMessageRequest,
     CreateThreadRequest,
     DispatchResponse,
     HealthCheckResponse,
@@ -29,6 +30,7 @@ from awesome_agent.api.schemas import (
     WorkspaceCleanupRequest,
 )
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.conversation.repository import ConversationRepository
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.extensions.config import build_project_extension_catalog_sync
@@ -62,6 +64,10 @@ from awesome_agent.observability.repository import (
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.budget import BudgetRepository, PostgresBudgetRepository
+from awesome_agent.persistence.conversations import (
+    InMemoryConversationRepository,
+    PostgresConversationRepository,
+)
 from awesome_agent.persistence.database import (
     create_engine,
     create_session_factory,
@@ -75,7 +81,6 @@ from awesome_agent.persistence.repository_registry import (
 )
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
 from awesome_agent.persistence.team import PostgresTeamRepository, TeamRepository
-from awesome_agent.persistence.threads import InMemoryThreadRepository
 from awesome_agent.persistence.tool_invocations import (
     PostgresToolInvocationRepository,
     ToolInvocationRepository,
@@ -133,10 +138,10 @@ def create_app(
     extension_catalog: ExtensionCatalog | None = None,
     extension_catalog_history: list[ExtensionCatalog] | None = None,
     project_root: Path | None = None,
-    thread_repository: InMemoryThreadRepository | None = None,
+    thread_repository: ConversationRepository | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
-    threads_repository = thread_repository or InMemoryThreadRepository()
+    threads_repository = thread_repository or InMemoryConversationRepository()
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
         active_extension_catalog = build_project_extension_catalog_sync(project_root)
@@ -221,7 +226,7 @@ def create_app(
             event_poll_interval=settings.event_poll_interval_seconds,
         )
         app.state.extension_catalog = active_extension_catalog
-        app.state.threads = threads_repository
+        app.state.threads = PostgresConversationRepository(sessions)
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry
         app.state.validation_repository = validation
@@ -380,8 +385,8 @@ def create_app(
             app.state.extension_catalogs_by_version,
         )
 
-    def threads() -> InMemoryThreadRepository:
-        return cast(InMemoryThreadRepository, app.state.threads)
+    def threads() -> ConversationRepository:
+        return cast(ConversationRepository, app.state.threads)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -450,16 +455,60 @@ def create_app(
 
     @app.post("/threads")
     async def create_thread(request: CreateThreadRequest) -> dict[str, object]:
-        thread = await threads().create(title=request.title)
+        thread = await threads().create_thread(
+            title=request.title,
+            context_kind=request.context_kind,
+            context_path=request.context_path,
+            default_model=request.default_model,
+            sandbox_profile=request.sandbox_profile,
+        )
+        return thread.api_payload()
+
+    @app.get("/threads")
+    async def list_threads() -> list[dict[str, object]]:
+        return [thread.api_payload() for thread in await threads().list_threads()]
+
+    @app.get("/threads/resume")
+    async def resume_thread(query: str) -> dict[str, object]:
+        try:
+            thread = await threads().resolve_thread(query)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
         return thread.api_payload()
 
     @app.get("/threads/{thread_id}")
     async def get_thread(thread_id: UUID) -> dict[str, object]:
         try:
-            thread = await threads().get(thread_id)
+            thread = await threads().get_thread(thread_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
         return thread.api_payload()
+
+    @app.post("/threads/{thread_id}/messages")
+    async def append_thread_message(
+        thread_id: UUID,
+        request: CreateThreadMessageRequest,
+    ) -> dict[str, object]:
+        try:
+            message = await threads().append_message(
+                thread_id=thread_id,
+                role=request.role,
+                content=request.content,
+                kind=request.kind,
+                run_id=request.run_id,
+                metadata=request.metadata,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return message.model_dump(mode="json")
+
+    @app.get("/threads/{thread_id}/messages")
+    async def list_thread_messages(thread_id: UUID) -> list[dict[str, object]]:
+        try:
+            messages = await threads().list_messages(thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return [message.model_dump(mode="json") for message in messages]
 
     @app.get("/runs")
     async def list_runs(
@@ -848,9 +897,9 @@ def create_app(
                 team_repository=team_repository_state(),
             )
             try:
-                return (
-                    await recovery_metrics.report_for_run(run_id)
-                ).model_dump(mode="json")
+                return (await recovery_metrics.report_for_run(run_id)).model_dump(
+                    mode="json"
+                )
             except KeyError as error:
                 attributes["http.status_code"] = 404
                 raise HTTPException(status_code=404, detail="Run not found.") from error

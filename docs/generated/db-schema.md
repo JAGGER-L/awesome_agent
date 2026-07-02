@@ -297,6 +297,33 @@ Generated from SQLAlchemy metadata.
 | `read_at` | `DATETIME` | yes |
 | `responded_at` | `DATETIME` | yes |
 
+## `thread_messages`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `thread_id` | `UUID` | no |
+| `role` | `VARCHAR(32)` | no |
+| `content` | `TEXT` | no |
+| `kind` | `VARCHAR(64)` | no |
+| `run_id` | `UUID` | yes |
+| `metadata` | `JSONB` | no |
+| `sequence` | `INTEGER` | no |
+| `created_at` | `DATETIME` | no |
+
+## `threads`
+
+| Column | Type | Nullable |
+| --- | --- | --- |
+| `id` | `UUID` | no |
+| `title` | `VARCHAR(200)` | no |
+| `context_kind` | `VARCHAR(32)` | no |
+| `context_path` | `TEXT` | yes |
+| `default_model` | `VARCHAR(128)` | yes |
+| `sandbox_profile` | `VARCHAR(64)` | yes |
+| `created_at` | `DATETIME` | no |
+| `updated_at` | `DATETIME` | no |
+
 ## `todos`
 
 | Column | Type | Nullable |

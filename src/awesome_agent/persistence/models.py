@@ -37,6 +37,50 @@ class RepositoryRecord(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ThreadRecord(Base):
+    __tablename__ = "threads"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), index=True)
+    context_kind: Mapped[str] = mapped_column(String(32), default="workspace")
+    context_path: Mapped[str | None] = mapped_column(Text)
+    default_model: Mapped[str | None] = mapped_column(String(128))
+    sandbox_profile: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class ThreadMessageRecord(Base):
+    __tablename__ = "thread_messages"
+    __table_args__ = (
+        Index(
+            "ix_thread_messages_thread_sequence", "thread_id", "sequence", unique=True
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    thread_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("threads.id", ondelete="CASCADE"),
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(32), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="SET NULL"),
+        index=True,
+    )
+    message_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSONB,
+        default=dict,
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class RunRecord(Base):
     __tablename__ = "runs"
 
