@@ -51,6 +51,11 @@ class ChatSessionState:
     launch_context: CliLaunchContext | None = None
     first_run_summary: ConfigFlowSummary | None = None
     current_run_id: str | None = None
+    last_resumable_run_id: str | None = None
+    active_operation_id: str | None = None
+    active_operation_label: str | None = None
+    streaming_assistant_message_id: str | None = None
+    streaming_buffer: str = ""
     status_label: str = "ready"
     details_enabled: bool = False
     last_failed_user_message: str | None = None
@@ -100,6 +105,52 @@ class ChatSessionState:
                 ],
             )
         return self.append(ChatMessage.assistant(content))
+
+    def begin_operation(
+        self,
+        operation_id: str,
+        label: str,
+    ) -> ChatSessionState:
+        return replace(
+            self,
+            active_operation_id=operation_id,
+            active_operation_label=label,
+            status_label=label,
+        )
+
+    def note_run_started(self, run_id: str) -> ChatSessionState:
+        return replace(self, current_run_id=run_id)
+
+    def append_stream_delta(self, text: str) -> ChatSessionState:
+        buffer = f"{self.streaming_buffer}{text}"
+        return replace(
+            self.upsert_streaming_assistant(buffer),
+            streaming_buffer=buffer,
+        )
+
+    def mark_operation_paused(self, run_id: str) -> ChatSessionState:
+        return replace(
+            self,
+            current_run_id=run_id,
+            last_resumable_run_id=run_id,
+            active_operation_id=None,
+            active_operation_label=None,
+            status_label="paused",
+        )
+
+    def finish_operation(
+        self,
+        *,
+        status_label: str = "ready",
+    ) -> ChatSessionState:
+        return replace(
+            self,
+            active_operation_id=None,
+            active_operation_label=None,
+            streaming_assistant_message_id=None,
+            streaming_buffer="",
+            status_label=status_label,
+        )
 
     def toggle_details(self) -> ChatSessionState:
         return replace(self, details_enabled=not self.details_enabled)
