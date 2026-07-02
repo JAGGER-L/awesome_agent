@@ -37,9 +37,16 @@ def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
     launched: dict[str, object] = {}
 
     class FakeTui:
-        def __init__(self, *, api_url: str, run_id: str | None = None) -> None:
+        def __init__(
+            self,
+            *,
+            api_url: str,
+            run_id: str | None = None,
+            launch_context: object | None = None,
+        ) -> None:
             launched["api_url"] = api_url
             launched["run_id"] = run_id
+            launched["launch_context"] = launch_context
 
         def run(self) -> None:
             launched["ran"] = True
@@ -52,5 +59,7 @@ def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
     assert launched == {
         "api_url": "http://127.0.0.1:9000",
         "run_id": None,
+        "launch_context": launched["launch_context"],
         "ran": True,
     }
+    assert launched["launch_context"] is not None

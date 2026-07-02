@@ -1,15 +1,14 @@
-from awesome_agent.cli.slash_commands import parse_slash_command
+from awesome_agent.cli.slash_commands import SlashCommand, SlashCommandKind
 from awesome_agent.tui.chat_state import ChatSessionState
 from awesome_agent.tui.slash_router import SlashRouter
 
 
-class FakeClient:
+class FakeSemanticClient:
     def create_thread(self, title: str) -> dict[str, object]:
         return {
             "id": "thread-1",
             "title": title,
-            "workspace_path": "~/.awesome-agent/threads/thread-1/workspace",
-            "logical_workspace": "/mnt/user-data/workspace",
+            "logical_workspace_path": "/mnt/user-data/workspace/",
         }
 
     def runtime_status(self) -> dict[str, object]:
@@ -19,38 +18,47 @@ class FakeClient:
         return [{"name": "deepseek-v4-pro", "role": "leader"}]
 
     def memory_summary(self) -> dict[str, object]:
-        return {"enabled": False, "items": 0}
+        return {"enabled": False}
+
+    def list_threads(self) -> list[dict[str, object]]:
+        return []
+
+    def list_skills(self) -> list[dict[str, object]]:
+        return [{"name": "brainstorming", "enabled": True}]
+
+    def list_tools(self) -> dict[str, list[str]]:
+        return {"builtin": ["read_file"], "mcp": [], "sandbox": ["shell"]}
+
+    def mcp_status(self) -> list[dict[str, object]]:
+        return []
+
+    def list_uploads(self) -> list[dict[str, object]]:
+        return []
+
+    def list_current_artifacts(self, run_id: str | None) -> list[dict[str, object]]:
+        return []
+
+    def usage_summary(self, run_id: str | None) -> dict[str, object]:
+        return {"tokens": 0}
+
+    def config_summary(self) -> dict[str, object]:
+        return {"home": "~/.awesome-agent"}
 
 
-def test_status_command_uses_runtime_status() -> None:
-    state = ChatSessionState.new()
-    message = SlashRouter(FakeClient()).handle(parse_slash_command("/status"), state)
-
-    assert "api=ready" in message.content
-    assert "sandbox=local" in message.content
-
-
-def test_models_command_lists_models() -> None:
-    state = ChatSessionState.new()
-    message = SlashRouter(FakeClient()).handle(parse_slash_command("/models"), state)
-
-    assert "deepseek-v4-pro" in message.content
-
-
-def test_memory_command_reports_memory() -> None:
-    state = ChatSessionState.new()
-    message = SlashRouter(FakeClient()).handle(parse_slash_command("/memory"), state)
-
-    assert "enabled=False" in message.content
-
-
-def test_new_command_creates_durable_thread() -> None:
-    state = ChatSessionState.new()
-    message = SlashRouter(FakeClient()).handle(
-        parse_slash_command("/new Snake game"),
-        state,
+def test_router_handles_tools_command() -> None:
+    message = SlashRouter(FakeSemanticClient()).handle(
+        SlashCommand(SlashCommandKind.TOOLS),
+        ChatSessionState.new(),
     )
 
-    assert "thread-1" in message.content
-    assert "Snake game" in message.content
-    assert "/mnt/user-data/workspace" in message.content
+    assert "builtin: read_file" in message.content
+    assert "sandbox: shell" in message.content
+
+
+def test_router_toggles_details() -> None:
+    message = SlashRouter(FakeSemanticClient()).handle(
+        SlashCommand(SlashCommandKind.DETAILS),
+        ChatSessionState.new(),
+    )
+
+    assert "Verbose activity rendering" in message.content

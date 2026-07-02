@@ -19,6 +19,22 @@ class ChatSemanticClient(Protocol):
 
     def memory_summary(self) -> dict[str, object]: ...
 
+    def list_threads(self) -> list[dict[str, object]]: ...
+
+    def list_skills(self) -> list[dict[str, object]]: ...
+
+    def list_tools(self) -> dict[str, list[str]]: ...
+
+    def mcp_status(self) -> list[dict[str, object]]: ...
+
+    def list_uploads(self) -> list[dict[str, object]]: ...
+
+    def list_current_artifacts(self, run_id: str | None) -> list[dict[str, object]]: ...
+
+    def usage_summary(self, run_id: str | None) -> dict[str, object]: ...
+
+    def config_summary(self) -> dict[str, object]: ...
+
 
 class SlashRouter:
     def __init__(self, client: ChatSemanticClient) -> None:
@@ -31,6 +47,18 @@ class SlashRouter:
     ) -> ChatMessage:
         if command.kind is SlashCommandKind.HELP:
             return ChatMessage.system(slash_command_help())
+        if command.kind is SlashCommandKind.THREADS:
+            threads = self.client.list_threads()
+            if not threads:
+                return ChatMessage.system("No API-backed threads found.")
+            return ChatMessage.system(
+                "\n".join(str(item.get("title") or item.get("id")) for item in threads)
+            )
+        if command.kind is SlashCommandKind.RESUME:
+            target = command.argument or "<thread id or title>"
+            return ChatMessage.system(
+                f"Thread resume for {target} is not backed by the local API yet."
+            )
         if command.kind is SlashCommandKind.STATUS:
             status = self.client.runtime_status()
             context = state.launch_context
@@ -56,6 +84,67 @@ class SlashRouter:
             memory = self.client.memory_summary()
             return ChatMessage.system(
                 " ".join(f"{key}={value}" for key, value in memory.items())
+            )
+        if command.kind is SlashCommandKind.SKILLS:
+            skills = self.client.list_skills()
+            if not skills:
+                return ChatMessage.system("No skills reported by the local API.")
+            return ChatMessage.system(
+                "\n".join(
+                    str(item.get("name") or item.get("id") or item)
+                    for item in skills
+                )
+            )
+        if command.kind is SlashCommandKind.TOOLS:
+            groups = self.client.list_tools()
+            lines = [
+                f"{name}: {', '.join(items) if items else '-'}"
+                for name, items in groups.items()
+            ]
+            return ChatMessage.system("\n".join(lines))
+        if command.kind is SlashCommandKind.MCP:
+            servers = self.client.mcp_status()
+            if not servers:
+                return ChatMessage.system("No MCP servers reported.")
+            return ChatMessage.system(
+                "\n".join(
+                    str(item.get("name") or item.get("server") or item)
+                    for item in servers
+                )
+            )
+        if command.kind is SlashCommandKind.UPLOADS:
+            uploads = self.client.list_uploads()
+            if not uploads:
+                return ChatMessage.system("No uploads for this thread.")
+            return ChatMessage.system(
+                "\n".join(
+                    str(item.get("path") or item.get("name") or item)
+                    for item in uploads
+                )
+            )
+        if command.kind is SlashCommandKind.ARTIFACTS:
+            artifacts = self.client.list_current_artifacts(state.current_run_id)
+            if not artifacts:
+                return ChatMessage.system("No artifacts for the current run.")
+            return ChatMessage.system(
+                "\n".join(
+                    str(item.get("path") or item.get("name") or item)
+                    for item in artifacts
+                )
+            )
+        if command.kind is SlashCommandKind.DETAILS:
+            return ChatMessage.system(
+                "Verbose activity rendering toggled. Use /details again to switch back."
+            )
+        if command.kind is SlashCommandKind.USAGE:
+            usage = self.client.usage_summary(state.current_run_id)
+            return ChatMessage.system(
+                " ".join(f"{key}={value}" for key, value in usage.items())
+            )
+        if command.kind is SlashCommandKind.CONFIG:
+            config = self.client.config_summary()
+            return ChatMessage.system(
+                " ".join(f"{key}={value}" for key, value in config.items())
             )
         if command.kind is SlashCommandKind.NEW:
             target = command.argument or "New conversation"

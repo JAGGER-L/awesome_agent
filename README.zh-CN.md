@@ -79,6 +79,29 @@ awesome commands
 
 启动目录会成为当前 thread 的默认上下文。如果该目录属于 Git 仓库，后续 Run 会继承这个 repo；如果不是 Git 仓库，CLI 会进入 workspace-only 模式，普通聊天仍然可用。
 
+本地 TUI 是 chat-first 的：启动时显示一个欢迎面板，之后主界面只保留 transcript 和输入框。运行细节通过 `/status`、`/tools`、`/mcp`、`/artifacts`、`/usage`、`/config` 等 slash commands 按需查看。
+
+| Command | Purpose |
+| --- | --- |
+| `/new` | 开启新的本地 thread。 |
+| `/threads` | 列出已知 threads。 |
+| `/switch` | `/threads` 的别名。 |
+| `/resume` | 按 id 或标题恢复 thread。 |
+| `/status` | 查看当前 thread、run、runtime 状态。 |
+| `/model` | `/models` 的别名。 |
+| `/models` | 列出模型配置。 |
+| `/skills` | 浏览 skills。 |
+| `/tools` | 查看 built-in、MCP 和 sandbox tools。 |
+| `/mcp` | 查看 MCP server 状态。 |
+| `/memory` | 查看 memory 状态。 |
+| `/uploads` | 查看当前 thread 的上传文件。 |
+| `/artifacts` | 查看生成产物。 |
+| `/details` | 切换详细活动日志。 |
+| `/usage` | 查看 token 使用和上下文。 |
+| `/config` | 查看配置路径和覆盖项。 |
+| `/help` | 查看帮助。 |
+| `/quit` | 退出 TUI。 |
+
 ### 自动启动
 
 ```powershell

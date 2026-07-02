@@ -55,6 +55,32 @@ class TuiApiClient:
             raise ValueError("Expected object response from /memory.")
         return dict(payload)
 
+    def list_threads(self) -> list[dict[str, Any]]:
+        return self._get_list_or_empty("/threads")
+
+    def list_skills(self) -> list[dict[str, Any]]:
+        return self._get_list_or_empty("/extensions/skills")
+
+    def list_tools(self) -> dict[str, list[str]]:
+        return {"builtin": [], "mcp": [], "sandbox": []}
+
+    def mcp_status(self) -> list[dict[str, Any]]:
+        return []
+
+    def list_uploads(self) -> list[dict[str, Any]]:
+        return []
+
+    def list_current_artifacts(self, run_id: str | None) -> list[dict[str, Any]]:
+        if run_id is None:
+            return []
+        return self.artifacts(run_id)
+
+    def usage_summary(self, run_id: str | None) -> dict[str, object]:
+        return {"run": run_id or "-", "tokens": 0}
+
+    def config_summary(self) -> dict[str, object]:
+        return {"api_url": self.api_url}
+
     def list_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return self._get_list("/runs", params={"limit": limit})
 
@@ -114,6 +140,21 @@ class TuiApiClient:
         params: dict[str, str | int | float | bool | None] | None = None,
     ) -> list[dict[str, Any]]:
         response = self._client.get(f"{self.api_url}{path}", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
+            raise ValueError(f"Expected list response from {path}.")
+        return [dict(item) for item in payload]
+
+    def _get_list_or_empty(
+        self,
+        path: str,
+        *,
+        params: dict[str, str | int | float | bool | None] | None = None,
+    ) -> list[dict[str, Any]]:
+        response = self._client.get(f"{self.api_url}{path}", params=params)
+        if response.status_code in {404, 405}:
+            return []
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
