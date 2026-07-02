@@ -52,17 +52,17 @@ Extension source 配置放在 `awesome-agent.yaml`。Project skills 会从 `skil
 
 ### Run Mode Matrix
 
-当前仓库仍支持 PowerShell quickstart scripts。目标启动模型正在迁移到
-Makefile 命令：Docker API 使用 `make docker-init` 和
+Makefile 命令是主要启动契约：Docker API 使用 `make docker-init` 和
 `make docker-start`；本地 API 开发使用 `make check`、`make install`、
-`make setup-sandbox` 和 `make dev`；本地交互式 CLI 使用 `awesome`。
+`make setup-sandbox` 和 `make dev`；Task 60 后本地交互式 CLI 使用
+`awesome`。现有 PowerShell scripts 仍保留为 Windows fallback。
 
 | Mode | Best for | Command | Status |
 | --- | --- | --- | --- |
-| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Supported |
-| Local API | API + Worker inspection from host Python | `.\.venv\Scripts\awesome-agent.exe start` | Supported |
-| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Supported |
-| Docker API/Web | Browser/API inspection against containerized API | `docker compose up -d --build postgres api worker` | Supported |
+| Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | Primary |
+| Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | Primary |
+| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Fallback |
+| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Fallback |
 
 The current "Web" surface is the local FastAPI inspection surface and generated API docs at `/docs`. It is not yet a hosted multi-user web application.
 

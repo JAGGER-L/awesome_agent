@@ -2,8 +2,8 @@
 
 This guide indexes local runtime operation and diagnosis.
 
-- Startup: `scripts/bootstrap.ps1`, `scripts/migrate.ps1`, and
-  `awesome-agent start`.
+- Startup: `make check`, `make install`, `make setup-sandbox`, `make dev`,
+  `make docker-init`, and `make docker-start`.
 - Split process mode: `awesome-agent serve` for API and `awesome-agent worker`
   for background execution.
 - Readiness: `/health`, `/ready?profile=api`, `/ready?profile=runtime`, and
@@ -18,11 +18,11 @@ This guide indexes local runtime operation and diagnosis.
 Use the [quickstart](../getting-started/quickstart.md) for the first local
 startup path.
 
-The current repository still supports the PowerShell quickstart scripts. The
-target startup model is being migrated to Makefile commands: Docker API uses
+The Makefile commands are the primary startup contract. The existing
+PowerShell scripts remain Windows fallback entrypoints. Docker API mode uses
 `make docker-init` and `make docker-start`; local API development uses
 `make check`, `make install`, `make setup-sandbox`, and `make dev`; local
-interactive CLI uses `awesome`.
+interactive CLI uses `awesome` after Task 60.
 
 See [runtime profiles and startup](../design-docs/runtime-profiles-and-startup.md)
 for the durable startup, sandbox, and workspace contract.
@@ -31,11 +31,13 @@ for the durable startup, sandbox, and workspace contract.
 
 | Mode | Command | Use |
 | --- | --- | --- |
-| Quick Start | `.\scripts\quickstart.ps1` | First local setup and verification. |
-| Supervised local runtime | `awesome-agent start` | API + Worker in one local command. |
+| Local API development | `make check`, `make install`, `make setup-sandbox`, `make dev` | Host API + Worker development stack. |
+| Docker API | `make docker-init`, `make docker-start` | Containerized API + Worker stack. |
+| Quick Start fallback | `.\scripts\quickstart.ps1` | Windows first-run setup and verification. |
+| Supervised local runtime fallback | `awesome-agent start` | API + Worker in one local command. |
 | Split runtime | `awesome-agent serve` and `awesome-agent worker` | Process-manager or debugging setups. |
 | PostgreSQL dependency | `docker compose up -d postgres` | Local durable storage. |
-| Docker runtime | `docker compose up -d --build postgres api worker` | Containerized API + Worker. |
+| Docker runtime fallback | `docker compose up -d --build postgres api worker` | Containerized API + Worker without sandbox service wiring. |
 
 ## Ports And Runtime Data
 
