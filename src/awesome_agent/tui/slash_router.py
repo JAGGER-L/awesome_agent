@@ -257,7 +257,7 @@ def _format_status(status: dict[str, object], state: ChatSessionState) -> str:
         "",
         f"Conversation: {state.thread_title}",
         f"Model: {state.last_requested_model or 'default'}",
-        "Thinking: on",
+        f"Thinking: {state.thinking_mode}",
         f"Task: {state.status_label}",
         "Team: leader only",
         f"Runtime: {status.get('runtime') or status.get('api') or '-'}",

@@ -55,10 +55,19 @@ class ConversationClient:
         thread_id: str,
         content: str,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
     ) -> Iterator[ConversationStreamEvent]:
         payload: dict[str, object] = {"content": content}
         if model is not None:
             payload["model"] = model
+        if thinking is not None:
+            payload["thinking_mode"] = thinking
+        if memory is not None:
+            payload["memory"] = memory
+        if skill_ids:
+            payload["skill_ids"] = list(skill_ids)
         with self._client.stream(
             "POST",
             f"{self.api_url}/threads/{thread_id}/turns",

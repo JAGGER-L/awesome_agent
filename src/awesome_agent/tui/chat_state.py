@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
+from awesome_agent.tui.pickers import PickerState
 
 
 class ChatEventKind(StrEnum):
@@ -93,6 +94,12 @@ class ChatSessionState:
     thought_elapsed_seconds: int | None = None
     thought_truncated: bool = False
     thought_blocks: dict[str, ThoughtBlock] = field(default_factory=dict)
+    current_model: str = "deepseek-v4-pro"
+    thinking_mode: str = "on_high"
+    local_memory_enabled: bool = False
+    provider_memory: str | None = None
+    staged_skill_ids: tuple[str, ...] = ()
+    active_picker: PickerState | None = None
     last_requested_model: str | None = None
     last_response_model: str | None = None
     last_model_provider: str | None = None
@@ -109,10 +116,16 @@ class ChatSessionState:
         launch_context: CliLaunchContext | None = None,
         first_run_summary: ConfigFlowSummary | None = None,
     ) -> ChatSessionState:
+        current_model = (
+            first_run_summary.model_name
+            if first_run_summary is not None
+            else "deepseek-v4-pro"
+        )
         return cls(
             thread_id=uuid4(),
             launch_context=launch_context,
             first_run_summary=first_run_summary,
+            current_model=current_model,
         )
 
     @property
@@ -168,6 +181,8 @@ class ChatSessionState:
             thought_elapsed_seconds=None,
             thought_truncated=False,
             thought_blocks={},
+            staged_skill_ids=(),
+            active_picker=None,
             status_label="ready",
             last_failed_user_message=None,
             messages=messages or [],
@@ -175,6 +190,42 @@ class ChatSessionState:
 
     def with_status(self, status_label: str) -> ChatSessionState:
         return replace(self, status_label=status_label)
+
+    def with_model(self, model_id: str) -> ChatSessionState:
+        return replace(self, current_model=model_id)
+
+    def with_thinking(self, mode: str) -> ChatSessionState:
+        if mode not in {"on_high", "on_max", "off"}:
+            raise ValueError(f"Unsupported thinking mode: {mode}")
+        return replace(self, thinking_mode=mode)
+
+    def with_local_memory(self, enabled: bool) -> ChatSessionState:
+        return replace(self, local_memory_enabled=enabled)
+
+    def with_provider_memory(self, provider: str | None) -> ChatSessionState:
+        return replace(self, provider_memory=provider)
+
+    def stage_skill(self, skill_id: str) -> ChatSessionState:
+        if skill_id in self.staged_skill_ids:
+            return self
+        return replace(self, staged_skill_ids=(*self.staged_skill_ids, skill_id))
+
+    def unstage_skill(self, skill_id: str) -> ChatSessionState:
+        return replace(
+            self,
+            staged_skill_ids=tuple(
+                staged for staged in self.staged_skill_ids if staged != skill_id
+            ),
+        )
+
+    def clear_staged_skills(self) -> ChatSessionState:
+        return replace(self, staged_skill_ids=())
+
+    def open_picker(self, picker: PickerState) -> ChatSessionState:
+        return replace(self, active_picker=picker)
+
+    def close_picker(self) -> ChatSessionState:
+        return replace(self, active_picker=None)
 
     def with_last_failed_user_message(
         self,

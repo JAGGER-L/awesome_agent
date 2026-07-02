@@ -50,6 +50,9 @@ class CreateConversationTurnRequest(BaseModel):
 
     content: str = Field(min_length=1)
     model: str | None = Field(default=None, max_length=128)
+    thinking_mode: str | None = Field(default=None, max_length=32)
+    memory: dict[str, object] = Field(default_factory=dict)
+    skill_ids: list[str] = Field(default_factory=list)
 
 
 class CreateThreadRunRequest(BaseModel):

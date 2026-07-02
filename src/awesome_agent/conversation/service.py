@@ -79,11 +79,20 @@ class ConversationService:
         thread_id: UUID,
         content: str,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
     ) -> AsyncIterator[ConversationStreamEvent]:
         turn_id = uuid4()
         trace_id = uuid4().hex
         sequence = 1
         selected_model = model or self._default_model
+        turn_options: dict[str, object] = {
+            "model": selected_model,
+            "thinking": thinking,
+            "memory": memory or {},
+            "skill_ids": list(skill_ids),
+        }
         run = Run(
             goal=content,
             status=RunStatus.RUNNING,
@@ -104,7 +113,7 @@ class ConversationService:
             event_type=EventType.RUN_CREATED,
             payload={
                 "goal": content,
-                "model": selected_model,
+                **turn_options,
                 "runtime_route": run.runtime_route or "",
                 "leader_agent_id": str(leader.id),
             },
@@ -139,7 +148,11 @@ class ConversationService:
             role=ThreadMessageRole.USER,
             content=content,
             run_id=run.id,
-            metadata={"run_id": str(run.id), "leader_agent_id": str(leader.id)},
+            metadata={
+                "run_id": str(run.id),
+                "leader_agent_id": str(leader.id),
+                "turn_options": turn_options,
+            },
         )
         sequence += 1
         yield _event(

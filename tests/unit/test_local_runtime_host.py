@@ -82,3 +82,30 @@ def test_local_runtime_host_reports_coding_mode_boundary() -> None:
     assert result["status"] == "planned"
     assert result["execution_mode"] == "coding"
     assert result["transport"] == "embedded"
+
+
+def test_local_runtime_host_forwards_turn_options() -> None:
+    host = LocalRuntimeHost(
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread("Options")
+
+    list(
+        host.stream_turn(
+            thread.id,
+            "hi",
+            model="alternate-model",
+            thinking="off",
+            memory={"local_enabled": True},
+            skill_ids=("repository-inspection",),
+        )
+    )
+
+    [user, _assistant] = host.list_thread_messages(thread.id)
+    assert user["metadata"]["turn_options"] == {
+        "model": "alternate-model",
+        "thinking": "off",
+        "memory": {"local_enabled": True},
+        "skill_ids": ["repository-inspection"],
+    }

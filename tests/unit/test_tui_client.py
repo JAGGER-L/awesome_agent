@@ -70,6 +70,51 @@ def test_tui_client_reads_runtime_status_models_and_memory() -> None:
     assert client.memory_summary() == {"enabled": False}
 
 
+def test_tui_client_sends_turn_options() -> None:
+    bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.read())
+        payload = (
+            '{"event":"message.completed",'
+            '"thread_id":"00000000-0000-0000-0000-000000000001",'
+            '"turn_id":"00000000-0000-0000-0000-000000000002",'
+            '"sequence":1,'
+            '"trace_id":"trace",'
+            '"payload":{"content":"ok"}}'
+        )
+        return httpx.Response(
+            200,
+            text=f"event: message.completed\ndata: {payload}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = TuiApiClient(
+        "http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = list(
+        client.stream_turn(
+            "thread-1",
+            "hi",
+            model="deepseek-v4-flash",
+            thinking="off",
+            memory={"local_enabled": True, "provider": "mem0"},
+            skill_ids=("repository-inspection",),
+        )
+    )
+
+    assert events[0].payload["content"] == "ok"
+    assert bodies == [
+        (
+            b'{"content":"hi","model":"deepseek-v4-flash","thinking_mode":"off",'
+            b'"memory":{"local_enabled":true,"provider":"mem0"},'
+            b'"skill_ids":["repository-inspection"]}'
+        )
+    ]
+
+
 def test_tui_client_reads_surface_capability_endpoints() -> None:
     requested_paths: list[str] = []
 

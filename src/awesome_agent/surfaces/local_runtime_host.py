@@ -169,6 +169,9 @@ class LocalRuntimeHost:
         content: str,
         *,
         model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         normalized = content.strip().casefold()
@@ -182,6 +185,9 @@ class LocalRuntimeHost:
                 thread_id=UUID(thread_id),
                 content=content,
                 model=model,
+                thinking=thinking,
+                memory=memory,
+                skill_ids=skill_ids,
             )
         )
 
