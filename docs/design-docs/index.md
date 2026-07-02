@@ -20,4 +20,5 @@ durable architecture contracts.
 - [Observability](observability.md)
 - [Extension architecture](extension-architecture.md)
 - [Runtime profiles and startup](runtime-profiles-and-startup.md)
+- [Product surface architecture](product-surface-architecture.md)
 - [ThinGraph, AgentLoop, and middleware contracts](thin-graph-agent-loop-middleware.md)

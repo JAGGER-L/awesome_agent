@@ -99,14 +99,24 @@ This ordering prevents later provider, MCP, skills, and product work from
 amplifying weak observability, weak permissions, or metadata-heavy middleware
 contracts.
 
-## Productization And Sandbox Phase
+## Product Surface Phase
 
-The runtime kernel, extension architecture sequence, and initial quickstart/TUI
-setup are complete through Task 56. The active phase now turns those kernel
-boundaries into a coherent local product surface:
+Tasks 57-67 completed the startup, sandbox, first-run configuration, and
+chat-first full-screen TUI groundwork. The active phase now turns that local
+surface into a real product client over shared backend conversation, Run,
+tool, extension, artifact, memory, and observability services.
+
+This phase keeps `awesome` as a full-screen TUI. It intentionally does not add
+an inline terminal chat mode. The architectural requirement is instead to make
+the full-screen TUI thin: it may own presentation, focus, shortcut handling,
+and command suggestions, but it must not own model chat, AgentLoop, tool
+calling, durable conversation history, or product policy.
+
+The profile and storage baseline remains specified in
+[`runtime-profiles-and-startup.md`](../design-docs/runtime-profiles-and-startup.md):
 
 - Docker API and local API development profiles default to AIO Docker.
-- Local `awesome` CLI/TUI defaults to LocalSandbox for trusted local use.
+- Local `awesome` TUI defaults to LocalSandbox for trusted local use.
 - Model-visible generated files use `/mnt/user-data/workspace/`.
 - Host thread workspaces persist under
   `~/.awesome-agent/threads/<thread_id>/workspace/`.
@@ -115,21 +125,34 @@ boundaries into a coherent local product surface:
 - Repository-root `output/` and `e2e-output/` are not formal runtime output
   locations.
 
-The phase design is specified in
-[`runtime-profiles-and-startup.md`](../design-docs/runtime-profiles-and-startup.md).
-
-Current productization and sandbox sequence:
+Current product surface sequence:
 
 | Task | Phase | Status | Purpose | Exit condition |
 | --- | --- | --- | --- | --- |
-| Task 57 | Productization | Active | Lock runtime profiles, startup UX, workspace storage, and sandbox defaults in durable design docs and roadmap. | Roadmap and design docs define Docker API, Local API development, and Local CLI/TUI profiles, including sandbox defaults, workspace/artifact storage, and non-goals. |
-| Task 58 | Sandbox | Planned | Refactor sandbox provider contracts around LocalSandbox and AIO Docker, deleting the old one-shot Docker backend instead of preserving compatibility. | Shell execution and validation select only `local` or `aio-docker`; tests prove API cannot silently use LocalSandbox and no `docker-run` backend remains. |
-| Task 59 | Startup | Planned | Add cross-platform Makefile-driven Docker and local API startup commands. | `make docker-init`, `make docker-start`, `make check`, `make install`, `make setup-sandbox`, and `make dev` exist, delegate to cross-platform helpers where possible, and docs reference them as the primary API startup path. |
-| Task 60 | CLI | Planned | Define durable Thread/Conversation state and scaffold the `awesome` interactive CLI entrypoint and semantic slash-command model. | `awesome` launches the local interactive surface, `/new` maps to durable thread/conversation creation, first-run configuration is reachable, and slash commands map to semantic operations. |
-| Task 61 | TUI | Planned | Replace the operator-console layout with a chat-first local coding-agent TUI. | The TUI supports `/new`, `/status`, `/models`, `/memory`, and `/help`, streams tool/model activity, and keeps API operations semantic. |
-| Task 62 | Sandbox | Planned | Implement the standalone AIO Docker sandbox image and HTTP service. | The sandbox service builds, exposes `/health` and `/execute`, runs commands inside `/mnt/user-data/workspace`, bounds output, handles timeouts, and preserves thread-scoped workspace state in service-level tests. |
-| Task 63 | Sandbox Integration | Planned | Wire AIO Docker into runtime, Compose, Makefile, and health checks as the default API sandbox. | API/Worker profiles execute shell tools through the AIO HTTP client, Compose starts the sandbox service, and `make docker-init` / `make docker-start` prepare and run it. |
-| Task 64 | Verification | Planned | Add full AIO sandbox E2E evidence, clean up old one-shot Docker assumptions, and record LocalSandbox security debt. | Local API, Docker API, and chat-first CLI/TUI flows can generate and preserve a simple HTML snake game; no one-shot Docker backend remains; LocalSandbox unrestricted execution is tracked as explicit technical debt. |
+| Task 68 | Product Surface Architecture | Planned | Lock the CLI/TUI/API/Web product-surface boundary and explicitly retain full-screen TUI as the local client. | Design docs and roadmap define TUI as presentation, shared client as protocol adapter, API/services as conversation authority, and AgentLoop/runtime as execution authority; no UI path calls provider or AgentLoop internals directly. |
+| Task 69 | Conversation State And API | Planned | Add durable thread, message, and conversation-turn state that can serve TUI now and Web later. | API can list/create/get threads, persist launch repo/workspace/model/sandbox context, append/list thread messages, and resume by id or title through a repository-backed service rather than process-local state. |
+| Task 70 | Conversation Streaming Service | Planned | Add model-backed conversation turns with a stable client stream event contract. | A conversation turn persists the user message, invokes the configured model through backend service code, streams `message.delta` / completion / error events, records usage and trace ids, and persists the assistant response without involving TUI-specific logic. |
+| Task 71 | Full-Screen TUI Real Chat | Planned | Connect the full-screen TUI to the shared conversation client and remove fake local chat acknowledgements. | Ordinary TUI messages create backend conversation turns, render streamed model responses, keep the input visible and focused after long command output such as `/help`, and pass headless layout/focus tests. |
+| Task 72 | Shared Slash Command Registry | Planned | Promote slash-command metadata into a reusable surface contract with autocomplete. | `/help`, parsing, validation, aliases, keyboard autocomplete, and command execution use one shared registry; typing `/` and filtered prefixes show selectable suggestions; future Web can consume the same command metadata. |
+| Task 73 | Conversation-Scoped Coding Runs | Planned | Make Coding Runs an explicit execution mode inside a conversation thread. | The TUI can start a Run from the current thread context, Run events project back into the thread transcript, artifacts remain run-scoped but thread-discoverable, and cancellation/status stay API-owned. |
+| Task 74 | Surface Capability APIs | Planned | Replace TUI command stubs with real API-backed status for models, tools, skills, MCP, memory, uploads, artifacts, usage, and config. | Slash commands read shared client/API resources instead of hard-coded empty values, and API inspection surfaces expose enabled/disabled state, health, grants, and redacted configuration. |
+| Task 75 | Product Hardening And E2E | Planned | Add the product reliability layer around the full-screen TUI and conversation APIs. | Structured errors, request/trace ids, cancel/retry/interrupt, `awesome doctor`, contract tests, TUI focus/layout tests, and local/Docker E2E prove the TUI/API path can create a simple HTML artifact through the real product path. |
+
+Completed productization groundwork:
+
+| Task | Phase | Status | Purpose | Exit condition |
+| --- | --- | --- | --- | --- |
+| Task 57 | Productization | Done | Locked runtime profiles, startup UX, workspace storage, and sandbox defaults in durable design docs and roadmap. | Roadmap and design docs define Docker API, local API development, and local TUI profiles, including sandbox defaults, workspace/artifact storage, and non-goals. |
+| Task 58 | Sandbox | Done | Refactored sandbox provider contracts around LocalSandbox and AIO Docker, deleting the old one-shot Docker backend instead of preserving compatibility. | Shell execution and validation select only `local` or `aio-docker`; tests prove API cannot silently use LocalSandbox and no `docker-run` backend remains. |
+| Task 59 | Startup | Done | Added cross-platform Makefile-driven Docker and local API startup commands. | `make docker-init`, `make docker-start`, `make check`, `make install`, `make setup-sandbox`, and `make dev` exist and docs reference them as the primary API startup path. |
+| Task 60 | CLI | Done | Defined durable Thread/Conversation entry concepts and scaffolded the `awesome` interactive entrypoint and semantic slash-command model. | `awesome` launches the local interactive surface, first-run configuration is reachable, and slash commands map to semantic operations. |
+| Task 61 | TUI | Done | Replaced the operator-console layout with a chat-first local coding-agent TUI direction. | The TUI supports the first chat-oriented commands and keeps API operations semantic, while real model chat remains a Product Surface Phase dependency. |
+| Task 62 | Sandbox | Done | Implemented the standalone AIO Docker sandbox image and HTTP service foundation. | The sandbox service builds, exposes `/health` and `/execute`, runs commands inside `/mnt/user-data/workspace`, bounds output, handles timeouts, and preserves thread-scoped workspace state in service-level tests. |
+| Task 63 | Sandbox Integration | Done | Wired AIO Docker into runtime, Compose, Makefile, and health checks as the default API sandbox. | API/Worker profiles execute shell tools through the AIO HTTP client, Compose starts the sandbox service, and `make docker-init` / `make docker-start` prepare and run it. |
+| Task 64 | Verification | Done | Added AIO sandbox E2E evidence, cleaned up old one-shot Docker assumptions, and recorded LocalSandbox security debt. | Local API, Docker API, and TUI flows can generate and preserve a simple HTML artifact; no one-shot Docker backend remains; LocalSandbox unrestricted execution is tracked as explicit technical debt. |
+| Task 65 | CLI Context | Done | Made `awesome` usable from any user project directory by treating launch cwd as the default thread context. | The TUI starts with the launch repo/workspace context and ordinary input no longer blocks on manual repository selection. |
+| Task 66 | TUI Commands | Done | Simplified the full-screen TUI toward a Claude/Codex-style command surface. | The TUI exposes the accepted slash-command set and keeps the surface chat-first rather than an operator dashboard. |
+| Task 67 | First Run | Done | Added first-run model/config guidance for the local TUI. | `awesome init`, `/config`, `/models`, and welcome guidance explain resolved config paths and missing API-key env vars without writing secrets. |
 
 Completed post-kernel setup:
 
@@ -167,7 +190,7 @@ Extension sequence:
 | P4: unified tool permission | Complete for the kernel phase. Task 31 added the resolver foundation; Task 38 made effective policy visible through API inspection/team contexts and enforceable at the shared executor boundary. | Future tools, MCP, skills, provider-side tools, and temporary grants must enter through resolver inputs and pass `EffectiveToolPolicy` to exposure and execution helpers. |
 | P5: team hardening | Complete for local validation, same-child validation rework, patch conflict recovery, stress coverage, mailbox collaboration, bounded Leader plan repair, policy-backed recovery budgets, and read-only recovery metrics. | Continue with production evidence collection and explicit calibration changes only after recovery metrics show stable provider/model and team-role patterns. |
 
-## Post-Extension Long-Term Plan
+## Post-Product-Surface Long-Term Plan
 
 The following phases are directional. They are not committed task numbers until
 this roadmap is updated through change control.
@@ -176,7 +199,7 @@ this roadmap is updated through change control.
 | --- | --- | --- | --- |
 | Provider Ecosystem Phase | Expand provider routing, fallback, model profiles, and provider-quality feedback. | Task 41 and Task 42 complete; production runtime graph construction uses route-aware provider resolvers and recovery outcomes are measurable. | Provider decisions are reliable, explainable, retry-safe, and tuned by measured runtime outcomes rather than hard-coded optimism. |
 | Operations Phase | Improve dashboards, alerts, trace exploration, recovery metrics, and readiness diagnostics. | Task 40 and Task 42 complete; durable evidence can be inspected through redacted diagnostics and recovery-metrics projections. | Operators can diagnose latency, failure class, budget pressure, provider quality, recovery behavior, and worker health without reading raw logs. |
-| Productization Phase | Build higher-level user workflows and UI/API surfaces. | Kernel boundaries stable; roadmap change defines target users and workflows. | Product surfaces inspect and control Runs without bypassing approvals, cancellation, capability policy, or durable evidence. |
+| Web And Multi-Surface Phase | Add a Web frontend and richer multi-client workflows over the same conversation, Run, command, tool, artifact, and memory contracts used by the full-screen TUI. | Product Surface Phase exits with stable Conversation API, shared client stream events, command metadata, and TUI evidence. | Web, TUI, and API clients share backend contracts without duplicating AgentLoop, model chat, tool, or policy logic. |
 | Team Intelligence Phase | Improve Leader planning, assignment quality, Verifier calibration, and recovery tuning. | P5 evidence exists across real team runs and provider metrics. | Team behavior improves through bounded, observable policy changes rather than hidden prompt growth. |
 
 ## Completed Milestones Summary
@@ -192,6 +215,9 @@ Detailed historical task notes are archived in
 | Tasks 19-24 | AgentLoop architecture migration | Graph-version removal, ThinGraph/AgentLoop contracts, solo and team AgentLoop middleware migration, OTel span instrumentation, and durable graph versus policy boundary cleanup. |
 | Tasks 25-35 | Distributed team hardening and governance | Teammate-local validation, same-child rework, patch conflict recovery, multi-worker stress, mailbox collaboration, roadmap lock, capability resolver foundation, bounded Leader replanning, policy-backed recovery budgets, provider-aware token accounting, and token-only budget governance. |
 | Tasks 36-42 | Kernel completion and operational evidence | AgentLoop observability, typed middleware context, capability-policy convergence, provider routing/fallback, runtime diagnostics, production provider routing integration, and recovery metrics. |
+| Tasks 43-52 | Extension architecture | Versioned extension catalogs, independent tool exposure hooks, skill manifests/context injection, MCP discovery/execution/transports, community tools, diagnostics, project extension config, and repository-root `skills/` discovery. |
+| Tasks 53-56 | Documentation, quickstart, and first TUI | Documentation governance, bilingual README entry points, local Quick Start, Docker/API/Web quickstart matrix, and the first API-backed local TUI operator console. |
+| Tasks 57-67 | Productization groundwork | Runtime profiles, sandbox defaults, Makefile startup, AIO Docker sandbox service/integration, local TUI entrypoint, cwd repo/workspace context, simplified full-screen slash-command surface, and first-run config guidance. |
 
 ## Change Control
 
