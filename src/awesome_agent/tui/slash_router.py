@@ -23,15 +23,23 @@ class ChatSemanticClient(Protocol):
 
     def list_skills(self) -> list[dict[str, object]]: ...
 
-    def list_tools(self) -> dict[str, list[str]]: ...
+    def list_tools(self) -> dict[str, list[dict[str, object]]]: ...
 
     def mcp_status(self) -> list[dict[str, object]]: ...
 
-    def list_uploads(self) -> list[dict[str, object]]: ...
+    def list_uploads(self, thread_id: str | None) -> list[dict[str, object]]: ...
 
-    def list_current_artifacts(self, run_id: str | None) -> list[dict[str, object]]: ...
+    def list_current_artifacts(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> list[dict[str, object]]: ...
 
-    def usage_summary(self, run_id: str | None) -> dict[str, object]: ...
+    def usage_summary(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> dict[str, object]: ...
 
     def config_summary(self) -> dict[str, object]: ...
 
@@ -98,15 +106,17 @@ class SlashRouter:
                 return ChatMessage.system("No skills reported by the local API.")
             return ChatMessage.system(
                 "\n".join(
-                    str(item.get("name") or item.get("id") or item) for item in skills
+                    _label(
+                        item,
+                        "id",
+                        suffix_keys=("version", "source_id", "risk_level"),
+                    )
+                    for item in skills
                 )
             )
         if command.kind is SlashCommandKind.TOOLS:
             groups = self.client.list_tools()
-            lines = [
-                f"{name}: {', '.join(items) if items else '-'}"
-                for name, items in groups.items()
-            ]
+            lines = [_format_tool_group(name, items) for name, items in groups.items()]
             return ChatMessage.system("\n".join(lines))
         if command.kind is SlashCommandKind.MCP:
             servers = self.client.mcp_status()
@@ -114,12 +124,12 @@ class SlashRouter:
                 return ChatMessage.system("No MCP servers reported.")
             return ChatMessage.system(
                 "\n".join(
-                    str(item.get("name") or item.get("server") or item)
+                    _label(item, "id", suffix_keys=("status", "type", "trust"))
                     for item in servers
                 )
             )
         if command.kind is SlashCommandKind.UPLOADS:
-            uploads = self.client.list_uploads()
+            uploads = self.client.list_uploads(state.backend_thread_id)
             if not uploads:
                 return ChatMessage.system("No uploads for this thread.")
             return ChatMessage.system(
@@ -129,7 +139,10 @@ class SlashRouter:
                 )
             )
         if command.kind is SlashCommandKind.ARTIFACTS:
-            artifacts = self.client.list_current_artifacts(state.current_run_id)
+            artifacts = self.client.list_current_artifacts(
+                state.backend_thread_id,
+                state.current_run_id,
+            )
             if not artifacts:
                 return ChatMessage.system("No artifacts for the current run.")
             return ChatMessage.system(
@@ -143,7 +156,10 @@ class SlashRouter:
                 "Verbose activity rendering toggled. Use /details again to switch back."
             )
         if command.kind is SlashCommandKind.USAGE:
-            usage = self.client.usage_summary(state.current_run_id)
+            usage = self.client.usage_summary(
+                state.backend_thread_id,
+                state.current_run_id,
+            )
             return ChatMessage.system(
                 " ".join(f"{key}={value}" for key, value in usage.items())
             )
@@ -194,3 +210,29 @@ class SlashRouter:
             f"Unknown command. Try /help. Current thread={state.thread_id}",
             kind=ChatEventKind.ERROR,
         )
+
+
+def _format_tool_group(name: str, items: list[dict[str, object]]) -> str:
+    if not items:
+        return f"{name}: -"
+    rendered = [
+        _label(item, "name", suffix_keys=("risk_level", "health")) for item in items
+    ]
+    return f"{name}: {', '.join(rendered)}"
+
+
+def _label(
+    item: dict[str, object],
+    key: str,
+    *,
+    suffix_keys: tuple[str, ...],
+) -> str:
+    label = str(item.get(key) or item.get("name") or item.get("id") or item)
+    suffix = [
+        f"{suffix_key}={item[suffix_key]}"
+        for suffix_key in suffix_keys
+        if item.get(suffix_key) not in (None, "", [])
+    ]
+    if not suffix:
+        return label
+    return f"{label} ({', '.join(suffix)})"

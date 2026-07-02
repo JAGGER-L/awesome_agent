@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -137,3 +138,85 @@ class ContextCompactionResponse(BaseModel):
     summary: str
     artifact_refs: list[UUID]
     created_at: datetime
+
+
+class ModelProfileResponse(BaseModel):
+    role: str
+    name: str
+    provider: str
+    configured: bool
+    api_key_env: str
+    base_url: str | None = None
+
+
+class SurfaceToolItemResponse(BaseModel):
+    name: str
+    source: str
+    category: str
+    risk_level: str
+    required_capabilities: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    health: str = "unknown"
+    description: str = ""
+
+
+class SurfaceToolsResponse(BaseModel):
+    builtin: list[SurfaceToolItemResponse] = Field(default_factory=list)
+    sandbox: list[SurfaceToolItemResponse] = Field(default_factory=list)
+    mcp: list[SurfaceToolItemResponse] = Field(default_factory=list)
+    extension: list[SurfaceToolItemResponse] = Field(default_factory=list)
+
+
+class ExtensionSkillsResponse(BaseModel):
+    configured: bool
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class McpServersResponse(BaseModel):
+    configured: bool
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MemoryStatusResponse(BaseModel):
+    enabled: bool
+    provider: str
+    configured: bool
+    source: str
+    hint: str | None = None
+
+
+class ThreadUploadsResponse(BaseModel):
+    thread_id: UUID
+    configured: bool = False
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ThreadArtifactsResponse(BaseModel):
+    thread_id: UUID
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ThreadUsageResponse(BaseModel):
+    thread_id: UUID
+    run_id: UUID | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    reasoning_tokens: int = 0
+    active_seconds: int = 0
+    model_call_count: int = 0
+    threshold_status: str = "not_configured"
+
+
+class ConfigStatusResponse(BaseModel):
+    api_host: str
+    local_config_path: str
+    artifact_root: str
+    workspace_root: str | None
+    sandbox_backend: str
+    local_cli_sandbox_backend: str
+    observability_enabled: bool
+    deepseek_api_key_env: str = "AWESOME_AGENT_DEEPSEEK_API_KEY"
+    deepseek_api_key_configured: bool
+    mem0_api_key_env: str = "AWESOME_AGENT_MEM0_API_KEY"
+    mem0_api_key_configured: bool
