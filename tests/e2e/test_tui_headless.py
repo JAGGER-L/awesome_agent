@@ -76,3 +76,36 @@ async def test_tui_status_includes_launch_context(tmp_path: Path) -> None:
         transcript = app.query_one("#transcript").render()
 
     assert f"workspace={tmp_path}" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_renders_minimal_welcome_card(tmp_path: Path) -> None:
+    app = AwesomeAgentTui(
+        api_url="http://127.0.0.1:8000",
+        client=FakeClient(),
+        launch_context=CliLaunchContext(
+            project_root=tmp_path,
+            context_kind="workspace",
+        ),
+    )
+
+    async with app.run_test():
+        welcome = app.query_one("#welcome").render()
+        footer = app.query_one("#shortcuts").render()
+
+    assert "Awesome Agent" in str(welcome)
+    assert str(tmp_path) in str(welcome)
+    assert "? for shortcuts" in str(footer)
+
+
+@pytest.mark.asyncio
+async def test_tui_details_toggles_verbose_state() -> None:
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=FakeClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "d", "e", "t", "a", "i", "l", "s", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert app.state.details_enabled is True
+    assert "Details enabled" in str(transcript)

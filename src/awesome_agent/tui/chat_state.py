@@ -45,6 +45,7 @@ class ChatSessionState:
     launch_context: CliLaunchContext | None = None
     current_run_id: str | None = None
     status_label: str = "ready"
+    details_enabled: bool = False
     messages: list[ChatMessage] = field(default_factory=list)
 
     @classmethod
@@ -66,6 +67,9 @@ class ChatSessionState:
 
     def append(self, message: ChatMessage) -> ChatSessionState:
         return replace(self, messages=[*self.messages, message])
+
+    def toggle_details(self) -> ChatSessionState:
+        return replace(self, details_enabled=not self.details_enabled)
 
     def with_run(
         self,

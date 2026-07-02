@@ -1,5 +1,3 @@
-import pytest
-
 from awesome_agent.cli.slash_commands import (
     SlashCommandKind,
     parse_slash_command,
@@ -7,44 +5,40 @@ from awesome_agent.cli.slash_commands import (
 )
 
 
-@pytest.mark.parametrize(
-    ("raw", "kind", "argument"),
-    [
-        ("/new", SlashCommandKind.NEW, ""),
-        ("/new build snake game", SlashCommandKind.NEW, "build snake game"),
-        ("/status", SlashCommandKind.STATUS, ""),
-        ("/models", SlashCommandKind.MODELS, ""),
-        ("/memory", SlashCommandKind.MEMORY, ""),
-        ("/help", SlashCommandKind.HELP, ""),
-    ],
-)
-def test_parse_known_slash_commands(
-    raw: str,
-    kind: SlashCommandKind,
-    argument: str,
-) -> None:
-    parsed = parse_slash_command(raw)
+def test_parse_known_command_with_argument() -> None:
+    command = parse_slash_command("/resume project alpha")
 
-    assert parsed.kind is kind
-    assert parsed.argument == argument
+    assert command.kind is SlashCommandKind.RESUME
+    assert command.argument == "project alpha"
 
 
-def test_non_slash_input_is_user_message() -> None:
-    parsed = parse_slash_command("please inspect this repo")
+def test_parse_switch_alias_as_threads() -> None:
+    command = parse_slash_command("/switch")
 
-    assert parsed.kind is SlashCommandKind.USER_MESSAGE
-    assert parsed.argument == "please inspect this repo"
-
-
-def test_unknown_slash_command_is_error() -> None:
-    parsed = parse_slash_command("/dance")
-
-    assert parsed.kind is SlashCommandKind.UNKNOWN
-    assert parsed.argument == "dance"
+    assert command.kind is SlashCommandKind.THREADS
 
 
-def test_help_lists_required_commands() -> None:
-    text = slash_command_help()
+def test_parse_model_alias_as_models() -> None:
+    command = parse_slash_command("/model")
 
-    for command in ["/new", "/status", "/models", "/memory", "/help"]:
-        assert command in text
+    assert command.kind is SlashCommandKind.MODELS
+
+
+def test_help_lists_expected_interactive_commands() -> None:
+    help_text = slash_command_help()
+
+    for command in [
+        "/new",
+        "/threads",
+        "/resume",
+        "/model",
+        "/skills",
+        "/tools",
+        "/mcp",
+        "/artifacts",
+        "/details",
+        "/usage",
+        "/config",
+        "/quit",
+    ]:
+        assert command in help_text

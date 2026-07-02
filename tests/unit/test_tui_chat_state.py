@@ -35,3 +35,12 @@ def test_chat_session_stores_launch_context(tmp_path: Path) -> None:
 
     assert state.launch_context == context
     assert state.context_label == f"workspace: {tmp_path}"
+
+
+def test_chat_state_toggles_details() -> None:
+    state = ChatSessionState.new()
+
+    updated = state.toggle_details()
+
+    assert updated.details_enabled is True
+    assert updated.toggle_details().details_enabled is False

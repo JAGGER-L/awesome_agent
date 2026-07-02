@@ -5,7 +5,7 @@ from typing import ClassVar
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
-from textual.widgets import Footer, Header, Input, Static
+from textual.widgets import Input, Static
 
 from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.cli.slash_commands import SlashCommandKind, parse_slash_command
@@ -41,12 +41,11 @@ class AwesomeAgentTui(App[None]):
             self.state = self.state.with_run(run_id)
 
     def compose(self) -> ComposeResult:
-        yield Header()
         with Vertical(id="chat-root"):
-            yield Static("", id="status-strip")
+            yield Static("", id="welcome")
             yield Static("", id="transcript")
-            yield Input(placeholder="Ask awesome_agent, or type /help", id="prompt")
-        yield Footer()
+            yield Input(placeholder="Ask Awesome Agent, or type /help", id="prompt")
+            yield Static("? for shortcuts - /help for commands", id="shortcuts")
 
     def on_mount(self) -> None:
         self._render()
@@ -70,7 +69,15 @@ class AwesomeAgentTui(App[None]):
             )
         else:
             try:
-                message = SlashRouter(self.client).handle(parsed, self.state)
+                if parsed.kind is SlashCommandKind.DETAILS:
+                    self.state = self.state.toggle_details()
+                    label = "enabled" if self.state.details_enabled else "disabled"
+                    message = ChatMessage.system(f"Details {label}.")
+                elif parsed.kind is SlashCommandKind.QUIT:
+                    self.exit()
+                    return
+                else:
+                    message = SlashRouter(self.client).handle(parsed, self.state)
             except Exception as error:
                 message = ChatMessage.system(
                     str(error),
@@ -80,15 +87,18 @@ class AwesomeAgentTui(App[None]):
         self._render()
 
     def _render(self) -> None:
-        self.query_one("#status-strip", Static).update(
-            " ".join(
-                [
-                    f"thread={self.state.thread_id}",
-                    f"run={self.state.current_run_id or '-'}",
-                    f"status={self.state.status_label}",
-                ]
-            )
-        )
+        self.query_one("#welcome", Static).update(self._welcome_text())
         self.query_one("#transcript", Static).update(
             "\n\n".join(render_message(message) for message in self.state.messages)
+        )
+
+    def _welcome_text(self) -> str:
+        return "\n".join(
+            [
+                "+-- Awesome Agent --------------------------------------+",
+                "| Welcome back                                          |",
+                f"| cwd: {self.state.context_label}",
+                "| tips: /help, /model, /status                          |",
+                "+-------------------------------------------------------+",
+            ]
         )

@@ -26,13 +26,31 @@ awesome commands
 
 The required slash commands are:
 
+The local TUI is intentionally chat-first. It shows a welcome panel at launch,
+then keeps the main screen focused on the transcript and input prompt. Runtime
+details are available through slash commands such as `/status`, `/tools`,
+`/mcp`, `/artifacts`, `/usage`, and `/config`.
+
 | Command | Purpose |
 | --- | --- |
 | `/new` | Start a new durable local conversation/thread. |
+| `/threads` | List known threads. |
+| `/switch` | Alias for `/threads`. |
+| `/resume` | Resume a thread by id or title when supported. |
 | `/status` | Show current thread/run/runtime status. |
+| `/model` | Alias for `/models`. |
 | `/models` | List configured model profiles. |
+| `/skills` | Browse enabled and available skills. |
+| `/tools` | Show built-in, MCP, and sandbox tools. |
+| `/mcp` | Show MCP server status. |
 | `/memory` | Show memory configuration and current memory summary. |
+| `/uploads` | Show uploaded files for this thread. |
+| `/artifacts` | Show generated artifacts. |
+| `/details` | Toggle verbose activity rendering. |
+| `/usage` | Show token usage and context. |
+| `/config` | Show resolved config paths and overrides. |
 | `/help` | Show help. |
+| `/quit` | Exit the TUI. |
 
 Slash commands are CLI/TUI interaction syntax. API routes should expose
 semantic resources such as threads, runs, models, memory, readiness, and
