@@ -289,8 +289,8 @@ Open the local TUI operator console:
 The TUI is a local API-backed inspection and control surface for Runs,
 diagnostics, events, and approvals. It is not a hosted web dashboard.
 
-`awesome-agent start` is a fallback/debug supervisor for API and Worker
-processes together. Use `make dev` for the normal local API development path,
+`awesome-agent start` is a fallback/debug supervisor for API + Worker in one
+local process group. Use `make dev` for the normal local API development path,
 or use `awesome-agent serve` and `awesome-agent worker` separately when another
 process manager should own them. The local API is unauthenticated and binds to
 loopback by default; non-loopback binding requires explicit unsafe consent.

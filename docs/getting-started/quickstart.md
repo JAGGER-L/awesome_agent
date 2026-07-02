@@ -148,6 +148,9 @@ docker compose up -d postgres
 .\.venv\Scripts\awesome-agent.exe start
 ```
 
+`awesome-agent start` is a fallback/debug supervisor for API + Worker in one
+local process group. Prefer `make dev` for normal local API development.
+
 The API address is `http://127.0.0.1:8000`.
 
 Check readiness:
