@@ -7,6 +7,7 @@ from awesome_agent.conversation.events import (
     ConversationStreamEventKind,
     parse_conversation_stream_event,
 )
+from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.stream import (
@@ -18,6 +19,7 @@ from awesome_agent.modeling.stream import (
 )
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 
 
 def test_reasoning_events_parse_from_sse_payloads() -> None:
@@ -41,7 +43,8 @@ async def test_conversation_service_emits_reasoning_events_before_answer() -> No
     thread = await repository.create_thread(title="Reasoning")
     service = ConversationService(
         repository=repository,
-        provider_factory=lambda _model: ReasoningProvider(),
+        runtime_repository=InMemoryRuntimeRepository(),
+        leader_executor=ProviderLeaderTurnExecutor(lambda _model: ReasoningProvider()),
         default_model="fake-model",
     )
 

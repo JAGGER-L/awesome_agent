@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -13,15 +13,23 @@ from awesome_agent.conversation.models import (
     ThreadMessageRole,
 )
 from awesome_agent.conversation.repository import ConversationRepository
-from awesome_agent.domain.enums import RunIntent, RunMode
-from awesome_agent.domain.models import Run
+from awesome_agent.domain.enums import (
+    AgentKind,
+    AgentStatus,
+    DispatchStatus,
+    EventType,
+    ExecutionKind,
+    RunIntent,
+    RunMode,
+    RunStatus,
+)
+from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling.errors import (
     ModelErrorCode,
     ModelErrorInfo,
     ModelProviderError,
 )
 from awesome_agent.modeling.messages import AssistantMessage, SystemMessage, UserMessage
-from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.modeling.stream import (
     ReasoningDelta,
     ReasoningStarted,
@@ -30,6 +38,9 @@ from awesome_agent.modeling.stream import (
     TurnFailed,
 )
 from awesome_agent.modeling.turns import ModelRequest, ModelUsage
+from awesome_agent.runtime.repository import RuntimeRepository
+
+from .runtime_turns import LeaderTurnExecutor
 
 
 class ThreadRunIntake(Protocol):
@@ -53,11 +64,13 @@ class ConversationService:
         self,
         *,
         repository: ConversationRepository,
-        provider_factory: Callable[[str], ModelProvider],
+        runtime_repository: RuntimeRepository,
+        leader_executor: LeaderTurnExecutor,
         default_model: str,
     ) -> None:
         self._repository = repository
-        self._provider_factory = provider_factory
+        self._runtime_repository = runtime_repository
+        self._leader_executor = leader_executor
         self._default_model = default_model
 
     async def start_turn(
@@ -71,18 +84,62 @@ class ConversationService:
         trace_id = uuid4().hex
         sequence = 1
         selected_model = model or self._default_model
+        run = Run(
+            goal=content,
+            status=RunStatus.RUNNING,
+            execution_kind=ExecutionKind.CODING,
+            runtime_route="leader-turn",
+            dispatch_status=DispatchStatus.TERMINAL,
+        )
+        leader = Agent(
+            run_id=run.id,
+            kind=AgentKind.LEADER,
+            profile="leader",
+            model=selected_model,
+            status=AgentStatus.RUNNING,
+        )
+        await self._runtime_repository.create_run(run, leader)
+        run_event = await self._runtime_repository.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_CREATED,
+            payload={
+                "goal": content,
+                "model": selected_model,
+                "runtime_route": run.runtime_route or "",
+                "leader_agent_id": str(leader.id),
+            },
+            agent_id=leader.id,
+        )
         yield _event(
             ConversationStreamEventKind.TURN_STARTED,
             thread_id=thread_id,
             turn_id=turn_id,
             sequence=sequence,
             trace_id=trace_id,
-            payload={"model": selected_model},
+            payload={
+                "model": selected_model,
+                "run_id": str(run.id),
+                "leader_agent_id": str(leader.id),
+                "runtime_event_id": str(run_event.id),
+            },
+        )
+        await self._runtime_repository.append_event(
+            run_id=run.id,
+            event_type=EventType.AGENT_CREATED,
+            payload={
+                "agent_id": str(leader.id),
+                "kind": leader.kind.value,
+                "profile": leader.profile,
+                "model": leader.model,
+            },
+            agent_id=leader.id,
         )
         user_message = await self._repository.append_message(
             thread_id=thread_id,
             role=ThreadMessageRole.USER,
             content=content,
+            run_id=run.id,
+            metadata={"run_id": str(run.id), "leader_agent_id": str(leader.id)},
         )
         sequence += 1
         yield _event(
@@ -97,9 +154,11 @@ class ConversationService:
         assistant_text = ""
         reasoning_active = False
         try:
-            provider = self._provider_factory(selected_model)
             request = await self._model_request(thread_id)
-            async for model_event in provider.stream(request):
+            async for model_event in self._leader_executor.stream(
+                request,
+                model=selected_model,
+            ):
                 if isinstance(model_event, ReasoningStarted):
                     if not reasoning_active:
                         reasoning_active = True
@@ -142,7 +201,7 @@ class ConversationService:
                         turn_id=turn_id,
                         sequence=sequence,
                         trace_id=trace_id,
-                        payload={"text": model_event.text},
+                        payload={"text": model_event.text, "run_id": str(run.id)},
                     )
                 elif isinstance(model_event, TurnFailed):
                     if reasoning_active:
@@ -193,9 +252,21 @@ class ConversationService:
                         thread_id=thread_id,
                         role=ThreadMessageRole.ASSISTANT,
                         content=final_text,
+                        run_id=run.id,
+                        metadata={"run_id": str(run.id)},
+                    )
+                    completed = run.model_copy(update={"status": RunStatus.COMPLETED})
+                    await self._runtime_repository.update_run(completed)
+                    await self._runtime_repository.append_event(
+                        run_id=run.id,
+                        event_type=EventType.RUN_STATUS_CHANGED,
+                        payload={"status": completed.status.value},
+                        agent_id=leader.id,
                     )
                     completion_payload = {
                         **assistant.model_dump(mode="json"),
+                        "run_id": str(run.id),
+                        "leader_agent_id": str(leader.id),
                         "requested_model": selected_model,
                         "response_model": model_event.turn.model,
                         "provider": model_event.turn.provider,
@@ -232,6 +303,7 @@ class ConversationService:
                     payload={"failed": True},
                 )
             sequence += 1
+            await self._mark_run_failed(run, leader)
             yield _error_event(
                 thread_id=thread_id,
                 turn_id=turn_id,
@@ -252,6 +324,7 @@ class ConversationService:
                     payload={"failed": True},
                 )
             sequence += 1
+            await self._mark_run_failed(run, leader)
             yield _error_event(
                 thread_id=thread_id,
                 turn_id=turn_id,
@@ -265,6 +338,16 @@ class ConversationService:
                 ),
             )
             return
+
+    async def _mark_run_failed(self, run: Run, leader: Agent) -> None:
+        failed = run.model_copy(update={"status": RunStatus.FAILED})
+        await self._runtime_repository.update_run(failed)
+        await self._runtime_repository.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_STATUS_CHANGED,
+            payload={"status": failed.status.value},
+            agent_id=leader.id,
+        )
 
     async def create_thread_run(
         self,

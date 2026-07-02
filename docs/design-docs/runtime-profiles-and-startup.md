@@ -92,9 +92,9 @@ local coding-agent work can begin. Use `awesome --api-url <url>` only when the
 TUI should connect to a local, Docker, or remote API server.
 
 Ordinary text input is the main execution entry. The runtime chooses the
-appropriate execution mode for the turn: lightweight model response,
-tool-capable foreground coding work, background work, or resume of an
-interrupted Run. `/run` remains an advanced/manual command for explicit
+appropriate execution behavior for the leader turn: no-tool model response,
+leader-visible tools, teammate/subagent delegation, background work, or resume
+of an interrupted Run. `/run` remains an advanced/manual command for explicit
 execution control; it is not required for normal work.
 
 Slash commands such as `/new`, `/status`, `/models`, `/memory`, `/resume`, and

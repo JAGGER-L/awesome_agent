@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from awesome_agent.conversation.events import ConversationStreamEventKind
+from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 
 
 async def test_conversation_completion_includes_model_metadata() -> None:
@@ -15,7 +17,8 @@ async def test_conversation_completion_includes_model_metadata() -> None:
     thread = await repository.create_thread(title="Model metadata")
     service = ConversationService(
         repository=repository,
-        provider_factory=lambda _model: MetadataProvider(),
+        runtime_repository=InMemoryRuntimeRepository(),
+        leader_executor=ProviderLeaderTurnExecutor(lambda _model: MetadataProvider()),
         default_model="deepseek-v4-pro",
     )
 
