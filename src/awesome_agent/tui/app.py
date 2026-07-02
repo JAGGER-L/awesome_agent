@@ -24,7 +24,13 @@ from awesome_agent.conversation.events import (
     ConversationStreamEventKind,
 )
 from awesome_agent.surfaces.client import SurfaceClient, SurfaceThread
-from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
+from awesome_agent.tui.chat_state import (
+    ChatEventKind,
+    ChatMessage,
+    ChatSessionState,
+    chat_messages_from_thread_records,
+    should_resume_last_run,
+)
 from awesome_agent.tui.client import HttpSurfaceClient
 from awesome_agent.tui.command_palette import CommandPaletteState, is_command_prefix
 from awesome_agent.tui.rendering import render_message
@@ -115,7 +121,7 @@ class AwesomeAgentTui(App[None]):
         if parsed.kind is SlashCommandKind.USER_MESSAGE:
             resume_run_id = (
                 self.state.last_resumable_run_id
-                if raw.casefold() in {"continue", "resume", "\u7ee7\u7eed"}
+                if should_resume_last_run(raw)
                 else None
             )
             self._start_user_message(raw, resume_run_id=resume_run_id)
@@ -384,6 +390,37 @@ class AwesomeAgentTui(App[None]):
                     run,
                     message,
                 )
+            elif parsed.kind is SlashCommandKind.NEW:
+                thread, message = self._create_thread(parsed, state)
+                self.call_from_thread(
+                    self._switch_to_thread,
+                    thread,
+                    [],
+                    message,
+                )
+            elif parsed.kind is SlashCommandKind.RESUME:
+                if not parsed.argument:
+                    guidance = (
+                        "Use /threads to choose a conversation or "
+                        "/resume <id-or-title>."
+                    )
+                    message = ChatMessage.system(guidance)
+                    self.call_from_thread(self._append_command_message, message)
+                else:
+                    thread = self.client.resume_thread(parsed.argument)
+                    messages = chat_messages_from_thread_records(
+                        self.client.list_thread_messages(_thread_id(thread))
+                    )
+                    message = ChatMessage.system(
+                        f"Resumed conversation: {_thread_title(thread)}",
+                        kind=ChatEventKind.RUN,
+                    )
+                    self.call_from_thread(
+                        self._switch_to_thread,
+                        thread,
+                        messages,
+                        message,
+                    )
             else:
                 message = SlashRouter(self.client).handle(parsed, state)
                 self.call_from_thread(self._append_command_message, message)
@@ -420,6 +457,22 @@ class AwesomeAgentTui(App[None]):
         self._render()
         self._focus_prompt()
 
+    def _switch_to_thread(
+        self,
+        thread: SurfaceThread | dict[str, object],
+        messages: list[ChatMessage],
+        message: ChatMessage,
+    ) -> None:
+        self.state = self.state.switch_thread(
+            backend_thread_id=_thread_id(thread),
+            title=_thread_title(thread),
+            context_label=_thread_context_label(thread),
+            messages=messages,
+        )
+        self.state = self.state.append(message)
+        self._render()
+        self._focus_prompt()
+
     def _finish_command_worker(self, *, failed: bool) -> None:
         self._active_worker = None
         self.state = self.state.finish_operation(
@@ -438,8 +491,32 @@ class AwesomeAgentTui(App[None]):
             context_path=context.display_path if context is not None else None,
         )
         thread_id = _thread_id(thread)
-        self.state = self.state.with_backend_thread(thread_id)
+        self.state = self.state.with_backend_thread(
+            thread_id,
+            title=_thread_title(thread),
+            context_label=_thread_context_label(thread),
+        )
         return thread_id
+
+    def _create_thread(
+        self,
+        parsed: SlashCommand,
+        state: ChatSessionState,
+    ) -> tuple[SurfaceThread | dict[str, object], ChatMessage]:
+        title = parsed.argument or "New conversation"
+        context = state.launch_context
+        thread = self.client.create_thread(
+            title=title,
+            context_kind=context.context_kind if context is not None else None,
+            context_path=context.display_path if context is not None else None,
+        )
+        return (
+            thread,
+            ChatMessage.system(
+                f"New conversation started: {_thread_title(thread)}",
+                kind=ChatEventKind.RUN,
+            ),
+        )
 
     def _start_coding_run(
         self,
@@ -560,3 +637,16 @@ def _thread_id(thread: SurfaceThread | dict[str, object]) -> str:
     if isinstance(thread, SurfaceThread):
         return thread.id
     return str(thread["id"])
+
+
+def _thread_title(thread: SurfaceThread | dict[str, object]) -> str:
+    if isinstance(thread, SurfaceThread):
+        return thread.title
+    return str(thread.get("title") or "New conversation")
+
+
+def _thread_context_label(thread: SurfaceThread | dict[str, object]) -> str | None:
+    if isinstance(thread, SurfaceThread):
+        return thread.context_label
+    context = thread.get("context_path") or thread.get("context_label")
+    return str(context) if context is not None else None

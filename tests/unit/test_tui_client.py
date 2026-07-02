@@ -130,3 +130,57 @@ def test_tui_client_reads_surface_capability_endpoints() -> None:
     assert client.usage_summary("thread-1", None)["total_tokens"] == 30
     assert client.config_summary()["api_url"] == "http://testserver"
     assert "/surface/tools" in requested_paths
+
+
+def test_tui_client_resumes_thread_and_reads_messages() -> None:
+    requested_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path == "/threads/resume":
+            assert request.url.params["query"] == "snake"
+            return httpx.Response(
+                200,
+                json={"id": "thread-1", "title": "Snake", "context_path": "E:\\repo"},
+            )
+        if request.url.path == "/threads/thread-1/messages":
+            return httpx.Response(
+                200,
+                json=[{"role": "user", "content": "hi", "kind": "message"}],
+            )
+        return httpx.Response(404)
+
+    client = TuiApiClient(
+        "http://testserver",
+        transport=httpx.MockTransport(handler),
+    )
+
+    thread = client.resume_thread("snake")
+    messages = client.list_thread_messages("thread-1")
+
+    assert thread.id == "thread-1"
+    assert thread.context_label == "E:\\repo"
+    assert messages[0]["content"] == "hi"
+    assert requested_paths == ["/threads/resume", "/threads/thread-1/messages"]
+
+
+def test_tui_client_finds_last_resumable_run_from_thread_runs() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/threads/thread-1/runs"
+        return httpx.Response(
+            200,
+            json=[
+                {"id": "run-finished", "status": "completed"},
+                {"id": "run-paused", "status": "paused"},
+            ],
+        )
+
+    client = TuiApiClient(
+        "http://testserver",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.last_resumable_run("thread-1") == {
+        "id": "run-paused",
+        "status": "paused",
+    }

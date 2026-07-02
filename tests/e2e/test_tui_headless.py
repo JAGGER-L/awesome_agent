@@ -27,6 +27,10 @@ class FakeClient:
         self.turns: list[tuple[str, str]] = []
         self.runs: list[dict[str, object]] = []
         self.cancelled_runs: list[str] = []
+        self.created_threads = 0
+        self.threads: list[dict[str, object]] = []
+        self.messages_by_thread: dict[str, list[dict[str, object]]] = {}
+        self.resumed_queries: list[str] = []
 
     def create_thread(
         self,
@@ -38,8 +42,10 @@ class FakeClient:
         default_model: str | None = None,
         sandbox_profile: str | None = None,
     ) -> dict[str, object]:
-        return {
-            "id": self.thread_id,
+        thread_id = self.thread_id if self.created_threads == 0 else str(uuid4())
+        self.created_threads += 1
+        thread = {
+            "id": thread_id,
             "title": title,
             "context_kind": context_kind or "workspace",
             "context_path": context_path,
@@ -47,7 +53,31 @@ class FakeClient:
             "default_model": default_model,
             "sandbox_profile": sandbox_profile,
             "logical_workspace_path": "/mnt/user-data/workspace/",
+            "updated_label": "now",
         }
+        self.threads.insert(0, thread)
+        self.messages_by_thread.setdefault(thread_id, [])
+        return thread
+
+    def list_threads(self) -> list[dict[str, object]]:
+        return list(self.threads)
+
+    def resume_thread(self, query: str) -> dict[str, object]:
+        self.resumed_queries.append(query)
+        normalized = query.casefold()
+        for thread in self.threads:
+            thread_id = str(thread["id"])
+            title = str(thread["title"])
+            if (
+                thread_id == query
+                or thread_id.startswith(query)
+                or normalized in title.casefold()
+            ):
+                return thread
+        raise ValueError(f"Thread not found: {query}")
+
+    def list_thread_messages(self, thread_id: str) -> list[dict[str, object]]:
+        return list(self.messages_by_thread.get(thread_id, []))
 
     def stream_turn(
         self,
@@ -58,6 +88,12 @@ class FakeClient:
         resume_run_id: str | None = None,
     ) -> list[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
+        self.messages_by_thread.setdefault(thread_id, []).append(
+            {"role": "user", "content": content, "kind": "message"}
+        )
+        self.messages_by_thread[thread_id].append(
+            {"role": "assistant", "content": "hello world", "kind": "model"}
+        )
         turn_id = uuid4()
         trace_id = "trace-test"
         return [
@@ -388,6 +424,126 @@ async def test_tui_accepts_plain_message_without_repo_selection_block(
     assert "hello world" in rendered
     assert client.turns == [(client.thread_id, "hi")]
     assert "Select repository context" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_first_plain_message_creates_thread_automatically() -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+
+    assert client.created_threads == 1
+    assert app.state.backend_thread_id == client.thread_id
+
+
+@pytest.mark.asyncio
+async def test_tui_new_switches_thread_without_internal_path_leak(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(
+        client=client,
+        launch_context=CliLaunchContext(
+            project_root=tmp_path,
+            context_kind="workspace",
+        ),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        old_thread_id = app.state.backend_thread_id
+        await pilot.press("/", "n", "e", "w", " ", "f", "r", "e", "s", "h", "enter")
+        await pilot.pause()
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert app.state.backend_thread_id != old_thread_id
+    assert app.state.thread_title == "fresh"
+    assert "Started thread" not in rendered
+    assert "/mnt/user-data/workspace" not in rendered
+    assert "New conversation started: fresh" in rendered
+    assert "hello world" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_resume_switches_thread_and_loads_messages() -> None:
+    client = FakeClient()
+    original = client.create_thread("Original")
+    restored = client.create_thread("Restored")
+    restored_id = str(restored["id"])
+    client.messages_by_thread[restored_id] = [
+        {"role": "user", "content": "old question", "kind": "message"},
+        {"role": "assistant", "content": "old answer", "kind": "model"},
+    ]
+    app = AwesomeAgentTui(client=client)
+    app.state = app.state.switch_thread(
+        backend_thread_id=str(original["id"]),
+        title="Original",
+        context_label=None,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press(
+            "/",
+            "r",
+            "e",
+            "s",
+            "u",
+            "m",
+            "e",
+            " ",
+            "r",
+            "e",
+            "s",
+            "t",
+            "o",
+            "r",
+            "e",
+            "d",
+            "enter",
+        )
+        await pilot.pause()
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert app.state.backend_thread_id == restored_id
+    assert client.resumed_queries == ["restored"]
+    assert "old question" in rendered
+    assert "old answer" in rendered
+    assert "Resumed conversation: Restored" in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_threads_lists_current_thread_without_internal_paths() -> None:
+    client = FakeClient()
+    current = client.create_thread(
+        "Current",
+        context_path="/mnt/user-data/workspace/",
+    )
+    client.create_thread("Other", context_path="E:\\other")
+    app = AwesomeAgentTui(client=client)
+    app.state = app.state.switch_thread(
+        backend_thread_id=str(current["id"]),
+        title="Current",
+        context_label=str(current["context_path"]),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "t", "h", "r", "e", "a", "d", "s", "enter")
+        await pilot.pause()
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "Threads" in rendered
+    assert "* Current" in rendered
+    assert "Other" in rendered
+    assert "/mnt/user-data/workspace" not in rendered
 
 
 @pytest.mark.asyncio

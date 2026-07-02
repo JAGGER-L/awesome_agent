@@ -143,6 +143,13 @@ class HttpSurfaceClient:
         ]
 
     def resume_thread(self, query: str) -> SurfaceThread:
+        response = self._client.get(
+            f"{self.api_url}/threads/resume",
+            params={"query": query},
+        )
+        if response.status_code not in {404, 405}:
+            response.raise_for_status()
+            return surface_thread_from_mapping(dict(response.json()))
         threads = self.list_threads()
         query_normalized = query.casefold()
         for thread in threads:
@@ -156,6 +163,12 @@ class HttpSurfaceClient:
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]:
         return self._get_list_or_empty(f"/threads/{thread_id}/messages")
+
+    def last_resumable_run(self, thread_id: str) -> dict[str, Any] | None:
+        for run in self._get_list_or_empty(f"/threads/{thread_id}/runs"):
+            if run.get("status") in {"cancelled", "interrupted", "paused"}:
+                return run
+        return None
 
     def list_skills(self) -> list[dict[str, Any]]:
         return self._get_items_object("/extensions/skills")

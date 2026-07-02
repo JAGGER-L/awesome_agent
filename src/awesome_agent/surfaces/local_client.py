@@ -27,6 +27,12 @@ class LocalSurfaceClient:
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]:
         return self.host.list_thread_messages(thread_id)
 
+    def last_resumable_run(self, thread_id: str) -> dict[str, Any] | None:
+        if hasattr(self.host, "last_resumable_run"):
+            result = self.host.last_resumable_run(thread_id)
+            return dict(result) if result is not None else None
+        return None
+
     def stream_turn(
         self,
         thread_id: str,
