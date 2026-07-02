@@ -70,13 +70,15 @@ reserved for the local CLI/TUI profile or explicit trusted local operation.
 
 ## TUI
 
-The TUI requires the local API to be reachable. Start the runtime first, then
-open the terminal operator console:
+`awesome` is the default chat-first local CLI/TUI. It can launch before the API
+is running, and slash commands guide thread, status, model, and memory
+inspection:
 
 ```powershell
-awesome-agent start
-awesome-agent tui --api-url http://127.0.0.1:8000
+awesome
+awesome commands
 ```
 
-Use the TUI for local Run inspection, diagnostics, recent events, and approval
-decisions. It uses API endpoints rather than direct database access.
+Use `awesome-agent` subcommands for direct operations, diagnostics, scripting,
+and API-backed approval workflows. The TUI uses API endpoints rather than
+direct database access.

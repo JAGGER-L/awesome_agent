@@ -81,8 +81,8 @@ awesome commands
 ```
 
 `awesome` does not require an API before launch. It defaults to the local CLI
-profile and LocalSandbox, reports first-run setup state, and lists the stable
-slash commands that Task 61 will use in the chat-first TUI.
+profile and LocalSandbox, then opens the chat-first local CLI/TUI. Use
+`awesome-agent` subcommands for direct operations, diagnostics, and scripting.
 
 ## Local CLI Fallback
 
