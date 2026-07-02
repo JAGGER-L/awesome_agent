@@ -50,6 +50,15 @@ class ChatMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class ThoughtBlock:
+    text: str
+    active: bool
+    collapsed: bool
+    elapsed_seconds: int | None
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ChatSessionState:
     thread_id: UUID
     backend_thread_id: str | None = None
@@ -63,6 +72,12 @@ class ChatSessionState:
     active_operation_label: str | None = None
     streaming_assistant_message_id: str | None = None
     streaming_buffer: str = ""
+    thought_text: str = ""
+    thought_active: bool = False
+    thought_collapsed: bool = True
+    thought_started_at: datetime | None = None
+    thought_elapsed_seconds: int | None = None
+    thought_truncated: bool = False
     status_label: str = "ready"
     details_enabled: bool = False
     last_failed_user_message: str | None = None
@@ -125,6 +140,12 @@ class ChatSessionState:
             active_operation_label=None,
             streaming_assistant_message_id=None,
             streaming_buffer="",
+            thought_text="",
+            thought_active=False,
+            thought_collapsed=True,
+            thought_started_at=None,
+            thought_elapsed_seconds=None,
+            thought_truncated=False,
             status_label="ready",
             last_failed_user_message=None,
             messages=messages or [],
@@ -172,6 +193,59 @@ class ChatSessionState:
             streaming_buffer=buffer,
         )
 
+    def begin_thought(self, started_at: datetime) -> ChatSessionState:
+        return replace(
+            self,
+            thought_text="",
+            thought_active=True,
+            thought_collapsed=False,
+            thought_started_at=started_at,
+            thought_elapsed_seconds=None,
+            thought_truncated=False,
+        )
+
+    def append_thought_delta(
+        self,
+        text: str,
+        *,
+        max_chars: int = 16_000,
+    ) -> ChatSessionState:
+        if self.thought_truncated:
+            return self
+        combined = f"{self.thought_text}{text}"
+        truncated = len(combined) > max_chars
+        return replace(
+            self,
+            thought_text=combined[:max_chars],
+            thought_truncated=truncated,
+        )
+
+    def complete_thought(self, ended_at: datetime) -> ChatSessionState:
+        started_at = self.thought_started_at or ended_at
+        elapsed = max(0, int((ended_at - started_at).total_seconds()))
+        return replace(
+            self,
+            thought_active=False,
+            thought_collapsed=True,
+            thought_elapsed_seconds=elapsed,
+        )
+
+    def toggle_thought(self) -> ChatSessionState:
+        if not self.thought_text and not self.thought_active:
+            return self
+        return replace(self, thought_collapsed=not self.thought_collapsed)
+
+    def thought_block(self) -> ThoughtBlock | None:
+        if not self.thought_active and not self.thought_text:
+            return None
+        return ThoughtBlock(
+            text=self.thought_text,
+            active=self.thought_active,
+            collapsed=self.thought_collapsed,
+            elapsed_seconds=self.thought_elapsed_seconds,
+            truncated=self.thought_truncated,
+        )
+
     def mark_operation_paused(self, run_id: str) -> ChatSessionState:
         return replace(
             self,
@@ -193,6 +267,8 @@ class ChatSessionState:
             active_operation_label=None,
             streaming_assistant_message_id=None,
             streaming_buffer="",
+            thought_active=False,
+            thought_collapsed=True,
             status_label=status_label,
         )
 

@@ -219,6 +219,54 @@ class SlowStreamingClient(FakeClient):
         )
 
 
+class ReasoningStreamingClient(FakeClient):
+    def stream_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        model: str | None = None,
+        resume_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        self.turns.append((thread_id, content))
+        turn_id = uuid4()
+        events = [
+            (
+                ConversationStreamEventKind.REASONING_STARTED,
+                {},
+            ),
+            (
+                ConversationStreamEventKind.REASONING_DELTA,
+                {"text": "inspect context. "},
+            ),
+            (
+                ConversationStreamEventKind.REASONING_DELTA,
+                {"text": "choose answer."},
+            ),
+            (
+                ConversationStreamEventKind.MESSAGE_DELTA,
+                {"text": "final answer"},
+            ),
+            (
+                ConversationStreamEventKind.REASONING_COMPLETED,
+                {},
+            ),
+            (
+                ConversationStreamEventKind.MESSAGE_COMPLETED,
+                {"content": "final answer"},
+            ),
+        ]
+        for sequence, (event, payload) in enumerate(events, start=1):
+            yield ConversationStreamEvent(
+                event=event,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=sequence,
+                trace_id="trace-reasoning",
+                payload=payload,
+            )
+
+
 class FakeProvider(StructuredModelProvider):
     async def stream(self, request: ModelRequest) -> ModelStreamEvent:
         yield TextDelta(text="embedded")
@@ -367,6 +415,29 @@ async def test_continue_resumes_last_resumable_run() -> None:
         await pilot.pause(0.1)
 
     assert client.resume_run_ids == ["run-1"]
+
+
+@pytest.mark.asyncio
+async def test_tui_reasoning_thought_collapses_and_toggles() -> None:
+    app = AwesomeAgentTui(client=ReasoningStreamingClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        await pilot.pause()
+        collapsed = str(app.query_one("#transcript").render())
+        await pilot.press("ctrl+o")
+        expanded = str(app.query_one("#transcript").render())
+        await pilot.press("ctrl+o")
+        collapsed_again = str(app.query_one("#transcript").render())
+
+    assert "Thought for " in collapsed
+    assert "ctrl+o to expand" in collapsed
+    assert "inspect context" not in collapsed
+    assert "final answer" in collapsed
+    assert "inspect context. choose answer." in expanded
+    assert "ctrl+o to collapse" in expanded
+    assert "inspect context" not in collapsed_again
 
 
 @pytest.mark.asyncio

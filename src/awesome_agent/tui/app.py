@@ -64,6 +64,7 @@ class AwesomeAgentTui(App[None]):
     """
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         ("ctrl+c", "cancel", "Cancel"),
+        ("ctrl+o", "toggle_thought", "Toggle thought"),
         ("ctrl+r", "retry", "Retry"),
         ("q", "quit", "Quit"),
     ]
@@ -237,10 +238,15 @@ class AwesomeAgentTui(App[None]):
         self._render()
         self._focus_prompt()
 
+    def action_toggle_thought(self) -> None:
+        self.state = self.state.toggle_thought()
+        self._render()
+        self._focus_prompt()
+
     def _render(self) -> None:
         self.query_one("#welcome", Static).update(self._welcome_text())
         self.query_one("#transcript", Static).update(
-            render_transcript(self.state.messages)
+            render_transcript(self.state.messages, thought=self.state.thought_block())
         )
         self._render_palette()
 
@@ -320,7 +326,15 @@ class AwesomeAgentTui(App[None]):
         run_id = stream_event.payload.get("run_id")
         if isinstance(run_id, str):
             self.state = self.state.note_run_started(run_id)
-        if stream_event.event is ConversationStreamEventKind.MESSAGE_DELTA:
+        if stream_event.event is ConversationStreamEventKind.REASONING_STARTED:
+            self.state = self.state.begin_thought(stream_event.created_at)
+        elif stream_event.event is ConversationStreamEventKind.REASONING_DELTA:
+            text = stream_event.payload.get("text")
+            if isinstance(text, str):
+                self.state = self.state.append_thought_delta(text)
+        elif stream_event.event is ConversationStreamEventKind.REASONING_COMPLETED:
+            self.state = self.state.complete_thought(stream_event.created_at)
+        elif stream_event.event is ConversationStreamEventKind.MESSAGE_DELTA:
             text = stream_event.payload.get("text")
             if isinstance(text, str):
                 self.state = self.state.append_stream_delta(text)

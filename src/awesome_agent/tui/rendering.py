@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from rich.text import Text
 
-from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage
+from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
 
 
 def render_message(message: ChatMessage) -> Text:
@@ -25,12 +25,44 @@ def render_message(message: ChatMessage) -> Text:
     return _labeled("note", message.content, label_style="dim")
 
 
-def render_transcript(messages: Iterable[ChatMessage]) -> Text:
+def render_transcript(
+    messages: Iterable[ChatMessage],
+    *,
+    thought: ThoughtBlock | None = None,
+) -> Text:
     rendered = Text()
-    for index, message in enumerate(messages):
+    message_list = list(messages)
+    thought_inserted = False
+    for index, message in enumerate(message_list):
         if index:
             rendered.append("\n\n")
         rendered.append_text(render_message(message))
+        if thought is not None and not thought_inserted and message.role == "user":
+            rendered.append("\n\n")
+            rendered.append_text(render_thought(thought))
+            thought_inserted = True
+    if thought is not None and not thought_inserted:
+        if message_list:
+            rendered.append("\n\n")
+        rendered.append_text(render_thought(thought))
+    return rendered
+
+
+def render_thought(thought: ThoughtBlock) -> Text:
+    if thought.active:
+        label = "Thinking ..."
+    else:
+        seconds = thought.elapsed_seconds if thought.elapsed_seconds is not None else 0
+        label = f"Thought for {seconds}s (ctrl+o to expand)"
+        if not thought.collapsed:
+            label = f"Thought for {seconds}s (ctrl+o to collapse)"
+    rendered = Text(label, style="dim")
+    if thought.collapsed:
+        return rendered
+    rendered.append("\n")
+    rendered.append(thought.text, style="dim")
+    if thought.truncated:
+        rendered.append("\n[truncated]", style="yellow")
     return rendered
 
 
