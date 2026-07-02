@@ -12,6 +12,14 @@ def test_product_surface_docs_keep_tui_as_client_surface() -> None:
     assert "advanced" in text or "manual" in text
 
 
+def test_product_surface_docs_make_leader_agentloop_primary_turn_path() -> None:
+    text = _normalized("docs/design-docs/product-surface-architecture.md")
+
+    assert "ordinary input enters the leader agentloop" in text
+    assert "simple questions are leader turns with no tool calls" in text
+    assert "tui never imports provider" in text
+
+
 def test_runtime_profile_docs_keep_docker_api_without_cli() -> None:
     text = _normalized("docs/design-docs/runtime-profiles-and-startup.md")
 

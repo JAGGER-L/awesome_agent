@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.conversation.models import ThreadMessageRole
+from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.modeling.errors import ModelErrorCode, ModelErrorInfo
 from awesome_agent.modeling.messages import AssistantMessage
@@ -15,6 +16,7 @@ from awesome_agent.modeling.stream import (
 )
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 
 
 async def test_conversation_service_streams_and_persists_assistant_message() -> None:
@@ -22,7 +24,10 @@ async def test_conversation_service_streams_and_persists_assistant_message() -> 
     thread = await repository.create_thread(title="Greeting")
     service = ConversationService(
         repository=repository,
-        provider_factory=lambda _model: FakeStreamingProvider(),
+        runtime_repository=InMemoryRuntimeRepository(),
+        leader_executor=ProviderLeaderTurnExecutor(
+            lambda _model: FakeStreamingProvider(),
+        ),
         default_model="fake-model",
     )
 
@@ -56,7 +61,10 @@ async def test_conversation_service_emits_error_without_assistant_message() -> N
     thread = await repository.create_thread(title="Failure")
     service = ConversationService(
         repository=repository,
-        provider_factory=lambda _model: FailingStreamingProvider(),
+        runtime_repository=InMemoryRuntimeRepository(),
+        leader_executor=ProviderLeaderTurnExecutor(
+            lambda _model: FailingStreamingProvider(),
+        ),
         default_model="fake-model",
     )
 

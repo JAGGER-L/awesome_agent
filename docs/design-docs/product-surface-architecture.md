@@ -23,9 +23,10 @@ The local `awesome` command remains a full-screen TUI. This phase intentionally
 does not introduce an inline terminal chat mode.
 
 Ordinary input is the primary product entry. Users should not need to know
-whether a response is a lightweight model turn, a tool-capable coding
-execution, or a background runtime task. The system creates the appropriate
-durable Run semantics behind the conversation turn.
+whether a response needs only the leader model, leader-visible tools,
+teammates, or a background runtime task. Ordinary input enters the leader
+AgentLoop. The system creates the appropriate durable Run semantics behind the
+conversation turn.
 
 The full-screen TUI may own:
 
@@ -63,9 +64,11 @@ The normal local TUI flow is:
 1. The TUI accepts user input in the active thread.
 2. The TUI calls the shared surface client.
 3. The surface client is either embedded local mode or explicit HTTP mode.
-4. The shared service layer records the user message and starts a turn.
-5. A planner chooses the execution mode: lightweight model turn,
-   tool-capable coding Run, background Run, or resume of an interrupted Run.
+4. The shared service layer records the user message and starts a durable
+   leader turn.
+5. The leader AgentLoop decides whether the turn can finish with no tool calls,
+   needs leader-visible tools, delegates to teammates/subagents, moves to
+   background work, or resumes interrupted work.
 6. Runtime/provider services stream normalized events such as
    `run.started`, `reasoning.delta`, `message.delta`, `tool.completed`,
    `artifact.created`, `message.completed`, `usage.updated`, and `error`.
@@ -79,11 +82,11 @@ instead of relying on its local transcript cache.
 ## Run Semantics
 
 Ordinary input is the primary execution route. Every user turn has durable Run
-semantics, but not every turn is a heavy coding execution. A simple question may
-create a lightweight Run that only records model streaming, interruption, usage,
-and completion evidence. A coding request may create a tool-capable Run that
-uses AgentLoop, tools, sandbox execution, validation, approvals, artifacts, and
-recovery. A long-running request may run in the background.
+semantics and a leader agent. Simple questions are leader turns with no tool
+calls. A coding request may use leader-visible tools, sandbox execution,
+validation, approvals, artifacts, and recovery. A complex request may create
+teammates/subagents under runtime policy. A long-running request may run in the
+background.
 
 The Run flow is:
 
@@ -91,8 +94,8 @@ The Run flow is:
    requests execution from the current thread context.
 2. Services validate the thread context, repository/workspace, model profile,
    sandbox profile, and capability policy.
-3. The planner selects lightweight chat, foreground coding, background coding,
-   or resume.
+3. The leader AgentLoop selects no-tool response, foreground coding,
+   background coding, delegation, or resume.
 4. Runtime events remain the execution source of truth.
 5. Conversation services project user-meaningful Run lifecycle events into the
    thread transcript.
@@ -129,6 +132,8 @@ meaning.
 - Add inline terminal chat.
 - Let the TUI call model providers directly.
 - Let the TUI import AgentLoop or graph modules.
+- Let the TUI own model provider calls; the TUI never imports provider,
+  AgentLoop, graph, or tool-executor modules.
 - Add Web-specific backend forks.
 - Require `/run` for normal coding-agent work.
 - Treat every ordinary question as a heavy tool-capable coding execution.

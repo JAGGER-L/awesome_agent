@@ -29,8 +29,8 @@ class FakeProvider(StructuredModelProvider):
         )
 
 
-def test_simple_question_uses_lightweight_run() -> None:
-    assert plan_execution_mode("What can you do?") is ExecutionMode.LIGHTWEIGHT
+def test_simple_question_uses_leader_turn() -> None:
+    assert plan_execution_mode("What can you do?") is ExecutionMode.LEADER
 
 
 def test_coding_request_uses_coding_execution_mode() -> None:
@@ -46,7 +46,7 @@ def test_continue_resumes_last_resumable_run() -> None:
 
 
 @pytest.mark.parametrize("content", ["hi", "What can you do?"])
-def test_local_runtime_host_streams_lightweight_turn(content: str) -> None:
+def test_local_runtime_host_streams_leader_turn(content: str) -> None:
     host = LocalRuntimeHost(
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
@@ -63,7 +63,11 @@ def test_local_runtime_host_streams_lightweight_turn(content: str) -> None:
         "message.completed",
         "turn.completed",
     ]
-    assert events[2].payload == {"text": "hello"}
+    assert "run_id" in events[0].payload
+    assert events[2].payload == {
+        "text": "hello",
+        "run_id": events[0].payload["run_id"],
+    }
 
 
 def test_local_runtime_host_reports_coding_mode_boundary() -> None:

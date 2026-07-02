@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 ROOT = Path("src/awesome_agent")
 TUI_ROOT = ROOT / "tui"
 SHARED_SURFACE_ROOTS = [ROOT / "client", ROOT / "surfaces"]
@@ -29,7 +28,9 @@ def test_shared_surface_layers_do_not_import_textual() -> None:
         for path in _python_files(root):
             imports = _imports(path)
             assert not [
-                name for name in imports if name == "textual" or name.startswith("textual.")
+                name
+                for name in imports
+                if name == "textual" or name.startswith("textual.")
             ], f"{path} imports Textual: {imports}"
 
 

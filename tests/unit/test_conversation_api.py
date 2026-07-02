@@ -6,6 +6,7 @@ from typing import Any, cast
 from fastapi.testclient import TestClient
 
 from awesome_agent.api.app import create_app
+from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.modeling.errors import ModelErrorCode, ModelErrorInfo
 from awesome_agent.modeling.messages import AssistantMessage
@@ -17,6 +18,7 @@ from awesome_agent.modeling.stream import (
 )
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.settings import Settings
 
 
@@ -57,7 +59,8 @@ def _client(provider: object) -> TestClient:
     repository = InMemoryConversationRepository()
     conversation = ConversationService(
         repository=repository,
-        provider_factory=lambda _model: cast(Any, provider),
+        runtime_repository=InMemoryRuntimeRepository(),
+        leader_executor=ProviderLeaderTurnExecutor(lambda _model: cast(Any, provider)),
         default_model="fake-model",
     )
     return TestClient(

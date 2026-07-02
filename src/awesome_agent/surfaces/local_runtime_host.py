@@ -8,16 +8,18 @@ from threading import Thread
 from uuid import UUID, uuid4
 
 from awesome_agent.conversation.events import ConversationStreamEvent
+from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.providers.factory import ModelProviderFactory
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import SurfaceClientError, SurfaceThread
 
 
 class ExecutionMode(StrEnum):
-    LIGHTWEIGHT = "lightweight"
+    LEADER = "leader"
     CODING = "coding"
     RESUME = "resume"
 
@@ -52,7 +54,7 @@ def plan_execution_mode(
     )
     if any(marker in normalized for marker in coding_markers):
         return ExecutionMode.CODING
-    return ExecutionMode.LIGHTWEIGHT
+    return ExecutionMode.LEADER
 
 
 class LocalRuntimeHost:
@@ -65,13 +67,15 @@ class LocalRuntimeHost:
     ) -> None:
         self.settings = settings or Settings()
         self.repository = InMemoryConversationRepository()
+        self.runtime_repository = InMemoryRuntimeRepository()
         self.default_model = default_model or self.settings.leader_model
         factory = provider_factory
         if factory is None:
             factory = ModelProviderFactory(self.settings).create
         self._conversation = ConversationService(
             repository=self.repository,
-            provider_factory=factory,
+            runtime_repository=self.runtime_repository,
+            leader_executor=ProviderLeaderTurnExecutor(factory),
             default_model=self.default_model,
         )
         self._planned_runs: dict[str, dict[str, object]] = {}
@@ -168,8 +172,13 @@ class LocalRuntimeHost:
         model: str | None = None,
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
-        mode = plan_execution_mode(content, resumable_run_id=resume_run_id)
-        if mode is ExecutionMode.RESUME and resume_run_id is None:
+        normalized = content.strip().casefold()
+        if resume_run_id is not None and normalized in {"continue", "resume", "继续"}:
+            raise SurfaceClientError(
+                "Durable turn resume is not available yet.",
+                code="resume_not_available",
+            )
+        if resume_run_id is None and normalized in {"/resume"}:
             raise SurfaceClientError(
                 "No resumable Run is available in the current thread.",
                 code="no_resumable_run",

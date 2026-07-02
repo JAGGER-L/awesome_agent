@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import ArtifactMetadata
+from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import RunIntent, RunMode, RunStatus
 from awesome_agent.domain.models import Run
@@ -17,6 +18,7 @@ from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.settings import Settings
 
 
@@ -26,7 +28,8 @@ def test_product_surface_thread_turn_run_and_artifact_flow(tmp_path: Path) -> No
     intake = FakeRunIntake(runtime)
     conversation_service = ConversationService(
         repository=thread_repository,
-        provider_factory=lambda _model: FakeProvider(),
+        runtime_repository=InMemoryRuntimeRepository(),
+        leader_executor=ProviderLeaderTurnExecutor(lambda _model: FakeProvider()),
         default_model="fake-model",
     )
     client = TestClient(

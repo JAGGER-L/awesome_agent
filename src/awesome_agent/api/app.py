@@ -46,6 +46,7 @@ from awesome_agent.api.schemas import (
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.conversation.repository import ConversationRepository
+from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import (
     ConversationService,
     MissingThreadRepositoryContext,
@@ -125,6 +126,7 @@ from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.intake import RunIntakeError, RunIntakeService
 from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_ROUTE
 from awesome_agent.runtime.recovery_metrics import RecoveryMetricsService
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
 from awesome_agent.runtime.workspaces import (
     WorkspaceCandidate,
@@ -167,9 +169,13 @@ def create_app(
     settings = settings or Settings()
     threads_repository = thread_repository or InMemoryConversationRepository()
     model_provider_factory = ModelProviderFactory(settings)
+    default_runtime_repository = getattr(service, "repository", None)
+    if default_runtime_repository is None:
+        default_runtime_repository = InMemoryRuntimeRepository()
     default_conversation_service = conversation_service or ConversationService(
         repository=threads_repository,
-        provider_factory=model_provider_factory.create,
+        runtime_repository=default_runtime_repository,
+        leader_executor=ProviderLeaderTurnExecutor(model_provider_factory.create),
         default_model=settings.leader_model,
     )
     active_extension_catalog = extension_catalog
@@ -260,7 +266,10 @@ def create_app(
         app.state.threads = PostgresConversationRepository(sessions)
         app.state.conversations = conversation_service or ConversationService(
             repository=app.state.threads,
-            provider_factory=ModelProviderFactory(settings).create,
+            runtime_repository=runtime_repository,
+            leader_executor=ProviderLeaderTurnExecutor(
+                ModelProviderFactory(settings).create,
+            ),
             default_model=settings.leader_model,
         )
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
