@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
+from awesome_agent.tui.events import ApprovalPromptState
 from awesome_agent.tui.pickers import PickerState
 
 
@@ -100,6 +101,8 @@ class ChatSessionState:
     provider_memory: str | None = None
     staged_skill_ids: tuple[str, ...] = ()
     active_picker: PickerState | None = None
+    pending_approval: ApprovalPromptState | None = None
+    session_allow_rules: tuple[str, ...] = ()
     last_requested_model: str | None = None
     last_response_model: str | None = None
     last_model_provider: str | None = None
@@ -183,6 +186,7 @@ class ChatSessionState:
             thought_blocks={},
             staged_skill_ids=(),
             active_picker=None,
+            pending_approval=None,
             status_label="ready",
             last_failed_user_message=None,
             messages=messages or [],
@@ -226,6 +230,17 @@ class ChatSessionState:
 
     def close_picker(self) -> ChatSessionState:
         return replace(self, active_picker=None)
+
+    def with_approval_prompt(
+        self,
+        prompt: ApprovalPromptState | None,
+    ) -> ChatSessionState:
+        return replace(self, pending_approval=prompt)
+
+    def add_session_allow_rule(self, rule: str) -> ChatSessionState:
+        if rule in self.session_allow_rules:
+            return self
+        return replace(self, session_allow_rules=(*self.session_allow_rules, rule))
 
     def with_last_failed_user_message(
         self,

@@ -33,6 +33,7 @@ class FakeClient:
         self.messages_by_thread: dict[str, list[dict[str, object]]] = {}
         self.resumed_queries: list[str] = []
         self.turn_options: list[dict[str, object]] = []
+        self.approval_decisions: list[dict[str, object]] = []
 
     def create_thread(
         self,
@@ -194,6 +195,22 @@ class FakeClient:
     def cancel(self, run_id: str) -> dict[str, object]:
         self.cancelled_runs.append(run_id)
         return {"id": run_id, "status": "cancelled"}
+
+    def decide_approval(
+        self,
+        run_id: str,
+        approval_id: str,
+        *,
+        approved: bool,
+    ) -> dict[str, object]:
+        decision = {
+            "run_id": run_id,
+            "approval_id": approval_id,
+            "approved": approved,
+            "status": "decided",
+        }
+        self.approval_decisions.append(decision)
+        return decision
 
 
 class SlowStatusClient(FakeClient):
@@ -1050,6 +1067,204 @@ async def test_tui_renders_approval_required_stream_error_as_actionable() -> Non
     assert "Action required" in rendered
     assert "Tool approval is required" in rendered
     assert "Use the approvals view to decide" in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_approval_prompt_choice_calls_client() -> None:
+    class ApprovalClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            resume_run_id: str | None = None,
+        ) -> list[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.ERROR,
+                    thread_id=uuid4(),
+                    turn_id=uuid4(),
+                    sequence=1,
+                    trace_id="trace-approval",
+                    payload={
+                        "run_id": "run-1",
+                        "approval_id": "approval-1",
+                        "code": "approval_required",
+                        "message": "File edit needs approval.",
+                        "approval_required": True,
+                        "approval_type": "edit",
+                        "path": "snake-game.html",
+                    },
+                )
+            ]
+
+    client = ApprovalClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        await pilot.pause()
+        palette = str(app.query_one("#command-palette").render())
+        await pilot.press("down", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert "Leader wants to create:" in palette
+    assert "snake-game.html" in palette
+    assert client.approval_decisions == [
+        {
+            "run_id": "run-1",
+            "approval_id": "approval-1",
+            "approved": True,
+            "status": "decided",
+        }
+    ]
+    assert app.state.session_allow_rules == ("edit:*",)
+    assert app.state.pending_approval is None
+    assert "Approval approved: snake-game.html status=decided" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_session_allow_auto_decides_matching_approval() -> None:
+    class ApprovalClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            resume_run_id: str | None = None,
+        ) -> list[ConversationStreamEvent]:
+            self.calls += 1
+            self.turns.append((thread_id, content))
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.ERROR,
+                    thread_id=uuid4(),
+                    turn_id=uuid4(),
+                    sequence=1,
+                    trace_id=f"trace-approval-{self.calls}",
+                    payload={
+                        "run_id": f"run-{self.calls}",
+                        "approval_id": f"approval-{self.calls}",
+                        "code": "approval_required",
+                        "message": "File edit needs approval.",
+                        "approval_required": True,
+                        "approval_type": "edit",
+                        "path": f"file-{self.calls}.html",
+                    },
+                )
+            ]
+
+    client = ApprovalClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("f", "i", "r", "s", "t", "enter")
+        await pilot.pause()
+        await pilot.press("down", "enter")
+        await pilot.press("s", "e", "c", "o", "n", "d", "enter")
+        await pilot.pause()
+
+    assert client.approval_decisions == [
+        {
+            "run_id": "run-1",
+            "approval_id": "approval-1",
+            "approved": True,
+            "status": "decided",
+        },
+        {
+            "run_id": "run-2",
+            "approval_id": "approval-2",
+            "approved": True,
+            "status": "decided",
+        },
+    ]
+    assert app.state.pending_approval is None
+
+
+@pytest.mark.asyncio
+async def test_tui_renders_tool_and_team_stream_events() -> None:
+    class EventClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            resume_run_id: str | None = None,
+        ) -> list[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            turn_id = uuid4()
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_DELTA,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=1,
+                    trace_id="trace-events",
+                    payload={
+                        "tool_event": {
+                            "name": "write_file",
+                            "summary": "created snake-game.html",
+                            "path": "snake-game.html",
+                        }
+                    },
+                ),
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_DELTA,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=2,
+                    trace_id="trace-events",
+                    payload={
+                        "team_event": {
+                            "role": "leader",
+                            "summary": "created 2 teammates",
+                            "message": "leader -> frontend-engineer",
+                        }
+                    },
+                ),
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_COMPLETED,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=3,
+                    trace_id="trace-events",
+                    payload={"content": "done"},
+                ),
+            ]
+
+    app = AwesomeAgentTui(client=EventClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("b", "u", "i", "l", "d", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "Tool - write_file" in rendered
+    assert "created snake-game.html" in rendered
+    assert "path:" not in rendered
+    assert "Team" in rendered
+    assert "leader: created 2 teammates" in rendered
+    assert "leader -> frontend-engineer" not in rendered
 
 
 @pytest.mark.asyncio
