@@ -19,6 +19,7 @@ from awesome_agent.api.schemas import (
     ApprovalDecisionRequest,
     BudgetLedgerResponse,
     ContextCompactionResponse,
+    CreateConversationTurnRequest,
     CreateProbeRequest,
     CreateRunRequest,
     CreateThreadMessageRequest,
@@ -30,7 +31,9 @@ from awesome_agent.api.schemas import (
     WorkspaceCleanupRequest,
 )
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.conversation.repository import ConversationRepository
+from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.extensions.config import build_project_extension_catalog_sync
@@ -93,6 +96,7 @@ from awesome_agent.persistence.validation import (
 from awesome_agent.persistence.worker_heartbeats import (
     PostgresWorkerHeartbeatRepository,
 )
+from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
@@ -139,9 +143,16 @@ def create_app(
     extension_catalog_history: list[ExtensionCatalog] | None = None,
     project_root: Path | None = None,
     thread_repository: ConversationRepository | None = None,
+    conversation_service: ConversationService | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     threads_repository = thread_repository or InMemoryConversationRepository()
+    model_provider_factory = ModelProviderFactory(settings)
+    default_conversation_service = conversation_service or ConversationService(
+        repository=threads_repository,
+        provider_factory=model_provider_factory.create,
+        default_model=settings.leader_model,
+    )
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
         active_extension_catalog = build_project_extension_catalog_sync(project_root)
@@ -161,6 +172,7 @@ def create_app(
             app.state.registry = registry
             app.state.extension_catalog = active_extension_catalog
             app.state.threads = threads_repository
+            app.state.conversations = default_conversation_service
             app.state.extension_catalogs_by_version = extension_catalogs_by_version
             if workspace_service is not None:
                 app.state.workspaces = workspace_service
@@ -227,6 +239,11 @@ def create_app(
         )
         app.state.extension_catalog = active_extension_catalog
         app.state.threads = PostgresConversationRepository(sessions)
+        app.state.conversations = conversation_service or ConversationService(
+            repository=app.state.threads,
+            provider_factory=ModelProviderFactory(settings).create,
+            default_model=settings.leader_model,
+        )
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry
         app.state.validation_repository = validation
@@ -279,6 +296,7 @@ def create_app(
         app.state.registry = registry
     app.state.extension_catalog = active_extension_catalog
     app.state.threads = threads_repository
+    app.state.conversations = default_conversation_service
     app.state.extension_catalogs_by_version = extension_catalogs_by_version
     if workspace_service is not None:
         app.state.workspaces = workspace_service
@@ -387,6 +405,9 @@ def create_app(
 
     def threads() -> ConversationRepository:
         return cast(ConversationRepository, app.state.threads)
+
+    def conversations() -> ConversationService:
+        return cast(ConversationService, app.state.conversations)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -509,6 +530,22 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
         return [message.model_dump(mode="json") for message in messages]
+
+    @app.post("/threads/{thread_id}/turns")
+    async def create_conversation_turn(
+        thread_id: UUID,
+        request: CreateConversationTurnRequest,
+    ) -> StreamingResponse:
+        return StreamingResponse(
+            _conversation_sse(
+                conversations().start_turn(
+                    thread_id=thread_id,
+                    content=request.content,
+                    model=request.model,
+                )
+            ),
+            media_type="text/event-stream",
+        )
 
     @app.get("/runs")
     async def list_runs(
@@ -974,6 +1011,14 @@ async def _sse(
         after_sequence=after_sequence,
     ):
         yield _format_sse(event)
+
+
+async def _conversation_sse(
+    events: AsyncIterator[ConversationStreamEvent],
+) -> AsyncIterator[str]:
+    async for event in events:
+        data = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
+        yield f"id: {event.sequence}\nevent: {event.event.value}\ndata: {data}\n\n"
 
 
 def _format_sse(event: RuntimeEvent) -> str:
