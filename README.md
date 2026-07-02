@@ -86,9 +86,10 @@ remain Windows fallback entrypoints.
 
 | Mode | Best for | Command | Status |
 | --- | --- | --- | --- |
+| Local CLI | Interactive local coding-agent entrypoint | `awesome`, `awesome commands` | Primary |
 | Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | Primary |
 | Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | Primary |
-| Local CLI | First local run and development | `.\scripts\quickstart.ps1` | Fallback until `awesome` lands |
+| Local CLI fallback | First local run and development | `.\scripts\quickstart.ps1` | Fallback |
 | Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Fallback |
 
 The current "Web" surface is the local FastAPI inspection surface and
@@ -140,6 +141,29 @@ The PowerShell quickstart remains available:
 The API binds to `http://127.0.0.1:8000` by default. Use `/health` for process
 liveness and `/ready?profile=api` or `/ready?profile=runtime` for dependency
 readiness.
+
+### Run Local CLI
+
+```powershell
+awesome
+awesome commands
+```
+
+`awesome` is the local interactive entrypoint. In this phase it prints a safe
+bootstrap summary and the supported slash-command model; Task 61 replaces the
+inside with the chat-first TUI.
+
+| Command | Purpose |
+| --- | --- |
+| `/new` | Start a new durable local conversation/thread. |
+| `/status` | Show current thread/run/runtime status. |
+| `/models` | List configured model profiles. |
+| `/memory` | Show memory configuration and current memory summary. |
+| `/help` | Show help. |
+
+Slash commands are CLI/TUI interaction syntax. API routes expose semantic
+resources such as threads, runs, models, memory, readiness, and approvals
+rather than slash-command route names.
 
 ### Verify
 
