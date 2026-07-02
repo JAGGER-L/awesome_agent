@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 from uuid import UUID, uuid4
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
@@ -50,6 +51,8 @@ class ChatSessionState:
     backend_thread_id: str | None = None
     launch_context: CliLaunchContext | None = None
     first_run_summary: ConfigFlowSummary | None = None
+    thread_title: str = "New conversation"
+    thread_context_label: str | None = None
     current_run_id: str | None = None
     last_resumable_run_id: str | None = None
     active_operation_id: str | None = None
@@ -83,8 +86,45 @@ class ChatSessionState:
     def append(self, message: ChatMessage) -> ChatSessionState:
         return replace(self, messages=[*self.messages, message])
 
-    def with_backend_thread(self, thread_id: str) -> ChatSessionState:
-        return replace(self, backend_thread_id=thread_id)
+    def with_backend_thread(
+        self,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        context_label: str | None = None,
+    ) -> ChatSessionState:
+        return replace(
+            self,
+            backend_thread_id=thread_id,
+            thread_title=title or self.thread_title,
+            thread_context_label=context_label
+            if context_label is not None
+            else self.thread_context_label,
+        )
+
+    def switch_thread(
+        self,
+        *,
+        backend_thread_id: str,
+        title: str,
+        context_label: str | None,
+        messages: list[ChatMessage] | None = None,
+    ) -> ChatSessionState:
+        return replace(
+            self,
+            backend_thread_id=backend_thread_id,
+            thread_title=title,
+            thread_context_label=context_label,
+            current_run_id=None,
+            last_resumable_run_id=None,
+            active_operation_id=None,
+            active_operation_label=None,
+            streaming_assistant_message_id=None,
+            streaming_buffer="",
+            status_label="ready",
+            last_failed_user_message=None,
+            messages=messages or [],
+        )
 
     def with_status(self, status_label: str) -> ChatSessionState:
         return replace(self, status_label=status_label)
@@ -166,3 +206,28 @@ class ChatSessionState:
             current_run_id=run_id,
             status_label=status_label,
         )
+
+
+def should_resume_last_run(input_text: str) -> bool:
+    return input_text.strip().casefold() in {"continue", "resume", "\u7ee7\u7eed"}
+
+
+def chat_messages_from_thread_records(
+    records: list[dict[str, Any]],
+) -> list[ChatMessage]:
+    return [_chat_message_from_record(record) for record in records]
+
+
+def _chat_message_from_record(record: dict[str, Any]) -> ChatMessage:
+    role = str(record.get("role") or "system")
+    content = str(record.get("content") or "")
+    raw_kind = str(record.get("kind") or ChatEventKind.MESSAGE)
+    try:
+        kind = ChatEventKind(raw_kind)
+    except ValueError:
+        kind = ChatEventKind.MESSAGE
+    if role == "user":
+        return ChatMessage.user(content)
+    if role == "assistant":
+        return ChatMessage.assistant(content)
+    return ChatMessage.system(content, kind=kind)

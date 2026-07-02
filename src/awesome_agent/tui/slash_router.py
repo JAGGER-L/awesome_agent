@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from awesome_agent.cli.slash_commands import (
@@ -58,10 +59,8 @@ class SlashRouter:
             return ChatMessage.system(slash_command_help())
         if command.kind is SlashCommandKind.THREADS:
             threads = self.client.list_threads()
-            if not threads:
-                return ChatMessage.system("No threads found.")
             return ChatMessage.system(
-                "\n".join(_thread_label(item) for item in threads)
+                format_thread_list(thread_summaries(threads, state.backend_thread_id))
             )
         if command.kind is SlashCommandKind.RESUME:
             target = command.argument or "<thread id or title>"
@@ -205,6 +204,40 @@ class SlashRouter:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ThreadSummary:
+    id: str
+    short_id: str
+    title: str
+    current: bool = False
+    context_label: str | None = None
+    updated_label: str | None = None
+
+
+def thread_summaries(
+    threads: list[SurfaceThread | dict[str, object]],
+    current_thread_id: str | None,
+) -> list[ThreadSummary]:
+    return [
+        _thread_summary(thread, current_thread_id=current_thread_id)
+        for thread in threads
+    ]
+
+
+def format_thread_list(threads: list[ThreadSummary]) -> str:
+    if not threads:
+        return "No conversations yet."
+    lines = ["Threads"]
+    for thread in threads:
+        marker = "*" if thread.current else " "
+        updated = thread.updated_label or "-"
+        context = _public_context_label(thread.context_label)
+        lines.append(
+            f"{marker} {thread.title}  {thread.short_id}  {updated}  {context}"
+        )
+    return "\n".join(lines)
+
+
 def _format_tool_group(name: str, items: list[dict[str, object]]) -> str:
     if not items:
         return f"{name}: -"
@@ -238,3 +271,40 @@ def _thread_label(thread: SurfaceThread | dict[str, object]) -> str:
     thread_id = str(thread.get("id") or "-")
     title = str(thread.get("title") or thread_id)
     return f"{title} {thread_id[:8]}".strip()
+
+
+def _thread_summary(
+    thread: SurfaceThread | dict[str, object],
+    *,
+    current_thread_id: str | None,
+) -> ThreadSummary:
+    if isinstance(thread, SurfaceThread):
+        return ThreadSummary(
+            id=thread.id,
+            short_id=thread.short_id,
+            title=thread.title,
+            current=thread.id == current_thread_id,
+            context_label=thread.context_label,
+            updated_label=thread.updated_label,
+        )
+    thread_id = str(thread.get("id") or "-")
+    title = str(thread.get("title") or thread_id)
+    context = thread.get("context_path") or thread.get("context_label")
+    updated = thread.get("updated_label")
+    return ThreadSummary(
+        id=thread_id,
+        short_id=thread_id[:8],
+        title=title,
+        current=thread_id == current_thread_id,
+        context_label=str(context) if context is not None else None,
+        updated_label=str(updated) if updated is not None else None,
+    )
+
+
+def _public_context_label(context_label: str | None) -> str:
+    if not context_label:
+        return "-"
+    normalized = context_label.replace("\\", "/")
+    if normalized.startswith("/mnt/user-data/"):
+        return "workspace"
+    return context_label

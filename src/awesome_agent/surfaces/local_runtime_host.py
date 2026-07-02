@@ -28,6 +28,8 @@ def plan_execution_mode(
     resumable_run_id: str | None = None,
 ) -> ExecutionMode:
     normalized = content.strip().casefold()
+    if resumable_run_id is not None and normalized == "\u7ee7\u7eed":
+        return ExecutionMode.RESUME
     if resumable_run_id is not None and normalized in {
         "continue",
         "resume",
@@ -147,6 +149,16 @@ class LocalRuntimeHost:
     ) -> list[dict[str, object]]:
         messages = await self.repository.list_messages(UUID(thread_id))
         return [message.model_dump(mode="json") for message in messages]
+
+    def last_resumable_run(self, thread_id: str) -> dict[str, object] | None:
+        for run in reversed(list(self._planned_runs.values())):
+            if run.get("thread_id") == thread_id and run.get("status") in {
+                "cancelled",
+                "interrupted",
+                "paused",
+            }:
+                return dict(run)
+        return None
 
     def stream_turn(
         self,

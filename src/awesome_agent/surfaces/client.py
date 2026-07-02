@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from awesome_agent.conversation.events import ConversationStreamEvent
@@ -13,6 +14,7 @@ class SurfaceThread:
     title: str
     short_id: str
     context_label: str | None = None
+    updated_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,8 @@ class SurfaceClient(Protocol):
     def resume_thread(self, query: str) -> SurfaceThread: ...
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]: ...
+
+    def last_resumable_run(self, thread_id: str) -> dict[str, Any] | None: ...
 
     def stream_turn(
         self,
@@ -103,4 +107,28 @@ def surface_thread_from_mapping(payload: dict[str, object]) -> SurfaceThread:
         title=title,
         short_id=thread_id[:8],
         context_label=str(context_label) if context_label is not None else None,
+        updated_label=_relative_time_label(payload.get("updated_at")),
     )
+
+
+def _relative_time_label(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        updated = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    now = datetime.now(UTC)
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=UTC)
+    seconds = max(0, int((now - updated).total_seconds()))
+    if seconds < 60:
+        return "now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
