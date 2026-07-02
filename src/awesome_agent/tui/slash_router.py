@@ -84,8 +84,7 @@ class SlashRouter:
                 return ChatMessage.system(f"default: {summary.model_name} ({suffix})")
             models = self.client.list_models()
             lines = [
-                f"{item.get('role', 'model')}: {item.get('name')}"
-                for item in models
+                f"{item.get('role', 'model')}: {item.get('name')}" for item in models
             ]
             return ChatMessage.system("\n".join(lines) or "No models configured.")
         if command.kind is SlashCommandKind.MEMORY:
@@ -99,8 +98,7 @@ class SlashRouter:
                 return ChatMessage.system("No skills reported by the local API.")
             return ChatMessage.system(
                 "\n".join(
-                    str(item.get("name") or item.get("id") or item)
-                    for item in skills
+                    str(item.get("name") or item.get("id") or item) for item in skills
                 )
             )
         if command.kind is SlashCommandKind.TOOLS:

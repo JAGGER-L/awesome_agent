@@ -31,6 +31,10 @@ class ChatMessage:
         return cls(role="user", content=content)
 
     @classmethod
+    def assistant(cls, content: str) -> ChatMessage:
+        return cls(role="assistant", content=content, kind=ChatEventKind.MODEL)
+
+    @classmethod
     def system(
         cls,
         content: str,
@@ -43,6 +47,7 @@ class ChatMessage:
 @dataclass(frozen=True, slots=True)
 class ChatSessionState:
     thread_id: UUID
+    backend_thread_id: str | None = None
     launch_context: CliLaunchContext | None = None
     first_run_summary: ConfigFlowSummary | None = None
     current_run_id: str | None = None
@@ -67,13 +72,27 @@ class ChatSessionState:
     def context_label(self) -> str:
         if self.launch_context is None:
             return "workspace: -"
-        return (
-            f"{self.launch_context.context_kind}: "
-            f"{self.launch_context.display_path}"
-        )
+        return f"{self.launch_context.context_kind}: {self.launch_context.display_path}"
 
     def append(self, message: ChatMessage) -> ChatSessionState:
         return replace(self, messages=[*self.messages, message])
+
+    def with_backend_thread(self, thread_id: str) -> ChatSessionState:
+        return replace(self, backend_thread_id=thread_id)
+
+    def with_status(self, status_label: str) -> ChatSessionState:
+        return replace(self, status_label=status_label)
+
+    def upsert_streaming_assistant(self, content: str) -> ChatSessionState:
+        if self.messages and self.messages[-1].role == "assistant":
+            return replace(
+                self,
+                messages=[
+                    *self.messages[:-1],
+                    ChatMessage.assistant(content),
+                ],
+            )
+        return self.append(ChatMessage.assistant(content))
 
     def toggle_details(self) -> ChatSessionState:
         return replace(self, details_enabled=not self.details_enabled)
