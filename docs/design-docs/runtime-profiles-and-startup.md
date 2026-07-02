@@ -97,10 +97,11 @@ leader-visible tools, teammate/subagent delegation, background work, or resume
 of an interrupted Run. `/run` remains an advanced/manual command for explicit
 execution control; it is not required for normal work.
 
-Slash commands such as `/new`, `/status`, `/models`, `/memory`, `/resume`, and
-`/help` are local interaction syntax over semantic runtime operations. The API
-remains resource-oriented: `POST /threads`, `POST /runs`, readiness, models,
-memory, and approval resources, not slash-command route names.
+Slash commands such as `/new`, `/threads`, `/model`, `/thinking`, `/memory`,
+`/status`, and `/help` are local interaction syntax over semantic runtime
+operations. The API remains resource-oriented: `POST /threads`, `POST /runs`,
+readiness, models, memory, and approval resources, not slash-command route
+names.
 
 ## Non-Goals
 

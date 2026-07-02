@@ -36,7 +36,6 @@ def plan_execution_mode(
         "continue",
         "resume",
         "继续",
-        "/resume",
     }:
         return ExecutionMode.RESUME
     coding_markers = (
@@ -177,11 +176,6 @@ class LocalRuntimeHost:
             raise SurfaceClientError(
                 "Durable turn resume is not available yet.",
                 code="resume_not_available",
-            )
-        if resume_run_id is None and normalized in {"/resume"}:
-            raise SurfaceClientError(
-                "No resumable Run is available in the current thread.",
-                code="no_resumable_run",
             )
         yield from _iter_async_in_thread(
             self._conversation.start_turn(

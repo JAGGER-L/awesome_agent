@@ -23,7 +23,7 @@ class ModelClient:
         ]
 
 
-def test_models_output_includes_last_turn_metadata() -> None:
+def test_model_output_includes_last_turn_metadata() -> None:
     state = ChatSessionState.new().note_model_metadata(
         {
             "requested_model": "deepseek-v4-pro",
@@ -34,7 +34,7 @@ def test_models_output_includes_last_turn_metadata() -> None:
     )
 
     message = SlashRouter(ModelClient()).handle(
-        SlashCommand(SlashCommandKind.MODELS),
+        SlashCommand(SlashCommandKind.MODEL),
         state,
     )
 
@@ -47,7 +47,7 @@ def test_models_output_includes_last_turn_metadata() -> None:
     assert "self-description is not authoritative" in message.content
 
 
-def test_models_output_uses_first_run_summary_without_secret(tmp_path: Path) -> None:
+def test_model_output_uses_first_run_summary_without_secret(tmp_path: Path) -> None:
     state = ChatSessionState.new(
         first_run_summary=ConfigFlowSummary(
             home=tmp_path,
@@ -65,7 +65,7 @@ def test_models_output_uses_first_run_summary_without_secret(tmp_path: Path) -> 
     )
 
     message = SlashRouter(ModelClient()).handle(
-        SlashCommand(SlashCommandKind.MODELS),
+        SlashCommand(SlashCommandKind.MODEL),
         state,
     )
 

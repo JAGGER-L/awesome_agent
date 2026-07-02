@@ -31,12 +31,14 @@ class FakeSemanticClient:
 
     def list_tools(self) -> dict[str, list[dict[str, object]]]:
         return {
-            "builtin": [
-                {"name": "repo.read", "risk_level": "low", "health": "healthy"}
+            "Files": [
+                {"name": "read_file", "risk_level": "low", "health": "healthy"}
             ],
-            "mcp": [],
-            "sandbox": [
-                {"name": "shell.execute", "risk_level": "medium", "health": "healthy"}
+            "Terminal": [
+                {"name": "run_command", "risk_level": "medium", "health": "healthy"}
+            ],
+            "Approvals": [
+                {"name": "File edits: ask first", "health": "policy"}
             ],
         }
 
@@ -61,7 +63,15 @@ class FakeSemanticClient:
         return {"tokens": 0}
 
     def config_summary(self) -> dict[str, object]:
-        return {"home": "~/.awesome-agent"}
+        return {
+            "project_root": "E:/project",
+            "mode": "embedded",
+            "home": "~/.awesome-agent",
+            "default_model": "deepseek-v4-pro",
+            "memory_enabled": True,
+            "sandbox_backend": "local",
+            "deepseek_api_key_configured": False,
+        }
 
 
 def test_router_handles_tools_command() -> None:
@@ -70,9 +80,10 @@ def test_router_handles_tools_command() -> None:
         ChatSessionState.new(),
     )
 
-    assert "builtin: repo.read" in message.content
-    assert "risk_level=low" in message.content
-    assert "sandbox: shell.execute" in message.content
+    assert "Leader tools" in message.content
+    assert "Files\n  read_file" in message.content
+    assert "Terminal\n  run_command" in message.content
+    assert "Approvals\n  File edits: ask first" in message.content
 
 
 def test_router_toggles_details() -> None:
@@ -81,7 +92,9 @@ def test_router_toggles_details() -> None:
         ChatSessionState.new(),
     )
 
-    assert "Verbose activity rendering" in message.content
+    assert "Details" in message.content
+    assert "Off" in message.content
+    assert "On" in message.content
 
 
 def test_router_config_uses_first_run_summary_when_available(tmp_path: Path) -> None:
@@ -93,22 +106,57 @@ def test_router_config_uses_first_run_summary_when_available(tmp_path: Path) -> 
         state,
     )
 
-    assert str(summary.user_config) in message.content
-    assert "AWESOME_AGENT_DEEPSEEK_API_KEY=missing" in message.content
+    assert "Configuration" in message.content
+    assert "Project" in message.content
+    assert str(summary.project_config) in message.content
+    assert "AWESOME_AGENT_DEEPSEEK_API_KEY: missing" in message.content
 
 
-def test_router_models_marks_missing_key(tmp_path: Path) -> None:
+def test_router_model_marks_missing_key(tmp_path: Path) -> None:
     state = ChatSessionState.new(
         first_run_summary=_summary(tmp_path, model_api_key_configured=False)
     )
 
     message = SlashRouter(FakeSemanticClient()).handle(
-        SlashCommand(SlashCommandKind.MODELS),
+        SlashCommand(SlashCommandKind.MODEL),
         state,
     )
 
     assert "deepseek-v4-pro" in message.content
     assert "missing AWESOME_AGENT_DEEPSEEK_API_KEY" in message.content
+
+
+def test_router_memory_uses_two_level_entry() -> None:
+    message = SlashRouter(FakeSemanticClient()).handle(
+        SlashCommand(SlashCommandKind.MEMORY),
+        ChatSessionState.new(),
+    )
+
+    assert "Memory" in message.content
+    assert "Local memory" in message.content
+    assert "Provider memory" in message.content
+
+
+def test_router_config_uses_user_facing_sections() -> None:
+    message = SlashRouter(FakeSemanticClient()).handle(
+        SlashCommand(SlashCommandKind.CONFIG),
+        ChatSessionState.new(),
+    )
+
+    assert "Configuration" in message.content
+    assert "Project\n  Root:" in message.content
+    assert "Runtime\n  Mode:" in message.content
+    assert "Secrets\n  DeepSeek API key:" in message.content
+
+
+def test_router_unknown_command_is_actionable() -> None:
+    message = SlashRouter(FakeSemanticClient()).handle(
+        SlashCommand(SlashCommandKind.UNKNOWN, "resume"),
+        ChatSessionState.new(),
+    )
+
+    assert "Unknown command: /resume" in message.content
+    assert "Type /help" in message.content
 
 
 def _summary(

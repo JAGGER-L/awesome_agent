@@ -7,16 +7,14 @@ from enum import StrEnum
 class SlashCommandKind(StrEnum):
     NEW = "new"
     THREADS = "threads"
-    RESUME = "resume"
     RUN = "run"
     STATUS = "status"
-    MODELS = "models"
+    MODEL = "model"
+    THINKING = "thinking"
     SKILLS = "skills"
     TOOLS = "tools"
     MCP = "mcp"
     MEMORY = "memory"
-    UPLOADS = "uploads"
-    ARTIFACTS = "artifacts"
     DETAILS = "details"
     USAGE = "usage"
     CONFIG = "config"
@@ -53,28 +51,20 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
     SlashCommandDefinition(
         name="new",
         kind=SlashCommandKind.NEW,
-        description="Start a new local conversation.",
+        description="Start a new conversation.",
         category="thread",
         argument_hint="[title]",
     ),
     SlashCommandDefinition(
         name="threads",
         kind=SlashCommandKind.THREADS,
-        description="List known threads.",
+        description="Switch conversation.",
         category="thread",
-        aliases=("switch",),
-    ),
-    SlashCommandDefinition(
-        name="resume",
-        kind=SlashCommandKind.RESUME,
-        description="Resume a thread by id or title.",
-        category="thread",
-        argument_hint="<id-or-title>",
     ),
     SlashCommandDefinition(
         name="run",
         kind=SlashCommandKind.RUN,
-        description="Start a Coding Run from the current thread context.",
+        description="Force advanced execution mode.",
         category="run",
         argument_hint="<goal>",
         requires_thread=True,
@@ -84,26 +74,31 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
     SlashCommandDefinition(
         name="status",
         kind=SlashCommandKind.STATUS,
-        description="Show the current thread, run, API, and sandbox status.",
+        description="Show current state.",
         category="status",
     ),
     SlashCommandDefinition(
-        name="models",
-        kind=SlashCommandKind.MODELS,
-        description="List configured model profiles.",
+        name="model",
+        kind=SlashCommandKind.MODEL,
+        description="Choose model.",
+        category="model",
+    ),
+    SlashCommandDefinition(
+        name="thinking",
+        kind=SlashCommandKind.THINKING,
+        description="Choose thinking mode.",
         category="status",
-        aliases=("model",),
     ),
     SlashCommandDefinition(
         name="skills",
         kind=SlashCommandKind.SKILLS,
-        description="Browse enabled and available skills.",
+        description="Apply skills to the next turn.",
         category="extensions",
     ),
     SlashCommandDefinition(
         name="tools",
         kind=SlashCommandKind.TOOLS,
-        description="Show built-in, MCP, and sandbox tools.",
+        description="Show leader-visible tools.",
         category="extensions",
     ),
     SlashCommandDefinition(
@@ -115,27 +110,13 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
     SlashCommandDefinition(
         name="memory",
         kind=SlashCommandKind.MEMORY,
-        description="Show memory configuration and current memory summary.",
+        description="Manage memory.",
         category="context",
-    ),
-    SlashCommandDefinition(
-        name="uploads",
-        kind=SlashCommandKind.UPLOADS,
-        description="Show uploaded files for this thread.",
-        category="context",
-        requires_thread=True,
-    ),
-    SlashCommandDefinition(
-        name="artifacts",
-        kind=SlashCommandKind.ARTIFACTS,
-        description="Show generated artifacts.",
-        category="context",
-        requires_thread=True,
     ),
     SlashCommandDefinition(
         name="details",
         kind=SlashCommandKind.DETAILS,
-        description="Toggle verbose activity rendering.",
+        description="Choose detail level.",
         category="display",
     ),
     SlashCommandDefinition(
@@ -147,19 +128,19 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
     SlashCommandDefinition(
         name="config",
         kind=SlashCommandKind.CONFIG,
-        description="Show resolved config paths and overrides.",
+        description="Show configuration.",
         category="status",
     ),
     SlashCommandDefinition(
         name="help",
         kind=SlashCommandKind.HELP,
-        description="Show interactive help.",
+        description="Show commands.",
         category="help",
     ),
     SlashCommandDefinition(
         name="quit",
         kind=SlashCommandKind.QUIT,
-        description="Exit the TUI.",
+        description="Exit.",
         category="session",
     ),
 )

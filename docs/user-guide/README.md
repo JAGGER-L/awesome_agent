@@ -29,7 +29,7 @@ The required slash commands are:
 The local TUI is intentionally chat-first. It shows a welcome panel at launch,
 then keeps the main screen focused on the transcript and input prompt. Runtime
 details are available through slash commands such as `/status`, `/tools`,
-`/mcp`, `/artifacts`, `/usage`, and `/config`.
+`/mcp`, `/usage`, and `/config`.
 
 Conversation and Run failures are rendered as structured transcript items with
 request IDs, retryability, and remediation hints when the API provides them.
@@ -38,23 +38,20 @@ the current Run.
 
 | Command | Purpose |
 | --- | --- |
-| `/new` | Start a new durable local conversation/thread. |
-| `/threads` | List known threads. |
-| `/switch` | Alias for `/threads`. |
-| `/resume` | Resume a thread by id or title when supported. |
-| `/status` | Show current thread/run/runtime status. |
-| `/model` | Alias for `/models`. |
-| `/models` | List configured model profiles and last-turn routing metadata. |
-| `/skills` | Browse enabled and available skills. |
-| `/tools` | Show built-in, MCP, and sandbox tools. |
+| `/help` | Show commands. |
+| `/new` | Start a new conversation. |
+| `/threads` | Switch conversation. |
+| `/model` | Choose model. |
+| `/thinking` | Choose thinking mode. |
+| `/memory` | Manage memory. |
+| `/skills` | Apply skills to the next turn. |
+| `/tools` | Show leader-visible tools. |
 | `/mcp` | Show MCP server status. |
-| `/memory` | Show memory configuration and current memory summary. |
-| `/uploads` | Show uploaded files for this thread. |
-| `/artifacts` | Show generated artifacts. |
-| `/details` | Toggle verbose activity rendering. |
+| `/status` | Show current thread/run/runtime status. |
 | `/usage` | Show token usage and context. |
-| `/config` | Show resolved config paths and overrides. |
-| `/help` | Show help. |
+| `/config` | Show configuration. |
+| `/details` | Choose detail level. |
+| `/run` | Force advanced execution mode. |
 | `/quit` | Exit the TUI. |
 
 Useful chat-first TUI keys:
@@ -70,8 +67,9 @@ semantic resources such as threads, runs, models, memory, readiness, and
 approvals rather than slash-command route names.
 
 Model self-descriptions are not authoritative identity evidence. Use
-`/models` to inspect configured model names, provider, base URL, API-key
-presence, and the last completed turn's requested and observed response model.
+`/model` to choose the current model and inspect configured model names,
+provider, base URL, API-key presence, and the last completed turn's requested
+and observed response model.
 Gateways and compatible base URLs may route aliases internally; when response
 metadata is absent, the provider did not return it.
 

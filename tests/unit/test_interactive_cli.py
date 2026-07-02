@@ -30,9 +30,11 @@ def test_awesome_commands_lists_slash_commands() -> None:
     assert result.exit_code == 0
     assert "/new" in result.output
     assert "/status" in result.output
-    assert "/models" in result.output
+    assert "/model" in result.output
+    assert "/thinking" in result.output
     assert "/memory" in result.output
     assert "/help" in result.output
+    assert "/models" not in result.output
 
 
 def test_awesome_init_creates_user_config(
