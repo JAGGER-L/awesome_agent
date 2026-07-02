@@ -47,3 +47,51 @@ def test_thought_delta_is_bounded_and_marked_truncated() -> None:
 
     assert updated.thought_text == "abc"
     assert updated.thought_truncated is True
+
+
+def test_thought_attaches_to_active_turn_only() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    ended = started + timedelta(seconds=1)
+    state = (
+        ChatSessionState.new()
+        .begin_turn("turn-1")
+        .begin_thought(started)
+        .append_thought_delta("first thought")
+        .complete_thought(ended)
+        .finish_turn()
+        .begin_turn("turn-2")
+        .begin_thought(started)
+        .append_thought_delta("second thought")
+    )
+
+    first = state.thought_for_turn("turn-1")
+    second = state.thought_for_turn("turn-2")
+
+    assert first is not None
+    assert second is not None
+    assert first.text == "first thought"
+    assert first.active is False
+    assert second.text == "second thought"
+    assert second.active is True
+
+
+def test_toggle_thought_toggles_current_or_latest_thought() -> None:
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    state = (
+        ChatSessionState.new()
+        .begin_turn("turn-1")
+        .begin_thought(started)
+        .append_thought_delta("first")
+        .complete_thought(started)
+        .finish_turn()
+    )
+
+    expanded = state.toggle_thought()
+    collapsed = expanded.toggle_thought()
+    expanded_thought = expanded.thought_for_turn("turn-1")
+    collapsed_thought = collapsed.thought_for_turn("turn-1")
+
+    assert expanded_thought is not None
+    assert collapsed_thought is not None
+    assert expanded_thought.collapsed is False
+    assert collapsed_thought.collapsed is True

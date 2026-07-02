@@ -12,6 +12,7 @@ from awesome_agent.cli.repo_context import CliLaunchContext
 
 class ChatEventKind(StrEnum):
     MESSAGE = "message"
+    COMMAND = "command"
     RUN = "run"
     TOOL = "tool"
     MODEL = "model"
@@ -25,15 +26,26 @@ class ChatMessage:
     role: str
     content: str
     kind: ChatEventKind = ChatEventKind.MESSAGE
+    id: str = field(default_factory=lambda: uuid4().hex)
+    turn_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @classmethod
-    def user(cls, content: str) -> ChatMessage:
-        return cls(role="user", content=content)
+    def user(cls, content: str, *, turn_id: str | None = None) -> ChatMessage:
+        return cls(role="user", content=content, turn_id=turn_id)
 
     @classmethod
-    def assistant(cls, content: str) -> ChatMessage:
-        return cls(role="assistant", content=content, kind=ChatEventKind.MODEL)
+    def assistant(cls, content: str, *, turn_id: str | None = None) -> ChatMessage:
+        return cls(
+            role="assistant",
+            content=content,
+            kind=ChatEventKind.MODEL,
+            turn_id=turn_id,
+        )
+
+    @classmethod
+    def command(cls, content: str) -> ChatMessage:
+        return cls(role="user", content=content, kind=ChatEventKind.COMMAND)
 
     @classmethod
     def error(cls, content: str) -> ChatMessage:
@@ -70,6 +82,8 @@ class ChatSessionState:
     last_resumable_run_id: str | None = None
     active_operation_id: str | None = None
     active_operation_label: str | None = None
+    active_turn_id: str | None = None
+    active_thought_turn_id: str | None = None
     streaming_assistant_message_id: str | None = None
     streaming_buffer: str = ""
     thought_text: str = ""
@@ -78,6 +92,7 @@ class ChatSessionState:
     thought_started_at: datetime | None = None
     thought_elapsed_seconds: int | None = None
     thought_truncated: bool = False
+    thought_blocks: dict[str, ThoughtBlock] = field(default_factory=dict)
     last_requested_model: str | None = None
     last_response_model: str | None = None
     last_model_provider: str | None = None
@@ -142,6 +157,8 @@ class ChatSessionState:
             last_resumable_run_id=None,
             active_operation_id=None,
             active_operation_label=None,
+            active_turn_id=None,
+            active_thought_turn_id=None,
             streaming_assistant_message_id=None,
             streaming_buffer="",
             thought_text="",
@@ -150,6 +167,7 @@ class ChatSessionState:
             thought_started_at=None,
             thought_elapsed_seconds=None,
             thought_truncated=False,
+            thought_blocks={},
             status_label="ready",
             last_failed_user_message=None,
             messages=messages or [],
@@ -166,14 +184,26 @@ class ChatSessionState:
 
     def upsert_streaming_assistant(self, content: str) -> ChatSessionState:
         if self.messages and self.messages[-1].role == "assistant":
+            existing = self.messages[-1]
             return replace(
                 self,
                 messages=[
                     *self.messages[:-1],
-                    ChatMessage.assistant(content),
+                    ChatMessage.assistant(content, turn_id=existing.turn_id),
                 ],
             )
-        return self.append(ChatMessage.assistant(content))
+        return self.append(ChatMessage.assistant(content, turn_id=self.active_turn_id))
+
+    def begin_turn(self, turn_id: str) -> ChatSessionState:
+        return replace(
+            self,
+            active_turn_id=turn_id,
+            streaming_buffer="",
+            streaming_assistant_message_id=None,
+        )
+
+    def finish_turn(self) -> ChatSessionState:
+        return replace(self, active_turn_id=None, active_thought_turn_id=None)
 
     def begin_operation(
         self,
@@ -207,14 +237,24 @@ class ChatSessionState:
         )
 
     def begin_thought(self, started_at: datetime) -> ChatSessionState:
+        turn_id = self.active_turn_id or self.active_operation_id or uuid4().hex
+        thought = ThoughtBlock(
+            text="",
+            active=True,
+            collapsed=False,
+            elapsed_seconds=None,
+            truncated=False,
+        )
         return replace(
             self,
+            active_thought_turn_id=turn_id,
             thought_text="",
             thought_active=True,
             thought_collapsed=False,
             thought_started_at=started_at,
             thought_elapsed_seconds=None,
             thought_truncated=False,
+            thought_blocks={**self.thought_blocks, turn_id: thought},
         )
 
     def append_thought_delta(
@@ -223,41 +263,91 @@ class ChatSessionState:
         *,
         max_chars: int = 16_000,
     ) -> ChatSessionState:
-        if self.thought_truncated:
+        turn_id = self.active_thought_turn_id or self.active_turn_id
+        if turn_id is None:
             return self
-        combined = f"{self.thought_text}{text}"
+        current = self.thought_blocks.get(turn_id)
+        if current is None:
+            current = ThoughtBlock(
+                text="",
+                active=True,
+                collapsed=False,
+                elapsed_seconds=None,
+                truncated=False,
+            )
+        if current.truncated:
+            return self
+        combined = f"{current.text}{text}"
         truncated = len(combined) > max_chars
+        updated = ThoughtBlock(
+            text=combined[:max_chars],
+            active=current.active,
+            collapsed=current.collapsed,
+            elapsed_seconds=current.elapsed_seconds,
+            truncated=truncated,
+        )
         return replace(
             self,
-            thought_text=combined[:max_chars],
+            thought_text=updated.text,
             thought_truncated=truncated,
+            thought_blocks={**self.thought_blocks, turn_id: updated},
         )
 
     def complete_thought(self, ended_at: datetime) -> ChatSessionState:
         started_at = self.thought_started_at or ended_at
         elapsed = max(0, int((ended_at - started_at).total_seconds()))
+        turn_id = self.active_thought_turn_id or self.active_turn_id
+        thought_blocks = self.thought_blocks
+        if turn_id is not None:
+            current = thought_blocks.get(turn_id)
+            if current is not None:
+                thought_blocks = {
+                    **thought_blocks,
+                    turn_id: ThoughtBlock(
+                        text=current.text,
+                        active=False,
+                        collapsed=True,
+                        elapsed_seconds=elapsed,
+                        truncated=current.truncated,
+                    ),
+                }
         return replace(
             self,
+            active_thought_turn_id=None,
             thought_active=False,
             thought_collapsed=True,
             thought_elapsed_seconds=elapsed,
+            thought_blocks=thought_blocks,
         )
 
     def toggle_thought(self) -> ChatSessionState:
-        if not self.thought_text and not self.thought_active:
+        turn_id = self.active_thought_turn_id or self.active_turn_id
+        if turn_id is None:
+            turn_id = next(reversed(self.thought_blocks), None)
+        if turn_id is None:
             return self
-        return replace(self, thought_collapsed=not self.thought_collapsed)
+        current = self.thought_blocks.get(turn_id)
+        if current is None:
+            return self
+        updated = replace(current, collapsed=not current.collapsed)
+        return replace(
+            self,
+            thought_collapsed=updated.collapsed,
+            thought_blocks={**self.thought_blocks, turn_id: updated},
+        )
 
     def thought_block(self) -> ThoughtBlock | None:
-        if not self.thought_active and not self.thought_text:
-            return None
-        return ThoughtBlock(
-            text=self.thought_text,
-            active=self.thought_active,
-            collapsed=self.thought_collapsed,
-            elapsed_seconds=self.thought_elapsed_seconds,
-            truncated=self.thought_truncated,
-        )
+        return self.latest_thought()
+
+    def thought_for_turn(self, turn_id: str) -> ThoughtBlock | None:
+        return self.thought_blocks.get(turn_id)
+
+    def latest_thought(self) -> ThoughtBlock | None:
+        if self.active_thought_turn_id is not None:
+            active = self.thought_blocks.get(self.active_thought_turn_id)
+            if active is not None:
+                return active
+        return next(reversed(self.thought_blocks.values()), None)
 
     def mark_operation_paused(self, run_id: str) -> ChatSessionState:
         return replace(
@@ -266,6 +356,8 @@ class ChatSessionState:
             last_resumable_run_id=run_id,
             active_operation_id=None,
             active_operation_label=None,
+            active_turn_id=None,
+            active_thought_turn_id=None,
             status_label="paused",
         )
 
@@ -278,6 +370,8 @@ class ChatSessionState:
             self,
             active_operation_id=None,
             active_operation_label=None,
+            active_turn_id=None,
+            active_thought_turn_id=None,
             streaming_assistant_message_id=None,
             streaming_buffer="",
             thought_active=False,
