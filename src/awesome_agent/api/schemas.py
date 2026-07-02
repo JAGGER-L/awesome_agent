@@ -156,7 +156,10 @@ class ModelProfileResponse(BaseModel):
     provider: str
     configured: bool
     api_key_env: str
+    api_key_present: bool
     base_url: str | None = None
+    source: str = "settings"
+    overridden_by_env: bool = False
 
 
 class SurfaceToolItemResponse(BaseModel):

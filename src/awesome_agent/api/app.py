@@ -1486,7 +1486,10 @@ def _model_profiles(settings: Settings) -> list[ModelProfileResponse]:
             provider="deepseek",
             configured=settings.deepseek_api_key is not None,
             api_key_env="AWESOME_AGENT_DEEPSEEK_API_KEY",
+            api_key_present=settings.deepseek_api_key is not None,
             base_url=settings.deepseek_base_url,
+            source="settings",
+            overridden_by_env=False,
         )
         for role, model in roles
     ]
