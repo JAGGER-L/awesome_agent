@@ -18,6 +18,7 @@ class ConversationRepository(Protocol):
         title: str,
         context_kind: str = "workspace",
         context_path: str | None = None,
+        repository_id: UUID | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
     ) -> Thread:
@@ -27,6 +28,9 @@ class ConversationRepository(Protocol):
         pass
 
     async def get_thread(self, thread_id: UUID) -> Thread:
+        pass
+
+    async def bind_repository(self, thread_id: UUID, repository_id: UUID) -> Thread:
         pass
 
     async def resolve_thread(self, query: str) -> Thread:

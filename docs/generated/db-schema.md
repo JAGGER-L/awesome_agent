@@ -319,6 +319,7 @@ Generated from SQLAlchemy metadata.
 | `title` | `VARCHAR(200)` | no |
 | `context_kind` | `VARCHAR(32)` | no |
 | `context_path` | `TEXT` | yes |
+| `repository_id` | `UUID` | yes |
 | `default_model` | `VARCHAR(128)` | yes |
 | `sandbox_profile` | `VARCHAR(64)` | yes |
 | `created_at` | `DATETIME` | no |

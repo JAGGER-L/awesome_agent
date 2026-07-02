@@ -98,6 +98,8 @@ class AwesomeAgentTui(App[None]):
                     self.state = self.state.toggle_details()
                     label = "enabled" if self.state.details_enabled else "disabled"
                     message = ChatMessage.system(f"Details {label}.")
+                elif parsed.kind is SlashCommandKind.RUN:
+                    message = self._start_coding_run(parsed.argument)
                 elif parsed.kind is SlashCommandKind.QUIT:
                     self.exit()
                     return
@@ -215,6 +217,32 @@ class AwesomeAgentTui(App[None]):
         thread_id = str(thread["id"])
         self.state = self.state.with_backend_thread(thread_id)
         return thread_id
+
+    def _start_coding_run(self, goal: str) -> ChatMessage:
+        if not goal:
+            return ChatMessage.system(
+                "Usage: /run <goal>",
+                kind=ChatEventKind.ERROR,
+            )
+        thread_id = self._ensure_backend_thread(goal)
+        context = self.state.launch_context
+        repository_path = (
+            context.display_path
+            if context is not None and context.context_kind == "repo"
+            else None
+        )
+        run = self.client.create_thread_run(
+            thread_id,
+            goal,
+            repository_path=repository_path,
+        )
+        self.state = self.state.with_run(
+            str(run["id"]), status_label=str(run["status"])
+        )
+        return ChatMessage.system(
+            (f"Started Coding Run {run['id']}: {run['goal']} status={run['status']}"),
+            kind=ChatEventKind.RUN,
+        )
 
     def _focus_prompt(self) -> None:
         self.query_one("#prompt", Input).focus()

@@ -29,6 +29,7 @@ class TuiApiClient:
         *,
         context_kind: str | None = None,
         context_path: str | None = None,
+        repository_id: str | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
     ) -> dict[str, Any]:
@@ -37,6 +38,8 @@ class TuiApiClient:
             payload["context_kind"] = context_kind
         if context_path is not None:
             payload["context_path"] = context_path
+        if repository_id is not None:
+            payload["repository_id"] = repository_id
         if default_model is not None:
             payload["default_model"] = default_model
         if sandbox_profile is not None:
@@ -57,6 +60,31 @@ class TuiApiClient:
             content=content,
             model=model,
         )
+
+    def create_thread_run(
+        self,
+        thread_id: str,
+        goal: str,
+        *,
+        intent: str = "modifying",
+        mode: str = "solo",
+        repository_id: str | None = None,
+        repository_path: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, object] = {"goal": goal, "intent": intent, "mode": mode}
+        if repository_id is not None:
+            payload["repository_id"] = repository_id
+        if repository_path is not None:
+            payload["repository_path"] = repository_path
+        response = self._client.post(
+            f"{self.api_url}/threads/{thread_id}/runs",
+            json=payload,
+        )
+        response.raise_for_status()
+        return dict(response.json())
+
+    def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:
+        return self._get_list(f"/threads/{thread_id}/runs")
 
     def runtime_status(self) -> dict[str, object]:
         response = self._client.get(

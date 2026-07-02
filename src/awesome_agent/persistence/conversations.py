@@ -25,6 +25,7 @@ class InMemoryConversationRepository:
         title: str,
         context_kind: str = "workspace",
         context_path: str | None = None,
+        repository_id: UUID | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
     ) -> Thread:
@@ -32,6 +33,7 @@ class InMemoryConversationRepository:
             title=title,
             context_kind=context_kind,
             context_path=context_path,
+            repository_id=repository_id,
             default_model=default_model,
             sandbox_profile=sandbox_profile,
         )
@@ -51,6 +53,12 @@ class InMemoryConversationRepository:
             return self._threads[thread_id]
         except KeyError as error:
             raise KeyError(f"Thread not found: {thread_id}") from error
+
+    async def bind_repository(self, thread_id: UUID, repository_id: UUID) -> Thread:
+        thread = await self.get_thread(thread_id)
+        updated = thread.model_copy(update={"repository_id": repository_id})
+        self._threads[thread_id] = updated
+        return updated
 
     async def resolve_thread(self, query: str) -> Thread:
         try:
@@ -105,6 +113,7 @@ class PostgresConversationRepository:
         title: str,
         context_kind: str = "workspace",
         context_path: str | None = None,
+        repository_id: UUID | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
     ) -> Thread:
@@ -112,6 +121,7 @@ class PostgresConversationRepository:
             title=title,
             context_kind=context_kind,
             context_path=context_path,
+            repository_id=repository_id,
             default_model=default_model,
             sandbox_profile=sandbox_profile,
         )
@@ -138,6 +148,15 @@ class PostgresConversationRepository:
         if record is None:
             raise KeyError(f"Thread not found: {thread_id}")
         return _thread_from_record(record)
+
+    async def bind_repository(self, thread_id: UUID, repository_id: UUID) -> Thread:
+        async with self._sessions.begin() as session:
+            record = await session.get(ThreadRecord, thread_id)
+            if record is None:
+                raise KeyError(f"Thread not found: {thread_id}")
+            record.repository_id = repository_id
+            await session.flush()
+            return _thread_from_record(record)
 
     async def resolve_thread(self, query: str) -> Thread:
         try:
@@ -211,6 +230,7 @@ def _thread_to_record(thread: Thread) -> ThreadRecord:
         title=thread.title,
         context_kind=thread.context_kind,
         context_path=thread.context_path,
+        repository_id=thread.repository_id,
         default_model=thread.default_model,
         sandbox_profile=thread.sandbox_profile,
         created_at=thread.created_at,
@@ -224,6 +244,7 @@ def _thread_from_record(record: ThreadRecord) -> Thread:
         title=record.title,
         context_kind=record.context_kind,
         context_path=record.context_path,
+        repository_id=record.repository_id,
         default_model=record.default_model,
         sandbox_profile=record.sandbox_profile,
         created_at=record.created_at,

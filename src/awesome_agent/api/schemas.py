@@ -29,6 +29,7 @@ class CreateThreadRequest(BaseModel):
     title: str = Field(default="Untitled thread", min_length=1, max_length=200)
     context_kind: str = Field(default="workspace", min_length=1, max_length=32)
     context_path: str | None = None
+    repository_id: UUID | None = None
     default_model: str | None = Field(default=None, max_length=128)
     sandbox_profile: str | None = Field(default=None, max_length=64)
 
@@ -48,6 +49,16 @@ class CreateConversationTurnRequest(BaseModel):
 
     content: str = Field(min_length=1)
     model: str | None = Field(default=None, max_length=128)
+
+
+class CreateThreadRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str = Field(min_length=1)
+    intent: RunIntent = RunIntent.MODIFYING
+    mode: RunMode = RunMode.SOLO
+    repository_id: UUID | None = None
+    repository_path: str | None = Field(default=None, min_length=1)
 
 
 class ApprovalDecisionRequest(BaseModel):
