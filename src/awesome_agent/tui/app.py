@@ -32,8 +32,18 @@ from awesome_agent.tui.chat_state import (
 )
 from awesome_agent.tui.client import HttpSurfaceClient
 from awesome_agent.tui.command_palette import CommandPaletteState, is_command_prefix
+from awesome_agent.tui.events import (
+    ApprovalPromptState,
+    TeamDisplayEvent,
+    ToolDisplayEvent,
+)
 from awesome_agent.tui.pickers import PickerItem, PickerState
-from awesome_agent.tui.rendering import render_transcript
+from awesome_agent.tui.rendering import (
+    render_approval_prompt,
+    render_team_event,
+    render_tool_event,
+    render_transcript,
+)
 from awesome_agent.tui.slash_router import SlashRouter
 
 
@@ -122,6 +132,21 @@ class AwesomeAgentTui(App[None]):
         event.input.value = ""
         self.command_palette = self.command_palette.close()
         if not raw:
+            if self.state.pending_approval is not None:
+                self._apply_approval_choice(self.state.pending_approval.active_index)
+            return
+        if self.state.pending_approval is not None:
+            if raw in {"1", "2", "3"}:
+                self._apply_approval_choice(int(raw) - 1)
+            else:
+                self.state = self.state.append(
+                    ChatMessage.system(
+                        "Decide the pending approval before sending another message.",
+                        kind=ChatEventKind.ERROR,
+                    )
+                )
+                self._render()
+                self._focus_prompt()
             return
         parsed = parse_slash_command(raw)
         if parsed.kind is SlashCommandKind.USER_MESSAGE:
@@ -158,6 +183,33 @@ class AwesomeAgentTui(App[None]):
         self._render_palette()
 
     def on_key(self, event: events.Key) -> None:
+        if self.state.pending_approval is not None:
+            if event.key in {"down", "ctrl+n"}:
+                self.state = self.state.with_approval_prompt(
+                    self.state.pending_approval.move(1)
+                )
+                self._render()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key in {"up", "ctrl+p"}:
+                self.state = self.state.with_approval_prompt(
+                    self.state.pending_approval.move(-1)
+                )
+                self._render()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key in {"1", "2", "3"}:
+                self._apply_approval_choice(int(event.key) - 1)
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key == "enter":
+                self._apply_approval_choice(self.state.pending_approval.active_index)
+                event.prevent_default()
+                event.stop()
+                return
         if self.state.active_picker is not None:
             if event.key == "escape":
                 self.state = self.state.close_picker()
@@ -289,6 +341,11 @@ class AwesomeAgentTui(App[None]):
         self._focus_prompt()
 
     def _render_palette(self) -> None:
+        if self.state.pending_approval is not None:
+            self.query_one("#command-palette", Static).update(
+                render_approval_prompt(self.state.pending_approval)
+            )
+            return
         if self.state.active_picker is not None:
             self.query_one("#command-palette", Static).update(
                 self.state.active_picker.render()
@@ -390,12 +447,42 @@ class AwesomeAgentTui(App[None]):
             text = stream_event.payload.get("text")
             if isinstance(text, str):
                 self.state = self.state.append_stream_delta(text)
+            tool_event = stream_event.payload.get("tool_event")
+            if isinstance(tool_event, dict):
+                self.state = self.state.append(
+                    ChatMessage.system(
+                        render_tool_event(
+                            _tool_display_event(tool_event),
+                            details_enabled=self.state.details_enabled,
+                        ).plain,
+                        kind=ChatEventKind.TOOL,
+                    )
+                )
+            team_event = stream_event.payload.get("team_event")
+            if isinstance(team_event, dict):
+                self.state = self.state.append(
+                    ChatMessage.system(
+                        render_team_event(
+                            _team_display_event(team_event),
+                            details_enabled=self.state.details_enabled,
+                        ).plain,
+                        kind=ChatEventKind.RUN,
+                    )
+                )
         elif stream_event.event is ConversationStreamEventKind.MESSAGE_COMPLETED:
             final_content = stream_event.payload.get("content")
             if isinstance(final_content, str):
                 self.state = self.state.upsert_streaming_assistant(final_content)
             self.state = self.state.note_model_metadata(stream_event.payload)
         elif stream_event.event is ConversationStreamEventKind.ERROR:
+            if stream_event.payload.get("approval_required") is True:
+                prompt = _approval_prompt_from_payload(stream_event.payload)
+                if prompt is not None:
+                    if _session_allow_rule(prompt) in self.state.session_allow_rules:
+                        self.state = self.state.with_approval_prompt(prompt)
+                        self._apply_approval_choice(0)
+                        return
+                    self.state = self.state.with_approval_prompt(prompt)
             message = self._format_stream_error(
                 stream_event.payload,
                 fallback="Conversation failed.",
@@ -403,6 +490,31 @@ class AwesomeAgentTui(App[None]):
             self.state = self.state.append(
                 ChatMessage.system(str(message), kind=ChatEventKind.ERROR)
             )
+        self._render()
+        self._focus_prompt()
+
+    def _apply_approval_choice(self, index: int) -> None:
+        prompt = self.state.pending_approval
+        if prompt is None:
+            return
+        approved = index in {0, 1}
+        if index == 1:
+            self.state = self.state.add_session_allow_rule(
+                _session_allow_rule(prompt)
+            )
+        result = self.client.decide_approval(
+            prompt.run_id,
+            prompt.approval_id,
+            approved=approved,
+        )
+        label = "approved" if approved else "denied"
+        status = result.get("status", "-")
+        self.state = self.state.with_approval_prompt(None).append(
+            ChatMessage.system(
+                f"Approval {label}: {prompt.subject} status={status}",
+                kind=ChatEventKind.APPROVAL,
+            )
+        )
         self._render()
         self._focus_prompt()
 
@@ -876,3 +988,76 @@ def _thread_context_label(thread: SurfaceThread | dict[str, object]) -> str | No
         return thread.context_label
     context = thread.get("context_path") or thread.get("context_label")
     return str(context) if context is not None else None
+
+
+def _tool_display_event(payload: dict[str, object]) -> ToolDisplayEvent:
+    name = str(payload.get("name") or payload.get("tool") or "tool")
+    summary = str(
+        payload.get("summary")
+        or payload.get("result")
+        or payload.get("status")
+        or "started"
+    )
+    details = {
+        str(key): value
+        for key, value in payload.items()
+        if key not in {"name", "tool", "summary", "result", "status"}
+    }
+    return ToolDisplayEvent(name=name, summary=summary, details=details)
+
+
+def _team_display_event(payload: dict[str, object]) -> TeamDisplayEvent:
+    role = str(
+        payload.get("role")
+        or payload.get("agent")
+        or payload.get("kind")
+        or "Team"
+    )
+    summary = str(
+        payload.get("summary")
+        or payload.get("task")
+        or payload.get("status")
+        or "activity"
+    )
+    details = {
+        str(key): value
+        for key, value in payload.items()
+        if key not in {"role", "agent", "kind", "summary", "task", "status"}
+    }
+    title = "Review" if "verifier" in role.casefold() else "Team"
+    return TeamDisplayEvent(title=title, summary=f"{role}: {summary}", details=details)
+
+
+def _approval_prompt_from_payload(
+    payload: dict[str, object],
+) -> ApprovalPromptState | None:
+    run_id = payload.get("run_id")
+    approval_id = payload.get("approval_id")
+    if not isinstance(run_id, str) or not isinstance(approval_id, str):
+        return None
+    approval_type = str(payload.get("approval_type") or "edit")
+    subject = str(
+        payload.get("path")
+        or payload.get("command")
+        or payload.get("tool")
+        or payload.get("message")
+        or "requested action"
+    )
+    if approval_type == "command":
+        title = "Leader wants to run:"
+    else:
+        title = "Leader wants to create:"
+    return ApprovalPromptState(
+        run_id=run_id,
+        approval_id=approval_id,
+        title=title,
+        subject=subject,
+        approval_type=approval_type,
+    )
+
+
+def _session_allow_rule(prompt: ApprovalPromptState) -> str:
+    if prompt.approval_type == "command":
+        command_family = prompt.subject.strip().split(maxsplit=1)[0].casefold()
+        return f"command:{command_family or 'unknown'}"
+    return "edit:*"

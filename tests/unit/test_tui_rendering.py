@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
+from awesome_agent.tui.events import (
+    ApprovalPromptState,
+    TeamDisplayEvent,
+    ToolDisplayEvent,
+)
 from awesome_agent.tui.rendering import (
+    render_approval_prompt,
     render_message,
+    render_team_event,
     render_thought,
+    render_tool_event,
     render_transcript,
 )
 
@@ -142,3 +150,67 @@ def test_later_thought_does_not_overwrite_previous_turn() -> None:
     assert "first thought" in transcript
     assert "second thought" not in transcript
     assert "Thought for 2s (ctrl+o to expand)" in transcript
+
+
+def test_tool_call_renders_collapsed_by_default() -> None:
+    event = ToolDisplayEvent(
+        name="write_file",
+        summary="created snake-game.html",
+        details={"path": "snake-game.html", "stdout": "raw output"},
+    )
+
+    rendered = render_tool_event(event, details_enabled=False).plain
+
+    assert "Tool - write_file" in rendered
+    assert "created snake-game.html" in rendered
+    assert "path:" not in rendered
+    assert "stdout:" not in rendered
+
+
+def test_tool_call_details_are_bounded_and_redacted() -> None:
+    event = ToolDisplayEvent(
+        name="run_command",
+        summary="completed",
+        details={
+            "command": "python -m pytest",
+            "stdout": f"OPENAI_API_KEY {'x' * 900}",
+        },
+    )
+
+    rendered = render_tool_event(event, details_enabled=True).plain
+
+    assert "command: python -m pytest" in rendered
+    assert "stdout: [redacted]" in rendered
+    assert len(rendered) < 900
+    assert "..." in rendered
+
+
+def test_team_event_hides_details_until_details_mode() -> None:
+    event = TeamDisplayEvent(
+        title="Team",
+        summary="Leader created 2 teammates",
+        details={"message": "leader -> frontend-engineer"},
+    )
+
+    collapsed = render_team_event(event, details_enabled=False).plain
+    expanded = render_team_event(event, details_enabled=True).plain
+
+    assert "Leader created 2 teammates" in collapsed
+    assert "leader -> frontend-engineer" not in collapsed
+    assert "leader -> frontend-engineer" in expanded
+
+
+def test_approval_prompt_renders_choices() -> None:
+    prompt = ApprovalPromptState(
+        run_id="run-1",
+        approval_id="approval-1",
+        title="Leader wants to create:",
+        subject="snake-game.html",
+    )
+
+    rendered = render_approval_prompt(prompt).plain
+
+    assert "Leader wants to create:" in rendered
+    assert "snake-game.html" in rendered
+    assert "> 1. Yes" in rendered
+    assert "allow all file edits during this session" in rendered

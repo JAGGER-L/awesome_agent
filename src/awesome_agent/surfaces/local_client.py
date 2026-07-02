@@ -102,3 +102,18 @@ class LocalSurfaceClient:
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         return {"id": run_id, "status": "cancelled", "transport": "embedded"}
+
+    def decide_approval(
+        self,
+        run_id: str,
+        approval_id: str,
+        *,
+        approved: bool,
+    ) -> dict[str, Any]:
+        return {
+            "run_id": run_id,
+            "approval_id": approval_id,
+            "approved": approved,
+            "transport": "embedded",
+            "status": "unsupported",
+        }

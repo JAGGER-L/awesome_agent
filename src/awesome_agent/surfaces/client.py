@@ -100,6 +100,14 @@ class SurfaceClient(Protocol):
 
     def cancel(self, run_id: str) -> dict[str, Any]: ...
 
+    def decide_approval(
+        self,
+        run_id: str,
+        approval_id: str,
+        *,
+        approved: bool,
+    ) -> dict[str, Any]: ...
+
 
 def surface_thread_from_mapping(payload: dict[str, object]) -> SurfaceThread:
     thread_id = str(payload["id"])

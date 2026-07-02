@@ -5,6 +5,11 @@ from collections.abc import Iterable
 from rich.text import Text
 
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
+from awesome_agent.tui.events import (
+    ApprovalPromptState,
+    TeamDisplayEvent,
+    ToolDisplayEvent,
+)
 
 
 def render_message(message: ChatMessage) -> Text:
@@ -85,5 +90,40 @@ def render_thought(thought: ThoughtBlock) -> Text:
     return rendered
 
 
+def render_tool_event(event: ToolDisplayEvent, *, details_enabled: bool) -> Text:
+    rendered = Text.assemble(("Tool - ", "magenta"), (event.name, "bold"))
+    if event.summary:
+        rendered.append(f"\n  {event.summary}")
+    if details_enabled:
+        for key, value in event.details.items():
+            rendered.append(f"\n  {key}: {_bounded(str(value))}", style="dim")
+    return rendered
+
+
+def render_team_event(event: TeamDisplayEvent, *, details_enabled: bool) -> Text:
+    rendered = Text.assemble((event.title, "blue"), ("\n  ", ""), (event.summary, ""))
+    if details_enabled:
+        for key, value in event.details.items():
+            rendered.append(f"\n  {key}: {_bounded(str(value))}", style="dim")
+    return rendered
+
+
+def render_approval_prompt(prompt: ApprovalPromptState) -> Text:
+    return Text(prompt.render(), style="yellow")
+
+
 def _labeled(label: str, content: str, *, label_style: str) -> Text:
     return Text.assemble((f"{label}: ", label_style), (content, ""))
+
+
+def _bounded(value: str, *, max_chars: int = 600) -> str:
+    redacted = (
+        value.replace("api_key", "redacted_key")
+        .replace("secret", "redacted")
+        .replace("password", "redacted")
+        .replace("OPENAI_API_KEY", "[redacted]")
+        .replace("DEEPSEEK_API_KEY", "[redacted]")
+    )
+    if len(redacted) <= max_chars:
+        return redacted
+    return f"{redacted[:300]}\n  ...\n  {redacted[-300:]}"
