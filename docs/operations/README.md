@@ -56,11 +56,27 @@ for the durable startup, sandbox, and workspace contract.
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod "http://127.0.0.1:8000/ready?profile=api"
+awesome-agent doctor --profile api
 docker compose logs api
 docker compose logs worker
 docker compose logs sandbox
 docker compose down
 ```
+
+`doctor` checks local config path writability, thread workspace writability,
+model configuration, PostgreSQL, migrations, checkpoint storage, sandbox
+health, MCP catalog health, and Worker heartbeat when the runtime profile is
+selected.
+
+For gated product-path verification against a live stack, use:
+
+```powershell
+.\scripts\verify_product_surface.ps1 -ApiUrl http://127.0.0.1:8000
+```
+
+The script creates a thread, sends a conversation prompt, starts a thread-scoped
+Coding Run, and waits for a generated HTML artifact to appear in the thread
+artifact surface.
 
 The Docker API service binds to `0.0.0.0` inside the container so the host can
 reach `http://127.0.0.1:8000`. Keep it local unless an external authentication

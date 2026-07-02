@@ -16,6 +16,11 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from awesome_agent.extensions.config import build_project_extension_catalog_sync
+from awesome_agent.extensions.models import (
+    ExtensionHealthStatus,
+    ExtensionSourceType,
+)
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.runtime.graphs import (
@@ -245,6 +250,92 @@ def workspace_root_check(path: Path) -> HealthCheck:
     return HealthCheck("workspace_root", HealthStatus.HEALTHY, str(path))
 
 
+def local_config_path_check(path: Path) -> HealthCheck:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        probe = path.parent / ".awesome-agent-config-healthcheck"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except Exception as error:
+        return HealthCheck(
+            "local_config_path",
+            HealthStatus.UNHEALTHY,
+            f"config directory {path.parent}: {error}",
+            remediation="Choose a writable AWESOME_AGENT_LOCAL_CONFIG_PATH.",
+        )
+    detail = str(path) if path.exists() else f"{path} (will be created on init)"
+    return HealthCheck("local_config_path", HealthStatus.HEALTHY, detail)
+
+
+def thread_workspace_check(workspace_root: Path) -> HealthCheck:
+    try:
+        thread_root = workspace_root / "threads"
+        thread_root.mkdir(parents=True, exist_ok=True)
+        probe = thread_root / ".awesome-agent-thread-healthcheck"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except Exception as error:
+        return HealthCheck(
+            "thread_workspace",
+            HealthStatus.UNHEALTHY,
+            f"thread workspace {workspace_root / 'threads'}: {error}",
+            remediation="Choose a writable workspace root for thread user-data.",
+        )
+    return HealthCheck(
+        "thread_workspace",
+        HealthStatus.HEALTHY,
+        str(workspace_root / "threads"),
+    )
+
+
+def mcp_catalog_check(project_root: Path | None = None) -> HealthCheck:
+    try:
+        catalog = build_project_extension_catalog_sync(project_root or _project_root())
+    except Exception as error:
+        return HealthCheck(
+            "mcp",
+            HealthStatus.UNHEALTHY,
+            f"MCP catalog check failed: {error}",
+            remediation="Check awesome-agent.yaml MCP source configuration.",
+        )
+    mcp_sources = [
+        source
+        for source in catalog.sources
+        if source.type
+        in {
+            ExtensionSourceType.MCP_STDIO,
+            ExtensionSourceType.MCP_STREAMABLE_HTTP,
+        }
+    ]
+    if not mcp_sources:
+        return HealthCheck(
+            "mcp",
+            HealthStatus.HEALTHY,
+            "no MCP sources configured",
+            severity=CheckSeverity.INFORMATIONAL,
+        )
+    statuses = {source.health.status for source in mcp_sources}
+    detail = ", ".join(
+        f"{source.id}={source.health.status.value}" for source in mcp_sources
+    )
+    if ExtensionHealthStatus.UNHEALTHY in statuses:
+        return HealthCheck(
+            "mcp",
+            HealthStatus.UNHEALTHY,
+            detail,
+            remediation="Start unhealthy MCP servers or disable them in config.",
+        )
+    if statuses & {ExtensionHealthStatus.DEGRADED, ExtensionHealthStatus.UNKNOWN}:
+        return HealthCheck(
+            "mcp",
+            HealthStatus.DEGRADED,
+            detail,
+            severity=CheckSeverity.DEGRADED,
+            remediation="Inspect MCP server discovery details before using tools.",
+        )
+    return HealthCheck("mcp", HealthStatus.HEALTHY, detail)
+
+
 def provider_key_check(settings: Settings, profile: ReadinessProfile) -> HealthCheck:
     key = settings.deepseek_api_key
     has_key = bool(key and key.get_secret_value())
@@ -333,12 +424,16 @@ async def collect_readiness(
     worker_heartbeat_repository: Any | None = None,
 ) -> ReadinessReport:
     checks = collect_health(check_docker=check_docker)
+    workspace_root = resolve_workspace_root(settings)
     checks.extend(
         [
             bind_policy_check(settings.api_host, settings.unsafe_bind_public),
-            workspace_root_check(resolve_workspace_root(settings)),
+            local_config_path_check(settings.local_config_path),
+            workspace_root_check(workspace_root),
+            thread_workspace_check(workspace_root),
             provider_key_check(settings, profile),
             model_routes_check(settings, profile),
+            mcp_catalog_check(),
             await database_check(settings.database_url),
             await migration_check(settings.database_url),
             await checkpoint_check(settings.checkpoint_database_url),

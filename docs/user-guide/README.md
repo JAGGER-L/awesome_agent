@@ -31,6 +31,11 @@ then keeps the main screen focused on the transcript and input prompt. Runtime
 details are available through slash commands such as `/status`, `/tools`,
 `/mcp`, `/artifacts`, `/usage`, and `/config`.
 
+Conversation and Run failures are rendered as structured transcript items with
+request IDs, retryability, and remediation hints when the API provides them.
+Use `Ctrl+R` to retry the last failed conversation turn and `Ctrl+C` to cancel
+the current Run.
+
 | Command | Purpose |
 | --- | --- |
 | `/new` | Start a new durable local conversation/thread. |
@@ -51,6 +56,13 @@ details are available through slash commands such as `/status`, `/tools`,
 | `/config` | Show resolved config paths and overrides. |
 | `/help` | Show help. |
 | `/quit` | Exit the TUI. |
+
+Useful chat-first TUI keys:
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+C` | Cancel the current Run when one is active. |
+| `Ctrl+R` | Retry the last failed conversation turn. |
 
 Slash commands are CLI/TUI interaction syntax. API routes should expose
 semantic resources such as threads, runs, models, memory, readiness, and

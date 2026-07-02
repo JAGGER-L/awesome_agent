@@ -11,6 +11,7 @@ from textual.widgets import Input, Static
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
 from awesome_agent.cli.slash_commands import SlashCommandKind, parse_slash_command
+from awesome_agent.client.conversation import ConversationHttpError
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 from awesome_agent.tui.client import TuiApiClient
@@ -45,6 +46,8 @@ class AwesomeAgentTui(App[None]):
     }
     """
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
+        ("ctrl+c", "cancel", "Cancel"),
+        ("ctrl+r", "retry", "Retry"),
         ("q", "quit", "Quit"),
     ]
 
@@ -150,6 +153,52 @@ class AwesomeAgentTui(App[None]):
                 event.prevent_default()
                 event.stop()
 
+    def action_cancel(self) -> None:
+        if self.state.current_run_id is not None:
+            try:
+                cancelled = self.client.cancel(self.state.current_run_id)
+                status = cancelled.get("status", "cancelled")
+                message = ChatMessage.system(
+                    f"Cancelled Run {self.state.current_run_id}: status={status}",
+                    kind=ChatEventKind.RUN,
+                )
+                self.state = self.state.with_status(str(status)).append(message)
+            except Exception as error:
+                self.state = self.state.with_status("error").append(
+                    ChatMessage.system(
+                        self._format_error(error),
+                        kind=ChatEventKind.ERROR,
+                    )
+                )
+        elif self.state.status_label == "streaming":
+            self.state = self.state.with_status("cancelled").append(
+                ChatMessage.system(
+                    "Cancel requested for the current conversation turn.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+        else:
+            self.state = self.state.append(ChatMessage.system("No active Run."))
+        self._render()
+        self._focus_prompt()
+
+    def action_retry(self) -> None:
+        content = self.state.last_failed_user_message
+        if not content:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    "No failed conversation turn is available to retry.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            self._render()
+            self._focus_prompt()
+            return
+        self.state = self.state.append(ChatMessage.system(f"Retrying: {content}"))
+        self._send_user_message(content)
+        self._render()
+        self._focus_prompt()
+
     def _render(self) -> None:
         self.query_one("#welcome", Static).update(self._welcome_text())
         self.query_one("#transcript", Static).update(
@@ -172,6 +221,7 @@ class AwesomeAgentTui(App[None]):
         self.state = self.state.append(ChatMessage.user(content))
         self.state = self.state.with_status("streaming")
         self._render()
+        failed = False
         try:
             thread_id = self._ensure_backend_thread(content)
             assistant_buffer = ""
@@ -192,17 +242,23 @@ class AwesomeAgentTui(App[None]):
                         assistant_buffer = final_content
                     self.state = self.state.upsert_streaming_assistant(assistant_buffer)
                 elif stream_event.event is ConversationStreamEventKind.ERROR:
-                    message = (
-                        stream_event.payload.get("message") or "Conversation failed."
+                    failed = True
+                    message = self._format_stream_error(
+                        stream_event.payload,
+                        fallback="Conversation failed.",
                     )
                     self.state = self.state.append(
                         ChatMessage.system(str(message), kind=ChatEventKind.ERROR)
                     )
-            self.state = self.state.with_status("ready")
+            self.state = self.state.with_status("error" if failed else "ready")
+            self.state = self.state.with_last_failed_user_message(
+                content if failed else None
+            )
         except Exception as error:
             self.state = self.state.with_status("error")
+            self.state = self.state.with_last_failed_user_message(content)
             self.state = self.state.append(
-                ChatMessage.system(str(error), kind=ChatEventKind.ERROR)
+                ChatMessage.system(self._format_error(error), kind=ChatEventKind.ERROR)
             )
 
     def _ensure_backend_thread(self, title_seed: str) -> str:
@@ -246,6 +302,48 @@ class AwesomeAgentTui(App[None]):
 
     def _focus_prompt(self) -> None:
         self.query_one("#prompt", Input).focus()
+
+    def _format_error(self, error: Exception) -> str:
+        message = str(error)
+        if isinstance(error, ConversationHttpError):
+            parts = [
+                f"{error.code or 'http_error'}: {message}",
+                f"status={error.status_code}",
+            ]
+            if error.request_id:
+                parts.append(f"request_id={error.request_id}")
+            if error.hint:
+                parts.append(f"hint={error.hint}")
+            if error.recoverable:
+                parts.append("retryable=true")
+            return " | ".join(parts)
+        return message
+
+    def _format_stream_error(
+        self,
+        payload: dict[str, object],
+        *,
+        fallback: str,
+    ) -> str:
+        message = payload.get("message")
+        text = message if isinstance(message, str) else fallback
+        code = payload.get("code")
+        hint = payload.get("hint")
+        retryable = payload.get("retryable")
+        action_required = (
+            payload.get("approval_required") is True
+            or payload.get("interrupt") is True
+            or code in {"approval_required", "interrupt"}
+        )
+        prefix = "Action required" if action_required else None
+        parts = [f"{code}: {text}" if isinstance(code, str) else text]
+        if prefix is not None:
+            parts[0] = f"{prefix}: {parts[0]}"
+        if isinstance(hint, str):
+            parts.append(f"hint={hint}")
+        if retryable is True:
+            parts.append("retryable=true")
+        return " | ".join(parts)
 
     def _welcome_text(self) -> str:
         lines = [

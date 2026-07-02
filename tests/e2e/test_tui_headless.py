@@ -18,6 +18,7 @@ class FakeClient:
         self.thread_id = str(uuid4())
         self.turns: list[tuple[str, str]] = []
         self.runs: list[dict[str, object]] = []
+        self.cancelled_runs: list[str] = []
 
     def create_thread(
         self,
@@ -109,6 +110,10 @@ class FakeClient:
 
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
+
+    def cancel(self, run_id: str) -> dict[str, object]:
+        self.cancelled_runs.append(run_id)
+        return {"id": run_id, "status": "cancelled"}
 
 
 @pytest.mark.asyncio
@@ -318,6 +323,98 @@ async def test_tui_details_toggles_verbose_state() -> None:
 
     assert app.state.details_enabled is True
     assert "Details enabled" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_retry_resends_last_failed_message() -> None:
+    class FailingOnceClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+        ) -> list[ConversationStreamEvent]:
+            self.calls += 1
+            if self.calls == 1:
+                self.turns.append((thread_id, content))
+                raise RuntimeError("temporary model failure")
+            return super().stream_turn(thread_id, content, model=model)
+
+    client = FailingOnceClient()
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        assert app.state.last_failed_user_message == "hi"
+        await pilot.press("ctrl+r")
+        transcript = app.query_one("#transcript").render()
+
+    assert client.turns == [(client.thread_id, "hi"), (client.thread_id, "hi")]
+    assert app.state.last_failed_user_message is None
+    assert "temporary model failure" in str(transcript)
+    assert "hello world" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_cancel_current_run_calls_api() -> None:
+    client = FakeClient()
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "r", "u", "n", " ", "b", "u", "i", "l", "d", "enter")
+        assert app.state.current_run_id is not None
+        await pilot.press("ctrl+c")
+        transcript = app.query_one("#transcript").render()
+
+    assert client.cancelled_runs == [app.state.current_run_id]
+    assert "Cancelled Run" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_renders_approval_required_stream_error_as_actionable() -> None:
+    class ApprovalClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+        ) -> list[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.ERROR,
+                    thread_id=uuid4(),
+                    turn_id=uuid4(),
+                    sequence=1,
+                    trace_id="trace-approval",
+                    payload={
+                        "code": "approval_required",
+                        "message": "Tool approval is required.",
+                        "hint": "Use the approvals view to decide.",
+                        "approval_required": True,
+                    },
+                )
+            ]
+
+    app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=ApprovalClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "Action required" in rendered
+    assert "Tool approval is required" in rendered
+    assert "Use the approvals view to decide" in rendered
 
 
 @pytest.mark.asyncio

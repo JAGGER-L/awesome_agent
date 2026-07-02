@@ -53,6 +53,7 @@ class ChatSessionState:
     current_run_id: str | None = None
     status_label: str = "ready"
     details_enabled: bool = False
+    last_failed_user_message: str | None = None
     messages: list[ChatMessage] = field(default_factory=list)
 
     @classmethod
@@ -82,6 +83,12 @@ class ChatSessionState:
 
     def with_status(self, status_label: str) -> ChatSessionState:
         return replace(self, status_label=status_label)
+
+    def with_last_failed_user_message(
+        self,
+        content: str | None,
+    ) -> ChatSessionState:
+        return replace(self, last_failed_user_message=content)
 
     def upsert_streaming_assistant(self, content: str) -> ChatSessionState:
         if self.messages and self.messages[-1].role == "assistant":

@@ -62,6 +62,16 @@ class CreateThreadRunRequest(BaseModel):
     repository_path: str | None = Field(default=None, min_length=1)
 
 
+class ErrorResponse(BaseModel):
+    code: str
+    message: str
+    detail: str
+    hint: str | None = None
+    request_id: str
+    trace_id: str | None = None
+    recoverable: bool = False
+
+
 class ApprovalDecisionRequest(BaseModel):
     approved: bool
 
