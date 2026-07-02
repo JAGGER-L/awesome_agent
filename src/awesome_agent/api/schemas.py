@@ -43,6 +43,13 @@ class CreateThreadMessageRequest(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class CreateConversationTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1)
+    model: str | None = Field(default=None, max_length=128)
+
+
 class ApprovalDecisionRequest(BaseModel):
     approved: bool
 
