@@ -20,6 +20,7 @@ from awesome_agent.domain.enums import (
     AgentKind,
     EventType,
     RiskLevel,
+    RunIntent,
     RunMode,
     RunStatus,
 )
@@ -179,6 +180,27 @@ def _client(
     )
 
 
+def _create_run(
+    client: TestClient,
+    repository: Repository,
+    *,
+    goal: str,
+    intent: RunIntent = RunIntent.READ_ONLY,
+    mode: RunMode = RunMode.SOLO,
+) -> Run:
+    return cast(
+        Run,
+        asyncio.run(
+            cast(Any, client.app).state.intake.create_run(
+                repository_id=repository.id,
+                goal=goal,
+                intent=intent,
+                mode=mode,
+            )
+        ),
+    )
+
+
 class RecordingExporter(SpanExporter):
     def __init__(self) -> None:
         self.spans: list[ReadableSpan] = []
@@ -233,19 +255,22 @@ def _facade(
     )
 
 
-def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
+def test_post_runs_is_removed_from_product_api(tmp_path: Path) -> None:
     client, repository = _client(tmp_path)
 
-    created = client.post(
+    response = client.post(
         "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Implement feature",
-            "intent": "read_only",
-        },
+        json={"repository_id": str(repository.id), "goal": "build"},
     )
-    assert created.status_code == 201
-    run_id = created.json()["id"]
+
+    assert response.status_code == 405
+
+
+def test_inspect_and_cancel_run(tmp_path: Path) -> None:
+    client, repository = _client(tmp_path)
+
+    created = _create_run(client, repository, goal="Implement feature")
+    run_id = str(created.id)
 
     run = client.get(f"/runs/{run_id}").json()
     assert run["status"] == "created"
@@ -285,28 +310,14 @@ def test_create_inspect_and_cancel_run(tmp_path: Path) -> None:
 
 def test_list_runs_returns_recent_runs(tmp_path: Path) -> None:
     client, repository = _client(tmp_path)
-    first = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect alpha",
-            "intent": "read_only",
-        },
-    ).json()
-    second = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect beta",
-            "intent": "read_only",
-        },
-    ).json()
+    first = _create_run(client, repository, goal="Inspect alpha")
+    second = _create_run(client, repository, goal="Inspect beta")
 
     response = client.get("/runs")
 
     assert response.status_code == 200
     body = response.json()
-    assert [run["id"] for run in body[:2]] == [second["id"], first["id"]]
+    assert [run["id"] for run in body[:2]] == [str(second.id), str(first.id)]
     assert body[0]["goal"] == "Inspect beta"
     assert body[0]["status"] == "created"
 
@@ -315,17 +326,9 @@ def test_create_run_pins_extension_catalog_version(tmp_path: Path) -> None:
     catalog = ExtensionCatalog(version="ext_123")
     client, repository = _client(tmp_path, extension_catalog=catalog)
 
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect extension pin",
-            "intent": "read_only",
-        },
-    )
+    created = _create_run(client, repository, goal="Inspect extension pin")
 
-    assert created.status_code == 201
-    run = client.get(f"/runs/{created.json()['id']}").json()
+    run = client.get(f"/runs/{created.id}").json()
     assert run["extension_catalog_version"] == "ext_123"
 
 
@@ -337,15 +340,8 @@ def test_extension_diagnostics_reports_catalog_and_denials(tmp_path: Path) -> No
         extension_catalog=catalog,
         tool_invocation_repository=tool_invocations,
     )
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect extension diagnostics",
-            "intent": "read_only",
-        },
-    )
-    run_id = UUID(created.json()["id"])
+    created = _create_run(client, repository, goal="Inspect extension diagnostics")
+    run_id = created.id
     app = cast(Any, client.app)
     runtime_repository = app.state.runtime.repository
     run = asyncio.run(runtime_repository.get_run(run_id))
@@ -453,42 +449,26 @@ def test_missing_run_returns_404(tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
-def test_repository_endpoints_and_path_injection_rejection(
+def test_repository_endpoints_return_registered_repository(
     tmp_path: Path,
 ) -> None:
     client, repository = _client(tmp_path)
 
     listed = client.get("/repositories")
     fetched = client.get(f"/repositories/{repository.id}")
-    injected = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "repository_path": str(repository.root),
-            "goal": "Injected path",
-        },
-    )
 
     assert listed.status_code == 200
     assert listed.json()[0]["id"] == str(repository.id)
     assert fetched.status_code == 200
     assert fetched.json()["root"] == str(repository.root)
-    assert injected.status_code == 422
 
 
 def test_workspace_endpoints_list_preview_and_reject_force_without_reason(
     tmp_path: Path,
 ) -> None:
     client, repository = _client(tmp_path)
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect project",
-            "intent": "read_only",
-        },
-    )
-    run_id = created.json()["id"]
+    created = _create_run(client, repository, goal="Inspect project")
+    run_id = str(created.id)
 
     listed = client.get("/workspaces")
     preview = client.post(
@@ -531,15 +511,8 @@ def test_observability_endpoints_return_run_trace_metrics_and_model_calls(
         tmp_path,
         observability_repository=observability,
     )
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect project",
-            "intent": "read_only",
-        },
-    )
-    run_id = UUID(created.json()["id"])
+    created = _create_run(client, repository, goal="Inspect project")
+    run_id = created.id
 
     async def record() -> None:
         await observability.record_span(
@@ -606,15 +579,8 @@ def test_runtime_diagnostics_summarizes_run_evidence_and_redacts(
         validation_repository=validation_repository,
         tool_invocation_repository=tool_invocations,
     )
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Diagnose this run",
-            "intent": "read_only",
-        },
-    )
-    run_id = UUID(created.json()["id"])
+    created = _create_run(client, repository, goal="Diagnose this run")
+    run_id = created.id
     app = cast(Any, client.app)
     runtime_repository = app.state.runtime.repository
     run = asyncio.run(runtime_repository.get_run(run_id))
@@ -753,15 +719,8 @@ def test_runtime_diagnostics_summarizes_run_evidence_and_redacts(
 
 def test_artifact_download_redacts_text_content(tmp_path: Path) -> None:
     client, repository = _client(tmp_path)
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Download a redacted artifact",
-            "intent": "read_only",
-        },
-    )
-    run_id = UUID(created.json()["id"])
+    created = _create_run(client, repository, goal="Download a redacted artifact")
+    run_id = created.id
     app = cast(Any, client.app)
     runtime_service = app.state.runtime
     artifact = asyncio.run(
@@ -927,15 +886,13 @@ def test_recovery_metrics_aggregate_team_and_provider_evidence(
         budget_repository=budget_repository,
         validation_repository=validation_repository,
     )
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Recover this team run",
-            "mode": "team",
-        },
+    created = _create_run(
+        client,
+        repository,
+        goal="Recover this team run",
+        mode=RunMode.TEAM,
     )
-    run_id = UUID(created.json()["id"])
+    run_id = created.id
     app = cast(Any, client.app)
     runtime_repository = app.state.runtime.repository
     teams = app.state.team_repository
@@ -1070,15 +1027,8 @@ def test_api_records_manual_endpoint_spans(tmp_path: Path) -> None:
 
     assert client.get("/health").status_code == 200
     assert client.get("/ready?profile=api").status_code in {200, 503}
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect project",
-            "intent": "read_only",
-        },
-    )
-    run_id = UUID(created.json()["id"])
+    created = _create_run(client, repository, goal="Inspect project")
+    run_id = created.id
     assert client.get(f"/runs/{run_id}/trace").status_code == 200
     assert client.get(f"/runs/{run_id}/metrics").status_code == 200
     assert client.get(f"/runs/{run_id}/model-calls").status_code == 200
@@ -1086,7 +1036,6 @@ def test_api_records_manual_endpoint_spans(tmp_path: Path) -> None:
     assert {span.name for span in exporter.spans} >= {
         "api.health",
         "api.ready",
-        "api.runs.create",
         "api.runs.trace",
         "api.runs.metrics",
         "api.runs.model_calls",
@@ -1107,15 +1056,8 @@ def test_budget_endpoints_return_ledger_and_context_compactions(
 ) -> None:
     budget_repository = InMemoryBudgetRepository()
     client, repository = _client(tmp_path, budget_repository=budget_repository)
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Inspect project",
-            "intent": "read_only",
-        },
-    )
-    run_id = UUID(created.json()["id"])
+    created = _create_run(client, repository, goal="Inspect project")
+    run_id = created.id
     artifact_id = uuid4()
 
     async def record() -> None:
@@ -1159,17 +1101,14 @@ def test_budget_endpoints_return_ledger_and_context_compactions(
 def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:
     client, repository = _client(tmp_path)
 
-    response = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Fix bug",
-            "intent": "modifying",
-        },
+    created = _create_run(
+        client,
+        repository,
+        goal="Fix bug",
+        intent=RunIntent.MODIFYING,
     )
 
-    assert response.status_code == 201
-    body = response.json()
+    body = client.get(f"/runs/{created.id}").json()
     assert body["runtime_route"] == "solo-modifying"
     assert "graph_version" not in body
     assert body["dispatch_status"] == "queued"
@@ -1180,19 +1119,16 @@ def test_team_run_uses_team_graph_and_starts_with_leader_only(
 ) -> None:
     client, repository = _client(tmp_path)
 
-    response = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Implement backend and verify it",
-            "intent": "modifying",
-            "mode": "team",
-        },
+    created = _create_run(
+        client,
+        repository,
+        goal="Implement backend and verify it",
+        intent=RunIntent.MODIFYING,
+        mode=RunMode.TEAM,
     )
 
-    assert response.status_code == 201
-    body = response.json()
-    run_id = body["id"]
+    body = client.get(f"/runs/{created.id}").json()
+    run_id = str(created.id)
     assert body["mode"] == "team"
     assert body["runtime_route"] == "team-coding"
     assert "graph_version" not in body
@@ -1294,15 +1230,13 @@ def test_verification_endpoint_returns_durable_validation_reports(
 ) -> None:
     validation = InMemoryValidationRepository()
     client, repository = _client(tmp_path, validation_repository=validation)
-    created = client.post(
-        "/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": "Fix bug",
-            "intent": "modifying",
-        },
+    created = _create_run(
+        client,
+        repository,
+        goal="Fix bug",
+        intent=RunIntent.MODIFYING,
     )
-    run_id = UUID(created.json()["id"])
+    run_id = created.id
     report = DurableValidationReport(
         run_id=run_id,
         agent_id=None,

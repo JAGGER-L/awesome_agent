@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -13,98 +14,35 @@ from awesome_agent.domain.enums import RunIntent, RunMode, RunStatus
 from awesome_agent.domain.models import Run
 
 
-def test_create_thread_run_uses_thread_repository_context() -> None:
-    intake = FakeRunIntake()
-    client = _client(intake)
-    repository_id = uuid4()
-    thread = client.post(
-        "/threads",
-        json={"title": "Snake", "repository_id": str(repository_id)},
-    ).json()
-
-    response = client.post(
-        f"/threads/{thread['id']}/runs",
-        json={"goal": "Build snake", "intent": "modifying", "mode": "solo"},
-    )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["goal"] == "Build snake"
-    assert body["repository_id"] == str(repository_id)
-    assert intake.calls == [
-        {
-            "repository_id": repository_id,
-            "goal": "Build snake",
-            "intent": RunIntent.MODIFYING,
-            "mode": RunMode.SOLO,
-        }
-    ]
-    messages = client.get(f"/threads/{thread['id']}/messages").json()
-    assert messages[-1]["kind"] == "run"
-    assert messages[-1]["run_id"] == body["id"]
-
-
-def test_create_thread_run_missing_thread_returns_404() -> None:
+def test_post_thread_runs_is_removed_from_product_api() -> None:
     client = _client(FakeRunIntake())
-
-    response = client.post(
-        f"/threads/{uuid4()}/runs",
-        json={"goal": "Build snake"},
-    )
-
-    assert response.status_code == 404
-
-
-def test_create_thread_run_without_repository_context_returns_409() -> None:
-    client = _client(FakeRunIntake())
-    thread = client.post("/threads", json={"title": "No repo"}).json()
+    thread = client.post("/threads", json={"title": "Chat"}).json()
 
     response = client.post(
         f"/threads/{thread['id']}/runs",
         json={"goal": "Build snake"},
     )
 
-    assert response.status_code == 409
-    assert "repository_id" in response.json()["detail"]
-
-
-def test_create_thread_run_can_bind_repository_context() -> None:
-    intake = FakeRunIntake()
-    client = _client(intake)
-    repository_id = uuid4()
-    thread = client.post("/threads", json={"title": "Late repo"}).json()
-
-    response = client.post(
-        f"/threads/{thread['id']}/runs",
-        json={"goal": "Build snake", "repository_id": str(repository_id)},
-    )
-
-    assert response.status_code == 201
-    assert response.json()["repository_id"] == str(repository_id)
-    assert client.get(f"/threads/{thread['id']}").json()["repository_id"] == str(
-        repository_id
-    )
+    assert response.status_code == 405
 
 
 def test_list_thread_runs_returns_newest_projection_first() -> None:
-    client = _client(FakeRunIntake())
+    intake = FakeRunIntake()
+    client = _client(intake)
     thread = client.post(
         "/threads",
         json={"title": "Snake", "repository_id": str(uuid4())},
     ).json()
 
-    first = client.post(
-        f"/threads/{thread['id']}/runs",
-        json={"goal": "First run"},
-    ).json()
-    second = client.post(
-        f"/threads/{thread['id']}/runs",
-        json={"goal": "Second run"},
-    ).json()
+    first = _create_thread_run(client, thread["id"], intake, "First run")
+    second = _create_thread_run(client, thread["id"], intake, "Second run")
     response = client.get(f"/threads/{thread['id']}/runs")
 
     assert response.status_code == 200
-    assert [item["run_id"] for item in response.json()] == [second["id"], first["id"]]
+    assert [item["run_id"] for item in response.json()] == [
+        str(second.id),
+        str(first.id),
+    ]
 
 
 def test_list_thread_runs_exposes_runtime_status_and_artifacts(
@@ -117,15 +55,17 @@ def test_list_thread_runs_exposes_runtime_status_and_artifacts(
         json={"title": "Snake", "repository_id": str(uuid4())},
     ).json()
 
-    created = client.post(
-        f"/threads/{thread['id']}/runs",
-        json={"goal": "Build snake"},
-    ).json()
+    created = _create_thread_run(
+        client,
+        thread["id"],
+        cast(Any, client.app).state.intake,
+        "Build snake",
+    )
     response = client.get(f"/threads/{thread['id']}/runs")
 
     assert response.status_code == 200
     [projection] = response.json()
-    assert projection["run_id"] == created["id"]
+    assert projection["run_id"] == str(created.id)
     assert projection["status"] == "completed"
     assert projection["result_text"] == "done"
     assert projection["artifacts"][0]["path"].endswith("snake.html")
@@ -203,3 +143,21 @@ def _client(
             settings=test_settings(),
         )
     )
+
+
+def _create_thread_run(
+    client: TestClient,
+    thread_id: str,
+    intake: FakeRunIntake,
+    goal: str,
+) -> Run:
+    created = asyncio.run(
+        cast(Any, client.app).state.conversations.create_thread_run(
+            thread_id=UUID(thread_id),
+            goal=goal,
+            intent=RunIntent.MODIFYING,
+            mode=RunMode.SOLO,
+            run_intake=intake,
+        )
+    )
+    return cast(Run, created)

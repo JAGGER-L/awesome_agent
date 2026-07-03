@@ -285,110 +285,11 @@ def test_config_root_add_and_list(
     assert os.path.normcase(str(projects.resolve())) in listed.stdout
 
 
-def test_run_registers_path_locally_and_sends_repository_id(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repository_path = tmp_path / "repository"
-    repository_path.mkdir()
-    repository = Repository(
-        id=uuid4(),
-        root=repository_path,
-        display_name="repository",
-        git_common_dir=repository_path / ".git",
-    )
-    request: dict[str, Any] = {}
+def test_cli_run_command_is_removed() -> None:
+    result = runner.invoke(app, ["run", "build", "--repo", "."])
 
-    class Response:
-        def raise_for_status(self) -> None:
-            pass
-
-        def json(self) -> dict[str, str]:
-            return {"id": "run-id"}
-
-    def post(url: str, **kwargs: Any) -> Response:
-        request["url"] = url
-        request.update(kwargs)
-        return Response()
-
-    monkeypatch.setattr(
-        cli_module,
-        "_run_with_repository_service",
-        lambda operation: repository,
-    )
-    monkeypatch.setattr(httpx, "post", post)
-
-    result = runner.invoke(
-        app,
-        [
-            "run",
-            "Inspect code",
-            "--repo",
-            str(repository_path),
-            "--read-only",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert request["json"] == {
-        "repository_id": str(repository.id),
-        "goal": "Inspect code",
-        "intent": "read_only",
-        "mode": "solo",
-    }
-
-
-def test_run_can_request_team_mode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repository_path = tmp_path / "repository"
-    repository_path.mkdir()
-    repository = Repository(
-        id=uuid4(),
-        root=repository_path,
-        display_name="repository",
-        git_common_dir=repository_path / ".git",
-    )
-    request: dict[str, Any] = {}
-
-    class Response:
-        def raise_for_status(self) -> None:
-            pass
-
-        def json(self) -> dict[str, str]:
-            return {"id": "team-run-id"}
-
-    def post(url: str, **kwargs: Any) -> Response:
-        request["url"] = url
-        request.update(kwargs)
-        return Response()
-
-    monkeypatch.setattr(
-        cli_module,
-        "_run_with_repository_service",
-        lambda operation: repository,
-    )
-    monkeypatch.setattr(httpx, "post", post)
-
-    result = runner.invoke(
-        app,
-        [
-            "run",
-            "Implement backend and verify it",
-            "--repo",
-            str(repository_path),
-            "--team",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert request["json"] == {
-        "repository_id": str(repository.id),
-        "goal": "Implement backend and verify it",
-        "intent": "modifying",
-        "mode": "team",
-    }
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
 def test_probe_sends_diagnostic_request(
