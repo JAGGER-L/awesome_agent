@@ -180,6 +180,13 @@ async def test_conversation_graph_writes_user_then_assistant_messages() -> None:
     assert messages[1].run_id == run.id
     assert messages[1].content == "hello"
     assert state["final_answer"] == "hello"
+    persisted_run = await runtime.get_run(run.id)
+    assert persisted_run.status is RunStatus.CREATED
+    assert persisted_run.dispatch_status is DispatchStatus.QUEUED
+    runtime_events = await runtime.list_events(run.id)
+    assert EventType.RUN_STATUS_CHANGED not in {
+        event.event_type for event in runtime_events
+    }
 
 
 @pytest.mark.asyncio
@@ -234,3 +241,10 @@ async def test_conversation_graph_does_not_write_assistant_message_on_failure() 
     messages = await conversations.list_messages(thread.id)
     assert [message.role for message in messages] == [ThreadMessageRole.USER]
     assert messages[0].run_id == run.id
+    persisted_run = await runtime.get_run(run.id)
+    assert persisted_run.status is RunStatus.CREATED
+    assert persisted_run.dispatch_status is DispatchStatus.QUEUED
+    runtime_events = await runtime.list_events(run.id)
+    assert EventType.RUN_STATUS_CHANGED not in {
+        event.event_type for event in runtime_events
+    }

@@ -12,7 +12,7 @@ from awesome_agent.conversation.models import (
     ThreadMessageRole,
 )
 from awesome_agent.conversation.repository import ConversationRepository
-from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
+from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling.messages import (
     AssistantMessage,
@@ -69,53 +69,15 @@ class ConversationGraph:
             "memory": _dict_payload(created.get("memory")),
             "skill_ids": _list_payload(created.get("skill_ids")),
         }
-        running = run.model_copy(
-            update={
-                "status": RunStatus.RUNNING,
-                "dispatch_status": DispatchStatus.EXECUTING,
-            }
+        return await self._execute_turn(
+            run=run,
+            leader=leader,
+            thread_id=thread_id,
+            content=content,
+            selected_model=selected_model,
+            thinking=thinking,
+            turn_options=turn_options,
         )
-        await self.runtime.update_run(running)
-        await self.runtime.append_event(
-            run_id=run.id,
-            event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": running.status.value,
-                "dispatch_status": running.dispatch_status.value,
-            },
-            agent_id=leader.id,
-        )
-        try:
-            state = await self._execute_turn(
-                run=running,
-                leader=leader,
-                thread_id=thread_id,
-                content=content,
-                selected_model=selected_model,
-                thinking=thinking,
-                turn_options=turn_options,
-            )
-        except Exception:
-            await self._mark_failed(running, leader)
-            raise
-        completed = running.model_copy(
-            update={
-                "status": RunStatus.COMPLETED,
-                "dispatch_status": DispatchStatus.TERMINAL,
-                "result_text": str(state.get("final_answer") or ""),
-            }
-        )
-        await self.runtime.update_run(completed)
-        await self.runtime.append_event(
-            run_id=run.id,
-            event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": completed.status.value,
-                "dispatch_status": completed.dispatch_status.value,
-            },
-            agent_id=leader.id,
-        )
-        return state
 
     async def _execute_turn(
         self,
@@ -398,25 +360,6 @@ class ConversationGraph:
             "response_id": completed.response_id,
             "changed_files": _dedupe_changed_files(changed_files),
         }
-
-    async def _mark_failed(self, run: Run, leader: Agent) -> None:
-        failed = run.model_copy(
-            update={
-                "status": RunStatus.FAILED,
-                "dispatch_status": DispatchStatus.TERMINAL,
-            }
-        )
-        await self.runtime.update_run(failed)
-        await self.runtime.append_event(
-            run_id=run.id,
-            event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": failed.status.value,
-                "dispatch_status": failed.dispatch_status.value,
-            },
-            agent_id=leader.id,
-        )
-
 
 async def _identity_state(state: ConversationGraphState) -> ConversationGraphState:
     return state
