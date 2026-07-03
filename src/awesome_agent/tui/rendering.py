@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from rich.text import Text
 
+from awesome_agent.surfaces.client import ChangedFileSummary
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
 from awesome_agent.tui.events import (
     ApprovalPromptState,
@@ -110,6 +111,17 @@ def render_team_event(event: TeamDisplayEvent, *, details_enabled: bool) -> Text
 
 def render_approval_prompt(prompt: ApprovalPromptState) -> Text:
     return Text(prompt.render(), style="yellow")
+
+
+def render_changed_files(files: Iterable[ChangedFileSummary]) -> Text:
+    file_list = list(files)
+    rendered = Text("Changed files", style="green")
+    if not file_list:
+        rendered.append("\n  none")
+        return rendered
+    for item in file_list:
+        rendered.append(f"\n  {item.status:<7} {item.visible_path}")
+    return rendered
 
 
 def _labeled(label: str, content: str, *, label_style: str) -> Text:

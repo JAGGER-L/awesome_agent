@@ -135,10 +135,6 @@ def test_tui_client_reads_surface_capability_endpoints() -> None:
                 "configured": True,
                 "items": [{"id": "github", "status": "healthy"}],
             },
-            "/threads/thread-1/uploads": {"configured": False, "items": []},
-            "/threads/thread-1/artifacts": {
-                "items": [{"path": "/mnt/user-data/workspace/snake.html"}],
-            },
             "/threads/thread-1/usage": {
                 "thread_id": "thread-1",
                 "total_tokens": 30,
@@ -168,10 +164,6 @@ def test_tui_client_reads_surface_capability_endpoints() -> None:
     assert client.list_skills()[0]["id"] == "repository-inspection"
     assert client.list_tools()["builtin"][0]["name"] == "repo.read"
     assert client.mcp_status()[0]["status"] == "healthy"
-    assert client.list_uploads("thread-1") == []
-    assert client.list_current_artifacts("thread-1", None)[0]["path"].endswith(
-        "snake.html"
-    )
     assert client.usage_summary("thread-1", None)["total_tokens"] == 30
     assert client.config_summary()["api_url"] == "http://testserver"
     assert "/surface/tools" in requested_paths

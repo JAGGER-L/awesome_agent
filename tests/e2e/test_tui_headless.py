@@ -829,7 +829,7 @@ async def test_tui_threads_lists_current_thread_without_internal_paths() -> None
         transcript = app.query_one("#transcript").render()
 
     rendered = str(transcript)
-    assert "Threads" in rendered
+    assert "Conversations" in rendered
     assert "* Current" in rendered
     assert "Other" in rendered
     assert "/mnt/user-data/workspace" not in rendered
@@ -1265,6 +1265,64 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
     assert "Team" in rendered
     assert "leader: created 2 teammates" in rendered
     assert "leader -> frontend-engineer" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_renders_changed_files_after_completed_message() -> None:
+    class ChangedFilesClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            resume_run_id: str | None = None,
+        ) -> list[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            turn_id = uuid4()
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_DELTA,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=1,
+                    trace_id="trace-changes",
+                    payload={"text": "Done."},
+                ),
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_COMPLETED,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=2,
+                    trace_id="trace-changes",
+                    payload={
+                        "content": "Done.",
+                        "changed_files": [
+                            {
+                                "path": "/mnt/user-data/workspace/snake-game.html",
+                                "status": "created",
+                            }
+                        ],
+                    },
+                ),
+            ]
+
+    app = AwesomeAgentTui(client=ChangedFilesClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("b", "u", "i", "l", "d", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "Done." in rendered
+    assert "Changed files" in rendered
+    assert "created snake-game.html" in rendered
+    assert rendered.index("Done.") < rendered.index("Changed files")
+    assert "/mnt/user-data/workspace" not in rendered
 
 
 @pytest.mark.asyncio

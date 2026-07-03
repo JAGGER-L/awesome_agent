@@ -8,6 +8,7 @@ from threading import Thread
 from uuid import UUID, uuid4
 
 from awesome_agent.conversation.events import ConversationStreamEvent
+from awesome_agent.conversation.models import ThreadMessage
 from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.modeling.provider import ModelProvider
@@ -15,7 +16,12 @@ from awesome_agent.persistence.conversations import InMemoryConversationReposito
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.settings import Settings
-from awesome_agent.surfaces.client import SurfaceClientError, SurfaceThread
+from awesome_agent.surfaces.client import (
+    ChangedFileSummary,
+    SurfaceClientError,
+    SurfaceThread,
+    changed_file_summaries_from_payload,
+)
 
 
 class ExecutionMode(StrEnum):
@@ -114,6 +120,7 @@ class LocalRuntimeHost:
             title=thread.title,
             short_id=str(thread.id)[:8],
             context_label=thread.context_path,
+            updated_label="now",
         )
 
     def list_threads(self) -> list[SurfaceThread]:
@@ -121,15 +128,23 @@ class LocalRuntimeHost:
 
     async def _list_threads_async(self) -> list[SurfaceThread]:
         threads = await self.repository.list_threads()
-        return [
-            SurfaceThread(
-                id=str(thread.id),
-                title=thread.title,
-                short_id=str(thread.id)[:8],
-                context_label=thread.context_path,
+        summaries: list[SurfaceThread] = []
+        for thread in threads:
+            changed_files = _latest_changed_files(
+                await self.repository.list_messages(thread.id)
             )
-            for thread in threads
-        ]
+            summaries.append(
+                SurfaceThread(
+                    id=str(thread.id),
+                    title=thread.title,
+                    short_id=str(thread.id)[:8],
+                    context_label=thread.context_path,
+                    updated_label="now",
+                    changed_file_count=len(changed_files),
+                    latest_changed_files=changed_files,
+                )
+            )
+        return summaries
 
     def resume_thread(self, query: str) -> SurfaceThread:
         return _run_async(self._resume_thread_async(query))
@@ -141,6 +156,7 @@ class LocalRuntimeHost:
             title=thread.title,
             short_id=str(thread.id)[:8],
             context_label=thread.context_path,
+            updated_label="now",
         )
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, object]]:
@@ -252,6 +268,18 @@ class LocalRuntimeHost:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _latest_changed_files(
+    messages: list[ThreadMessage],
+) -> tuple[ChangedFileSummary, ...]:
+    for message in reversed(messages):
+        changed_files = changed_file_summaries_from_payload(
+            message.metadata.get("changed_files")
+        )
+        if changed_files:
+            return changed_files
+    return ()
 
 
 def _run_async[T](awaitable: object) -> T:

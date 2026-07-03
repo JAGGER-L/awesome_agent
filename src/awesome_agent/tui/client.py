@@ -196,22 +196,6 @@ class HttpSurfaceClient:
     def mcp_status(self) -> list[dict[str, Any]]:
         return self._get_items_object("/extensions/mcp")
 
-    def list_uploads(self, thread_id: str | None) -> list[dict[str, Any]]:
-        if thread_id is None:
-            return []
-        return self._get_items_object(f"/threads/{thread_id}/uploads")
-
-    def list_current_artifacts(
-        self,
-        thread_id: str | None,
-        run_id: str | None,
-    ) -> list[dict[str, Any]]:
-        if thread_id is not None:
-            return self._get_items_object(f"/threads/{thread_id}/artifacts")
-        if run_id is not None:
-            return self.artifacts(run_id)
-        return []
-
     def usage_summary(
         self,
         thread_id: str | None,

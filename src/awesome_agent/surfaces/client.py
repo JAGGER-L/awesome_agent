@@ -9,12 +9,25 @@ from awesome_agent.conversation.events import ConversationStreamEvent
 
 
 @dataclass(frozen=True)
+class ChangedFileSummary:
+    path: str
+    status: str = "updated"
+    display_path: str | None = None
+
+    @property
+    def visible_path(self) -> str:
+        return self.display_path or self.path
+
+
+@dataclass(frozen=True)
 class SurfaceThread:
     id: str
     title: str
     short_id: str
     context_label: str | None = None
     updated_label: str | None = None
+    changed_file_count: int = 0
+    latest_changed_files: tuple[ChangedFileSummary, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -82,14 +95,6 @@ class SurfaceClient(Protocol):
 
     def mcp_status(self) -> list[dict[str, Any]]: ...
 
-    def list_uploads(self, thread_id: str | None) -> list[dict[str, Any]]: ...
-
-    def list_current_artifacts(
-        self,
-        thread_id: str | None,
-        run_id: str | None,
-    ) -> list[dict[str, Any]]: ...
-
     def usage_summary(
         self,
         thread_id: str | None,
@@ -113,13 +118,70 @@ def surface_thread_from_mapping(payload: dict[str, object]) -> SurfaceThread:
     thread_id = str(payload["id"])
     title = str(payload.get("title") or "New conversation")
     context_label = payload.get("context_path") or payload.get("context_label")
+    latest_changed_files = tuple(
+        changed_file_summary_from_mapping(item)
+        for item in _mapping_list(payload.get("latest_changed_files"))
+    )
+    changed_file_count = payload.get("changed_file_count")
     return SurfaceThread(
         id=thread_id,
         title=title,
         short_id=thread_id[:8],
         context_label=str(context_label) if context_label is not None else None,
         updated_label=_relative_time_label(payload.get("updated_at")),
+        changed_file_count=(
+            changed_file_count
+            if isinstance(changed_file_count, int)
+            else len(latest_changed_files)
+        ),
+        latest_changed_files=latest_changed_files,
     )
+
+
+def changed_file_summary_from_mapping(
+    payload: dict[str, object] | str,
+) -> ChangedFileSummary:
+    if isinstance(payload, str):
+        return ChangedFileSummary(path=payload, display_path=_display_path(payload))
+    path = str(payload.get("path") or payload.get("display_path") or "-")
+    status = str(payload.get("status") or "updated")
+    display_path = payload.get("display_path")
+    return ChangedFileSummary(
+        path=path,
+        status=status if status in {"created", "updated", "deleted"} else "updated",
+        display_path=(
+            str(display_path) if isinstance(display_path, str) else _display_path(path)
+        ),
+    )
+
+
+def changed_file_summaries_from_payload(
+    value: object,
+) -> tuple[ChangedFileSummary, ...]:
+    return tuple(
+        changed_file_summary_from_mapping(item)
+        for item in _mapping_or_string_list(value)
+    )
+
+
+def _mapping_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _mapping_or_string_list(value: object) -> list[dict[str, object] | str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict | str)]
+
+
+def _display_path(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    marker = "/mnt/user-data/workspace/"
+    if normalized.startswith(marker):
+        return normalized.removeprefix(marker)
+    return path
 
 
 def _relative_time_label(value: object) -> str | None:

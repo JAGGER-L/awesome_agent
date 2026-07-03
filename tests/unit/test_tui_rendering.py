@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from awesome_agent.surfaces.client import ChangedFileSummary
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
 from awesome_agent.tui.events import (
     ApprovalPromptState,
@@ -8,6 +9,7 @@ from awesome_agent.tui.events import (
 )
 from awesome_agent.tui.rendering import (
     render_approval_prompt,
+    render_changed_files,
     render_message,
     render_team_event,
     render_thought,
@@ -214,3 +216,27 @@ def test_approval_prompt_renders_choices() -> None:
     assert "snake-game.html" in rendered
     assert "> 1. Yes" in rendered
     assert "allow all file edits during this session" in rendered
+
+
+def test_changed_files_render_workspace_relative_paths() -> None:
+    rendered = render_changed_files(
+        [
+            ChangedFileSummary(
+                path="/mnt/user-data/workspace/snake-game.html",
+                status="created",
+                display_path="snake-game.html",
+            ),
+            ChangedFileSummary(path="README.md", status="updated"),
+        ]
+    ).plain
+
+    assert "Changed files" in rendered
+    assert "created snake-game.html" in rendered
+    assert "updated README.md" in rendered
+    assert "/mnt/user-data/workspace" not in rendered
+
+
+def test_changed_files_empty_state_is_explicit() -> None:
+    rendered = render_changed_files([]).plain
+
+    assert rendered == "Changed files\n  none"

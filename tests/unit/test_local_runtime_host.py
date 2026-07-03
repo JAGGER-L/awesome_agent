@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
+from uuid import UUID
 
 import pytest
 
+from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
@@ -109,3 +112,31 @@ def test_local_runtime_host_forwards_turn_options() -> None:
         "memory": {"local_enabled": True},
         "skill_ids": ["repository-inspection"],
     }
+
+
+def test_local_runtime_host_thread_summary_includes_changed_files() -> None:
+    host = LocalRuntimeHost(
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread("Snake")
+    asyncio.run(
+        host.repository.append_message(
+            thread_id=UUID(thread.id),
+            role=ThreadMessageRole.ASSISTANT,
+            content="Done.",
+            metadata={
+                "changed_files": [
+                    {
+                        "path": "/mnt/user-data/workspace/snake.html",
+                        "status": "created",
+                    }
+                ]
+            },
+        )
+    )
+
+    [summary] = host.list_threads()
+
+    assert summary.changed_file_count == 1
+    assert summary.latest_changed_files[0].visible_path == "snake.html"

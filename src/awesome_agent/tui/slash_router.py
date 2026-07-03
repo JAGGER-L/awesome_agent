@@ -8,7 +8,7 @@ from awesome_agent.cli.slash_commands import (
     SlashCommandKind,
     slash_command_help,
 )
-from awesome_agent.surfaces.client import SurfaceThread
+from awesome_agent.surfaces.client import ChangedFileSummary, SurfaceThread
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 
 
@@ -203,6 +203,8 @@ class ThreadSummary:
     current: bool = False
     context_label: str | None = None
     updated_label: str | None = None
+    changed_file_count: int = 0
+    latest_changed_files: tuple[ChangedFileSummary, ...] = ()
 
 
 def thread_summaries(
@@ -218,13 +220,13 @@ def thread_summaries(
 def format_thread_list(threads: list[ThreadSummary]) -> str:
     if not threads:
         return "No conversations yet."
-    lines = ["Threads"]
+    lines = ["Conversations", ""]
     for thread in threads:
         marker = "*" if thread.current else " "
-        updated = thread.updated_label or "-"
-        context = _public_context_label(thread.context_label)
+        updated = f"modified {thread.updated_label}" if thread.updated_label else "-"
+        changes = _changed_file_count_label(thread.changed_file_count)
         lines.append(
-            f"{marker} {thread.title}  {thread.short_id}  {updated}  {context}"
+            f"{marker} {thread.title:<24} {updated:<18} {changes}"
         )
     return "\n".join(lines)
 
@@ -395,11 +397,14 @@ def _thread_summary(
             current=thread.id == current_thread_id,
             context_label=thread.context_label,
             updated_label=thread.updated_label,
+            changed_file_count=thread.changed_file_count,
+            latest_changed_files=thread.latest_changed_files,
         )
     thread_id = str(thread.get("id") or "-")
     title = str(thread.get("title") or thread_id)
     context = thread.get("context_path") or thread.get("context_label")
     updated = thread.get("updated_label")
+    changed_file_count = thread.get("changed_file_count")
     return ThreadSummary(
         id=thread_id,
         short_id=thread_id[:8],
@@ -407,6 +412,9 @@ def _thread_summary(
         current=thread_id == current_thread_id,
         context_label=str(context) if context is not None else None,
         updated_label=str(updated) if updated is not None else None,
+        changed_file_count=(
+            changed_file_count if isinstance(changed_file_count, int) else 0
+        ),
     )
 
 
@@ -417,3 +425,11 @@ def _public_context_label(context_label: str | None) -> str:
     if normalized.startswith("/mnt/user-data/"):
         return "workspace"
     return context_label
+
+
+def _changed_file_count_label(count: int) -> str:
+    if count == 0:
+        return "no file changes"
+    if count == 1:
+        return "1 changed file"
+    return f"{count} changed files"
