@@ -80,3 +80,40 @@ async def test_inmemory_validation_repository_lists_reports_with_gates() -> None
     assert [item.report for item in listed] == [report]
     assert [item.gates for item in listed] == [[gate]]
     assert asdict(listed[0].report)["summary"] == "all gates passed"
+
+
+@pytest.mark.asyncio
+async def test_inmemory_validation_repository_redacts_stdout_and_stderr() -> None:
+    repository = InMemoryValidationRepository()
+    run_id = uuid4()
+    report = DurableValidationReport(
+        run_id=run_id,
+        agent_id=uuid4(),
+        attempt=0,
+        status="passed",
+        summary="all gates passed",
+    )
+    gate = DurableValidationGateResult(
+        report_id=report.id,
+        run_id=run_id,
+        gate_id="pytest",
+        name="Pytest",
+        command=["pytest", "-q"],
+        required=True,
+        status="passed",
+        exit_code=0,
+        duration_ms=123,
+        stdout_summary="TOKEN=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+        stderr_summary="PASSWORD=hunter2",
+        failure_kind=None,
+    )
+
+    await repository.record_report(report, gates=[gate])
+    [listed] = await repository.list_for_run(run_id)
+    [stored_gate] = listed.gates
+
+    assert "abcdefghijklmnopqrstuvwxyz" not in stored_gate.stdout_summary
+    assert stored_gate.stdout_summary == "TOKEN=[REDACTED:token]"
+    assert stored_gate.stderr_summary == "PASSWORD=[REDACTED:password]"
+    assert stored_gate.status == "passed"
+    assert stored_gate.exit_code == 0

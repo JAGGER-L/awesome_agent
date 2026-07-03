@@ -14,6 +14,7 @@ from awesome_agent.domain.enums import (
 )
 from awesome_agent.domain.models import Agent, Run, RuntimeEvent, TodoItem
 from awesome_agent.repositories.reservations import IntakeReservationStore
+from awesome_agent.safety.redaction import redact_runtime_payload
 
 
 class RuntimeRepository(Protocol):
@@ -144,7 +145,7 @@ class InMemoryRuntimeRepository(RuntimeRepository):
         self._agents[run.id].append(leader)
         if todo is not None:
             self._todos[run.id].append(todo)
-        self._events[run.id].extend(events)
+        self._events[run.id].extend(_redacted_event(event) for event in events)
         await self._reservations.update(published)
 
     async def get_run(self, run_id: UUID) -> Run:
@@ -187,11 +188,13 @@ class InMemoryRuntimeRepository(RuntimeRepository):
             run_id=run_id,
             sequence=len(self._events[run_id]) + 1,
             event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": RunStatus.RUNNING.value,
-                "dispatch_status": DispatchStatus.QUEUED.value,
-                "reason": reason,
-            },
+            payload=redact_runtime_payload(
+                {
+                    "status": RunStatus.RUNNING.value,
+                    "dispatch_status": DispatchStatus.QUEUED.value,
+                    "reason": reason,
+                }
+            ),
             trace_id=run_id.hex,
         )
         self._runs[run_id] = run
@@ -238,10 +241,12 @@ class InMemoryRuntimeRepository(RuntimeRepository):
             run_id=run_id,
             sequence=len(self._events[run_id]) + 1,
             event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": RunStatus.CANCELLED.value,
-                "dispatch_status": DispatchStatus.TERMINAL.value,
-            },
+            payload=redact_runtime_payload(
+                {
+                    "status": RunStatus.CANCELLED.value,
+                    "dispatch_status": DispatchStatus.TERMINAL.value,
+                }
+            ),
             trace_id=run_id.hex,
         )
         self._runs[run_id] = run
@@ -282,11 +287,13 @@ class InMemoryRuntimeRepository(RuntimeRepository):
                 run_id=run.id,
                 sequence=len(self._events[run.id]) + 1,
                 event_type=EventType.RUN_STATUS_CHANGED,
-                payload={
-                    "status": updated.status.value,
-                    "dispatch_status": updated.dispatch_status.value,
-                    "reason": reason,
-                },
+                payload=redact_runtime_payload(
+                    {
+                        "status": updated.status.value,
+                        "dispatch_status": updated.dispatch_status.value,
+                        "reason": reason,
+                    }
+                ),
                 trace_id=run.id.hex,
             )
         )
@@ -325,7 +332,7 @@ class InMemoryRuntimeRepository(RuntimeRepository):
             run_id=run_id,
             sequence=len(self._events[run_id]) + 1,
             event_type=event_type,
-            payload=payload,
+            payload=redact_runtime_payload(payload),
             agent_id=agent_id,
             trace_id=run_id.hex,
         )
@@ -338,3 +345,7 @@ class InMemoryRuntimeRepository(RuntimeRepository):
         return [
             event for event in self._events[run_id] if event.sequence > after_sequence
         ]
+
+
+def _redacted_event(event: RuntimeEvent) -> RuntimeEvent:
+    return event.model_copy(update={"payload": redact_runtime_payload(event.payload)})

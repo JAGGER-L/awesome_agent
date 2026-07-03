@@ -147,6 +147,14 @@ def redaction_metadata(report: RedactionReport) -> dict[str, object]:
     return {"applied": report.applied, "counts": dict(report.counts)}
 
 
+def redact_runtime_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    redacted, report = redact_value(payload)
+    output = dict(redacted) if isinstance(redacted, Mapping) else {}
+    if report.applied:
+        output["redaction"] = redaction_metadata(report)
+    return output
+
+
 def _redact_guardrail_payload(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any], RedactionReport]:
