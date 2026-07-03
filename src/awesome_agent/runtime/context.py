@@ -21,6 +21,7 @@ from awesome_agent.runtime.token_accounting import (
     TokenAccountant,
     default_token_accountant,
 )
+from awesome_agent.safety.redaction import redact_model_messages, redact_value
 
 _MESSAGE_ADAPTER = TypeAdapter(list[ModelMessage])
 _SUMMARY_SNIPPET_CHARS = 240
@@ -111,13 +112,16 @@ class ContextManager:
         parsed = _coerce_messages(messages)
         before_tokens = self._token_accountant.estimate_messages(parsed).tokens
         if before_tokens < policy.soft_context_tokens:
+            request_messages = redact_model_messages(parsed)
             return PreparedContext(
-                request_messages=parsed,
+                request_messages=request_messages,
                 rolling_summary=rolling_summary,
                 compacted=False,
                 hard_limit_exceeded=False,
                 before_estimated_tokens=before_tokens,
-                after_estimated_tokens=before_tokens,
+                after_estimated_tokens=self._token_accountant.estimate_messages(
+                    request_messages
+                ).tokens,
             )
 
         keep_indexes = _required_context_indexes(parsed)
@@ -134,6 +138,12 @@ class ContextManager:
             for index, message in enumerate(parsed)
             if index not in keep_indexes
         ]
+        redacted_removed_messages, _report = redact_value(removed_messages)
+        removed_messages = (
+            redacted_removed_messages
+            if isinstance(redacted_removed_messages, list)
+            else []
+        )
 
         artifact_refs: list[str] = []
         if removed_messages:
@@ -161,6 +171,7 @@ class ContextManager:
             artifact_refs=artifact_refs,
         )
         request_messages = _insert_summary_message(kept_messages, updated_summary)
+        request_messages = redact_model_messages(request_messages)
         after_tokens = self._token_accountant.estimate_messages(request_messages).tokens
         return PreparedContext(
             request_messages=request_messages,
@@ -253,12 +264,13 @@ class ContextManager:
     ) -> ToolResultMessage:
         if self._artifact_store is None or self._artifact_repository is None:
             return message
+        redacted_content = redact_model_messages([message])[0].content
         metadata = self._artifact_store.write(
             run_id=run_id,
             agent_id=agent_id,
             artifact_type="tool-output",
             filename=f"{message.call_id}.txt",
-            content=message.content.encode("utf-8"),
+            content=redacted_content.encode("utf-8"),
             mime_type="text/plain",
             summary=f"Large tool result for {message.call_id}",
         )
@@ -269,7 +281,7 @@ class ContextManager:
             update={
                 "content": (
                     f"Large tool result offloaded to artifact {artifact_ref}; "
-                    f"{len(message.content)} characters preserved outside checkpoint."
+                    f"{len(redacted_content)} characters preserved outside checkpoint."
                 ),
                 "artifact_refs": [*message.artifact_refs, artifact_ref],
             }

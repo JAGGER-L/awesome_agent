@@ -22,6 +22,7 @@ from awesome_agent.modeling.stream import TextDelta, TurnCompleted, TurnFailed
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage
 from awesome_agent.runtime.agent_loop import ReadOnlyAgentLoop
 from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.safety.redaction import redact_model_messages, redact_value
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.repository import (
@@ -277,7 +278,7 @@ class ConversationGraph:
         thinking: str | None,
     ) -> ConversationGraphState:
         provider = self.provider_factory(selected_model)
-        model_messages = list(messages)
+        model_messages = redact_model_messages(list(messages))
         tools = (
             model_tool_definitions(self.tool_registry)
             if self.tool_registry is not None and run.working_directory is not None
@@ -341,14 +342,20 @@ class ConversationGraph:
                 model_messages.append(result)
                 effects = _changed_files_from_tool_result(result)
                 changed_files.extend(effects)
+                payload: dict[str, object] = {
+                    "tool": call.name,
+                    "status": "failed" if result.is_error else "completed",
+                    "changed_files": effects,
+                }
+                redacted_payload, _report = redact_value(payload)
+                if isinstance(redacted_payload, dict):
+                    payload = {
+                        str(key): value for key, value in redacted_payload.items()
+                    }
                 await self.runtime.append_event(
                     run_id=run.id,
                     event_type=EventType.TOOL_CALL_CREATED,
-                    payload={
-                        "tool": call.name,
-                        "status": "failed" if result.is_error else "completed",
-                        "changed_files": effects,
-                    },
+                    payload=payload,
                     agent_id=leader.id,
                 )
         if completed is None:

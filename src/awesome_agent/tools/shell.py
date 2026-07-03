@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from awesome_agent.domain.enums import RiskLevel
+from awesome_agent.safety.redaction import redact_text, redaction_metadata
 from awesome_agent.sandbox.base import CommandRequest, SandboxBackend
 from awesome_agent.tools.guardrails import evaluate_command
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
@@ -69,14 +70,17 @@ async def _execute(
     )
     stdout, stdout_truncated = _bound(arguments.max_output_chars, result.stdout)
     stderr, stderr_truncated = _bound(arguments.max_output_chars, result.stderr)
+    stdout_redaction = redact_text(stdout)
+    stderr_redaction = redact_text(stderr)
+    redaction = stdout_redaction.report.merge(stderr_redaction.report)
     return ToolResult(
         invocation_id=invocation.id,
         output={
             "status": "completed" if result.exit_code == 0 else "failed",
             "argv": arguments.argv,
             "exit_code": result.exit_code,
-            "stdout": stdout,
-            "stderr": stderr,
+            "stdout": stdout_redaction.text,
+            "stderr": stderr_redaction.text,
             "timed_out": result.timed_out,
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
@@ -86,6 +90,7 @@ async def _execute(
                 "reason": guardrail.reason,
                 "name": guardrail.guardrail,
             },
+            "redaction": redaction_metadata(redaction),
         },
     )
 

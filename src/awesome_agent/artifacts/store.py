@@ -7,6 +7,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from awesome_agent.safety.redaction import redact_text
+
 
 class ArtifactMetadata(BaseModel):
     id: UUID = Field(default_factory=uuid4)
@@ -37,6 +39,8 @@ class LocalArtifactStore:
         summary: str = "",
         agent_id: UUID | None = None,
     ) -> ArtifactMetadata:
+        content = _redact_artifact_bytes(content, mime_type)
+        summary = redact_text(summary).text
         safe_name = Path(filename).name
         artifact_id = uuid4()
         directory = self._root / str(run_id) / "artifacts" / artifact_type
@@ -77,3 +81,18 @@ class LocalArtifactStore:
                 directory.rmdir()
         if run_root.exists():
             run_root.rmdir()
+
+
+def _redact_artifact_bytes(content: bytes, mime_type: str) -> bytes:
+    if not _is_text_like(mime_type):
+        return content
+    text = content.decode("utf-8", errors="replace")
+    return redact_text(text).text.encode("utf-8")
+
+
+def _is_text_like(mime_type: str) -> bool:
+    return mime_type.startswith("text/") or mime_type in {
+        "application/json",
+        "application/xml",
+        "application/yaml",
+    }

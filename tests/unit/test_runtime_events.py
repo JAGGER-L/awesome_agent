@@ -7,12 +7,13 @@ import pytest
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
+    AgentKind,
     ApprovalStatus,
     DispatchStatus,
     EventType,
     RunStatus,
 )
-from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.domain.models import Agent, Run, RuntimeEvent
 from awesome_agent.persistence.approvals import (
     DurableApproval,
     InMemoryApprovalRepository,
@@ -126,6 +127,62 @@ async def test_claimed_run_cancellation_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(DispatchConflict):
         await service.cancel_run(run.id)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_runtime_events_redact_payload_before_storage() -> None:
+    repository = InMemoryRuntimeRepository()
+    run = Run(goal="redact")
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake-model",
+    )
+    await repository.create_run(run, leader)
+
+    await repository.append_event(
+        run_id=run.id,
+        event_type=EventType.TOOL_CALL_CREATED,
+        payload={
+            "result_summary": (
+                "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"
+            ),
+            "guardrails": {
+                "version": 1,
+                "assessments": [
+                    {
+                        "subject": "command",
+                        "operation": "execute",
+                        "decision": "ask",
+                        "severity": "medium",
+                        "reason": "token=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+                        "rule_ids": ["guard.command.sensitive_target"],
+                        "targets": [
+                            {
+                                "kind": "command",
+                                "value": (
+                                    "echo token="
+                                    "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
+                                ),
+                                "sensitivity": "sensitive",
+                            }
+                        ],
+                        "approval_scope": None,
+                        "bypass_used": False,
+                        "stats": {},
+                    }
+                ],
+            },
+        },
+    )
+
+    [event] = await repository.list_events(run.id)
+    serialized = str(event.payload)
+    assert "sk-proj-" not in serialized
+    assert "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG" not in serialized
+    assert event.payload["guardrails"]["assessments"][0]["decision"] == "ask"
+    assert event.payload["redaction"]["applied"] is True
 
 
 @pytest.mark.asyncio

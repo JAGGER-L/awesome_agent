@@ -14,6 +14,7 @@ from awesome_agent.persistence.validation import (
 )
 from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
 from awesome_agent.runtime.validation.summarize import summarize_output
+from awesome_agent.safety.redaction import redact_text
 from awesome_agent.sandbox.base import SandboxBackend
 from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
@@ -149,8 +150,8 @@ async def _execute_gate(
         status=status,
         exit_code=exit_code,
         duration_ms=_duration_ms(start),
-        stdout_summary=summarize_output(stdout),
-        stderr_summary=summarize_output(stderr),
+        stdout_summary=_redacted_summary(stdout),
+        stderr_summary=_redacted_summary(stderr),
         failure_kind=failure_kind,
     )
 
@@ -174,7 +175,7 @@ def _failed_gate(
         required=gate.required,
         status=status,
         duration_ms=duration_ms,
-        stderr_summary=stderr_summary,
+        stderr_summary=redact_text(stderr_summary).text,
         failure_kind=failure_kind,
     )
 
@@ -197,6 +198,10 @@ def _int_or_none(value: object) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return None
+
+
+def _redacted_summary(value: str) -> str:
+    return redact_text(summarize_output(value)).text
 
 
 def _report_summary(

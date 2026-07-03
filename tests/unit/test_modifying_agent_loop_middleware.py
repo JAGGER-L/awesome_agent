@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
+from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import AgentKind, RunIntent, RunMode
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
@@ -14,6 +17,7 @@ from awesome_agent.modeling import (
     StopReason,
     SystemMessage,
     ToolCall,
+    ToolResultMessage,
     UserMessage,
 )
 from awesome_agent.observability.facade import NoopObservabilityFacade
@@ -27,6 +31,7 @@ from awesome_agent.runtime.agent_loop.modifying import (
     ModifyingAgentLoop,
 )
 from awesome_agent.runtime.agent_loop.modifying_middleware import (
+    ModifyingArtifactMiddleware,
     ModifyingBudgetExhausted,
     ModifyingBudgetMiddleware,
     ModifyingContextMiddleware,
@@ -358,3 +363,36 @@ def test_modifying_evidence_middleware_routes_tool_calls_and_completion() -> Non
         )
         == "feedback"
     )
+
+
+@pytest.mark.asyncio
+async def test_modifying_artifact_middleware_redacts_offloaded_tool_output(
+    tmp_path: Path,
+) -> None:
+    artifact_repository = InMemoryArtifactMetadataRepository()
+    middleware = ModifyingArtifactMiddleware(
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifact_repository,
+    )
+    run = _run()
+    agent = _agent(run)
+
+    result = await middleware.offload_result_if_needed(
+        call_id="call-secret",
+        result=ToolResultMessage(
+            call_id="call-secret",
+            content=(
+                "prefix "
+                "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890 "
+                + ("x" * 12_000)
+            ),
+        ),
+        run=run,
+        agent=agent,
+    )
+
+    artifacts = await artifact_repository.list_for_run(run.id)
+    artifact_text = artifacts[0].path.read_text(encoding="utf-8")
+    assert "sk-proj-" not in artifact_text
+    assert "sk-proj-" not in result.content
+    assert "[REDACTED:api_key]" in artifact_text

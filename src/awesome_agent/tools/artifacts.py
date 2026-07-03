@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.domain.enums import RiskLevel
+from awesome_agent.safety.redaction import redact_text, redaction_metadata
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 
@@ -32,6 +33,9 @@ def register_artifact_tools(
         truncated = len(content) > arguments.max_bytes
         if truncated:
             content = content[: arguments.max_bytes]
+        content_result = redact_text(content.decode("utf-8", errors="replace"))
+        summary_result = redact_text(metadata.summary)
+        redaction = content_result.report.merge(summary_result.report)
         return ToolResult(
             invocation_id=invocation.id,
             output={
@@ -40,9 +44,10 @@ def register_artifact_tools(
                 "mime_type": metadata.mime_type,
                 "size": metadata.size,
                 "sha256": metadata.sha256,
-                "summary": metadata.summary,
-                "content": content.decode("utf-8", errors="replace"),
+                "summary": summary_result.text,
+                "content": content_result.text,
                 "truncated": truncated,
+                "redaction": redaction_metadata(redaction),
             },
         )
 
