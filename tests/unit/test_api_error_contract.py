@@ -68,12 +68,25 @@ def test_api_conflict_errors_are_classified_by_domain() -> None:
     async def config_error() -> None:
         raise HTTPException(status_code=409, detail="Configuration file is invalid.")
 
+    @app.get("/test/secret-error")
+    async def secret_error() -> None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Provider rejected OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz"
+            ),
+        )
+
     client = TestClient(app)
 
     assert client.get("/test/model-error").json()["code"] == "model_error"
     assert client.get("/test/sandbox-error").json()["code"] == "sandbox_error"
     assert client.get("/test/mcp-error").json()["code"] == "mcp_error"
     assert client.get("/test/config-error").json()["code"] == "config_error"
+    secret_body = client.get("/test/secret-error").json()
+    assert secret_body["code"] == "model_error"
+    assert "sk-proj-" not in secret_body["message"]
+    assert "OPENAI_API_KEY=[REDACTED:api_key]" in secret_body["message"]
 
 
 def _client() -> TestClient:

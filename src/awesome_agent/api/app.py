@@ -137,7 +137,11 @@ from awesome_agent.runtime.workspaces import (
 from awesome_agent.runtime.workspaces import (
     WorkspaceCleanupRequest as RuntimeWorkspaceCleanupRequest,
 )
-from awesome_agent.safety.redaction import redact_text, redact_value
+from awesome_agent.safety.redaction import (
+    install_redacting_log_filter,
+    redact_text,
+    redact_value,
+)
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import changed_file_summaries_from_payload
 from awesome_agent.tools.repository import build_modifying_registry
@@ -169,6 +173,7 @@ def create_app(
     thread_repository: ConversationRepository | None = None,
     conversation_service: ConversationService | None = None,
 ) -> FastAPI:
+    install_redacting_log_filter(logger)
     settings = settings or Settings()
     threads_repository = thread_repository or InMemoryConversationRepository()
     default_runtime_repository = getattr(service, "repository", None)

@@ -258,8 +258,16 @@ def _typed_assignment(match: re.Match[str]) -> tuple[str, str]:
 
 class RedactingLogFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact_text(str(record.msg)).text
-        if record.args:
-            redacted_args, _report = redact_value(record.args)
-            record.args = redacted_args
+        record.msg = redact_text(record.getMessage()).text
+        record.args = ()
         return True
+
+
+def install_redacting_log_filter(target: Any) -> None:
+    filters = getattr(target, "filters", None)
+    add_filter = getattr(target, "addFilter", None)
+    if filters is None or not callable(add_filter):
+        return
+    if any(isinstance(item, RedactingLogFilter) for item in filters):
+        return
+    add_filter(RedactingLogFilter())

@@ -1,4 +1,6 @@
-from awesome_agent.safety.redaction import redact_text, redact_value
+import logging
+
+from awesome_agent.safety.redaction import RedactingLogFilter, redact_text, redact_value
 
 
 def test_redact_text_replaces_api_keys_and_auth_headers() -> None:
@@ -92,3 +94,21 @@ def test_redact_value_preserves_guardrail_schema() -> None:
     assert assessment["reason"] == "Command references token=[REDACTED:token]"
     assert assessment["targets"][0]["value"] == "echo token=[REDACTED:token]"
     assert report.applied is True
+
+
+def test_redacting_log_filter_redacts_formatted_message_arguments() -> None:
+    record = logging.LogRecord(
+        name="awesome_agent.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="provider token=%s",
+        args=("abcdefghijklmnopqrstuvwxyz0123456789",),
+        exc_info=None,
+    )
+
+    assert RedactingLogFilter().filter(record) is True
+
+    message = record.getMessage()
+    assert "abcdefghijklmnopqrstuvwxyz" not in message
+    assert message == "provider token=[REDACTED:token]"
