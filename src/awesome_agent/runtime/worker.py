@@ -25,6 +25,10 @@ from awesome_agent.observability.repository import (
 )
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.runtime.conversation_graph import (
+    ConversationGraph,
+    ConversationGraphState,
+)
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     ChildRunWait,
@@ -36,6 +40,7 @@ from awesome_agent.runtime.dispatch import (
     RunDispatcher,
 )
 from awesome_agent.runtime.graphs import (
+    CONVERSATION_TURN_ROUTE,
     MODIFYING_CODING_ROUTE,
     READ_ONLY_CODING_ROUTE,
     RUNTIME_PROBE_ROUTE,
@@ -96,6 +101,7 @@ class DurableWorker:
         probe_graph: RuntimeProbeGraph,
         coding_graph: ReadOnlyCodingGraph | None = None,
         modifying_graph: ModifyingCodingGraph | None = None,
+        conversation_graph: ConversationGraph | None = None,
         team_graph: TeamCodingGraph | None = None,
         team_leader_graph: TeamLeaderGraph | None = None,
         team_role_graph: TeamRoleGraph | None = None,
@@ -115,6 +121,7 @@ class DurableWorker:
         self.probe_graph = probe_graph
         self.coding_graph = coding_graph
         self.modifying_graph = modifying_graph
+        self.conversation_graph = conversation_graph
         self.team_graph = team_graph
         self.team_leader_graph = team_leader_graph
         self.team_role_graph = team_role_graph
@@ -164,6 +171,9 @@ class DurableWorker:
         if self.modifying_graph is not None:
             runtime_routes.add(MODIFYING_CODING_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
+        if self.conversation_graph is not None:
+            runtime_routes.add(CONVERSATION_TURN_ROUTE)
+            execution_kinds.add(ExecutionKind.CONVERSATION)
         if self.team_graph is not None:
             runtime_routes.add(SCOPED_TEAM_CODING_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
@@ -198,6 +208,8 @@ class DurableWorker:
             routes.append(RuntimeRoute(READ_ONLY_CODING_ROUTE))
         if self.modifying_graph is not None:
             routes.append(RuntimeRoute(MODIFYING_CODING_ROUTE))
+        if self.conversation_graph is not None:
+            routes.append(RuntimeRoute(CONVERSATION_TURN_ROUTE))
         if self.team_graph is not None:
             routes.append(RuntimeRoute(SCOPED_TEAM_CODING_ROUTE))
         if self.team_leader_graph is not None:
@@ -246,8 +258,11 @@ class DurableWorker:
                 runtime_route=run.runtime_route or "",
             )
             state, recovered = await self._execute_with_heartbeat(run, lease)
-            is_coding = run.execution_kind is ExecutionKind.CODING
-            final_answer = state.get("final_answer") if is_coding else None
+            has_user_goal = run.execution_kind in {
+                ExecutionKind.CODING,
+                ExecutionKind.CONVERSATION,
+            }
+            final_answer = state.get("final_answer") if has_user_goal else None
             completion_kind = self._completion_kind(run)
             await self.dispatcher.complete_execution(
                 lease,
@@ -257,7 +272,7 @@ class DurableWorker:
                 ),
                 recovered=recovered,
                 completion_kind=completion_kind,
-                goal_executed=is_coding,
+                goal_executed=has_user_goal,
                 result_text=(final_answer if isinstance(final_answer, str) else None),
             )
             await self._record_child_terminal_if_needed(run, "completed")
@@ -317,6 +332,7 @@ class DurableWorker:
         RuntimeProbeState
         | ReadOnlyAgentState
         | ModifyingAgentState
+        | ConversationGraphState
         | TeamCodingState
         | TeamLeaderState
         | TeamRoleState
@@ -506,8 +522,18 @@ class DurableWorker:
             return
 
     def _validate_run(self, run: Run) -> None:
-        if run.execution_kind is not ExecutionKind.CODING:
+        if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
             return
+        if (
+            run.execution_kind is ExecutionKind.CONVERSATION
+            and run.runtime_route == CONVERSATION_TURN_ROUTE
+            and self.conversation_graph is not None
+        ):
+            return
+        if run.execution_kind is not ExecutionKind.CODING:
+            raise IncompatibleGraphError(
+                f"Worker cannot execute kind {run.execution_kind.value}."
+            )
         if (
             run.runtime_route == READ_ONLY_CODING_ROUTE
             and self.coding_graph is not None
@@ -547,6 +573,7 @@ class DurableWorker:
         RuntimeProbeState
         | ReadOnlyAgentState
         | ModifyingAgentState
+        | ConversationGraphState
         | TeamCodingState
         | TeamLeaderState
         | TeamRoleState
@@ -560,6 +587,31 @@ class DurableWorker:
         try:
             if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
                 return await self.probe_graph.execute(run)
+            if run.execution_kind is ExecutionKind.CONVERSATION:
+                if self.conversation_graph is None:
+                    raise IncompatibleGraphError(
+                        "Worker has no Conversation graph configured."
+                    )
+                agents = await self.repository.list_agents(run.id)
+                leader = next(
+                    (agent for agent in agents if agent.parent_agent_id is None),
+                    None,
+                )
+                if leader is None and len(agents) == 1:
+                    leader = agents[0]
+                if leader is None:
+                    raise CorruptRuntimeStateError(
+                        "Conversation Run has no Leader Agent."
+                    )
+                conversation_graph = self.conversation_graph
+
+                async def execute_conversation() -> tuple[ConversationGraphState, bool]:
+                    return await conversation_graph.execute(run, leader), False
+
+                return await self._execute_with_active_budget(
+                    run,
+                    execute_conversation,
+                )
             if run.execution_kind is ExecutionKind.CODING:
                 agents = await self.repository.list_agents(run.id)
                 primary_agent = next(
@@ -682,6 +734,7 @@ class DurableWorker:
                 tuple[
                     ReadOnlyAgentState
                     | ModifyingAgentState
+                    | ConversationGraphState
                     | TeamCodingState
                     | TeamLeaderState
                     | TeamRoleState
@@ -693,6 +746,7 @@ class DurableWorker:
     ) -> tuple[
         ReadOnlyAgentState
         | ModifyingAgentState
+        | ConversationGraphState
         | TeamCodingState
         | TeamLeaderState
         | TeamRoleState
@@ -906,6 +960,8 @@ class DurableWorker:
             logger.exception("Observability write failed.")
 
     def _completion_kind(self, run: Run) -> str:
+        if run.execution_kind is ExecutionKind.CONVERSATION:
+            return "conversation"
         if run.execution_kind is not ExecutionKind.CODING:
             return "runtime_probe"
         if run.runtime_route in {SCOPED_TEAM_CODING_ROUTE, TEAM_CODING_ROUTE}:
