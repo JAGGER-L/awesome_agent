@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from contextlib import suppress
-from typing import ClassVar
+from typing import ClassVar, cast
 from uuid import uuid4
 
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Input, Static
 from textual.worker import Worker
 
@@ -103,14 +104,15 @@ class AwesomeAgentTui(App[None]):
         self.api_url = api_url
         self.initial_run_id = run_id
         self.refresh_interval = refresh_interval
-        if client is None:
+        resolved_client: SurfaceClient | None = client
+        if resolved_client is None:
             if api_url is None:
                 from awesome_agent.surfaces.local_client import LocalSurfaceClient
 
-                client = LocalSurfaceClient()
+                resolved_client = LocalSurfaceClient()
             else:
-                client = HttpSurfaceClient(api_url)
-        self.client = client
+                resolved_client = cast(SurfaceClient, HttpSurfaceClient(api_url))
+        self.client: SurfaceClient = resolved_client
         self.command_palette = CommandPaletteState()
         self.state = ChatSessionState.new(
             launch_context=launch_context,
@@ -190,10 +192,11 @@ class AwesomeAgentTui(App[None]):
         self._render_palette()
 
     def on_key(self, event: events.Key) -> None:
-        if self.state.pending_approval is not None:
+        pending_approval = self.state.pending_approval
+        if pending_approval is not None:
             if event.key in {"down", "ctrl+n"}:
                 self.state = self.state.with_approval_prompt(
-                    self.state.pending_approval.move(1)
+                    pending_approval.move(1)
                 )
                 self._render()
                 event.prevent_default()
@@ -201,7 +204,7 @@ class AwesomeAgentTui(App[None]):
                 return
             if event.key in {"up", "ctrl+p"}:
                 self.state = self.state.with_approval_prompt(
-                    self.state.pending_approval.move(-1)
+                    pending_approval.move(-1)
                 )
                 self._render()
                 event.prevent_default()
@@ -213,11 +216,12 @@ class AwesomeAgentTui(App[None]):
                 event.stop()
                 return
             if event.key == "enter":
-                self._apply_approval_choice(self.state.pending_approval.active_index)
+                self._apply_approval_choice(pending_approval.active_index)
                 event.prevent_default()
                 event.stop()
                 return
-        if self.state.active_picker is not None:
+        active_picker = self.state.active_picker
+        if active_picker is not None:
             if event.key == "escape":
                 self.state = self.state.close_picker()
                 self._render()
@@ -225,13 +229,13 @@ class AwesomeAgentTui(App[None]):
                 event.stop()
                 return
             if event.key in {"down", "ctrl+n"}:
-                self.state = self.state.open_picker(self.state.active_picker.move(1))
+                self.state = self.state.open_picker(active_picker.move(1))
                 self._render()
                 event.prevent_default()
                 event.stop()
                 return
             if event.key in {"up", "ctrl+p"}:
-                self.state = self.state.open_picker(self.state.active_picker.move(-1))
+                self.state = self.state.open_picker(active_picker.move(-1))
                 self._render()
                 event.prevent_default()
                 event.stop()
@@ -332,33 +336,46 @@ class AwesomeAgentTui(App[None]):
         self._focus_prompt()
 
     def _render(self, *, follow: bool = True) -> None:
-        self.query_one("#welcome", Static).update(self._welcome_text())
-        self.query_one("#transcript", Static).update(
-            render_transcript(
-                self.state.messages,
-                thought_blocks=self.state.thought_blocks,
+        try:
+            self.query_one("#welcome", Static).update(self._welcome_text())
+            self.query_one("#transcript", Static).update(
+                render_transcript(
+                    self.state.messages,
+                    thought_blocks=self.state.thought_blocks,
+                )
             )
-        )
+        except NoMatches:
+            return
         self._render_palette()
         if follow:
             self.call_after_refresh(self._scroll_transcript_end)
 
     def _scroll_transcript_end(self) -> None:
-        self.query_one("#transcript-scroll", VerticalScroll).scroll_end(animate=False)
+        try:
+            self.query_one("#transcript-scroll", VerticalScroll).scroll_end(
+                animate=False
+            )
+        except NoMatches:
+            return
         self._focus_prompt()
 
     def _render_palette(self) -> None:
-        if self.state.pending_approval is not None:
+        try:
+            if self.state.pending_approval is not None:
+                self.query_one("#command-palette", Static).update(
+                    render_approval_prompt(self.state.pending_approval)
+                )
+                return
+            if self.state.active_picker is not None:
+                self.query_one("#command-palette", Static).update(
+                    self.state.active_picker.render()
+                )
+                return
             self.query_one("#command-palette", Static).update(
-                render_approval_prompt(self.state.pending_approval)
+                self.command_palette.render()
             )
+        except NoMatches:
             return
-        if self.state.active_picker is not None:
-            self.query_one("#command-palette", Static).update(
-                self.state.active_picker.render()
-            )
-            return
-        self.query_one("#command-palette", Static).update(self.command_palette.render())
 
     def _active_command_value(self, raw: str) -> str:
         if not is_command_prefix(raw):
@@ -1048,7 +1065,8 @@ class AwesomeAgentTui(App[None]):
         )
 
     def _focus_prompt(self) -> None:
-        self.query_one("#prompt", Input).focus()
+        with suppress(NoMatches):
+            self.query_one("#prompt", Input).focus()
 
     def _format_error(self, error: Exception) -> str:
         message = str(error)

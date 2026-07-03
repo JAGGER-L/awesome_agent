@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from enum import StrEnum
 from queue import Queue
 from threading import Thread
+from typing import cast
 from uuid import UUID, uuid4
 
 from awesome_agent.conversation.events import ConversationStreamEvent
@@ -376,7 +377,7 @@ class LocalRuntimeHost:
             "extension": [],
         }
         for spec in self.tool_registry.list_specs():
-            item = {
+            item: dict[str, object] = {
                 "name": spec.name,
                 "risk_level": spec.risk_level.value,
                 "health": "healthy",
@@ -492,13 +493,13 @@ def _int_usage(value: object) -> int:
     return value if isinstance(value, int) else 0
 
 
-def _run_async[T](awaitable: object) -> T:
+def _run_async[T](awaitable: Awaitable[T]) -> T:
     sentinel = object()
     queue: Queue[object] = Queue()
 
     async def collect() -> None:
         try:
-            queue.put(await awaitable)  # type: ignore[misc]
+            queue.put(await awaitable)
         except BaseException as error:
             queue.put(error)
         finally:
@@ -516,7 +517,7 @@ def _run_async[T](awaitable: object) -> T:
         raise RuntimeError("Local runtime host async bridge ended unexpectedly.")
     if isinstance(item, BaseException):
         raise item
-    return item  # type: ignore[return-value]
+    return cast(T, item)
 
 
 def _iter_async_in_thread[T](

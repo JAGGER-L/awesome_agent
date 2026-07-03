@@ -953,6 +953,7 @@ async def test_tui_can_answer_with_real_local_surface_client(tmp_path: Path) -> 
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
+        await pilot.pause()
         transcript = app.query_one("#transcript").render()
 
     assert "embedded" in str(transcript)

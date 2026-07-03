@@ -240,13 +240,12 @@ class PostgresConversationRepository:
             thread_record = await session.get(ThreadRecord, thread_id)
             if thread_record is None:
                 raise KeyError(f"Thread not found: {thread_id}")
-            next_sequence = (
-                await session.scalar(
-                    select(
-                        func.coalesce(func.max(ThreadMessageRecord.sequence), 0)
-                    ).where(ThreadMessageRecord.thread_id == thread_id)
+            max_sequence = await session.scalar(
+                select(func.coalesce(func.max(ThreadMessageRecord.sequence), 0)).where(
+                    ThreadMessageRecord.thread_id == thread_id
                 )
-            ) + 1
+            )
+            next_sequence = (max_sequence or 0) + 1
             message = ThreadMessage(
                 thread_id=thread_id,
                 role=role,

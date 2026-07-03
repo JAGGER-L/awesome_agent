@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.middleware.base import RequestResponseEndpoint
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.schemas import (
@@ -332,7 +333,10 @@ def create_app(
     app = FastAPI(title="awesome_agent", version="0.1.0", lifespan=lifespan)
 
     @app.middleware("http")
-    async def request_id_middleware(request: Request, call_next) -> Response:
+    async def request_id_middleware(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
         request_id = request.headers.get(_REQUEST_ID_HEADER) or uuid4().hex
         request.state.request_id = request_id
         response = await call_next(request)
@@ -348,7 +352,7 @@ def create_app(
             request,
             status_code=error.status_code,
             detail=error.detail,
-            headers=error.headers,
+            headers=dict(error.headers) if error.headers is not None else None,
         )
 
     @app.exception_handler(RequestValidationError)
