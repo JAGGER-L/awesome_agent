@@ -1,11 +1,10 @@
 import pytest
 from pydantic import ValidationError
-
-from awesome_agent.settings import Settings
+from tests.type_helpers import test_settings
 
 
 def test_default_sandbox_backend_is_aio_docker_for_api_profiles() -> None:
-    settings = Settings(_env_file=None)
+    settings = test_settings()
 
     assert settings.sandbox_backend == "aio-docker"
     assert settings.local_cli_sandbox_backend == "local"
@@ -15,4 +14,4 @@ def test_default_sandbox_backend_is_aio_docker_for_api_profiles() -> None:
 
 def test_unknown_sandbox_backend_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, sandbox_backend="ssh")
+        test_settings(sandbox_backend="ssh")

@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -82,7 +83,7 @@ class FakeConversationRunIntake:
             runtime_route=CONVERSATION_TURN_ROUTE,
             status=RunStatus.CREATED,
             dispatch_status=DispatchStatus.QUEUED,
-            working_directory="E:/project",
+            working_directory=Path("E:/project"),
         )
         leader = Agent(
             run_id=run.id,

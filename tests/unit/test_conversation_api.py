@@ -4,12 +4,12 @@ from typing import Any, cast
 
 from fastapi.testclient import TestClient
 from tests.conversation_projection_fakes import ProjectedConversationRunIntake
+from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
-from awesome_agent.settings import Settings
 
 
 def test_conversation_turn_streams_deltas_before_completion() -> None:
@@ -108,7 +108,7 @@ def _client(
             service=cast(Any, object()),
             intake=cast(Any, object()),
             registry=cast(Any, object()),
-            settings=Settings(_env_file=None),
+            settings=test_settings(),
             thread_repository=repository,
             conversation_service=conversation,
         )

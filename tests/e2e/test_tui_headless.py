@@ -1,9 +1,10 @@
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 from time import sleep
 from uuid import uuid4
 
 import pytest
+from tests.type_helpers import test_settings
 from textual.containers import VerticalScroll
 from textual.widgets import Input
 
@@ -17,7 +18,6 @@ from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
-from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_client import LocalSurfaceClient
 from awesome_agent.surfaces.local_runtime_host import LocalRuntimeHost
 from awesome_agent.tui.app import AwesomeAgentTui
@@ -36,6 +36,9 @@ class FakeClient:
         self.turn_options: list[dict[str, object]] = []
         self.approval_decisions: list[dict[str, object]] = []
 
+    def close(self) -> None:
+        pass
+
     def create_thread(
         self,
         title: str,
@@ -48,10 +51,11 @@ class FakeClient:
         thinking_mode: str | None = None,
         local_memory_enabled: bool = False,
         provider_memory: str | None = None,
+        **_: object,
     ) -> dict[str, object]:
         thread_id = self.thread_id if self.created_threads == 0 else str(uuid4())
         self.created_threads += 1
-        thread = {
+        thread: dict[str, object] = {
             "id": thread_id,
             "title": title,
             "context_kind": context_kind or "workspace",
@@ -121,7 +125,7 @@ class FakeClient:
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
-    ) -> list[ConversationStreamEvent]:
+    ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         self.turn_options.append(
             {
@@ -177,7 +181,7 @@ class FakeClient:
         repository_path: str | None = None,
     ) -> dict[str, object]:
         run_id = str(uuid4())
-        payload = {
+        payload: dict[str, object] = {
             "id": run_id,
             "thread_id": thread_id,
             "goal": goal,
@@ -189,6 +193,27 @@ class FakeClient:
         }
         self.runs.append(payload)
         return payload
+
+    def start_explicit_run(
+        self,
+        thread_id: str,
+        goal: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        return self.create_thread_run(
+            thread_id,
+            goal,
+            intent=str(kwargs.get("intent") or "modifying"),
+            mode=str(kwargs.get("mode") or "solo"),
+            repository_id=_optional_string(kwargs.get("repository_id")),
+            repository_path=_optional_string(kwargs.get("repository_path")),
+        )
+
+    def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
+        return [run for run in self.runs if run.get("thread_id") == thread_id]
+
+    def last_resumable_run(self, thread_id: str) -> dict[str, object] | None:
+        return None
 
     def runtime_status(self) -> dict[str, object]:
         return {"api": "ready", "sandbox": "local"}
@@ -320,7 +345,7 @@ class ReasoningStreamingClient(FakeClient):
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         turn_id = uuid4()
-        events = [
+        events: list[tuple[ConversationStreamEventKind, dict[str, object]]] = [
             (
                 ConversationStreamEventKind.REASONING_STARTED,
                 {},
@@ -378,7 +403,7 @@ class MultiReasoningStreamingClient(FakeClient):
         turn_id = uuid4()
         thought = "first thought" if self.calls == 1 else "second thought"
         answer = "first answer" if self.calls == 1 else "second answer"
-        events = [
+        events: list[tuple[ConversationStreamEventKind, dict[str, object]]] = [
             (ConversationStreamEventKind.REASONING_STARTED, {}),
             (ConversationStreamEventKind.REASONING_DELTA, {"text": thought}),
             (ConversationStreamEventKind.MESSAGE_DELTA, {"text": answer}),
@@ -397,7 +422,7 @@ class MultiReasoningStreamingClient(FakeClient):
 
 
 class FakeProvider(StructuredModelProvider):
-    async def stream(self, request: ModelRequest) -> ModelStreamEvent:
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         yield TextDelta(text="embedded")
         yield TurnCompleted(
             turn=ModelTurn(
@@ -407,6 +432,10 @@ class FakeProvider(StructuredModelProvider):
                 provider="fake",
             )
         )
+
+
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 @pytest.mark.asyncio
@@ -854,7 +883,7 @@ async def test_tui_skills_picker_stages_next_turn_only() -> None:
         await pilot.press("h", "i", "enter")
 
     assert client.turn_options[-1]["skill_ids"] == ("repository-inspection",)
-    assert app.state.staged_skill_ids == ()
+    assert app.state.staged_skill_ids == tuple()
 
 
 @pytest.mark.asyncio
@@ -944,7 +973,7 @@ async def test_tui_can_answer_without_http_server() -> None:
 @pytest.mark.asyncio
 async def test_tui_can_answer_with_real_local_surface_client(tmp_path: Path) -> None:
     host = LocalRuntimeHost(
-        settings=Settings(_env_file=None, local_state_dir=tmp_path / "state"),
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
     )
@@ -1134,13 +1163,15 @@ async def test_tui_retry_resends_last_failed_message() -> None:
             if self.calls == 1:
                 self.turns.append((thread_id, content))
                 raise RuntimeError("temporary model failure")
-            return super().stream_turn(
-                thread_id,
-                content,
-                model=model,
-                thinking=thinking,
-                memory=memory,
-                skill_ids=skill_ids,
+            return list(
+                super().stream_turn(
+                    thread_id,
+                    content,
+                    model=model,
+                    thinking=thinking,
+                    memory=memory,
+                    skill_ids=skill_ids,
+                )
             )
 
     client = FailingOnceClient()
@@ -1163,7 +1194,7 @@ async def test_tui_retry_resends_last_failed_message() -> None:
 async def test_tui_local_memory_view_uses_client_facts() -> None:
     class MemoryClient(FakeClient):
         def local_memory_facts(self, thread_id: str | None) -> list[str]:
-            return ["用户目前在学习python。"]
+            return ["user is learning python."]
 
     app = AwesomeAgentTui(client=MemoryClient())
 
@@ -1176,7 +1207,7 @@ async def test_tui_local_memory_view_uses_client_facts() -> None:
 
     rendered = str(transcript)
     assert "Remembered facts" in rendered
-    assert "用户目前在学习python。" in rendered
+    assert "user is learning python." in rendered
     assert "No local memory facts" not in rendered
 
 

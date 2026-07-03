@@ -4,11 +4,18 @@ from pathlib import Path
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.slash_commands import SlashCommand, SlashCommandKind
+from awesome_agent.surfaces.client import SurfaceThread
 from awesome_agent.tui.chat_state import ChatSessionState
-from awesome_agent.tui.slash_router import SlashRouter
+from awesome_agent.tui.slash_router import ChatSemanticClient, SlashRouter
 
 
-class ModelClient:
+class ModelClient(ChatSemanticClient):
+    def create_thread(self, title: str) -> SurfaceThread | dict[str, object]:
+        raise AssertionError("not used by this test")
+
+    def runtime_status(self) -> dict[str, object]:
+        raise AssertionError("not used by this test")
+
     def list_models(self) -> list[dict[str, object]]:
         return [
             {
@@ -21,6 +28,31 @@ class ModelClient:
                 "base_url": "https://api.deepseek.com",
             }
         ]
+
+    def memory_summary(self) -> dict[str, object]:
+        raise AssertionError("not used by this test")
+
+    def list_threads(self) -> list[SurfaceThread | dict[str, object]]:
+        raise AssertionError("not used by this test")
+
+    def list_skills(self) -> list[dict[str, object]]:
+        raise AssertionError("not used by this test")
+
+    def list_tools(self) -> dict[str, list[dict[str, object]]]:
+        raise AssertionError("not used by this test")
+
+    def mcp_status(self) -> list[dict[str, object]]:
+        raise AssertionError("not used by this test")
+
+    def usage_summary(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> dict[str, object]:
+        raise AssertionError("not used by this test")
+
+    def config_summary(self) -> dict[str, object]:
+        raise AssertionError("not used by this test")
 
 
 def test_model_output_includes_last_turn_metadata() -> None:

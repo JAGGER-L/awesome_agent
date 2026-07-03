@@ -27,7 +27,7 @@ class ProjectedConversationRunIntake:
         runtime: InMemoryRuntimeRepository,
         assistant_content: str | None = "hello world",
         text_deltas: tuple[str, ...] = ("hello", " world"),
-        usage: dict[str, int] | None = None,
+        usage: dict[str, object] | None = None,
         response_metadata: dict[str, object] | None = None,
         reasoning: bool = False,
         fail: bool = False,

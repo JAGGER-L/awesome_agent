@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import cast
 from uuid import UUID
 
 import pytest
+from tests.type_helpers import test_settings
 
 from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.modeling.messages import AssistantMessage
@@ -14,7 +16,6 @@ from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompl
 from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
-from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_runtime_host import (
     ExecutionMode,
     LocalRuntimeHost,
@@ -110,7 +111,10 @@ def test_continue_resumes_last_resumable_run() -> None:
         plan_execution_mode("continue", resumable_run_id="run-1")
         is ExecutionMode.RESUME
     )
-    assert plan_execution_mode("继续", resumable_run_id="run-1") is ExecutionMode.RESUME
+    assert (
+        plan_execution_mode("\u7ee7\u7eed", resumable_run_id="run-1")
+        is ExecutionMode.RESUME
+    )
 
 
 @pytest.mark.parametrize("content", ["hi", "What can you do?"])
@@ -143,7 +147,7 @@ def test_local_runtime_host_stream_turn_creates_durable_conversation_run(
     tmp_path: Path,
 ) -> None:
     host = LocalRuntimeHost(
-        settings=Settings(_env_file=None, local_state_dir=tmp_path / "state"),
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
     )
@@ -192,7 +196,8 @@ def test_local_runtime_host_forwards_turn_options() -> None:
     )
 
     [user, _assistant] = host.list_thread_messages(thread.id)
-    assert user["metadata"]["turn_options"] == {
+    metadata = cast(dict[str, object], user["metadata"])
+    assert metadata["turn_options"] == {
         "model": "alternate-model",
         "thinking": "off",
         "memory": {"local_enabled": True},
@@ -226,16 +231,22 @@ def test_local_runtime_host_executes_leader_tools_in_thread_workspace(
     )
     thread = host.create_thread("Workspace", context_path=str(tmp_path))
 
-    events = list(host.stream_turn(thread.id, "创建一个用于计算1+1的python文件"))
+    events = list(
+        host.stream_turn(
+            thread.id,
+            "\u521b\u5efa\u4e00\u4e2a\u7528\u4e8e\u8ba1\u7b971+1\u7684python\u6587\u4ef6",
+        )
+    )
 
     target = tmp_path / "calculate_1_plus_1.py"
     assert target.read_text(encoding="utf-8") == "result = 1 + 1\nprint(result)\n"
     assert len(provider.requests) == 2
-    assert any(
-        event.payload.get("tool_event", {}).get("name") == "repo.apply_patch"
+    tool_events = [
+        cast(dict[str, object], event.payload["tool_event"])
         for event in events
         if isinstance(event.payload.get("tool_event"), dict)
-    )
+    ]
+    assert any(event.get("name") == "repo.apply_patch" for event in tool_events)
     assert any(
         event.payload.get("changed_files")
         == [{"path": "calculate_1_plus_1.py", "status": "created"}]
@@ -278,12 +289,14 @@ def test_local_runtime_host_extracts_local_memory_facts() -> None:
     list(
         host.stream_turn(
             thread.id,
-            "我目前在学习python",
+            "\u6211\u76ee\u524d\u5728\u5b66\u4e60python",
             memory={"local_enabled": True},
         )
     )
 
-    assert host.local_memory_facts(thread.id) == ["用户目前在学习python。"]
+    assert host.local_memory_facts(thread.id) == [
+        "\u7528\u6237\u76ee\u524d\u5728\u5b66\u4e60python\u3002"
+    ]
 
 
 def test_local_runtime_host_thread_summary_includes_changed_files() -> None:
@@ -316,7 +329,7 @@ def test_local_runtime_host_thread_summary_includes_changed_files() -> None:
 
 
 def test_local_runtime_host_persists_threads_across_instances(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, local_state_dir=tmp_path / "state")
+    settings = test_settings(local_state_dir=tmp_path / "state")
     first = LocalRuntimeHost(
         settings=settings,
         provider_factory=lambda _model: FakeProvider(),

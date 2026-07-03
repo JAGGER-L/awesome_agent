@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
-from awesome_agent.settings import Settings
 
 
 def test_models_endpoint_returns_safe_routing_facts() -> None:
     client = TestClient(
         create_app(
-            settings=Settings(
-                _env_file=None,
+            settings=test_settings(
                 deepseek_api_key="secret-value",
                 deepseek_base_url="https://gateway.example/v1",
                 leader_model="deepseek-v4-pro",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -104,7 +105,7 @@ def _make_worker(
     conversation_graph: FakeConversationGraph | None = None,
 ) -> DurableWorker:
     return DurableWorker(
-        dispatcher=dispatcher or FakeDispatcher(),
+        dispatcher=cast(Any, dispatcher or FakeDispatcher()),
         repository=FakeRepository(),  # type: ignore[arg-type]
         probe_graph=FakeProbeGraph(),  # type: ignore[arg-type]
         conversation_graph=conversation_graph,  # type: ignore[arg-type]

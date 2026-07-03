@@ -604,7 +604,7 @@ def test_diagnostics_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
         assert timeout == 30
         return Response()
 
-    monkeypatch.setattr(cli_module.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     result = runner.invoke(app, ["diagnostics", str(run_id)])
 
@@ -653,7 +653,7 @@ def test_recovery_metrics_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> 
         assert timeout == 30
         return Response()
 
-    monkeypatch.setattr(cli_module.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     result = runner.invoke(app, ["recovery-metrics", str(run_id)])
 
@@ -696,7 +696,7 @@ def test_extensions_catalog_command_reads_api(monkeypatch: pytest.MonkeyPatch) -
         assert timeout == 30
         return Response()
 
-    monkeypatch.setattr(cli_module.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     result = runner.invoke(app, ["extensions", "catalog"])
 
@@ -744,7 +744,7 @@ def test_extensions_diagnostics_command_reads_api(
         assert timeout == 30
         return Response()
 
-    monkeypatch.setattr(cli_module.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     result = runner.invoke(app, ["extensions", "diagnostics"])
 
@@ -782,7 +782,7 @@ def test_extensions_catalog_diff_command_reads_api(
         assert timeout == 30
         return Response()
 
-    monkeypatch.setattr(cli_module.httpx, "get", get)
+    monkeypatch.setattr(httpx, "get", get)
 
     result = runner.invoke(
         app,

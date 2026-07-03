@@ -19,7 +19,7 @@ class HtmlGameSurfaceClient:
         self.workspace = workspace
         self.thread_id = str(uuid4())
         self.turns: list[str] = []
-        self.threads = [
+        self.threads: list[dict[str, object]] = [
             {
                 "id": self.thread_id,
                 "title": "Snake game",
@@ -29,6 +29,9 @@ class HtmlGameSurfaceClient:
             }
         ]
         self.messages: list[dict[str, object]] = []
+
+    def close(self) -> None:
+        return None
 
     def create_thread(self, title: str, **kwargs: object) -> dict[str, object]:
         self.threads[0]["title"] = title
@@ -40,8 +43,22 @@ class HtmlGameSurfaceClient:
     def resume_thread(self, query: str) -> dict[str, object]:
         return self.threads[0]
 
+    def update_thread_settings(
+        self,
+        thread_id: str,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> dict[str, object]:
+        return self.threads[0]
+
     def list_thread_messages(self, thread_id: str) -> list[dict[str, object]]:
         return list(self.messages)
+
+    def last_resumable_run(self, thread_id: str) -> dict[str, object] | None:
+        return None
 
     def stream_turn(
         self,
@@ -99,11 +116,25 @@ class HtmlGameSurfaceClient:
     def runtime_status(self) -> dict[str, object]:
         return {"api": "embedded", "sandbox": "local"}
 
+    def start_explicit_run(
+        self,
+        thread_id: str,
+        goal: str,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        return {"id": str(uuid4()), "status": "completed", "goal": goal}
+
+    def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
+        return []
+
     def list_models(self) -> list[dict[str, object]]:
         return [{"name": "fake-model"}]
 
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
+
+    def local_memory_facts(self, thread_id: str | None) -> list[str]:
+        return []
 
     def list_skills(self) -> list[dict[str, object]]:
         return []

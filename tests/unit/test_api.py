@@ -16,13 +16,22 @@ from opentelemetry.sdk.trace.export import (
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, EventType, RunMode, RunStatus
+from awesome_agent.domain.enums import (
+    AgentKind,
+    EventType,
+    RiskLevel,
+    RunMode,
+    RunStatus,
+)
 from awesome_agent.domain.models import Agent, Repository, Run
 from awesome_agent.extensions.models import (
     ExtensionCatalog,
     ExtensionHealthSnapshot,
+    ExtensionHealthStatus,
     ExtensionSourceSnapshot,
+    ExtensionSourceType,
     ExtensionToolInventoryItem,
+    ExtensionTrustLevel,
 )
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.repository import (
@@ -193,9 +202,9 @@ def _extension_catalog(version: str, tools: list[str]) -> ExtensionCatalog:
         sources=[
             ExtensionSourceSnapshot(
                 id="github",
-                type="mcp_stdio",
-                trust="user",
-                health=ExtensionHealthSnapshot(status="healthy"),
+                type=ExtensionSourceType.MCP_STDIO,
+                trust=ExtensionTrustLevel.USER,
+                health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
             )
         ],
         tools=[
@@ -203,7 +212,7 @@ def _extension_catalog(version: str, tools: list[str]) -> ExtensionCatalog:
                 name=tool,
                 source_id="github",
                 description="Search GitHub.",
-                risk_level="medium",
+                risk_level=RiskLevel.MEDIUM,
                 required_capabilities={"network:request"},
                 input_schema={"type": "object"},
             )
@@ -356,7 +365,7 @@ def test_extension_diagnostics_reports_catalog_and_denials(tmp_path: Path) -> No
                 status="denied",
                 idempotency_key="tool-1",
                 arguments_hash="args",
-                risk_level="medium",
+                risk_level=RiskLevel.MEDIUM,
                 error="not exposed",
             )
         )
@@ -706,7 +715,7 @@ def test_runtime_diagnostics_summarizes_run_evidence_and_redacts(
                 status="failed",
                 idempotency_key="tool-1",
                 arguments_hash="args-hash",
-                risk_level="medium",
+                risk_level=RiskLevel.MEDIUM,
                 path_refs=["README.md"],
                 result_summary="command failed safely",
                 result_content="secret tool output",
@@ -817,9 +826,9 @@ def test_extension_catalog_endpoint_reports_redacted_inventory(tmp_path: Path) -
         sources=[
             ExtensionSourceSnapshot(
                 id="local-demo",
-                type="static",
-                trust="project",
-                health=ExtensionHealthSnapshot(status="healthy"),
+                type=ExtensionSourceType.STATIC,
+                trust=ExtensionTrustLevel.PROJECT,
+                health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
             )
         ],
         tools=[
@@ -827,7 +836,7 @@ def test_extension_catalog_endpoint_reports_redacted_inventory(tmp_path: Path) -
                 name="extension.local-demo.demo.search",
                 source_id="local-demo",
                 description="Search demo content.",
-                risk_level="low",
+                risk_level=RiskLevel.LOW,
                 required_capabilities={"repository:read"},
                 input_schema={"type": "object"},
             )

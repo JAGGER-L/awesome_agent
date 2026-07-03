@@ -6,7 +6,9 @@ from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.extensions.models import (
     ExtensionCatalog,
     ExtensionSourceSnapshot,
+    ExtensionSourceType,
     ExtensionToolInventoryItem,
+    ExtensionTrustLevel,
 )
 from awesome_agent.modeling import ToolCall
 from awesome_agent.runtime.capabilities import (
@@ -272,7 +274,11 @@ def _catalog_with_tool(tool_name: str) -> ExtensionCatalog:
     return ExtensionCatalog(
         version="ext_123",
         sources=[
-            ExtensionSourceSnapshot(id="local-demo", type="static", trust="project")
+            ExtensionSourceSnapshot(
+                id="local-demo",
+                type=ExtensionSourceType.STATIC,
+                trust=ExtensionTrustLevel.PROJECT,
+            )
         ],
         tools=[
             ExtensionToolInventoryItem(

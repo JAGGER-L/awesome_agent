@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 from uuid import uuid4
 
 from awesome_agent.domain.enums import AgentKind, AgentStatus, RiskLevel, RunStatus
@@ -11,8 +12,11 @@ from awesome_agent.extensions.diagnostics import (
 from awesome_agent.extensions.models import (
     ExtensionCatalog,
     ExtensionHealthSnapshot,
+    ExtensionHealthStatus,
     ExtensionSourceSnapshot,
+    ExtensionSourceType,
     ExtensionToolInventoryItem,
+    ExtensionTrustLevel,
 )
 from awesome_agent.persistence.tool_invocations import (
     DurableToolInvocation,
@@ -43,7 +47,7 @@ def test_extension_diagnostics_reports_catalog_denials_and_stale_runs() -> None:
         extension_catalog_version="ext_old",
     )
 
-    async def arrange_and_summarize() -> dict[str, object]:
+    async def arrange_and_summarize() -> dict[str, Any]:
         await runtime.create_run(
             stale_run,
             Agent(
@@ -64,7 +68,7 @@ def test_extension_diagnostics_reports_catalog_denials_and_stale_runs() -> None:
                 status="denied",
                 idempotency_key="tool-1",
                 arguments_hash="args",
-                risk_level="medium",
+                risk_level=RiskLevel.MEDIUM,
                 error="not exposed",
             )
         )
@@ -88,9 +92,9 @@ def test_extension_diagnostics_reports_catalog_denials_and_stale_runs() -> None:
 def _catalog(version: str, *, tools: list[str]) -> ExtensionCatalog:
     source = ExtensionSourceSnapshot(
         id="github",
-        type="mcp_stdio",
-        trust="user",
-        health=ExtensionHealthSnapshot(status="healthy"),
+        type=ExtensionSourceType.MCP_STDIO,
+        trust=ExtensionTrustLevel.USER,
+        health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
     )
     catalog = publish_catalog(
         sources=[source],

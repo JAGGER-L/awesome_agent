@@ -12,7 +12,9 @@ from awesome_agent.extensions.models import (
     ExtensionHealthStatus,
     ExtensionSourceConfig,
     ExtensionSourceSnapshot,
+    ExtensionSourceType,
     ExtensionStaticToolConfig,
+    ExtensionTrustLevel,
 )
 from awesome_agent.extensions.service import (
     ExtensionDiscoveryService,
@@ -29,8 +31,8 @@ def test_static_extension_source_publishes_versioned_catalog() -> None:
     source = StaticExtensionSource(
         ExtensionSourceConfig(
             id="local-demo",
-            type="static",
-            trust="project",
+            type=ExtensionSourceType.STATIC,
+            trust=ExtensionTrustLevel.PROJECT,
             tools=[
                 ExtensionStaticToolConfig(
                     name="demo.search",
@@ -63,8 +65,8 @@ def test_catalog_version_changes_when_inventory_changes() -> None:
                 StaticExtensionSource(
                     ExtensionSourceConfig(
                         id="local-demo",
-                        type="static",
-                        trust="project",
+                        type=ExtensionSourceType.STATIC,
+                        trust=ExtensionTrustLevel.PROJECT,
                         tools=[],
                     )
                 )
@@ -77,8 +79,8 @@ def test_catalog_version_changes_when_inventory_changes() -> None:
                 StaticExtensionSource(
                     ExtensionSourceConfig(
                         id="local-demo",
-                        type="static",
-                        trust="project",
+                        type=ExtensionSourceType.STATIC,
+                        trust=ExtensionTrustLevel.PROJECT,
                         tools=[
                             ExtensionStaticToolConfig(
                                 name="demo.search",
@@ -126,7 +128,11 @@ def test_extension_discovery_service_emits_lifecycle_hooks() -> None:
             events.append(f"publish:{catalog.version}")
 
     source = StaticExtensionSource(
-        ExtensionSourceConfig(id="local-demo", type="static", trust="project")
+        ExtensionSourceConfig(
+            id="local-demo",
+            type=ExtensionSourceType.STATIC,
+            trust=ExtensionTrustLevel.PROJECT,
+        )
     )
 
     catalog = asyncio.run(
@@ -231,7 +237,7 @@ class FlakySource:
 def _healthy_source_snapshot() -> ExtensionSourceSnapshot:
     return ExtensionSourceSnapshot(
         id="local-demo",
-        type="static",
-        trust="project",
+        type=ExtensionSourceType.STATIC,
+        trust=ExtensionTrustLevel.PROJECT,
         health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
     )
