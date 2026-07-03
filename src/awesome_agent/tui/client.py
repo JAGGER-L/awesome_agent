@@ -142,6 +142,19 @@ class HttpSurfaceClient:
             raise ValueError("Expected object response from /memory.")
         return dict(payload)
 
+    def local_memory_facts(self, thread_id: str | None) -> list[str]:
+        if thread_id is None:
+            return []
+        response = self._client.get(f"{self.api_url}/threads/{thread_id}/memory")
+        if response.status_code in {404, 405}:
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        facts = payload.get("facts", []) if isinstance(payload, dict) else payload
+        if not isinstance(facts, Iterable) or isinstance(facts, dict | str | bytes):
+            raise ValueError("Expected facts list response from thread memory.")
+        return [str(item) for item in facts]
+
     def list_threads(self) -> list[SurfaceThread]:
         return [
             surface_thread_from_mapping(item)

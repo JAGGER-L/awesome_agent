@@ -443,12 +443,18 @@ class AwesomeAgentTui(App[None]):
         if isinstance(run_id, str):
             self.state = self.state.note_run_started(run_id)
         if stream_event.event is ConversationStreamEventKind.REASONING_STARTED:
+            if self.state.thinking_mode == "off":
+                return
             self.state = self.state.begin_thought(stream_event.created_at)
         elif stream_event.event is ConversationStreamEventKind.REASONING_DELTA:
+            if self.state.thinking_mode == "off":
+                return
             text = stream_event.payload.get("text")
             if isinstance(text, str):
                 self.state = self.state.append_thought_delta(text)
         elif stream_event.event is ConversationStreamEventKind.REASONING_COMPLETED:
+            if self.state.thinking_mode == "off":
+                return
             self.state = self.state.complete_thought(stream_event.created_at)
         elif stream_event.event is ConversationStreamEventKind.MESSAGE_DELTA:
             text = stream_event.payload.get("text")
@@ -764,10 +770,20 @@ class AwesomeAgentTui(App[None]):
 
     def _apply_local_memory_picker(self, item: PickerItem) -> None:
         if item.id == "view":
-            self.state = self.state.close_picker().append(
-                ChatMessage.system(
-                    "Remembered facts\n\nNo local memory facts for this conversation."
+            facts = self._local_memory_facts()
+            content = "Remembered facts"
+            if facts:
+                content = "\n".join([content, "", *[f"- {fact}" for fact in facts]])
+            else:
+                content = "\n".join(
+                    [
+                        content,
+                        "",
+                        "No local memory facts for this conversation.",
+                    ]
                 )
+            self.state = self.state.close_picker().append(
+                ChatMessage.system(content)
             )
             return
         enabled = item.id == "enabled"
@@ -778,6 +794,15 @@ class AwesomeAgentTui(App[None]):
                 f"Local memory changed to: {'Enabled' if enabled else 'Disabled'}"
             )
         )
+
+    def _local_memory_facts(self) -> list[str]:
+        facts = getattr(self.client, "local_memory_facts", None)
+        if not callable(facts):
+            return []
+        try:
+            return [str(item) for item in facts(self.state.backend_thread_id)]
+        except Exception:
+            return []
 
     def _restore_thread(self, thread_id: str) -> None:
         thread = self.client.resume_thread(thread_id)

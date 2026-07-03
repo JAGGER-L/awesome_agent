@@ -52,7 +52,7 @@ from awesome_agent.conversation.service import (
     ConversationService,
     MissingThreadRepositoryContext,
 )
-from awesome_agent.domain.enums import ExecutionKind, RunIntent
+from awesome_agent.domain.enums import ExecutionKind, ExecutionOrigin, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.extensions.config import build_project_extension_catalog_sync
 from awesome_agent.extensions.diagnostics import (
@@ -137,9 +137,13 @@ from awesome_agent.runtime.workspaces import (
 from awesome_agent.runtime.workspaces import (
     WorkspaceCleanupRequest as RuntimeWorkspaceCleanupRequest,
 )
+from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import changed_file_summaries_from_payload
-from awesome_agent.tools.repository import build_modifying_registry
+from awesome_agent.tools.repository import (
+    build_modifying_executor,
+    build_modifying_registry,
+)
 
 logger = logging.getLogger(__name__)
 _NIL_RUN_ID = UUID(int=0)
@@ -171,6 +175,10 @@ def create_app(
     settings = settings or Settings()
     threads_repository = thread_repository or InMemoryConversationRepository()
     model_provider_factory = ModelProviderFactory(settings)
+    conversation_tool_registry = build_modifying_registry(
+        sandbox=create_sandbox(origin=ExecutionOrigin.API, settings=settings)
+    )
+    conversation_tool_executor = build_modifying_executor(conversation_tool_registry)
     default_runtime_repository = getattr(service, "repository", None)
     if default_runtime_repository is None:
         default_runtime_repository = InMemoryRuntimeRepository()
@@ -179,6 +187,8 @@ def create_app(
         runtime_repository=default_runtime_repository,
         leader_executor=ProviderLeaderTurnExecutor(model_provider_factory.create),
         default_model=settings.leader_model,
+        tool_executor=conversation_tool_executor,
+        tool_registry=conversation_tool_registry,
     )
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
@@ -273,6 +283,8 @@ def create_app(
                 ModelProviderFactory(settings).create,
             ),
             default_model=settings.leader_model,
+            tool_executor=conversation_tool_executor,
+            tool_registry=conversation_tool_registry,
         )
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry

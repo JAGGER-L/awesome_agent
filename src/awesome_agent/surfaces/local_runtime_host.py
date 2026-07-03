@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator, Callable, Iterable
 from enum import StrEnum
 from queue import Queue
@@ -11,17 +12,23 @@ from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.conversation.models import ThreadMessage
 from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
+from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.persistence.local_conversations import LocalConversationRepository
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
+from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import (
     ChangedFileSummary,
     SurfaceClientError,
     SurfaceThread,
     changed_file_summaries_from_payload,
+)
+from awesome_agent.tools.repository import (
+    build_modifying_executor,
+    build_modifying_registry,
 )
 
 
@@ -80,6 +87,14 @@ class LocalRuntimeHost:
         )
         self.runtime_repository = InMemoryRuntimeRepository()
         self.default_model = default_model or self.settings.leader_model
+        self.tool_registry = build_modifying_registry(
+            sandbox=create_sandbox(
+                origin=ExecutionOrigin.CLI,
+                settings=self.settings,
+                profile="local-cli",
+            )
+        )
+        self.tool_executor = build_modifying_executor(self.tool_registry)
         factory = provider_factory
         if factory is None:
             factory = ModelProviderFactory(self.settings).create
@@ -88,6 +103,8 @@ class LocalRuntimeHost:
             runtime_repository=self.runtime_repository,
             leader_executor=ProviderLeaderTurnExecutor(factory),
             default_model=self.default_model,
+            tool_executor=self.tool_executor,
+            tool_registry=self.tool_registry,
         )
         self._planned_runs: dict[str, dict[str, object]] = {}
 
@@ -333,6 +350,88 @@ class LocalRuntimeHost:
             "mem0": self.settings.mem0_enabled,
         }
 
+    def local_memory_facts(self, thread_id: str | None) -> list[str]:
+        if thread_id is None:
+            return []
+        return _run_async(self._local_memory_facts_async(thread_id))
+
+    async def _local_memory_facts_async(self, thread_id: str) -> list[str]:
+        facts: list[str] = []
+        seen: set[str] = set()
+        for message in await self.repository.list_messages(UUID(thread_id)):
+            if not _message_local_memory_enabled(message):
+                continue
+            fact = _extract_local_memory_fact(message.content)
+            if fact is None or fact in seen:
+                continue
+            facts.append(fact)
+            seen.add(fact)
+        return facts
+
+    def list_tools(self) -> dict[str, list[dict[str, object]]]:
+        groups: dict[str, list[dict[str, object]]] = {
+            "builtin": [],
+            "sandbox": [],
+            "mcp": [],
+            "extension": [],
+        }
+        for spec in self.tool_registry.list_specs():
+            item = {
+                "name": spec.name,
+                "risk_level": spec.risk_level.value,
+                "health": "healthy",
+                "description": spec.description,
+            }
+            if spec.sandbox_required:
+                groups["sandbox"].append(item)
+            else:
+                groups["builtin"].append(item)
+        return groups
+
+    def usage_summary(
+        self,
+        thread_id: str | None,
+        run_id: str | None,
+    ) -> dict[str, object]:
+        if thread_id is None:
+            return {
+                "thread_id": None,
+                "run_id": run_id,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "reasoning_tokens": 0,
+                "total_tokens": 0,
+                "budget": "-",
+            }
+        return _run_async(self._usage_summary_async(thread_id, run_id))
+
+    async def _usage_summary_async(
+        self,
+        thread_id: str,
+        run_id: str | None,
+    ) -> dict[str, object]:
+        input_tokens = 0
+        output_tokens = 0
+        reasoning_tokens = 0
+        for message in await self.repository.list_messages(UUID(thread_id)):
+            usage = message.metadata.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            if run_id is not None and str(message.run_id) != run_id:
+                continue
+            input_tokens += _int_usage(usage.get("input_tokens"))
+            output_tokens += _int_usage(usage.get("output_tokens"))
+            reasoning_tokens += _int_usage(usage.get("reasoning_tokens"))
+        return {
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "reasoning_tokens": reasoning_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "budget": "-",
+        }
+
     def config_summary(self) -> dict[str, object]:
         return {
             "mode": "embedded",
@@ -356,6 +455,41 @@ def _latest_changed_files(
         if changed_files:
             return changed_files
     return ()
+
+
+def _message_local_memory_enabled(message: ThreadMessage) -> bool:
+    options = message.metadata.get("turn_options")
+    if not isinstance(options, dict):
+        return False
+    memory = options.get("memory")
+    return isinstance(memory, dict) and memory.get("local_enabled") is True
+
+
+def _extract_local_memory_fact(content: str) -> str | None:
+    normalized = content.strip()
+    for pattern in (
+        r"^\u6211\u76ee\u524d\u5728\u5b66\u4e60(.+)$",
+        r"^\u6211\u5728\u5b66\u4e60(.+)$",
+    ):
+        match = re.match(pattern, normalized, flags=re.IGNORECASE)
+        if match:
+            topic = match.group(1).strip(" \t\u3002.!?\uff1f")
+            if topic:
+                return f"\u7528\u6237\u76ee\u524d\u5728\u5b66\u4e60{topic}\u3002"
+    english = re.match(
+        r"^(?:i am|i'm|im) (?:currently )?learning (.+)$",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if english:
+        topic = english.group(1).strip(" \t.")
+        if topic:
+            return f"User is currently learning {topic}."
+    return None
+
+
+def _int_usage(value: object) -> int:
+    return value if isinstance(value, int) else 0
 
 
 def _run_async[T](awaitable: object) -> T:

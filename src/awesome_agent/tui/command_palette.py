@@ -43,8 +43,12 @@ class CommandPaletteState:
     def render(self) -> str:
         if not self.suggestions:
             return ""
+        max_visible = 6
+        start = max(0, self.active_index - max_visible + 1)
+        visible = self.suggestions[start : start + max_visible]
         lines = []
-        for index, suggestion in enumerate(self.suggestions[:6]):
+        for offset, suggestion in enumerate(visible):
+            index = start + offset
             marker = ">" if index == self.active_index else " "
             hint = f" {suggestion.argument_hint}" if suggestion.argument_hint else ""
             lines.append(
