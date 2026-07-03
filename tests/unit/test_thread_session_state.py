@@ -42,10 +42,10 @@ def test_chat_messages_from_thread_records_maps_roles_and_kinds() -> None:
         [
             {"role": "user", "content": "hi", "kind": "message"},
             {"role": "assistant", "content": "hello", "kind": "model"},
-            {"role": "system", "content": "done", "kind": "run"},
+            {"role": "system", "content": "done", "kind": "artifact"},
         ]
     )
 
     assert [message.role for message in messages] == ["user", "assistant", "system"]
     assert [message.content for message in messages] == ["hi", "hello", "done"]
-    assert messages[2].kind == "run"
+    assert messages[2].kind == "artifact"
