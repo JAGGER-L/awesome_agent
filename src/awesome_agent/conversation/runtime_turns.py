@@ -16,7 +16,7 @@ from awesome_agent.modeling.turns import ModelRequest
 
 
 class LeaderTurnExecutor:
-    async def stream(
+    def stream(
         self,
         request: ModelRequest,
         *,

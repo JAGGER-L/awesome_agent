@@ -88,11 +88,14 @@ class LocalSurfaceClient:
     def memory_summary(self) -> dict[str, object]:
         return self.host.memory_summary()
 
+    def local_memory_facts(self, thread_id: str | None) -> list[str]:
+        return self.host.local_memory_facts(thread_id)
+
     def list_skills(self) -> list[dict[str, Any]]:
         return []
 
     def list_tools(self) -> dict[str, list[dict[str, Any]]]:
-        return {"builtin": [], "sandbox": [], "mcp": [], "extension": []}
+        return self.host.list_tools()
 
     def mcp_status(self) -> list[dict[str, Any]]:
         return []
@@ -102,7 +105,7 @@ class LocalSurfaceClient:
         thread_id: str | None,
         run_id: str | None,
     ) -> dict[str, object]:
-        return {"thread_id": thread_id, "run_id": run_id, "total_tokens": 0}
+        return self.host.usage_summary(thread_id, run_id)
 
     def config_summary(self) -> dict[str, object]:
         return self.host.config_summary()

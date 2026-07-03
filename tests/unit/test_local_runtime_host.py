@@ -11,7 +11,8 @@ from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
+from awesome_agent.modeling.tools import ToolCall
+from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_runtime_host import (
@@ -31,6 +32,67 @@ class FakeProvider(StructuredModelProvider):
                 stop_reason=StopReason.COMPLETED,
                 model="fake-model",
                 provider="fake",
+            )
+        )
+
+
+class CaptureRequestProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="done"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        )
+
+
+class PatchToolProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            assert any(tool.name == "repo.apply_patch" for tool in request.tools)
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(
+                        content="",
+                        tool_calls=[
+                            ToolCall(
+                                call_id="call-write",
+                                name="repo.apply_patch",
+                                arguments_json=(
+                                    '{"patch":"--- /dev/null\\n'
+                                    '+++ b/calculate_1_plus_1.py\\n'
+                                    '@@ -0,0 +1,2 @@\\n'
+                                    '+result = 1 + 1\\n'
+                                    '+print(result)\\n"}'
+                                ),
+                            )
+                        ],
+                    ),
+                    stop_reason=StopReason.TOOL_CALLS,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+            return
+        assert any(message.role == "tool" for message in request.messages)
+        yield TextDelta(text="Created calculate_1_plus_1.py.")
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="Created calculate_1_plus_1.py."),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+                usage=ModelUsage(input_tokens=10, output_tokens=5, reasoning_tokens=1),
             )
         )
 
@@ -118,6 +180,93 @@ def test_local_runtime_host_forwards_turn_options() -> None:
         "memory": {"local_enabled": True},
         "skill_ids": ["repository-inspection"],
     }
+
+
+def test_local_runtime_host_passes_thinking_mode_into_model_request() -> None:
+    provider = CaptureRequestProvider()
+    host = LocalRuntimeHost(
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        repository=InMemoryConversationRepository(),
+    )
+    thread = host.create_thread("Options")
+
+    list(host.stream_turn(thread.id, "hi", thinking="off"))
+
+    assert provider.requests
+    assert provider.requests[0].thinking == "off"
+
+
+def test_local_runtime_host_executes_leader_tools_in_thread_workspace(
+    tmp_path: Path,
+) -> None:
+    provider = PatchToolProvider()
+    host = LocalRuntimeHost(
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        repository=InMemoryConversationRepository(),
+    )
+    thread = host.create_thread("Workspace", context_path=str(tmp_path))
+
+    events = list(host.stream_turn(thread.id, "创建一个用于计算1+1的python文件"))
+
+    target = tmp_path / "calculate_1_plus_1.py"
+    assert target.read_text(encoding="utf-8") == "result = 1 + 1\nprint(result)\n"
+    assert len(provider.requests) == 2
+    assert any(
+        event.payload.get("tool_event", {}).get("name") == "repo.apply_patch"
+        for event in events
+        if isinstance(event.payload.get("tool_event"), dict)
+    )
+    assert any(
+        event.payload.get("changed_files") == [
+            {"path": "calculate_1_plus_1.py", "status": "created"}
+        ]
+        for event in events
+    )
+
+
+def test_local_runtime_host_usage_summary_reads_persisted_turn_usage(
+    tmp_path: Path,
+) -> None:
+    provider = PatchToolProvider()
+    host = LocalRuntimeHost(
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        repository=InMemoryConversationRepository(),
+    )
+    thread = host.create_thread("Usage", context_path=str(tmp_path))
+
+    list(host.stream_turn(thread.id, "create file"))
+
+    assert host.usage_summary(thread.id, None) == {
+        "thread_id": thread.id,
+        "run_id": None,
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "reasoning_tokens": 1,
+        "total_tokens": 15,
+        "budget": "-",
+    }
+
+
+def test_local_runtime_host_extracts_local_memory_facts() -> None:
+    host = LocalRuntimeHost(
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+        repository=InMemoryConversationRepository(),
+    )
+    thread = host.create_thread("Memory")
+
+    list(
+        host.stream_turn(
+            thread.id,
+            "我目前在学习python",
+            memory={"local_enabled": True},
+        )
+    )
+
+    assert host.local_memory_facts(thread.id) == ["用户目前在学习python。"]
 
 
 def test_local_runtime_host_thread_summary_includes_changed_files() -> None:

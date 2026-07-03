@@ -66,7 +66,7 @@ from awesome_agent.runtime.modifying_graph import (
     _idempotency_key,
 )
 from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
-from awesome_agent.sandbox.base import CommandResult
+from awesome_agent.sandbox.base import CommandRequest, CommandResult
 from awesome_agent.tools.repository import canonical_arguments_hash_from_arguments
 
 
@@ -734,7 +734,6 @@ async def test_modifying_graph_fails_when_rework_attempts_are_exhausted(
 @pytest.mark.asyncio
 async def test_modifying_graph_interrupts_and_resumes_approved_shell(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "test@example.com")
@@ -749,25 +748,23 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
 -old
 +new
 """
-    shell_runs = 0
+    class RecordingSandbox:
+        name = "recording"
 
-    async def fake_run_process(
-        arguments: list[str],
-        *,
-        command_label: str,
-        workspace: Path,
-        timeout_seconds: float,
-    ) -> CommandResult:
-        nonlocal shell_runs
-        shell_runs += 1
-        return CommandResult(
-            command=command_label,
-            exit_code=0,
-            stdout="approved\n",
-            stderr="",
-        )
+        def __init__(self) -> None:
+            self.requests: list[CommandRequest] = []
 
-    monkeypatch.setattr("awesome_agent.tools.shell.run_process", fake_run_process)
+        async def execute(self, request: CommandRequest) -> CommandResult:
+            self.requests.append(request)
+            return CommandResult(
+                command=request.command_label,
+                exit_code=0,
+                stdout="approved\n",
+                stderr="",
+                sandbox=self.name,
+            )
+
+    sandbox = RecordingSandbox()
     provider = SequenceProvider(
         [
             ModelTurn(
@@ -827,11 +824,12 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
     graph = ModifyingCodingGraph(
         MemorySaver(),  # type: ignore[arg-type]
         provider_resolver=lambda _: provider,
-        tool_repository=tools,
-        approval_repository=approvals,
-        validation_plan_resolver=lambda _: _validation_plan(),
-        validation_runner=_passing_validation_runner,
-    )
+            tool_repository=tools,
+            approval_repository=approvals,
+            validation_plan_resolver=lambda _: _validation_plan(),
+            validation_runner=_passing_validation_runner,
+            sandbox=sandbox,
+        )
     events: list[tuple[object, dict[str, object], str]] = []
     run, agent = _run(tmp_path)
 
@@ -861,7 +859,7 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
     state, recovered = await graph.execute(run, agent, event_sink=emit)
 
     assert recovered
-    assert shell_runs == 1
+    assert len(sandbox.requests) == 1
     assert state["phase"] == "completed"
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new\n"
 

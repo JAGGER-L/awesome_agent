@@ -199,6 +199,9 @@ class FakeClient:
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
 
+    def local_memory_facts(self, thread_id: str | None) -> list[str]:
+        return []
+
     def list_skills(self) -> list[dict[str, object]]:
         return [
             {"id": "repository-inspection", "name": "repository-inspection"},
@@ -572,6 +575,23 @@ async def test_tui_reasoning_thought_collapses_and_toggles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_ignores_reasoning_events_when_thinking_is_off() -> None:
+    app = AwesomeAgentTui(client=ReasoningStreamingClient())
+    app.state = app.state.with_thinking("off")
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        await pilot.pause()
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "Thought for " not in rendered
+    assert "inspect context" not in rendered
+    assert "final answer" in rendered
+
+
+@pytest.mark.asyncio
 async def test_tui_keeps_thoughts_attached_to_each_turn() -> None:
     app = AwesomeAgentTui(client=MultiReasoningStreamingClient())
 
@@ -933,6 +953,7 @@ async def test_tui_can_answer_with_real_local_surface_client(tmp_path: Path) -> 
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
+        await pilot.pause()
         transcript = app.query_one("#transcript").render()
 
     assert "embedded" in str(transcript)
@@ -1136,6 +1157,27 @@ async def test_tui_retry_resends_last_failed_message() -> None:
     assert app.state.last_failed_user_message is None
     assert "temporary model failure" in str(transcript)
     assert "hello world" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_local_memory_view_uses_client_facts() -> None:
+    class MemoryClient(FakeClient):
+        def local_memory_facts(self, thread_id: str | None) -> list[str]:
+            return ["用户目前在学习python。"]
+
+    app = AwesomeAgentTui(client=MemoryClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "m", "e", "m", "o", "r", "y", "enter")
+        await pilot.press("enter")
+        await pilot.press("down", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "Remembered facts" in rendered
+    assert "用户目前在学习python。" in rendered
+    assert "No local memory facts" not in rendered
 
 
 @pytest.mark.asyncio

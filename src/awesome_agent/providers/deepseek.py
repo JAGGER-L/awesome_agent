@@ -72,6 +72,11 @@ class DeepSeekProvider(StructuredModelProvider):
         request: StructuredModelRequest,
     ) -> AsyncIterator[ModelStreamEvent]:
         tool_names = _deepseek_tool_names(request)
+        thinking_enabled, reasoning_effort = _deepseek_thinking_options(
+            request.thinking,
+            default_enabled=self._thinking_enabled,
+            default_effort=self._reasoning_effort,
+        )
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
@@ -79,10 +84,10 @@ class DeepSeekProvider(StructuredModelProvider):
                 tools=cast(Any, _deepseek_tools(request, tool_names)),
                 tool_choice=cast(Any, _deepseek_tool_choice(request, tool_names)),
                 max_tokens=request.max_output_tokens,
-                reasoning_effort=cast(Any, self._reasoning_effort),
+                reasoning_effort=cast(Any, reasoning_effort),
                 extra_body={
                     "thinking": {
-                        "type": ("enabled" if self._thinking_enabled else "disabled")
+                        "type": ("enabled" if thinking_enabled else "disabled")
                     }
                 },
                 stream=True,
@@ -350,3 +355,18 @@ def _deepseek_stop_reason(value: str | None) -> StopReason:
         "length": StopReason.MAX_TOKENS,
         "content_filter": StopReason.CONTENT_FILTER,
     }.get(value or "", StopReason.UNKNOWN)
+
+
+def _deepseek_thinking_options(
+    thinking: str | None,
+    *,
+    default_enabled: bool,
+    default_effort: Literal["high", "max"],
+) -> tuple[bool, Literal["high", "max"]]:
+    if thinking == "off":
+        return False, default_effort
+    if thinking == "on_max":
+        return True, "max"
+    if thinking == "on_high":
+        return True, "high"
+    return default_enabled, default_effort

@@ -228,3 +228,39 @@ async def test_deepseek_replays_private_reasoning_continuation() -> None:
     assert call is not None
     assistant = call.kwargs["messages"][1]
     assert assistant["reasoning_content"] == "private continuation"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_uses_per_request_thinking_override() -> None:
+    create = AsyncMock(
+        return_value=AsyncEvents([_chunk(content="done", finish_reason="stop")])
+    )
+    client = cast(
+        AsyncOpenAI,
+        cast(
+            Any,
+            SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+            ),
+        ),
+    )
+    provider = DeepSeekProvider(
+        api_key="test",
+        model="test",
+        thinking_enabled=True,
+        reasoning_effort="high",
+        client=client,
+    )
+
+    await provider.complete(
+        ModelRequest(messages=[UserMessage(content="quick answer")], thinking="off")
+    )
+    await provider.complete(
+        ModelRequest(messages=[UserMessage(content="hard answer")], thinking="on_max")
+    )
+
+    first, second = create.await_args_list
+    assert first.kwargs["extra_body"]["thinking"]["type"] == "disabled"
+    assert first.kwargs["reasoning_effort"] == "high"
+    assert second.kwargs["extra_body"]["thinking"]["type"] == "enabled"
+    assert second.kwargs["reasoning_effort"] == "max"

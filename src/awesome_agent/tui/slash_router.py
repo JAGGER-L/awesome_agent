@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -21,7 +22,7 @@ class ChatSemanticClient(Protocol):
 
     def memory_summary(self) -> dict[str, object]: ...
 
-    def list_threads(self) -> list[SurfaceThread | dict[str, object]]: ...
+    def list_threads(self) -> Sequence[SurfaceThread | dict[str, object]]: ...
 
     def list_skills(self) -> list[dict[str, object]]: ...
 
@@ -208,7 +209,7 @@ class ThreadSummary:
 
 
 def thread_summaries(
-    threads: list[SurfaceThread | dict[str, object]],
+    threads: Sequence[SurfaceThread | dict[str, object]],
     current_thread_id: str | None,
 ) -> list[ThreadSummary]:
     return [
