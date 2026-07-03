@@ -87,6 +87,54 @@ async def test_local_runtime_repository_cancel_queued_run(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_local_runtime_repository_does_not_cancel_terminal_run(
+    tmp_path: Path,
+) -> None:
+    repository = LocalRuntimeRepository(tmp_path / "state.db")
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.COMPLETED,
+            "dispatch_status": DispatchStatus.TERMINAL,
+        }
+    )
+    await repository.create_run(run, _leader(run))
+
+    unchanged, event = await repository.cancel_run(run.id)
+
+    assert unchanged == run
+    assert event is None
+    assert await repository.get_run(run.id) == run
+    repository.close()
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_repository_persists_transition_id_idempotently(
+    tmp_path: Path,
+) -> None:
+    repository = LocalRuntimeRepository(tmp_path / "state.db")
+    run = _run(tmp_path)
+    await repository.create_run(run, _leader(run))
+
+    first = await repository.append_event(
+        run_id=run.id,
+        event_type=EventType.RUN_STATUS_CHANGED,
+        payload={"status": "running"},
+        transition_id="transition-1",
+    )
+    repeated = await repository.append_event(
+        run_id=run.id,
+        event_type=EventType.RUN_STATUS_CHANGED,
+        payload={"status": "running"},
+        transition_id="transition-1",
+    )
+
+    assert repeated == first
+    assert await repository.list_events(run.id) == [first]
+    assert (await repository.list_events(run.id))[0].transition_id == "transition-1"
+    repository.close()
+
+
+@pytest.mark.asyncio
 async def test_local_runtime_repository_redacts_event_payload(
     tmp_path: Path,
 ) -> None:

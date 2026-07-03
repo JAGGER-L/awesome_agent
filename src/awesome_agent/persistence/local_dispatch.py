@@ -12,7 +12,7 @@ from awesome_agent.domain.enums import (
 )
 from awesome_agent.domain.models import Run, RunLease, RuntimeEvent
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
-from awesome_agent.runtime.dispatch import LeaseLost, RunDispatcher
+from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
 
 
 class LocalRunDispatcher(RunDispatcher):
@@ -132,10 +132,9 @@ class LocalRunDispatcher(RunDispatcher):
             run_id=lease.run_id,
             event_type=event_type,
             payload=payload,
+            transition_id=transition_id,
         )
-        if transition_id is None:
-            return event
-        return event.model_copy(update={"transition_id": transition_id})
+        return event
 
     async def release_to_queue(
         self,
@@ -171,13 +170,24 @@ class LocalRunDispatcher(RunDispatcher):
         reason: str | None,
     ) -> RuntimeEvent | None:
         run = await self.runtime.get_run(run_id)
+        if run.status is RunStatus.CANCELLED:
+            return None
+        if run.dispatch_status is DispatchStatus.TERMINAL:
+            raise DispatchConflict("Terminal Runs cannot be cancelled.")
+        if run.status in {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.RECOVERY_REQUIRED,
+        }:
+            return None
+        now = datetime.now(UTC)
         if run.dispatch_status in {
             DispatchStatus.CLAIMED,
             DispatchStatus.EXECUTING,
         }:
             updated = run.model_copy(
                 update={
-                    "cancel_requested_at": datetime.now(UTC),
+                    "cancel_requested_at": run.cancel_requested_at or now,
                     "cancel_requested_by": requested_by,
                     "cancel_reason": reason,
                 }
@@ -189,13 +199,23 @@ class LocalRunDispatcher(RunDispatcher):
                 payload={
                     "requested_by": requested_by,
                     "reason": reason,
+                    "dispatch_status": updated.dispatch_status.value,
                 },
+                transition_id=f"cancel-requested:{run_id}",
             )
+        updated = run.model_copy(
+            update={
+                "cancel_requested_at": run.cancel_requested_at or now,
+                "cancel_requested_by": requested_by,
+                "cancel_reason": reason,
+            }
+        )
+        await self.runtime.update_run(updated)
         _cancelled, event = await self.runtime.cancel_run(run_id)
         return event
 
     async def is_cancel_requested(self, lease: RunLease) -> bool:
-        run = await self.runtime.get_run(lease.run_id)
+        run = await self._owned_run(lease)
         return run.cancel_requested_at is not None
 
     async def mark_cancelled(self, lease: RunLease, *, reason: str) -> None:
@@ -207,7 +227,7 @@ class LocalRunDispatcher(RunDispatcher):
                 "cancel_reason": reason,
             }
         )
-        await self.runtime.update_run(updated)
+        await self.runtime.update_run(self._clear_lease(updated))
         await self.runtime.append_event(
             run_id=lease.run_id,
             event_type=EventType.RUN_STATUS_CHANGED,
@@ -227,15 +247,29 @@ class LocalRunDispatcher(RunDispatcher):
     ) -> None:
         run = await self._owned_run(lease)
         updated = self._released_run(
-            run.model_copy(update={"status": RunStatus.WAITING}),
+            run.model_copy(update={"status": RunStatus.PAUSED}),
             dispatch_status=DispatchStatus.WAITING,
             reason=reason,
         )
         await self.runtime.update_run(updated)
         await self.runtime.append_event(
             run_id=lease.run_id,
-            event_type=EventType.APPROVAL_REQUESTED,
-            payload={"approval_id": str(approval_id), "reason": reason},
+            event_type=EventType.DISPATCH_RELEASED,
+            payload={
+                "dispatch_status": updated.dispatch_status.value,
+                "approval_id": str(approval_id),
+                "reason": reason,
+            },
+        )
+        await self.runtime.append_event(
+            run_id=lease.run_id,
+            event_type=EventType.RUN_STATUS_CHANGED,
+            payload={
+                "status": updated.status.value,
+                "dispatch_status": updated.dispatch_status.value,
+                "approval_id": str(approval_id),
+                "reason": reason,
+            },
         )
 
     async def release_for_child_wait(self, lease: RunLease, *, reason: str) -> None:
@@ -314,15 +348,40 @@ class LocalRunDispatcher(RunDispatcher):
                 continue
             if run.lease_expires_at is None or run.lease_expires_at > now:
                 continue
-            await self._mark_run_recovery_required(
-                run,
-                reason="Local worker lease expired.",
-            )
+            expired_worker = run.current_worker_id
+            expired_token = run.fencing_token
+            if run.attempt >= max_attempts:
+                await self._mark_run_recovery_required(
+                    run,
+                    reason="maximum attempts exceeded",
+                )
+            else:
+                updated = self._clear_lease(
+                    run.model_copy(
+                        update={
+                            "dispatch_status": DispatchStatus.QUEUED,
+                            "available_at": now,
+                            "last_release_reason": "lease expired",
+                        }
+                    )
+                )
+                await self.runtime.update_run(updated)
+                await self.runtime.append_event(
+                    run_id=run.id,
+                    event_type=EventType.DISPATCH_LEASE_EXPIRED,
+                    payload={
+                        "expired_worker_id": str(expired_worker),
+                        "fencing_token": expired_token,
+                        "attempt": run.attempt,
+                    },
+                )
             processed += 1
         return processed
 
     async def start_execution(self, lease: RunLease, *, runtime_route: str) -> None:
         run = await self._owned_run(lease)
+        if run.runtime_route != runtime_route:
+            raise ValueError("Run runtime route does not match the executor.")
         updated = run.model_copy(
             update={
                 "status": RunStatus.RUNNING,
@@ -338,6 +397,14 @@ class LocalRunDispatcher(RunDispatcher):
                 "status": updated.status.value,
                 "dispatch_status": updated.dispatch_status.value,
                 "runtime_route": runtime_route,
+            },
+        )
+        await self.runtime.append_event(
+            run_id=lease.run_id,
+            event_type=EventType.GRAPH_STARTED,
+            payload={
+                "runtime_route": runtime_route,
+                "fencing_token": lease.fencing_token,
             },
         )
 
@@ -375,6 +442,18 @@ class LocalRunDispatcher(RunDispatcher):
                 "recovered": recovered,
             },
         )
+        await self.runtime.append_event(
+            run_id=lease.run_id,
+            event_type=EventType.GRAPH_RECOVERED
+            if recovered
+            else EventType.GRAPH_COMPLETED,
+            payload={
+                "result_summary": result_summary,
+                "completion_kind": completion_kind,
+                "goal_executed": goal_executed,
+                "validation_complete": completion_kind != "modifying_unvalidated",
+            },
+        )
 
     async def fail_execution(self, lease: RunLease, *, reason: str) -> None:
         run = await self._owned_run(lease)
@@ -402,13 +481,18 @@ class LocalRunDispatcher(RunDispatcher):
 
     async def _owned_run(self, lease: RunLease) -> Run:
         run = await self.runtime.get_run(lease.run_id)
+        if run.dispatch_status not in {
+            DispatchStatus.CLAIMED,
+            DispatchStatus.EXECUTING,
+        }:
+            raise LeaseLost(f"Lease lost for Run {lease.run_id}.")
         if run.current_worker_id != lease.worker_id:
             raise LeaseLost(f"Lease lost for Run {lease.run_id}.")
         if run.fencing_token != lease.fencing_token:
             raise LeaseLost(f"Lease lost for Run {lease.run_id}.")
-        if run.lease_expires_at is not None and run.lease_expires_at <= datetime.now(
-            UTC
-        ):
+        if run.lease_expires_at is None:
+            raise LeaseLost(f"Lease lost for Run {lease.run_id}.")
+        if run.lease_expires_at <= datetime.now(UTC):
             raise LeaseLost(f"Lease expired for Run {lease.run_id}.")
         return run
 

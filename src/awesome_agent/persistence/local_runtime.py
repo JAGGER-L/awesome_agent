@@ -19,6 +19,12 @@ from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.safety.redaction import redact_runtime_payload
 
 _SCHEMA_VERSION = "1"
+_TERMINAL_RUN_STATUSES = {
+    RunStatus.COMPLETED,
+    RunStatus.FAILED,
+    RunStatus.CANCELLED,
+    RunStatus.RECOVERY_REQUIRED,
+}
 
 
 class LocalRuntimeRepository(RuntimeRepository):
@@ -152,12 +158,18 @@ class LocalRuntimeRepository(RuntimeRepository):
             DispatchStatus.EXECUTING,
         }:
             raise DispatchConflict("Claimed or executing Runs cannot be cancelled yet.")
+        if current.dispatch_status is DispatchStatus.TERMINAL:
+            return current, None
+        if current.status in _TERMINAL_RUN_STATUSES:
+            return current, None
         if current.status is RunStatus.CANCELLED:
             return current, None
         updated = current.model_copy(
             update={
                 "status": RunStatus.CANCELLED,
                 "dispatch_status": DispatchStatus.TERMINAL,
+                "cancel_requested_at": current.cancel_requested_at
+                or datetime.now(UTC),
             }
         )
         await self.update_run(updated)
@@ -213,11 +225,17 @@ class LocalRuntimeRepository(RuntimeRepository):
         event_type: EventType,
         payload: dict[str, object],
         agent_id: UUID | None = None,
+        transition_id: str | None = None,
     ) -> RuntimeEvent:
+        if transition_id is not None:
+            existing = self._event_by_transition_id(run_id, transition_id)
+            if existing is not None:
+                return existing
         sequence = self._next_sequence(run_id)
         event = RuntimeEvent(
             run_id=run_id,
             sequence=sequence,
+            transition_id=transition_id,
             event_type=event_type,
             payload=redact_runtime_payload(payload),
             agent_id=agent_id,
@@ -347,12 +365,21 @@ class LocalRuntimeRepository(RuntimeRepository):
                   id TEXT PRIMARY KEY,
                   run_id TEXT NOT NULL,
                   sequence INTEGER NOT NULL,
+                  transition_id TEXT,
                   event_type TEXT NOT NULL,
                   payload_json TEXT NOT NULL,
                   created_at TEXT NOT NULL,
                   UNIQUE(run_id, sequence),
                   FOREIGN KEY(run_id) REFERENCES runtime_runs(id)
                 )
+                """
+            )
+            self._ensure_runtime_events_transition_id_column()
+            self._connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_events_transition_id
+                ON runtime_events (run_id, transition_id)
+                WHERE transition_id IS NOT NULL
                 """
             )
             self._connection.execute(
@@ -427,17 +454,55 @@ class LocalRuntimeRepository(RuntimeRepository):
         self._connection.execute(
             """
             INSERT INTO runtime_events
-              (id, run_id, sequence, event_type, payload_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+              (
+                id,
+                run_id,
+                sequence,
+                transition_id,
+                event_type,
+                payload_json,
+                created_at
+              )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(event.id),
                 str(event.run_id),
                 event.sequence,
+                event.transition_id,
                 event.event_type.value,
                 event.model_dump_json(),
                 event.created_at.isoformat(),
             ),
+        )
+
+    def _event_by_transition_id(
+        self,
+        run_id: UUID,
+        transition_id: str,
+    ) -> RuntimeEvent | None:
+        row = self._connection.execute(
+            """
+            SELECT payload_json FROM runtime_events
+            WHERE run_id = ? AND transition_id = ?
+            """,
+            (str(run_id), transition_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return RuntimeEvent.model_validate_json(row["payload_json"])
+
+    def _ensure_runtime_events_transition_id_column(self) -> None:
+        columns = {
+            str(row["name"])
+            for row in self._connection.execute(
+                "PRAGMA table_info(runtime_events)"
+            ).fetchall()
+        }
+        if "transition_id" in columns:
+            return
+        self._connection.execute(
+            "ALTER TABLE runtime_events ADD COLUMN transition_id TEXT"
         )
 
     def _next_sequence(self, run_id: UUID) -> int:
