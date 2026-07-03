@@ -46,9 +46,17 @@ load user task and project policy
   lease validity.
 - Expired leases requeue until the maximum claim count, then enter
   `recovery_required`.
-- Every Run uses an isolated integration worktree from a clean captured base;
-  read-only intent controls tools rather than bypassing isolation, and
-  LocalSandbox does not permit direct edits to the user's checkout.
+- Ordinary conversation turns are durable `conversation` Runs executed by the
+  `conversation-turn` graph route. `ConversationService` projects runtime
+  events and does not own provider calls, tool calls, or ordinary message
+  writes.
+- Trusted local ordinary turns execute against the thread context path, which
+  defaults to the launch/current working directory in embedded local mode.
+  This is operator-equivalent local execution, not a filesystem security
+  boundary.
+- Repository coding Runs may use managed worktrees when they are explicitly
+  created as repository Runs. Conversation Runs do not create a coding worktree
+  just to answer or act in the trusted local cwd.
 - API runs select a registered repository identity rather than an arbitrary
   filesystem path.
 - Approval applies to one exact canonical tool invocation and expires.
@@ -70,10 +78,12 @@ awesome-agent start
 of each for normal local use. API request handling never owns the lifetime of a
 coding Run.
 
-The Worker claims diagnostic `runtime_probe` Runs and read-only Coding Runs
-routed to `solo-readonly`. Modifying Coding Runs remain queued. The read-only
-graph must loop through the centralized tool registry and may finish only after
-successful repository inspection.
+The Worker claims diagnostic `runtime_probe` Runs, ordinary conversation Runs
+routed to `conversation-turn`, and configured coding/team routes. The
+conversation graph writes the thread user message, builds model history from
+thread messages, invokes the model/tool loop, writes the assistant message, and
+sets terminal Run state. The read-only graph must loop through the centralized
+tool registry and may finish only after successful repository inspection.
 
 LangGraph checkpoints own the resumable graph position. Project PostgreSQL
 tables own user-visible projections and dispatch leases. Stable transition IDs,
@@ -107,11 +117,16 @@ interactive use. `aio-docker` is the target API default; until Task 62 adds the
 HTTP sandbox service, it fails with a clear unsupported-provider error rather
 than using host execution or the removed one-shot Docker backend.
 
-Model-visible generated files use `/mnt/user-data/workspace/` as the logical
-workspace path. On the host, that workspace persists under
-`~/.awesome-agent/threads/<thread_id>/workspace/`. Run audit evidence remains
-under `~/.awesome-agent/runs/<run_id>/artifacts/`. AIO Docker gets path
-equivalence through bind mounts; LocalSandbox gets it through path mapping.
+For the current trusted local product path, model-visible user files live in
+the thread context path, which defaults to the launch/current working
+directory. Run audit evidence remains internal. The older thread workspace and
+AIO Docker path mapping remain design inputs for Docker/API hardening, but they
+are not the product-closure default for ordinary local turns.
+
+Trusted local execution still needs defense-in-depth guardrails and output
+redaction. Task 93 owns soft path/command/env guardrails; Task 94 owns secret
+redaction before output, logs, evidence, or tool results enter user-visible or
+model-visible projections.
 
 ## Repository and Validation Policy
 
