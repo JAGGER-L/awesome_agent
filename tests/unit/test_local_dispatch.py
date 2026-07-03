@@ -73,9 +73,7 @@ async def test_local_dispatcher_completes_execution(tmp_path: Path) -> None:
     assert completed.status is RunStatus.COMPLETED
     assert completed.dispatch_status is DispatchStatus.TERMINAL
     assert completed.result_text == "done"
-    assert [
-        event.event_type for event in await runtime.list_events(run.id)
-    ] == [
+    assert [event.event_type for event in await runtime.list_events(run.id)] == [
         EventType.DISPATCH_CLAIMED,
         EventType.RUN_STATUS_CHANGED,
         EventType.GRAPH_STARTED,
@@ -327,9 +325,10 @@ async def test_local_dispatcher_append_fenced_event_is_transition_id_idempotent(
     )
 
     assert second == first
-    assert [
-        event.transition_id for event in await runtime.list_events(run.id)
-    ] == [None, "graph-status:1"]
+    assert [event.transition_id for event in await runtime.list_events(run.id)] == [
+        None,
+        "graph-status:1",
+    ]
     runtime.close()
 
 

@@ -15,7 +15,7 @@ from awesome_agent.domain.enums import (
     EventType,
     RunStatus,
 )
-from awesome_agent.domain.models import Run
+from awesome_agent.domain.models import Run, RuntimeEvent
 from awesome_agent.modeling.errors import (
     ModelErrorCode,
     ModelErrorInfo,
@@ -98,30 +98,41 @@ class ConversationService:
 
     async def list_thread_runs(self, thread_id: UUID) -> list[dict[str, object]]:
         await self._repository.get_thread(thread_id)
-        projections: list[dict[str, object]] = []
+        projections: list[tuple[RuntimeEvent, Run, dict[str, object]]] = []
         for run in await self._runtime_repository.list_runs():
-            created_payload = await self._run_created_payload(run.id)
+            created_event = await self._run_created_event(run.id)
+            if created_event is None:
+                continue
+            created_payload = created_event.payload
             if created_payload.get("thread_id") != str(thread_id):
                 continue
             projections.append(
-                {
-                    "run_id": str(run.id),
-                    "thread_id": str(thread_id),
-                    "goal": str(created_payload.get("goal") or run.goal),
-                    "status": run.status.value,
-                    "dispatch_status": run.dispatch_status.value,
-                    "runtime_route": run.runtime_route,
-                    "execution_kind": run.execution_kind.value,
-                    "result_text": run.result_text,
-                }
+                (
+                    created_event,
+                    run,
+                    {
+                        "run_id": str(run.id),
+                        "thread_id": str(thread_id),
+                        "goal": str(created_payload.get("goal") or run.goal),
+                        "status": run.status.value,
+                        "dispatch_status": run.dispatch_status.value,
+                        "runtime_route": run.runtime_route,
+                        "execution_kind": run.execution_kind.value,
+                        "result_text": run.result_text,
+                    },
+                )
             )
-        return list(reversed(projections))
+        projections.sort(
+            key=lambda item: (item[0].created_at, item[1].created_at, item[1].id.hex),
+            reverse=True,
+        )
+        return [projection for _event, _run, projection in projections]
 
-    async def _run_created_payload(self, run_id: UUID) -> dict[str, object]:
+    async def _run_created_event(self, run_id: UUID) -> RuntimeEvent | None:
         for event in await self._runtime_repository.list_events(run_id):
             if event.event_type is EventType.RUN_CREATED:
-                return event.payload
-        return {}
+                return event
+        return None
 
     async def _project_run_events(
         self,

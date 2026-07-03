@@ -14,6 +14,7 @@ from awesome_agent.conversation.events import (
     ConversationStreamEventKind,
 )
 from awesome_agent.conversation.models import ThreadMessage
+from awesome_agent.domain.models import Run, RuntimeEvent
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.settings import Settings
@@ -287,24 +288,35 @@ class LocalRuntimeHost:
         return _run_async(self._list_thread_runs_async(thread_id))
 
     async def _list_thread_runs_async(self, thread_id: str) -> list[dict[str, object]]:
-        runs: list[dict[str, object]] = []
+        runs: list[tuple[RuntimeEvent, Run, dict[str, object]]] = []
         for run in await self.runtime_repository.list_runs():
-            payload = await self._run_created_payload(run.id)
+            event = await self._run_created_event(run.id)
+            if event is None:
+                continue
+            payload = event.payload
             if payload.get("thread_id") != thread_id:
                 continue
             runs.append(
-                {
-                    "id": str(run.id),
-                    "thread_id": thread_id,
-                    "goal": run.goal,
-                    "status": run.status.value,
-                    "dispatch_status": run.dispatch_status.value,
-                    "runtime_route": run.runtime_route,
-                    "execution_kind": run.execution_kind.value,
-                    "result_text": run.result_text,
-                }
+                (
+                    event,
+                    run,
+                    {
+                        "id": str(run.id),
+                        "thread_id": thread_id,
+                        "goal": run.goal,
+                        "status": run.status.value,
+                        "dispatch_status": run.dispatch_status.value,
+                        "runtime_route": run.runtime_route,
+                        "execution_kind": run.execution_kind.value,
+                        "result_text": run.result_text,
+                    },
+                )
             )
-        return list(reversed(runs))
+        runs.sort(
+            key=lambda item: (item[0].created_at, item[1].created_at, item[1].id.hex),
+            reverse=True,
+        )
+        return [projection for _event, _run, projection in runs]
 
     def cancel(self, run_id: str) -> dict[str, object]:
         return _run_async(self._cancel_async(run_id))
@@ -350,11 +362,11 @@ class LocalRuntimeHost:
             "reason": "approval_not_found",
         }
 
-    async def _run_created_payload(self, run_id: UUID) -> dict[str, object]:
+    async def _run_created_event(self, run_id: UUID) -> RuntimeEvent | None:
         for event in await self.runtime_repository.list_events(run_id):
             if event.event_type.value == "run.created":
-                return event.payload
-        return {}
+                return event
+        return None
 
     def runtime_status(self) -> dict[str, object]:
         return {

@@ -4,135 +4,121 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+from tests.type_helpers import test_settings
+
 from awesome_agent.conversation.events import ConversationStreamEventKind
-from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.models import ThreadMessageRole
-from awesome_agent.conversation.service import ConversationService
-from awesome_agent.domain.enums import EventType
+from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
 from awesome_agent.modeling.messages import AssistantMessage, ModelMessage
-from awesome_agent.modeling.provider import ModelProvider
+from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
-from awesome_agent.persistence.conversations import InMemoryConversationRepository
-from awesome_agent.runtime.conversation_graph import ConversationGraph
-from awesome_agent.runtime.events import EventStream
-from awesome_agent.runtime.repository import InMemoryRuntimeRepository
+from awesome_agent.settings import Settings
+from awesome_agent.surfaces.local_runtime_container import LocalRuntimeContainer
 
 
-async def test_conversation_turn_runs_through_intake_graph_and_projection() -> None:
-    conversations = InMemoryConversationRepository()
-    thread = await conversations.create_thread(
-        title="Runtime path",
-        context_path=str(Path.cwd()),
-    )
-    runtime = InMemoryRuntimeRepository()
-    event_stream = EventStream()
-    service = ConversationService(
-        repository=conversations,
-        runtime_repository=runtime,
-        conversation_run_intake=ConversationRunIntakeService(
-            conversations=conversations,
-            runtime=runtime,
-            events=event_stream,
-            default_model="fake-model",
-        ),
-        default_model="fake-model",
-        event_poll_interval=0,
-    )
-    graph = ConversationGraph(
-        conversations=conversations,
-        runtime=runtime,
+def _settings(tmp_path: Path) -> Settings:
+    return test_settings(local_state_dir=tmp_path / "state")
+
+
+@pytest.mark.asyncio
+async def test_conversation_turn_runs_through_intake_graph_and_projection(
+    tmp_path: Path,
+) -> None:
+    container = LocalRuntimeContainer(
+        settings=_settings(tmp_path),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
     )
+    try:
+        thread = await container.conversations.create_thread(
+            title="Runtime path",
+            context_path=str(tmp_path),
+        )
 
-    stream = service.start_turn(thread_id=thread.id, content="hello")
-    first = await anext(stream)
-    run_id = UUID(str(first.payload["run_id"]))
-    run = await runtime.get_run(run_id)
-    leader = (await runtime.list_agents(run_id))[0]
+        stream = container.conversation_service.start_turn(
+            thread_id=thread.id,
+            content="hello",
+        )
+        first = await anext(stream)
+        run_id = UUID(str(first.payload["run_id"]))
+        await container.worker_pump.drain_until_run_terminal_or_waiting(str(run_id))
+        remaining = [event async for event in stream]
 
-    await graph.execute(run, leader)
-    remaining = [event async for event in stream]
+        assert first.event is ConversationStreamEventKind.TURN_STARTED
+        assert remaining[-1].event is ConversationStreamEventKind.TURN_COMPLETED
+        messages = await container.conversations.list_messages(thread.id)
+        assert [message.role for message in messages] == [
+            ThreadMessageRole.USER,
+            ThreadMessageRole.ASSISTANT,
+        ]
+        assert messages[1].content == "hello from graph"
+        runtime_events = await container.runtime.list_events(run_id)
+        runtime_event_types = [event.event_type for event in runtime_events]
+        assert EventType.DISPATCH_CLAIMED in runtime_event_types
+        assert EventType.GRAPH_COMPLETED in runtime_event_types
+        assert any(
+            event.event_type is EventType.MESSAGE_CREATED for event in runtime_events
+        )
+        run = await container.runtime.get_run(run_id)
+        assert run.status is RunStatus.COMPLETED
+        assert run.dispatch_status is DispatchStatus.TERMINAL
+    finally:
+        container.close()
 
-    assert first.event is ConversationStreamEventKind.TURN_STARTED
-    assert remaining[-1].event is ConversationStreamEventKind.TURN_COMPLETED
-    messages = await conversations.list_messages(thread.id)
-    assert [message.role for message in messages] == [
-        ThreadMessageRole.USER,
-        ThreadMessageRole.ASSISTANT,
-    ]
-    assert messages[1].content == "hello from graph"
-    runtime_events = await runtime.list_events(run_id)
-    assert any(
-        event.event_type is EventType.MESSAGE_CREATED for event in runtime_events
-    )
 
-
+@pytest.mark.asyncio
 async def test_conversation_graph_redacts_history_before_model_request(
     tmp_path: Path,
 ) -> None:
-    conversations = InMemoryConversationRepository()
-    thread = await conversations.create_thread(
-        title="Redacted history",
-        context_path=str(tmp_path),
-    )
-    await conversations.append_message(
-        thread_id=thread.id,
-        role=ThreadMessageRole.USER,
-        content="OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
-    )
-    runtime = InMemoryRuntimeRepository()
-    event_stream = EventStream()
-    service = ConversationService(
-        repository=conversations,
-        runtime_repository=runtime,
-        conversation_run_intake=ConversationRunIntakeService(
-            conversations=conversations,
-            runtime=runtime,
-            events=event_stream,
-            default_model="fake-model",
-        ),
-        default_model="fake-model",
-        event_poll_interval=0,
-    )
     provider = CapturingProvider()
-    graph = ConversationGraph(
-        conversations=conversations,
-        runtime=runtime,
+    container = LocalRuntimeContainer(
+        settings=_settings(tmp_path),
         provider_factory=lambda _model: provider,
         default_model="fake-model",
     )
+    try:
+        thread = await container.conversations.create_thread(
+            title="Redacted history",
+            context_path=str(tmp_path),
+        )
+        await container.conversations.append_message(
+            thread_id=thread.id,
+            role=ThreadMessageRole.USER,
+            content="OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
+        )
 
-    stream = service.start_turn(thread_id=thread.id, content="continue")
-    first = await anext(stream)
-    run_id = UUID(str(first.payload["run_id"]))
-    run = await runtime.get_run(run_id)
-    leader = (await runtime.list_agents(run_id))[0]
+        stream = container.conversation_service.start_turn(
+            thread_id=thread.id,
+            content="continue",
+        )
+        first = await anext(stream)
+        run_id = str(first.payload["run_id"])
+        await container.worker_pump.drain_until_run_terminal_or_waiting(run_id)
+        remaining = [event async for event in stream]
+        assert remaining[-1].event is ConversationStreamEventKind.TURN_COMPLETED
 
-    await graph.execute(run, leader)
+        serialized = str(
+            [message.model_dump(mode="json") for message in provider.last_messages]
+        )
+        assert "sk-proj-" not in serialized
+        assert "[REDACTED:api_key]" in serialized
+    finally:
+        container.close()
 
-    serialized = str(
-        [message.model_dump(mode="json") for message in provider.last_messages]
-    )
-    assert "sk-proj-" not in serialized
-    assert "[REDACTED:api_key]" in serialized
 
-
-class FakeProvider(ModelProvider):
-    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        async def events() -> AsyncIterator[ModelStreamEvent]:
-            yield TextDelta(text="hello from graph")
-            yield TurnCompleted(
-                turn=ModelTurn(
-                    assistant=AssistantMessage(content="hello from graph"),
-                    stop_reason=StopReason.COMPLETED,
-                    model="fake-model",
-                    provider="fake",
-                )
+class FakeProvider(StructuredModelProvider):
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        yield TextDelta(text="hello from graph")
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="hello from graph"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
             )
-
-        return events()
+        )
 
     async def complete(self, request: ModelRequest) -> ModelTurn:
         return ModelTurn(

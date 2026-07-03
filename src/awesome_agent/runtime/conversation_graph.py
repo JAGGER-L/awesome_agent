@@ -361,6 +361,7 @@ class ConversationGraph:
             "changed_files": _dedupe_changed_files(changed_files),
         }
 
+
 async def _identity_state(state: ConversationGraphState) -> ConversationGraphState:
     return state
 

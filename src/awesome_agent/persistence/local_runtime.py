@@ -176,8 +176,7 @@ class LocalRuntimeRepository(RuntimeRepository):
             update={
                 "status": RunStatus.CANCELLED,
                 "dispatch_status": DispatchStatus.TERMINAL,
-                "cancel_requested_at": current.cancel_requested_at
-                or datetime.now(UTC),
+                "cancel_requested_at": current.cancel_requested_at or datetime.now(UTC),
             }
         )
         await self.update_run(updated)

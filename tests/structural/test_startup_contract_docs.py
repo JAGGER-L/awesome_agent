@@ -33,10 +33,7 @@ def test_readmes_document_user_message_product_entry_contract() -> None:
     assert "launch directory becomes the default thread context" in english
     assert "If it is a Git checkout, Runs inherit that repository" in english
     assert "workspace-only mode and still accepts user message turns" in english
-    assert (
-        "Plain user messages are the only product execution creation path"
-        in english
-    )
+    assert "Plain user messages are the only product execution creation path" in english
     assert "internal conversation Run with a Leader Agent" in english
 
     assert "从项目目录运行 `awesome`" in chinese
