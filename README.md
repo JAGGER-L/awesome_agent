@@ -185,9 +185,10 @@ details are available through slash commands such as `/status`, `/tools`,
 | Command | Purpose |
 | --- | --- |
 | `/new` | Start a new durable local conversation/thread. |
-| `/threads` | List known threads. |
+| `/threads` | Switch conversation. |
 | `/status` | Show current thread/run/runtime status. |
 | `/model` | Choose the model for the current conversation. |
+| `/thinking` | Choose thinking mode. |
 | `/skills` | Browse enabled and available skills. |
 | `/tools` | Show built-in, MCP, and sandbox tools. |
 | `/mcp` | Show MCP server status. |
@@ -195,6 +196,7 @@ details are available through slash commands such as `/status`, `/tools`,
 | `/details` | Toggle verbose activity rendering. |
 | `/usage` | Show token usage and context. |
 | `/config` | Show resolved config paths and overrides. |
+| `/run` | Force advanced/manual execution mode. |
 | `/help` | Show help. |
 | `/quit` | Exit the TUI. |
 

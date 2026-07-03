@@ -94,20 +94,18 @@ awesome commands
 | Command | Purpose |
 | --- | --- |
 | `/new` | 开启新的本地 thread。 |
-| `/threads` | 列出已知 threads。 |
-| `/switch` | `/threads` 的别名。 |
-| `/resume` | 按 id 或标题恢复 thread。 |
+| `/threads` | 切换 conversation。 |
 | `/status` | 查看当前 thread、run、runtime 状态。 |
-| `/model` | `/models` 的别名。 |
-| `/models` | 列出模型配置。 |
+| `/model` | 选择当前 conversation 的模型。 |
+| `/thinking` | 选择 thinking mode。 |
 | `/skills` | 浏览 skills。 |
 | `/tools` | 查看 built-in、MCP 和 sandbox tools。 |
 | `/mcp` | 查看 MCP server 状态。 |
 | `/memory` | 查看 memory 状态。 |
-| `/uploads` | 查看当前 thread 的上传文件。 |
 | `/details` | 切换详细活动日志。 |
 | `/usage` | 查看 token 使用和上下文。 |
 | `/config` | 查看配置路径和覆盖项。 |
+| `/run` | 强制进入高级/手动执行模式。 |
 | `/help` | 查看帮助。 |
 | `/quit` | 退出 TUI。 |
 
