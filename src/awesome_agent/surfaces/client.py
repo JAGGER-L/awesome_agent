@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -58,11 +58,24 @@ class SurfaceClientError(RuntimeError):
 class SurfaceClient(Protocol):
     def close(self) -> None: ...
 
-    def create_thread(self, title: str, **kwargs: object) -> SurfaceThread: ...
+    def create_thread(
+        self,
+        title: str,
+        *,
+        context_kind: str | None = None,
+        context_path: str | None = None,
+        repository_id: str | None = None,
+        default_model: str | None = None,
+        sandbox_profile: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool = False,
+        provider_memory: str | None = None,
+        **kwargs: object,
+    ) -> SurfaceThread | dict[str, object]: ...
 
-    def list_threads(self) -> list[SurfaceThread]: ...
+    def list_threads(self) -> Sequence[SurfaceThread | dict[str, object]]: ...
 
-    def resume_thread(self, query: str) -> SurfaceThread: ...
+    def resume_thread(self, query: str) -> SurfaceThread | dict[str, object]: ...
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]: ...
 
@@ -76,7 +89,7 @@ class SurfaceClient(Protocol):
         thinking_mode: str | None = None,
         local_memory_enabled: bool | None = None,
         provider_memory: str | None = None,
-    ) -> SurfaceThread: ...
+    ) -> SurfaceThread | dict[str, object]: ...
 
     def stream_turn(
         self,

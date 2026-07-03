@@ -327,6 +327,81 @@ async def test_apply_patch_requires_write_capability(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_apply_patch_to_sensitive_file_requires_approval(tmp_path: Path) -> None:
+    _git(tmp_path, "init")
+    patch = """diff --git a/.env b/.env
+new file mode 100644
+--- /dev/null
++++ b/.env
+@@ -0,0 +1 @@
++TOKEN=value
+"""
+    registry = build_modifying_registry()
+
+    with pytest.raises(ApprovalRequired):
+        await execute_repository_call(
+            build_modifying_executor(registry),
+            ToolCall(
+                call_id="sensitive-write",
+                name="repo.apply_patch",
+                arguments_json=json.dumps({"patch": patch}),
+            ),
+            workspace=tmp_path,
+            agent_id=uuid4(),
+            capabilities={"repository:read", "repository:write"},
+        )
+
+    result = await execute_repository_call(
+        build_modifying_executor(registry),
+        ToolCall(
+            call_id="sensitive-write-approved",
+            name="repo.apply_patch",
+            arguments_json=json.dumps({"patch": patch}),
+        ),
+        workspace=tmp_path,
+        agent_id=uuid4(),
+        capabilities={"repository:read", "repository:write"},
+        approval_granted=True,
+    )
+    assert not result.is_error
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "TOKEN=value\n"
+
+
+@pytest.mark.asyncio
+async def test_apply_patch_respects_write_safe_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    safe_root = tmp_path / "safe-root"
+    safe_root.mkdir()
+    _git(workspace, "init")
+    patch = """diff --git a/file.txt b/file.txt
+new file mode 100644
+--- /dev/null
++++ b/file.txt
+@@ -0,0 +1 @@
++new
+"""
+    monkeypatch.setenv("AWESOME_AGENT_WRITE_SAFE_ROOT", str(safe_root))
+
+    with pytest.raises(ToolDenied):
+        await execute_repository_call(
+            build_modifying_executor(build_modifying_registry()),
+            ToolCall(
+                call_id="outside-safe-root",
+                name="repo.apply_patch",
+                arguments_json=json.dumps({"patch": patch}),
+            ),
+            workspace=workspace,
+            agent_id=uuid4(),
+            capabilities={"repository:read", "repository:write"},
+            approval_granted=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_status_and_instructions_tools_report_repository_context(
     tmp_path: Path,
 ) -> None:

@@ -84,7 +84,7 @@ def test_bootstrap_supports_dependency_sync_without_doctor() -> None:
     assert "[switch]$RunDoctor" in text
     assert '"postgres"' in text
     assert '"observability"' in text
-    assert 'if ($RunDoctor)' in text
+    assert "if ($RunDoctor)" in text
 
 
 def test_docker_quickstart_script_exists_and_has_plan_mode() -> None:

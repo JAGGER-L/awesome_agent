@@ -80,8 +80,7 @@ def launch(
         + (f"http:{api_url}" if api_url is not None else "embedded")
     )
     typer.echo(
-        f"awesome.context={launch_context.context_kind}:"
-        f"{launch_context.display_path}"
+        f"awesome.context={launch_context.context_kind}:{launch_context.display_path}"
     )
     typer.echo(f"awesome.first_run_setup_required={str(state.needs_setup).lower()}")
     _load_tui()(
@@ -104,8 +103,7 @@ def init_config() -> None:
     path = create_default_user_config(Path.home())
     typer.echo(f"Created or verified {path}")
     typer.echo(
-        "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment "
-        "or project .env."
+        "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment or project .env."
     )
 
 

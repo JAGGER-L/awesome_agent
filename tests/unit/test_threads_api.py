@@ -1,9 +1,9 @@
 from typing import Any, cast
 
 from fastapi.testclient import TestClient
+from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
-from awesome_agent.settings import Settings
 
 
 def test_create_thread_returns_durable_thread() -> None:
@@ -12,7 +12,7 @@ def test_create_thread_returns_durable_thread() -> None:
             service=cast(Any, object()),
             intake=cast(Any, object()),
             registry=cast(Any, object()),
-            settings=Settings(_env_file=None),
+            settings=test_settings(),
         )
     )
 
@@ -178,6 +178,6 @@ def _client() -> TestClient:
             service=cast(Any, object()),
             intake=cast(Any, object()),
             registry=cast(Any, object()),
-            settings=Settings(_env_file=None),
+            settings=test_settings(),
         )
     )

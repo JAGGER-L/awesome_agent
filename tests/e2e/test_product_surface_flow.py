@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from tests.conversation_projection_fakes import ProjectedConversationRunIntake
+from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import ArtifactMetadata
@@ -14,7 +15,6 @@ from awesome_agent.domain.enums import RunIntent, RunMode, RunStatus
 from awesome_agent.domain.models import Run
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
-from awesome_agent.settings import Settings
 
 
 def test_product_surface_thread_turn_run_and_artifact_flow(tmp_path: Path) -> None:
@@ -40,7 +40,7 @@ def test_product_surface_thread_turn_run_and_artifact_flow(tmp_path: Path) -> No
             service=cast(Any, runtime),
             intake=cast(Any, intake),
             registry=cast(Any, object()),
-            settings=Settings(_env_file=None),
+            settings=test_settings(),
             thread_repository=thread_repository,
             conversation_service=conversation_service,
         )

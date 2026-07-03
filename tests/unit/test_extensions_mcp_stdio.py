@@ -17,7 +17,10 @@ from awesome_agent.extensions.mcp import (
 )
 from awesome_agent.extensions.models import (
     ExtensionCatalog,
+    ExtensionSourceEnvConfig,
+    ExtensionSourceType,
     ExtensionToolInventoryItem,
+    ExtensionTrustLevel,
 )
 from awesome_agent.extensions.service import ExtensionDiscoveryService
 from awesome_agent.extensions.sources import ExtensionSourceFactory
@@ -38,10 +41,10 @@ def test_mcp_stdio_discovery_normalizes_tools(tmp_path: Path) -> None:
     source = McpStdioSource(
         McpStdioSourceConfig(
             id="playwright",
-            type="mcp_stdio",
+            type=ExtensionSourceType.MCP_STDIO,
             command=sys.executable,
             args=[str(fake_server)],
-            trust="user",
+            trust=ExtensionTrustLevel.USER,
             tool_capability_overrides={"open_page": ["browser:control"]},
             tool_risk_overrides={"open_page": RiskLevel.LOW},
         )
@@ -105,10 +108,10 @@ def test_optional_mcp_stdio_failure_records_redacted_unhealthy_source(
     source = McpStdioSource(
         McpStdioSourceConfig(
             id="broken",
-            type="mcp_stdio",
+            type=ExtensionSourceType.MCP_STDIO,
             command=sys.executable,
             args=[str(tmp_path / "missing.py"), "top-secret-token"],
-            trust="user",
+            trust=ExtensionTrustLevel.USER,
             required=False,
             secret_arg_indexes={1},
         )
@@ -133,11 +136,11 @@ def test_mcp_stdio_env_passes_only_declared_names(
     source = McpStdioSource(
         McpStdioSourceConfig(
             id="envcheck",
-            type="mcp_stdio",
+            type=ExtensionSourceType.MCP_STDIO,
             command=sys.executable,
             args=[str(fake_server)],
-            trust="user",
-            env={"pass": ["VISIBLE_TOKEN"]},
+            trust=ExtensionTrustLevel.USER,
+            env=ExtensionSourceEnvConfig.model_validate({"pass": ["VISIBLE_TOKEN"]}),
         )
     )
 
@@ -227,9 +230,7 @@ def test_mcp_stdio_registration_only_registers_exposed_tools(tmp_path: Path) -> 
         exposed_tool_names={"mcp.playwright.open_page"},
     )
 
-    assert [spec.name for spec in registry.list_specs()] == [
-        "mcp.playwright.open_page"
-    ]
+    assert [spec.name for spec in registry.list_specs()] == ["mcp.playwright.open_page"]
 
 
 def _fake_mcp_server(tmp_path: Path) -> Path:
@@ -363,10 +364,10 @@ def _mcp_tool(tool_name: str) -> ExtensionToolInventoryItem:
 def _mcp_config(fake_server: Path) -> McpStdioSourceConfig:
     return McpStdioSourceConfig(
         id="playwright",
-        type="mcp_stdio",
+        type=ExtensionSourceType.MCP_STDIO,
         command=sys.executable,
         args=[str(fake_server)],
-        trust="user",
+        trust=ExtensionTrustLevel.USER,
         discovery_timeout_seconds=2.0,
     )
 

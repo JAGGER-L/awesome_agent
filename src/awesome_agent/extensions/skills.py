@@ -39,7 +39,9 @@ class SkillDirectorySource:
             instructions=instructions.strip(),
             context_refs=_string_list(metadata.get("context_refs")),
             requested_tools=_string_list(metadata.get("requested_tools")),
-            required_capabilities=set(_string_list(metadata.get("required_capabilities"))),
+            required_capabilities=set(
+                _string_list(metadata.get("required_capabilities"))
+            ),
             compatible_actor_kinds=set(
                 _string_list(metadata.get("compatible_actor_kinds"))
             ),

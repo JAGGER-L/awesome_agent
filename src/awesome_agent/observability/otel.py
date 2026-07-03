@@ -179,12 +179,16 @@ def _add_exporter(provider: TracerProvider, exporter: SpanExporter) -> None:
 def _metric_readers(config: OTelConfig) -> list[PeriodicExportingMetricReader]:
     readers: list[PeriodicExportingMetricReader] = []
     if config.console_exporter:
-        readers.append(PeriodicExportingMetricReader(SafeMetricExporter(ConsoleMetricExporter())))
+        readers.append(
+            PeriodicExportingMetricReader(SafeMetricExporter(ConsoleMetricExporter()))
+        )
     if config.otlp_endpoint:
         try:
             readers.append(
                 PeriodicExportingMetricReader(
-                    SafeMetricExporter(OTLPMetricExporter(endpoint=config.otlp_endpoint))
+                    SafeMetricExporter(
+                        OTLPMetricExporter(endpoint=config.otlp_endpoint)
+                    )
                 )
             )
         except Exception:

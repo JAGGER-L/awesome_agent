@@ -166,16 +166,19 @@ class LocalConversationRepository:
         metadata: dict[str, object] | None = None,
     ) -> ThreadMessage:
         await self.get_thread(thread_id)
-        sequence = int(
-            self._connection.execute(
-                """
+        sequence = (
+            int(
+                self._connection.execute(
+                    """
                 SELECT COALESCE(MAX(sequence), 0)
                 FROM thread_messages
                 WHERE thread_id = ?
                 """,
-                (str(thread_id),),
-            ).fetchone()[0]
-        ) + 1
+                    (str(thread_id),),
+                ).fetchone()[0]
+            )
+            + 1
+        )
         message = ThreadMessage(
             thread_id=thread_id,
             role=role,

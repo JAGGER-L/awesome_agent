@@ -18,8 +18,11 @@ from awesome_agent.extensions.mcp import (
 )
 from awesome_agent.extensions.models import (
     ExtensionAuthConfig,
+    ExtensionAuthType,
     ExtensionCatalog,
+    ExtensionSourceType,
     ExtensionToolInventoryItem,
+    ExtensionTrustLevel,
 )
 from awesome_agent.extensions.service import ExtensionDiscoveryService
 from awesome_agent.extensions.sources import ExtensionSourceFactory
@@ -120,7 +123,7 @@ async def test_streamable_http_auth_uses_env_without_catalog_secret(
         return _json_rpc_response(request)
 
     monkeypatch.setenv("TOKEN_ENV", "fixture-token")
-    auth = ExtensionAuthConfig(type="bearer_token_env", env="TOKEN_ENV")
+    auth = ExtensionAuthConfig(type=ExtensionAuthType.BEARER_TOKEN_ENV, env="TOKEN_ENV")
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(handler),
         base_url="https://mcp.example.test",
@@ -233,9 +236,9 @@ def _http_config(
 ) -> McpStreamableHttpSourceConfig:
     return McpStreamableHttpSourceConfig(
         id="github",
-        type="mcp_streamable_http",
+        type=ExtensionSourceType.MCP_STREAMABLE_HTTP,
         url="https://mcp.example.test/mcp",
-        trust="user",
+        trust=ExtensionTrustLevel.USER,
         auth=auth,
         discovery_timeout_seconds=2.0,
     )

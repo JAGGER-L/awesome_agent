@@ -4,8 +4,8 @@ import re
 from dataclasses import dataclass
 
 from awesome_agent.domain.enums import ApprovalDecision, RiskLevel
+from awesome_agent.tools.guardrails import evaluate_command, evaluate_patch_write
 from awesome_agent.tools.models import ApprovalOutcome, ToolInvocation, ToolSpec
-from awesome_agent.tools.shell import classify_command
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,20 +35,46 @@ class ApprovalPolicy:
                     decision=ApprovalDecision.DENY,
                     reason="Shell command argv must be a list of strings.",
                 )
-            decision = classify_command(argv)
-            if decision == "deny":
+            decision = evaluate_command(argv)
+            if decision.action == "deny":
                 return ApprovalOutcome(
                     decision=ApprovalDecision.DENY,
-                    reason="Shell command is denied by policy.",
+                    reason=decision.reason,
                 )
-            if decision == "ask":
+            if decision.action == "ask":
                 return ApprovalOutcome(
                     decision=ApprovalDecision.ASK,
-                    reason="Shell command requires durable approval.",
+                    reason=decision.reason,
                 )
             return ApprovalOutcome(
                 decision=ApprovalDecision.ALLOW,
-                reason="Shell command is allowed by automatic policy.",
+                reason=decision.reason,
+            )
+
+        if spec.name == "repo.apply_patch":
+            patch = invocation.arguments.get("patch")
+            if not isinstance(patch, str):
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason="Patch must be a string.",
+                )
+            decision = evaluate_patch_write(
+                workspace=invocation.workspace,
+                patch=patch,
+            )
+            if decision.action == "deny":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason=decision.reason,
+                )
+            if decision.action == "ask":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.ASK,
+                    reason=decision.reason,
+                )
+            return ApprovalOutcome(
+                decision=ApprovalDecision.ALLOW,
+                reason=decision.reason,
             )
 
         command = str(invocation.arguments.get("command", ""))

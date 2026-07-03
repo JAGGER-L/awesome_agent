@@ -67,4 +67,3 @@ def _context_with_skill(
             requested_tools=requested_tools or [],
         ),
     )
-

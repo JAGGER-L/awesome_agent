@@ -5,9 +5,9 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
-from awesome_agent.settings import Settings
 
 
 def test_api_errors_include_request_id_and_structured_fields() -> None:
@@ -49,7 +49,7 @@ def test_api_conflict_errors_are_classified_by_domain() -> None:
         service=cast(Any, object()),
         intake=cast(Any, object()),
         registry=cast(Any, object()),
-        settings=Settings(_env_file=None),
+        settings=test_settings(),
     )
 
     @app.get("/test/model-error")
@@ -82,6 +82,6 @@ def _client() -> TestClient:
             service=cast(Any, object()),
             intake=cast(Any, object()),
             registry=cast(Any, object()),
-            settings=Settings(_env_file=None),
+            settings=test_settings(),
         )
     )

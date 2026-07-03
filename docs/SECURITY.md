@@ -4,8 +4,9 @@
 - LocalSandbox is available only for the local CLI/TUI profile or explicit
   trusted local execution.
 - LocalSandbox is a local-trust convenience backend for the local CLI/TUI
-  profile. It currently executes arbitrary local commands by design. This is
-  tracked as technical debt and must not be used as the default API sandbox.
+  profile. It runs as the same OS user and is not a security boundary. Trusted
+  local guardrails reduce accidents and improve evidence, but they do not make
+  host execution safe for untrusted code.
 - API-created Runs must not silently use LocalSandbox.
 - The `aio-docker` backend calls the long-lived AIO HTTP sandbox service and
   must not fall back to host execution or a one-shot Docker container.
@@ -25,7 +26,17 @@
 - Tool execution denies an invocation that is outside the provided effective
   policy even if the invocation carries enough raw capabilities for the tool
   descriptor.
-- Commands are classified as `ALLOW`, `ASK`, or `DENY`.
+- Commands are classified as `ALLOW`, `ASK`, or `DENY`. Known validation and
+  read-only inspection commands may run automatically; regex-matched mutation
+  commands require approval; extreme destructive commands are hard-blocked.
+- File and patch tools share path guardrails. Reads refuse common
+  credential/private-key files. Patches to sensitive paths require approval,
+  and `AWESOME_AGENT_WRITE_SAFE_ROOT` optionally hard-bounds patch write
+  targets.
+- Local subprocess environments are scrubbed of provider/API secret-looking
+  names before execution. This is defense-in-depth only; Task 94 owns output
+  redaction before command output, logs, evidence, or tool results are exposed
+  or persisted as user/model-visible content.
 - High-risk approvals are scoped to run, agent, command, workspace, and expiry.
 - Writing Teammates use isolated Git worktrees or child Run workspaces.
 - Subagents cannot delegate or authorize actions.

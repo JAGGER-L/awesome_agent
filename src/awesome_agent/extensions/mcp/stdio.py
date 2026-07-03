@@ -31,6 +31,7 @@ _MCP_TOOL_RESULT_MAX_CHARS = 30_000
 class McpStdioSourceConfig(ExtensionSourceConfig):
     """Config name reserved for the stdio MCP adapter contract."""
 
+
 _MCP_PROTOCOL_VERSION = "2024-11-05"
 _JSON_RPC_VERSION = "2.0"
 
@@ -480,9 +481,7 @@ def _validate_json_object_schema(
     required = schema.get("required", [])
     if isinstance(required, list):
         missing = [
-            key
-            for key in required
-            if isinstance(key, str) and key not in arguments
+            key for key in required if isinstance(key, str) and key not in arguments
         ]
         if missing:
             raise ValueError(f"MCP tool arguments missing required keys: {missing}")

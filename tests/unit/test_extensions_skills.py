@@ -100,9 +100,7 @@ def test_skill_runtime_view_enforces_actor_and_route_compatibility() -> None:
 
     assert view.skill_ids == []
     assert view.requested_tools == []
-    assert view.denied_skill_reasons == {
-        "repository-inspection": "incompatible_actor"
-    }
+    assert view.denied_skill_reasons == {"repository-inspection": "incompatible_actor"}
 
 
 def _catalog_with_skill(

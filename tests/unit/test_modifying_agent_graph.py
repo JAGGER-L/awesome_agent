@@ -748,6 +748,7 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
 -old
 +new
 """
+
     class RecordingSandbox:
         name = "recording"
 
@@ -824,12 +825,12 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
     graph = ModifyingCodingGraph(
         MemorySaver(),  # type: ignore[arg-type]
         provider_resolver=lambda _: provider,
-            tool_repository=tools,
-            approval_repository=approvals,
-            validation_plan_resolver=lambda _: _validation_plan(),
-            validation_runner=_passing_validation_runner,
-            sandbox=sandbox,
-        )
+        tool_repository=tools,
+        approval_repository=approvals,
+        validation_plan_resolver=lambda _: _validation_plan(),
+        validation_runner=_passing_validation_runner,
+        sandbox=sandbox,
+    )
     events: list[tuple[object, dict[str, object], str]] = []
     run, agent = _run(tmp_path)
 

@@ -5,12 +5,12 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
+from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import ArtifactMetadata
 from awesome_agent.domain.enums import RunIntent, RunMode, RunStatus
 from awesome_agent.domain.models import Run
-from awesome_agent.settings import Settings
 
 
 def test_create_thread_run_uses_thread_repository_context() -> None:
@@ -200,6 +200,6 @@ def _client(
             service=cast(Any, service or object()),
             intake=cast(Any, intake),
             registry=cast(Any, object()),
-            settings=Settings(_env_file=None),
+            settings=test_settings(),
         )
     )

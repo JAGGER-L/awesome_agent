@@ -649,8 +649,10 @@ intentionally outside the runtime kernel.
 ## Security Boundary
 
 Docker is the default command execution boundary. CLI users may explicitly opt
-into trusted local execution. FastAPI runs cannot use trusted-local mode.
-Writing Teammates use isolated Git worktrees.
+into trusted local execution. Trusted local mode runs as the same OS user and
+uses soft command, path, write-root, approval, and environment-scrubbing
+guardrails; it is not a security boundary. FastAPI runs cannot use
+trusted-local mode. Writing Teammates use isolated Git worktrees.
 
 Approval is scoped to one exact canonical tool invocation. Repository
 validation configuration and inferred project commands are untrusted input;

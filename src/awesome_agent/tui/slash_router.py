@@ -141,16 +141,14 @@ class SlashRouter:
                         "MCP servers",
                         "",
                         *(
-                    _label(item, "id", suffix_keys=("status", "type", "trust"))
-                    for item in servers
+                            _label(item, "id", suffix_keys=("status", "type", "trust"))
+                            for item in servers
                         ),
                     ]
                 )
             )
         if command.kind is SlashCommandKind.DETAILS:
-            return ChatMessage.system(
-                "Details\n\n  Off\n  On"
-            )
+            return ChatMessage.system("Details\n\n  Off\n  On")
         if command.kind is SlashCommandKind.USAGE:
             usage = self.client.usage_summary(
                 state.backend_thread_id,
@@ -226,9 +224,7 @@ def format_thread_list(threads: list[ThreadSummary]) -> str:
         marker = "*" if thread.current else " "
         updated = f"modified {thread.updated_label}" if thread.updated_label else "-"
         changes = _changed_file_count_label(thread.changed_file_count)
-        lines.append(
-            f"{marker} {thread.title:<24} {updated:<18} {changes}"
-        )
+        lines.append(f"{marker} {thread.title:<24} {updated:<18} {changes}")
     return "\n".join(lines)
 
 

@@ -31,15 +31,11 @@ class FakeSemanticClient:
 
     def list_tools(self) -> dict[str, list[dict[str, object]]]:
         return {
-            "Files": [
-                {"name": "read_file", "risk_level": "low", "health": "healthy"}
-            ],
+            "Files": [{"name": "read_file", "risk_level": "low", "health": "healthy"}],
             "Terminal": [
                 {"name": "run_command", "risk_level": "medium", "health": "healthy"}
             ],
-            "Approvals": [
-                {"name": "File edits: ask first", "health": "policy"}
-            ],
+            "Approvals": [{"name": "File edits: ask first", "health": "policy"}],
         }
 
     def mcp_status(self) -> list[dict[str, object]]:

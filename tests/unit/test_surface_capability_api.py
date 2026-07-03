@@ -6,6 +6,7 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
+from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import ArtifactMetadata
@@ -14,6 +15,7 @@ from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.extensions.models import (
     ExtensionCatalog,
     ExtensionHealthSnapshot,
+    ExtensionHealthStatus,
     ExtensionSkillInventoryItem,
     ExtensionSourceSnapshot,
     ExtensionSourceType,
@@ -31,8 +33,7 @@ from awesome_agent.settings import Settings
 def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> None:
     client, _threads, _runtime, _budget = _client(
         tmp_path,
-        settings=Settings(
-            _env_file=None,
+        settings=test_settings(
             deepseek_api_key="super-secret-value",
             local_config_path=tmp_path / "config.toml",
             artifact_root=tmp_path / "runs",
@@ -196,7 +197,7 @@ def _client(
                 service=cast(Any, fake_runtime),
                 intake=cast(Any, object()),
                 registry=cast(Any, object()),
-                settings=settings or Settings(_env_file=None),
+                settings=settings or test_settings(),
                 extension_catalog=extension_catalog or ExtensionCatalog(version="test"),
                 thread_repository=thread_repository,
                 budget_repository=budget,
@@ -216,13 +217,13 @@ def _catalog() -> ExtensionCatalog:
                 id="github",
                 type=ExtensionSourceType.MCP_STDIO,
                 trust=ExtensionTrustLevel.USER,
-                health=ExtensionHealthSnapshot(status="healthy"),
+                health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
             ),
             ExtensionSourceSnapshot(
                 id="project-skills",
                 type=ExtensionSourceType.SKILL_DIRECTORY,
                 trust=ExtensionTrustLevel.PROJECT,
-                health=ExtensionHealthSnapshot(status="healthy"),
+                health=ExtensionHealthSnapshot(status=ExtensionHealthStatus.HEALTHY),
             ),
         ],
         tools=[

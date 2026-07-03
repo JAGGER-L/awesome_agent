@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any, cast
 
 from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.surfaces.client import SurfaceThread
@@ -71,7 +72,7 @@ class FakeHost:
 
 def test_local_surface_client_streams_without_http() -> None:
     host = FakeHost()
-    client = LocalSurfaceClient(host=host)
+    client = LocalSurfaceClient(host=cast(Any, host))
 
     list(client.stream_turn("thread-1", "hi"))
 
@@ -79,14 +80,14 @@ def test_local_surface_client_streams_without_http() -> None:
 
 
 def test_local_surface_client_status_does_not_reference_http_health() -> None:
-    client = LocalSurfaceClient(host=FakeHost())
+    client = LocalSurfaceClient(host=cast(Any, FakeHost()))
 
     assert client.runtime_status() == {"runtime": "embedded", "transport": "local"}
 
 
 def test_explicit_run_uses_same_host_not_api_url() -> None:
     host = FakeHost()
-    client = LocalSurfaceClient(host=host)
+    client = LocalSurfaceClient(host=cast(Any, host))
 
     result = client.start_explicit_run("thread-1", "build")
 

@@ -65,3 +65,43 @@ async def test_local_sandbox_maps_logical_workspace(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert (host_workspace / "mapped.txt").read_text(encoding="utf-8").strip() == "ok"
+
+
+@pytest.mark.asyncio
+async def test_local_sandbox_scrubs_provider_secrets_from_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "host-secret")
+    sandbox = LocalSandbox()
+    argv = (
+        ["Write-Output", "$env:OPENAI_API_KEY; Write-Output $env:SAFE_FLAG"]
+        if os.name == "nt"
+        else [
+            "python",
+            "-c",
+            (
+                "import os; "
+                "print(os.environ.get('OPENAI_API_KEY', '<missing>')); "
+                "print(os.environ.get('SAFE_FLAG', '<missing>'))"
+            ),
+        ]
+    )
+
+    result = await sandbox.execute(
+        CommandRequest(
+            argv=argv,
+            workspace=tmp_path,
+            timeout_seconds=5,
+            max_output_chars=1000,
+            environment={
+                "OPENAI_API_KEY": "request-secret",
+                "SAFE_FLAG": "visible",
+            },
+        )
+    )
+
+    assert result.exit_code == 0
+    assert "request-secret" not in result.stdout
+    assert "host-secret" not in result.stdout
+    assert "visible" in result.stdout
