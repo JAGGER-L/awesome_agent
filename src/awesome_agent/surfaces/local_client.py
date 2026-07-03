@@ -71,14 +71,6 @@ class LocalSurfaceClient:
             resume_run_id=resume_run_id,
         )
 
-    def start_explicit_run(
-        self,
-        thread_id: str,
-        goal: str,
-        **kwargs: object,
-    ) -> dict[str, Any]:
-        return dict(self.host.start_explicit_run(thread_id, goal, **kwargs))
-
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:
         return [dict(item) for item in self.host.list_thread_runs(thread_id)]
 

@@ -17,7 +17,6 @@ class FakeHost:
             context_label="workspace",
         )
         self.streamed: list[tuple[str, str]] = []
-        self.explicit_runs: list[tuple[str, str]] = []
 
     def close(self) -> None:
         pass
@@ -48,15 +47,6 @@ class FakeHost:
         self.streamed.append((thread_id, content))
         return []
 
-    def start_explicit_run(
-        self,
-        thread_id: str,
-        goal: str,
-        **kwargs: object,
-    ) -> dict[str, object]:
-        self.explicit_runs.append((thread_id, goal))
-        return {"id": "run-1", "status": "planned"}
-
     def runtime_status(self) -> dict[str, object]:
         return {"runtime": "embedded", "transport": "local"}
 
@@ -85,11 +75,7 @@ def test_local_surface_client_status_does_not_reference_http_health() -> None:
     assert client.runtime_status() == {"runtime": "embedded", "transport": "local"}
 
 
-def test_explicit_run_uses_same_host_not_api_url() -> None:
-    host = FakeHost()
-    client = LocalSurfaceClient(host=cast(Any, host))
+def test_local_surface_client_has_no_explicit_run_creation() -> None:
+    client = LocalSurfaceClient(host=cast(Any, FakeHost()))
 
-    result = client.start_explicit_run("thread-1", "build")
-
-    assert result == {"id": "run-1", "status": "planned"}
-    assert host.explicit_runs == [("thread-1", "build")]
+    assert not hasattr(client, "start_" + "explicit_run")

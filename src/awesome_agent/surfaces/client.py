@@ -34,14 +34,6 @@ class SurfaceThread:
     provider_memory: str | None = None
 
 
-@dataclass(frozen=True)
-class SurfaceRun:
-    id: str
-    status: str
-    goal: str
-    execution_mode: str | None = None
-
-
 class SurfaceClientError(RuntimeError):
     def __init__(
         self,
@@ -102,13 +94,6 @@ class SurfaceClient(Protocol):
         skill_ids: tuple[str, ...] = (),
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]: ...
-
-    def start_explicit_run(
-        self,
-        thread_id: str,
-        goal: str,
-        **kwargs: object,
-    ) -> dict[str, Any]: ...
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]: ...
 

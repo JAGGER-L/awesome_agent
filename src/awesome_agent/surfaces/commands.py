@@ -7,7 +7,6 @@ from enum import StrEnum
 class SlashCommandKind(StrEnum):
     NEW = "new"
     THREADS = "threads"
-    RUN = "run"
     STATUS = "status"
     MODEL = "model"
     THINKING = "thinking"
@@ -60,16 +59,6 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
         kind=SlashCommandKind.THREADS,
         description="Switch conversation.",
         category="thread",
-    ),
-    SlashCommandDefinition(
-        name="run",
-        kind=SlashCommandKind.RUN,
-        description="Force advanced execution mode.",
-        category="run",
-        argument_hint="<goal>",
-        requires_thread=True,
-        executor="api",
-        output_kind="run",
     ),
     SlashCommandDefinition(
         name="status",
