@@ -29,6 +29,7 @@ build/
 # Local development-agent state
 .codex/
 .claude/
+.worktrees/
 # OS
 .DS_Store
 Thumbs.db
