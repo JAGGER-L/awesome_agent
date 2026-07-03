@@ -17,6 +17,9 @@ class Thread(BaseModel):
     repository_id: UUID | None = None
     default_model: str | None = None
     sandbox_profile: str | None = None
+    thinking_mode: str | None = None
+    local_memory_enabled: bool = False
+    provider_memory: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

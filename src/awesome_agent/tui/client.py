@@ -176,6 +176,30 @@ class HttpSurfaceClient:
                 return run
         return None
 
+    def update_thread_settings(
+        self,
+        thread_id: str,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> SurfaceThread:
+        payload: dict[str, object] = {}
+        if default_model is not None:
+            payload["default_model"] = default_model
+        if thinking_mode is not None:
+            payload["thinking_mode"] = thinking_mode
+        if local_memory_enabled is not None:
+            payload["local_memory_enabled"] = local_memory_enabled
+        payload["provider_memory"] = provider_memory
+        response = self._client.patch(
+            f"{self.api_url}/threads/{thread_id}/settings",
+            json=payload,
+        )
+        response.raise_for_status()
+        return surface_thread_from_mapping(dict(response.json()))
+
     def list_skills(self) -> list[dict[str, Any]]:
         return self._get_items_object("/extensions/skills")
 

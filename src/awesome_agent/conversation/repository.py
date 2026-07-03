@@ -21,6 +21,9 @@ class ConversationRepository(Protocol):
         repository_id: UUID | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool = False,
+        provider_memory: str | None = None,
     ) -> Thread:
         pass
 
@@ -31,6 +34,17 @@ class ConversationRepository(Protocol):
         pass
 
     async def bind_repository(self, thread_id: UUID, repository_id: UUID) -> Thread:
+        pass
+
+    async def update_thread_settings(
+        self,
+        thread_id: UUID,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> Thread:
         pass
 
     async def resolve_thread(self, query: str) -> Thread:

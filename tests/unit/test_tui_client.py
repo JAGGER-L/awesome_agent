@@ -221,3 +221,45 @@ def test_tui_client_finds_last_resumable_run_from_thread_runs() -> None:
         "id": "run-paused",
         "status": "paused",
     }
+
+
+def test_tui_client_updates_thread_settings() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "thread-1",
+                "title": "Settings",
+                "default_model": "deepseek-v4-flash",
+                "thinking_mode": "off",
+                "local_memory_enabled": True,
+                "provider_memory": None,
+            },
+        )
+
+    client = TuiApiClient(
+        "http://testserver",
+        transport=httpx.MockTransport(handler),
+    )
+
+    thread = client.update_thread_settings(
+        "thread-1",
+        default_model="deepseek-v4-flash",
+        thinking_mode="off",
+        local_memory_enabled=True,
+        provider_memory=None,
+    )
+
+    assert thread.default_model == "deepseek-v4-flash"
+    assert thread.thinking_mode == "off"
+    assert thread.local_memory_enabled is True
+    assert thread.provider_memory is None
+    assert requests[0].method == "PATCH"
+    assert requests[0].url.path == "/threads/thread-1/settings"
+    assert requests[0].read() == (
+        b'{"default_model":"deepseek-v4-flash","thinking_mode":"off",'
+        b'"local_memory_enabled":true,"provider_memory":null}'
+    )

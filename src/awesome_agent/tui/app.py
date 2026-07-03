@@ -32,6 +32,7 @@ from awesome_agent.tui.chat_state import (
     ChatEventKind,
     ChatMessage,
     ChatSessionState,
+    chat_messages_from_thread_records,
     should_resume_last_run,
 )
 from awesome_agent.tui.client import HttpSurfaceClient
@@ -176,6 +177,7 @@ class AwesomeAgentTui(App[None]):
                 SlashCommandKind.THINKING,
                 SlashCommandKind.MEMORY,
                 SlashCommandKind.SKILLS,
+                SlashCommandKind.THREADS,
             }:
                 self._open_picker(parsed)
             else:
@@ -635,6 +637,27 @@ class AwesomeAgentTui(App[None]):
                 )
             )
             return
+        if parsed.kind is SlashCommandKind.THREADS:
+            threads = self.client.list_threads()
+            items = [
+                PickerItem(
+                    id=_thread_id(thread),
+                    label=_thread_title(thread),
+                    description=_thread_picker_description(thread),
+                )
+                for thread in threads
+            ] or [
+                PickerItem(id="none", label="No conversations yet", disabled=True)
+            ]
+            self.state = self.state.open_picker(
+                PickerState.open(
+                    kind="threads",
+                    title="Conversations",
+                    items=items,
+                    selected_id=self.state.backend_thread_id,
+                )
+            )
+            return
         if parsed.kind is SlashCommandKind.SKILLS:
             skills = self.client.list_skills()
             items = [
@@ -666,6 +689,7 @@ class AwesomeAgentTui(App[None]):
             return
         if picker.kind == "model":
             self.state = self.state.with_model(item.id).close_picker()
+            self._persist_thread_settings(default_model=item.id)
             self.state = self.state.append(
                 ChatMessage.system(
                     f"Model changed to: {item.label}\nApplies to this conversation."
@@ -673,6 +697,7 @@ class AwesomeAgentTui(App[None]):
             )
         elif picker.kind == "thinking":
             self.state = self.state.with_thinking(item.id).close_picker()
+            self._persist_thread_settings(thinking_mode=item.id)
             self.state = self.state.append(
                 ChatMessage.system(
                     f"Thinking changed to: {item.label}\nApplies to this conversation."
@@ -685,9 +710,12 @@ class AwesomeAgentTui(App[None]):
         elif picker.kind == "memory_provider":
             provider = None if item.id == "disabled" else item.id
             self.state = self.state.with_provider_memory(provider).close_picker()
+            self._persist_thread_settings(provider_memory=provider)
             self.state = self.state.append(
                 ChatMessage.system(f"Provider memory changed to: {item.label}")
             )
+        elif picker.kind == "threads":
+            self._restore_thread(item.id)
         elif picker.kind == "skills":
             if item.id in self.state.staged_skill_ids:
                 self.state = self.state.unstage_skill(item.id).close_picker()
@@ -744,11 +772,67 @@ class AwesomeAgentTui(App[None]):
             return
         enabled = item.id == "enabled"
         self.state = self.state.with_local_memory(enabled).close_picker()
+        self._persist_thread_settings(local_memory_enabled=enabled)
         self.state = self.state.append(
             ChatMessage.system(
                 f"Local memory changed to: {'Enabled' if enabled else 'Disabled'}"
             )
         )
+
+    def _restore_thread(self, thread_id: str) -> None:
+        thread = self.client.resume_thread(thread_id)
+        messages = chat_messages_from_thread_records(
+            self.client.list_thread_messages(_thread_id(thread))
+        )
+        self.state = self.state.switch_thread(
+            backend_thread_id=_thread_id(thread),
+            title=_thread_title(thread),
+            context_label=_thread_context_label(thread),
+            messages=messages,
+        )
+        self.state = _apply_thread_settings(self.state, thread)
+        self.state = self.state.close_picker().append(
+            ChatMessage.system(
+                f"Opened conversation: {_thread_title(thread)}",
+                kind=ChatEventKind.RUN,
+            )
+        )
+        self._render()
+        self._focus_prompt()
+
+    def _persist_thread_settings(
+        self,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> None:
+        if self.state.backend_thread_id is None:
+            return
+        update = getattr(self.client, "update_thread_settings", None)
+        if not callable(update):
+            return
+        effective_model = default_model or self.state.current_model
+        effective_thinking = thinking_mode or self.state.thinking_mode
+        effective_local_memory = (
+            local_memory_enabled
+            if local_memory_enabled is not None
+            else self.state.local_memory_enabled
+        )
+        effective_provider_memory = (
+            provider_memory
+            if provider_memory is not None
+            else self.state.provider_memory
+        )
+        with suppress(Exception):
+            update(
+                self.state.backend_thread_id,
+                default_model=effective_model,
+                thinking_mode=effective_thinking,
+                local_memory_enabled=effective_local_memory,
+                provider_memory=effective_provider_memory,
+            )
 
     def _command_worker(
         self,
@@ -841,6 +925,10 @@ class AwesomeAgentTui(App[None]):
             title=title_seed[:80] or "New conversation",
             context_kind=context.context_kind if context is not None else None,
             context_path=context.display_path if context is not None else None,
+            default_model=self.state.current_model,
+            thinking_mode=self.state.thinking_mode,
+            local_memory_enabled=self.state.local_memory_enabled,
+            provider_memory=self.state.provider_memory,
         )
         thread_id = _thread_id(thread)
         self.state = self.state.with_backend_thread(
@@ -861,6 +949,10 @@ class AwesomeAgentTui(App[None]):
             title=title,
             context_kind=context.context_kind if context is not None else None,
             context_path=context.display_path if context is not None else None,
+            default_model=state.current_model,
+            thinking_mode=state.thinking_mode,
+            local_memory_enabled=state.local_memory_enabled,
+            provider_memory=state.provider_memory,
         )
         return (
             thread,
@@ -893,6 +985,10 @@ class AwesomeAgentTui(App[None]):
                 title=goal[:80] or "New conversation",
                 context_kind=context.context_kind if context is not None else None,
                 context_path=context.display_path if context is not None else None,
+                default_model=state.current_model,
+                thinking_mode=state.thinking_mode,
+                local_memory_enabled=state.local_memory_enabled,
+                provider_memory=state.provider_memory,
             )
             thread_id = _thread_id(thread)
             new_backend_thread_id = thread_id
@@ -1004,6 +1100,50 @@ def _thread_context_label(thread: SurfaceThread | dict[str, object]) -> str | No
         return thread.context_label
     context = thread.get("context_path") or thread.get("context_label")
     return str(context) if context is not None else None
+
+
+def _thread_picker_description(thread: SurfaceThread | dict[str, object]) -> str:
+    if isinstance(thread, SurfaceThread):
+        updated = thread.updated_label or "-"
+        changes = _changed_file_label(thread.changed_file_count)
+        return f"{updated} - {changes}"
+    updated = str(thread.get("updated_label") or "-")
+    count = thread.get("changed_file_count")
+    return f"{updated} - {_changed_file_label(count if isinstance(count, int) else 0)}"
+
+
+def _changed_file_label(count: int) -> str:
+    if count == 0:
+        return "no file changes"
+    if count == 1:
+        return "1 changed file"
+    return f"{count} changed files"
+
+
+def _apply_thread_settings(
+    state: ChatSessionState,
+    thread: SurfaceThread | dict[str, object],
+) -> ChatSessionState:
+    if isinstance(thread, SurfaceThread):
+        if thread.default_model:
+            state = state.with_model(thread.default_model)
+        if thread.thinking_mode:
+            state = state.with_thinking(thread.thinking_mode)
+        state = state.with_local_memory(thread.local_memory_enabled)
+        state = state.with_provider_memory(thread.provider_memory)
+        return state
+    default_model = thread.get("default_model")
+    thinking_mode = thread.get("thinking_mode")
+    provider_memory = thread.get("provider_memory")
+    if isinstance(default_model, str) and default_model:
+        state = state.with_model(default_model)
+    if isinstance(thinking_mode, str) and thinking_mode:
+        state = state.with_thinking(thinking_mode)
+    state = state.with_local_memory(thread.get("local_memory_enabled") is True)
+    state = state.with_provider_memory(
+        provider_memory if isinstance(provider_memory, str) else None
+    )
+    return state
 
 
 def _tool_display_event(payload: dict[str, object]) -> ToolDisplayEvent:

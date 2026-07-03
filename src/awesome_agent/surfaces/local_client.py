@@ -33,6 +33,23 @@ class LocalSurfaceClient:
             return dict(result) if result is not None else None
         return None
 
+    def update_thread_settings(
+        self,
+        thread_id: str,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> SurfaceThread:
+        return self.host.update_thread_settings(
+            thread_id,
+            default_model=default_model,
+            thinking_mode=thinking_mode,
+            local_memory_enabled=local_memory_enabled,
+            provider_memory=provider_memory,
+        )
+
     def stream_turn(
         self,
         thread_id: str,
