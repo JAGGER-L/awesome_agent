@@ -40,6 +40,7 @@ from awesome_agent.api.schemas import (
     ThreadArtifactsResponse,
     ThreadUploadsResponse,
     ThreadUsageResponse,
+    UpdateThreadSettingsRequest,
     WorkspaceCandidateResponse,
     WorkspaceCleanupRequest,
 )
@@ -670,6 +671,23 @@ def create_app(
     async def get_thread(thread_id: UUID) -> dict[str, object]:
         try:
             thread = await threads().get_thread(thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return thread.api_payload()
+
+    @app.patch("/threads/{thread_id}/settings")
+    async def update_thread_settings(
+        thread_id: UUID,
+        request: UpdateThreadSettingsRequest,
+    ) -> dict[str, object]:
+        try:
+            thread = await threads().update_thread_settings(
+                thread_id,
+                default_model=request.default_model,
+                thinking_mode=request.thinking_mode,
+                local_memory_enabled=request.local_memory_enabled,
+                provider_memory=request.provider_memory,
+            )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
         return thread.api_payload()

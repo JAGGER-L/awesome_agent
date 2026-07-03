@@ -28,6 +28,10 @@ class SurfaceThread:
     updated_label: str | None = None
     changed_file_count: int = 0
     latest_changed_files: tuple[ChangedFileSummary, ...] = ()
+    default_model: str | None = None
+    thinking_mode: str | None = None
+    local_memory_enabled: bool = False
+    provider_memory: str | None = None
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,16 @@ class SurfaceClient(Protocol):
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]: ...
 
     def last_resumable_run(self, thread_id: str) -> dict[str, Any] | None: ...
+
+    def update_thread_settings(
+        self,
+        thread_id: str,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> SurfaceThread: ...
 
     def stream_turn(
         self,
@@ -135,6 +149,10 @@ def surface_thread_from_mapping(payload: dict[str, object]) -> SurfaceThread:
             else len(latest_changed_files)
         ),
         latest_changed_files=latest_changed_files,
+        default_model=_optional_str(payload.get("default_model")),
+        thinking_mode=_optional_str(payload.get("thinking_mode")),
+        local_memory_enabled=payload.get("local_memory_enabled") is True,
+        provider_memory=_optional_str(payload.get("provider_memory")),
     )
 
 
@@ -182,6 +200,10 @@ def _display_path(path: str) -> str:
     if normalized.startswith(marker):
         return normalized.removeprefix(marker)
     return path
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _relative_time_label(value: object) -> str | None:

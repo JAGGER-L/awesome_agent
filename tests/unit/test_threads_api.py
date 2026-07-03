@@ -109,6 +109,28 @@ def test_get_thread_returns_created_thread() -> None:
     assert response.json()["id"] == created["id"]
 
 
+def test_update_thread_settings_returns_updated_thread() -> None:
+    client = _client()
+    created = client.post("/threads", json={"title": "Settings"}).json()
+
+    response = client.patch(
+        f"/threads/{created['id']}/settings",
+        json={
+            "default_model": "deepseek-v4-flash",
+            "thinking_mode": "off",
+            "local_memory_enabled": True,
+            "provider_memory": "mem0",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["default_model"] == "deepseek-v4-flash"
+    assert body["thinking_mode"] == "off"
+    assert body["local_memory_enabled"] is True
+    assert body["provider_memory"] == "mem0"
+
+
 def test_append_and_list_thread_messages() -> None:
     client = _client()
     thread = client.post("/threads", json={"title": "Snake game"}).json()

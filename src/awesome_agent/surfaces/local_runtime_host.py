@@ -13,6 +13,7 @@ from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.persistence.local_conversations import LocalConversationRepository
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.settings import Settings
@@ -69,9 +70,14 @@ class LocalRuntimeHost:
         settings: Settings | None = None,
         provider_factory: Callable[[str], ModelProvider] | None = None,
         default_model: str | None = None,
+        repository: (
+            InMemoryConversationRepository | LocalConversationRepository | None
+        ) = None,
     ) -> None:
         self.settings = settings or Settings()
-        self.repository = InMemoryConversationRepository()
+        self.repository = repository or LocalConversationRepository(
+            self.settings.local_state_dir / "awesome-agent.db"
+        )
         self.runtime_repository = InMemoryRuntimeRepository()
         self.default_model = default_model or self.settings.leader_model
         factory = provider_factory
@@ -86,7 +92,9 @@ class LocalRuntimeHost:
         self._planned_runs: dict[str, dict[str, object]] = {}
 
     def close(self) -> None:
-        pass
+        close = getattr(self.repository, "close", None)
+        if callable(close):
+            close()
 
     def create_thread(self, title: str, **kwargs: object) -> SurfaceThread:
         return _run_async(
@@ -96,6 +104,9 @@ class LocalRuntimeHost:
                 context_path=_optional_str(kwargs.get("context_path")),
                 default_model=_optional_str(kwargs.get("default_model")),
                 sandbox_profile=_optional_str(kwargs.get("sandbox_profile")),
+                thinking_mode=_optional_str(kwargs.get("thinking_mode")),
+                local_memory_enabled=bool(kwargs.get("local_memory_enabled") or False),
+                provider_memory=_optional_str(kwargs.get("provider_memory")),
             )
         )
 
@@ -107,6 +118,9 @@ class LocalRuntimeHost:
         context_path: str | None,
         default_model: str | None,
         sandbox_profile: str | None,
+        thinking_mode: str | None,
+        local_memory_enabled: bool,
+        provider_memory: str | None,
     ) -> SurfaceThread:
         thread = await self.repository.create_thread(
             title=title,
@@ -114,6 +128,9 @@ class LocalRuntimeHost:
             context_path=context_path,
             default_model=default_model,
             sandbox_profile=sandbox_profile,
+            thinking_mode=thinking_mode,
+            local_memory_enabled=local_memory_enabled,
+            provider_memory=provider_memory,
         )
         return SurfaceThread(
             id=str(thread.id),
@@ -121,6 +138,10 @@ class LocalRuntimeHost:
             short_id=str(thread.id)[:8],
             context_label=thread.context_path,
             updated_label="now",
+            default_model=thread.default_model,
+            thinking_mode=thread.thinking_mode,
+            local_memory_enabled=thread.local_memory_enabled,
+            provider_memory=thread.provider_memory,
         )
 
     def list_threads(self) -> list[SurfaceThread]:
@@ -142,6 +163,10 @@ class LocalRuntimeHost:
                     updated_label="now",
                     changed_file_count=len(changed_files),
                     latest_changed_files=changed_files,
+                    default_model=thread.default_model,
+                    thinking_mode=thread.thinking_mode,
+                    local_memory_enabled=thread.local_memory_enabled,
+                    provider_memory=thread.provider_memory,
                 )
             )
         return summaries
@@ -157,6 +182,57 @@ class LocalRuntimeHost:
             short_id=str(thread.id)[:8],
             context_label=thread.context_path,
             updated_label="now",
+            default_model=thread.default_model,
+            thinking_mode=thread.thinking_mode,
+            local_memory_enabled=thread.local_memory_enabled,
+            provider_memory=thread.provider_memory,
+        )
+
+    def update_thread_settings(
+        self,
+        thread_id: str,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> SurfaceThread:
+        return _run_async(
+            self._update_thread_settings_async(
+                thread_id,
+                default_model=default_model,
+                thinking_mode=thinking_mode,
+                local_memory_enabled=local_memory_enabled,
+                provider_memory=provider_memory,
+            )
+        )
+
+    async def _update_thread_settings_async(
+        self,
+        thread_id: str,
+        *,
+        default_model: str | None,
+        thinking_mode: str | None,
+        local_memory_enabled: bool | None,
+        provider_memory: str | None,
+    ) -> SurfaceThread:
+        thread = await self.repository.update_thread_settings(
+            UUID(thread_id),
+            default_model=default_model,
+            thinking_mode=thinking_mode,
+            local_memory_enabled=local_memory_enabled,
+            provider_memory=provider_memory,
+        )
+        return SurfaceThread(
+            id=str(thread.id),
+            title=thread.title,
+            short_id=str(thread.id)[:8],
+            context_label=thread.context_path,
+            updated_label="now",
+            default_model=thread.default_model,
+            thinking_mode=thread.thinking_mode,
+            local_memory_enabled=thread.local_memory_enabled,
+            provider_memory=thread.provider_memory,
         )
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, object]]:

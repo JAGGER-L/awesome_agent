@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     local_config_path: Path = Field(
         default_factory=lambda: Path.home() / ".awesome-agent" / "config.toml"
     )
+    local_state_dir: Path = Field(
+        default_factory=lambda: Path.home() / ".awesome-agent" / "state"
+    )
     workspace_root: Path | None = None
     sandbox_backend: Literal["aio-docker", "local"] = "aio-docker"
     local_cli_sandbox_backend: Literal["local", "aio-docker"] = "local"

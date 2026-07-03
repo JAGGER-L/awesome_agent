@@ -35,6 +35,15 @@ class CreateThreadRequest(BaseModel):
     sandbox_profile: str | None = Field(default=None, max_length=64)
 
 
+class UpdateThreadSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default_model: str | None = Field(default=None, max_length=128)
+    thinking_mode: str | None = Field(default=None, max_length=32)
+    local_memory_enabled: bool | None = None
+    provider_memory: str | None = Field(default=None, max_length=64)
+
+
 class CreateThreadMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

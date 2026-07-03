@@ -17,6 +17,7 @@ from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
+from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_client import LocalSurfaceClient
 from awesome_agent.surfaces.local_runtime_host import LocalRuntimeHost
 from awesome_agent.tui.app import AwesomeAgentTui
@@ -44,6 +45,9 @@ class FakeClient:
         repository_id: str | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool = False,
+        provider_memory: str | None = None,
     ) -> dict[str, object]:
         thread_id = self.thread_id if self.created_threads == 0 else str(uuid4())
         self.created_threads += 1
@@ -55,6 +59,9 @@ class FakeClient:
             "repository_id": repository_id,
             "default_model": default_model,
             "sandbox_profile": sandbox_profile,
+            "thinking_mode": thinking_mode,
+            "local_memory_enabled": local_memory_enabled,
+            "provider_memory": provider_memory,
             "logical_workspace_path": "/mnt/user-data/workspace/",
             "updated_label": "now",
         }
@@ -81,6 +88,28 @@ class FakeClient:
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, object]]:
         return list(self.messages_by_thread.get(thread_id, []))
+
+    def update_thread_settings(
+        self,
+        thread_id: str,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> dict[str, object]:
+        for thread in self.threads:
+            if str(thread["id"]) != thread_id:
+                continue
+            if default_model is not None:
+                thread["default_model"] = default_model
+            if thinking_mode is not None:
+                thread["thinking_mode"] = thinking_mode
+            if local_memory_enabled is not None:
+                thread["local_memory_enabled"] = local_memory_enabled
+            thread["provider_memory"] = provider_memory
+            return thread
+        raise ValueError(f"Thread not found: {thread_id}")
 
     def stream_turn(
         self,
@@ -632,6 +661,7 @@ async def test_tui_accepts_plain_message_without_repo_selection_block(
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
+        await pilot.pause()
         transcript = app.query_one("#transcript").render()
 
     rendered = str(transcript)
@@ -826,13 +856,54 @@ async def test_tui_threads_lists_current_thread_without_internal_paths() -> None
         await pilot.click("#prompt")
         await pilot.press("/", "t", "h", "r", "e", "a", "d", "s", "enter")
         await pilot.pause()
-        transcript = app.query_one("#transcript").render()
+        palette = app.query_one("#command-palette").render()
 
-    rendered = str(transcript)
+    rendered = str(palette)
     assert "Conversations" in rendered
     assert "* Current" in rendered
     assert "Other" in rendered
     assert "/mnt/user-data/workspace" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_tui_threads_picker_restores_thread_messages_and_settings() -> None:
+    client = FakeClient()
+    current = client.create_thread("Current")
+    restored = client.create_thread(
+        "Restored",
+        default_model="deepseek-v4-flash",
+        thinking_mode="off",
+        local_memory_enabled=True,
+        provider_memory="mem0",
+    )
+    client.messages_by_thread[str(restored["id"])] = [
+        {"role": "user", "content": "old question", "kind": "message"},
+        {"role": "assistant", "content": "old answer", "kind": "model"},
+    ]
+    app = AwesomeAgentTui(client=client)
+    app.state = app.state.switch_thread(
+        backend_thread_id=str(current["id"]),
+        title="Current",
+        context_label=None,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "t", "h", "r", "e", "a", "d", "s", "enter")
+        assert "Conversations" in str(app.query_one("#command-palette").render())
+        await pilot.press("up")
+        await pilot.press("enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert app.state.backend_thread_id == str(restored["id"])
+    assert app.state.current_model == "deepseek-v4-flash"
+    assert app.state.thinking_mode == "off"
+    assert app.state.local_memory_enabled is True
+    assert app.state.provider_memory == "mem0"
+    assert "old question" in rendered
+    assert "old answer" in rendered
+    assert "Opened conversation: Restored" in rendered
 
 
 @pytest.mark.asyncio
@@ -843,6 +914,7 @@ async def test_tui_can_answer_without_http_server() -> None:
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
+        await pilot.pause()
         transcript = app.query_one("#transcript").render()
 
     assert "hello world" in str(transcript)
@@ -850,8 +922,9 @@ async def test_tui_can_answer_without_http_server() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_can_answer_with_real_local_surface_client() -> None:
+async def test_tui_can_answer_with_real_local_surface_client(tmp_path: Path) -> None:
     host = LocalRuntimeHost(
+        settings=Settings(_env_file=None, local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
     )

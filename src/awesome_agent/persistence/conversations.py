@@ -28,6 +28,9 @@ class InMemoryConversationRepository:
         repository_id: UUID | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool = False,
+        provider_memory: str | None = None,
     ) -> Thread:
         thread = Thread(
             title=title,
@@ -36,6 +39,9 @@ class InMemoryConversationRepository:
             repository_id=repository_id,
             default_model=default_model,
             sandbox_profile=sandbox_profile,
+            thinking_mode=thinking_mode,
+            local_memory_enabled=local_memory_enabled,
+            provider_memory=provider_memory,
         )
         self._threads[thread.id] = thread
         self._messages[thread.id] = []
@@ -57,6 +63,28 @@ class InMemoryConversationRepository:
     async def bind_repository(self, thread_id: UUID, repository_id: UUID) -> Thread:
         thread = await self.get_thread(thread_id)
         updated = thread.model_copy(update={"repository_id": repository_id})
+        self._threads[thread_id] = updated
+        return updated
+
+    async def update_thread_settings(
+        self,
+        thread_id: UUID,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> Thread:
+        thread = await self.get_thread(thread_id)
+        updates: dict[str, object] = {}
+        if default_model is not None:
+            updates["default_model"] = default_model
+        if thinking_mode is not None:
+            updates["thinking_mode"] = thinking_mode
+        if local_memory_enabled is not None:
+            updates["local_memory_enabled"] = local_memory_enabled
+        updates["provider_memory"] = provider_memory
+        updated = thread.model_copy(update=updates)
         self._threads[thread_id] = updated
         return updated
 
@@ -116,6 +144,9 @@ class PostgresConversationRepository:
         repository_id: UUID | None = None,
         default_model: str | None = None,
         sandbox_profile: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool = False,
+        provider_memory: str | None = None,
     ) -> Thread:
         thread = Thread(
             title=title,
@@ -124,6 +155,9 @@ class PostgresConversationRepository:
             repository_id=repository_id,
             default_model=default_model,
             sandbox_profile=sandbox_profile,
+            thinking_mode=thinking_mode,
+            local_memory_enabled=local_memory_enabled,
+            provider_memory=provider_memory,
         )
         async with self._sessions.begin() as session:
             session.add(_thread_to_record(thread))
@@ -157,6 +191,21 @@ class PostgresConversationRepository:
             record.repository_id = repository_id
             await session.flush()
             return _thread_from_record(record)
+
+    async def update_thread_settings(
+        self,
+        thread_id: UUID,
+        *,
+        default_model: str | None = None,
+        thinking_mode: str | None = None,
+        local_memory_enabled: bool | None = None,
+        provider_memory: str | None = None,
+    ) -> Thread:
+        async with self._sessions() as session:
+            record = await session.get(ThreadRecord, thread_id)
+        if record is None:
+            raise KeyError(f"Thread not found: {thread_id}")
+        return _thread_from_record(record)
 
     async def resolve_thread(self, query: str) -> Thread:
         try:

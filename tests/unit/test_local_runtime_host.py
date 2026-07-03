@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -11,6 +12,8 @@ from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
+from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_runtime_host import (
     ExecutionMode,
     LocalRuntimeHost,
@@ -53,6 +56,7 @@ def test_local_runtime_host_streams_leader_turn(content: str) -> None:
     host = LocalRuntimeHost(
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
+        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Test")
 
@@ -77,6 +81,7 @@ def test_local_runtime_host_reports_coding_mode_boundary() -> None:
     host = LocalRuntimeHost(
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
+        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Build")
 
@@ -91,6 +96,7 @@ def test_local_runtime_host_forwards_turn_options() -> None:
     host = LocalRuntimeHost(
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
+        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Options")
 
@@ -118,6 +124,7 @@ def test_local_runtime_host_thread_summary_includes_changed_files() -> None:
     host = LocalRuntimeHost(
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
+        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Snake")
     asyncio.run(
@@ -140,3 +147,37 @@ def test_local_runtime_host_thread_summary_includes_changed_files() -> None:
 
     assert summary.changed_file_count == 1
     assert summary.latest_changed_files[0].visible_path == "snake.html"
+
+
+def test_local_runtime_host_persists_threads_across_instances(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, local_state_dir=tmp_path / "state")
+    first = LocalRuntimeHost(
+        settings=settings,
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = first.create_thread(
+        "Durable",
+        default_model="fake-model",
+        thinking_mode="off",
+        local_memory_enabled=True,
+        provider_memory="mem0",
+    )
+    list(first.stream_turn(thread.id, "hi"))
+    first.close()
+
+    second = LocalRuntimeHost(
+        settings=settings,
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    [restored] = second.list_threads()
+    messages = second.list_thread_messages(restored.id)
+    second.close()
+
+    assert restored.id == thread.id
+    assert restored.default_model == "fake-model"
+    assert restored.thinking_mode == "off"
+    assert restored.local_memory_enabled is True
+    assert restored.provider_memory == "mem0"
+    assert [message["content"] for message in messages] == ["hi", "hello world"]
