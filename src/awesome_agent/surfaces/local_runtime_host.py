@@ -3,29 +3,18 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
-from enum import StrEnum
 from pathlib import Path
 from queue import Queue
 from threading import Thread
 from typing import cast
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from awesome_agent.conversation.events import (
     ConversationStreamEvent,
     ConversationStreamEventKind,
 )
-from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.models import ThreadMessage
-from awesome_agent.conversation.service import ConversationService
-from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.modeling.provider import ModelProvider
-from awesome_agent.persistence.conversations import InMemoryConversationRepository
-from awesome_agent.persistence.local_conversations import LocalConversationRepository
-from awesome_agent.providers.factory import ModelProviderFactory
-from awesome_agent.runtime.conversation_graph import ConversationGraph
-from awesome_agent.runtime.events import EventStream
-from awesome_agent.runtime.repository import InMemoryRuntimeRepository
-from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import (
     ChangedFileSummary,
@@ -33,48 +22,7 @@ from awesome_agent.surfaces.client import (
     SurfaceThread,
     changed_file_summaries_from_payload,
 )
-from awesome_agent.tools.repository import (
-    build_modifying_executor,
-    build_modifying_registry,
-)
-
-
-class ExecutionMode(StrEnum):
-    LEADER = "leader"
-    CODING = "coding"
-    RESUME = "resume"
-
-
-def plan_execution_mode(
-    content: str,
-    *,
-    resumable_run_id: str | None = None,
-) -> ExecutionMode:
-    normalized = content.strip().casefold()
-    if resumable_run_id is not None and normalized == "\u7ee7\u7eed":
-        return ExecutionMode.RESUME
-    if resumable_run_id is not None and normalized in {
-        "continue",
-        "resume",
-        "继续",
-    }:
-        return ExecutionMode.RESUME
-    coding_markers = (
-        "build",
-        "create",
-        "edit",
-        "fix",
-        "test",
-        "html",
-        "file",
-        "code",
-        "生成",
-        "修改",
-        "修复",
-    )
-    if any(marker in normalized for marker in coding_markers):
-        return ExecutionMode.CODING
-    return ExecutionMode.LEADER
+from awesome_agent.surfaces.local_runtime_container import LocalRuntimeContainer
 
 
 class LocalRuntimeHost:
@@ -84,56 +32,30 @@ class LocalRuntimeHost:
         settings: Settings | None = None,
         provider_factory: Callable[[str], ModelProvider] | None = None,
         default_model: str | None = None,
-        repository: (
-            InMemoryConversationRepository | LocalConversationRepository | None
-        ) = None,
+        repository: object | None = None,
     ) -> None:
         self.settings = settings or Settings()
-        self.repository = repository or LocalConversationRepository(
-            self.settings.local_state_dir / "awesome-agent.db"
-        )
-        self.runtime_repository = InMemoryRuntimeRepository()
-        self.event_stream = EventStream()
         self.default_model = default_model or self.settings.leader_model
-        self.tool_registry = build_modifying_registry(
-            sandbox=create_sandbox(
-                origin=ExecutionOrigin.CLI,
-                settings=self.settings,
-                profile="local-cli",
+        if repository is not None:
+            raise ValueError(
+                "LocalRuntimeHost no longer accepts an injected conversation-only "
+                "repository; use LocalRuntimeContainer state_path for durable local "
+                "runtime tests."
             )
-        )
-        self.tool_executor = build_modifying_executor(self.tool_registry)
-        factory = provider_factory
-        if factory is None:
-            factory = ModelProviderFactory(self.settings).create
-        self._provider_factory = factory
-        self._conversation_intake = ConversationRunIntakeService(
-            conversations=self.repository,
-            runtime=self.runtime_repository,
-            events=self.event_stream,
+        self._container = LocalRuntimeContainer(
+            settings=self.settings,
+            provider_factory=provider_factory,
             default_model=self.default_model,
         )
-        self._conversation_graph = ConversationGraph(
-            conversations=self.repository,
-            runtime=self.runtime_repository,
-            provider_factory=self._provider_factory,
-            default_model=self.default_model,
-            tool_executor=self.tool_executor,
-            tool_registry=self.tool_registry,
-        )
-        self._conversation = ConversationService(
-            repository=self.repository,
-            runtime_repository=self.runtime_repository,
-            conversation_run_intake=self._conversation_intake,
-            default_model=self.default_model,
-            event_poll_interval=0,
-        )
-        self._planned_runs: dict[str, dict[str, object]] = {}
+        self.repository = self._container.conversations
+        self.runtime_repository = self._container.runtime
+        self.event_stream = self._container.events
+        self.tool_registry = self._container.tool_registry
+        self.tool_executor = self._container.tool_executor
+        self._conversation = self._container.conversation_service
 
     def close(self) -> None:
-        close = getattr(self.repository, "close", None)
-        if callable(close):
-            close()
+        self._container.close()
 
     def create_thread(self, title: str, **kwargs: object) -> SurfaceThread:
         return _run_async(
@@ -286,13 +208,13 @@ class LocalRuntimeHost:
         return [message.model_dump(mode="json") for message in messages]
 
     def last_resumable_run(self, thread_id: str) -> dict[str, object] | None:
-        for run in reversed(list(self._planned_runs.values())):
-            if run.get("thread_id") == thread_id and run.get("status") in {
-                "cancelled",
-                "interrupted",
+        for run in self.list_thread_runs(thread_id):
+            if run.get("status") in {
+                "waiting",
                 "paused",
+                "recovery_required",
             }:
-                return dict(run)
+                return run
         return None
 
     def stream_turn(
@@ -307,7 +229,11 @@ class LocalRuntimeHost:
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         normalized = content.strip().casefold()
-        if resume_run_id is not None and normalized in {"continue", "resume", "继续"}:
+        if resume_run_id is not None and normalized in {
+            "continue",
+            "resume",
+            "\u7ee7\u7eed",
+        }:
             raise SurfaceClientError(
                 "Durable turn resume is not available yet.",
                 code="resume_not_available",
@@ -352,20 +278,9 @@ class LocalRuntimeHost:
             if run_id in executed_run_ids:
                 continue
             executed_run_ids.add(run_id)
-            await self._execute_conversation_run(run_id)
-
-    async def _execute_conversation_run(self, run_id: UUID) -> None:
-        run = await self.runtime_repository.get_run(run_id)
-        agents = await self.runtime_repository.list_agents(run_id)
-        leader = next(
-            (agent for agent in agents if agent.parent_agent_id is None),
-            None,
-        )
-        if leader is None and len(agents) == 1:
-            leader = agents[0]
-        if leader is None:
-            raise RuntimeError(f"Conversation Run {run_id} has no Leader Agent.")
-        await self._conversation_graph.execute(run, leader)
+            await self._container.worker_pump.drain_until_run_terminal_or_waiting(
+                str(run_id)
+            )
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
         return _run_async(self._list_thread_runs_async(thread_id))
@@ -395,25 +310,6 @@ class LocalRuntimeHost:
             if event.event_type.value == "run.created":
                 return event.payload
         return {}
-
-    def start_explicit_run(
-        self,
-        thread_id: str,
-        goal: str,
-        **kwargs: object,
-    ) -> dict[str, object]:
-        mode = plan_execution_mode(goal)
-        run_id = str(uuid4())
-        payload: dict[str, object] = {
-            "id": run_id,
-            "thread_id": thread_id,
-            "goal": goal,
-            "status": "planned",
-            "execution_mode": mode.value,
-            "transport": "embedded",
-        }
-        self._planned_runs[run_id] = payload
-        return payload
 
     def runtime_status(self) -> dict[str, object]:
         return {
