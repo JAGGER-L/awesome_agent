@@ -36,10 +36,11 @@
   and stored as bounded model-call evidence or an artifact for user inspection.
 - Private model continuation is checkpoint-only and excluded from APIs,
   frontend events, logs, runtime events, artifacts, and memory.
-- Context compaction artifacts can contain raw removed messages or full tool
-  observations. Treat artifact storage as sensitive execution evidence, not as
-  a sanitized public cache. Deterministic summaries are for prompt budgeting
-  and audit navigation; they are not a redaction boundary.
+- Context compaction artifacts, tool-output artifacts, validation summaries,
+  runtime evidence, API projections, TUI details, and application logs redact
+  likely secrets before storage or display. Treat artifact storage as sensitive
+  execution evidence, not as a public cache; redaction is defense in depth, not
+  a guarantee that arbitrary user-authored files or third-party logs are clean.
 - DeepSeek and Mem0 credentials are read from the ignored local `.env` or the
   process environment and are never committed, logged, or persisted in memory.
 - `.env.example` contains names and non-secret defaults only.

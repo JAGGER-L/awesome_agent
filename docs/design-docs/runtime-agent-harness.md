@@ -123,10 +123,11 @@ directory. Run audit evidence remains internal. The older thread workspace and
 AIO Docker path mapping remain design inputs for Docker/API hardening, but they
 are not the product-closure default for ordinary local turns.
 
-Trusted local execution still needs defense-in-depth guardrails and output
-redaction. Task 93 owns soft path/command/env guardrails; Task 94 owns secret
-redaction before output, logs, evidence, or tool results enter user-visible or
-model-visible projections.
+Trusted local execution relies on defense-in-depth guardrails and output
+redaction. Task 93 owns soft path/command/env guardrails. Task 94 adds always-on
+secret redaction before command output, tool results, artifacts, runtime
+evidence, validation summaries, application logs, API/SSE payloads, diagnostics,
+TUI details, or model-context projections persist or display.
 
 ## Repository and Validation Policy
 
