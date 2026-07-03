@@ -57,6 +57,7 @@ class Run(BaseModel):
     cancel_requested_by: str | None = Field(default=None, max_length=255)
     cancel_reason: str | None = None
     result_text: str | None = Field(default=None, max_length=32768)
+    working_directory: Path | None = None
     workspace_path: Path | None = None
     integration_branch: str | None = None
     workspace_state: WorkspaceState | None = None

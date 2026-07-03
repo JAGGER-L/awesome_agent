@@ -144,6 +144,11 @@ class PostgresRuntimeRepository(RuntimeRepository):
             record.cancel_requested_by = run.cancel_requested_by
             record.cancel_reason = run.cancel_reason
             record.result_text = run.result_text
+            record.working_directory = (
+                str(run.working_directory)
+                if run.working_directory is not None
+                else None
+            )
             record.workspace_path = (
                 str(run.workspace_path) if run.workspace_path is not None else None
             )
@@ -384,6 +389,11 @@ def _run_from_record(record: RunRecord) -> Run:
         cancel_requested_by=record.cancel_requested_by,
         cancel_reason=record.cancel_reason,
         result_text=record.result_text,
+        working_directory=(
+            Path(record.working_directory)
+            if record.working_directory is not None
+            else None
+        ),
         workspace_path=(
             Path(record.workspace_path) if record.workspace_path is not None else None
         ),
@@ -436,6 +446,9 @@ def _run_to_record(run: Run) -> RunRecord:
         cancel_requested_by=run.cancel_requested_by,
         cancel_reason=run.cancel_reason,
         result_text=run.result_text,
+        working_directory=(
+            str(run.working_directory) if run.working_directory is not None else None
+        ),
         workspace_path=(
             str(run.workspace_path) if run.workspace_path is not None else None
         ),
