@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
 
@@ -27,19 +25,7 @@ from awesome_agent.modeling.errors import (
     ModelErrorCode,
     ModelErrorInfo,
 )
-from awesome_agent.modeling.messages import (
-    AssistantMessage,
-    ModelMessage,
-    SystemMessage,
-    ToolResultMessage,
-    UserMessage,
-)
-from awesome_agent.modeling.turns import ModelRequest, ModelUsage
 from awesome_agent.runtime.repository import RuntimeRepository
-from awesome_agent.tools.executor import ToolExecutor
-from awesome_agent.tools.registry import ToolRegistry
-
-from .runtime_turns import LeaderTurnExecutor
 
 
 class ThreadRunIntake(Protocol):
@@ -78,20 +64,14 @@ class ConversationService:
         *,
         repository: ConversationRepository,
         runtime_repository: RuntimeRepository,
-        conversation_run_intake: ConversationRunIntake | None = None,
-        leader_executor: LeaderTurnExecutor | None = None,
+        conversation_run_intake: ConversationRunIntake,
         default_model: str,
-        tool_executor: ToolExecutor | None = None,
-        tool_registry: ToolRegistry | None = None,
         event_poll_interval: float = 0.05,
     ) -> None:
         self._repository = repository
         self._runtime_repository = runtime_repository
         self._conversation_run_intake = conversation_run_intake
-        self._leader_executor = leader_executor
         self._default_model = default_model
-        self._tool_executor = tool_executor
-        self._tool_registry = tool_registry
         self._event_poll_interval = event_poll_interval
 
     async def start_turn(
@@ -104,8 +84,6 @@ class ConversationService:
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
     ) -> AsyncIterator[ConversationStreamEvent]:
-        if self._conversation_run_intake is None:
-            raise RuntimeError("Conversation runtime intake is not configured.")
         turn_id = uuid4()
         trace_id = uuid4().hex
         sequence = 1
@@ -364,32 +342,6 @@ class ConversationService:
                 )
         return None
 
-    async def _model_messages(self, thread_id: UUID) -> list[ModelMessage]:
-        messages: list[ModelMessage] = []
-        for message in await self._repository.list_messages(thread_id):
-            if message.kind is not ThreadMessageKind.MESSAGE:
-                continue
-            if message.role is ThreadMessageRole.USER:
-                messages.append(UserMessage(content=message.content))
-            elif message.role is ThreadMessageRole.ASSISTANT:
-                messages.append(AssistantMessage(content=message.content))
-            elif message.role is ThreadMessageRole.SYSTEM:
-                messages.append(SystemMessage(content=message.content))
-        return messages
-
-    async def _model_request(self, thread_id: UUID) -> ModelRequest:
-        return ModelRequest(messages=await self._model_messages(thread_id))
-
-    async def _thread_workspace(self, thread_id: UUID) -> Path | None:
-        try:
-            thread = await self._repository.get_thread(thread_id)
-        except KeyError:
-            return None
-        if not thread.context_path:
-            return None
-        return Path(thread.context_path)
-
-
 def _event(
     kind: ConversationStreamEventKind,
     *,
@@ -425,98 +377,6 @@ def _error_event(
         trace_id=trace_id,
         payload=error.model_dump(mode="json"),
     )
-
-
-def _has_usage(usage: ModelUsage) -> bool:
-    return any(
-        value is not None
-        for value in (
-            usage.input_tokens,
-            usage.output_tokens,
-            usage.reasoning_tokens,
-            usage.cache_read_tokens,
-            usage.cache_write_tokens,
-        )
-    )
-
-
-def _merge_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
-    return ModelUsage(
-        input_tokens=_sum_optional(left.input_tokens, right.input_tokens),
-        output_tokens=_sum_optional(left.output_tokens, right.output_tokens),
-        reasoning_tokens=_sum_optional(left.reasoning_tokens, right.reasoning_tokens),
-        cache_read_tokens=_sum_optional(
-            left.cache_read_tokens,
-            right.cache_read_tokens,
-        ),
-        cache_write_tokens=_sum_optional(
-            left.cache_write_tokens,
-            right.cache_write_tokens,
-        ),
-    )
-
-
-def _sum_optional(left: int | None, right: int | None) -> int | None:
-    if left is None:
-        return right
-    if right is None:
-        return left
-    return left + right
-
-
-def _changed_files_from_tool_result(
-    result: ToolResultMessage,
-) -> list[dict[str, object]]:
-    try:
-        payload = json.loads(result.content)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(payload, dict):
-        return []
-    paths = payload.get("paths")
-    if not isinstance(paths, list):
-        return []
-    preimage_hashes = payload.get("preimage_hashes")
-    postimage_hashes = payload.get("postimage_hashes")
-    preimages = preimage_hashes if isinstance(preimage_hashes, dict) else {}
-    postimages = postimage_hashes if isinstance(postimage_hashes, dict) else {}
-    changed_files: list[dict[str, object]] = []
-    for item in paths:
-        if not isinstance(item, str):
-            continue
-        before = preimages.get(item)
-        after = postimages.get(item)
-        if after == "<missing>":
-            status = "deleted"
-        elif before == "<missing>":
-            status = "created"
-        else:
-            status = "updated"
-        changed_files.append({"path": item, "status": status})
-    return changed_files
-
-
-def _dedupe_changed_files(
-    changed_files: list[dict[str, object]],
-) -> list[dict[str, object]]:
-    by_path: dict[str, dict[str, object]] = {}
-    for item in changed_files:
-        path = item.get("path")
-        if isinstance(path, str):
-            by_path[path] = item
-    return list(by_path.values())
-
-
-def _tool_result_summary(tool_name: str, result: ToolResultMessage) -> str:
-    if result.is_error:
-        return "failed"
-    if tool_name == "repo.apply_patch":
-        changed = _changed_files_from_tool_result(result)
-        if changed:
-            names = ", ".join(str(item["path"]) for item in changed[:3])
-            suffix = "" if len(changed) <= 3 else f" +{len(changed) - 3} more"
-            return f"changed {names}{suffix}"
-    return "completed"
 
 
 def _is_terminal_status_event(runtime_event: object) -> bool:

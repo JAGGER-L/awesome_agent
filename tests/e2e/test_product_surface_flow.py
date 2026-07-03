@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
+from tests.conversation_projection_fakes import ProjectedConversationRunIntake
 
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import ArtifactMetadata
-from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import RunIntent, RunMode, RunStatus
 from awesome_agent.domain.models import Run
-from awesome_agent.modeling.messages import AssistantMessage
-from awesome_agent.modeling.provider import ModelProvider
-from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.settings import Settings
@@ -26,11 +21,19 @@ def test_product_surface_thread_turn_run_and_artifact_flow(tmp_path: Path) -> No
     thread_repository = InMemoryConversationRepository()
     runtime = FakeRuntime(tmp_path)
     intake = FakeRunIntake(runtime)
+    conversation_runtime = InMemoryRuntimeRepository()
     conversation_service = ConversationService(
         repository=thread_repository,
-        runtime_repository=InMemoryRuntimeRepository(),
-        leader_executor=ProviderLeaderTurnExecutor(lambda _model: FakeProvider()),
+        runtime_repository=conversation_runtime,
+        conversation_run_intake=ProjectedConversationRunIntake(
+            conversations=thread_repository,
+            runtime=conversation_runtime,
+            assistant_content="Here is your tiny HTML snake game.",
+            text_deltas=("Here is your tiny ", "HTML snake game."),
+            usage={"input_tokens": 2, "output_tokens": 7},
+        ),
         default_model="fake-model",
+        event_poll_interval=0,
     )
     client = TestClient(
         create_app(
@@ -86,30 +89,6 @@ def test_product_surface_thread_turn_run_and_artifact_flow(tmp_path: Path) -> No
     assert artifact["run_id"] == run["id"]
     assert artifact["path"].endswith("snake.html")
     assert artifact["mime_type"] == "text/html"
-
-
-class FakeProvider(ModelProvider):
-    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        assert request.messages[-1].content == "Say hello"
-        yield TextDelta(text="Here is your tiny ")
-        yield TextDelta(text="HTML snake game.")
-        yield TurnCompleted(
-            turn=ModelTurn(
-                assistant=AssistantMessage(
-                    content="Here is your tiny HTML snake game."
-                ),
-                stop_reason=StopReason.COMPLETED,
-                model="fake-model",
-                provider="fake",
-                usage=ModelUsage(input_tokens=2, output_tokens=7),
-            )
-        )
-
-    async def complete(self, request: ModelRequest) -> ModelTurn:
-        async for event in self.stream(request):
-            if isinstance(event, TurnCompleted):
-                return event.turn
-        raise AssertionError("FakeProvider did not complete.")
 
 
 class FakeRunIntake:

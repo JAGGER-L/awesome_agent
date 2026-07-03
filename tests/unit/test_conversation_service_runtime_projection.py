@@ -20,7 +20,7 @@ from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 
 
 @pytest.mark.asyncio
-async def test_start_turn_creates_run_and_does_not_call_leader_executor() -> None:
+async def test_start_turn_creates_run_and_projects_runtime_events() -> None:
     conversations = InMemoryConversationRepository()
     thread = await conversations.create_thread(
         title="Chat",
@@ -28,13 +28,11 @@ async def test_start_turn_creates_run_and_does_not_call_leader_executor() -> Non
     )
     runtime = InMemoryRuntimeRepository()
     event_stream = EventStream()
-    leader_executor = ExplodingLeaderExecutor()
     intake = FakeConversationRunIntake(runtime, event_stream)
     service = ConversationService(
         repository=conversations,
         runtime_repository=runtime,
         conversation_run_intake=intake,
-        leader_executor=leader_executor,
         default_model="fake-model",
         event_poll_interval=0,
     )
@@ -52,18 +50,8 @@ async def test_start_turn_creates_run_and_does_not_call_leader_executor() -> Non
     ]
 
     assert intake.created == ["hello"]
-    assert not leader_executor.called
     assert events[0].event.value == "turn.started"
     assert events[-1].event.value == "turn.completed"
-
-
-class ExplodingLeaderExecutor:
-    def __init__(self) -> None:
-        self.called = False
-
-    async def stream(self, *args: object, **kwargs: object) -> None:
-        self.called = True
-        raise AssertionError("leader executor must not be called")
 
 
 class FakeConversationRunIntake:
