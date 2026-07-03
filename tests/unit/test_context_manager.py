@@ -45,6 +45,35 @@ def _one_token_accountant() -> TokenAccountant:
 
 
 @pytest.mark.asyncio
+async def test_context_manager_redacts_messages_before_model_context() -> None:
+    manager = ContextManager(
+        summary_provider=DeterministicSummaryProvider(),
+        token_accountant=_one_token_accountant(),
+    )
+
+    prepared = await manager.prepare_request(
+        run_id=uuid4(),
+        agent_id=uuid4(),
+        runtime_route="conversation-turn",
+        messages=[
+            UserMessage(
+                content="OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890"
+            ),
+            AssistantMessage(content="ok"),
+        ],
+        rolling_summary="",
+        policy=ContextPolicy(
+            soft_context_tokens=100,
+            hard_context_tokens=200,
+            recent_context_tokens=50,
+        ),
+    )
+
+    assert "sk-proj-" not in prepared.request_messages[0].content
+    assert "[REDACTED:api_key]" in prepared.request_messages[0].content
+
+
+@pytest.mark.asyncio
 async def test_context_manager_keeps_system_goal_and_recent_tool_cycle(
     tmp_path: Path,
 ) -> None:
@@ -190,3 +219,41 @@ async def test_context_manager_uses_injected_token_accountant(
 
     assert not prepared.compacted
     assert prepared.before_estimated_tokens == 3
+
+
+@pytest.mark.asyncio
+async def test_context_compaction_artifact_is_redacted(tmp_path: Path) -> None:
+    artifact_repository = InMemoryArtifactMetadataRepository()
+    manager = ContextManager(
+        summary_provider=DeterministicSummaryProvider(),
+        artifact_store=LocalArtifactStore(tmp_path / "artifacts"),
+        artifact_repository=artifact_repository,
+        token_accountant=_one_token_accountant(),
+    )
+    run_id = uuid4()
+
+    prepared = await manager.prepare_request(
+        run_id=run_id,
+        agent_id=uuid4(),
+        runtime_route="conversation-turn",
+        messages=[
+            SystemMessage(content="system"),
+            UserMessage(content="goal"),
+            UserMessage(content="TOKEN=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"),
+            AssistantMessage(content="old answer"),
+            UserMessage(content="keep latest"),
+        ],
+        rolling_summary="",
+        policy=ContextPolicy(
+            soft_context_tokens=1,
+            hard_context_tokens=1000,
+            recent_context_tokens=1,
+        ),
+    )
+
+    artifacts = await artifact_repository.list_for_run(run_id)
+    assert prepared.compacted is True
+    assert artifacts
+    artifact_text = Path(artifacts[0].path).read_text(encoding="utf-8")
+    assert "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG" not in artifact_text
+    assert "[REDACTED:token]" in artifact_text

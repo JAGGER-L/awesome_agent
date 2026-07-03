@@ -8,6 +8,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from awesome_agent.modeling.messages import (
+    AssistantMessage,
+    ModelMessage,
+    SystemMessage,
+    ToolResultMessage,
+    UserMessage,
+)
+
 _Replacement = str | Callable[[re.Match[str]], str | tuple[str, str]]
 
 
@@ -153,6 +161,22 @@ def redact_runtime_payload(payload: Mapping[str, object]) -> dict[str, object]:
     if report.applied:
         output["redaction"] = redaction_metadata(report)
     return output
+
+
+def redact_model_message(message: ModelMessage) -> ModelMessage:
+    if isinstance(message, SystemMessage):
+        return message.model_copy(update={"content": redact_text(message.content).text})
+    if isinstance(message, UserMessage):
+        return message.model_copy(update={"content": redact_text(message.content).text})
+    if isinstance(message, AssistantMessage):
+        return message.model_copy(update={"content": redact_text(message.content).text})
+    if isinstance(message, ToolResultMessage):
+        return message.model_copy(update={"content": redact_text(message.content).text})
+    return message
+
+
+def redact_model_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
+    return [redact_model_message(message) for message in messages]
 
 
 def _redact_guardrail_payload(
