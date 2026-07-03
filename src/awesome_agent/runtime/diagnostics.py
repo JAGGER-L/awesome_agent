@@ -20,6 +20,7 @@ from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.persistence.tool_invocations import ToolInvocationRepository
 from awesome_agent.persistence.validation import ValidationRepository
 from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.safety.redaction import redact_text
 
 
 class DiagnosticWarning(BaseModel):
@@ -627,9 +628,4 @@ def _counts(values: Iterable[str]) -> dict[str, int]:
 def _safe_text(value: str | None) -> str | None:
     if value is None:
         return None
-    redacted = value
-    for marker in ("secret", "token", "password", "credential", "api_key"):
-        redacted = redacted.replace(marker, "[redacted]")
-        redacted = redacted.replace(marker.upper(), "[redacted]")
-        redacted = redacted.replace(marker.title(), "[redacted]")
-    return redacted[:500]
+    return redact_text(value).text[:500]

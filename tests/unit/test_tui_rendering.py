@@ -175,16 +175,17 @@ def test_tool_call_details_are_bounded_and_redacted() -> None:
         summary="completed",
         details={
             "command": "python -m pytest",
-            "stdout": f"OPENAI_API_KEY {'x' * 900}",
+            "stdout": f"OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz {'x' * 900}",
         },
     )
 
     rendered = render_tool_event(event, details_enabled=True).plain
 
     assert "command: python -m pytest" in rendered
-    assert "stdout: [redacted]" in rendered
+    assert "stdout: OPENAI_API_KEY=[REDACTED:api_key]" in rendered
     assert len(rendered) < 900
     assert "..." in rendered
+    assert "sk-proj-" not in rendered
 
 
 def test_team_event_hides_details_until_details_mode() -> None:

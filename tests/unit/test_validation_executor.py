@@ -95,6 +95,29 @@ async def test_validation_executor_classifies_command_failure(
 
 
 @pytest.mark.asyncio
+async def test_validation_executor_redacts_stdout_and_stderr(
+    tmp_path: Path,
+) -> None:
+    result = await execute_validation_plan(
+        _plan(["pytest", "-q"]),
+        run_id=uuid4(),
+        agent_id=uuid4(),
+        workspace=tmp_path,
+        sandbox=RecordingSandbox(
+            stdout="TOKEN=abcdefghijklmnopqrstuvwxyz\n",
+            stderr="PASSWORD=hunter2\n",
+        ),
+    )
+
+    gate = result.gates[0]
+    assert gate.status == "passed"
+    assert gate.stdout_summary == "TOKEN=[REDACTED:token]\n"
+    assert gate.stderr_summary == "PASSWORD=[REDACTED:password]\n"
+    assert "abcdefghijklmnopqrstuvwxyz" not in gate.stdout_summary
+    assert "hunter2" not in gate.stderr_summary
+
+
+@pytest.mark.asyncio
 async def test_validation_executor_classifies_timeout(
     tmp_path: Path,
 ) -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -137,6 +137,7 @@ from awesome_agent.runtime.workspaces import (
 from awesome_agent.runtime.workspaces import (
     WorkspaceCleanupRequest as RuntimeWorkspaceCleanupRequest,
 )
+from awesome_agent.safety.redaction import redact_text, redact_value
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import changed_file_summaries_from_payload
 from awesome_agent.tools.repository import build_modifying_registry
@@ -514,7 +515,7 @@ def create_app(
 
     @app.get("/extensions/catalog")
     async def get_extensions_catalog() -> dict[str, object]:
-        return cast(dict[str, object], extensions_catalog().model_dump(mode="json"))
+        return _redacted_dict(extensions_catalog().model_dump(mode="json"))
 
     @app.get("/extensions/diagnostics")
     async def get_extensions_diagnostics() -> dict[str, object]:
@@ -525,7 +526,7 @@ def create_app(
         )
         return cast(
             dict[str, object],
-            (await diagnostics.summarize()).model_dump(mode="json"),
+            _redacted_payload((await diagnostics.summarize()).model_dump(mode="json")),
         )
 
     @app.get("/extensions/catalog-diff")
@@ -544,7 +545,9 @@ def create_app(
             ) from error
         return cast(
             dict[str, object],
-            diff_extension_catalogs(before, after).model_dump(mode="json"),
+            _redacted_payload(
+                diff_extension_catalogs(before, after).model_dump(mode="json")
+            ),
         )
 
     @app.get("/ready")
@@ -665,7 +668,7 @@ def create_app(
             default_model=request.default_model,
             sandbox_profile=request.sandbox_profile,
         )
-        return thread.api_payload()
+        return _redacted_dict(thread.api_payload())
 
     @app.get("/threads")
     async def list_threads() -> list[dict[str, object]]:
@@ -680,7 +683,7 @@ def create_app(
             thread = await threads().resolve_thread(query)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return thread.api_payload()
+        return _redacted_dict(thread.api_payload())
 
     @app.get("/threads/{thread_id}")
     async def get_thread(thread_id: UUID) -> dict[str, object]:
@@ -688,7 +691,7 @@ def create_app(
             thread = await threads().get_thread(thread_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return thread.api_payload()
+        return _redacted_dict(thread.api_payload())
 
     @app.patch("/threads/{thread_id}/settings")
     async def update_thread_settings(
@@ -705,7 +708,7 @@ def create_app(
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return thread.api_payload()
+        return _redacted_dict(thread.api_payload())
 
     @app.post("/threads/{thread_id}/messages")
     async def append_thread_message(
@@ -723,7 +726,7 @@ def create_app(
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return message.model_dump(mode="json")
+        return _redacted_dict(message.model_dump(mode="json"))
 
     @app.get("/threads/{thread_id}/messages")
     async def list_thread_messages(thread_id: UUID) -> list[dict[str, object]]:
@@ -731,7 +734,7 @@ def create_app(
             messages = await threads().list_messages(thread_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return [message.model_dump(mode="json") for message in messages]
+        return [_redacted_dict(message.model_dump(mode="json")) for message in messages]
 
     @app.get("/threads/{thread_id}/uploads")
     async def list_thread_uploads(thread_id: UUID) -> ThreadUploadsResponse:
@@ -830,7 +833,7 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except (RunIntakeError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return run.model_dump(mode="json")
+        return _redacted_dict(run.model_dump(mode="json"))
 
     @app.get("/threads/{thread_id}/runs")
     async def list_thread_runs(thread_id: UUID) -> list[dict[str, object]]:
@@ -850,7 +853,7 @@ def create_app(
         attributes = _api_attributes("GET", "/runs", 200)
         async with api_span("api.runs.list", attributes=attributes):
             return [
-                run.model_dump(mode="json")
+                _redacted_dict(run.model_dump(mode="json"))
                 for run in await runtime().list_runs(limit=limit)
             ]
 
@@ -881,7 +884,7 @@ def create_app(
                 raise HTTPException(status_code=409, detail=str(error)) from error
             span_run_id = run.id
             attributes["run_id"] = str(run.id)
-            return run.model_dump(mode="json")
+            return _redacted_dict(run.model_dump(mode="json"))
 
     @app.post("/runtime/probes", status_code=201)
     async def create_probe(request: CreateProbeRequest) -> dict[str, object]:
@@ -900,12 +903,12 @@ def create_app(
             ) from error
         except (RunIntakeError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return run.model_dump(mode="json")
+        return _redacted_dict(run.model_dump(mode="json"))
 
     @app.get("/repositories")
     async def list_repositories() -> list[dict[str, object]]:
         return [
-            repository.model_dump(mode="json")
+            _redacted_dict(repository.model_dump(mode="json"))
             for repository in await repositories().list()
         ]
 
@@ -918,7 +921,7 @@ def create_app(
                 status_code=404,
                 detail="Repository not found.",
             ) from error
-        return repository.model_dump(mode="json")
+        return _redacted_dict(repository.model_dump(mode="json"))
 
     @app.get("/workspaces")
     async def list_workspaces() -> list[WorkspaceCandidateResponse]:
@@ -957,7 +960,9 @@ def create_app(
         attributes["run_id"] = str(run_id)
         async with api_span("api.runs.get", run_id=run_id, attributes=attributes):
             try:
-                return (await runtime().get_run(run_id)).model_dump(mode="json")
+                return _redacted_dict(
+                    (await runtime().get_run(run_id)).model_dump(mode="json")
+                )
             except KeyError as error:
                 attributes["http.status_code"] = 404
                 raise HTTPException(status_code=404, detail="Run not found.") from error
@@ -978,8 +983,16 @@ def create_app(
             lease_acquired_at=run.lease_acquired_at,
             lease_expires_at=run.lease_expires_at,
             heartbeat_at=run.heartbeat_at,
-            last_release_reason=run.last_release_reason,
-            last_error=run.last_dispatch_error,
+            last_release_reason=(
+                redact_text(run.last_release_reason).text
+                if run.last_release_reason is not None
+                else None
+            ),
+            last_error=(
+                redact_text(run.last_dispatch_error).text
+                if run.last_dispatch_error is not None
+                else None
+            ),
         )
 
     @app.post("/runs/{run_id}/cancel")
@@ -990,7 +1003,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Run not found.") from error
         except DispatchConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return run.model_dump(mode="json")
+        return _redacted_dict(run.model_dump(mode="json"))
 
     @app.post("/runs/{run_id}/resume")
     async def resume_run(run_id: UUID) -> dict[str, object]:
@@ -1000,19 +1013,20 @@ def create_app(
             raise HTTPException(status_code=404, detail="Run not found.") from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return run.model_dump(mode="json")
+        return _redacted_dict(run.model_dump(mode="json"))
 
     @app.get("/runs/{run_id}/agents")
     async def list_agents(run_id: UUID) -> list[dict[str, object]]:
         return [
-            agent.model_dump(mode="json")
+            _redacted_dict(agent.model_dump(mode="json"))
             for agent in await runtime().list_agents(run_id)
         ]
 
     @app.get("/runs/{run_id}/todos")
     async def list_todos(run_id: UUID) -> list[dict[str, object]]:
         return [
-            todo.model_dump(mode="json") for todo in await runtime().list_todos(run_id)
+            _redacted_dict(todo.model_dump(mode="json"))
+            for todo in await runtime().list_todos(run_id)
         ]
 
     @app.get("/runs/{run_id}/events/history")
@@ -1021,7 +1035,7 @@ def create_app(
         after_sequence: int = Query(default=0, ge=0),
     ) -> list[dict[str, object]]:
         return [
-            event.model_dump(mode="json")
+            _redacted_dict(event.model_dump(mode="json"))
             for event in await runtime().list_events(
                 run_id,
                 after_sequence=after_sequence,
@@ -1031,12 +1045,15 @@ def create_app(
     @app.get("/runs/{run_id}/children")
     async def list_children(run_id: UUID) -> list[dict[str, object]]:
         children = await runtime().repository.list_child_runs(run_id)
-        return [child.model_dump(mode="json") for child in children]
+        return [_redacted_dict(child.model_dump(mode="json")) for child in children]
 
     @app.get("/runs/{run_id}/descendants")
     async def list_descendants(run_id: UUID) -> list[dict[str, object]]:
         descendants = await runtime().repository.list_descendant_runs(run_id)
-        return [descendant.model_dump(mode="json") for descendant in descendants]
+        return [
+            _redacted_dict(descendant.model_dump(mode="json"))
+            for descendant in descendants
+        ]
 
     @app.get("/runs/{run_id}/team/assignments")
     async def list_team_assignments(
@@ -1056,13 +1073,13 @@ def create_app(
             )
             payload = assignment.model_dump(mode="json")
             payload.update(policy.as_inspection_payload())
-            payloads.append(payload)
+            payloads.append(_redacted_dict(payload))
         return payloads
 
     @app.get("/runs/{run_id}/team/mailbox")
     async def list_team_mailbox(run_id: UUID) -> list[dict[str, object]]:
         messages = await team_repository_state().list_mailbox_messages(run_id)
-        return [message.model_dump(mode="json") for message in messages]
+        return [_redacted_dict(message.model_dump(mode="json")) for message in messages]
 
     @app.post("/runs/{run_id}/team/assignments/{assignment_id}/retire")
     async def retire_team_assignment(
@@ -1076,7 +1093,7 @@ def create_app(
         )
         if assignment.root_run_id != run_id:
             raise HTTPException(status_code=404, detail="Assignment not found.")
-        return assignment.model_dump(mode="json")
+        return _redacted_dict(assignment.model_dump(mode="json"))
 
     @app.get("/runs/{run_id}/events")
     async def stream_events(
@@ -1094,7 +1111,7 @@ def create_app(
     @app.get("/runs/{run_id}/messages")
     async def list_messages(run_id: UUID) -> list[dict[str, object]]:
         return [
-            event.model_dump(mode="json")
+            _redacted_dict(event.model_dump(mode="json"))
             for event in await runtime().list_events(run_id)
             if event.event_type.value == "message.created"
         ]
@@ -1102,28 +1119,43 @@ def create_app(
     @app.get("/runs/{run_id}/artifacts")
     async def list_artifacts(run_id: UUID) -> list[dict[str, object]]:
         return [
-            artifact.model_dump(mode="json")
+            _redacted_dict(artifact.model_dump(mode="json"))
             for artifact in await runtime().list_artifacts(run_id)
         ]
 
     @app.get("/artifacts/{artifact_id}")
-    async def download_artifact(artifact_id: UUID) -> FileResponse:
+    async def download_artifact(artifact_id: UUID) -> Response:
         try:
             artifact = await runtime().get_artifact(artifact_id)
         except KeyError as error:
             raise HTTPException(
                 status_code=404, detail="Artifact not found."
             ) from error
+        path = Path(artifact.path)
+        if _is_text_artifact(artifact.mime_type, path):
+            try:
+                content = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                return FileResponse(
+                    path,
+                    media_type=artifact.mime_type,
+                    filename=path.name,
+                )
+            return Response(
+                content=redact_text(content).text,
+                media_type=artifact.mime_type,
+                headers={"content-disposition": _attachment_header(path.name)},
+            )
         return FileResponse(
-            Path(artifact.path),
+            path,
             media_type=artifact.mime_type,
-            filename=Path(artifact.path).name,
+            filename=path.name,
         )
 
     @app.get("/runs/{run_id}/approvals")
     async def list_approvals(run_id: UUID) -> list[dict[str, object]]:
         return [
-            event.model_dump(mode="json")
+            _redacted_dict(event.model_dump(mode="json"))
             for event in await runtime().list_events(run_id)
             if event.event_type.value.startswith("approval.")
         ]
@@ -1144,7 +1176,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="Run not found.") from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return event.model_dump(mode="json")
+        return _redacted_dict(event.model_dump(mode="json"))
 
     @app.get("/runs/{run_id}/verification")
     async def list_verification(run_id: UUID) -> list[dict[str, object]]:
@@ -1152,7 +1184,7 @@ def create_app(
         if repository is None:
             return []
         return [
-            _verification_report_response(report)
+            _redacted_dict(_verification_report_response(report))
             for report in await repository.list_for_run(run_id)
         ]
 
@@ -1162,7 +1194,7 @@ def create_app(
         attributes["run_id"] = str(run_id)
         async with api_span("api.runs.trace", run_id=run_id, attributes=attributes):
             return [
-                asdict(span)
+                _redacted_dict(asdict(span))
                 for span in await observability().list_spans_for_run(run_id)
             ]
 
@@ -1172,7 +1204,7 @@ def create_app(
         attributes["run_id"] = str(run_id)
         async with api_span("api.runs.metrics", run_id=run_id, attributes=attributes):
             return [
-                asdict(metric)
+                _redacted_dict(asdict(metric))
                 for metric in await observability().list_metrics_for_run(run_id)
             ]
 
@@ -1186,7 +1218,7 @@ def create_app(
             attributes=attributes,
         ):
             return [
-                asdict(call)
+                _redacted_dict(asdict(call))
                 for call in await observability().list_model_calls_for_run(run_id)
             ]
 
@@ -1208,7 +1240,9 @@ def create_app(
                 team_repository=team_repository_state(),
             )
             try:
-                return (await diagnostics.summarize(run_id)).model_dump(mode="json")
+                return _redacted_dict(
+                    (await diagnostics.summarize(run_id)).model_dump(mode="json")
+                )
             except KeyError as error:
                 attributes["http.status_code"] = 404
                 raise HTTPException(status_code=404, detail="Run not found.") from error
@@ -1230,8 +1264,10 @@ def create_app(
                 team_repository=team_repository_state(),
             )
             try:
-                return (await recovery_metrics.report_for_run(run_id)).model_dump(
-                    mode="json"
+                return _redacted_dict(
+                    (await recovery_metrics.report_for_run(run_id)).model_dump(
+                        mode="json"
+                    )
                 )
             except KeyError as error:
                 attributes["http.status_code"] = 404
@@ -1313,7 +1349,10 @@ async def _conversation_sse(
     events: AsyncIterator[ConversationStreamEvent],
 ) -> AsyncIterator[str]:
     async for event in events:
-        data = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
+        data = json.dumps(
+            _redacted_payload(event.model_dump(mode="json")),
+            separators=(",", ":"),
+        )
         yield f"id: {event.sequence}\nevent: {event.event.value}\ndata: {data}\n\n"
 
 
@@ -1327,7 +1366,7 @@ def _structured_error_response(
     recoverable: bool | None = None,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    message = _error_message(detail)
+    message = redact_text(_error_message(detail)).text
     classified_code = code or _classify_error(status_code, message)
     request_id = str(getattr(request.state, "request_id", "") or uuid4().hex)
     payload = ErrorResponse(
@@ -1417,8 +1456,36 @@ def _is_recoverable(code: str) -> bool:
 
 
 def _format_sse(event: RuntimeEvent) -> str:
-    data = json.dumps(event.model_dump(mode="json"), separators=(",", ":"))
+    data = json.dumps(
+        _redacted_payload(event.model_dump(mode="json")),
+        separators=(",", ":"),
+    )
     return f"id: {event.sequence}\nevent: {event.event_type.value}\ndata: {data}\n\n"
+
+
+def _redacted_payload(value: object) -> object:
+    redacted, _report = redact_value(value)
+    return redacted
+
+
+def _redacted_dict(value: Mapping[str, object]) -> dict[str, object]:
+    redacted = _redacted_payload(value)
+    if isinstance(redacted, Mapping):
+        return {str(key): item for key, item in redacted.items()}
+    return {}
+
+
+def _is_text_artifact(mime_type: str, path: Path) -> bool:
+    if mime_type.startswith("text/"):
+        return True
+    if mime_type in {"application/json", "application/xml", "application/yaml"}:
+        return True
+    return path.suffix.lower() in {".json", ".md", ".txt", ".xml", ".yaml", ".yml"}
+
+
+def _attachment_header(filename: str) -> str:
+    safe = filename.replace("\\", "_").replace("/", "_").replace('"', "")
+    return f'attachment; filename="{safe}"'
 
 
 def _api_attributes(
@@ -1635,7 +1702,9 @@ async def _thread_artifact_items(
             artifacts = await list_artifacts(run_id)
         except (KeyError, TypeError, ValueError):
             continue
-        items.extend(artifact.model_dump(mode="json") for artifact in artifacts)
+        items.extend(
+            _redacted_dict(artifact.model_dump(mode="json")) for artifact in artifacts
+        )
     return items
 
 
@@ -1648,7 +1717,7 @@ async def _thread_payload_with_changed_files(
         thread_id = UUID(str(payload["id"]))
         messages = await repository.list_messages(thread_id)
     except (KeyError, TypeError, ValueError):
-        return enriched
+        return _redacted_dict(enriched)
     for message in reversed(messages):
         changed_files = changed_file_summaries_from_payload(
             message.metadata.get("changed_files")
@@ -1665,7 +1734,7 @@ async def _thread_payload_with_changed_files(
             for item in changed_files
         ]
         break
-    return enriched
+    return _redacted_dict(enriched)
 
 
 async def _thread_run_projection_response(
@@ -1675,7 +1744,7 @@ async def _thread_run_projection_response(
     get_run = getattr(runtime_service, "get_run", None)
     list_artifacts = getattr(runtime_service, "list_artifacts", None)
     if not callable(get_run) or not callable(list_artifacts):
-        return projections
+        return [_redacted_dict(projection) for projection in projections]
     enriched: list[dict[str, object]] = []
     for projection in projections:
         item = dict(projection)
@@ -1684,12 +1753,14 @@ async def _thread_run_projection_response(
             run = await get_run(run_id)
             artifacts = await list_artifacts(run_id)
         except (KeyError, TypeError, ValueError):
-            enriched.append(item)
+            enriched.append(_redacted_dict(item))
             continue
         item["status"] = run.status.value
         item["result_text"] = run.result_text
-        item["artifacts"] = [artifact.model_dump(mode="json") for artifact in artifacts]
-        enriched.append(item)
+        item["artifacts"] = [
+            _redacted_dict(artifact.model_dump(mode="json")) for artifact in artifacts
+        ]
+        enriched.append(_redacted_dict(item))
     return enriched
 
 
