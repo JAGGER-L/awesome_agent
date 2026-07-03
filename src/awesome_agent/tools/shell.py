@@ -6,6 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from awesome_agent.domain.enums import RiskLevel
+from awesome_agent.safety.redaction import redact_text, redaction_metadata
 from awesome_agent.sandbox.base import CommandRequest, SandboxBackend
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
@@ -64,18 +65,22 @@ async def _execute(
     )
     stdout, stdout_truncated = _bound(arguments.max_output_chars, result.stdout)
     stderr, stderr_truncated = _bound(arguments.max_output_chars, result.stderr)
+    stdout_redaction = redact_text(stdout)
+    stderr_redaction = redact_text(stderr)
+    redaction = stdout_redaction.report.merge(stderr_redaction.report)
     return ToolResult(
         invocation_id=invocation.id,
         output={
             "status": "completed" if result.exit_code == 0 else "failed",
             "argv": arguments.argv,
             "exit_code": result.exit_code,
-            "stdout": stdout,
-            "stderr": stderr,
+            "stdout": stdout_redaction.text,
+            "stderr": stderr_redaction.text,
             "timed_out": result.timed_out,
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
             "sandbox": result.sandbox or sandbox.name,
+            "redaction": redaction_metadata(redaction),
         },
     )
 
@@ -106,10 +111,15 @@ def classify_command(argv: list[str]) -> Literal["allow", "ask", "deny"]:
             return "allow"
     if executable == "pytest":
         return "allow"
-    if executable == "python" and len(lowered) > 2 and lowered[1:3] == [
-        "-m",
-        "unittest",
-    ]:
+    if (
+        executable == "python"
+        and len(lowered) > 2
+        and lowered[1:3]
+        == [
+            "-m",
+            "unittest",
+        ]
+    ):
         return "allow"
     if executable == "ruff" and len(lowered) > 1 and lowered[1] == "check":
         return "allow"

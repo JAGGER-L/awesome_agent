@@ -189,6 +189,36 @@ async def test_shell_execute_reports_failed_and_truncated_output(
 
 
 @pytest.mark.asyncio
+async def test_shell_execute_redacts_stdout_and_stderr_before_tool_result(
+    tmp_path: Path,
+) -> None:
+    result = await _execute(
+        ToolInvocation(
+            tool_name="shell.execute",
+            agent_id=uuid4(),
+            profile="leader",
+            capabilities={"shell:execute"},
+            arguments={"argv": ["pytest"]},
+            workspace=tmp_path,
+        ),
+        None,
+        sandbox=RecordingSandbox(
+            stdout="OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
+            stderr=(
+                "Authorization: Bearer "
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.signature"
+            ),
+        ),
+    )
+
+    assert "sk-proj-" not in result.output["stdout"]
+    assert "eyJhbGci" not in result.output["stderr"]
+    assert "[REDACTED:api_key]" in result.output["stdout"]
+    assert "[REDACTED:auth_header]" in result.output["stderr"]
+    assert result.output["redaction"]["applied"] is True
+
+
+@pytest.mark.asyncio
 async def test_shell_execute_requires_workspace() -> None:
     with pytest.raises(RuntimeError, match="workspace"):
         await _execute(

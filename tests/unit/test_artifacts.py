@@ -44,6 +44,21 @@ def test_artifact_store_writes_hashes_and_deletes_run(tmp_path: Path) -> None:
     assert not (tmp_path / str(run_id)).exists()
 
 
+def test_artifact_store_redacts_text_content_before_write(tmp_path: Path) -> None:
+    store = LocalArtifactStore(tmp_path)
+    metadata = store.write(
+        run_id=uuid4(),
+        artifact_type="tool-output",
+        filename="output.txt",
+        content=b"PASSWORD=hunter2",
+        mime_type="text/plain",
+        summary="Large output with PASSWORD=hunter2",
+    )
+
+    assert metadata.path.read_text(encoding="utf-8") == ("PASSWORD=[REDACTED:password]")
+    assert metadata.summary == "Large output with PASSWORD=[REDACTED:password]"
+
+
 @pytest.mark.asyncio
 async def test_runtime_service_persists_artifact_metadata(tmp_path: Path) -> None:
     metadata_repository = InMemoryArtifactMetadataRepository()

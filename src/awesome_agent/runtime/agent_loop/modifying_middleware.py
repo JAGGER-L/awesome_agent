@@ -54,6 +54,7 @@ from awesome_agent.runtime.token_accounting import (
     default_token_accountant,
 )
 from awesome_agent.runtime.validation.models import ValidationPlan
+from awesome_agent.safety.redaction import redact_text
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.models import ApprovalRequired, ToolDenied
 from awesome_agent.tools.registry import ToolRegistry
@@ -271,23 +272,26 @@ class ModifyingArtifactMiddleware:
             or len(result.content) <= _TOOL_RESULT_OFFLOAD_CHARS
         ):
             return result
+        redacted = redact_text(result.content)
+        content_for_storage = redacted.text
         metadata = self.artifact_store.write(
             run_id=run.id,
             agent_id=agent.id,
             artifact_type="tool-output",
             filename=f"{call_id}.json",
-            content=result.content.encode("utf-8"),
+            content=content_for_storage.encode("utf-8"),
             mime_type="application/json",
-            summary=f"Large tool output for {call_id}",
+            summary=f"Redacted large tool output for {call_id}",
         )
         await self.artifact_repository.record(metadata)
-        head = result.content[:_TOOL_RESULT_HEAD_CHARS]
-        tail = result.content[-_TOOL_RESULT_TAIL_CHARS:]
+        head = content_for_storage[:_TOOL_RESULT_HEAD_CHARS]
+        tail = content_for_storage[-_TOOL_RESULT_TAIL_CHARS:]
         return result.model_copy(
             update={
                 "content": (
                     f"{head}\n...[tool output offloaded to artifact "
-                    f"{metadata.id}; {len(result.content)} characters]...\n{tail}"
+                    f"{metadata.id}; {len(content_for_storage)} characters]...\n"
+                    f"{tail}"
                 ),
                 "artifact_refs": [str(metadata.id)],
             }
