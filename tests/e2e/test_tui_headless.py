@@ -1036,6 +1036,62 @@ async def test_tui_details_toggles_verbose_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_details_on_expands_tool_event_details() -> None:
+    class ToolDetailsClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            resume_run_id: str | None = None,
+        ) -> list[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            turn_id = uuid4()
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_DELTA,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=1,
+                    trace_id="trace-tool-details",
+                    payload={
+                        "tool_event": {
+                            "name": "run_command",
+                            "summary": "completed",
+                            "command": "python -m pytest",
+                            "exit_code": 0,
+                        }
+                    },
+                ),
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_COMPLETED,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=2,
+                    trace_id="trace-tool-details",
+                    payload={"content": "done"},
+                ),
+            ]
+
+    app = AwesomeAgentTui(client=ToolDetailsClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "d", "e", "t", "a", "i", "l", "s", "enter")
+        await pilot.press("r", "u", "n", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "Tool - run_command" in rendered
+    assert "command: python -m pytest" in rendered
+    assert "exit_code: 0" in rendered
+
+
+@pytest.mark.asyncio
 async def test_tui_retry_resends_last_failed_message() -> None:
     class FailingOnceClient(FakeClient):
         def __init__(self) -> None:

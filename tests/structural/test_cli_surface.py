@@ -1,5 +1,32 @@
 from pathlib import Path
 
+from awesome_agent.cli.slash_commands import (
+    SlashCommandKind,
+    command_suggestions,
+    parse_slash_command,
+    slash_command_help,
+)
+
+RETAINED_COMMANDS = [
+    "/help",
+    "/new",
+    "/threads",
+    "/model",
+    "/thinking",
+    "/memory",
+    "/skills",
+    "/tools",
+    "/mcp",
+    "/status",
+    "/usage",
+    "/config",
+    "/details",
+    "/run",
+    "/quit",
+]
+
+DELETED_COMMANDS = ["/resume", "/models", "/uploads", "/artifacts", "/switch"]
+
 
 def test_awesome_script_is_declared() -> None:
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
@@ -11,25 +38,27 @@ def test_awesome_script_is_declared() -> None:
 def test_interactive_cli_documents_required_slash_commands() -> None:
     text = Path("docs/user-guide/README.md").read_text(encoding="utf-8")
 
-    retained = [
-        "/help",
-        "/new",
-        "/threads",
-        "/model",
-        "/thinking",
-        "/memory",
-        "/skills",
-        "/tools",
-        "/mcp",
-        "/status",
-        "/usage",
-        "/config",
-        "/details",
-        "/run",
-        "/quit",
-    ]
-    deleted = ["/resume", "/models", "/uploads", "/artifacts", "/switch"]
-    for command in retained:
+    for command in RETAINED_COMMANDS:
         assert command in text
-    for command in deleted:
+    for command in DELETED_COMMANDS:
         assert command not in text
+
+
+def test_readmes_document_final_cli_command_inventory() -> None:
+    for path in ["README.md", "README.zh-CN.md"]:
+        text = Path(path).read_text(encoding="utf-8")
+        for command in RETAINED_COMMANDS:
+            assert command in text
+        for command in DELETED_COMMANDS:
+            assert f"| `{command}` |" not in text
+
+
+def test_slash_command_registry_matches_final_inventory() -> None:
+    suggestions = {f"/{item.name}" for item in command_suggestions("/")}
+
+    assert suggestions == set(RETAINED_COMMANDS)
+    for command in RETAINED_COMMANDS:
+        assert command in slash_command_help()
+    for command in DELETED_COMMANDS:
+        assert parse_slash_command(command).kind is SlashCommandKind.UNKNOWN
+        assert command not in slash_command_help()
