@@ -1,23 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from uuid import uuid4
+
+from tests.conversation_projection_fakes import ProjectedConversationRunIntake
 
 from awesome_agent.conversation.events import (
     ConversationStreamEventKind,
     parse_conversation_stream_event,
 )
-from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
-from awesome_agent.modeling.messages import AssistantMessage
-from awesome_agent.modeling.stream import (
-    ModelStreamEvent,
-    ReasoningDelta,
-    ReasoningStarted,
-    TextDelta,
-    TurnCompleted,
-)
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 
@@ -40,12 +31,23 @@ def test_reasoning_events_parse_from_sse_payloads() -> None:
 
 async def test_conversation_service_emits_reasoning_events_before_answer() -> None:
     repository = InMemoryConversationRepository()
-    thread = await repository.create_thread(title="Reasoning")
+    thread = await repository.create_thread(
+        title="Reasoning",
+        context_path="E:/project",
+    )
+    runtime = InMemoryRuntimeRepository()
     service = ConversationService(
         repository=repository,
-        runtime_repository=InMemoryRuntimeRepository(),
-        leader_executor=ProviderLeaderTurnExecutor(lambda _model: ReasoningProvider()),
+        runtime_repository=runtime,
+        conversation_run_intake=ProjectedConversationRunIntake(
+            conversations=repository,
+            runtime=runtime,
+            assistant_content="hello",
+            text_deltas=("hello",),
+            reasoning=True,
+        ),
         default_model="fake-model",
+        event_poll_interval=0,
     )
 
     events = [
@@ -65,18 +67,3 @@ async def test_conversation_service_emits_reasoning_events_before_answer() -> No
     ]
     assert events[3].payload == {"text": "Inspect context."}
     assert events[5].payload == {"failed": False}
-
-
-class ReasoningProvider:
-    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        yield ReasoningStarted()
-        yield ReasoningDelta(text="Inspect context.")
-        yield TextDelta(text="hello")
-        yield TurnCompleted(
-            turn=ModelTurn(
-                assistant=AssistantMessage(content="hello"),
-                stop_reason=StopReason.COMPLETED,
-                model="fake-model",
-                provider="fake",
-            )
-        )

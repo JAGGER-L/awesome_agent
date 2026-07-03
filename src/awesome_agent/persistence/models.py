@@ -132,6 +132,7 @@ class RunRecord(Base):
     cancel_requested_by: Mapped[str | None] = mapped_column(String(255))
     cancel_reason: Mapped[str | None] = mapped_column(Text)
     result_text: Mapped[str | None] = mapped_column(Text)
+    working_directory: Mapped[str | None] = mapped_column(Text)
     workspace_path: Mapped[str | None] = mapped_column(Text)
     integration_branch: Mapped[str | None] = mapped_column(String(255))
     workspace_state: Mapped[str | None] = mapped_column(String(32))

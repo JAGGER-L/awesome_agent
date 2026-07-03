@@ -1,34 +1,32 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from tests.conversation_projection_fakes import ProjectedConversationRunIntake
 
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.conversation.models import ThreadMessageRole
-from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
-from awesome_agent.modeling.errors import ModelErrorCode, ModelErrorInfo
-from awesome_agent.modeling.messages import AssistantMessage
-from awesome_agent.modeling.stream import (
-    ModelStreamEvent,
-    TextDelta,
-    TurnCompleted,
-    TurnFailed,
-)
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 
 
-async def test_conversation_service_streams_and_persists_assistant_message() -> None:
+async def test_conversation_service_projects_and_persists_assistant_message() -> None:
     repository = InMemoryConversationRepository()
-    thread = await repository.create_thread(title="Greeting")
+    thread = await repository.create_thread(
+        title="Greeting",
+        context_path="E:/project",
+    )
+    runtime = InMemoryRuntimeRepository()
+    intake = ProjectedConversationRunIntake(
+        conversations=repository,
+        runtime=runtime,
+        usage={"input_tokens": 1, "output_tokens": 2},
+    )
     service = ConversationService(
         repository=repository,
-        runtime_repository=InMemoryRuntimeRepository(),
-        leader_executor=ProviderLeaderTurnExecutor(
-            lambda _model: FakeStreamingProvider(),
-        ),
+        runtime_repository=runtime,
+        conversation_run_intake=intake,
         default_model="fake-model",
+        event_poll_interval=0,
     )
 
     events = [
@@ -56,16 +54,26 @@ async def test_conversation_service_streams_and_persists_assistant_message() -> 
     assert all(event.trace_id == events[0].trace_id for event in events)
 
 
-async def test_conversation_service_emits_error_without_assistant_message() -> None:
+async def test_conversation_service_projects_error_without_assistant_message() -> None:
     repository = InMemoryConversationRepository()
-    thread = await repository.create_thread(title="Failure")
+    thread = await repository.create_thread(
+        title="Failure",
+        context_path="E:/project",
+    )
+    runtime = InMemoryRuntimeRepository()
+    intake = ProjectedConversationRunIntake(
+        conversations=repository,
+        runtime=runtime,
+        assistant_content=None,
+        text_deltas=(),
+        fail=True,
+    )
     service = ConversationService(
         repository=repository,
-        runtime_repository=InMemoryRuntimeRepository(),
-        leader_executor=ProviderLeaderTurnExecutor(
-            lambda _model: FailingStreamingProvider(),
-        ),
+        runtime_repository=runtime,
+        conversation_run_intake=intake,
         default_model="fake-model",
+        event_poll_interval=0,
     )
 
     events = [
@@ -75,34 +83,5 @@ async def test_conversation_service_emits_error_without_assistant_message() -> N
     messages = await repository.list_messages(thread.id)
 
     assert events[-1].event is ConversationStreamEventKind.ERROR
-    assert events[-1].payload["code"] == "invalid_request"
+    assert events[-1].payload["message"] == "bad request"
     assert [message.role for message in messages] == [ThreadMessageRole.USER]
-
-
-class FakeStreamingProvider:
-    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        assert request.messages[-1].role == "user"
-        yield TextDelta(text="hello")
-        yield TextDelta(text=" world")
-        yield TurnCompleted(
-            turn=ModelTurn(
-                assistant=AssistantMessage(content="hello world"),
-                stop_reason=StopReason.COMPLETED,
-                model="fake-model",
-                provider="fake",
-                usage=ModelUsage(input_tokens=1, output_tokens=2),
-            )
-        )
-
-
-class FailingStreamingProvider:
-    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        yield TurnFailed(
-            error=ModelErrorInfo(
-                code=ModelErrorCode.INVALID_REQUEST,
-                message="bad request",
-                retryable=False,
-                provider="fake",
-                status_code=400,
-            )
-        )

@@ -1,25 +1,37 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from tests.conversation_projection_fakes import ProjectedConversationRunIntake
 
 from awesome_agent.conversation.events import ConversationStreamEventKind
-from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
-from awesome_agent.modeling.messages import AssistantMessage
-from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 
 
 async def test_conversation_completion_includes_model_metadata() -> None:
     repository = InMemoryConversationRepository()
-    thread = await repository.create_thread(title="Model metadata")
+    thread = await repository.create_thread(
+        title="Model metadata",
+        context_path="E:/project",
+    )
+    runtime = InMemoryRuntimeRepository()
     service = ConversationService(
         repository=repository,
-        runtime_repository=InMemoryRuntimeRepository(),
-        leader_executor=ProviderLeaderTurnExecutor(lambda _model: MetadataProvider()),
+        runtime_repository=runtime,
+        conversation_run_intake=ProjectedConversationRunIntake(
+            conversations=repository,
+            runtime=runtime,
+            assistant_content="hello",
+            text_deltas=("hello",),
+            response_metadata={
+                "requested_model": "deepseek-v4-pro",
+                "response_model": "deepseek-v4-pro",
+                "provider": "deepseek",
+                "response_id": "response-123",
+            },
+        ),
         default_model="deepseek-v4-pro",
+        event_poll_interval=0,
     )
 
     events = [
@@ -35,17 +47,3 @@ async def test_conversation_completion_includes_model_metadata() -> None:
     assert completed.payload["response_model"] == "deepseek-v4-pro"
     assert completed.payload["provider"] == "deepseek"
     assert completed.payload["response_id"] == "response-123"
-
-
-class MetadataProvider:
-    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        yield TextDelta(text="hello")
-        yield TurnCompleted(
-            turn=ModelTurn(
-                assistant=AssistantMessage(content="hello"),
-                stop_reason=StopReason.COMPLETED,
-                model="deepseek-v4-pro",
-                provider="deepseek",
-                response_id="response-123",
-            )
-        )

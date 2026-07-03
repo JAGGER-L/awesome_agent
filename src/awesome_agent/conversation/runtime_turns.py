@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
 from uuid import UUID
 
 from awesome_agent.conversation.events import (
@@ -10,34 +8,6 @@ from awesome_agent.conversation.events import (
 )
 from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import RuntimeEvent
-from awesome_agent.modeling.provider import ModelProvider
-from awesome_agent.modeling.stream import ModelStreamEvent
-from awesome_agent.modeling.turns import ModelRequest
-
-
-class LeaderTurnExecutor:
-    def stream(
-        self,
-        request: ModelRequest,
-        *,
-        model: str,
-    ) -> AsyncIterator[ModelStreamEvent]:
-        raise NotImplementedError
-
-
-@dataclass(slots=True)
-class ProviderLeaderTurnExecutor(LeaderTurnExecutor):
-    provider_factory: Callable[[str], ModelProvider]
-
-    async def stream(
-        self,
-        request: ModelRequest,
-        *,
-        model: str,
-    ) -> AsyncIterator[ModelStreamEvent]:
-        provider = self.provider_factory(model)
-        async for event in provider.stream(request):
-            yield event
 
 
 def project_runtime_event(

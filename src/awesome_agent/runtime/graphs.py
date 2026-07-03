@@ -2,6 +2,8 @@ READ_ONLY_CODING_ROUTE = "solo-readonly"
 
 MODIFYING_CODING_ROUTE = "solo-modifying"
 
+CONVERSATION_TURN_ROUTE = "conversation-turn"
+
 SCOPED_TEAM_CODING_ROUTE = "team-coding-scoped"
 
 TEAM_CODING_ROUTE = "team-coding"

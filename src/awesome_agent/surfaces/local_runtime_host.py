@@ -4,20 +4,26 @@ import asyncio
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from enum import StrEnum
+from pathlib import Path
 from queue import Queue
 from threading import Thread
 from typing import cast
 from uuid import UUID, uuid4
 
-from awesome_agent.conversation.events import ConversationStreamEvent
+from awesome_agent.conversation.events import (
+    ConversationStreamEvent,
+    ConversationStreamEventKind,
+)
+from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.models import ThreadMessage
-from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.persistence.local_conversations import LocalConversationRepository
 from awesome_agent.providers.factory import ModelProviderFactory
+from awesome_agent.runtime.conversation_graph import ConversationGraph
+from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
@@ -87,6 +93,7 @@ class LocalRuntimeHost:
             self.settings.local_state_dir / "awesome-agent.db"
         )
         self.runtime_repository = InMemoryRuntimeRepository()
+        self.event_stream = EventStream()
         self.default_model = default_model or self.settings.leader_model
         self.tool_registry = build_modifying_registry(
             sandbox=create_sandbox(
@@ -99,13 +106,27 @@ class LocalRuntimeHost:
         factory = provider_factory
         if factory is None:
             factory = ModelProviderFactory(self.settings).create
-        self._conversation = ConversationService(
-            repository=self.repository,
-            runtime_repository=self.runtime_repository,
-            leader_executor=ProviderLeaderTurnExecutor(factory),
+        self._provider_factory = factory
+        self._conversation_intake = ConversationRunIntakeService(
+            conversations=self.repository,
+            runtime=self.runtime_repository,
+            events=self.event_stream,
+            default_model=self.default_model,
+        )
+        self._conversation_graph = ConversationGraph(
+            conversations=self.repository,
+            runtime=self.runtime_repository,
+            provider_factory=self._provider_factory,
             default_model=self.default_model,
             tool_executor=self.tool_executor,
             tool_registry=self.tool_registry,
+        )
+        self._conversation = ConversationService(
+            repository=self.repository,
+            runtime_repository=self.runtime_repository,
+            conversation_run_intake=self._conversation_intake,
+            default_model=self.default_model,
+            event_poll_interval=0,
         )
         self._planned_runs: dict[str, dict[str, object]] = {}
 
@@ -119,7 +140,8 @@ class LocalRuntimeHost:
             self._create_thread_async(
                 title,
                 context_kind=_optional_str(kwargs.get("context_kind")) or "workspace",
-                context_path=_optional_str(kwargs.get("context_path")),
+                context_path=_optional_str(kwargs.get("context_path"))
+                or str(Path.cwd()),
                 default_model=_optional_str(kwargs.get("default_model")),
                 sandbox_profile=_optional_str(kwargs.get("sandbox_profile")),
                 thinking_mode=_optional_str(kwargs.get("thinking_mode")),
@@ -291,7 +313,7 @@ class LocalRuntimeHost:
                 code="resume_not_available",
             )
         yield from _iter_async_in_thread(
-            self._conversation.start_turn(
+            self._stream_turn_async(
                 thread_id=UUID(thread_id),
                 content=content,
                 model=model,
@@ -300,6 +322,79 @@ class LocalRuntimeHost:
                 skill_ids=skill_ids,
             )
         )
+
+    async def _stream_turn_async(
+        self,
+        *,
+        thread_id: UUID,
+        content: str,
+        model: str | None,
+        thinking: str | None,
+        memory: dict[str, object] | None,
+        skill_ids: tuple[str, ...],
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        executed_run_ids: set[UUID] = set()
+        async for event in self._conversation.start_turn(
+            thread_id=thread_id,
+            content=content,
+            model=model,
+            thinking=thinking,
+            memory=memory,
+            skill_ids=skill_ids,
+        ):
+            yield event
+            if event.event is not ConversationStreamEventKind.TURN_STARTED:
+                continue
+            run_id_value = event.payload.get("run_id")
+            if not isinstance(run_id_value, str):
+                continue
+            run_id = UUID(run_id_value)
+            if run_id in executed_run_ids:
+                continue
+            executed_run_ids.add(run_id)
+            await self._execute_conversation_run(run_id)
+
+    async def _execute_conversation_run(self, run_id: UUID) -> None:
+        run = await self.runtime_repository.get_run(run_id)
+        agents = await self.runtime_repository.list_agents(run_id)
+        leader = next(
+            (agent for agent in agents if agent.parent_agent_id is None),
+            None,
+        )
+        if leader is None and len(agents) == 1:
+            leader = agents[0]
+        if leader is None:
+            raise RuntimeError(f"Conversation Run {run_id} has no Leader Agent.")
+        await self._conversation_graph.execute(run, leader)
+
+    def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
+        return _run_async(self._list_thread_runs_async(thread_id))
+
+    async def _list_thread_runs_async(self, thread_id: str) -> list[dict[str, object]]:
+        runs: list[dict[str, object]] = []
+        for run in await self.runtime_repository.list_runs():
+            payload = await self._run_created_payload(run.id)
+            if payload.get("thread_id") != thread_id:
+                continue
+            runs.append(
+                {
+                    "id": str(run.id),
+                    "thread_id": thread_id,
+                    "goal": run.goal,
+                    "status": run.status.value,
+                    "dispatch_status": run.dispatch_status.value,
+                    "runtime_route": run.runtime_route,
+                    "execution_kind": run.execution_kind.value,
+                    "result_text": run.result_text,
+                }
+            )
+        return list(reversed(runs))
+
+    async def _run_created_payload(self, run_id: UUID) -> dict[str, object]:
+        for event in await self.runtime_repository.list_events(run_id):
+            if event.event_type.value == "run.created":
+                return event.payload
+        return {}
 
     def start_explicit_run(
         self,

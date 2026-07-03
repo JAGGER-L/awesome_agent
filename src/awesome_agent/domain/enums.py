@@ -9,10 +9,12 @@ class RunMode(StrEnum):
 class RunIntent(StrEnum):
     READ_ONLY = "read_only"
     MODIFYING = "modifying"
+    CONVERSATION = "conversation"
 
 
 class ExecutionKind(StrEnum):
     CODING = "coding"
+    CONVERSATION = "conversation"
     RUNTIME_PROBE = "runtime_probe"
 
 

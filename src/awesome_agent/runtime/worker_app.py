@@ -20,6 +20,7 @@ from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
 from awesome_agent.persistence.budget import PostgresBudgetRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
+from awesome_agent.persistence.conversations import PostgresConversationRepository
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
@@ -32,6 +33,7 @@ from awesome_agent.persistence.worker_heartbeats import (
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.context import ContextManager, DeterministicSummaryProvider
+from awesome_agent.runtime.conversation_graph import ConversationGraph
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
@@ -77,6 +79,8 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     )
     artifact_store = LocalArtifactStore(configured.artifact_root)
     artifact_repository = PostgresArtifactMetadataRepository(sessions)
+    conversation_repository = PostgresConversationRepository(sessions)
+    runtime_repository = PostgresRuntimeRepository(sessions)
     team_repository = PostgresTeamRepository(sessions)
     observability_repository = PostgresObservabilityRepository(sessions)
     otel_config = OTelConfig(
@@ -178,10 +182,20 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         )
         worker = DurableWorker(
             dispatcher=PostgresRunDispatcher(sessions),
-            repository=PostgresRuntimeRepository(sessions),
+            repository=runtime_repository,
             probe_graph=RuntimeProbeGraph(saver),
             coding_graph=coding_graph,
             modifying_graph=modifying_graph,
+            conversation_graph=(
+                ConversationGraph(
+                    conversations=conversation_repository,
+                    runtime=runtime_repository,
+                    provider_factory=providers.create,
+                    default_model=configured.leader_model,
+                )
+                if providers.coding_available
+                else None
+            ),
             team_graph=(
                 TeamCodingGraph(
                     saver,

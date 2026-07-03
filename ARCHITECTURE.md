@@ -79,6 +79,26 @@ agents, Todos, event history, approvals, artifacts, and live SSE updates for a
 future frontend. Both surfaces call application services rather than accessing
 provider, database, or sandbox implementations directly.
 
+### Ordinary Conversation Turn Authority
+
+Ordinary chat turns are durable conversation Runs, not direct provider calls.
+`ConversationRunIntakeService` creates a `conversation` Run, a Leader agent,
+and initial runtime events before any user or assistant thread message is
+written. A Worker route named `conversation-turn` executes `ConversationGraph`.
+The graph owns conversation message writes, model/tool execution, runtime
+events, usage metadata, changed-file metadata, and terminal Run state.
+
+`ConversationService` is a projection boundary. It starts the durable turn and
+projects runtime events into the shared conversation stream event contract. It
+does not call model providers, execute tools, or append ordinary user/assistant
+messages directly.
+
+Embedded local mode uses the same Run/Graph semantics and drains the local
+conversation graph synchronously for deterministic TUI streaming. Its working
+directory is the launch/current working directory unless the thread explicitly
+sets another context path. Repository coding worktrees remain a separate
+explicit coding-run concern.
+
 ### Health and Readiness
 
 ```text

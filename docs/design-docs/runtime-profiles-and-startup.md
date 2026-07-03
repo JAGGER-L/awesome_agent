@@ -25,8 +25,9 @@ Startup commands should map to user intent:
 
 `LocalSandbox` executes local shell commands for the local CLI/TUI profile. It
 is not the default backend for API-created Runs. Current LocalSandbox command
-policy is intentionally permissive for trusted local use and must be hardened
-in a later security task.
+policy is intentionally permissive for trusted local use; Task 93 adds
+Hermes-style soft guardrails and environment scrubbing, and Task 94 adds output
+redaction.
 
 `AIO Docker` is a long-lived Linux development container with a
 thread-mounted workspace directory and an `agent-sandbox` HTTP service. API
@@ -36,30 +37,29 @@ next sandbox hardening step.
 
 ## Storage Contract
 
-Model-visible generated files use one logical path in every execution mode:
+For embedded local ordinary turns, the model-visible working directory is the
+thread context path. When a thread is created without an explicit context path,
+that path is the process launch/current working directory. Reads, writes, and
+commands therefore target the same project tree a user would target from their
+terminal.
 
-```text
-/mnt/user-data/workspace/
-```
-
-On the host, that logical workspace persists at:
-
-```text
-~/.awesome-agent/threads/<thread_id>/workspace/
-```
-
-Run audit evidence remains separate:
+Run audit evidence remains separate and internal:
 
 ```text
 ~/.awesome-agent/runs/<run_id>/artifacts/
 ```
 
-Docker API mode mounts the shared `awesome_agent_user_data` volume at
-`/mnt/user-data/` in API, Worker, and sandbox containers, so files written to
-`/mnt/user-data/workspace/` are visible to all three services. LocalSandbox uses
-a path mapper to translate the same logical path to the host thread workspace
-before command execution. Repository-root `output/` and `e2e-output/` are not
-formal runtime output locations.
+The previous logical thread workspace remains a Docker/API design input rather
+than the default product-closure path:
+
+```text
+~/.awesome-agent/threads/<thread_id>/workspace/
+```
+
+Docker API mode and AIO Docker path equivalence are deferred hardening work.
+They must not be required for the embedded local product path to create a
+durable conversation Run, call tools, write files in cwd, and recover
+conversation state.
 
 ## Command Targets
 
@@ -91,11 +91,12 @@ LocalSandbox. It does not require an API server before ordinary conversation or
 local coding-agent work can begin. Use `awesome --api-url <url>` only when the
 TUI should connect to a local, Docker, or remote API server.
 
-Ordinary text input is the main execution entry. The runtime chooses the
-appropriate execution behavior for the leader turn: no-tool model response,
-leader-visible tools, teammate/subagent delegation, background work, or resume
-of an interrupted Run. `/run` remains an advanced/manual command for explicit
-execution control; it is not required for normal work.
+Ordinary text input is the main execution entry. It creates a durable
+conversation Run and executes through the `conversation-turn` graph route.
+`ConversationService` only starts the Run and projects runtime events; the graph
+owns model calls, tool calls, thread message writes, usage metadata, changed
+files, and terminal state. `/run` remains an advanced/manual command for
+explicit execution control; it is not required for normal work.
 
 Slash commands such as `/new`, `/threads`, `/model`, `/thinking`, `/memory`,
 `/status`, and `/help` are local interaction syntax over semantic runtime
