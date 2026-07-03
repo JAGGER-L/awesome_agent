@@ -159,6 +159,10 @@ class ConversationGraph:
                 "role": assistant.role.value,
                 "content": assistant.content,
                 "run_id": str(run.id),
+                "usage": usage.model_dump(mode="json"),
+                "response_model": model_state.get("response_model"),
+                "provider": model_state.get("provider"),
+                "response_id": model_state.get("response_id"),
             },
             agent_id=leader.id,
         )

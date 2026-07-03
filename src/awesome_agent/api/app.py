@@ -47,13 +47,13 @@ from awesome_agent.api.schemas import (
 )
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.conversation.events import ConversationStreamEvent
+from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.repository import ConversationRepository
-from awesome_agent.conversation.runtime_turns import ProviderLeaderTurnExecutor
 from awesome_agent.conversation.service import (
     ConversationService,
     MissingThreadRepositoryContext,
 )
-from awesome_agent.domain.enums import ExecutionKind, ExecutionOrigin, RunIntent
+from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.extensions.config import build_project_extension_catalog_sync
 from awesome_agent.extensions.diagnostics import (
@@ -115,7 +115,6 @@ from awesome_agent.persistence.validation import (
 from awesome_agent.persistence.worker_heartbeats import (
     PostgresWorkerHeartbeatRepository,
 )
-from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
 from awesome_agent.repositories.service import RepositoryService
@@ -138,13 +137,9 @@ from awesome_agent.runtime.workspaces import (
 from awesome_agent.runtime.workspaces import (
     WorkspaceCleanupRequest as RuntimeWorkspaceCleanupRequest,
 )
-from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import changed_file_summaries_from_payload
-from awesome_agent.tools.repository import (
-    build_modifying_executor,
-    build_modifying_registry,
-)
+from awesome_agent.tools.repository import build_modifying_registry
 
 logger = logging.getLogger(__name__)
 _NIL_RUN_ID = UUID(int=0)
@@ -175,21 +170,22 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings()
     threads_repository = thread_repository or InMemoryConversationRepository()
-    model_provider_factory = ModelProviderFactory(settings)
-    conversation_tool_registry = build_modifying_registry(
-        sandbox=create_sandbox(origin=ExecutionOrigin.API, settings=settings)
-    )
-    conversation_tool_executor = build_modifying_executor(conversation_tool_registry)
     default_runtime_repository = getattr(service, "repository", None)
     if default_runtime_repository is None:
         default_runtime_repository = InMemoryRuntimeRepository()
+    default_event_stream = EventStream()
+    default_conversation_intake = ConversationRunIntakeService(
+        conversations=threads_repository,
+        runtime=default_runtime_repository,
+        events=default_event_stream,
+        default_model=settings.leader_model,
+    )
     default_conversation_service = conversation_service or ConversationService(
         repository=threads_repository,
         runtime_repository=default_runtime_repository,
-        leader_executor=ProviderLeaderTurnExecutor(model_provider_factory.create),
+        conversation_run_intake=default_conversation_intake,
         default_model=settings.leader_model,
-        tool_executor=conversation_tool_executor,
-        tool_registry=conversation_tool_registry,
+        event_poll_interval=settings.event_poll_interval_seconds,
     )
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
@@ -277,15 +273,18 @@ def create_app(
         )
         app.state.extension_catalog = active_extension_catalog
         app.state.threads = PostgresConversationRepository(sessions)
+        conversation_intake = ConversationRunIntakeService(
+            conversations=app.state.threads,
+            runtime=runtime_repository,
+            events=event_stream,
+            default_model=settings.leader_model,
+        )
         app.state.conversations = conversation_service or ConversationService(
             repository=app.state.threads,
             runtime_repository=runtime_repository,
-            leader_executor=ProviderLeaderTurnExecutor(
-                ModelProviderFactory(settings).create,
-            ),
+            conversation_run_intake=conversation_intake,
             default_model=settings.leader_model,
-            tool_executor=conversation_tool_executor,
-            tool_registry=conversation_tool_registry,
+            event_poll_interval=settings.event_poll_interval_seconds,
         )
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry
