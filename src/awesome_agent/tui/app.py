@@ -195,17 +195,13 @@ class AwesomeAgentTui(App[None]):
         pending_approval = self.state.pending_approval
         if pending_approval is not None:
             if event.key in {"down", "ctrl+n"}:
-                self.state = self.state.with_approval_prompt(
-                    pending_approval.move(1)
-                )
+                self.state = self.state.with_approval_prompt(pending_approval.move(1))
                 self._render()
                 event.prevent_default()
                 event.stop()
                 return
             if event.key in {"up", "ctrl+p"}:
-                self.state = self.state.with_approval_prompt(
-                    pending_approval.move(-1)
-                )
+                self.state = self.state.with_approval_prompt(pending_approval.move(-1))
                 self._render()
                 event.prevent_default()
                 event.stop()
@@ -540,9 +536,7 @@ class AwesomeAgentTui(App[None]):
             return
         approved = index in {0, 1}
         if index == 1:
-            self.state = self.state.add_session_allow_rule(
-                _session_allow_rule(prompt)
-            )
+            self.state = self.state.add_session_allow_rule(_session_allow_rule(prompt))
         result = self.client.decide_approval(
             prompt.run_id,
             prompt.approval_id,
@@ -669,9 +663,7 @@ class AwesomeAgentTui(App[None]):
                     description=_thread_picker_description(thread),
                 )
                 for thread in threads
-            ] or [
-                PickerItem(id="none", label="No conversations yet", disabled=True)
-            ]
+            ] or [PickerItem(id="none", label="No conversations yet", disabled=True)]
             self.state = self.state.open_picker(
                 PickerState.open(
                     kind="threads",
@@ -690,9 +682,7 @@ class AwesomeAgentTui(App[None]):
                 )
                 for item in skills
                 if item.get("id") or item.get("name")
-            ] or [
-                PickerItem(id="none", label="No skills available", disabled=True)
-            ]
+            ] or [PickerItem(id="none", label="No skills available", disabled=True)]
             self.state = self.state.open_picker(
                 PickerState.open(
                     kind="skills",
@@ -799,9 +789,7 @@ class AwesomeAgentTui(App[None]):
                         "No local memory facts for this conversation.",
                     ]
                 )
-            self.state = self.state.close_picker().append(
-                ChatMessage.system(content)
-            )
+            self.state = self.state.close_picker().append(ChatMessage.system(content))
             return
         enabled = item.id == "enabled"
         self.state = self.state.with_local_memory(enabled).close_picker()
@@ -1207,10 +1195,7 @@ def _tool_display_event(payload: dict[str, object]) -> ToolDisplayEvent:
 
 def _team_display_event(payload: dict[str, object]) -> TeamDisplayEvent:
     role = str(
-        payload.get("role")
-        or payload.get("agent")
-        or payload.get("kind")
-        or "Team"
+        payload.get("role") or payload.get("agent") or payload.get("kind") or "Team"
     )
     summary = str(
         payload.get("summary")

@@ -227,9 +227,7 @@ def test_mcp_stdio_registration_only_registers_exposed_tools(tmp_path: Path) -> 
         exposed_tool_names={"mcp.playwright.open_page"},
     )
 
-    assert [spec.name for spec in registry.list_specs()] == [
-        "mcp.playwright.open_page"
-    ]
+    assert [spec.name for spec in registry.list_specs()] == ["mcp.playwright.open_page"]
 
 
 def _fake_mcp_server(tmp_path: Path) -> Path:

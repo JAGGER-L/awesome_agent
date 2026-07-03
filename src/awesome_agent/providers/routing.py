@@ -48,8 +48,7 @@ class ModelRouteAttempt:
 
 
 class ModelRouter(Protocol):
-    def resolve(self, request: ModelRouteRequest) -> ModelRouteDecision:
-        ...
+    def resolve(self, request: ModelRouteRequest) -> ModelRouteDecision: ...
 
 
 class TokenBudgetCheck(Protocol):
@@ -57,8 +56,7 @@ class TokenBudgetCheck(Protocol):
         self,
         candidate: ModelRouteCandidate,
         request: ModelRequest,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class TokenUsageRecorder(Protocol):
@@ -66,8 +64,7 @@ class TokenUsageRecorder(Protocol):
         self,
         candidate: ModelRouteCandidate,
         turn: ModelTurn,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 AttemptRecorder = Callable[[ModelRouteAttempt], None]

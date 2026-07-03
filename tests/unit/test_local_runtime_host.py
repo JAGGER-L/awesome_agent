@@ -70,9 +70,9 @@ class PatchToolProvider(StructuredModelProvider):
                                 name="repo.apply_patch",
                                 arguments_json=(
                                     '{"patch":"--- /dev/null\\n'
-                                    '+++ b/calculate_1_plus_1.py\\n'
-                                    '@@ -0,0 +1,2 @@\\n'
-                                    '+result = 1 + 1\\n'
+                                    "+++ b/calculate_1_plus_1.py\\n"
+                                    "@@ -0,0 +1,2 @@\\n"
+                                    "+result = 1 + 1\\n"
                                     '+print(result)\\n"}'
                                 ),
                             )
@@ -237,9 +237,8 @@ def test_local_runtime_host_executes_leader_tools_in_thread_workspace(
         if isinstance(event.payload.get("tool_event"), dict)
     )
     assert any(
-        event.payload.get("changed_files") == [
-            {"path": "calculate_1_plus_1.py", "status": "created"}
-        ]
+        event.payload.get("changed_files")
+        == [{"path": "calculate_1_plus_1.py", "status": "created"}]
         for event in events
     )
 

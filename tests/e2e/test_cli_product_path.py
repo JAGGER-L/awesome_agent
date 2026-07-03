@@ -92,9 +92,7 @@ class HtmlGameSurfaceClient:
             trace_id="trace-html-game",
             payload={
                 "content": "Created snake-game.html.",
-                "changed_files": [
-                    {"path": "snake-game.html", "status": "created"}
-                ],
+                "changed_files": [{"path": "snake-game.html", "status": "created"}],
             },
         )
 

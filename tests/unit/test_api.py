@@ -1010,9 +1010,7 @@ def test_recovery_metrics_aggregate_team_and_provider_evidence(
 def test_recovery_metrics_returns_404_for_missing_run(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
 
-    response = client.get(
-        "/runs/00000000-0000-0000-0000-000000000000/recovery-metrics"
-    )
+    response = client.get("/runs/00000000-0000-0000-0000-000000000000/recovery-metrics")
 
     assert response.status_code == 404
 

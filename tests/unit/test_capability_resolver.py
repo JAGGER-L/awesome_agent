@@ -221,9 +221,9 @@ def test_extension_tool_exposed_with_assignment_grant_and_catalog_inventory() ->
     )
 
     assert exposure.allows("extension.local-demo.demo.search")
-    assert exposure.capabilities_for(
-        "extension.local-demo.demo.search"
-    ) == frozenset({"repository:read"})
+    assert exposure.capabilities_for("extension.local-demo.demo.search") == frozenset(
+        {"repository:read"}
+    )
     assert [tool.name for tool in exposure.tool_definitions] == [
         "extension.local-demo.demo.search"
     ]

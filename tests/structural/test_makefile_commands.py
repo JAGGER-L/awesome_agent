@@ -33,9 +33,7 @@ def test_makefile_delegates_to_scripts() -> None:
 
 
 def test_docker_start_docs_do_not_start_cli() -> None:
-    quickstart = Path("docs/getting-started/quickstart.md").read_text(
-        encoding="utf-8"
-    )
+    quickstart = Path("docs/getting-started/quickstart.md").read_text(encoding="utf-8")
 
     assert "make docker-init" in quickstart
     assert "make docker-start" in quickstart
@@ -45,9 +43,7 @@ def test_docker_start_docs_do_not_start_cli() -> None:
 def test_docker_scripts_include_sandbox_service() -> None:
     docker_init = Path("scripts/make/docker_init.py").read_text(encoding="utf-8")
     docker_start = Path("scripts/make/docker_start.py").read_text(encoding="utf-8")
-    setup_sandbox = Path("scripts/make/setup_sandbox.py").read_text(
-        encoding="utf-8"
-    )
+    setup_sandbox = Path("scripts/make/setup_sandbox.py").read_text(encoding="utf-8")
 
     assert '"sandbox"' in docker_init
     assert '"sandbox"' in docker_start

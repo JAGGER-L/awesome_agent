@@ -18,8 +18,7 @@ def test_tui_does_not_import_runtime_execution_internals() -> None:
         assert not [
             name
             for name in imports
-            if name.startswith(forbidden_prefixes)
-            or _is_runtime_graph_module(name)
+            if name.startswith(forbidden_prefixes) or _is_runtime_graph_module(name)
         ], f"{path} imports runtime execution internals: {imports}"
 
 

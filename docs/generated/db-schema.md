@@ -202,6 +202,7 @@ Generated from SQLAlchemy metadata.
 | `cancel_requested_by` | `VARCHAR(255)` | yes |
 | `cancel_reason` | `TEXT` | yes |
 | `result_text` | `TEXT` | yes |
+| `working_directory` | `TEXT` | yes |
 | `workspace_path` | `TEXT` | yes |
 | `integration_branch` | `VARCHAR(255)` | yes |
 | `workspace_state` | `VARCHAR(32)` | yes |

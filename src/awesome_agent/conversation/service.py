@@ -342,6 +342,7 @@ class ConversationService:
                 )
         return None
 
+
 def _event(
     kind: ConversationStreamEventKind,
     *,

@@ -29,9 +29,7 @@ def test_docker_image_contains_migration_files() -> None:
 
 def test_docker_quickstart_documented_commands_are_implemented() -> None:
     script = Path("scripts/docker-quickstart.ps1")
-    quickstart = Path("docs/getting-started/quickstart.md").read_text(
-        encoding="utf-8"
-    )
+    quickstart = Path("docs/getting-started/quickstart.md").read_text(encoding="utf-8")
 
     assert script.is_file()
     assert ".\\scripts\\docker-quickstart.ps1" in quickstart

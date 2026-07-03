@@ -51,8 +51,7 @@ async def test_conversation_service_emits_reasoning_events_before_answer() -> No
     )
 
     events = [
-        event
-        async for event in service.start_turn(thread_id=thread.id, content="hi")
+        event async for event in service.start_turn(thread_id=thread.id, content="hi")
     ]
 
     assert [event.event for event in events] == [
