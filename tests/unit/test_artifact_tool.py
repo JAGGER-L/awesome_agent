@@ -60,3 +60,38 @@ async def test_artifact_read_returns_bounded_content(tmp_path: Path) -> None:
     assert not result.is_error
     assert "hello" in result.content
     assert '"truncated": true' in result.content
+
+
+@pytest.mark.asyncio
+async def test_artifact_read_redacts_persisted_content(tmp_path: Path) -> None:
+    artifact_path = tmp_path / "artifact.txt"
+    artifact_path.write_text(
+        "TOKEN=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG",
+        encoding="utf-8",
+    )
+    repository = InMemoryArtifactMetadataRepository()
+    metadata = ArtifactMetadata(
+        run_id=uuid4(),
+        artifact_type="tool-output",
+        path=artifact_path,
+        sha256="hash",
+        size=artifact_path.stat().st_size,
+        mime_type="text/plain",
+    )
+    await repository.record(metadata)
+    registry = build_modifying_registry(repository)
+
+    result = await execute_repository_call(
+        build_modifying_executor(registry),
+        ToolCall(
+            call_id="artifact",
+            name="artifact.read",
+            arguments_json=f'{{"artifact_id":"{metadata.id}"}}',
+        ),
+        workspace=tmp_path,
+        agent_id=uuid4(),
+        capabilities={"artifact:read"},
+    )
+
+    assert "abcdefghijklmnopqrstuvwxyz" not in result.content
+    assert "[REDACTED:token]" in result.content

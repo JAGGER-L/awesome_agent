@@ -12,6 +12,7 @@ from awesome_agent.persistence.models import (
     ValidationGateResultRecord,
     ValidationReportRecord,
 )
+from awesome_agent.safety.redaction import redact_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +78,7 @@ class InMemoryValidationRepository:
         gates: list[DurableValidationGateResult],
     ) -> DurableValidationReport:
         self._reports[report.id] = report
-        self._gates[report.id] = list(gates)
+        self._gates[report.id] = [_redacted_gate(gate) for gate in gates]
         return report
 
     async def list_for_run(self, run_id: UUID) -> list[ValidationReportWithGates]:
@@ -184,6 +185,7 @@ def _from_report_record(record: ValidationReportRecord) -> DurableValidationRepo
 def _to_gate_record(
     gate: DurableValidationGateResult,
 ) -> ValidationGateResultRecord:
+    gate = _redacted_gate(gate)
     return ValidationGateResultRecord(
         id=gate.id,
         report_id=gate.report_id,
@@ -210,8 +212,8 @@ def _update_gate_record(
     record.status = gate.status
     record.exit_code = gate.exit_code
     record.duration_ms = gate.duration_ms
-    record.stdout_summary = gate.stdout_summary
-    record.stderr_summary = gate.stderr_summary
+    record.stdout_summary = redact_text(gate.stdout_summary).text
+    record.stderr_summary = redact_text(gate.stderr_summary).text
     record.artifact_refs = gate.artifact_refs
     record.failure_kind = gate.failure_kind
 
@@ -235,4 +237,26 @@ def _from_gate_record(
         artifact_refs=list(record.artifact_refs),
         failure_kind=record.failure_kind,
         created_at=record.created_at,
+    )
+
+
+def _redacted_gate(
+    gate: DurableValidationGateResult,
+) -> DurableValidationGateResult:
+    return DurableValidationGateResult(
+        id=gate.id,
+        report_id=gate.report_id,
+        run_id=gate.run_id,
+        gate_id=gate.gate_id,
+        name=gate.name,
+        command=list(gate.command),
+        required=gate.required,
+        status=gate.status,
+        exit_code=gate.exit_code,
+        duration_ms=gate.duration_ms,
+        stdout_summary=redact_text(gate.stdout_summary).text,
+        stderr_summary=redact_text(gate.stderr_summary).text,
+        artifact_refs=list(gate.artifact_refs),
+        failure_kind=gate.failure_kind,
+        created_at=gate.created_at,
     )

@@ -32,6 +32,7 @@ from awesome_agent.persistence.models import (
 )
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.safety.redaction import redact_runtime_payload
 
 
 class PostgresRuntimeRepository(RuntimeRepository):
@@ -334,7 +335,7 @@ class PostgresRuntimeRepository(RuntimeRepository):
                 run_id=run_id,
                 sequence=(current or 0) + 1,
                 event_type=event_type,
-                payload=payload,
+                payload=redact_runtime_payload(payload),
                 agent_id=agent_id,
                 trace_id=run_id.hex,
             )
@@ -539,7 +540,7 @@ def _event_to_record(event: RuntimeEvent) -> RuntimeEventRecord:
         sequence=event.sequence,
         transition_id=event.transition_id,
         event_type=event.event_type.value,
-        payload=event.payload,
+        payload=redact_runtime_payload(event.payload),
         team_id=event.team_id,
         agent_id=event.agent_id,
         parent_agent_id=event.parent_agent_id,
@@ -583,7 +584,7 @@ async def _append_locked_event(
         run_id=run_id,
         sequence=(current or 0) + 1,
         event_type=event_type,
-        payload=payload,
+        payload=redact_runtime_payload(payload),
         trace_id=run_id.hex,
     )
     session.add(_event_to_record(event))

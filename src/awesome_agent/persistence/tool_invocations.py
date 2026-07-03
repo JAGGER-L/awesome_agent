@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.persistence.models import ToolInvocationRecord
+from awesome_agent.safety.redaction import redact_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +64,9 @@ class InMemoryToolInvocationRepository:
         self._records: dict[UUID, DurableToolInvocation] = {}
 
     async def upsert(self, invocation: DurableToolInvocation) -> DurableToolInvocation:
-        self._records[invocation.id] = invocation
-        return invocation
+        redacted = _redacted_invocation(invocation)
+        self._records[redacted.id] = redacted
+        return redacted
 
     async def get(self, invocation_id: UUID) -> DurableToolInvocation:
         return self._records[invocation_id]
@@ -97,6 +99,7 @@ class PostgresToolInvocationRepository:
         self._sessions = session_factory
 
     async def upsert(self, invocation: DurableToolInvocation) -> DurableToolInvocation:
+        invocation = _redacted_invocation(invocation)
         async with self._sessions.begin() as session:
             record = await session.get(ToolInvocationRecord, invocation.id)
             if record is None:
@@ -139,6 +142,7 @@ class PostgresToolInvocationRepository:
 
 
 def _to_record(invocation: DurableToolInvocation) -> ToolInvocationRecord:
+    invocation = _redacted_invocation(invocation)
     return ToolInvocationRecord(
         id=invocation.id,
         run_id=invocation.run_id,
@@ -168,6 +172,7 @@ def _update_record(
     record: ToolInvocationRecord,
     invocation: DurableToolInvocation,
 ) -> None:
+    invocation = _redacted_invocation(invocation)
     record.status = invocation.status
     record.path_refs = invocation.path_refs
     record.preimage_hashes = invocation.preimage_hashes
@@ -210,3 +215,35 @@ def _from_record(record: ToolInvocationRecord) -> DurableToolInvocation:
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def _redacted_invocation(invocation: DurableToolInvocation) -> DurableToolInvocation:
+    return DurableToolInvocation(
+        id=invocation.id,
+        run_id=invocation.run_id,
+        agent_id=invocation.agent_id,
+        tool_name=invocation.tool_name,
+        tool_version=invocation.tool_version,
+        status=invocation.status,
+        idempotency_key=invocation.idempotency_key,
+        arguments_hash=invocation.arguments_hash,
+        risk_level=invocation.risk_level,
+        path_refs=list(invocation.path_refs),
+        preimage_hashes=dict(invocation.preimage_hashes),
+        expected_postimage_hashes=dict(invocation.expected_postimage_hashes),
+        result_summary=_redact_optional(invocation.result_summary),
+        result_content=_redact_optional(invocation.result_content),
+        result_is_error=invocation.result_is_error,
+        artifact_refs=list(invocation.artifact_refs),
+        error=_redact_optional(invocation.error),
+        started_at=invocation.started_at,
+        completed_at=invocation.completed_at,
+        created_at=invocation.created_at,
+        updated_at=invocation.updated_at,
+    )
+
+
+def _redact_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return redact_text(value).text

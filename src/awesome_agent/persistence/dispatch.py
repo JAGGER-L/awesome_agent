@@ -29,6 +29,7 @@ from awesome_agent.persistence.models import (
     RuntimeEventRecord,
 )
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
+from awesome_agent.safety.redaction import redact_runtime_payload
 
 
 class PostgresRunDispatcher(RunDispatcher):
@@ -736,7 +737,7 @@ async def _append_event(
         sequence=(current or 0) + 1,
         transition_id=transition_id,
         event_type=event_type,
-        payload=payload,
+        payload=redact_runtime_payload(payload),
         trace_id=record.id.hex,
     )
     session.add(

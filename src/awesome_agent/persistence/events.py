@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.persistence.models import RuntimeEventRecord
+from awesome_agent.safety.redaction import redact_runtime_payload
 
 
 class EventRepository:
@@ -19,7 +20,7 @@ class EventRepository:
                 run_id=event.run_id,
                 sequence=event.sequence,
                 event_type=event.event_type.value,
-                payload=event.payload,
+                payload=redact_runtime_payload(event.payload),
                 team_id=event.team_id,
                 agent_id=event.agent_id,
                 parent_agent_id=event.parent_agent_id,

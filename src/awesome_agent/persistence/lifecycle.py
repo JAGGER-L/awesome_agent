@@ -14,6 +14,7 @@ from awesome_agent.persistence.models import (
     RuntimeEventRecord,
     TodoRecord,
 )
+from awesome_agent.safety.redaction import redact_runtime_payload
 
 
 async def append_lifecycle_event(
@@ -46,7 +47,7 @@ async def append_lifecycle_event(
         sequence=(current or 0) + 1,
         transition_id=transition_id,
         event_type=event_type,
-        payload=payload,
+        payload=redact_runtime_payload(payload),
         agent_id=agent_id,
         task_id=task_id,
         trace_id=run_id.hex,

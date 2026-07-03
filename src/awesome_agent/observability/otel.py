@@ -26,6 +26,8 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 
+from awesome_agent.safety.redaction import install_redacting_log_filter
+
 logger = logging.getLogger(__name__)
 
 
@@ -127,6 +129,9 @@ class OTelMetricRecorder:
 
 def configure_otel(config: OTelConfig) -> TracerProvider:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    install_redacting_log_filter(logging.getLogger())
+    for handler in logging.getLogger().handlers:
+        install_redacting_log_filter(handler)
     structlog.configure(
         processors=[
             structlog.processors.TimeStamper(fmt="iso", utc=True),

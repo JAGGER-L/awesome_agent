@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 from rich.text import Text
 
+from awesome_agent.safety.redaction import redact_text
 from awesome_agent.surfaces.client import ChangedFileSummary
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
 from awesome_agent.tui.events import (
@@ -129,13 +130,7 @@ def _labeled(label: str, content: str, *, label_style: str) -> Text:
 
 
 def _bounded(value: str, *, max_chars: int = 600) -> str:
-    redacted = (
-        value.replace("api_key", "redacted_key")
-        .replace("secret", "redacted")
-        .replace("password", "redacted")
-        .replace("OPENAI_API_KEY", "[redacted]")
-        .replace("DEEPSEEK_API_KEY", "[redacted]")
-    )
+    redacted = redact_text(value).text
     if len(redacted) <= max_chars:
         return redacted
     return f"{redacted[:300]}\n  ...\n  {redacted[-300:]}"

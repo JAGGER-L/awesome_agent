@@ -751,6 +751,41 @@ def test_runtime_diagnostics_summarizes_run_evidence_and_redacts(
     assert "currency" not in serialized
 
 
+def test_artifact_download_redacts_text_content(tmp_path: Path) -> None:
+    client, repository = _client(tmp_path)
+    created = client.post(
+        "/runs",
+        json={
+            "repository_id": str(repository.id),
+            "goal": "Download a redacted artifact",
+            "intent": "read_only",
+        },
+    )
+    run_id = UUID(created.json()["id"])
+    app = cast(Any, client.app)
+    runtime_service = app.state.runtime
+    artifact = asyncio.run(
+        runtime_service.write_artifact(
+            run_id=run_id,
+            artifact_type="tool-output",
+            filename="secret.txt",
+            content=b"already redacted\n",
+            mime_type="text/plain",
+            summary="tool output",
+        )
+    )
+    Path(artifact.path).write_text(
+        "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(f"/artifacts/{artifact.id}")
+
+    assert response.status_code == 200
+    assert "sk-proj-" not in response.text
+    assert "OPENAI_API_KEY=[REDACTED:api_key]" in response.text
+
+
 def test_runtime_diagnostics_rolls_up_team_children(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     app = cast(Any, client.app)
