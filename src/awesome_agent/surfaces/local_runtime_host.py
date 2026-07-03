@@ -15,6 +15,7 @@ from awesome_agent.conversation.events import (
 )
 from awesome_agent.conversation.models import ThreadMessage
 from awesome_agent.modeling.provider import ModelProvider
+from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import (
     ChangedFileSummary,
@@ -304,6 +305,45 @@ class LocalRuntimeHost:
                 }
             )
         return list(reversed(runs))
+
+    def cancel(self, run_id: str) -> dict[str, object]:
+        return _run_async(self._cancel_async(run_id))
+
+    async def _cancel_async(self, run_id: str) -> dict[str, object]:
+        run_uuid = UUID(run_id)
+        event_sequence: int | None = None
+        try:
+            event = await self._container.dispatcher.request_cancellation(
+                run_id=run_uuid,
+                requested_by="local-surface",
+                reason="user_requested",
+            )
+        except DispatchConflict:
+            event = None
+        if event is not None:
+            event_sequence = event.sequence
+        run = await self.runtime_repository.get_run(run_uuid)
+        return {
+            "run_id": run_id,
+            "status": run.status.value,
+            "dispatch_status": run.dispatch_status.value,
+            "event_sequence": event_sequence,
+        }
+
+    def decide_approval(
+        self,
+        run_id: str,
+        approval_id: str,
+        *,
+        approved: bool,
+    ) -> dict[str, object]:
+        return {
+            "run_id": run_id,
+            "approval_id": approval_id,
+            "approved": approved,
+            "status": "not_found",
+            "reason": "approval_not_found",
+        }
 
     async def _run_created_payload(self, run_id: UUID) -> dict[str, object]:
         for event in await self.runtime_repository.list_events(run_id):
