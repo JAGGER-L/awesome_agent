@@ -165,17 +165,16 @@ awesome commands
 Run `awesome` from the project directory you want the agent to work on. The
 launch directory becomes the default thread context. If it is a Git checkout,
 Runs inherit that repository. If it is not a Git checkout, the CLI uses
-workspace-only mode and still accepts ordinary chat messages.
+workspace-only mode and still accepts user message turns.
 
 `awesome` is the default chat-first local CLI/TUI. Use `awesome-agent`
 subcommands for direct operations, diagnostics, and scripting.
 
-Ordinary input is the main execution entry. Simple questions use a lightweight
-local runtime turn; coding requests can be planned as coding execution from the
-same conversation context. Use `awesome --api-url http://127.0.0.1:8000` only
-when you explicitly want the TUI to connect to a local, Docker, or remote API
-server. `/run` is an advanced/manual execution command, not the normal way to
-make the agent work.
+Plain user messages are the only product execution creation path. A user
+message turn creates an internal conversation Run with a Leader Agent and
+executes through the embedded local runtime. Use
+`awesome --api-url http://127.0.0.1:8000` only when you explicitly want the TUI
+to connect to a local, Docker, or remote API server.
 
 The local TUI is intentionally chat-first. It shows a welcome panel at launch,
 then keeps the main screen focused on the transcript and input prompt. Runtime
@@ -186,7 +185,7 @@ details are available through slash commands such as `/status`, `/tools`,
 | --- | --- |
 | `/new` | Start a new durable local conversation/thread. |
 | `/threads` | Switch conversation. |
-| `/status` | Show current thread/run/runtime status. |
+| `/status` | Show current thread, run, and runtime status. |
 | `/model` | Choose the model for the current conversation. |
 | `/thinking` | Choose thinking mode. |
 | `/skills` | Browse enabled and available skills. |
@@ -196,7 +195,6 @@ details are available through slash commands such as `/status`, `/tools`,
 | `/details` | Toggle verbose activity rendering. |
 | `/usage` | Show token usage and context. |
 | `/config` | Show resolved config paths and overrides. |
-| `/run` | Force advanced/manual execution mode. |
 | `/help` | Show help. |
 | `/quit` | Exit the TUI. |
 
@@ -220,13 +218,14 @@ Verify the durable runtime without a model key:
 .\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
 ```
 
-### First Read-Only Run
+### First Model-Backed User Message
 
-Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the runtime, then run a
-read-only coding task:
+Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the local interactive
+runtime, open `awesome` from the project directory, then send a plain user
+message:
 
-```powershell
-.\.venv\Scripts\awesome-agent.exe run "Inspect this repository" --repo <repository-path> --read-only
+```text
+Build a single-file HTML timer in this folder.
 ```
 
 Committed defaults route Leader work to `deepseek-v4-pro` and Teammate,
@@ -234,8 +233,8 @@ Verifier, and Subagent work to `deepseek-v4-flash`. Override them with
 `AWESOME_AGENT_LEADER_MODEL`, `AWESOME_AGENT_TEAMMATE_MODEL`,
 `AWESOME_AGENT_VERIFIER_MODEL`, and `AWESOME_AGENT_SUBAGENT_MODEL`.
 
-Use `--team` when you want the distributed Leader, Teammate, and Verifier
-runtime.
+Distributed Leader, Teammate, and Verifier work remains a runtime capability;
+chat-first product entry and team controls continue through the roadmap.
 
 ## First Run
 
@@ -246,8 +245,8 @@ The fastest safe first run is the automated quickstart:
 ```
 
 It uses a diagnostic probe for the required success check. Add `-RunReadOnly`
-only after configuring a provider key and deciding to create a model-backed
-read-only Run.
+only after configuring a provider key and deciding to exercise the script's
+optional model-backed validation path.
 
 ## Extensions
 

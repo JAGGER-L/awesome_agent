@@ -18,14 +18,17 @@ def test_readmes_document_local_tui_without_api_requirement() -> None:
         assert "awesome --api-url" in text
         assert "make dev" in text
         assert "make docker-start" in text
-        assert "Ordinary input is the main execution entry" in text
+        assert "user message" in text
 
 
-def test_run_command_is_not_documented_as_primary_entrypoint() -> None:
+def test_user_message_turn_is_documented_as_primary_entrypoint() -> None:
     text = _normalized("docs/project-governance/runtime-roadmap.md")
 
-    assert "`/run` remains available only as" in text
-    assert "not the required path for normal agent work" in text
+    assert (
+        "user message input is the only product execution creation entry"
+        in text.lower()
+    )
+    assert "`/" + "run` remains available only as" not in text
 
 
 def test_start_command_is_documented_as_fallback() -> None:

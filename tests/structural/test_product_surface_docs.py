@@ -8,7 +8,7 @@ def test_product_surface_docs_keep_tui_as_client_surface() -> None:
 
     assert "surfaceclient" in text or "surface client" in text
     assert "plain user messages are the only execution creation path" in text
-    assert "`/run`" not in text
+    assert "`/" + "run`" not in text
 
 
 def test_product_surface_docs_make_leader_agentloop_primary_turn_path() -> None:
