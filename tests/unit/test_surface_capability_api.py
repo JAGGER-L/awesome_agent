@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -117,12 +118,14 @@ def test_thread_usage_and_artifacts_use_latest_thread_run(
         thread_id=UUID(thread["id"]),
         run_id=old_run_id,
         goal="Old run",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     _record_thread_run(
         runtime,
         thread_id=UUID(thread["id"]),
         run_id=latest_run_id,
         goal="Latest run",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=1),
     )
     asyncio.run(
         budget.upsert_ledger(
@@ -260,6 +263,7 @@ def _record_thread_run(
     thread_id: UUID,
     run_id: UUID,
     goal: str,
+    created_at: datetime,
 ) -> Run:
     run = Run(
         id=run_id,
@@ -270,6 +274,7 @@ def _record_thread_run(
         status=RunStatus.COMPLETED,
         dispatch_status=DispatchStatus.TERMINAL,
         result_text="done",
+        created_at=created_at,
     )
     leader = Agent(
         run_id=run.id,
@@ -279,7 +284,7 @@ def _record_thread_run(
         status=AgentStatus.READY,
     )
     asyncio.run(runtime.repository.create_run(run, leader))
-    asyncio.run(
+    event = asyncio.run(
         runtime.repository.append_event(
             run_id=run.id,
             event_type=EventType.RUN_CREATED,
@@ -287,4 +292,5 @@ def _record_thread_run(
             agent_id=leader.id,
         )
     )
+    event.created_at = created_at
     return run
