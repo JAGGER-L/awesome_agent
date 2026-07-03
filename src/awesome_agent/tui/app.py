@@ -23,7 +23,11 @@ from awesome_agent.conversation.events import (
     ConversationStreamEvent,
     ConversationStreamEventKind,
 )
-from awesome_agent.surfaces.client import SurfaceClient, SurfaceThread
+from awesome_agent.surfaces.client import (
+    SurfaceClient,
+    SurfaceThread,
+    changed_file_summaries_from_payload,
+)
 from awesome_agent.tui.chat_state import (
     ChatEventKind,
     ChatMessage,
@@ -40,6 +44,7 @@ from awesome_agent.tui.events import (
 from awesome_agent.tui.pickers import PickerItem, PickerState
 from awesome_agent.tui.rendering import (
     render_approval_prompt,
+    render_changed_files,
     render_team_event,
     render_tool_event,
     render_transcript,
@@ -474,6 +479,17 @@ class AwesomeAgentTui(App[None]):
             if isinstance(final_content, str):
                 self.state = self.state.upsert_streaming_assistant(final_content)
             self.state = self.state.note_model_metadata(stream_event.payload)
+            if "changed_files" in stream_event.payload:
+                self.state = self.state.append(
+                    ChatMessage.system(
+                        render_changed_files(
+                            changed_file_summaries_from_payload(
+                                stream_event.payload.get("changed_files")
+                            )
+                        ).plain,
+                        kind=ChatEventKind.RUN,
+                    )
+                )
         elif stream_event.event is ConversationStreamEventKind.ERROR:
             if stream_event.payload.get("approval_required") is True:
                 prompt = _approval_prompt_from_payload(stream_event.payload)

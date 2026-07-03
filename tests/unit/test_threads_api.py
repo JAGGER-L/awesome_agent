@@ -55,11 +55,48 @@ def test_list_threads_returns_newest_updated_first() -> None:
     client = _client()
     first = client.post("/threads", json={"title": "First"}).json()
     second = client.post("/threads", json={"title": "Second"}).json()
+    client.post(
+        f"/threads/{first['id']}/messages",
+        json={"role": "user", "content": "update first"},
+    )
 
     response = client.get("/threads")
 
     assert response.status_code == 200
-    assert [item["id"] for item in response.json()] == [second["id"], first["id"]]
+    assert [item["id"] for item in response.json()] == [first["id"], second["id"]]
+
+
+def test_list_threads_includes_latest_changed_file_summary() -> None:
+    client = _client()
+    thread = client.post("/threads", json={"title": "Snake game"}).json()
+    client.post(
+        f"/threads/{thread['id']}/messages",
+        json={
+            "role": "assistant",
+            "content": "Done.",
+            "metadata": {
+                "changed_files": [
+                    {
+                        "path": "/mnt/user-data/workspace/snake.html",
+                        "status": "created",
+                    }
+                ]
+            },
+        },
+    )
+
+    response = client.get("/threads")
+
+    assert response.status_code == 200
+    [summary] = response.json()
+    assert summary["changed_file_count"] == 1
+    assert summary["latest_changed_files"] == [
+        {
+            "path": "/mnt/user-data/workspace/snake.html",
+            "status": "created",
+            "display_path": "snake.html",
+        }
+    ]
 
 
 def test_get_thread_returns_created_thread() -> None:

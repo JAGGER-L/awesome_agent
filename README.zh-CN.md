@@ -89,7 +89,7 @@ awesome commands
 
 启动目录会成为当前 thread 的默认上下文。如果该目录属于 Git 仓库，后续 Run 会继承这个 repo；如果不是 Git 仓库，CLI 会进入 workspace-only 模式，普通聊天仍然可用。
 
-本地 TUI 是 chat-first 的：启动时显示一个欢迎面板，之后主界面只保留 transcript 和输入框。运行细节通过 `/status`、`/tools`、`/mcp`、`/artifacts`、`/usage`、`/config` 等 slash commands 按需查看。
+本地 TUI 是 chat-first 的：启动时显示一个欢迎面板，之后主界面只保留 transcript 和输入框。运行细节通过 `/status`、`/tools`、`/mcp`、`/usage`、`/config` 等 slash commands 按需查看。
 
 | Command | Purpose |
 | --- | --- |
@@ -105,7 +105,6 @@ awesome commands
 | `/mcp` | 查看 MCP server 状态。 |
 | `/memory` | 查看 memory 状态。 |
 | `/uploads` | 查看当前 thread 的上传文件。 |
-| `/artifacts` | 查看生成产物。 |
 | `/details` | 切换详细活动日志。 |
 | `/usage` | 查看 token 使用和上下文。 |
 | `/config` | 查看配置路径和覆盖项。 |
@@ -242,7 +241,7 @@ TUI 是基于本地 API 的 Run、诊断、事件和审批检查/控制界面，
 ## 安全提示
 
 不要把 secrets 提交进仓库。Provider keys 和本机 runtime settings 放在 `.env`。API 创建的 Runs 目标默认使用 `aio-docker` sandbox；LocalSandbox 只用于本地 CLI/TUI 或显式可信本地执行。
-Thread workspaces persist under `~/.awesome-agent/threads/<thread_id>/workspace/`. Run artifacts persist under `~/.awesome-agent/runs/<run_id>/artifacts/`. LocalSandbox is trusted-local only.
+Thread workspaces persist under `~/.awesome-agent/threads/<thread_id>/workspace/`. Generated files are shown as workspace changes in the TUI. Internal run evidence can persist under `~/.awesome-agent/runs/<run_id>/artifacts/`, but users normally interact with files in the launch workspace/project. LocalSandbox is trusted-local only.
 
 本地 CLI/TUI 直接使用 `awesome` 启动，默认使用嵌入式本地 runtime（embedded local runtime）；
 普通本地使用不需要先启动 API server。只有在你明确希望 TUI 连接到某个 API server 时，才使用

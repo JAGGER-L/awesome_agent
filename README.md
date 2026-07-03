@@ -180,23 +180,18 @@ make the agent work.
 The local TUI is intentionally chat-first. It shows a welcome panel at launch,
 then keeps the main screen focused on the transcript and input prompt. Runtime
 details are available through slash commands such as `/status`, `/tools`,
-`/mcp`, `/artifacts`, `/usage`, and `/config`.
+`/mcp`, `/usage`, and `/config`.
 
 | Command | Purpose |
 | --- | --- |
 | `/new` | Start a new durable local conversation/thread. |
 | `/threads` | List known threads. |
-| `/switch` | Alias for `/threads`. |
-| `/resume` | Resume a thread by id or title when supported. |
 | `/status` | Show current thread/run/runtime status. |
-| `/model` | Alias for `/models`. |
-| `/models` | List configured model profiles. |
+| `/model` | Choose the model for the current conversation. |
 | `/skills` | Browse enabled and available skills. |
 | `/tools` | Show built-in, MCP, and sandbox tools. |
 | `/mcp` | Show MCP server status. |
 | `/memory` | Show memory configuration and current memory summary. |
-| `/uploads` | Show uploaded files for this thread. |
-| `/artifacts` | Show generated artifacts. |
 | `/details` | Toggle verbose activity rendering. |
 | `/usage` | Show token usage and context. |
 | `/config` | Show resolved config paths and overrides. |
@@ -346,5 +341,7 @@ machine-specific runtime settings. Run untrusted code through Docker-backed
 local CLI/TUI profile or explicit trusted local operation.
 
 Thread workspaces persist under
-`~/.awesome-agent/threads/<thread_id>/workspace/`. Run artifacts persist under
-`~/.awesome-agent/runs/<run_id>/artifacts/`.
+`~/.awesome-agent/threads/<thread_id>/workspace/`. Generated files are presented
+as workspace changes in the TUI. Internal run evidence can persist under
+`~/.awesome-agent/runs/<run_id>/artifacts/`, but users normally interact with
+the files in their launch workspace/project.

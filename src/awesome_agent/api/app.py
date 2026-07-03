@@ -137,6 +137,7 @@ from awesome_agent.runtime.workspaces import (
     WorkspaceCleanupRequest as RuntimeWorkspaceCleanupRequest,
 )
 from awesome_agent.settings import Settings
+from awesome_agent.surfaces.client import changed_file_summaries_from_payload
 from awesome_agent.tools.repository import build_modifying_registry
 
 logger = logging.getLogger(__name__)
@@ -652,7 +653,10 @@ def create_app(
 
     @app.get("/threads")
     async def list_threads() -> list[dict[str, object]]:
-        return [thread.api_payload() for thread in await threads().list_threads()]
+        return [
+            await _thread_payload_with_changed_files(threads(), thread.api_payload())
+            for thread in await threads().list_threads()
+        ]
 
     @app.get("/threads/resume")
     async def resume_thread(query: str) -> dict[str, object]:
@@ -1600,6 +1604,35 @@ async def _thread_artifact_items(
             continue
         items.extend(artifact.model_dump(mode="json") for artifact in artifacts)
     return items
+
+
+async def _thread_payload_with_changed_files(
+    repository: ConversationRepository,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    enriched = dict(payload)
+    try:
+        thread_id = UUID(str(payload["id"]))
+        messages = await repository.list_messages(thread_id)
+    except (KeyError, TypeError, ValueError):
+        return enriched
+    for message in reversed(messages):
+        changed_files = changed_file_summaries_from_payload(
+            message.metadata.get("changed_files")
+        )
+        if not changed_files:
+            continue
+        enriched["changed_file_count"] = len(changed_files)
+        enriched["latest_changed_files"] = [
+            {
+                "path": item.path,
+                "status": item.status,
+                "display_path": item.visible_path,
+            }
+            for item in changed_files
+        ]
+        break
+    return enriched
 
 
 async def _thread_run_projection_response(

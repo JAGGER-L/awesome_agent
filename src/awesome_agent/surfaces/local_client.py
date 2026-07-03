@@ -80,16 +80,6 @@ class LocalSurfaceClient:
     def mcp_status(self) -> list[dict[str, Any]]:
         return []
 
-    def list_uploads(self, thread_id: str | None) -> list[dict[str, Any]]:
-        return []
-
-    def list_current_artifacts(
-        self,
-        thread_id: str | None,
-        run_id: str | None,
-    ) -> list[dict[str, Any]]:
-        return []
-
     def usage_summary(
         self,
         thread_id: str | None,
