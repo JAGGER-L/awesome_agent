@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -186,6 +187,47 @@ async def test_shell_execute_policy_allows_asks_and_denies() -> None:
                 profile="leader",
                 capabilities={"shell:execute"},
                 arguments={"argv": ["bash", "-lc", "echo unsafe"]},
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_regex_policy_requires_approval(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_shell_tools(registry, sandbox=RecordingSandbox())
+    executor = ToolExecutor(registry, ApprovalPolicy())
+    invocation = ToolInvocation(
+        tool_name="shell.execute",
+        agent_id=uuid4(),
+        profile="leader",
+        capabilities={"shell:execute"},
+        arguments={"argv": ["git", "commit", "-m", "change"]},
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(ApprovalRequired):
+        await executor.execute(invocation)
+
+    approved = invocation.model_copy(update={"approval_granted": True})
+    result = await executor.execute(approved)
+    assert result.output["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_shell_execute_hard_blocks_extreme_destructive_command() -> None:
+    registry = ToolRegistry()
+    register_shell_tools(registry, sandbox=RecordingSandbox())
+    executor = ToolExecutor(registry, ApprovalPolicy())
+
+    with pytest.raises(ToolDenied):
+        await executor.execute(
+            ToolInvocation(
+                tool_name="shell.execute",
+                agent_id=uuid4(),
+                profile="leader",
+                capabilities={"shell:execute"},
+                arguments={"argv": ["rm", "-rf", "/"]},
+                approval_granted=True,
             )
         )
 

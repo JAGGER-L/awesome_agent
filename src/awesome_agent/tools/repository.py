@@ -20,32 +20,23 @@ from awesome_agent.settings import Settings
 from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.artifacts import ArtifactReadArguments, register_artifact_tools
 from awesome_agent.tools.executor import ToolExecutor
+from awesome_agent.tools.guardrails import (
+    evaluate_patch_write,
+    is_sensitive_path,
+    parse_patch_paths,
+)
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.shell import ShellExecuteArguments, register_shell_tools
 
 TOOL_RESULT_MAX_CHARS = 30_000
-_SENSITIVE_NAMES = {
-    ".env",
-    ".env.local",
-    ".npmrc",
-    ".pypirc",
-    "credentials",
-    "credentials.json",
-    "id_dsa",
-    "id_ed25519",
-    "id_rsa",
-}
-_SENSITIVE_SUFFIXES = {".key", ".pem", ".p12", ".pfx"}
 
 
 class EffectiveToolPolicyLike(Protocol):
     @property
-    def tool_names(self) -> tuple[str, ...]:
-        ...
+    def tool_names(self) -> tuple[str, ...]: ...
 
-    def capabilities_for(self, tool_name: str) -> frozenset[str]:
-        ...
+    def capabilities_for(self, tool_name: str) -> frozenset[str]: ...
 
 
 class RepositoryToolError(RuntimeError):
@@ -461,6 +452,7 @@ async def _diff(invocation: ToolInvocation, _: object) -> ToolResult:
 async def _apply_patch(invocation: ToolInvocation, _: object) -> ToolResult:
     arguments = ApplyPatchArguments.model_validate(invocation.arguments)
     workspace = _workspace(invocation)
+    guardrail = evaluate_patch_write(workspace=workspace, patch=arguments.patch)
     paths = _patch_paths(arguments.patch)
     preimage_hashes = _file_hashes(workspace, paths)
     checked = await _git_apply(workspace, arguments.patch, check=True)
@@ -474,6 +466,11 @@ async def _apply_patch(invocation: ToolInvocation, _: object) -> ToolResult:
                     "paths": sorted(path.as_posix() for path in paths),
                     "preimage_hashes": {},
                     "postimage_hashes": _file_hashes(workspace, paths),
+                    "guardrail": {
+                        "action": guardrail.action,
+                        "reason": guardrail.reason,
+                        "name": guardrail.guardrail,
+                    },
                 },
             )
         detail = checked.stderr or checked.stdout or "git apply --check failed"
@@ -488,6 +485,11 @@ async def _apply_patch(invocation: ToolInvocation, _: object) -> ToolResult:
             "paths": sorted(path.as_posix() for path in paths),
             "preimage_hashes": preimage_hashes,
             "postimage_hashes": _file_hashes(workspace, paths),
+            "guardrail": {
+                "action": guardrail.action,
+                "reason": guardrail.reason,
+                "name": guardrail.guardrail,
+            },
         },
     )
 
@@ -517,21 +519,7 @@ def _safe_path(
 
 
 def _patch_paths(patch: str) -> set[Path]:
-    paths: set[Path] = set()
-    for line in patch.splitlines():
-        if not (line.startswith("--- ") or line.startswith("+++ ")):
-            continue
-        raw = line[4:].split("\t", maxsplit=1)[0].strip()
-        if raw == "/dev/null":
-            continue
-        if raw.startswith(("a/", "b/")):
-            raw = raw[2:]
-        path = Path(raw)
-        if path.is_absolute() or ".." in path.parts or ".git" in path.parts:
-            raise RepositoryToolError("Patch paths must remain inside the worktree.")
-        if not path.parts:
-            raise RepositoryToolError("Patch path is empty.")
-        paths.add(path)
+    paths = parse_patch_paths(patch)
     if not paths:
         raise RepositoryToolError("Patch contains no file paths.")
     return paths
@@ -610,10 +598,7 @@ def _read_text(path: Path) -> str | None:
 
 
 def _is_sensitive(path: Path) -> bool:
-    return (
-        path.name.lower() in _SENSITIVE_NAMES
-        or path.suffix.lower() in _SENSITIVE_SUFFIXES
-    )
+    return is_sensitive_path(path)
 
 
 async def _git(workspace: Path, *arguments: str) -> str:

@@ -24,10 +24,12 @@ Startup commands should map to user intent:
 ## Sandbox Targets
 
 `LocalSandbox` executes local shell commands for the local CLI/TUI profile. It
-is not the default backend for API-created Runs. Current LocalSandbox command
-policy is intentionally permissive for trusted local use; Task 93 adds
-Hermes-style soft guardrails and environment scrubbing, and Task 94 adds output
-redaction.
+is not the default backend for API-created Runs and is not a security boundary.
+Trusted local execution uses Hermes-style soft guardrails: validation and
+read-only commands may run automatically, risky mutation commands require
+approval, extreme destructive commands are blocked, patch writes can be
+bounded by `AWESOME_AGENT_WRITE_SAFE_ROOT`, and subprocess environments are
+scrubbed of provider/API secret-looking names. Task 94 adds output redaction.
 
 `AIO Docker` is a long-lived Linux development container with a
 thread-mounted workspace directory and an `agent-sandbox` HTTP service. API

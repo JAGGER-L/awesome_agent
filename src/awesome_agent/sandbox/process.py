@@ -4,7 +4,7 @@ import asyncio
 import os
 import signal
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
 from typing import cast
@@ -20,8 +20,9 @@ async def run_process(
     command_label: str,
     workspace: Path,
     timeout_seconds: float,
+    environment: Mapping[str, str] | None = None,
 ) -> CommandResult:
-    process = _start_process(arguments, workspace=workspace)
+    process = _start_process(arguments, workspace=workspace, environment=environment)
     communicate = asyncio.create_task(
         asyncio.to_thread(process.communicate),
         name=f"communicate:{command_label}",
@@ -57,11 +58,13 @@ def _start_process(
     arguments: Sequence[str],
     *,
     workspace: Path,
+    environment: Mapping[str, str] | None = None,
 ) -> subprocess.Popen[str]:
     if os.name == "nt":
         return subprocess.Popen(
             list(arguments),
             cwd=workspace,
+            env=dict(environment) if environment is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -70,6 +73,7 @@ def _start_process(
     return subprocess.Popen(
         list(arguments),
         cwd=workspace,
+        env=dict(environment) if environment is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

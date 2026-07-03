@@ -6,6 +6,7 @@ from pathlib import Path
 from awesome_agent.sandbox.base import CommandRequest, CommandResult
 from awesome_agent.sandbox.path_mapping import WorkspacePathMapper
 from awesome_agent.sandbox.process import run_process
+from awesome_agent.tools.guardrails import scrub_subprocess_environment
 
 
 class LocalSandbox:
@@ -28,6 +29,7 @@ class LocalSandbox:
             command_label=request.command_label,
             workspace=workspace,
             timeout_seconds=request.timeout_seconds,
+            environment=scrub_subprocess_environment(overrides=request.environment),
         )
         return result.model_copy(update={"sandbox": self.name})
 

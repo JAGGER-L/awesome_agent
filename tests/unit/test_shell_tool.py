@@ -44,9 +44,9 @@ def test_shell_policy_classifies_allow_ask_and_deny() -> None:
     assert classify_command(["pytest"]) == "allow"
     assert classify_command(["python", "-m", "unittest", "discover"]) == "allow"
     assert classify_command(["git", "diff"]) == "allow"
-    assert classify_command(["git", "push"]) == "deny"
+    assert classify_command(["git", "push"]) == "ask"
     assert classify_command(["git", "status"]) == "allow"
-    assert classify_command(["git", "reset", "--hard"]) == "deny"
+    assert classify_command(["git", "reset", "--hard"]) == "ask"
     assert classify_command(["ruff", "check", "."]) == "allow"
     assert classify_command(["mypy", "src"]) == "allow"
     assert classify_command(["npm", "publish"]) == "deny"
@@ -140,14 +140,14 @@ async def test_shell_execute_runs_approved_ambiguous_command(
 
 @pytest.mark.asyncio
 async def test_shell_execute_denies_dangerous_command(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="denied"):
+    with pytest.raises(RuntimeError, match="blocked"):
         await _execute(
             ToolInvocation(
                 tool_name="shell.execute",
                 agent_id=uuid4(),
                 profile="leader",
                 capabilities={"shell:execute"},
-                arguments={"argv": ["git", "push"]},
+                arguments={"argv": ["rm", "-rf", "/"]},
                 workspace=tmp_path,
             ),
             None,
