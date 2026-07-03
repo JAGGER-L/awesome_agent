@@ -139,6 +139,24 @@ def test_local_runtime_host_streams_leader_turn(content: str) -> None:
     }
 
 
+def test_local_runtime_host_stream_turn_creates_durable_conversation_run(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=Settings(_env_file=None, local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
+
+    events = list(host.stream_turn(thread.id, "hi"))
+
+    assert any(event.event.value == "turn.started" for event in events)
+    runs = host.list_thread_runs(thread.id)
+    assert runs
+    assert runs[0]["runtime_route"] == "conversation-turn"
+
+
 def test_local_runtime_host_reports_coding_mode_boundary() -> None:
     host = LocalRuntimeHost(
         provider_factory=lambda _model: FakeProvider(),
