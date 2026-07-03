@@ -153,6 +153,26 @@ def test_local_surface_cancel_uses_runtime_state(tmp_path: Path) -> None:
     host.close()
 
 
+def test_local_surface_cancel_reports_missing_run_as_not_found(tmp_path: Path) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    run_id = "00000000-0000-0000-0000-000000000000"
+
+    result = host.cancel(run_id)
+
+    assert result == {
+        "run_id": run_id,
+        "status": "not_found",
+        "reason": "run_not_found",
+        "dispatch_status": None,
+        "event_sequence": None,
+    }
+    host.close()
+
+
 def test_local_surface_client_cancel_delegates_to_host() -> None:
     host = FakeHost()
     client = LocalSurfaceClient(host=cast(Any, host))

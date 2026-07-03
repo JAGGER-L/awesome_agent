@@ -318,11 +318,16 @@ class LocalRuntimeHost:
                 requested_by="local-surface",
                 reason="user_requested",
             )
+        except KeyError:
+            return _cancel_run_not_found_response(run_id)
         except DispatchConflict:
             event = None
         if event is not None:
             event_sequence = event.sequence
-        run = await self.runtime_repository.get_run(run_uuid)
+        try:
+            run = await self.runtime_repository.get_run(run_uuid)
+        except KeyError:
+            return _cancel_run_not_found_response(run_id)
         return {
             "run_id": run_id,
             "status": run.status.value,
@@ -475,6 +480,16 @@ class LocalRuntimeHost:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _cancel_run_not_found_response(run_id: str) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "status": "not_found",
+        "reason": "run_not_found",
+        "dispatch_status": None,
+        "event_sequence": None,
+    }
 
 
 def _latest_changed_files(
