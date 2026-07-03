@@ -46,12 +46,17 @@ load user task and project policy
   lease validity.
 - Expired leases requeue until the maximum claim count, then enter
   `recovery_required`.
-- Ordinary conversation turns are durable `conversation` Runs executed by the
+- User message turns are durable `conversation` Runs executed by the
   `conversation-turn` graph route. `ConversationService` projects runtime
-  events and does not own provider calls, tool calls, or ordinary message
+  events and does not own provider calls, tool calls, or user message
   writes.
-- Trusted local ordinary turns execute against the thread context path, which
-  defaults to the launch/current working directory in embedded local mode.
+- User message turn -> conversation Run -> initial Leader Agent -> dispatcher
+  -> Worker -> ConversationGraph -> Leader AgentLoop.
+- Surfaces do not create explicit product Runs and surfaces do not execute
+  graphs.
+- Trusted local user message turns execute against the thread context path,
+  which defaults to the launch/current working directory in embedded local
+  mode.
   This is operator-equivalent local execution, not a filesystem security
   boundary.
 - Repository coding Runs may use managed worktrees when they are explicitly
@@ -78,7 +83,7 @@ awesome-agent start
 of each for normal local use. API request handling never owns the lifetime of a
 coding Run.
 
-The Worker claims diagnostic `runtime_probe` Runs, ordinary conversation Runs
+The Worker claims diagnostic `runtime_probe` Runs, user message conversation Runs
 routed to `conversation-turn`, and configured coding/team routes. The
 conversation graph writes the thread user message, builds model history from
 thread messages, invokes the model/tool loop, writes the assistant message, and
@@ -121,7 +126,7 @@ For the current trusted local product path, model-visible user files live in
 the thread context path, which defaults to the launch/current working
 directory. Run audit evidence remains internal. The older thread workspace and
 AIO Docker path mapping remain design inputs for Docker/API hardening, but they
-are not the product-closure default for ordinary local turns.
+are not the product-closure default for user message local turns.
 
 Trusted local execution relies on defense-in-depth guardrails and output
 redaction, but it is not a security boundary. Shared guardrails classify shell
