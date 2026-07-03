@@ -108,6 +108,36 @@ async def test_local_runtime_repository_does_not_cancel_terminal_run(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "dispatch_status"),
+    [
+        (RunStatus.COMPLETED, DispatchStatus.WAITING),
+        (RunStatus.PAUSED, DispatchStatus.QUEUED),
+    ],
+)
+async def test_local_runtime_repository_does_not_requeue_non_waiting_run(
+    tmp_path: Path,
+    status: RunStatus,
+    dispatch_status: DispatchStatus,
+) -> None:
+    repository = LocalRuntimeRepository(tmp_path / "state.db")
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": status,
+            "dispatch_status": dispatch_status,
+        }
+    )
+    await repository.create_run(run, _leader(run))
+
+    unchanged = await repository.requeue_waiting_run(run.id, reason="approval_granted")
+
+    assert unchanged == run
+    assert await repository.get_run(run.id) == run
+    assert await repository.list_events(run.id) == []
+    repository.close()
+
+
+@pytest.mark.asyncio
 async def test_local_runtime_repository_persists_transition_id_idempotently(
     tmp_path: Path,
 ) -> None:

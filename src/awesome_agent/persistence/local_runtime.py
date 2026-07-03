@@ -111,13 +111,21 @@ class LocalRuntimeRepository(RuntimeRepository):
 
     async def requeue_waiting_run(self, run_id: UUID, *, reason: str) -> Run:
         current = await self.get_run(run_id)
-        if current.status is not RunStatus.WAITING:
+        if (
+            current.dispatch_status is not DispatchStatus.WAITING
+            or current.status not in {RunStatus.PAUSED, RunStatus.WAITING}
+        ):
             return current
         updated = current.model_copy(
             update={
                 "status": RunStatus.RUNNING,
                 "dispatch_status": DispatchStatus.QUEUED,
                 "last_release_reason": reason,
+                "current_worker_id": None,
+                "current_worker_name": None,
+                "lease_acquired_at": None,
+                "lease_expires_at": None,
+                "heartbeat_at": None,
             }
         )
         await self.update_run(updated)

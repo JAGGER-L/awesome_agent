@@ -231,6 +231,47 @@ async def test_local_dispatcher_release_for_approval_wait_pauses_run(
 
 
 @pytest.mark.asyncio
+async def test_local_dispatcher_requeues_paused_approval_wait(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime)
+    run = _run(tmp_path)
+    await runtime.create_run(run, _leader(run))
+    lease = await dispatcher.claim_next(
+        worker_id=uuid4(),
+        worker_name="local-worker",
+        lease_duration=timedelta(seconds=30),
+        max_attempts=3,
+    )
+    assert lease is not None
+    await dispatcher.start_execution(lease, runtime_route=CONVERSATION_TURN_ROUTE)
+
+    approval_id = uuid4()
+    await dispatcher.release_for_approval_wait(
+        lease,
+        approval_id=approval_id,
+        reason="approval_wait",
+    )
+    await dispatcher.requeue_after_approval(
+        run_id=run.id,
+        approval_id=approval_id,
+        reason="approval_granted",
+    )
+
+    stored = await runtime.get_run(run.id)
+    assert stored.status is RunStatus.RUNNING
+    assert stored.dispatch_status is DispatchStatus.QUEUED
+    assert stored.last_release_reason == "approval_granted"
+    assert stored.current_worker_id is None
+    assert stored.current_worker_name is None
+    assert stored.lease_acquired_at is None
+    assert stored.lease_expires_at is None
+    assert stored.heartbeat_at is None
+    runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_local_dispatcher_does_not_cancel_terminal_run(
     tmp_path: Path,
 ) -> None:
