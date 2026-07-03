@@ -97,7 +97,7 @@ class LocalRuntimeContainer:
                 poll_interval=0.01,
                 recovery_interval=15,
                 shutdown_grace=0.01,
-                retry_delay=timedelta(seconds=5),
+                retry_delay=timedelta(seconds=0),
                 max_attempts=3,
             ),
             budget_repository=InMemoryBudgetRepository(),

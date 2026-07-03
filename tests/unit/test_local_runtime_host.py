@@ -49,6 +49,19 @@ class CaptureRequestProvider(StructuredModelProvider):
         )
 
 
+class FailingProvider(StructuredModelProvider):
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        raise RuntimeError("model failed")
+        yield TurnCompleted(  # pragma: no cover
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="unreachable"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        )
+
+
 class PatchToolProvider(StructuredModelProvider):
     def __init__(self) -> None:
         self.requests: list[ModelRequest] = []
@@ -163,6 +176,30 @@ def test_local_runtime_host_uses_worker_pump_for_user_message_turn(
     runtime_event_types = [event.event_type for event in runtime_events]
     assert EventType.DISPATCH_CLAIMED in runtime_event_types
     assert EventType.GRAPH_COMPLETED in runtime_event_types
+
+
+def test_local_runtime_host_stream_turn_returns_error_after_retry_exhaustion(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FailingProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
+
+    events = list(host.stream_turn(thread.id, "hi"))
+
+    assert events[-1].event.value == "error"
+    assert events[-1].payload["message"] == "model failed"
+    [run] = host.list_thread_runs(thread.id)
+    assert run["status"] == "recovery_required"
+    runtime_events = asyncio.run(
+        host.runtime_repository.list_events(UUID(str(run["id"])))
+    )
+    runtime_event_types = [event.event_type for event in runtime_events]
+    assert EventType.RUN_STATUS_CHANGED in runtime_event_types
+    assert EventType.DISPATCH_RECOVERY_REQUIRED in runtime_event_types
 
 
 def test_local_runtime_host_rejects_conversation_repository_injection(

@@ -509,6 +509,15 @@ class LocalRunDispatcher(RunDispatcher):
         await self.runtime.update_run(updated)
         await self.runtime.append_event(
             run_id=run.id,
+            event_type=EventType.RUN_STATUS_CHANGED,
+            payload={
+                "status": updated.status.value,
+                "dispatch_status": updated.dispatch_status.value,
+                "error": reason,
+            },
+        )
+        await self.runtime.append_event(
+            run_id=run.id,
             event_type=EventType.DISPATCH_RECOVERY_REQUIRED,
             payload={
                 "status": updated.status.value,

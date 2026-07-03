@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from uuid import UUID
 
 from awesome_agent.domain.enums import DispatchStatus, RunStatus
@@ -28,10 +31,12 @@ class LocalWorkerPump:
         worker: DurableWorker,
         runtime: RuntimeRepository,
         max_iterations: int = 100,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.worker = worker
         self.runtime = runtime
         self.max_iterations = max_iterations
+        self.sleep = sleep
 
     async def drain_until_idle(self) -> int:
         for processed in range(self.max_iterations):
@@ -48,8 +53,20 @@ class LocalWorkerPump:
                 or run.dispatch_status in _STOP_DISPATCH_STATUSES
             ):
                 return processed
-            if not await self.worker.run_once():
+            if await self.worker.run_once():
+                continue
+            run = await self.runtime.get_run(target)
+            if (
+                run.status in _STOP_RUN_STATUSES
+                or run.dispatch_status in _STOP_DISPATCH_STATUSES
+            ):
                 return processed
+            if run.dispatch_status is DispatchStatus.RETRY_SCHEDULED:
+                delay = max(0.0, (run.available_at - datetime.now(UTC)).total_seconds())
+                if delay > 0:
+                    await self.sleep(min(delay, 0.1))
+                continue
+            return processed
         raise RuntimeError(
             "Local worker pump did not reach a terminal or waiting state "
             f"for Run {run_id}."
