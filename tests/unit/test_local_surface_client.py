@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Coroutine, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -520,7 +520,7 @@ def test_local_surface_client_approval_delegates_without_fake_unsupported() -> N
     }
 
 
-def _run_async[T](awaitable: Any) -> T:
+def _run_async[T](awaitable: Coroutine[Any, Any, T]) -> T:
     import asyncio
 
     return asyncio.run(awaitable)

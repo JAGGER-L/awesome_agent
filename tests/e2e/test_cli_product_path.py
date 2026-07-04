@@ -112,6 +112,22 @@ class HtmlGameSurfaceClient:
             },
         )
 
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        turn_id = uuid4()
+        yield ConversationStreamEvent(
+            event=ConversationStreamEventKind.TURN_CONTINUED,
+            thread_id=uuid4(),
+            turn_id=turn_id,
+            sequence=1,
+            trace_id="trace-continue",
+            payload={"run_id": expected_run_id, "resumed": True},
+        )
+
     def runtime_status(self) -> dict[str, object]:
         return {"api": "embedded", "sandbox": "local"}
 

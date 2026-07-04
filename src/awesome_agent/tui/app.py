@@ -447,7 +447,8 @@ class AwesomeAgentTui(App[None]):
             )
 
     def _start_continue_turn(self, *, expected_run_id: str | None = None) -> None:
-        if self.state.backend_thread_id is None:
+        thread_id = self.state.backend_thread_id
+        if thread_id is None:
             self.state = self.state.append(
                 ChatMessage.system(
                     "No active conversation is available to continue.",
@@ -464,7 +465,6 @@ class AwesomeAgentTui(App[None]):
             )
             return
         operation_id = str(uuid4())
-        thread_id = self.state.backend_thread_id
         self.state = self.state.begin_operation(operation_id, "continuing")
         self._active_worker = self.run_worker(
             lambda: self._continue_worker(thread_id, expected_run_id),

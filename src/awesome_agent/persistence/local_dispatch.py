@@ -312,14 +312,13 @@ class LocalRunDispatcher(RunDispatcher):
         run_id: UUID,
         approval_id: UUID,
         reason: str,
-    ) -> bool:
+    ) -> None:
         if not await self.is_waiting_for_approval(
             run_id=run_id,
             approval_id=approval_id,
         ):
-            return False
+            return
         await self.runtime.requeue_waiting_run(run_id, reason=reason)
-        return True
 
     async def is_waiting_for_approval(
         self,

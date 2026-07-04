@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.tui.app import AwesomeAgentTui
@@ -60,7 +60,7 @@ def test_tui_continue_input_uses_continuation_without_user_message() -> None:
         expected_run_id
     )
 
-    app.on_input_submitted(_submitted("continue"))
+    app.on_input_submitted(cast(Any, _submitted("continue")))
 
     assert started == ["run-1"]
     assert [message.content for message in app.state.messages] == []

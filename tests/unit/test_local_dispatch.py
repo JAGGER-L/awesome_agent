@@ -290,14 +290,13 @@ async def test_local_dispatcher_does_not_requeue_stale_waiting_approval(
     await _append_approval_wait(runtime, run.id, stale_approval)
     await _append_approval_wait(runtime, run.id, current_approval)
 
-    requeued = await dispatcher.requeue_after_approval(
+    await dispatcher.requeue_after_approval(
         run_id=run.id,
         approval_id=stale_approval,
         reason="approval_decided",
     )
 
     stored = await runtime.get_run(run.id)
-    assert requeued is False
     assert stored.status is RunStatus.PAUSED
     assert stored.dispatch_status is DispatchStatus.WAITING
     assert stored.last_release_reason is None
@@ -322,14 +321,13 @@ async def test_local_dispatcher_requeues_current_waiting_approval(
     await _append_approval_wait(runtime, run.id, stale_approval)
     await _append_approval_wait(runtime, run.id, current_approval)
 
-    requeued = await dispatcher.requeue_after_approval(
+    await dispatcher.requeue_after_approval(
         run_id=run.id,
         approval_id=current_approval,
         reason="approval_decided",
     )
 
     stored = await runtime.get_run(run.id)
-    assert requeued is True
     assert stored.status is RunStatus.RUNNING
     assert stored.dispatch_status is DispatchStatus.QUEUED
     assert stored.last_release_reason == "approval_decided"
