@@ -6,7 +6,7 @@ from awesome_agent.cli.slash_commands import (
     SlashCommandKind,
     parse_slash_command,
 )
-from awesome_agent.tui.chat_state import ChatSessionState
+from awesome_agent.tui.chat_state import ChatEventKind, ChatSessionState
 from awesome_agent.tui.slash_router import SlashRouter
 
 
@@ -17,9 +17,6 @@ class FakeSemanticClient:
             "title": title,
             "logical_workspace_path": "/mnt/user-data/workspace/",
         }
-
-    def runtime_status(self) -> dict[str, object]:
-        return {"api": "ready", "sandbox": "local"}
 
     def list_models(self) -> dict[str, object]:
         return _model_catalog(configured=False)
@@ -111,6 +108,16 @@ def test_router_config_uses_first_run_summary_when_available(tmp_path: Path) -> 
     assert "Project" in message.content
     assert str(summary.project_config) in message.content
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY: missing" in message.content
+
+
+def test_status_command_is_owned_by_tui_app_not_slash_router() -> None:
+    message = SlashRouter(FakeSemanticClient()).handle(
+        SlashCommand(SlashCommandKind.STATUS),
+        ChatSessionState.new(),
+    )
+
+    assert message.kind is ChatEventKind.ERROR
+    assert "Unknown command" in message.content
 
 
 def test_router_model_marks_missing_key(tmp_path: Path) -> None:

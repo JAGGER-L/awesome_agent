@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, cast
 from uuid import UUID, uuid4
@@ -52,6 +53,11 @@ from awesome_agent.tui.rendering import (
     render_transcript,
 )
 from awesome_agent.tui.slash_router import SlashRouter
+from awesome_agent.tui.status_panel import (
+    StatusPanelSnapshot,
+    build_status_panel_snapshot,
+    render_status_panel,
+)
 
 
 class AwesomeAgentTui(App[None]):
@@ -77,6 +83,10 @@ class AwesomeAgentTui(App[None]):
 
     #command-palette {
         max-height: 8;
+    }
+
+    #status-panel {
+        height: auto;
     }
 
     #shortcuts {
@@ -129,12 +139,14 @@ class AwesomeAgentTui(App[None]):
         self._active_worker: Worker[object] | None = None
         self._seen_runtime_events: set[tuple[str, int]] = set()
         self._last_runtime_sequence_by_run: dict[str, int] = {}
+        self._session_started_at = datetime.now(UTC)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-root"):
             yield Static("", id="welcome")
             with VerticalScroll(id="transcript-scroll"):
                 yield Static("", id="transcript")
+            yield Static("", id="status-panel")
             yield Static("", id="command-palette")
             yield Input(placeholder="Ask Awesome Agent, or type /help", id="prompt")
             yield Static("? for shortcuts - /help for commands", id="shortcuts")
@@ -166,6 +178,7 @@ class AwesomeAgentTui(App[None]):
             return
         parsed = parse_slash_command(raw)
         if parsed.kind is SlashCommandKind.USER_MESSAGE:
+            self.state = self.state.close_status_panel()
             if should_resume_last_run(raw):
                 self._start_continue_turn(
                     expected_run_id=self.state.last_resumable_run_id
@@ -175,8 +188,10 @@ class AwesomeAgentTui(App[None]):
         else:
             if parsed.kind is not SlashCommandKind.QUIT:
                 self.state = self.state.append(ChatMessage.command(raw))
-            if parsed.kind is SlashCommandKind.DETAILS:
-                self.state = self.state.toggle_details()
+            if parsed.kind is SlashCommandKind.STATUS:
+                self.state = self.state.open_status_panel()
+            elif parsed.kind is SlashCommandKind.DETAILS:
+                self.state = self.state.close_status_panel().toggle_details()
                 label = "enabled" if self.state.details_enabled else "disabled"
                 self.state = self.state.append(ChatMessage.system(f"Details {label}."))
             elif parsed.kind is SlashCommandKind.QUIT:
@@ -189,10 +204,13 @@ class AwesomeAgentTui(App[None]):
                 SlashCommandKind.SKILLS,
                 SlashCommandKind.THREADS,
             }:
+                self.state = self.state.close_status_panel()
                 self._open_picker(parsed)
             elif parsed.kind is SlashCommandKind.ATTACH:
+                self.state = self.state.close_status_panel()
                 self._start_attach(parsed)
             else:
+                self.state = self.state.close_status_panel()
                 self._start_command(parsed)
         self._render()
         self._focus_prompt()
@@ -248,6 +266,28 @@ class AwesomeAgentTui(App[None]):
                 return
             if event.key == "enter":
                 self._apply_picker()
+                event.prevent_default()
+                event.stop()
+                return
+        if (
+            self.state.active_status_tab is not None
+            and not self.command_palette.is_open
+        ):
+            if event.key == "escape":
+                self.state = self.state.close_status_panel()
+                self._render()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key == "right":
+                self.state = self.state.next_status_tab()
+                self._render()
+                event.prevent_default()
+                event.stop()
+                return
+            if event.key == "left":
+                self.state = self.state.previous_status_tab()
+                self._render()
                 event.prevent_default()
                 event.stop()
                 return
@@ -361,9 +401,47 @@ class AwesomeAgentTui(App[None]):
             )
         except NoMatches:
             return
+        self._render_status_panel()
         self._render_palette()
         if follow:
             self.call_after_refresh(self._scroll_transcript_end)
+
+    def _render_status_panel(self) -> None:
+        try:
+            widget = self.query_one("#status-panel", Static)
+        except NoMatches:
+            return
+        active_tab = self.state.active_status_tab
+        if active_tab is None:
+            widget.update("")
+            return
+        widget.update(render_status_panel(self._status_panel_snapshot(), active_tab))
+
+    def _status_panel_snapshot(self) -> StatusPanelSnapshot:
+        return build_status_panel_snapshot(
+            state=self.state,
+            config_summary=self._safe_config_summary(),
+            memory_summary=self._safe_memory_summary(),
+            usage_summary=self._safe_status_usage(),
+            session_elapsed=datetime.now(UTC) - self._session_started_at,
+        )
+
+    def _safe_config_summary(self) -> dict[str, object]:
+        with suppress(Exception):
+            return dict(self.client.config_summary())
+        return {}
+
+    def _safe_memory_summary(self) -> dict[str, object]:
+        with suppress(Exception):
+            return dict(self.client.memory_summary())
+        return {}
+
+    def _safe_status_usage(self) -> dict[str, object]:
+        if self.state.backend_thread_id is None:
+            return {}
+        with suppress(Exception):
+            return dict(self.client.usage_summary(self.state.backend_thread_id, None))
+        return {}
 
     def _scroll_transcript_end(self) -> None:
         try:
