@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, cast
 
@@ -64,7 +65,7 @@ def test_conversation_turn_accepts_runtime_options() -> None:
         f"/threads/{thread['id']}/turns/stream",
         json={
             "content": "hello?",
-            "model": "alternate-model",
+            "model": "deepseek-v4-flash",
             "thinking_mode": "off",
             "memory": {"local_enabled": True, "provider": "mem0"},
             "skill_ids": ["repository-inspection"],
@@ -75,11 +76,51 @@ def test_conversation_turn_accepts_runtime_options() -> None:
     messages = client.get(f"/threads/{thread['id']}/messages").json()
     user_options = messages[0]["metadata"]["turn_options"]
     assert user_options == {
-        "model": "alternate-model",
+        "model": "deepseek-v4-flash",
         "thinking": "off",
-        "memory": {"local_enabled": True, "provider": "mem0"},
+        "memory": {"local_enabled": False, "provider": None},
         "skill_ids": ["repository-inspection"],
+        "attachment_ids": [],
     }
+
+
+def test_conversation_turn_rejects_unknown_model_before_run_creation() -> None:
+    repository = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    conversation = ConversationService(
+        repository=repository,
+        runtime_repository=runtime,
+        conversation_run_intake=ProjectedConversationRunIntake(
+            conversations=repository,
+            runtime=runtime,
+        ),
+        default_model="deepseek-v4-pro",
+        event_poll_interval=0,
+    )
+    client = TestClient(
+        create_app(
+            service=cast(Any, object()),
+            intake=cast(Any, object()),
+            registry=cast(Any, object()),
+            settings=test_settings(),
+            thread_repository=repository,
+            conversation_service=conversation,
+        )
+    )
+    thread = client.post(
+        "/threads",
+        json={"title": "Invalid model", "context_path": "E:/project"},
+    ).json()
+
+    response = client.post(
+        f"/threads/{thread['id']}/turns/stream",
+        json={"content": "hello?", "model": "gpt-4o"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "unsupported_model"
+    assert client.get(f"/threads/{thread['id']}/messages").json() == []
+    assert len(asyncio.run(runtime.list_runs())) == 0
 
 
 def test_continue_turn_stream_uses_after_sequence_for_runtime_catchup() -> None:

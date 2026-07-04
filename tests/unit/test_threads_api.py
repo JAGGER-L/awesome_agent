@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from time import sleep
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -59,6 +60,7 @@ def test_list_threads_returns_newest_updated_first() -> None:
     client = _client()
     first = client.post("/threads", json={"title": "First"}).json()
     second = client.post("/threads", json={"title": "Second"}).json()
+    sleep(0.02)
     client.post(
         f"/threads/{first['id']}/messages",
         json={"role": "user", "content": "update first"},
@@ -133,6 +135,23 @@ def test_update_thread_settings_returns_updated_thread() -> None:
     assert body["thinking_mode"] == "off"
     assert body["local_memory_enabled"] is True
     assert body["provider_memory"] == "mem0"
+
+
+def test_update_thread_settings_rejects_unknown_default_model() -> None:
+    client = _client()
+    created = client.post("/threads", json={"title": "Settings"}).json()
+
+    response = client.patch(
+        f"/threads/{created['id']}/settings",
+        json={"default_model": "gpt-4o"},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "unsupported_model"
+    assert "gpt-4o" in body["message"]
+    unchanged = client.get(f"/threads/{created['id']}").json()
+    assert unchanged["default_model"] is None
 
 
 def test_append_and_list_thread_messages() -> None:

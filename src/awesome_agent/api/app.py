@@ -85,7 +85,7 @@ from awesome_agent.memory.external import NoopMemoryProvider
 from awesome_agent.memory.models import MemoryTarget
 from awesome_agent.memory.policy import MemoryPolicy
 from awesome_agent.memory.service import MemoryService
-from awesome_agent.modeling.catalog import ModelCatalog
+from awesome_agent.modeling.catalog import ModelCatalog, ModelCatalogError
 from awesome_agent.observability.facade import (
     ObservabilityFacade,
     ObservabilitySpanInput,
@@ -732,6 +732,8 @@ def create_app(
 
     @app.post("/threads")
     async def create_thread(request: CreateThreadRequest) -> dict[str, object]:
+        if request.default_model is not None:
+            _validate_model_choice(settings, request.default_model)
         thread = await threads().create_thread(
             title=request.title,
             context_kind=request.context_kind,
@@ -781,6 +783,8 @@ def create_app(
         request: UpdateThreadSettingsRequest,
     ) -> dict[str, object]:
         try:
+            if request.default_model is not None:
+                _validate_model_choice(settings, request.default_model)
             thread = await threads().update_thread_settings(
                 thread_id,
                 default_model=request.default_model,
@@ -969,6 +973,14 @@ def create_app(
         thread_id: UUID,
         request: CreateConversationTurnRequest,
     ) -> StreamingResponse:
+        try:
+            thread = await threads().get_thread(thread_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        _validate_model_choice(
+            settings,
+            request.model or thread.default_model or settings.leader_model,
+        )
         return StreamingResponse(
             _conversation_sse(
                 conversations().start_turn(
@@ -1546,7 +1558,11 @@ def _structured_error_response(
         code=classified_code,
         message=message,
         detail=message,
-        hint=hint or _error_hint(classified_code, status_code),
+        hint=(
+            hint
+            or _error_detail_hint(detail)
+            or _error_hint(classified_code, status_code)
+        ),
         request_id=request_id,
         trace_id=request.headers.get("traceparent"),
         recoverable=(
@@ -1635,6 +1651,24 @@ def _attachment_http_error(error: Exception) -> HTTPException:
     )
 
 
+def _validate_model_choice(settings: Settings, model_id: str) -> None:
+    try:
+        ModelCatalog.from_settings(settings).require_model(model_id)
+    except ModelCatalogError as error:
+        raise _model_catalog_http_error(error) from error
+
+
+def _model_catalog_http_error(error: ModelCatalogError) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": error.code,
+            "message": error.message,
+            "hint": error.hint,
+        },
+    )
+
+
 def _error_message(detail: object) -> str:
     if isinstance(detail, str):
         return detail
@@ -1650,6 +1684,13 @@ def _error_code(detail: object) -> str | None:
         return None
     code = detail.get("code")
     return code if isinstance(code, str) and code else None
+
+
+def _error_detail_hint(detail: object) -> str | None:
+    if not isinstance(detail, dict):
+        return None
+    hint = detail.get("hint")
+    return hint if isinstance(hint, str) and hint else None
 
 
 def _classify_error(status_code: int, message: str) -> str:
