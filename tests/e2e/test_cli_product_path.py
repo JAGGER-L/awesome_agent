@@ -214,7 +214,7 @@ class HtmlGameSurfaceClient:
     ) -> dict[str, object]:
         return {"total_tokens": 0}
 
-    def config_summary(self) -> dict[str, object]:
+    def config_summary(self, thread_id: str | None = None) -> dict[str, object]:
         return {"mode": "embedded"}
 
     def cancel(

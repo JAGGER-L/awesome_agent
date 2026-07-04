@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -10,7 +10,7 @@ from email.parser import BytesParser
 from email.policy import default as email_policy
 from pathlib import Path
 from time import monotonic
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -39,12 +39,13 @@ from awesome_agent.api.schemas import (
     MemoryEntryResponse,
     MemoryStatusResponse,
     ModelCatalogResponse,
+    PaginatedResponse,
     ReadinessReportResponse,
     SurfaceToolsResponse,
     ThreadArtifactsResponse,
     ThreadAttachmentResponse,
     ThreadAttachmentsResponse,
-    ThreadUploadsResponse,
+    ThreadMemoryStatusResponse,
     ThreadUsageResponse,
     UpdateThreadSettingsRequest,
     WorkspaceCandidateResponse,
@@ -570,6 +571,43 @@ def create_app(
     def attachments() -> AttachmentService:
         return cast(AttachmentService, app.state.attachment_service)
 
+    def config_status_response(
+        *,
+        thread_context_path: str | None = None,
+    ) -> ConfigStatusResponse:
+        project_config_path: str | None = None
+        project_config_exists: bool | None = None
+        project_env_path: str | None = None
+        project_env_exists: bool | None = None
+        if thread_context_path:
+            root = Path(thread_context_path)
+            project_config = root / "awesome-agent.yaml"
+            project_env = root / ".env"
+            project_config_path = str(project_config)
+            project_config_exists = project_config.exists()
+            project_env_path = str(project_env)
+            project_env_exists = project_env.exists()
+        return ConfigStatusResponse(
+            api_host=settings.api_host,
+            local_config_path=str(settings.local_config_path),
+            artifact_root=str(settings.artifact_root),
+            workspace_root=(
+                str(settings.workspace_root)
+                if settings.workspace_root is not None
+                else None
+            ),
+            sandbox_backend=settings.sandbox_backend,
+            local_cli_sandbox_backend=settings.local_cli_sandbox_backend,
+            observability_enabled=settings.observability_enabled,
+            deepseek_api_key_configured=settings.deepseek_api_key is not None,
+            deepseek_base_url=settings.deepseek_base_url,
+            mem0_api_key_configured=settings.mem0_api_key is not None,
+            project_config_path=project_config_path,
+            project_config_exists=project_config_exists,
+            project_env_path=project_env_path,
+            project_env_exists=project_env_exists,
+        )
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         async with api_span(
@@ -637,13 +675,26 @@ def create_app(
                 attributes["http.status_code"] = 503
             return _readiness_report_response(report)
 
-    @app.get("/models")
+    @app.get(
+        "/models",
+        summary="List product model profiles",
+        description=(
+            "DeepSeek-only product model catalog with provider-neutral response shape."
+        ),
+    )
     async def list_model_profiles() -> ModelCatalogResponse:
         return ModelCatalogResponse.model_validate(
             ModelCatalog.from_settings(settings).response_payload()
         )
 
-    @app.get("/surface/tools")
+    @app.get(
+        "/surface/tools",
+        summary="List available tool inventory",
+        description=(
+            "Capability inventory only. This endpoint does not grant execution "
+            "authority."
+        ),
+    )
     async def get_surface_tools() -> SurfaceToolsResponse:
         return SurfaceToolsResponse.model_validate(
             CapabilitySurfaceService(
@@ -652,7 +703,13 @@ def create_app(
             ).tools()
         )
 
-    @app.get("/extensions/skills")
+    @app.get(
+        "/extensions/skills",
+        summary="List skill inventory",
+        description=(
+            "Skill inventory only. Skills request capabilities but do not grant tools."
+        ),
+    )
     async def get_extension_skills() -> ExtensionSkillsResponse:
         skills = CapabilitySurfaceService(
             catalog=extensions_catalog(),
@@ -660,7 +717,13 @@ def create_app(
         ).skills()
         return ExtensionSkillsResponse(configured=bool(skills), items=skills)
 
-    @app.get("/extensions/mcp")
+    @app.get(
+        "/extensions/mcp",
+        summary="List MCP server inventory",
+        description=(
+            "MCP inventory only. No health deep scan is triggered by this endpoint."
+        ),
+    )
     async def get_mcp_status() -> McpServersResponse:
         sources = CapabilitySurfaceService(
             catalog=extensions_catalog(),
@@ -675,15 +738,24 @@ def create_app(
         )
 
     @app.get("/memory/entries")
-    async def list_memory_entries(target: str | None = None) -> MemoryEntriesResponse:
+    async def list_memory_entries(
+        target: str | None = None,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> MemoryEntriesResponse:
         parsed = MemoryTarget(target) if target is not None else None
         result = await memory().list_entries(target=parsed)
+        items = [
+            MemoryEntryResponse.model_validate(entry.model_dump(mode="json"))
+            for entry in result.entries
+        ]
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
         return MemoryEntriesResponse(
             target=target,
-            items=[
-                MemoryEntryResponse.model_validate(entry.model_dump(mode="json"))
-                for entry in result.entries
-            ],
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
         )
 
     @app.delete("/memory/entries/{memory_id}")
@@ -712,23 +784,16 @@ def create_app(
             target=parsed.value,
         )
 
-    @app.get("/config")
+    @app.get(
+        "/config",
+        summary="Get global API configuration status",
+        description=(
+            "Returns local API configuration status without inferring a project "
+            "from the API server current working directory."
+        ),
+    )
     async def get_config_status() -> ConfigStatusResponse:
-        return ConfigStatusResponse(
-            api_host=settings.api_host,
-            local_config_path=str(settings.local_config_path),
-            artifact_root=str(settings.artifact_root),
-            workspace_root=(
-                str(settings.workspace_root)
-                if settings.workspace_root is not None
-                else None
-            ),
-            sandbox_backend=settings.sandbox_backend,
-            local_cli_sandbox_backend=settings.local_cli_sandbox_backend,
-            observability_enabled=settings.observability_enabled,
-            deepseek_api_key_configured=settings.deepseek_api_key is not None,
-            mem0_api_key_configured=settings.mem0_api_key is not None,
-        )
+        return config_status_response()
 
     @app.post("/threads")
     async def create_thread(request: CreateThreadRequest) -> dict[str, object]:
@@ -754,12 +819,26 @@ def create_app(
         )
         return _redacted_dict(thread.api_payload())
 
-    @app.get("/threads")
-    async def list_threads() -> list[dict[str, object]]:
-        return [
+    @app.get(
+        "/threads",
+        summary="List conversation threads",
+        description="Thread-first product resource. Returns bounded thread summaries.",
+    )
+    async def list_threads(
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> PaginatedResponse[dict[str, object]]:
+        items = [
             await _thread_payload_with_changed_files(threads(), thread.api_payload())
             for thread in await threads().list_threads()
         ]
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
+        return PaginatedResponse[dict[str, object]](
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+        )
 
     @app.get("/threads/resolve")
     async def resolve_thread(query: str) -> dict[str, object]:
@@ -774,8 +853,49 @@ def create_app(
         try:
             thread = await threads().get_thread(thread_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
         return _redacted_dict(thread.api_payload())
+
+    @app.get(
+        "/threads/{thread_id}/config",
+        summary="Get thread effective configuration status",
+        description=(
+            "Returns configuration status for a thread context path. The API "
+            "server current working directory is never used as a fallback."
+        ),
+    )
+    async def get_thread_config_status(thread_id: UUID) -> ConfigStatusResponse:
+        try:
+            thread = await threads().get_thread(thread_id)
+        except KeyError as error:
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        return config_status_response(thread_context_path=thread.context_path)
+
+    @app.get(
+        "/threads/{thread_id}/memory",
+        summary="Get thread effective memory status",
+        description=(
+            "Returns status-only memory information for a thread. Builtin memory "
+            "entries and provider memory contents are not returned."
+        ),
+    )
+    async def get_thread_memory_status(thread_id: UUID) -> ThreadMemoryStatusResponse:
+        try:
+            thread = await threads().get_thread(thread_id)
+        except KeyError as error:
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        status = memory().status().model_dump(mode="json")
+        status["thread_id"] = thread.id
+        status["builtin_enabled"] = bool(thread.local_memory_enabled)
+        status["provider_enabled"] = thread.provider_memory is not None
+        status["provider_thread_scoped"] = thread.provider_memory is not None
+        return ThreadMemoryStatusResponse.model_validate(status)
 
     @app.patch("/threads/{thread_id}/settings")
     async def update_thread_settings(
@@ -814,13 +934,32 @@ def create_app(
             raise HTTPException(status_code=404, detail="Thread not found.") from error
         return _redacted_dict(message.model_dump(mode="json"))
 
-    @app.get("/threads/{thread_id}/messages")
-    async def list_thread_messages(thread_id: UUID) -> list[dict[str, object]]:
+    @app.get(
+        "/threads/{thread_id}/messages",
+        summary="List thread messages",
+        description="Thread-first transcript resource with bounded pagination.",
+    )
+    async def list_thread_messages(
+        thread_id: UUID,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> PaginatedResponse[dict[str, object]]:
         try:
             messages = await threads().list_messages(thread_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return [_redacted_dict(message.model_dump(mode="json")) for message in messages]
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        items = [
+            _redacted_dict(message.model_dump(mode="json")) for message in messages
+        ]
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
+        return PaginatedResponse[dict[str, object]](
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+        )
 
     @app.post("/threads/{thread_id}/attachments")
     async def create_thread_attachment(
@@ -829,6 +968,11 @@ def create_app(
     ) -> ThreadAttachmentResponse:
         try:
             await threads().get_thread(thread_id)
+        except KeyError as error:
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        try:
             upload = await _read_multipart_attachment(request)
             attachment = await attachments().create(
                 thread_id=thread_id,
@@ -847,20 +991,31 @@ def create_app(
         thread_id: UUID,
         status: str | None = None,
         include_deleted: bool = False,
-        limit: int = Query(default=50, ge=1, le=50),
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
     ) -> ThreadAttachmentsResponse:
         try:
             await threads().get_thread(thread_id)
+        except KeyError as error:
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        try:
             parsed_status = AttachmentStatus(status) if status is not None else None
             items = await attachments().list_thread(
                 thread_id,
                 status=parsed_status,
                 include_deleted=include_deleted,
-                limit=limit,
+                limit=offset + limit + 1,
             )
+            responses = [_attachment_response(item) for item in items]
+            page, has_more = _bounded_page(responses, limit=limit, offset=offset)
             return ThreadAttachmentsResponse(
                 thread_id=thread_id,
-                items=[_attachment_response(item) for item in items],
+                items=page,
+                limit=limit,
+                offset=offset,
+                has_more=has_more,
             )
         except Exception as error:
             raise _attachment_http_error(error) from error
@@ -920,30 +1075,29 @@ def create_app(
         except Exception as error:
             raise _attachment_http_error(error) from error
 
-    @app.get("/threads/{thread_id}/uploads")
-    async def list_thread_uploads(thread_id: UUID) -> ThreadUploadsResponse:
-        try:
-            await threads().get_thread(thread_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
-        items = await attachments().list_thread(thread_id, include_deleted=False)
-        return ThreadUploadsResponse(
-            thread_id=thread_id,
-            configured=True,
-            items=[item.model_dump(mode="json") for item in items],
-        )
-
     @app.get("/threads/{thread_id}/artifacts")
-    async def list_thread_artifacts(thread_id: UUID) -> ThreadArtifactsResponse:
+    async def list_thread_artifacts(
+        thread_id: UUID,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> ThreadArtifactsResponse:
         try:
             run_ids = await _thread_run_ids(conversations(), thread_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        items = await _thread_artifact_items(
+            run_ids,
+            getattr(app.state, "runtime", None),
+        )
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
         return ThreadArtifactsResponse(
             thread_id=thread_id,
-            items=await _thread_artifact_items(
-                run_ids, getattr(app.state, "runtime", None)
-            ),
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
         )
 
     @app.get("/threads/{thread_id}/usage")
@@ -951,24 +1105,41 @@ def create_app(
         try:
             run_ids = await _thread_run_ids(conversations(), thread_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
-        latest_run_id = run_ids[0] if run_ids else None
-        if latest_run_id is None or budgets() is None:
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        if not run_ids or budgets() is None:
             return ThreadUsageResponse(thread_id=thread_id)
-        ledger = await budgets().get_ledger(latest_run_id)  # type: ignore[union-attr]
+        input_tokens = 0
+        output_tokens = 0
+        reasoning_tokens = 0
+        active_seconds = 0
+        model_call_count = 0
+        threshold_status = "not_configured"
+        for run_id in run_ids:
+            ledger = await budgets().get_ledger(run_id)  # type: ignore[union-attr]
+            input_tokens += ledger.total_input_tokens
+            output_tokens += ledger.total_output_tokens
+            reasoning_tokens += ledger.total_reasoning_tokens
+            active_seconds += ledger.active_seconds
+            model_call_count += ledger.model_call_count
+            threshold_status = ledger.threshold_status
         return ThreadUsageResponse(
             thread_id=thread_id,
-            run_id=latest_run_id,
-            input_tokens=ledger.total_input_tokens,
-            output_tokens=ledger.total_output_tokens,
-            total_tokens=ledger.total_input_tokens + ledger.total_output_tokens,
-            reasoning_tokens=ledger.total_reasoning_tokens,
-            active_seconds=ledger.active_seconds,
-            model_call_count=ledger.model_call_count,
-            threshold_status=ledger.threshold_status,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+            reasoning_tokens=reasoning_tokens,
+            active_seconds=active_seconds,
+            model_call_count=model_call_count,
+            threshold_status=threshold_status,
         )
 
-    @app.post("/threads/{thread_id}/turns/stream")
+    @app.post(
+        "/threads/{thread_id}/turns/stream",
+        summary="Stream a conversation turn",
+        description="Thread-first product entry point for sending a user message.",
+    )
     async def create_conversation_turn(
         thread_id: UUID,
         request: CreateConversationTurnRequest,
@@ -976,7 +1147,9 @@ def create_app(
         try:
             thread = await threads().get_thread(thread_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
         _validate_model_choice(
             settings,
             request.model or thread.default_model or settings.leader_model,
@@ -996,7 +1169,11 @@ def create_app(
             media_type="text/event-stream",
         )
 
-    @app.post("/threads/{thread_id}/turns/continue/stream")
+    @app.post(
+        "/threads/{thread_id}/turns/continue/stream",
+        summary="Continue the latest recoverable conversation turn",
+        description="Thread-first product entry point for resuming interrupted work.",
+    )
     async def continue_conversation_turn(
         thread_id: UUID,
         request: ContinueConversationTurnRequest,
@@ -1031,21 +1208,151 @@ def create_app(
                 after_sequence=after_sequence,
             )
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
         return StreamingResponse(
             _conversation_sse(events),
             media_type="text/event-stream",
         )
 
-    @app.get("/threads/{thread_id}/runs")
-    async def list_thread_runs(thread_id: UUID) -> list[dict[str, object]]:
+    @app.get(
+        "/threads/{thread_id}/runs",
+        summary="List thread runs",
+        description="Thread-first product projection of internal conversation Runs.",
+    )
+    async def list_thread_runs(
+        thread_id: UUID,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> PaginatedResponse[dict[str, object]]:
         try:
             projections = await conversations().list_thread_runs(thread_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return await _thread_run_projection_response(
+            raise _resource_not_found(
+                "thread_not_found", "Thread not found."
+            ) from error
+        items = await _thread_run_projection_response(
             projections,
             getattr(app.state, "runtime", None),
+        )
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
+        return PaginatedResponse[dict[str, object]](
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+        )
+
+    @app.get(
+        "/threads/{thread_id}/runs/{run_id}",
+        summary="Get a thread run",
+        description="Thread-first product projection of an internal conversation Run.",
+    )
+    async def get_thread_run(thread_id: UUID, run_id: UUID) -> dict[str, object]:
+        projection = await _thread_run_projection(conversations(), thread_id, run_id)
+        return _redacted_dict(projection)
+
+    @app.get(
+        "/threads/{thread_id}/runs/{run_id}/events",
+        summary="List thread run events",
+        description=(
+            "Thread-first runtime event replay for a Run scoped to its owning thread."
+        ),
+    )
+    async def list_thread_run_events(
+        thread_id: UUID,
+        run_id: UUID,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> PaginatedResponse[dict[str, object]]:
+        await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
+        items = [
+            _redacted_dict(event.model_dump(mode="json"))
+            for event in await runtime().list_events(run_id)
+        ]
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
+        return PaginatedResponse[dict[str, object]](
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+        )
+
+    @app.get(
+        "/threads/{thread_id}/runs/{run_id}/messages",
+        summary="List messages produced by a thread run",
+        description=(
+            "Thread-first message projection for one internal conversation Run."
+        ),
+    )
+    async def list_thread_run_messages(
+        thread_id: UUID,
+        run_id: UUID,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> PaginatedResponse[dict[str, object]]:
+        await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
+        messages = await threads().list_messages(thread_id)
+        items = _run_message_items_for(messages, run_id)
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
+        return PaginatedResponse[dict[str, object]](
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+        )
+
+    @app.get(
+        "/threads/{thread_id}/runs/{run_id}/artifacts",
+        summary="List artifacts produced by a thread run",
+        description=(
+            "Thread-first artifact projection for one internal conversation Run."
+        ),
+    )
+    async def list_thread_run_artifacts(
+        thread_id: UUID,
+        run_id: UUID,
+        limit: int = Query(default=50, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> ThreadArtifactsResponse:
+        await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
+        items = await _thread_artifact_items(
+            [run_id], getattr(app.state, "runtime", None)
+        )
+        page, has_more = _bounded_page(items, limit=limit, offset=offset)
+        return ThreadArtifactsResponse(
+            thread_id=thread_id,
+            items=page,
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+        )
+
+    @app.get(
+        "/threads/{thread_id}/runs/{run_id}/usage",
+        summary="Get usage for a thread run",
+        description=(
+            "Token and runtime usage summary for one internal conversation Run."
+        ),
+    )
+    async def get_thread_run_usage(
+        thread_id: UUID, run_id: UUID
+    ) -> ThreadUsageResponse:
+        await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
+        if budgets() is None:
+            return ThreadUsageResponse(thread_id=thread_id, run_id=run_id)
+        ledger = await budgets().get_ledger(run_id)  # type: ignore[union-attr]
+        return ThreadUsageResponse(
+            thread_id=thread_id,
+            run_id=run_id,
+            input_tokens=ledger.total_input_tokens,
+            output_tokens=ledger.total_output_tokens,
+            total_tokens=ledger.total_input_tokens + ledger.total_output_tokens,
+            reasoning_tokens=ledger.total_reasoning_tokens,
+            active_seconds=ledger.active_seconds,
+            model_call_count=ledger.model_call_count,
+            threshold_status=ledger.threshold_status,
         )
 
     @app.post("/threads/{thread_id}/runs/{run_id}/cancel")
@@ -1054,22 +1361,23 @@ def create_app(
         try:
             run = await runtime().cancel_run(run_id)
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Run not found.") from error
+            raise _resource_not_found("run_not_found", "Run not found.") from error
         except DispatchConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise _resource_conflict("invalid_state", str(error)) from error
         return _redacted_dict(run.model_dump(mode="json"))
 
     @app.get("/threads/{thread_id}/runs/{run_id}/approvals")
     async def list_thread_run_approvals(
         thread_id: UUID,
         run_id: UUID,
+        limit: int = Query(default=50, ge=1, le=200),
     ) -> list[dict[str, object]]:
         await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
         return [
             _redacted_dict(event.model_dump(mode="json"))
             for event in await runtime().list_events(run_id)
             if event.event_type.value.startswith("approval.")
-        ]
+        ][:limit]
 
     @app.post("/threads/{thread_id}/runs/{run_id}/approvals/{approval_id}")
     async def decide_thread_run_approval(
@@ -1086,9 +1394,12 @@ def create_app(
                 approved=request.approved,
             )
         except KeyError as error:
-            raise HTTPException(status_code=404, detail="Run not found.") from error
+            raise _resource_not_found(
+                "approval_not_found",
+                "Approval not found.",
+            ) from error
         except ValueError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            raise _resource_conflict("invalid_state", str(error)) from error
         return _redacted_dict(event.model_dump(mode="json"))
 
     @app.get("/runs")
@@ -1102,7 +1413,14 @@ def create_app(
                 for run in await runtime().list_runs(limit=limit)
             ]
 
-    @app.post("/runtime/probes", status_code=201)
+    @app.post(
+        "/runtime/probes",
+        status_code=201,
+        summary="Create a runtime diagnostic probe",
+        description=(
+            "Explicit diagnostic action. It is not part of the main conversation API."
+        ),
+    )
     async def create_probe(request: CreateProbeRequest) -> dict[str, object]:
         try:
             run = await run_intake().create_run(
@@ -1553,6 +1871,7 @@ def _structured_error_response(
             message,
         )
     )
+    detail_recoverable = _error_detail_recoverable(detail)
     request_id = str(getattr(request.state, "request_id", "") or uuid4().hex)
     payload = ErrorResponse(
         code=classified_code,
@@ -1566,7 +1885,11 @@ def _structured_error_response(
         request_id=request_id,
         trace_id=request.headers.get("traceparent"),
         recoverable=(
-            recoverable if recoverable is not None else _is_recoverable(classified_code)
+            recoverable
+            if recoverable is not None
+            else detail_recoverable
+            if detail_recoverable is not None
+            else _is_recoverable(classified_code)
         ),
     )
     response_headers = dict(headers or {})
@@ -1575,6 +1898,40 @@ def _structured_error_response(
         status_code=status_code,
         content=payload.model_dump(mode="json"),
         headers=response_headers,
+    )
+
+
+def _bounded_page[T](
+    items: Sequence[T],
+    *,
+    limit: int,
+    offset: int,
+) -> tuple[list[T], bool]:
+    window = list(items[offset : offset + limit + 1])
+    return window[:limit], len(window) > limit
+
+
+def _resource_not_found(code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "code": code,
+            "message": message,
+            "detail": message,
+            "recoverable": False,
+        },
+    )
+
+
+def _resource_conflict(code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": code,
+            "message": message,
+            "detail": message,
+            "recoverable": True,
+        },
     )
 
 
@@ -1619,7 +1976,7 @@ def _attachment_http_error(error: Exception) -> HTTPException:
     if isinstance(error, HTTPException):
         return error
     if isinstance(error, KeyError):
-        return HTTPException(status_code=404, detail="attachment_not_found")
+        return _resource_not_found("attachment_not_found", "Attachment not found.")
     code = None
     if isinstance(error, AttachmentError):
         code = error.code
@@ -1646,7 +2003,11 @@ def _attachment_http_error(error: Exception) -> HTTPException:
         status_code=status,
         detail={
             "code": code or "attachment_error",
-            "message": str(error),
+            "message": (
+                "Attachment not found."
+                if code == "attachment_not_found"
+                else str(error)
+            ),
         },
     )
 
@@ -1691,6 +2052,13 @@ def _error_detail_hint(detail: object) -> str | None:
         return None
     hint = detail.get("hint")
     return hint if isinstance(hint, str) and hint else None
+
+
+def _error_detail_recoverable(detail: object) -> bool | None:
+    if not isinstance(detail, dict):
+        return None
+    value = detail.get("recoverable")
+    return value if isinstance(value, bool) else None
 
 
 def _classify_error(status_code: int, message: str) -> str:
@@ -1911,12 +2279,41 @@ async def _assert_run_belongs_to_thread(
     try:
         projections = await conversation_service.list_thread_runs(thread_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail="Thread not found.") from error
+        raise _resource_not_found("thread_not_found", "Thread not found.") from error
     if not any(
         str(projection.get("run_id") or projection.get("id")) == str(run_id)
         for projection in projections
     ):
-        raise HTTPException(status_code=404, detail="Run not found for thread.")
+        raise _resource_not_found("run_not_found", "Run not found.")
+
+
+async def _thread_run_projection(
+    conversation_service: ConversationService,
+    thread_id: UUID,
+    run_id: UUID,
+) -> dict[str, object]:
+    try:
+        projections = await conversation_service.list_thread_runs(thread_id)
+    except KeyError as error:
+        raise _resource_not_found("thread_not_found", "Thread not found.") from error
+    for projection in projections:
+        if str(projection.get("run_id") or projection.get("id")) == str(run_id):
+            item = dict(projection)
+            item.setdefault("id", str(run_id))
+            return item
+    raise _resource_not_found("run_not_found", "Run not found.")
+
+
+def _run_message_items_for(
+    messages: Sequence[object],
+    run_id: UUID,
+) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for message in messages:
+        payload = cast(Any, message).model_dump(mode="json")
+        if str(payload.get("run_id")) == str(run_id):
+            items.append(_redacted_dict(payload))
+    return items
 
 
 async def _thread_artifact_items(
@@ -1974,7 +2371,15 @@ async def _thread_run_projection_response(
     get_run = getattr(runtime_service, "get_run", None)
     list_artifacts = getattr(runtime_service, "list_artifacts", None)
     if not callable(get_run) or not callable(list_artifacts):
-        return [_redacted_dict(projection) for projection in projections]
+        return [
+            _redacted_dict(
+                {
+                    **projection,
+                    "id": projection.get("id") or projection.get("run_id"),
+                }
+            )
+            for projection in projections
+        ]
     enriched: list[dict[str, object]] = []
     for projection in projections:
         item = dict(projection)
@@ -1983,8 +2388,10 @@ async def _thread_run_projection_response(
             run = await get_run(run_id)
             artifacts = await list_artifacts(run_id)
         except (KeyError, TypeError, ValueError):
+            item.setdefault("id", item.get("run_id"))
             enriched.append(_redacted_dict(item))
             continue
+        item.setdefault("id", str(run_id))
         item["status"] = run.status.value
         item["result_text"] = run.result_text
         item["artifacts"] = [

@@ -354,11 +354,13 @@ def test_local_runtime_host_scans_project_skills_once_at_startup(
         project_root=project,
     )
 
-    assert [skill["id"] for skill in host.list_skills()] == ["repository-inspection"]
+    skills = cast(list[dict[str, object]], host.list_skills()["items"])
+    assert [skill["id"] for skill in skills] == ["repository-inspection"]
 
     _write_skill(project, "new-skill", "New instructions.")
 
-    assert [skill["id"] for skill in host.list_skills()] == ["repository-inspection"]
+    skills = cast(list[dict[str, object]], host.list_skills()["items"])
+    assert [skill["id"] for skill in skills] == ["repository-inspection"]
 
 
 def test_local_runtime_host_pins_catalog_and_injects_staged_skill_context(
@@ -392,6 +394,29 @@ def test_local_runtime_host_pins_catalog_and_injects_staged_skill_context(
     assert metadata["extension_catalog_version"] == run["extension_catalog_version"]
     assert provider.requests
     assert "Prefer repo.search first." in provider.requests[0].messages[0].content
+
+
+def test_local_runtime_host_config_summary_matches_http_status_fields(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "awesome-agent.yaml").write_text("skills: []\n", encoding="utf-8")
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+        project_root=project,
+    )
+
+    summary = host.config_summary()
+
+    assert summary["deepseek_base_url"] == "https://api.deepseek.com"
+    assert summary["deepseek_api_key_env"] == "AWESOME_AGENT_DEEPSEEK_API_KEY"
+    assert summary["project_config_path"] == str(project / "awesome-agent.yaml")
+    assert summary["project_config_exists"] is True
+    assert summary["project_env_path"] == str(project / ".env")
+    assert summary["project_env_exists"] is False
 
 
 def test_local_runtime_host_passes_thinking_mode_into_model_request(

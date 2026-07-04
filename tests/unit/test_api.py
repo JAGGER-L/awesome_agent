@@ -203,6 +203,29 @@ def _create_run(
     )
 
 
+def _create_conversation_run(
+    client: TestClient,
+    thread_id: str,
+    *,
+    content: str = "Inspect conversation",
+) -> Run:
+    return cast(
+        Run,
+        asyncio.run(
+            cast(
+                Any, client.app
+            ).state.conversations._conversation_run_intake.create_turn_run(
+                thread_id=UUID(thread_id),
+                content=content,
+                model=None,
+                thinking=None,
+                memory={},
+                skill_ids=(),
+            )
+        ),
+    )
+
+
 class RecordingExporter(SpanExporter):
     def __init__(self) -> None:
         self.spans: list[ReadableSpan] = []
@@ -430,6 +453,230 @@ def test_ready_rejects_invalid_profile(tmp_path: Path) -> None:
     response = client.get("/ready?profile=invalid")
 
     assert response.status_code == 422
+
+
+def test_config_exposes_status_panel_provider_fields(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+
+    response = client.get("/config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["deepseek_api_key_env"] == "AWESOME_AGENT_DEEPSEEK_API_KEY"
+    assert body["deepseek_api_key_configured"] is False
+    assert body["deepseek_base_url"] == "https://api.deepseek.com"
+    assert body["project_config_path"] is None
+    assert body["project_config_exists"] is None
+    assert body["project_env_path"] is None
+    assert body["project_env_exists"] is None
+
+
+def test_threads_list_uses_bounded_envelope(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+    for index in range(3):
+        assert (
+            client.post("/threads", json={"title": f"Thread {index}"}).status_code
+            == 200
+        )
+
+    response = client.get("/threads", params={"limit": 2, "offset": 0})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"items", "limit", "offset", "has_more"}
+    assert body["limit"] == 2
+    assert body["offset"] == 0
+    assert body["has_more"] is True
+    assert len(body["items"]) == 2
+
+
+def test_threads_list_rejects_unbounded_limit(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+
+    response = client.get("/threads", params={"limit": 201})
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["code"] == "validation_error"
+    assert body["request_id"]
+
+
+def test_thread_config_uses_thread_context_path(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    config_file = project / "awesome-agent.yaml"
+    env_file = project / ".env"
+    config_file.write_text("skills: []\n", encoding="utf-8")
+    env_file.write_text("EXAMPLE=1\n", encoding="utf-8")
+    thread = client.post(
+        "/threads",
+        json={"title": "Project", "context_path": str(project)},
+    ).json()
+
+    response = client.get(f"/threads/{thread['id']}/config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_config_path"] == str(config_file)
+    assert body["project_config_exists"] is True
+    assert body["project_env_path"] == str(env_file)
+    assert body["project_env_exists"] is True
+    assert body["deepseek_base_url"] == "https://api.deepseek.com"
+
+
+def test_thread_config_without_context_does_not_use_server_cwd(
+    tmp_path: Path,
+) -> None:
+    client, _repository = _client(tmp_path)
+    thread = client.post("/threads", json={"title": "No cwd"}).json()
+
+    response = client.get(f"/threads/{thread['id']}/config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_config_path"] is None
+    assert body["project_config_exists"] is None
+    assert body["project_env_path"] is None
+    assert body["project_env_exists"] is None
+
+
+def test_thread_memory_status_is_status_only(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+    thread = client.post(
+        "/threads",
+        json={
+            "title": "Memory",
+            "local_memory_enabled": True,
+            "provider_memory": None,
+        },
+    ).json()
+
+    response = client.get(f"/threads/{thread['id']}/memory")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["thread_id"] == thread["id"]
+    assert "items" not in body
+    assert body["builtin_enabled"] is True
+    assert body["provider_enabled"] is False
+    assert body["provider_thread_scoped"] is False
+
+
+def test_thread_messages_runs_and_run_resources_use_bounded_envelopes(
+    tmp_path: Path,
+) -> None:
+    client, _repository = _client(tmp_path)
+    thread = client.post(
+        "/threads",
+        json={"title": "Runs", "context_path": str(tmp_path)},
+    ).json()
+    for index in range(3):
+        client.post(
+            f"/threads/{thread['id']}/messages",
+            json={"role": "user", "content": f"message {index}"},
+        )
+    run = _create_conversation_run(client, thread["id"])
+    client.post(
+        f"/threads/{thread['id']}/messages",
+        json={
+            "role": "assistant",
+            "content": "done",
+            "run_id": str(run.id),
+        },
+    )
+
+    messages = client.get(
+        f"/threads/{thread['id']}/messages",
+        params={"limit": 2},
+    ).json()
+    runs = client.get(f"/threads/{thread['id']}/runs").json()
+    run_detail = client.get(f"/threads/{thread['id']}/runs/{run.id}").json()
+    events = client.get(f"/threads/{thread['id']}/runs/{run.id}/events").json()
+    run_messages = client.get(
+        f"/threads/{thread['id']}/runs/{run.id}/messages",
+    ).json()
+    artifacts = client.get(
+        f"/threads/{thread['id']}/runs/{run.id}/artifacts",
+    ).json()
+    usage = client.get(f"/threads/{thread['id']}/runs/{run.id}/usage").json()
+
+    assert messages["limit"] == 2
+    assert messages["has_more"] is True
+    assert runs["items"][0]["id"] == str(run.id)
+    assert run_detail["id"] == str(run.id)
+    assert events["items"][0]["event_type"] == "run.created"
+    assert run_messages["items"][0]["content"] == "done"
+    assert artifacts["items"] == []
+    assert usage["run_id"] == str(run.id)
+
+
+def test_threads_uploads_placeholder_is_removed(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+    thread = client.post("/threads", json={"title": "Uploads"}).json()
+
+    response = client.get(f"/threads/{thread['id']}/uploads")
+
+    assert response.status_code == 404
+
+
+def test_changed_resource_errors_have_stable_codes(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+    thread = client.post("/threads", json={"title": "Errors"}).json()
+
+    missing_thread = client.get(
+        "/threads/00000000-0000-0000-0000-000000000000/messages"
+    )
+    missing_attachment = client.get(f"/threads/{thread['id']}/attachments/{uuid4()}")
+    missing_run = client.get(f"/threads/{thread['id']}/runs/{uuid4()}")
+    missing_approval = client.post(
+        f"/threads/{thread['id']}/runs/{uuid4()}/approvals/{uuid4()}",
+        json={"approved": True},
+    )
+
+    assert missing_thread.status_code == 404
+    assert missing_thread.json()["code"] == "thread_not_found"
+    assert missing_attachment.status_code == 404
+    assert missing_attachment.json()["code"] == "attachment_not_found"
+    assert missing_run.status_code == 404
+    assert missing_run.json()["code"] == "run_not_found"
+    assert missing_approval.status_code == 404
+    assert missing_approval.json()["code"] == "run_not_found"
+
+
+def test_models_product_path_exposes_only_deepseek(tmp_path: Path) -> None:
+    client, _repository = _client(tmp_path)
+
+    response = client.get("/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    provider_ids = [provider["id"] for provider in body["providers"]]
+    assert provider_ids == ["deepseek"]
+    assert body["current"]["provider_id"] == "deepseek"
+    assert all(
+        model["provider_id"] == "deepseek" for model in body["providers"][0]["models"]
+    )
+
+
+def test_openapi_marks_thread_first_and_diagnostics_resources(
+    tmp_path: Path,
+) -> None:
+    client, _repository = _client(tmp_path)
+
+    schema = client.get("/openapi.json").json()
+
+    assert schema["paths"]["/threads"]["get"]["summary"] == "List conversation threads"
+    assert (
+        "Thread-first"
+        in schema["paths"]["/threads/{thread_id}/runs/{run_id}/events"]["get"][
+            "description"
+        ]
+    )
+    assert (
+        "diagnostic"
+        in schema["paths"]["/runtime/probes"]["post"]["description"].casefold()
+    )
 
 
 def test_create_app_rejects_public_bind_without_unsafe_consent() -> None:

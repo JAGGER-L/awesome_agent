@@ -87,6 +87,48 @@ Slash commands are CLI/TUI interaction syntax. API routes should expose
 semantic resources such as threads, read-only runs, runtime probes, models,
 memory, readiness, and approvals rather than slash-command route names.
 
+## API Resource Shape
+
+The product API is thread-first. Create or resume a conversation through
+`/threads`, then send turns with `/threads/{thread_id}/turns/stream` or resume
+the latest recoverable turn with `/threads/{thread_id}/turns/continue/stream`.
+
+Thread resources expose the product state used by the TUI:
+
+- `/threads/{thread_id}/messages`
+- `/threads/{thread_id}/runs`
+- `/threads/{thread_id}/runs/{run_id}/events`
+- `/threads/{thread_id}/runs/{run_id}/messages`
+- `/threads/{thread_id}/runs/{run_id}/artifacts`
+- `/threads/{thread_id}/runs/{run_id}/usage`
+- `/threads/{thread_id}/attachments`
+- `/threads/{thread_id}/config`
+- `/threads/{thread_id}/memory`
+
+List resources that can grow return a bounded envelope:
+
+```json
+{
+  "items": [],
+  "limit": 50,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+Run-first endpoints are read-only diagnostics. They are useful for debugging
+runtime evidence, traces, metrics, and model calls, but they are not the main
+chat product entry point. Run mutation and approval decisions require a thread
+scope.
+
+File input is represented by thread attachments. The legacy
+`/threads/{thread_id}/uploads` inspection endpoint is not part of the product
+API.
+
+Errors use a structured JSON shape with `code`, `message`, `detail`,
+`request_id`, and `recoverable`. This local API does not add authentication or
+rate limiting.
+
 `/model` opens a provider picker first. The current product build exposes only
 DeepSeek. Selecting DeepSeek opens the DeepSeek model picker and updates the
 current conversation default model. Team role model configuration remains a

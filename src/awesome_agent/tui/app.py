@@ -428,7 +428,7 @@ class AwesomeAgentTui(App[None]):
 
     def _safe_config_summary(self) -> dict[str, object]:
         with suppress(Exception):
-            return dict(self.client.config_summary())
+            return dict(self.client.config_summary(self.state.backend_thread_id))
         return {}
 
     def _safe_memory_summary(self) -> dict[str, object]:

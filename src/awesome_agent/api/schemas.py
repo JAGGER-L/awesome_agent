@@ -74,6 +74,13 @@ class ErrorResponse(BaseModel):
     recoverable: bool = False
 
 
+class PaginatedResponse[T](BaseModel):
+    items: list[T] = Field(default_factory=list)
+    limit: int = Field(ge=1, le=200)
+    offset: int = Field(ge=0)
+    has_more: bool = False
+
+
 class ApprovalDecisionRequest(BaseModel):
     approved: bool
 
@@ -229,6 +236,9 @@ class MemoryEntryResponse(BaseModel):
 class MemoryEntriesResponse(BaseModel):
     target: str | None = None
     items: list[MemoryEntryResponse] = Field(default_factory=list)
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+    has_more: bool = False
 
 
 class MemoryDeleteResponse(BaseModel):
@@ -237,10 +247,9 @@ class MemoryDeleteResponse(BaseModel):
     target: str
 
 
-class ThreadUploadsResponse(BaseModel):
+class ThreadMemoryStatusResponse(MemoryStatusResponse):
     thread_id: UUID
-    configured: bool = False
-    items: list[dict[str, Any]] = Field(default_factory=list)
+    provider_thread_scoped: bool = False
 
 
 class ThreadAttachmentResponse(BaseModel):
@@ -263,11 +272,17 @@ class ThreadAttachmentResponse(BaseModel):
 class ThreadAttachmentsResponse(BaseModel):
     thread_id: UUID
     items: list[ThreadAttachmentResponse] = Field(default_factory=list)
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+    has_more: bool = False
 
 
 class ThreadArtifactsResponse(BaseModel):
     thread_id: UUID
     items: list[dict[str, Any]] = Field(default_factory=list)
+    limit: int = Field(default=50, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+    has_more: bool = False
 
 
 class ThreadUsageResponse(BaseModel):
@@ -292,5 +307,10 @@ class ConfigStatusResponse(BaseModel):
     observability_enabled: bool
     deepseek_api_key_env: str = "AWESOME_AGENT_DEEPSEEK_API_KEY"
     deepseek_api_key_configured: bool
+    deepseek_base_url: str
     mem0_api_key_env: str = "AWESOME_AGENT_MEM0_API_KEY"
     mem0_api_key_configured: bool
+    project_config_path: str | None = None
+    project_config_exists: bool | None = None
+    project_env_path: str | None = None
+    project_env_exists: bool | None = None
