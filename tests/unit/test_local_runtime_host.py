@@ -341,6 +341,58 @@ def test_local_runtime_host_forwards_turn_options(tmp_path: Path) -> None:
     }
 
 
+def test_local_runtime_host_scans_project_skills_once_at_startup(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    _write_skill(project, "repository-inspection", "Use bounded repository reads.")
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+        project_root=project,
+    )
+
+    assert [skill["id"] for skill in host.list_skills()] == ["repository-inspection"]
+
+    _write_skill(project, "new-skill", "New instructions.")
+
+    assert [skill["id"] for skill in host.list_skills()] == ["repository-inspection"]
+
+
+def test_local_runtime_host_pins_catalog_and_injects_staged_skill_context(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    _write_skill(project, "repository-inspection", "Prefer repo.search first.")
+    provider = CaptureRequestProvider()
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        project_root=project,
+    )
+    thread = host.create_thread("Skills", context_path=str(project))
+
+    list(
+        host.stream_turn(
+            thread.id,
+            "inspect",
+            skill_ids=("repository-inspection",),
+        )
+    )
+
+    [run] = host.list_thread_runs(thread.id)
+    assert run["extension_catalog_version"] == (
+        host._container.extension_runtime.catalog.version
+    )
+    [user, _assistant] = host.list_thread_messages(thread.id)
+    metadata = cast(dict[str, object], user["metadata"])
+    assert metadata["extension_catalog_version"] == run["extension_catalog_version"]
+    assert provider.requests
+    assert "Prefer repo.search first." in provider.requests[0].messages[0].content
+
+
 def test_local_runtime_host_passes_thinking_mode_into_model_request(
     tmp_path: Path,
 ) -> None:
@@ -435,6 +487,27 @@ def test_local_runtime_host_extracts_local_memory_facts(tmp_path: Path) -> None:
     assert host.local_memory_facts(thread.id) == [
         "\u7528\u6237\u76ee\u524d\u5728\u5b66\u4e60python\u3002"
     ]
+
+
+def _write_skill(project: Path, skill_id: str, instructions: str) -> None:
+    skill_dir = project / "skills" / skill_id
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "\n".join(
+            [
+                "---",
+                f"id: {skill_id}",
+                'version: "1"',
+                "risk_level: low",
+                "requested_tools:",
+                "  - repo.search",
+                "---",
+                instructions,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_local_runtime_host_thread_summary_includes_changed_files(

@@ -27,11 +27,13 @@ class ConversationRunIntakeService:
         runtime: RuntimeRepository,
         events: EventStream,
         default_model: str,
+        extension_catalog_version: str | None = None,
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
         self.events = events
         self.default_model = default_model
+        self.extension_catalog_version = extension_catalog_version
 
     async def create_turn_run(
         self,
@@ -56,6 +58,7 @@ class ConversationRunIntakeService:
             status=RunStatus.CREATED,
             dispatch_status=DispatchStatus.QUEUED,
             working_directory=Path(thread.context_path),
+            extension_catalog_version=self.extension_catalog_version,
         )
         run = run.model_copy(update={"graph_thread_id": f"conversation:{run.id}"})
         leader = Agent(
@@ -67,19 +70,22 @@ class ConversationRunIntakeService:
         )
 
         await self.runtime.create_run(run, leader)
+        payload: dict[str, object] = {
+            "thread_id": str(thread_id),
+            "goal": content,
+            "model": selected_model,
+            "thinking": thinking,
+            "memory": memory,
+            "skill_ids": list(skill_ids),
+            "working_directory": str(run.working_directory),
+            "runtime_route": CONVERSATION_TURN_ROUTE,
+        }
+        if self.extension_catalog_version is not None:
+            payload["extension_catalog_version"] = self.extension_catalog_version
         created_event = await self.runtime.append_event(
             run_id=run.id,
             event_type=EventType.RUN_CREATED,
-            payload={
-                "thread_id": str(thread_id),
-                "goal": content,
-                "model": selected_model,
-                "thinking": thinking,
-                "memory": memory,
-                "skill_ids": list(skill_ids),
-                "working_directory": str(run.working_directory),
-                "runtime_route": CONVERSATION_TURN_ROUTE,
-            },
+            payload=payload,
             agent_id=leader.id,
         )
         agent_event = await self.runtime.append_event(

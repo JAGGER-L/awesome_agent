@@ -208,6 +208,7 @@ class ConversationService:
                         "dispatch_status": run.dispatch_status.value,
                         "runtime_route": run.runtime_route,
                         "execution_kind": run.execution_kind.value,
+                        "extension_catalog_version": run.extension_catalog_version,
                         "result_text": run.result_text,
                     },
                 )

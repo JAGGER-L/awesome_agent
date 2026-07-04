@@ -98,13 +98,13 @@ class LocalSurfaceClient:
         return self.host.local_memory_facts(thread_id)
 
     def list_skills(self) -> list[dict[str, Any]]:
-        return []
+        return [dict(item) for item in self.host.list_skills()]
 
     def list_tools(self) -> dict[str, list[dict[str, Any]]]:
         return self.host.list_tools()
 
     def mcp_status(self) -> list[dict[str, Any]]:
-        return []
+        return [dict(item) for item in self.host.mcp_status()]
 
     def usage_summary(
         self,

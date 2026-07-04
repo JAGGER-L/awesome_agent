@@ -14,6 +14,10 @@ from awesome_agent.conversation.models import (
 from awesome_agent.conversation.repository import ConversationRepository
 from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.extensions.catalog import empty_extension_catalog
+from awesome_agent.extensions.catalog_store import CatalogSnapshotMissing
+from awesome_agent.extensions.models import ExtensionCatalog
+from awesome_agent.extensions.skills import SkillRuntimeView
 from awesome_agent.modeling.messages import (
     AssistantMessage,
     ModelMessage,
@@ -25,9 +29,15 @@ from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.modeling.stream import TextDelta, TurnCompleted, TurnFailed
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage
 from awesome_agent.runtime.agent_loop import ReadOnlyAgentLoop
+from awesome_agent.runtime.agent_loop.contracts import MiddlewareContext
+from awesome_agent.runtime.agent_loop.skill_context_middleware import (
+    SkillContextMiddleware,
+)
 from awesome_agent.runtime.repository import RuntimeRepository
+from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
 from awesome_agent.safety.redaction import redact_model_messages, redact_value
 from awesome_agent.tools.executor import ToolExecutor
+from awesome_agent.tools.models import ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.repository import (
     execute_repository_call,
@@ -48,6 +58,8 @@ class ConversationGraph:
         agent_loop: ReadOnlyAgentLoop | None = None,
         tool_executor: ToolExecutor | None = None,
         tool_registry: ToolRegistry | None = None,
+        extension_catalog_store: object | None = None,
+        skill_context_middleware: SkillContextMiddleware | None = None,
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
@@ -56,6 +68,10 @@ class ConversationGraph:
         self.agent_loop = agent_loop or ReadOnlyAgentLoop()
         self.tool_executor = tool_executor
         self.tool_registry = tool_registry
+        self.extension_catalog_store = extension_catalog_store
+        self.skill_context_middleware = (
+            skill_context_middleware or SkillContextMiddleware()
+        )
 
     async def execute(self, run: Run, leader: Agent) -> ConversationGraphState:
         created = await self._run_created_payload(run)
@@ -63,11 +79,12 @@ class ConversationGraph:
         content = str(created.get("goal") or run.goal)
         selected_model = str(created.get("model") or leader.model or self.default_model)
         thinking = _optional_str(created.get("thinking"))
+        skill_ids = _string_list_payload(created.get("skill_ids"))
         turn_options: dict[str, object] = {
             "model": selected_model,
             "thinking": thinking,
             "memory": _dict_payload(created.get("memory")),
-            "skill_ids": _list_payload(created.get("skill_ids")),
+            "skill_ids": skill_ids,
         }
         return await self._execute_turn(
             run=run,
@@ -77,6 +94,7 @@ class ConversationGraph:
             selected_model=selected_model,
             thinking=thinking,
             turn_options=turn_options,
+            skill_ids=skill_ids,
         )
 
     async def _execute_turn(
@@ -89,7 +107,16 @@ class ConversationGraph:
         selected_model: str,
         thinking: str | None,
         turn_options: dict[str, object],
+        skill_ids: list[str],
     ) -> ConversationGraphState:
+        catalog = self._catalog_for_run(run)
+        skill_runtime_view = _skill_runtime_view(
+            run=run,
+            leader=leader,
+            catalog=catalog,
+            skill_ids=skill_ids,
+            tool_registry=self.tool_registry,
+        )
         user_message = await self._message_for_run_role(
             thread_id=thread_id,
             run_id=run.id,
@@ -107,6 +134,8 @@ class ConversationGraph:
                     "working_directory": str(run.working_directory)
                     if run.working_directory
                     else None,
+                    "extension_catalog_version": run.extension_catalog_version,
+                    "resolved_skills": skill_runtime_view.model_dump(mode="json"),
                 },
             )
             await self.runtime.append_event(
@@ -137,6 +166,7 @@ class ConversationGraph:
             messages=messages,
             selected_model=selected_model,
             thinking=thinking,
+            skill_runtime_view=skill_runtime_view,
         )
         final_answer = str(model_state["final_answer"])
         usage = model_state["usage"]
@@ -192,6 +222,7 @@ class ConversationGraph:
         messages: list[ModelMessage],
         selected_model: str,
         thinking: str | None,
+        skill_runtime_view: SkillRuntimeView | None,
     ) -> ConversationGraphState:
         initial_state: ConversationGraphState = {}
 
@@ -209,6 +240,7 @@ class ConversationGraph:
                     selected_model,
                     messages,
                     thinking,
+                    skill_runtime_view,
                 ),
             )
 
@@ -268,6 +300,7 @@ class ConversationGraph:
         selected_model: str,
         messages: list[ModelMessage],
         thinking: str | None,
+        skill_runtime_view: SkillRuntimeView | None,
     ) -> ConversationGraphState:
         provider = self.provider_factory(selected_model)
         model_messages = redact_model_messages(list(messages))
@@ -275,6 +308,11 @@ class ConversationGraph:
             model_tool_definitions(self.tool_registry)
             if self.tool_registry is not None and run.working_directory is not None
             else []
+        )
+        effective_tools = (
+            _RegistryToolPolicy.from_registry(self.tool_registry)
+            if self.tool_registry is not None
+            else None
         )
         usage = ModelUsage()
         changed_files: list[dict[str, object]] = []
@@ -287,6 +325,16 @@ class ConversationGraph:
                 messages=model_messages,
                 tools=tools,
                 thinking=thinking,
+            )
+            request = await self.skill_context_middleware.before_model_call(
+                request,
+                MiddlewareContext(
+                    run_id=str(run.id),
+                    agent_id=str(leader.id),
+                    runtime_route=run.runtime_route or "",
+                    messages=model_messages,
+                    skill_runtime_view=skill_runtime_view,
+                ),
             )
             async for event in provider.stream(request):
                 if isinstance(event, TextDelta):
@@ -325,11 +373,7 @@ class ConversationGraph:
                     call,
                     workspace=Path(run.working_directory),
                     agent_id=leader.id,
-                    capabilities={
-                        "repository:read",
-                        "repository:write",
-                        "shell:execute",
-                    },
+                    effective_tools=effective_tools,
                 )
                 model_messages.append(result)
                 effects = _changed_files_from_tool_result(result)
@@ -361,6 +405,21 @@ class ConversationGraph:
             "changed_files": _dedupe_changed_files(changed_files),
         }
 
+    def _catalog_for_run(self, run: Run) -> ExtensionCatalog:
+        version = run.extension_catalog_version
+        if version is None or self.extension_catalog_store is None:
+            return empty_extension_catalog()
+        get_catalog = getattr(self.extension_catalog_store, "get", None)
+        if not callable(get_catalog):
+            return empty_extension_catalog()
+        try:
+            catalog = get_catalog(version)
+        except CatalogSnapshotMissing:
+            return empty_extension_catalog()
+        if isinstance(catalog, ExtensionCatalog):
+            return catalog
+        return empty_extension_catalog()
+
 
 async def _identity_state(state: ConversationGraphState) -> ConversationGraphState:
     return state
@@ -378,6 +437,65 @@ def _dict_payload(value: object) -> dict[str, object]:
 
 def _list_payload(value: object) -> list[object]:
     return value if isinstance(value, list) else []
+
+
+def _string_list_payload(value: object) -> list[str]:
+    return [str(item) for item in _list_payload(value)]
+
+
+class _RegistryToolPolicy:
+    def __init__(self, specs: list[ToolSpec]) -> None:
+        self._specs = {spec.name: spec for spec in specs}
+
+    @classmethod
+    def from_registry(cls, registry: ToolRegistry) -> _RegistryToolPolicy:
+        return cls(registry.list_specs())
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(self._specs)
+
+    def capabilities_for(self, tool_name: str) -> frozenset[str]:
+        spec = self._specs.get(tool_name)
+        if spec is None:
+            return frozenset()
+        return frozenset(spec.required_capabilities)
+
+
+def _skill_runtime_view(
+    *,
+    run: Run,
+    leader: Agent,
+    catalog: ExtensionCatalog,
+    skill_ids: list[str],
+    tool_registry: ToolRegistry | None,
+) -> SkillRuntimeView:
+    tool_names = (
+        [spec.name for spec in tool_registry.list_specs()]
+        if tool_registry is not None
+        else []
+    )
+    assignment = TeamAssignment(
+        root_run_id=run.root_run_id or run.id,
+        parent_run_id=run.parent_run_id or run.id,
+        child_run_id=run.id,
+        kind=TeamAssignmentKind.TEAMMATE,
+        role_profile=leader.profile,
+        runtime_route=run.runtime_route or "",
+        goal=run.goal,
+        allowed_tools=tool_names,
+        allowed_skills=skill_ids,
+        can_write=True,
+        can_delegate=True,
+        max_subagents=1,
+    )
+    return SkillRuntimeView.from_allowed_skills(
+        allowed_skill_ids=skill_ids,
+        catalog=catalog,
+        assignment=assignment,
+        actor_kind=leader.kind.value,
+        route=run.runtime_route or "",
+    )
 
 
 def _state_from_assistant_message(message: ThreadMessage) -> ConversationGraphState:

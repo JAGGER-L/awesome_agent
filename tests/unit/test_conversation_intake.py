@@ -116,3 +116,37 @@ async def test_conversation_intake_records_graph_input_in_run_goal_and_payload()
         "working_directory": str(Path(thread.context_path or "")),
         "runtime_route": CONVERSATION_TURN_ROUTE,
     }
+
+
+@pytest.mark.asyncio
+async def test_conversation_intake_pins_extension_catalog_version() -> None:
+    conversations = InMemoryConversationRepository()
+    thread = await conversations.create_thread(
+        title="Chat",
+        context_path=str(Path.cwd()),
+    )
+    runtime = InMemoryRuntimeRepository()
+    service = ConversationRunIntakeService(
+        conversations=conversations,
+        runtime=runtime,
+        events=EventStream(),
+        default_model="fake-model",
+        extension_catalog_version="ext_123",
+    )
+
+    run = await service.create_turn_run(
+        thread_id=thread.id,
+        content="hello",
+        model=None,
+        thinking=None,
+        memory={},
+        skill_ids=(),
+    )
+
+    assert run.extension_catalog_version == "ext_123"
+    [created] = [
+        event
+        for event in await runtime.list_events(run.id)
+        if event.event_type is EventType.RUN_CREATED
+    ]
+    assert created.payload["extension_catalog_version"] == "ext_123"

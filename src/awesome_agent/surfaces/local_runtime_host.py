@@ -30,6 +30,7 @@ from awesome_agent.persistence.approval_contracts import (
 )
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.settings import Settings
+from awesome_agent.surfaces.capabilities import CapabilitySurfaceService
 from awesome_agent.surfaces.client import (
     ChangedFileSummary,
     SurfaceThread,
@@ -46,6 +47,7 @@ class LocalRuntimeHost:
         provider_factory: Callable[[str], ModelProvider] | None = None,
         default_model: str | None = None,
         repository: object | None = None,
+        project_root: Path | None = None,
     ) -> None:
         self.settings = settings or Settings()
         self.default_model = default_model or self.settings.leader_model
@@ -59,6 +61,7 @@ class LocalRuntimeHost:
             settings=self.settings,
             provider_factory=provider_factory,
             default_model=self.default_model,
+            project_root=project_root,
         )
         self.repository = self._container.conversations
         self.runtime_repository = self._container.runtime
@@ -459,6 +462,7 @@ class LocalRuntimeHost:
                         "dispatch_status": run.dispatch_status.value,
                         "runtime_route": run.runtime_route,
                         "execution_kind": run.execution_kind.value,
+                        "extension_catalog_version": run.extension_catalog_version,
                         "result_text": run.result_text,
                     },
                 )
@@ -695,25 +699,26 @@ class LocalRuntimeHost:
             seen.add(fact)
         return facts
 
+    def list_skills(self) -> list[dict[str, object]]:
+        catalog = self._container.extension_catalog_store.active()
+        return CapabilitySurfaceService(
+            catalog=catalog,
+            tool_registry=self.tool_registry,
+        ).skills()
+
+    def mcp_status(self) -> list[dict[str, object]]:
+        catalog = self._container.extension_catalog_store.active()
+        return CapabilitySurfaceService(
+            catalog=catalog,
+            tool_registry=self.tool_registry,
+        ).mcp_servers()
+
     def list_tools(self) -> dict[str, list[dict[str, object]]]:
-        groups: dict[str, list[dict[str, object]]] = {
-            "builtin": [],
-            "sandbox": [],
-            "mcp": [],
-            "extension": [],
-        }
-        for spec in self.tool_registry.list_specs():
-            item: dict[str, object] = {
-                "name": spec.name,
-                "risk_level": spec.risk_level.value,
-                "health": "healthy",
-                "description": spec.description,
-            }
-            if spec.sandbox_required:
-                groups["sandbox"].append(item)
-            else:
-                groups["builtin"].append(item)
-        return groups
+        catalog = self._container.extension_catalog_store.active()
+        return CapabilitySurfaceService(
+            catalog=catalog,
+            tool_registry=self.tool_registry,
+        ).tools()
 
     def usage_summary(
         self,

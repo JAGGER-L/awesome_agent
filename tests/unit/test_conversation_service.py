@@ -149,6 +149,7 @@ async def test_list_thread_runs_projects_from_runtime_created_events() -> None:
             "dispatch_status": "terminal",
             "runtime_route": "conversation-turn",
             "execution_kind": "conversation",
+            "extension_catalog_version": None,
             "result_text": "done",
         }
     ]

@@ -35,7 +35,6 @@ from awesome_agent.api.schemas import (
     MemoryStatusResponse,
     ModelProfileResponse,
     ReadinessReportResponse,
-    SurfaceToolItemResponse,
     SurfaceToolsResponse,
     ThreadArtifactsResponse,
     ThreadUploadsResponse,
@@ -138,6 +137,7 @@ from awesome_agent.safety.redaction import (
     redact_value,
 )
 from awesome_agent.settings import Settings
+from awesome_agent.surfaces.capabilities import CapabilitySurfaceService
 from awesome_agent.surfaces.client import changed_file_summaries_from_payload
 from awesome_agent.tools.repository import build_modifying_registry
 
@@ -175,11 +175,19 @@ def create_app(
     if default_runtime_repository is None:
         default_runtime_repository = InMemoryRuntimeRepository()
     default_event_stream = EventStream()
+    active_extension_catalog = extension_catalog
+    if active_extension_catalog is None:
+        active_extension_catalog = build_project_extension_catalog_sync(project_root)
+    extension_catalogs_by_version = {
+        catalog.version: catalog
+        for catalog in [*(extension_catalog_history or []), active_extension_catalog]
+    }
     default_conversation_intake = ConversationRunIntakeService(
         conversations=threads_repository,
         runtime=default_runtime_repository,
         events=default_event_stream,
         default_model=settings.leader_model,
+        extension_catalog_version=active_extension_catalog.version,
     )
     default_conversation_service = conversation_service or ConversationService(
         repository=threads_repository,
@@ -188,13 +196,6 @@ def create_app(
         default_model=settings.leader_model,
         event_poll_interval=settings.event_poll_interval_seconds,
     )
-    active_extension_catalog = extension_catalog
-    if active_extension_catalog is None:
-        active_extension_catalog = build_project_extension_catalog_sync(project_root)
-    extension_catalogs_by_version = {
-        catalog.version: catalog
-        for catalog in [*(extension_catalog_history or []), active_extension_catalog]
-    }
     bind_check = bind_policy_check(settings.api_host, settings.unsafe_bind_public)
     if bind_check.status is HealthStatus.UNHEALTHY:
         raise RuntimeError(bind_check.detail)
@@ -279,6 +280,7 @@ def create_app(
             runtime=runtime_repository,
             events=event_stream,
             default_model=settings.leader_model,
+            extension_catalog_version=active_extension_catalog.version,
         )
         app.state.conversations = conversation_service or ConversationService(
             repository=app.state.threads,
@@ -578,37 +580,27 @@ def create_app(
 
     @app.get("/surface/tools")
     async def get_surface_tools() -> SurfaceToolsResponse:
-        return _surface_tools_response(extensions_catalog())
+        return SurfaceToolsResponse.model_validate(
+            CapabilitySurfaceService(
+                catalog=extensions_catalog(),
+                tool_registry=build_modifying_registry(),
+            ).tools()
+        )
 
     @app.get("/extensions/skills")
     async def get_extension_skills() -> ExtensionSkillsResponse:
-        skills = [
-            {
-                "id": skill.id,
-                "source_id": skill.source_id,
-                "version": skill.version,
-                "requested_tools": skill.requested_tools,
-                "required_capabilities": sorted(skill.required_capabilities),
-                "risk_level": skill.risk_level.value,
-            }
-            for skill in extensions_catalog().skills
-        ]
+        skills = CapabilitySurfaceService(
+            catalog=extensions_catalog(),
+            tool_registry=build_modifying_registry(),
+        ).skills()
         return ExtensionSkillsResponse(configured=bool(skills), items=skills)
 
     @app.get("/extensions/mcp")
     async def get_mcp_status() -> McpServersResponse:
-        sources = [
-            {
-                "id": source.id,
-                "type": source.type.value,
-                "trust": source.trust.value,
-                "status": source.health.status.value,
-                "detail": source.health.detail,
-                "checked_at": source.health.checked_at.isoformat(),
-            }
-            for source in extensions_catalog().sources
-            if source.type.value.startswith("mcp_")
-        ]
+        sources = CapabilitySurfaceService(
+            catalog=extensions_catalog(),
+            tool_registry=build_modifying_registry(),
+        ).mcp_servers()
         return McpServersResponse(configured=bool(sources), items=sources)
 
     @app.get("/memory")
@@ -1610,70 +1602,6 @@ def _model_profiles(settings: Settings) -> list[ModelProfileResponse]:
         )
         for role, model in roles
     ]
-
-
-def _surface_tools_response(catalog: ExtensionCatalog) -> SurfaceToolsResponse:
-    builtin: list[SurfaceToolItemResponse] = []
-    sandbox: list[SurfaceToolItemResponse] = []
-    for spec in build_modifying_registry().list_specs():
-        item = SurfaceToolItemResponse(
-            name=spec.name,
-            source="builtin",
-            category=_tool_category(spec.name),
-            risk_level=spec.risk_level.value,
-            required_capabilities=sorted(spec.required_capabilities),
-            enabled=True,
-            health="healthy",
-            description=spec.description,
-        )
-        if spec.sandbox_required:
-            sandbox.append(item)
-        else:
-            builtin.append(item)
-
-    source_by_id = {source.id: source for source in catalog.sources}
-    mcp: list[SurfaceToolItemResponse] = []
-    extension: list[SurfaceToolItemResponse] = []
-    for tool in catalog.tools:
-        source = source_by_id.get(tool.source_id)
-        item = SurfaceToolItemResponse(
-            name=tool.name,
-            source=tool.source_id,
-            category="mcp" if _is_mcp_source(source) else "extension",
-            risk_level=tool.risk_level.value,
-            required_capabilities=sorted(tool.required_capabilities),
-            enabled=True,
-            health=source.health.status.value if source is not None else "unknown",
-            description=tool.description,
-        )
-        if _is_mcp_source(source):
-            mcp.append(item)
-        else:
-            extension.append(item)
-    return SurfaceToolsResponse(
-        builtin=builtin,
-        sandbox=sandbox,
-        mcp=mcp,
-        extension=extension,
-    )
-
-
-def _tool_category(tool_name: str) -> str:
-    if tool_name.startswith("repo."):
-        return "repository"
-    if tool_name.startswith("shell."):
-        return "sandbox"
-    if tool_name.startswith("artifact."):
-        return "artifact"
-    return "builtin"
-
-
-def _is_mcp_source(source: object | None) -> bool:
-    return (
-        source is not None
-        and hasattr(source, "type")
-        and str(source.type.value).startswith("mcp_")
-    )
 
 
 async def _thread_run_ids(
