@@ -110,9 +110,9 @@ def test_model_catalog_rejects_invalid_role_model() -> None:
 
 
 def test_provider_factory_creates_deepseek_catalog_model() -> None:
-    provider = ModelProviderFactory(
-        test_settings(deepseek_api_key="secret")
-    ).create("deepseek-v4-pro")
+    provider = ModelProviderFactory(test_settings(deepseek_api_key="secret")).create(
+        "deepseek-v4-pro"
+    )
 
     assert isinstance(provider, DeepSeekProvider)
 

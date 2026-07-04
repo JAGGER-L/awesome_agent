@@ -162,8 +162,32 @@ class HtmlGameSurfaceClient:
     def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
         return []
 
-    def list_models(self) -> list[dict[str, object]]:
-        return [{"name": "fake-model"}]
+    def list_models(self) -> dict[str, object]:
+        return {
+            "providers": [
+                {
+                    "id": "deepseek",
+                    "display_name": "DeepSeek",
+                    "configured": True,
+                    "credential_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                    "api_key_present": True,
+                    "models": [
+                        {
+                            "id": "deepseek-v4-pro",
+                            "display_name": "DeepSeek V4 Pro",
+                            "provider_id": "deepseek",
+                            "capabilities": ["streaming", "tools", "reasoning"],
+                            "recommended_for": ["leader"],
+                            "selected": True,
+                        }
+                    ],
+                }
+            ],
+            "current": {
+                "provider_id": "deepseek",
+                "model_id": "deepseek-v4-pro",
+            },
+        }
 
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}

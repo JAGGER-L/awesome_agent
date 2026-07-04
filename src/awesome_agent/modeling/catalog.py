@@ -67,8 +67,7 @@ class ModelCatalog(BaseModel):
     @classmethod
     def from_settings(cls, settings: Settings) -> ModelCatalog:
         api_key_present = bool(
-            settings.deepseek_api_key
-            and settings.deepseek_api_key.get_secret_value()
+            settings.deepseek_api_key and settings.deepseek_api_key.get_secret_value()
         )
         current_model = settings.leader_model or settings.deepseek_pro_model
         provider = ProviderProfile(
@@ -165,8 +164,7 @@ class ModelCatalog(BaseModel):
                 "unsupported_provider_configuration",
                 "Custom DeepSeek base URLs are not supported.",
                 hint=(
-                    f"Use the official DeepSeek endpoint: "
-                    f"{DEEPSEEK_OFFICIAL_BASE_URL}."
+                    f"Use the official DeepSeek endpoint: {DEEPSEEK_OFFICIAL_BASE_URL}."
                 ),
             )
 

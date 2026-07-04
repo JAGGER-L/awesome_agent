@@ -41,9 +41,12 @@ Create local configuration:
 Copy-Item .env.example .env
 ```
 
-Model provider settings currently use `AWESOME_AGENT_DEEPSEEK_*` values in
-`.env`. The default role models are `deepseek-v4-pro` for Leader and
-`deepseek-v4-flash` for Teammate, Verifier, and Subagent.
+Awesome Agent currently supports the official DeepSeek provider for product
+conversation turns. Configure `AWESOME_AGENT_DEEPSEEK_API_KEY` in your local
+ignored `.env` or shell environment. Custom DeepSeek-compatible base URLs are
+not supported by the product runtime. The default role models are
+`deepseek-v4-pro` for Leader and `deepseek-v4-flash` for Teammate, Verifier,
+and Subagent.
 
 ## Quickstart Matrix
 

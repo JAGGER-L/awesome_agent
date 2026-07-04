@@ -44,7 +44,7 @@ Runtime 的设计目标是：即使 Run 经历进程崩溃、审批等待、验�
 Copy-Item .env.example .env
 ```
 
-Provider secrets 放在 `.env`。默认模型 provider 设置包括 `AWESOME_AGENT_DEEPSEEK_API_KEY`、`AWESOME_AGENT_DEEPSEEK_BASE_URL`、`AWESOME_AGENT_DEEPSEEK_PRO_MODEL` 和 `AWESOME_AGENT_DEEPSEEK_FLASH_MODEL`。
+Provider secrets 放在 `.env`。当前产品构建只支持官方 DeepSeek provider 的 conversation turns。配置 `AWESOME_AGENT_DEEPSEEK_API_KEY`；产品 runtime 不支持自定义 DeepSeek-compatible base URL。
 
 Extension source 配置放在 `awesome-agent.yaml`。Project skills 会从 `skills/` 发现。不要把 secrets 放进 `awesome-agent.yaml`。
 
@@ -95,7 +95,7 @@ awesome commands
 | `/new` | 开启新的本地 conversation/thread。 |
 | `/threads` | 切换 conversation。 |
 | `/status` | 查看当前 thread、run 和 runtime 状态。 |
-| `/model` | 选择当前 conversation 的模型。 |
+| `/model` | 先选择 provider，再选择当前 conversation 的模型。 |
 | `/thinking` | 选择 thinking mode。 |
 | `/skills` | 浏览 skills。 |
 | `/tools` | 查看 built-in、MCP 和 sandbox tools。 |

@@ -68,10 +68,10 @@ The target startup profile contract is defined in
 Copy-Item .env.example .env
 ```
 
-Put provider secrets in `.env`. The default model provider settings are
-`AWESOME_AGENT_DEEPSEEK_API_KEY`, `AWESOME_AGENT_DEEPSEEK_BASE_URL`,
-`AWESOME_AGENT_DEEPSEEK_PRO_MODEL`, and
-`AWESOME_AGENT_DEEPSEEK_FLASH_MODEL`.
+Put provider secrets in `.env`. The current product build supports only the
+official DeepSeek provider for conversation turns. Configure
+`AWESOME_AGENT_DEEPSEEK_API_KEY`; custom DeepSeek-compatible base URLs are not
+supported by the product runtime.
 
 Keep extension source configuration in `awesome-agent.yaml`. Project skills
 are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
@@ -186,7 +186,7 @@ details are available through slash commands such as `/status`, `/tools`,
 | `/new` | Start a new durable local conversation/thread. |
 | `/threads` | Switch conversation. |
 | `/status` | Show current thread, run, and runtime status. |
-| `/model` | Choose the model for the current conversation. |
+| `/model` | Choose provider, then model, for the current conversation. |
 | `/thinking` | Choose thinking mode. |
 | `/skills` | Browse enabled and available skills. |
 | `/tools` | Show built-in, MCP, and sandbox tools. |
