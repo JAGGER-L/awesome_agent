@@ -69,7 +69,6 @@ class HtmlGameSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append(content)
         target = self.workspace / "snake-game.html"
@@ -147,7 +146,12 @@ class HtmlGameSurfaceClient:
     def config_summary(self) -> dict[str, object]:
         return {"mode": "embedded"}
 
-    def cancel(self, run_id: str) -> dict[str, object]:
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, object]:
         return {"id": run_id, "status": "cancelled"}
 
     def decide_approval(
@@ -156,6 +160,7 @@ class HtmlGameSurfaceClient:
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, object]:
         return {"status": "decided", "approved": approved}
 
