@@ -121,10 +121,7 @@ class HttpSurfaceClient:
         response = self._client.get(f"{self.api_url}/memory/entries", params=params)
         response.raise_for_status()
         payload = response.json()
-        items = payload.get("items") if isinstance(payload, dict) else None
-        if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
-            raise ValueError("Expected memory entries list response.")
-        return [dict(item) for item in items]
+        return _items_from_list_or_envelope(payload, path="/memory/entries")
 
     def delete_memory_entry(self, memory_id: str, *, target: str) -> dict[str, object]:
         response = self._client.delete(
@@ -188,10 +185,10 @@ class HttpSurfaceClient:
             f"/threads/{thread_id}/attachments",
             params={"include_deleted": include_deleted},
         )
-        items = payload.get("items", [])
-        if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
-            raise ValueError("Expected attachment items list response.")
-        return [dict(item) for item in items]
+        return _items_from_list_or_envelope(
+            payload,
+            path=f"/threads/{thread_id}/attachments",
+        )
 
     def delete_attachment(self, thread_id: str, attachment_id: str) -> dict[str, Any]:
         response = self._client.delete(
@@ -264,8 +261,9 @@ class HttpSurfaceClient:
             return self._get_object(f"/runs/{run_id}/budget")
         return {"run_id": None, "total_tokens": 0, "threshold_status": "not_started"}
 
-    def config_summary(self) -> dict[str, object]:
-        config = self._get_object("/config")
+    def config_summary(self, thread_id: str | None = None) -> dict[str, object]:
+        path = f"/threads/{thread_id}/config" if thread_id else "/config"
+        config = self._get_object(path)
         return {"api_url": self.api_url, **config}
 
     def list_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
@@ -336,9 +334,7 @@ class HttpSurfaceClient:
         response = self._client.get(f"{self.api_url}{path}", params=params)
         response.raise_for_status()
         payload = response.json()
-        if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
-            raise ValueError(f"Expected list response from {path}.")
-        return [dict(item) for item in payload]
+        return _items_from_list_or_envelope(payload, path=path)
 
     def _get_list_or_empty(
         self,
@@ -351,9 +347,7 @@ class HttpSurfaceClient:
             return []
         response.raise_for_status()
         payload = response.json()
-        if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
-            raise ValueError(f"Expected list response from {path}.")
-        return [dict(item) for item in payload]
+        return _items_from_list_or_envelope(payload, path=path)
 
     def _get_object(
         self,
@@ -375,10 +369,19 @@ class HttpSurfaceClient:
         params: dict[str, str | int | float | bool | None] | None = None,
     ) -> list[dict[str, Any]]:
         payload = self._get_object(path, params=params)
-        items = payload.get("items", [])
-        if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
-            raise ValueError(f"Expected items list response from {path}.")
-        return [dict(item) for item in items]
+        return _items_from_list_or_envelope(payload, path=path)
 
 
 TuiApiClient = HttpSurfaceClient
+
+
+def _items_from_list_or_envelope(
+    payload: object,
+    *,
+    path: str,
+) -> list[dict[str, Any]]:
+    if isinstance(payload, dict):
+        payload = payload.get("items", [])
+    if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
+        raise ValueError(f"Expected items list response from {path}.")
+    return [dict(item) for item in payload]

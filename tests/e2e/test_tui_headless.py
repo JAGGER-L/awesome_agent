@@ -270,7 +270,7 @@ class FakeClient:
     ) -> dict[str, object]:
         return {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
 
-    def config_summary(self) -> dict[str, object]:
+    def config_summary(self, thread_id: str | None = None) -> dict[str, object]:
         return {"mode": "embedded", "default_model": "deepseek-v4-pro"}
 
     def cancel(

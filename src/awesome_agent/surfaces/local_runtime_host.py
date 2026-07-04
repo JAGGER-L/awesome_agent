@@ -760,19 +760,21 @@ class LocalRuntimeHost:
         )
         return result.model_dump(mode="json", exclude_none=True)
 
-    def list_skills(self) -> list[dict[str, object]]:
+    def list_skills(self) -> dict[str, object]:
         catalog = self._container.extension_catalog_store.active()
-        return CapabilitySurfaceService(
+        items = CapabilitySurfaceService(
             catalog=catalog,
             tool_registry=self.tool_registry,
         ).skills()
+        return {"configured": bool(items), "items": items}
 
-    def mcp_status(self) -> list[dict[str, object]]:
+    def mcp_status(self) -> dict[str, object]:
         catalog = self._container.extension_catalog_store.active()
-        return CapabilitySurfaceService(
+        items = CapabilitySurfaceService(
             catalog=catalog,
             tool_registry=self.tool_registry,
         ).mcp_servers()
+        return {"configured": bool(items), "items": items}
 
     def list_tools(self) -> dict[str, list[dict[str, object]]]:
         catalog = self._container.extension_catalog_store.active()
@@ -826,11 +828,31 @@ class LocalRuntimeHost:
         }
 
     def config_summary(self) -> dict[str, object]:
+        project_config = self._container.project_root / "awesome-agent.yaml"
+        project_env = self._container.project_root / ".env"
         return {
             "mode": "embedded",
+            "api_host": "embedded",
+            "local_config_path": str(self.settings.local_config_path),
+            "artifact_root": str(self.settings.artifact_root),
+            "workspace_root": (
+                str(self.settings.workspace_root)
+                if self.settings.workspace_root is not None
+                else None
+            ),
             "sandbox_backend": self.settings.local_cli_sandbox_backend,
+            "local_cli_sandbox_backend": self.settings.local_cli_sandbox_backend,
+            "observability_enabled": self.settings.observability_enabled,
             "default_model": self.settings.leader_model,
+            "deepseek_api_key_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
             "deepseek_api_key_configured": self.settings.deepseek_api_key is not None,
+            "deepseek_base_url": self.settings.deepseek_base_url,
+            "mem0_api_key_env": "AWESOME_AGENT_MEM0_API_KEY",
+            "mem0_api_key_configured": self.settings.mem0_api_key is not None,
+            "project_config_path": str(project_config),
+            "project_config_exists": project_config.exists(),
+            "project_env_path": str(project_env),
+            "project_env_exists": project_env.exists(),
         }
 
 

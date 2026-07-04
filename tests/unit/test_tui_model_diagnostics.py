@@ -65,7 +65,7 @@ class ModelClient(ChatSemanticClient):
     ) -> dict[str, object]:
         raise AssertionError("not used by this test")
 
-    def config_summary(self) -> dict[str, object]:
+    def config_summary(self, thread_id: str | None = None) -> dict[str, object]:
         raise AssertionError("not used by this test")
 
 

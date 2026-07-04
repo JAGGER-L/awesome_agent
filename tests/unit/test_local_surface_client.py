@@ -131,7 +131,13 @@ class FakeHost:
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
 
-    def config_summary(self) -> dict[str, object]:
+    def list_skills(self) -> dict[str, object]:
+        return {"configured": True, "items": [{"id": "repository-inspection"}]}
+
+    def mcp_status(self) -> dict[str, object]:
+        return {"configured": True, "items": [{"id": "github", "status": "ready"}]}
+
+    def config_summary(self, thread_id: str | None = None) -> dict[str, object]:
         return {"mode": "embedded"}
 
     def cancel(self, run_id: str) -> dict[str, object]:
@@ -188,6 +194,13 @@ def test_local_surface_client_has_no_explicit_run_creation() -> None:
     client = LocalSurfaceClient(host=cast(Any, FakeHost()))
 
     assert not hasattr(client, "start_" + "explicit_run")
+
+
+def test_local_surface_client_normalizes_local_inventory_objects() -> None:
+    client = LocalSurfaceClient(host=cast(Any, FakeHost()))
+
+    assert client.list_skills()[0]["id"] == "repository-inspection"
+    assert client.mcp_status()[0]["status"] == "ready"
 
 
 def test_local_surface_cancel_uses_runtime_state(tmp_path: Path) -> None:

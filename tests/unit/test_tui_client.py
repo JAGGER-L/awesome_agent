@@ -378,6 +378,7 @@ def test_tui_client_reads_surface_capability_endpoints() -> None:
                 "observability_enabled": True,
                 "deepseek_api_key_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
                 "deepseek_api_key_configured": False,
+                "deepseek_base_url": "https://api.deepseek.com",
                 "mem0_api_key_env": "AWESOME_AGENT_MEM0_API_KEY",
                 "mem0_api_key_configured": False,
             },
@@ -411,7 +412,12 @@ def test_tui_client_resumes_thread_and_reads_messages() -> None:
         if request.url.path == "/threads/thread-1/messages":
             return httpx.Response(
                 200,
-                json=[{"role": "user", "content": "hi", "kind": "message"}],
+                json={
+                    "items": [{"role": "user", "content": "hi", "kind": "message"}],
+                    "limit": 50,
+                    "offset": 0,
+                    "has_more": False,
+                },
             )
         return httpx.Response(404)
 
@@ -427,6 +433,82 @@ def test_tui_client_resumes_thread_and_reads_messages() -> None:
     assert thread.context_label == "E:\\repo"
     assert messages[0]["content"] == "hi"
     assert requested_paths == ["/threads/resolve", "/threads/thread-1/messages"]
+
+
+def test_tui_client_reads_paginated_thread_resources() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads = {
+            "/threads": {
+                "items": [{"id": "thread-1", "title": "Thread"}],
+                "limit": 50,
+                "offset": 0,
+                "has_more": False,
+            },
+            "/threads/thread-1/runs": {
+                "items": [{"id": "run-1", "status": "completed"}],
+                "limit": 50,
+                "offset": 0,
+                "has_more": False,
+            },
+            "/threads/thread-1/attachments": {
+                "thread_id": "thread-1",
+                "items": [{"id": "attachment-1", "filename": "spec.md"}],
+                "limit": 50,
+                "offset": 0,
+                "has_more": False,
+            },
+        }
+        return httpx.Response(200, json=payloads[request.url.path])
+
+    client = TuiApiClient(
+        "http://testserver",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.list_threads()[0].id == "thread-1"
+    assert client.list_thread_runs("thread-1")[0]["id"] == "run-1"
+    assert client.list_attachments("thread-1")[0]["id"] == "attachment-1"
+
+
+def test_tui_client_reads_thread_config_when_thread_id_is_available() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/threads/thread-1/config":
+            return httpx.Response(
+                200,
+                json={
+                    "api_host": "127.0.0.1",
+                    "local_config_path": "/home/user/.awesome-agent/config.toml",
+                    "artifact_root": "/home/user/.awesome-agent/artifacts",
+                    "workspace_root": None,
+                    "sandbox_backend": "local",
+                    "local_cli_sandbox_backend": "local",
+                    "observability_enabled": False,
+                    "deepseek_api_key_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                    "deepseek_api_key_configured": False,
+                    "deepseek_base_url": "https://api.deepseek.com",
+                    "mem0_api_key_env": "AWESOME_AGENT_MEM0_API_KEY",
+                    "mem0_api_key_configured": False,
+                    "project_config_path": "/project/awesome-agent.yaml",
+                    "project_config_exists": True,
+                    "project_env_path": "/project/.env",
+                    "project_env_exists": False,
+                },
+            )
+        return httpx.Response(500)
+
+    client = TuiApiClient(
+        "http://testserver",
+        transport=httpx.MockTransport(handler),
+    )
+
+    config = client.config_summary("thread-1")
+
+    assert config["project_config_exists"] is True
+    assert config["deepseek_base_url"] == "https://api.deepseek.com"
+    assert requests[0].url.path == "/threads/thread-1/config"
 
 
 def test_tui_client_finds_last_resumable_run_from_thread_runs() -> None:

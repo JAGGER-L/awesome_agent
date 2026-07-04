@@ -60,7 +60,7 @@ class FakeSemanticClient:
     ) -> dict[str, object]:
         return {"tokens": 0}
 
-    def config_summary(self) -> dict[str, object]:
+    def config_summary(self, thread_id: str | None = None) -> dict[str, object]:
         return {
             "project_root": "E:/project",
             "mode": "embedded",

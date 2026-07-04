@@ -60,8 +60,8 @@ def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> N
         "/extensions/skills": client.get("/extensions/skills"),
         "/extensions/mcp": client.get("/extensions/mcp"),
         "/memory": client.get("/memory"),
-        f"/threads/{thread['id']}/uploads": client.get(
-            f"/threads/{thread['id']}/uploads"
+        f"/threads/{thread['id']}/attachments": client.get(
+            f"/threads/{thread['id']}/attachments"
         ),
         f"/threads/{thread['id']}/artifacts": client.get(
             f"/threads/{thread['id']}/artifacts"
@@ -113,8 +113,7 @@ def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> N
     missing_delete = client.delete("/memory/entries/mem_missing?target=user")
     assert missing_delete.status_code == 404
     assert missing_delete.json()["code"] == "memory_entry_not_found"
-    assert responses[f"/threads/{thread['id']}/uploads"].json()["configured"] is True
-    assert responses[f"/threads/{thread['id']}/uploads"].json()["items"] == []
+    assert responses[f"/threads/{thread['id']}/attachments"].json()["items"] == []
     assert responses[f"/threads/{thread['id']}/artifacts"].json()["items"] == []
     assert responses[f"/threads/{thread['id']}/usage"].json()["threshold_status"] == (
         "not_configured"
@@ -141,7 +140,7 @@ def test_models_api_returns_unconfigured_deepseek_without_failing(
     assert body["current"]["model_id"] == "deepseek-v4-pro"
 
 
-def test_thread_usage_and_artifacts_use_latest_thread_run(
+def test_thread_usage_and_artifacts_use_thread_run_projection(
     tmp_path: Path,
 ) -> None:
     threads = InMemoryConversationRepository()
@@ -199,7 +198,7 @@ def test_thread_usage_and_artifacts_use_latest_thread_run(
     artifacts = client.get(f"/threads/{thread['id']}/artifacts")
 
     assert usage.status_code == 200
-    assert usage.json()["run_id"] == str(latest_run_id)
+    assert usage.json()["run_id"] is None
     assert usage.json()["total_tokens"] == 30
     assert usage.json()["reasoning_tokens"] == 5
     assert artifacts.status_code == 200
@@ -212,7 +211,9 @@ def test_thread_surface_endpoints_return_404_for_missing_thread(
     client, _threads, _runtime, _budget = _client(tmp_path)
     missing = "00000000-0000-0000-0000-000000000000"
 
-    assert client.get(f"/threads/{missing}/uploads").status_code == 404
+    attachments = client.get(f"/threads/{missing}/attachments")
+    assert attachments.status_code == 404
+    assert attachments.json()["code"] == "thread_not_found"
     assert client.get(f"/threads/{missing}/artifacts").status_code == 404
     assert client.get(f"/threads/{missing}/usage").status_code == 404
 
@@ -236,9 +237,7 @@ def test_thread_attachment_api_lifecycle(tmp_path: Path) -> None:
     assert listed.json()["items"][0]["id"] == attachment["id"]
 
     uploads = client.get(f"/threads/{thread['id']}/uploads")
-    assert uploads.status_code == 200
-    assert uploads.json()["configured"] is True
-    assert uploads.json()["items"][0]["id"] == attachment["id"]
+    assert uploads.status_code == 404
 
     content = client.get(
         f"/threads/{thread['id']}/attachments/{attachment['id']}/content"

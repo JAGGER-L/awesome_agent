@@ -69,7 +69,10 @@ def test_list_threads_returns_newest_updated_first() -> None:
     response = client.get("/threads")
 
     assert response.status_code == 200
-    assert [item["id"] for item in response.json()] == [first["id"], second["id"]]
+    assert [item["id"] for item in response.json()["items"]] == [
+        first["id"],
+        second["id"],
+    ]
 
 
 def test_list_threads_includes_latest_changed_file_summary() -> None:
@@ -94,7 +97,7 @@ def test_list_threads_includes_latest_changed_file_summary() -> None:
     response = client.get("/threads")
 
     assert response.status_code == 200
-    [summary] = response.json()
+    [summary] = response.json()["items"]
     assert summary["changed_file_count"] == 1
     assert summary["latest_changed_files"] == [
         {
@@ -176,7 +179,7 @@ def test_append_and_list_thread_messages() -> None:
     assert first.status_code == 200
     assert second.status_code == 200
     assert response.status_code == 200
-    messages = response.json()
+    messages = response.json()["items"]
     assert [item["sequence"] for item in messages] == [1, 2]
     assert [item["content"] for item in messages] == ["Build snake.", "I can help."]
     assert messages[1]["metadata"] == {"source": "test"}

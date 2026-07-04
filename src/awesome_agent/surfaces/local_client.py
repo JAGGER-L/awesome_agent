@@ -124,13 +124,21 @@ class LocalSurfaceClient:
         return dict(self.host.delete_memory_entry(memory_id, target=target))
 
     def list_skills(self) -> list[dict[str, Any]]:
-        return [dict(item) for item in self.host.list_skills()]
+        payload = self.host.list_skills()
+        items = payload.get("items", []) if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            return []
+        return [dict(item) for item in items]
 
     def list_tools(self) -> dict[str, list[dict[str, Any]]]:
         return self.host.list_tools()
 
     def mcp_status(self) -> list[dict[str, Any]]:
-        return [dict(item) for item in self.host.mcp_status()]
+        payload = self.host.mcp_status()
+        items = payload.get("items", []) if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            return []
+        return [dict(item) for item in items]
 
     def usage_summary(
         self,
@@ -139,7 +147,7 @@ class LocalSurfaceClient:
     ) -> dict[str, object]:
         return self.host.usage_summary(thread_id, run_id)
 
-    def config_summary(self) -> dict[str, object]:
+    def config_summary(self, thread_id: str | None = None) -> dict[str, object]:
         return self.host.config_summary()
 
     def cancel(
