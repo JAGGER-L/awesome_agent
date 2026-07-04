@@ -73,10 +73,12 @@ class HttpSurfaceClient:
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
         return self._conversation.continue_turn(
             thread_id=thread_id,
             expected_run_id=expected_run_id,
+            after_sequence=after_sequence,
         )
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:

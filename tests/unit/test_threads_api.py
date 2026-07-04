@@ -251,11 +251,22 @@ class _FakeConversationService:
     ) -> SimpleNamespace:
         return SimpleNamespace(id=self.run_id)
 
+    async def continuable_thread_run(
+        self,
+        thread_id: UUID,
+        *,
+        expected_run_id: UUID | None = None,
+    ) -> SimpleNamespace | None:
+        if expected_run_id is not None and expected_run_id != self.run_id:
+            return None
+        return SimpleNamespace(id=self.run_id)
+
     async def continue_turn(
         self,
         *,
         thread_id: UUID,
         expected_run_id: UUID | None = None,
+        after_sequence: int = 0,
     ) -> AsyncIterator[ConversationStreamEvent]:
         if False:
             yield  # pragma: no cover

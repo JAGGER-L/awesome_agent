@@ -19,6 +19,7 @@ from awesome_agent.modeling.errors import (
     InvalidRequestModelError,
     TransientModelError,
 )
+from awesome_agent.modeling.stream import TextDelta, TurnCompleted
 from awesome_agent.providers.routing import (
     ModelCallExecutor,
     ModelRouteAttempt,
@@ -209,6 +210,111 @@ async def test_routed_model_provider_resolves_and_executes_route() -> None:
     assert attempts[0].route_id.startswith("solo-readonly:leader:coding")
 
 
+@pytest.mark.asyncio
+async def test_model_call_executor_stream_falls_back_before_visible_output() -> None:
+    attempts: list[ModelRouteAttempt] = []
+    decision = _decision(
+        ModelRouteCandidate("primary", "model-a", "primary"),
+        ModelRouteCandidate("fallback", "model-b", "fallback"),
+    )
+    executor = ModelCallExecutor(
+        lambda candidate: (
+            StreamingFailBeforeOutputProvider(
+                TransientModelError("temporary", provider="primary")
+            )
+            if candidate.provider == "primary"
+            else StreamingSuccessProvider(
+                provider=candidate.provider,
+                model=candidate.model,
+                chunks=("ok",),
+            )
+        ),
+        attempt_recorder=attempts.append,
+    )
+
+    events = [event async for event in executor.stream(decision, _request())]
+
+    assert [type(event) for event in events] == [TextDelta, TurnCompleted]
+    assert [
+        (item.provider, item.outcome, item.fallback_reason) for item in attempts
+    ] == [("primary", "failed", "transient"), ("fallback", "completed", None)]
+    completed = events[-1]
+    assert isinstance(completed, TurnCompleted)
+    assert completed.turn.provider == "fallback"
+    assert completed.turn.model == "model-b"
+
+
+@pytest.mark.asyncio
+async def test_model_call_executor_stream_does_not_fallback_after_output() -> None:
+    attempts: list[ModelRouteAttempt] = []
+    decision = _decision(
+        ModelRouteCandidate("primary", "model-a", "primary"),
+        ModelRouteCandidate("fallback", "model-b", "fallback"),
+    )
+    executor = ModelCallExecutor(
+        lambda candidate: (
+            StreamingFailAfterOutputProvider(
+                TransientModelError("stream dropped", provider="primary")
+            )
+            if candidate.provider == "primary"
+            else StreamingSuccessProvider(
+                provider=candidate.provider,
+                model=candidate.model,
+                chunks=("fallback",),
+            )
+        ),
+        attempt_recorder=attempts.append,
+    )
+
+    received: list[object] = []
+    with pytest.raises(ModelRouteExecutionError) as captured:
+        async for event in executor.stream(decision, _request()):
+            received.append(event)
+
+    assert [type(event) for event in received] == [TextDelta]
+    assert len(captured.value.attempts) == 1
+    assert captured.value.attempts[0].provider == "primary"
+    assert captured.value.attempts[0].fallback_reason is None
+    assert [(item.provider, item.outcome) for item in attempts] == [
+        ("primary", "failed"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_routed_model_provider_stream_resolves_route() -> None:
+    attempts: list[ModelRouteAttempt] = []
+    router = StaticModelRouter(
+        default_candidate=ModelRouteCandidate("default", "default", "unused"),
+        route_candidates={
+            ("conversation-turn", "leader"): (
+                ModelRouteCandidate("primary", "model-a", "primary"),
+                ModelRouteCandidate("fallback", "model-b", "fallback"),
+            )
+        },
+    )
+    provider = RoutedModelProvider(
+        router=router,
+        route_request=ModelRouteRequest(
+            runtime_route="conversation-turn",
+            agent_role="leader",
+            task_kind="conversation",
+        ),
+        provider_factory=lambda candidate: StreamingSuccessProvider(
+            provider=candidate.provider,
+            model=candidate.model,
+            chunks=("hello",),
+        ),
+        attempt_recorder=attempts.append,
+    )
+
+    events = [event async for event in provider.stream(_request())]
+
+    assert [type(event) for event in events] == [TextDelta, TurnCompleted]
+    assert attempts[0].route_id.startswith("conversation-turn:leader:conversation")
+    assert attempts[0].provider == "primary"
+    assert attempts[0].outcome == "completed"
+
+
 def test_routing_contract_has_no_monetary_fields() -> None:
     forbidden = {"cost", "price", "amount", "usd", "currency", "money"}
 
@@ -248,6 +354,67 @@ class FailingProvider:
 
     def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         raise NotImplementedError
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        raise self.error
+
+
+class StreamingSuccessProvider:
+    def __init__(
+        self,
+        *,
+        provider: str,
+        model: str,
+        chunks: tuple[str, ...],
+        usage: ModelUsage | None = None,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.chunks = chunks
+        self.usage = usage or ModelUsage(input_tokens=1, output_tokens=len(chunks))
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        for chunk in self.chunks:
+            yield TextDelta(text=chunk)
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="".join(self.chunks)),
+                stop_reason=StopReason.COMPLETED,
+                provider=self.provider,
+                model=self.model,
+                usage=self.usage,
+            )
+        )
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        return ModelTurn(
+            assistant=AssistantMessage(content="".join(self.chunks)),
+            stop_reason=StopReason.COMPLETED,
+            provider=self.provider,
+            model=self.model,
+            usage=self.usage,
+        )
+
+
+class StreamingFailBeforeOutputProvider:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        raise self.error
+        yield TextDelta(text="unreachable")  # pragma: no cover
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        raise self.error
+
+
+class StreamingFailAfterOutputProvider:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        yield TextDelta(text="partial")
+        raise self.error
 
     async def complete(self, request: ModelRequest) -> ModelTurn:
         raise self.error

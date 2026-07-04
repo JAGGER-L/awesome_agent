@@ -99,6 +99,7 @@ class SurfaceClient(Protocol):
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]: ...
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]: ...

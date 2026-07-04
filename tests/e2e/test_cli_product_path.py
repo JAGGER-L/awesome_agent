@@ -117,6 +117,7 @@ class HtmlGameSurfaceClient:
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
         turn_id = uuid4()
         yield ConversationStreamEvent(

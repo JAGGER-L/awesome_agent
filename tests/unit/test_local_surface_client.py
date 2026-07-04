@@ -55,7 +55,7 @@ class FakeHost:
             context_label="workspace",
         )
         self.streamed: list[tuple[str, str]] = []
-        self.continued: list[tuple[str, str | None]] = []
+        self.continued: list[tuple[str, str | None, int]] = []
         self.cancelled: list[str] = []
         self.approvals: list[tuple[str, str, bool]] = []
 
@@ -92,8 +92,9 @@ class FakeHost:
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
-        self.continued.append((thread_id, expected_run_id))
+        self.continued.append((thread_id, expected_run_id, after_sequence))
         return []
 
     def runtime_status(self) -> dict[str, object]:
@@ -147,9 +148,9 @@ def test_local_surface_client_continue_delegates_to_host() -> None:
     host = FakeHost()
     client = LocalSurfaceClient(host=cast(Any, host))
 
-    list(client.continue_turn("thread-1", expected_run_id="run-1"))
+    list(client.continue_turn("thread-1", expected_run_id="run-1", after_sequence=8))
 
-    assert host.continued == [("thread-1", "run-1")]
+    assert host.continued == [("thread-1", "run-1", 8)]
 
 
 def test_local_surface_client_status_does_not_reference_http_health() -> None:
@@ -293,12 +294,10 @@ def test_local_host_continue_turn_yields_current_projected_wait_event(
 
     assert [event.event for event in events] == [
         ConversationStreamEventKind.TURN_CONTINUED,
-        ConversationStreamEventKind.MESSAGE_DELTA,
+        ConversationStreamEventKind.TOOL_PROGRESS,
     ]
-    assert events[1].payload["tool_event"] == {
-        "name": "shell.execute",
-        "summary": "approval_pending",
-    }
+    assert events[1].payload["tool"] == "shell.execute"
+    assert events[1].payload["status"] == "approval_pending"
     host.close()
 
 

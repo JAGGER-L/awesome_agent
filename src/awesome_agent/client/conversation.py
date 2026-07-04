@@ -82,8 +82,9 @@ class ConversationClient:
         *,
         thread_id: str,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterator[ConversationStreamEvent]:
-        payload: dict[str, object] = {}
+        payload: dict[str, object] = {"after_sequence": after_sequence}
         if expected_run_id is not None:
             payload["expected_run_id"] = expected_run_id
         with self._client.stream(

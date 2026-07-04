@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -189,11 +191,19 @@ def test_tui_client_continues_turn_with_expected_run_id() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    events = list(client.continue_turn("thread-1", expected_run_id="run-1"))
+    events = list(
+        client.continue_turn(
+            "thread-1",
+            expected_run_id="run-1",
+            after_sequence=2,
+        )
+    )
 
     assert events[0].payload["run_id"] == "run-1"
     assert paths == ["/threads/thread-1/turns/continue/stream"]
-    assert bodies == [b'{"expected_run_id":"run-1"}']
+    assert [json.loads(body.decode()) for body in bodies] == [
+        {"expected_run_id": "run-1", "after_sequence": 2}
+    ]
 
 
 def test_tui_client_reads_surface_capability_endpoints() -> None:
