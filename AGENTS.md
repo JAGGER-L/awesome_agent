@@ -1,75 +1,143 @@
-# Repository Engineering Agent Contract
+# Agent Guide
 
-These instructions constrain Codex and any other agent modifying this
-repository. They do not define the behavior of the `awesome_agent` product at
-runtime. Runtime-agent behavior is specified in
-`docs/design-docs/runtime-agent-harness.md`.
+This document constrains all coding agents that modify this repository, including Codex, Claude Code, and other automated development agents.
+
+## Core Principles
+
+* Repository files are the source of truth. Chat history may be used only as context; it must not replace verification against the current code, documentation, tests, and plan files.
+* Prefer small, explicit changes. Do not perform unrelated refactors, opportunistic optimizations, or scope expansion.
+* Preserve the work of the user and other agents. Do not discard, overwrite, move, or revert changes unrelated to the current task.
+* When multiple worktrees or branches are active in parallel, modify only the files and plans owned by the current task. Do not affect other active worktrees, branches, or tasks.
+* Do not weaken acceptance criteria to make the task pass. Do not claim implementation is complete without recorded verification evidence.
+* Do not commit secrets, credentials, private configuration, temporary files, debugging code, large full-source dumps, or large raw tool outputs.
 
 ## Start Work
 
-Before editing:
+Before editing, perform enough context checks to understand the task without over-auditing the repository:
 
-1. Confirm the repository root and inspect `git status`.
-2. Read the active local plan under `.codex/exec-plans/active/`, if one exists.
-3. Read the relevant design documents linked from that plan.
-4. Inspect recent Git history and existing implementation/tests.
-5. Run the repository health and baseline checks once they exist.
+1. Confirm the repository root, current branch, and `git status`.
+2. If `.codex/exec-plans/active/` contains a plan related to the current task, read that plan first.
+3. Read the design documents, interface contracts, test files, and call chains directly relevant to the current task.
+4. If the task affects code behavior, confirm the available baseline check commands. If no canonical command exists, choose the closest lightweight check and record it.
 
-If the baseline is unhealthy, fix or record the baseline failure before feature
-work.
+Do not perform a full-repository audit by default at the start of every task. Expand the reading scope only when the task involves architecture, public interfaces, cross-component behavior, or unclear context.
 
-## Hard Rules
+## Planning and Scope
 
-- The repository is the source of truth; do not rely on chat history alone.
-- Keep development-agent plans, handoffs, and session state under `.codex/`;
-  never commit them.
-- Default to `WIP = 1`: finish and verify one plan milestone at a time.
-- Commit each completed logical change as its own minimal, reviewable commit.
-  A conversation may contain multiple commits; do not wait for the conversation
-  to end when an independent change is already complete and verified.
-- Keep changes within the active milestone's scope and exclusions.
-- Do not weaken acceptance criteria to make work pass.
-- Do not mark implementation complete without recorded verification evidence.
-- Preserve user changes and never discard unrelated work.
-- Keep secrets, credentials, full source, and raw tool output out of memory.
-- Use Docker for untrusted execution. Host execution requires explicit
-  `--trusted-local` consent.
-- Team-mode work requires an independent Verifier before the Leader may finish.
-- Update `README.md` and `README.zh-CN.md` together in the same change.
-- Keep `.codex/exec-plans/active/` small. It should contain only the current
-  execution plan and, when explicitly requested, the next approved plan. After
-  a task is verified, merged, or otherwise closed, move its local plan to
-  `.codex/exec-plans/completed/`. Use `.codex/exec-plans/pending/` for future
-  plans that are accepted but not yet active.
-- After changing code, consider whether behavior, interfaces, configuration, or
-  architecture described in the docs also changed. Update the relevant docs
-  when needed; bug fixes and internal refactors do not require artificial
-  documentation edits.
+* If an execution plan already exists, follow it. Do not re-evaluate whether the plan is reasonable unless you find a clear conflict between the plan and the code, interfaces, or documentation.
+* If no execution plan exists, decide whether a short plan is needed based on task complexity. Small localized changes may be implemented directly.
+* Keep changes within the current task scope.
+* When you find out-of-scope issues, record them as follow-up items. Do not fix them opportunistically unless they block the current task.
+* Each worktree maintains its own plan state. Do not move, close, or rewrite plan files belonging to other active worktrees.
 
-## Validation Order
+## Product Thinking
 
-Run required gates in this order:
+For product-facing work, think from three angles before implementing:
+
+* First principles: identify the underlying problem, invariant, or user need instead of only patching the visible symptom.
+* Productization: prefer solutions that are coherent, reusable, documented, testable, and aligned with the product architecture.
+* User experience: evaluate setup, first run, common workflows, error messages, recovery paths, and whether the behavior is understandable to a real user.
+
+Do not turn every task into a broad redesign. Apply this thinking to guide implementation choices, then keep the actual change within the current task scope. Record larger product, architecture, or UX issues as follow-up items.
+
+## `.codex/` Rules
+
+* Store development plans, handoff notes, and temporary session state under `.codex/`.
+* Do not commit `.codex/` content by default, unless explicitly required by the user or repository rules.
+* `.codex/exec-plans/active/` should contain only the current active plan. If explicitly requested by the user, it may also contain the next approved plan.
+* Accepted but not-yet-started plans belong in `.codex/exec-plans/pending/`.
+* Completed, merged, or otherwise closed plans belong in `.codex/exec-plans/completed/`.
+
+## Code Change Rules
+
+* Reuse the existing architecture, module boundaries, naming style, and error-handling patterns.
+* Before changing public interfaces, configuration, persistence formats, CLI/API behavior, or AgentLoop behavior, confirm the relevant design documents and callers.
+* Do not use temporary compatibility layers to hide real interface inconsistencies unless explicitly required by the plan or the user.
+* Do not introduce new production dependencies unless explicitly allowed by the plan or the user.
+* Do not leave behind debugging code, temporary logs, one-off scripts, or unused code.
+* Be restrained with large files. When adding complex functionality, prefer extracting it into new modules and keeping tests close to the logic being verified.
+
+## Documentation Rules
+
+After changing code, determine whether the behavior, interfaces, configuration, or architecture described in the documentation also changed.
+
+The following changes usually require documentation updates:
+
+* User-visible behavior changes
+* CLI/API parameter, output, or error-semantics changes
+* Configuration option, environment variable, or default-value changes
+* Architecture boundary, module responsibility, or call-chain changes
+* Installation, startup, deployment, or development-command changes
+
+Pure bug fixes, internal refactors, test additions, and non-behavioral cleanups do not require artificial documentation edits.
+
+If user-facing entry documentation needs to be updated, keep `README.md` and `README.zh-CN.md` consistent in the same change.
+
+## Validation Rules
+
+Choose the lightest validation set that sufficiently covers the risk of the current change. Use the following priority order:
 
 1. formatting and lint
 2. type checking
-3. unit tests
-4. structural tests
-5. integration tests
-6. application startup
+3. targeted unit tests
+4. affected structural tests
+5. affected integration tests
+6. application startup or basic smoke validation
 7. end-to-end tests for cross-component behavior
 
-Do not advance past a failed lower gate. Record commands, results, and any
-unverified paths in the active local execution plan.
+Validation requirements:
+
+* Documentation-only changes usually do not require code validation; when relevant, check links, headings, and example commands.
+* Localized implementation changes should run at least the relevant lint, typecheck, and targeted tests, depending on the commands available in the repository.
+* Public interfaces, configuration, persistence, CLI/API entrypoints, AgentLoop, tool execution, or cross-component changes require higher-level validation.
+* Dependency, packaging, startup, or deployment changes require startup or basic smoke validation.
+* If a lower-level validation gate fails, do not continue to heavier validation unless the failure is unrelated to the current change and has been clearly recorded.
+* If a validation gate does not exist, record it as unavailable instead of silently skipping it.
+
+Record the commands actually run, their results, and any unverified risk areas in the execution plan, handoff notes, PR description, or final response.
+
+## Safety and Execution Boundaries
+
+* Host execution is only for routine repository commands and must not include clearly destructive operations.
+* Obtain explicit consent before deleting files, rewriting history, cleaning large directory areas, modifying production configuration, accessing external services, or executing unknown scripts.
+* Do not write secrets, credentials, private paths, full source files, or large raw tool outputs into long-term memory, plan files, or handoff notes. Record only necessary summaries and key error lines.
+
+## Commits, PRs, and Merges
+
+* Each commit should correspond to one completed, verified, and clearly scoped logical change.
+
+* Do not commit speculative, partially completed, unverified, or out-of-scope work.
+
+* Before committing, inspect `git diff` and `git status` to confirm there are no temporary files, debugging code, secrets, or unrelated changes.
+
+* For tasks that are completed, verified, and clearly scoped, the agent may commit, push the branch, and create a PR without asking the user for confirmation again.
+
+* A PR may be automatically merged only when all of the following conditions are satisfied:
+
+  * The current task is complete.
+  * Required validation has passed, and verification evidence has been recorded.
+  * The PR contains only changes within the current task scope.
+  * The branch is synchronized with the target branch, and there are no merge conflicts.
+  * CI or repository-required checks have passed, or it is clear that no such checks exist.
+  * There are no secrets, debugging code, temporary files, or unrelated changes.
+  * The current task does not require an independent Verifier, manual review, or final user confirmation.
+  * The change does not involve production configuration, deployment flow, security boundaries, permission models, data migrations, destructive operations, or major public API changes.
+
+* If automatic push, PR creation, or merge fails, do not repeatedly retry destructive operations. Record the failure reason, current branch state, and recommended next step.
+
+* PR or handoff notes should include: change summary, validation commands, results, unverified risks, and follow-up items.
 
 ## Finish Work
 
-Before ending:
+Before ending, confirm that:
 
-1. Update the active plan status and handoff section.
-2. Record validation evidence, blockers, risks, and next action.
-3. Update architecture or decision docs when behavior or boundaries changed.
-4. Remove temporary files and debugging code.
-5. Leave the worktree in a reviewable, recoverable state.
+1. The current changes remain within task scope.
+2. Relevant code, tests, and documentation have been validated according to risk level.
+3. Validation commands, results, and unverified risks have been recorded.
+4. Temporary files, debugging code, and unrelated changes have been removed.
+5. `git status` is explainable, and the worktree is reviewable and recoverable.
+6. If the task is complete, verified, and satisfies the commit, PR, and merge conditions, the commit, push, PR creation, and merge have been completed. If not, the reason and next step have been clearly recorded.
+
 
 ## Documentation Map
 
