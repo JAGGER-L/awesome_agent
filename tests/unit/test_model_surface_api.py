@@ -11,7 +11,6 @@ def test_models_endpoint_returns_safe_routing_facts() -> None:
         create_app(
             settings=test_settings(
                 deepseek_api_key="secret-value",
-                deepseek_base_url="https://gateway.example/v1",
                 leader_model="deepseek-v4-pro",
             )
         )
@@ -21,13 +20,21 @@ def test_models_endpoint_returns_safe_routing_facts() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    leader = payload[0]
-    assert leader["name"] == "deepseek-v4-pro"
-    assert leader["provider"] == "deepseek"
-    assert leader["configured"] is True
-    assert leader["api_key_env"] == "AWESOME_AGENT_DEEPSEEK_API_KEY"
-    assert leader["api_key_present"] is True
-    assert leader["base_url"] == "https://gateway.example/v1"
+    assert payload["current"] == {
+        "provider_id": "deepseek",
+        "model_id": "deepseek-v4-pro",
+    }
+    [provider] = payload["providers"]
+    assert provider["id"] == "deepseek"
+    assert provider["display_name"] == "DeepSeek"
+    assert provider["configured"] is True
+    assert provider["credential_env"] == "AWESOME_AGENT_DEEPSEEK_API_KEY"
+    assert provider["api_key_present"] is True
+    assert [model["id"] for model in provider["models"]] == [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+    ]
     assert "secret-value" not in response.text
+    assert "base_url" not in provider
     forbidden = {"price", "cost", "amount", "billing", "currency", "usd"}
-    assert forbidden.isdisjoint(set(leader))
+    assert forbidden.isdisjoint(set(provider))

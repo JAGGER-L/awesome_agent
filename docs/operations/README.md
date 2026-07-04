@@ -67,7 +67,9 @@ docker compose down
 `doctor` checks local config path writability, thread workspace writability,
 model configuration, PostgreSQL, migrations, checkpoint storage, sandbox
 health, MCP catalog health, and Worker heartbeat when the runtime profile is
-selected.
+selected. Readiness checks validate the DeepSeek provider profile, API-key
+presence, official provider endpoint, and role model membership in the model
+catalog. They do not call the remote DeepSeek API.
 
 For gated product-path verification against a live stack, use:
 

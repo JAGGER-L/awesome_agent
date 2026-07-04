@@ -24,6 +24,7 @@ from awesome_agent.domain.enums import (
 )
 from awesome_agent.domain.models import Run, RuntimeEvent
 from awesome_agent.memory.models import MemoryTarget
+from awesome_agent.modeling.catalog import ModelCatalog
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.approval_contracts import (
     ApprovalExpired,
@@ -725,21 +726,8 @@ class LocalRuntimeHost:
             "sandbox": self.settings.local_cli_sandbox_backend,
         }
 
-    def list_models(self) -> list[dict[str, object]]:
-        configured = self.settings.deepseek_api_key is not None
-        return [
-            {
-                "name": self.settings.leader_model,
-                "role": "leader",
-                "provider": "deepseek",
-                "configured": configured,
-                "api_key_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
-                "api_key_present": configured,
-                "base_url": self.settings.deepseek_base_url,
-                "source": "settings",
-                "overridden_by_env": False,
-            }
-        ]
+    def list_models(self) -> dict[str, object]:
+        return ModelCatalog.from_settings(self.settings).response_payload()
 
     def memory_summary(self) -> dict[str, object]:
         return self._container.memory_service.status().model_dump(mode="json")

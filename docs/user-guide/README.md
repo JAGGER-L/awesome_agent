@@ -63,7 +63,7 @@ this lifecycle.
 | `/new` | Start a new conversation. |
 | `/threads` | Switch conversation. |
 | `/attach <path>` | Attach a local file to the next message. |
-| `/model` | Choose model. |
+| `/model` | Choose provider, then model. |
 | `/thinking` | Choose thinking mode. |
 | `/memory` | Manage memory. |
 | `/skills` | Apply skills to the next turn. |
@@ -87,12 +87,16 @@ Slash commands are CLI/TUI interaction syntax. API routes should expose
 semantic resources such as threads, read-only runs, runtime probes, models,
 memory, readiness, and approvals rather than slash-command route names.
 
-Model self-descriptions are not authoritative identity evidence. Use
-`/model` to choose the current model and inspect configured model names,
-provider, base URL, API-key presence, and the last completed turn's requested
-and observed response model.
-Gateways and compatible base URLs may route aliases internally; when response
-metadata is absent, the provider did not return it.
+`/model` opens a provider picker first. The current product build exposes only
+DeepSeek. Selecting DeepSeek opens the DeepSeek model picker and updates the
+current conversation default model. Team role model configuration remains a
+settings-level runtime concern.
+
+Model self-descriptions are not authoritative identity evidence. Use `/model`
+to choose the current model and inspect configured model names, provider,
+API-key presence, and the last completed turn's requested and observed response
+model. Custom DeepSeek-compatible base URLs are not supported by the product
+runtime.
 
 ## Thread Attachments
 

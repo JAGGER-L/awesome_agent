@@ -98,13 +98,13 @@ class HttpSurfaceClient:
             raise ValueError("Expected object response from /ready.")
         return {"api": payload.get("status", "unknown")}
 
-    def list_models(self) -> list[dict[str, Any]]:
+    def list_models(self) -> dict[str, Any]:
         response = self._client.get(f"{self.api_url}/models")
         response.raise_for_status()
         payload = response.json()
-        if not isinstance(payload, Iterable) or isinstance(payload, dict | str | bytes):
-            raise ValueError("Expected list response from /models.")
-        return [dict(item) for item in payload]
+        if not isinstance(payload, dict):
+            raise ValueError("Expected provider-first response from /models.")
+        return dict(payload)
 
     def memory_summary(self) -> dict[str, object]:
         response = self._client.get(f"{self.api_url}/memory")

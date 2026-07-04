@@ -18,7 +18,7 @@ class ChatSemanticClient(Protocol):
 
     def runtime_status(self) -> dict[str, object]: ...
 
-    def list_models(self) -> list[dict[str, object]]: ...
+    def list_models(self) -> dict[str, object]: ...
 
     def memory_summary(self) -> dict[str, object]: ...
 
@@ -66,17 +66,33 @@ class SlashRouter:
                 summary = state.first_run_summary
                 return ChatMessage.system(
                     _format_models(
-                        [
-                            {
-                                "role": "default",
-                                "name": summary.model_name,
-                                "provider": "deepseek",
-                                "configured": summary.model_api_key_configured,
-                                "api_key_env": summary.model_api_key_env,
-                                "api_key_present": summary.model_api_key_configured,
-                                "source": "first_run_summary",
-                            }
-                        ],
+                        {
+                            "providers": [
+                                {
+                                    "id": "deepseek",
+                                    "display_name": "DeepSeek",
+                                    "configured": summary.model_api_key_configured,
+                                    "credential_env": summary.model_api_key_env,
+                                    "api_key_present": (
+                                        summary.model_api_key_configured
+                                    ),
+                                    "models": [
+                                        {
+                                            "id": summary.model_name,
+                                            "display_name": summary.model_name,
+                                            "provider_id": "deepseek",
+                                            "capabilities": [],
+                                            "recommended_for": ["leader"],
+                                            "selected": True,
+                                        }
+                                    ],
+                                }
+                            ],
+                            "current": {
+                                "provider_id": "deepseek",
+                                "model_id": summary.model_name,
+                            },
+                        },
                         state,
                     )
                 )
@@ -328,30 +344,32 @@ def _format_config(config: dict[str, object]) -> str:
     )
 
 
-def _format_models(
-    models: list[dict[str, object]],
-    state: ChatSessionState,
-) -> str:
-    if not models:
-        return "No models configured.\nlast turn: none yet"
+def _format_models(catalog: dict[str, object], state: ChatSessionState) -> str:
+    providers = catalog.get("providers")
+    if not isinstance(providers, list) or not providers:
+        return "Models\n\nNo providers configured.\nlast turn: none yet"
     lines = ["Models"]
-    for item in models:
-        configured = "yes" if item.get("configured") is True else "no"
-        provider = item.get("provider") or "unknown"
-        role = item.get("role") or "model"
-        name = item.get("name") or "-"
-        line = f"{role}: {name}  provider={provider}  configured={configured}"
-        api_key_env = item.get("api_key_env")
-        api_key_present = item.get("api_key_present")
-        if api_key_env is not None:
-            present = "yes" if api_key_present is True else "no"
-            line = f"{line}  api_key_env={api_key_env} present={present}"
-            if api_key_present is not True:
-                line = f"{line} (missing {api_key_env})"
+    for raw_provider in providers:
+        if not isinstance(raw_provider, dict):
+            continue
+        configured = "yes" if raw_provider.get("configured") is True else "no"
+        provider_name = raw_provider.get("display_name") or raw_provider.get("id")
+        line = f"Provider: {provider_name} configured={configured}"
+        env_name = raw_provider.get("credential_env")
+        present = "yes" if raw_provider.get("api_key_present") is True else "no"
+        if env_name:
+            line = f"{line} api_key_env={env_name} present={present}"
+            if raw_provider.get("api_key_present") is not True:
+                line = f"{line} (missing {env_name})"
         lines.append(line)
-        base_url = item.get("base_url")
-        if base_url:
-            lines.append(f"base_url: {base_url}")
+        models = raw_provider.get("models")
+        if isinstance(models, list):
+            for raw_model in models:
+                if not isinstance(raw_model, dict):
+                    continue
+                selected = " *" if raw_model.get("selected") is True else ""
+                display = raw_model.get("display_name") or raw_model.get("id")
+                lines.append(f"  {display}{selected}")
     if state.last_requested_model is None:
         lines.append("last turn: none yet")
     else:

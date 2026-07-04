@@ -239,8 +239,8 @@ class FakeClient:
     def runtime_status(self) -> dict[str, object]:
         return {"api": "ready", "sandbox": "local"}
 
-    def list_models(self) -> list[dict[str, object]]:
-        return [{"name": "deepseek-v4-pro", "role": "leader"}]
+    def list_models(self) -> dict[str, object]:
+        return _model_catalog()
 
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
@@ -299,6 +299,49 @@ class FakeClient:
         }
         self.approval_decisions.append(decision)
         return decision
+
+
+def _model_catalog(
+    *,
+    configured: bool = True,
+    include_models: bool = True,
+) -> dict[str, object]:
+    models: list[dict[str, object]] = []
+    if include_models:
+        models = [
+            {
+                "id": "deepseek-v4-pro",
+                "display_name": "DeepSeek V4 Pro",
+                "provider_id": "deepseek",
+                "capabilities": ["streaming", "tools", "reasoning"],
+                "recommended_for": ["leader"],
+                "selected": True,
+            },
+            {
+                "id": "deepseek-v4-flash",
+                "display_name": "DeepSeek V4 Flash",
+                "provider_id": "deepseek",
+                "capabilities": ["streaming", "tools", "reasoning"],
+                "recommended_for": ["teammate"],
+                "selected": False,
+            },
+        ]
+    return {
+        "providers": [
+            {
+                "id": "deepseek",
+                "display_name": "DeepSeek",
+                "configured": configured,
+                "credential_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                "api_key_present": configured,
+                "models": models,
+            }
+        ],
+        "current": {
+            "provider_id": "deepseek",
+            "model_id": "deepseek-v4-pro",
+        },
+    }
 
 
 class SlowStatusClient(FakeClient):
@@ -970,11 +1013,8 @@ async def test_tui_deleted_resume_command_is_unknown() -> None:
 @pytest.mark.asyncio
 async def test_tui_model_picker_changes_model_for_next_turn() -> None:
     class ModelClient(FakeClient):
-        def list_models(self) -> list[dict[str, object]]:
-            return [
-                {"name": "deepseek-v4-pro", "display_name": "DeepSeek V4 Pro"},
-                {"name": "deepseek-v4-flash", "display_name": "DeepSeek V4 Flash"},
-            ]
+        def list_models(self) -> dict[str, object]:
+            return _model_catalog()
 
     client = ModelClient()
     app = AwesomeAgentTui(client=client)
@@ -982,14 +1022,45 @@ async def test_tui_model_picker_changes_model_for_next_turn() -> None:
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("/", "m", "o", "d", "e", "l", "enter")
-        assert "Select model for this conversation" in str(
-            app.query_one("#command-palette").render()
-        )
+        provider_picker = app.state.active_picker
+        assert provider_picker is not None
+        assert provider_picker.kind == "model_provider"
+        assert provider_picker.items[0].id == "deepseek"
+        await pilot.press("enter")
+        model_picker = app.state.active_picker
+        assert model_picker is not None
+        assert model_picker.kind == "model_model"
+        assert [item.id for item in model_picker.items] == [
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+        ]
         await pilot.press("down", "enter")
         await pilot.press("h", "i", "enter")
 
     assert app.state.current_model == "deepseek-v4-flash"
     assert client.turn_options[-1]["model"] == "deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+async def test_tui_model_picker_disables_unconfigured_provider() -> None:
+    class MissingKeyClient(FakeClient):
+        def list_models(self) -> dict[str, object]:
+            return _model_catalog(configured=False, include_models=False)
+
+    app = AwesomeAgentTui(client=MissingKeyClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "m", "o", "d", "e", "l", "enter")
+        provider_picker = app.state.active_picker
+        assert provider_picker is not None
+        assert provider_picker.kind == "model_provider"
+        assert provider_picker.items[0].disabled is True
+        await pilot.press("enter")
+        transcript = app.query_one("#transcript").render()
+
+    assert app.state.active_picker is None
+    assert "Set AWESOME_AGENT_DEEPSEEK_API_KEY" in str(transcript)
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from awesome_agent.domain.enums import AgentKind
+from awesome_agent.modeling.catalog import ModelCatalog
 from awesome_agent.settings import Settings
 
 
@@ -44,6 +45,7 @@ class RoleModelResolver:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> RoleModelResolver:
+        ModelCatalog.from_settings(settings).validate_role_models()
         return cls(
             leader_model=settings.leader_model,
             teammate_model=settings.teammate_model,
