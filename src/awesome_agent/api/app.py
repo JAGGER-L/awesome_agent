@@ -32,6 +32,9 @@ from awesome_agent.api.schemas import (
     ExtensionSkillsResponse,
     HealthCheckResponse,
     McpServersResponse,
+    MemoryDeleteResponse,
+    MemoryEntriesResponse,
+    MemoryEntryResponse,
     MemoryStatusResponse,
     ModelProfileResponse,
     ReadinessReportResponse,
@@ -64,6 +67,11 @@ from awesome_agent.health import (
     bind_policy_check,
     collect_readiness,
 )
+from awesome_agent.memory.builtin import BuiltinMemoryStore
+from awesome_agent.memory.external import NoopMemoryProvider
+from awesome_agent.memory.models import MemoryTarget
+from awesome_agent.memory.policy import MemoryPolicy
+from awesome_agent.memory.service import MemoryService
 from awesome_agent.observability.facade import (
     ObservabilityFacade,
     ObservabilitySpanInput,
@@ -167,6 +175,7 @@ def create_app(
     project_root: Path | None = None,
     thread_repository: ConversationRepository | None = None,
     conversation_service: ConversationService | None = None,
+    memory_service: MemoryService | None = None,
 ) -> FastAPI:
     install_redacting_log_filter(logger)
     settings = settings or Settings()
@@ -175,6 +184,15 @@ def create_app(
     if default_runtime_repository is None:
         default_runtime_repository = InMemoryRuntimeRepository()
     default_event_stream = EventStream()
+    configured_memory_service = memory_service or MemoryService(
+        builtin=BuiltinMemoryStore(
+            root=settings.local_state_dir / "memory",
+            policy=MemoryPolicy(),
+        ),
+        provider=NoopMemoryProvider(),
+        builtin_enabled=settings.builtin_memory_enabled,
+        provider_enabled=settings.mem0_enabled,
+    )
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
         active_extension_catalog = build_project_extension_catalog_sync(project_root)
@@ -195,6 +213,8 @@ def create_app(
         conversation_run_intake=default_conversation_intake,
         default_model=settings.leader_model,
         event_poll_interval=settings.event_poll_interval_seconds,
+        global_builtin_memory_enabled=settings.builtin_memory_enabled,
+        global_provider_memory_enabled=settings.mem0_enabled,
     )
     bind_check = bind_policy_check(settings.api_host, settings.unsafe_bind_public)
     if bind_check.status is HealthStatus.UNHEALTHY:
@@ -209,6 +229,7 @@ def create_app(
             app.state.extension_catalog = active_extension_catalog
             app.state.threads = threads_repository
             app.state.conversations = default_conversation_service
+            app.state.memory_service = configured_memory_service
             app.state.extension_catalogs_by_version = extension_catalogs_by_version
             if workspace_service is not None:
                 app.state.workspaces = workspace_service
@@ -288,7 +309,10 @@ def create_app(
             conversation_run_intake=conversation_intake,
             default_model=settings.leader_model,
             event_poll_interval=settings.event_poll_interval_seconds,
+            global_builtin_memory_enabled=settings.builtin_memory_enabled,
+            global_provider_memory_enabled=settings.mem0_enabled,
         )
+        app.state.memory_service = configured_memory_service
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry
         app.state.validation_repository = validation
@@ -395,6 +419,7 @@ def create_app(
     app.state.extension_catalog = active_extension_catalog
     app.state.threads = threads_repository
     app.state.conversations = default_conversation_service
+    app.state.memory_service = configured_memory_service
     app.state.extension_catalogs_by_version = extension_catalogs_by_version
     if workspace_service is not None:
         app.state.workspaces = workspace_service
@@ -507,6 +532,9 @@ def create_app(
     def conversations() -> ConversationService:
         return cast(ConversationService, app.state.conversations)
 
+    def memory() -> MemoryService:
+        return cast(MemoryService, app.state.memory_service)
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         async with api_span(
@@ -605,31 +633,46 @@ def create_app(
 
     @app.get("/memory")
     async def get_memory_status() -> MemoryStatusResponse:
-        if settings.mem0_enabled:
-            return MemoryStatusResponse(
-                enabled=True,
-                provider="mem0",
-                configured=settings.mem0_api_key is not None,
-                source="mem0",
-                hint=(
-                    None
-                    if settings.mem0_api_key is not None
-                    else "Set AWESOME_AGENT_MEM0_API_KEY to enable mem0 memory."
-                ),
+        return MemoryStatusResponse.model_validate(
+            memory().status().model_dump(mode="json")
+        )
+
+    @app.get("/memory/entries")
+    async def list_memory_entries(target: str | None = None) -> MemoryEntriesResponse:
+        parsed = MemoryTarget(target) if target is not None else None
+        result = await memory().list_entries(target=parsed)
+        return MemoryEntriesResponse(
+            target=target,
+            items=[
+                MemoryEntryResponse.model_validate(entry.model_dump(mode="json"))
+                for entry in result.entries
+            ],
+        )
+
+    @app.delete("/memory/entries/{memory_id}")
+    async def delete_memory_entry(
+        memory_id: str,
+        target: str,
+    ) -> MemoryDeleteResponse:
+        parsed = MemoryTarget(target)
+        result = await memory().delete(
+            target=parsed,
+            memory_id=memory_id,
+            run_id=None,
+            agent_id=None,
+        )
+        if result.status == "not_found":
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "memory_entry_not_found",
+                    "message": f"Memory entry not found: {memory_id}",
+                },
             )
-        if settings.builtin_memory_enabled:
-            return MemoryStatusResponse(
-                enabled=True,
-                provider="builtin",
-                configured=True,
-                source="builtin",
-            )
-        return MemoryStatusResponse(
-            enabled=False,
-            provider="none",
-            configured=False,
-            source="not_configured",
-            hint="Enable builtin_memory_enabled or mem0_enabled to inject memory.",
+        return MemoryDeleteResponse(
+            status=result.status,
+            memory_id=memory_id,
+            target=parsed.value,
         )
 
     @app.get("/config")
@@ -659,6 +702,16 @@ def create_app(
             repository_id=request.repository_id,
             default_model=request.default_model,
             sandbox_profile=request.sandbox_profile,
+            local_memory_enabled=(
+                request.local_memory_enabled
+                if request.local_memory_enabled is not None
+                else settings.builtin_memory_enabled
+            ),
+            provider_memory=(
+                request.provider_memory
+                if request.provider_memory is not None
+                else ("mem0" if settings.mem0_enabled else None)
+            ),
         )
         return _redacted_dict(thread.api_payload())
 

@@ -44,12 +44,16 @@ class ConversationService:
         conversation_run_intake: ConversationRunIntake,
         default_model: str,
         event_poll_interval: float = 0.05,
+        global_builtin_memory_enabled: bool = False,
+        global_provider_memory_enabled: bool = False,
     ) -> None:
         self._repository = repository
         self._runtime_repository = runtime_repository
         self._conversation_run_intake = conversation_run_intake
         self._default_model = default_model
         self._event_poll_interval = event_poll_interval
+        self._global_builtin_memory_enabled = global_builtin_memory_enabled
+        self._global_provider_memory_enabled = global_provider_memory_enabled
 
     async def start_turn(
         self,
@@ -64,12 +68,20 @@ class ConversationService:
         turn_id = uuid4()
         trace_id = uuid4().hex
         sequence = 1
+        thread = await self._repository.get_thread(thread_id)
+        effective_memory = _effective_memory_payload(
+            requested=memory or {},
+            thread_local_enabled=thread.local_memory_enabled,
+            thread_provider=thread.provider_memory,
+            global_builtin_enabled=self._global_builtin_memory_enabled,
+            global_provider_enabled=self._global_provider_memory_enabled,
+        )
         run = await self._conversation_run_intake.create_turn_run(
             thread_id=thread_id,
             content=content,
             model=model,
             thinking=thinking,
-            memory=memory or {},
+            memory=effective_memory,
             skill_ids=skill_ids,
         )
         yield _event(
@@ -83,6 +95,7 @@ class ConversationService:
                 "run_id": str(run.id),
                 "status": run.status.value,
                 "model": model or self._default_model,
+                "memory": effective_memory,
             },
         )
         async for projected in self._project_run_events(
@@ -331,6 +344,26 @@ def _event(
         runtime_sequence=runtime_sequence,
         payload=payload,
     )
+
+
+def _effective_memory_payload(
+    *,
+    requested: dict[str, object],
+    thread_local_enabled: bool,
+    thread_provider: str | None,
+    global_builtin_enabled: bool,
+    global_provider_enabled: bool,
+) -> dict[str, object]:
+    requested_local = requested.get("local_enabled")
+    local_enabled = (
+        requested_local if isinstance(requested_local, bool) else thread_local_enabled
+    )
+    provider_value = requested.get("provider")
+    provider = provider_value if isinstance(provider_value, str) else thread_provider
+    return {
+        "local_enabled": bool(global_builtin_enabled and local_enabled),
+        "provider": provider if global_provider_enabled else None,
+    }
 
 
 def _is_resumable_run(run: Run) -> bool:

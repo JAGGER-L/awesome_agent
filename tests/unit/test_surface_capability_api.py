@@ -82,13 +82,19 @@ def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> N
         "repository-inspection"
     )
     assert responses["/extensions/mcp"].json()["items"][0]["status"] == "healthy"
-    assert responses["/memory"].json() == {
-        "enabled": False,
-        "provider": "none",
-        "configured": False,
-        "source": "not_configured",
-        "hint": "Enable builtin_memory_enabled or mem0_enabled to inject memory.",
-    }
+    memory = responses["/memory"].json()
+    assert memory["enabled"] is False
+    assert memory["builtin_enabled"] is False
+    assert memory["provider_enabled"] is False
+    assert memory["files"]["user"].endswith("USER.md")
+    assert memory["counts"] == {"user": 0, "memory": 0}
+    entries = client.get("/memory/entries?target=user")
+    assert entries.status_code == 200
+    assert entries.json()["target"] == "user"
+    assert entries.json()["items"] == []
+    missing_delete = client.delete("/memory/entries/mem_missing?target=user")
+    assert missing_delete.status_code == 404
+    assert missing_delete.json()["code"] == "memory_entry_not_found"
     assert responses[f"/threads/{thread['id']}/uploads"].json()["configured"] is False
     assert responses[f"/threads/{thread['id']}/uploads"].json()["items"] == []
     assert responses[f"/threads/{thread['id']}/artifacts"].json()["items"] == []

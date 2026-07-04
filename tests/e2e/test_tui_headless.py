@@ -203,8 +203,11 @@ class FakeClient:
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
 
-    def local_memory_facts(self, thread_id: str | None) -> list[str]:
+    def memory_entries(self, target: str | None = None) -> list[dict[str, object]]:
         return []
+
+    def delete_memory_entry(self, memory_id: str, *, target: str) -> dict[str, object]:
+        return {"status": "deleted", "memory_id": memory_id, "target": target}
 
     def list_skills(self) -> list[dict[str, object]]:
         return [
@@ -1173,10 +1176,18 @@ async def test_tui_retry_resends_last_failed_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_local_memory_view_uses_client_facts() -> None:
+async def test_tui_local_memory_view_uses_client_entries() -> None:
     class MemoryClient(FakeClient):
-        def local_memory_facts(self, thread_id: str | None) -> list[str]:
-            return ["user is learning python."]
+        def memory_entries(self, target: str | None = None) -> list[dict[str, object]]:
+            if target == "user":
+                return [
+                    {
+                        "id": "mem_user",
+                        "target": "user",
+                        "content": "User is learning python.",
+                    }
+                ]
+            return []
 
     app = AwesomeAgentTui(client=MemoryClient())
 
@@ -1188,9 +1199,10 @@ async def test_tui_local_memory_view_uses_client_facts() -> None:
         transcript = app.query_one("#transcript").render()
 
     rendered = str(transcript)
-    assert "Remembered facts" in rendered
-    assert "user is learning python." in rendered
-    assert "No local memory facts" not in rendered
+    assert "USER.md" in rendered
+    assert "mem_user" in rendered
+    assert "User is learning python." in rendered
+    assert "No local memory entries" not in rendered
 
 
 @pytest.mark.asyncio

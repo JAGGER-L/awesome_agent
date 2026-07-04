@@ -25,7 +25,18 @@ class FakeSemanticClient:
         return [{"name": "deepseek-v4-pro", "role": "leader"}]
 
     def memory_summary(self) -> dict[str, object]:
-        return {"enabled": False}
+        return {
+            "enabled": True,
+            "builtin_enabled": True,
+            "provider_enabled": False,
+            "provider_status": "disabled",
+            "files": {
+                "user": "C:/Users/test/.awesome-agent/state/memory/USER.md",
+                "memory": "C:/Users/test/.awesome-agent/state/memory/MEMORY.md",
+            },
+            "counts": {"user": 1, "memory": 0},
+            "truncated": {"user": False, "memory": False},
+        }
 
     def list_threads(self) -> list[dict[str, object]]:
         return []
@@ -123,8 +134,10 @@ def test_router_memory_uses_two_level_entry() -> None:
     )
 
     assert "Memory" in message.content
-    assert "Local memory" in message.content
-    assert "Provider memory" in message.content
+    assert "Builtin: on" in message.content
+    assert "Provider: off (disabled)" in message.content
+    assert "Entries: user=1 memory=0" in message.content
+    assert "USER.md" in message.content
 
 
 def test_router_config_uses_user_facing_sections() -> None:

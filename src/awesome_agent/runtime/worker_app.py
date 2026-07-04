@@ -9,6 +9,10 @@ from typing import Any
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import ExecutionOrigin
+from awesome_agent.memory.builtin import BuiltinMemoryStore
+from awesome_agent.memory.external import NoopMemoryProvider
+from awesome_agent.memory.policy import MemoryPolicy
+from awesome_agent.memory.service import MemoryService
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.otel import (
     OTelConfig,
@@ -46,6 +50,11 @@ from awesome_agent.runtime.token_accounting import default_token_accountant
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
+from awesome_agent.tools.memory import register_memory_tools
+from awesome_agent.tools.repository import (
+    build_modifying_executor,
+    build_modifying_registry,
+)
 
 
 async def run_worker(*, once: bool = False, settings: Settings | None = None) -> bool:
@@ -128,6 +137,18 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     )
     token_accountant = default_token_accountant()
     sandbox = create_sandbox(origin=ExecutionOrigin.API, settings=configured)
+    memory_service = MemoryService(
+        builtin=BuiltinMemoryStore(
+            root=configured.local_state_dir / "memory",
+            policy=MemoryPolicy(),
+        ),
+        provider=NoopMemoryProvider(),
+        builtin_enabled=configured.builtin_memory_enabled,
+        provider_enabled=configured.mem0_enabled,
+    )
+    conversation_tool_registry = build_modifying_registry(sandbox=sandbox)
+    register_memory_tools(conversation_tool_registry, memory_service)
+    conversation_tool_executor = build_modifying_executor(conversation_tool_registry)
     context_manager = ContextManager(
         summary_provider=DeterministicSummaryProvider(),
         artifact_store=artifact_store,
@@ -192,6 +213,9 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     runtime=runtime_repository,
                     provider_factory=providers.create,
                     default_model=configured.leader_model,
+                    tool_executor=conversation_tool_executor,
+                    tool_registry=conversation_tool_registry,
+                    memory_service=memory_service,
                 )
                 if providers.coding_available
                 else None

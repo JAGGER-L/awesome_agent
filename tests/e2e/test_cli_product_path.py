@@ -141,8 +141,11 @@ class HtmlGameSurfaceClient:
     def memory_summary(self) -> dict[str, object]:
         return {"enabled": False}
 
-    def local_memory_facts(self, thread_id: str | None) -> list[str]:
+    def memory_entries(self, target: str | None = None) -> list[dict[str, object]]:
         return []
+
+    def delete_memory_entry(self, memory_id: str, *, target: str) -> dict[str, object]:
+        return {"status": "deleted", "memory_id": memory_id, "target": target}
 
     def list_skills(self) -> list[dict[str, object]]:
         return []
