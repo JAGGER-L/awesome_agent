@@ -320,9 +320,12 @@ class LocalRunDispatcher(RunDispatcher):
             raise ValueError("Batch size must be positive.")
         if self.approval_repository is None:
             return 0
-        expired = await self.approval_repository.expire_expired(datetime.now(UTC))
+        expired = await self.approval_repository.expire_expired(
+            datetime.now(UTC),
+            batch_size=batch_size,
+        )
         processed = 0
-        for approval in expired[:batch_size]:
+        for approval in expired:
             await self.runtime.append_event(
                 run_id=approval.run_id,
                 event_type=EventType.APPROVAL_DECIDED,

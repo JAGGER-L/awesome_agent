@@ -131,18 +131,27 @@ class LocalApprovalRepository:
             raise ApprovalExpired(expired)
         raise RuntimeError("Approval decision transaction ended without a result.")
 
-    async def expire_expired(self, now: datetime) -> list[DurableApproval]:
+    async def expire_expired(
+        self,
+        now: datetime,
+        *,
+        batch_size: int | None = None,
+    ) -> list[DurableApproval]:
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("Batch size must be positive.")
         expired: list[DurableApproval] = []
         with self._connection:
             rows = self._connection.execute(
                 """
                 SELECT payload_json FROM local_approvals
                 WHERE status = ?
-                ORDER BY created_at ASC, id ASC
+                ORDER BY expires_at ASC, created_at ASC, id ASC
                 """,
                 (ApprovalStatus.PENDING.value,),
             ).fetchall()
             for row in rows:
+                if batch_size is not None and len(expired) >= batch_size:
+                    break
                 approval = _approval_from_json(str(row["payload_json"]))
                 if approval.expires_at > now:
                     continue

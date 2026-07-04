@@ -315,6 +315,63 @@ async def test_local_dispatcher_expires_pending_approvals_and_requeues_waiting_r
 
 
 @pytest.mark.asyncio
+async def test_local_dispatcher_expire_pending_approvals_respects_batch_size(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    approvals = LocalApprovalRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime, approval_repository=approvals)
+    first_run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+        }
+    )
+    second_run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+        }
+    )
+    await runtime.create_run(first_run, _leader(first_run))
+    await runtime.create_run(second_run, _leader(second_run))
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    first_approval = await approvals.upsert(
+        _approval(first_run.id, tmp_path, expires_at=expired_at)
+    )
+    second_approval = await approvals.upsert(
+        _approval(second_run.id, tmp_path, expires_at=expired_at)
+    )
+
+    first_count = await dispatcher.expire_pending_approvals(batch_size=1)
+    first_statuses = {
+        (await approvals.get(first_approval.id)).status,
+        (await approvals.get(second_approval.id)).status,
+    }
+    first_runs = [
+        await runtime.get_run(first_run.id),
+        await runtime.get_run(second_run.id),
+    ]
+
+    assert first_count == 1
+    assert first_statuses == {ApprovalStatus.EXPIRED, ApprovalStatus.PENDING}
+    assert [run.dispatch_status for run in first_runs].count(DispatchStatus.QUEUED) == 1
+
+    second_count = await dispatcher.expire_pending_approvals(batch_size=1)
+    second_runs = [
+        await runtime.get_run(first_run.id),
+        await runtime.get_run(second_run.id),
+    ]
+
+    assert second_count == 1
+    assert (await approvals.get(first_approval.id)).status is ApprovalStatus.EXPIRED
+    assert (await approvals.get(second_approval.id)).status is ApprovalStatus.EXPIRED
+    assert {run.dispatch_status for run in second_runs} == {DispatchStatus.QUEUED}
+    runtime.close()
+    approvals.close()
+
+
+@pytest.mark.asyncio
 async def test_local_dispatcher_cancel_waiting_run_closes_pending_approval(
     tmp_path: Path,
 ) -> None:

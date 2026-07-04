@@ -122,19 +122,28 @@ class PostgresApprovalRepository:
             _update_record(record, decided)
             return decided
 
-    async def expire_expired(self, now: datetime) -> list[DurableApproval]:
+    async def expire_expired(
+        self,
+        now: datetime,
+        *,
+        batch_size: int | None = None,
+    ) -> list[DurableApproval]:
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("Batch size must be positive.")
         expired: list[DurableApproval] = []
         async with self._sessions.begin() as session:
-            records = list(
-                await session.scalars(
-                    select(ApprovalTable)
-                    .where(
-                        ApprovalTable.status == ApprovalStatus.PENDING.value,
-                        ApprovalTable.expires_at <= now,
-                    )
-                    .with_for_update(skip_locked=True)
+            query = (
+                select(ApprovalTable)
+                .where(
+                    ApprovalTable.status == ApprovalStatus.PENDING.value,
+                    ApprovalTable.expires_at <= now,
                 )
+                .order_by(ApprovalTable.expires_at, ApprovalTable.id)
+                .with_for_update(skip_locked=True)
             )
+            if batch_size is not None:
+                query = query.limit(batch_size)
+            records = list(await session.scalars(query))
             for record in records:
                 approval = replace(
                     _from_record(record),

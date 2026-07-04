@@ -76,7 +76,12 @@ class ApprovalRepository(Protocol):
         """Compare-and-set a pending approval to approved or denied."""
         ...
 
-    async def expire_expired(self, now: datetime) -> list[DurableApproval]:
+    async def expire_expired(
+        self,
+        now: datetime,
+        *,
+        batch_size: int | None = None,
+    ) -> list[DurableApproval]:
         """Expire pending approvals whose deadline has passed."""
         ...
 
@@ -153,9 +158,26 @@ class InMemoryApprovalRepository:
         self._records[approval_id] = decided
         return decided
 
-    async def expire_expired(self, now: datetime) -> list[DurableApproval]:
+    async def expire_expired(
+        self,
+        now: datetime,
+        *,
+        batch_size: int | None = None,
+    ) -> list[DurableApproval]:
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("Batch size must be positive.")
         expired: list[DurableApproval] = []
-        for approval in list(self._records.values()):
+        candidates = sorted(
+            self._records.values(),
+            key=lambda approval: (
+                approval.expires_at,
+                approval.created_at,
+                approval.id,
+            ),
+        )
+        for approval in candidates:
+            if batch_size is not None and len(expired) >= batch_size:
+                break
             if approval.status is ApprovalStatus.PENDING and approval.expires_at <= now:
                 updated = replace(
                     approval,

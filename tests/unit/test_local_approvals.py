@@ -258,6 +258,36 @@ async def test_local_approval_repository_expire_expired_returns_and_persists(
 
 
 @pytest.mark.asyncio
+async def test_local_approval_repository_expire_expired_respects_batch_size(
+    tmp_path: Path,
+) -> None:
+    LocalApprovalRepository = _local_approval_repository()
+    repository = LocalApprovalRepository(tmp_path / "state.db")
+    now = datetime(2026, 1, 1, 0, 10, tzinfo=UTC)
+    first = await repository.upsert(
+        _approval(
+            tmp_path,
+            approval_id=UUID("00000000-0000-0000-0000-000000000001"),
+            expires_at=now - timedelta(seconds=2),
+        )
+    )
+    second = await repository.upsert(
+        _approval(
+            tmp_path,
+            approval_id=UUID("00000000-0000-0000-0000-000000000002"),
+            expires_at=now - timedelta(seconds=1),
+        )
+    )
+
+    expired_items = await repository.expire_expired(now, batch_size=1)
+
+    assert [item.id for item in expired_items] == [first.id]
+    assert (await repository.get(first.id)).status is ApprovalStatus.EXPIRED
+    assert (await repository.get(second.id)).status is ApprovalStatus.PENDING
+    repository.close()
+
+
+@pytest.mark.asyncio
 async def test_local_approval_repository_persists_after_close_and_reopen(
     tmp_path: Path,
 ) -> None:
