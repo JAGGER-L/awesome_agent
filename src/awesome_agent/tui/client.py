@@ -106,25 +106,33 @@ class HttpSurfaceClient:
     def memory_summary(self) -> dict[str, object]:
         response = self._client.get(f"{self.api_url}/memory")
         if response.status_code == 404:
-            return {"enabled": False, "source": "not_configured"}
+            return {"enabled": False}
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError("Expected object response from /memory.")
         return dict(payload)
 
-    def local_memory_facts(self, thread_id: str | None) -> list[str]:
-        if thread_id is None:
-            return []
-        response = self._client.get(f"{self.api_url}/threads/{thread_id}/memory")
-        if response.status_code in {404, 405}:
-            return []
+    def memory_entries(self, target: str | None = None) -> list[dict[str, object]]:
+        params = {"target": target} if target else None
+        response = self._client.get(f"{self.api_url}/memory/entries", params=params)
         response.raise_for_status()
         payload = response.json()
-        facts = payload.get("facts", []) if isinstance(payload, dict) else payload
-        if not isinstance(facts, Iterable) or isinstance(facts, dict | str | bytes):
-            raise ValueError("Expected facts list response from thread memory.")
-        return [str(item) for item in facts]
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
+            raise ValueError("Expected memory entries list response.")
+        return [dict(item) for item in items]
+
+    def delete_memory_entry(self, memory_id: str, *, target: str) -> dict[str, object]:
+        response = self._client.delete(
+            f"{self.api_url}/memory/entries/{memory_id}",
+            params={"target": target},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Expected memory delete object response.")
+        return dict(payload)
 
     def list_threads(self) -> list[SurfaceThread]:
         return [

@@ -31,6 +31,7 @@ class ToolProgress(BaseModel):
 
 class ToolInvocation(BaseModel):
     id: UUID = Field(default_factory=uuid4)
+    run_id: UUID | None = None
     tool_name: str
     agent_id: UUID
     profile: str

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +22,7 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Run, RuntimeEvent
+from awesome_agent.memory.models import MemoryTarget
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.approval_contracts import (
     ApprovalExpired,
@@ -74,6 +74,12 @@ class LocalRuntimeHost:
         self._container.close()
 
     def create_thread(self, title: str, **kwargs: object) -> SurfaceThread:
+        requested_local = kwargs.get("local_memory_enabled")
+        local_memory_enabled = (
+            requested_local
+            if isinstance(requested_local, bool)
+            else self.settings.builtin_memory_enabled
+        )
         return _run_async(
             self._create_thread_async(
                 title,
@@ -83,8 +89,9 @@ class LocalRuntimeHost:
                 default_model=_optional_str(kwargs.get("default_model")),
                 sandbox_profile=_optional_str(kwargs.get("sandbox_profile")),
                 thinking_mode=_optional_str(kwargs.get("thinking_mode")),
-                local_memory_enabled=bool(kwargs.get("local_memory_enabled") or False),
-                provider_memory=_optional_str(kwargs.get("provider_memory")),
+                local_memory_enabled=local_memory_enabled,
+                provider_memory=_optional_str(kwargs.get("provider_memory"))
+                or ("mem0" if self.settings.mem0_enabled else None),
             )
         )
 
@@ -674,30 +681,35 @@ class LocalRuntimeHost:
         ]
 
     def memory_summary(self) -> dict[str, object]:
-        return {
-            "enabled": self.settings.builtin_memory_enabled
-            or self.settings.mem0_enabled,
-            "builtin": self.settings.builtin_memory_enabled,
-            "mem0": self.settings.mem0_enabled,
-        }
+        return self._container.memory_service.status().model_dump(mode="json")
 
-    def local_memory_facts(self, thread_id: str | None) -> list[str]:
-        if thread_id is None:
-            return []
-        return _run_async(self._local_memory_facts_async(thread_id))
+    def memory_entries(self, target: str | None = None) -> list[dict[str, object]]:
+        return _run_async(self._memory_entries_async(target))
 
-    async def _local_memory_facts_async(self, thread_id: str) -> list[str]:
-        facts: list[str] = []
-        seen: set[str] = set()
-        for message in await self.repository.list_messages(UUID(thread_id)):
-            if not _message_local_memory_enabled(message):
-                continue
-            fact = _extract_local_memory_fact(message.content)
-            if fact is None or fact in seen:
-                continue
-            facts.append(fact)
-            seen.add(fact)
-        return facts
+    async def _memory_entries_async(
+        self,
+        target: str | None,
+    ) -> list[dict[str, object]]:
+        parsed = MemoryTarget(target) if target is not None else None
+        result = await self._container.memory_service.list_entries(target=parsed)
+        return [entry.model_dump(mode="json") for entry in result.entries]
+
+    def delete_memory_entry(self, memory_id: str, *, target: str) -> dict[str, object]:
+        return _run_async(self._delete_memory_entry_async(memory_id, target=target))
+
+    async def _delete_memory_entry_async(
+        self,
+        memory_id: str,
+        *,
+        target: str,
+    ) -> dict[str, object]:
+        result = await self._container.memory_service.delete(
+            target=MemoryTarget(target),
+            memory_id=memory_id,
+            run_id=None,
+            agent_id=None,
+        )
+        return result.model_dump(mode="json", exclude_none=True)
 
     def list_skills(self) -> list[dict[str, object]]:
         catalog = self._container.extension_catalog_store.active()
@@ -845,37 +857,6 @@ def _latest_changed_files(
         if changed_files:
             return changed_files
     return ()
-
-
-def _message_local_memory_enabled(message: ThreadMessage) -> bool:
-    options = message.metadata.get("turn_options")
-    if not isinstance(options, dict):
-        return False
-    memory = options.get("memory")
-    return isinstance(memory, dict) and memory.get("local_enabled") is True
-
-
-def _extract_local_memory_fact(content: str) -> str | None:
-    normalized = content.strip()
-    for pattern in (
-        r"^\u6211\u76ee\u524d\u5728\u5b66\u4e60(.+)$",
-        r"^\u6211\u5728\u5b66\u4e60(.+)$",
-    ):
-        match = re.match(pattern, normalized, flags=re.IGNORECASE)
-        if match:
-            topic = match.group(1).strip(" \t\u3002.!?\uff1f")
-            if topic:
-                return f"\u7528\u6237\u76ee\u524d\u5728\u5b66\u4e60{topic}\u3002"
-    english = re.match(
-        r"^(?:i am|i'm|im) (?:currently )?learning (.+)$",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    if english:
-        topic = english.group(1).strip(" \t.")
-        if topic:
-            return f"User is currently learning {topic}."
-    return None
 
 
 def _int_usage(value: object) -> int:

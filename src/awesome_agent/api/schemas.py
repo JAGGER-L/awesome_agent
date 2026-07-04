@@ -23,6 +23,8 @@ class CreateThreadRequest(BaseModel):
     repository_id: UUID | None = None
     default_model: str | None = Field(default=None, max_length=128)
     sandbox_profile: str | None = Field(default=None, max_length=64)
+    local_memory_enabled: bool | None = None
+    provider_memory: str | None = Field(default=None, max_length=64)
 
 
 class UpdateThreadSettingsRequest(BaseModel):
@@ -191,10 +193,31 @@ class McpServersResponse(BaseModel):
 
 class MemoryStatusResponse(BaseModel):
     enabled: bool
-    provider: str
-    configured: bool
-    source: str
+    builtin_enabled: bool
+    provider_enabled: bool
+    provider_status: str
+    root: str
+    files: dict[str, str]
+    counts: dict[str, int]
+    truncated: dict[str, bool]
     hint: str | None = None
+
+
+class MemoryEntryResponse(BaseModel):
+    id: str
+    target: str
+    content: str
+
+
+class MemoryEntriesResponse(BaseModel):
+    target: str | None = None
+    items: list[MemoryEntryResponse] = Field(default_factory=list)
+
+
+class MemoryDeleteResponse(BaseModel):
+    status: str
+    memory_id: str
+    target: str
 
 
 class ThreadUploadsResponse(BaseModel):

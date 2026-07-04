@@ -94,8 +94,11 @@ class LocalSurfaceClient:
     def memory_summary(self) -> dict[str, object]:
         return self.host.memory_summary()
 
-    def local_memory_facts(self, thread_id: str | None) -> list[str]:
-        return self.host.local_memory_facts(thread_id)
+    def memory_entries(self, target: str | None = None) -> list[dict[str, Any]]:
+        return [dict(item) for item in self.host.memory_entries(target)]
+
+    def delete_memory_entry(self, memory_id: str, *, target: str) -> dict[str, Any]:
+        return dict(self.host.delete_memory_entry(memory_id, target=target))
 
     def list_skills(self) -> list[dict[str, Any]]:
         return [dict(item) for item in self.host.list_skills()]

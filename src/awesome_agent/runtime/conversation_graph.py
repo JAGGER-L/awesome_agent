@@ -18,6 +18,7 @@ from awesome_agent.extensions.catalog import empty_extension_catalog
 from awesome_agent.extensions.catalog_store import CatalogSnapshotMissing
 from awesome_agent.extensions.models import ExtensionCatalog
 from awesome_agent.extensions.skills import SkillRuntimeView
+from awesome_agent.memory.service import MemoryService
 from awesome_agent.modeling.messages import (
     AssistantMessage,
     ModelMessage,
@@ -60,6 +61,7 @@ class ConversationGraph:
         tool_registry: ToolRegistry | None = None,
         extension_catalog_store: object | None = None,
         skill_context_middleware: SkillContextMiddleware | None = None,
+        memory_service: MemoryService | None = None,
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
@@ -72,6 +74,7 @@ class ConversationGraph:
         self.skill_context_middleware = (
             skill_context_middleware or SkillContextMiddleware()
         )
+        self.memory_service = memory_service
 
     async def execute(self, run: Run, leader: Agent) -> ConversationGraphState:
         created = await self._run_created_payload(run)
@@ -160,6 +163,12 @@ class ConversationGraph:
             return _state_from_assistant_message(assistant)
 
         messages = await self._model_messages(thread_id)
+        messages = await self._with_memory_context(
+            run=run,
+            leader=leader,
+            messages=messages,
+            turn_options=turn_options,
+        )
         model_state = await self._run_model(
             run=run,
             leader=leader,
@@ -167,6 +176,7 @@ class ConversationGraph:
             selected_model=selected_model,
             thinking=thinking,
             skill_runtime_view=skill_runtime_view,
+            turn_options=turn_options,
         )
         final_answer = str(model_state["final_answer"])
         usage = model_state["usage"]
@@ -223,6 +233,7 @@ class ConversationGraph:
         selected_model: str,
         thinking: str | None,
         skill_runtime_view: SkillRuntimeView | None,
+        turn_options: dict[str, object],
     ) -> ConversationGraphState:
         initial_state: ConversationGraphState = {}
 
@@ -241,6 +252,7 @@ class ConversationGraph:
                     messages,
                     thinking,
                     skill_runtime_view,
+                    turn_options,
                 ),
             )
 
@@ -301,16 +313,18 @@ class ConversationGraph:
         messages: list[ModelMessage],
         thinking: str | None,
         skill_runtime_view: SkillRuntimeView | None,
+        turn_options: dict[str, object],
     ) -> ConversationGraphState:
         provider = self.provider_factory(selected_model)
         model_messages = redact_model_messages(list(messages))
+        tool_names = self._tool_names_for_turn(run, turn_options)
         tools = (
-            model_tool_definitions(self.tool_registry)
-            if self.tool_registry is not None and run.working_directory is not None
+            model_tool_definitions(self.tool_registry, names=tool_names)
+            if self.tool_registry is not None
             else []
         )
         effective_tools = (
-            _RegistryToolPolicy.from_registry(self.tool_registry)
+            _RegistryToolPolicy.from_registry(self.tool_registry, names=tool_names)
             if self.tool_registry is not None
             else None
         )
@@ -373,9 +387,17 @@ class ConversationGraph:
                     call,
                     workspace=Path(run.working_directory),
                     agent_id=leader.id,
+                    run_id=run.id,
                     effective_tools=effective_tools,
                 )
                 model_messages.append(result)
+                if call.name == "memory.manage":
+                    await self._append_memory_tool_event(
+                        run=run,
+                        leader=leader,
+                        result=result,
+                    )
+                    continue
                 effects = _changed_files_from_tool_result(result)
                 changed_files.extend(effects)
                 payload: dict[str, object] = {
@@ -420,6 +442,82 @@ class ConversationGraph:
             return catalog
         return empty_extension_catalog()
 
+    async def _with_memory_context(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        messages: list[ModelMessage],
+        turn_options: dict[str, object],
+    ) -> list[ModelMessage]:
+        if self.memory_service is None:
+            return messages
+        effective = self.memory_service.effective_from_payload(
+            _dict_payload(turn_options.get("memory"))
+        )
+        snapshot = self.memory_service.context_snapshot(effective)
+        rendered = self.memory_service.render_context(snapshot)
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.MEMORY_OPERATION_CREATED,
+            payload={
+                "operation": "context_injected",
+                "enabled": snapshot.enabled,
+                "targets": [
+                    {
+                        "target": item.target.value,
+                        "chars": item.chars,
+                        "truncated": item.truncated,
+                    }
+                    for item in snapshot.targets.values()
+                ],
+                "provider_status": snapshot.provider_status,
+            },
+            agent_id=leader.id,
+        )
+        if not rendered:
+            return messages
+        return [SystemMessage(content=rendered), *messages]
+
+    def _tool_names_for_turn(
+        self,
+        run: Run,
+        turn_options: dict[str, object],
+    ) -> set[str]:
+        if self.tool_registry is None:
+            return set()
+        tool_names = {
+            spec.name
+            for spec in self.tool_registry.list_specs()
+            if spec.name != "memory.manage" and run.working_directory is not None
+        }
+        if self._memory_enabled_for_turn(turn_options):
+            tool_names.add("memory.manage")
+        return tool_names
+
+    def _memory_enabled_for_turn(self, turn_options: dict[str, object]) -> bool:
+        if self.memory_service is None:
+            return False
+        effective = self.memory_service.effective_from_payload(
+            _dict_payload(turn_options.get("memory"))
+        )
+        return effective.local_enabled or effective.provider is not None
+
+    async def _append_memory_tool_event(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        result: ToolResultMessage,
+    ) -> None:
+        payload = _memory_event_payload(result)
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.MEMORY_OPERATION_CREATED,
+            payload=payload,
+            agent_id=leader.id,
+        )
+
 
 async def _identity_state(state: ConversationGraphState) -> ConversationGraphState:
     return state
@@ -443,13 +541,52 @@ def _string_list_payload(value: object) -> list[str]:
     return [str(item) for item in _list_payload(value)]
 
 
+def _memory_event_payload(result: ToolResultMessage) -> dict[str, object]:
+    try:
+        loaded = json.loads(result.content)
+    except json.JSONDecodeError:
+        loaded = {}
+    payload: dict[str, object] = {
+        "operation": "unknown",
+        "status": "failed" if result.is_error else "completed",
+    }
+    if isinstance(loaded, dict):
+        for key in (
+            "operation",
+            "target",
+            "status",
+            "memory_id",
+            "source",
+            "policy_decision",
+            "reason",
+            "provider_status",
+        ):
+            value = loaded.get(key)
+            if value is not None:
+                payload[key] = value
+    redacted_payload, _report = redact_value(payload)
+    if isinstance(redacted_payload, dict):
+        return {str(key): value for key, value in redacted_payload.items()}
+    return payload
+
+
 class _RegistryToolPolicy:
     def __init__(self, specs: list[ToolSpec]) -> None:
         self._specs = {spec.name: spec for spec in specs}
 
     @classmethod
-    def from_registry(cls, registry: ToolRegistry) -> _RegistryToolPolicy:
-        return cls(registry.list_specs())
+    def from_registry(
+        cls,
+        registry: ToolRegistry,
+        *,
+        names: set[str] | None = None,
+    ) -> _RegistryToolPolicy:
+        specs = [
+            spec
+            for spec in registry.list_specs()
+            if names is None or spec.name in names
+        ]
+        return cls(specs)
 
     @property
     def tool_names(self) -> tuple[str, ...]:

@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal, Protocol
+from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -25,6 +26,7 @@ from awesome_agent.tools.guardrails import (
     is_sensitive_path,
     parse_patch_paths,
 )
+from awesome_agent.tools.memory import MemoryManageArguments
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.shell import ShellExecuteArguments, register_shell_tools
@@ -93,6 +95,7 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "repo.apply_patch": ApplyPatchArguments,
     "shell.execute": ShellExecuteArguments,
     "artifact.read": ArtifactReadArguments,
+    "memory.manage": MemoryManageArguments,
 }
 
 
@@ -175,7 +178,11 @@ def build_modifying_registry(
     return registry
 
 
-def model_tool_definitions(registry: ToolRegistry) -> list[ToolDefinition]:
+def model_tool_definitions(
+    registry: ToolRegistry,
+    *,
+    names: set[str] | None = None,
+) -> list[ToolDefinition]:
     return [
         ToolDefinition(
             name=spec.name,
@@ -183,6 +190,7 @@ def model_tool_definitions(registry: ToolRegistry) -> list[ToolDefinition]:
             input_schema=spec.input_schema,
         )
         for spec in registry.list_specs()
+        if names is None or spec.name in names
     ]
 
 
@@ -192,6 +200,7 @@ async def execute_repository_call(
     *,
     workspace: Path,
     agent_id: Any,
+    run_id: UUID | None = None,
     profile: str = "leader",
     capabilities: set[str] | None = None,
     effective_tools: EffectiveToolPolicyLike | None = None,
@@ -205,6 +214,7 @@ async def execute_repository_call(
         result = await executor.execute(
             ToolInvocation(
                 id=_tool_uuid(call.call_id),
+                run_id=run_id,
                 tool_name=call.name,
                 agent_id=agent_id,
                 profile=profile,

@@ -15,19 +15,29 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.memory.builtin import BuiltinMemoryStore
+from awesome_agent.memory.external import NoopMemoryProvider
+from awesome_agent.memory.models import MemoryTarget
+from awesome_agent.memory.policy import MemoryPolicy
+from awesome_agent.memory.service import MemoryService
 from awesome_agent.modeling.errors import ModelErrorCode, ModelErrorInfo
-from awesome_agent.modeling.messages import AssistantMessage
+from awesome_agent.modeling.messages import AssistantMessage, SystemMessage
 from awesome_agent.modeling.stream import (
     ModelStreamEvent,
     TextDelta,
     TurnCompleted,
     TurnFailed,
 )
+from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.conversation_graph import ConversationGraph
 from awesome_agent.runtime.graphs import CONVERSATION_TURN_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
+from awesome_agent.tools.approval import ApprovalPolicy
+from awesome_agent.tools.executor import ToolExecutor
+from awesome_agent.tools.memory import register_memory_tools
+from awesome_agent.tools.registry import ToolRegistry
 
 
 class FakeProvider:
@@ -74,6 +84,87 @@ class FailingProvider:
 
     async def complete(self, request: ModelRequest) -> ModelTurn:
         raise RuntimeError("model failed")
+
+
+class CapturingProvider:
+    def __init__(self, content: str = "hello") -> None:
+        self.content = content
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content=self.content),
+                    stop_reason=StopReason.COMPLETED,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        self.requests.append(request)
+        return ModelTurn(
+            assistant=AssistantMessage(content=self.content),
+            stop_reason=StopReason.COMPLETED,
+            model="fake-model",
+            provider="fake",
+        )
+
+
+class MemoryToolProvider:
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="call-memory",
+                                    name="memory.manage",
+                                    arguments_json=(
+                                        '{"action":"add","target":"user",'
+                                        '"content":"Prefer concise engineering '
+                                        'updates.",'
+                                        '"source":"explicit_user_request"}'
+                                    ),
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content="remembered"),
+                    stop_reason=StopReason.COMPLETED,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        self.requests.append(request)
+        return ModelTurn(
+            assistant=AssistantMessage(content="remembered"),
+            stop_reason=StopReason.COMPLETED,
+            model="fake-model",
+            provider="fake",
+        )
 
 
 def make_conversation_run(
@@ -248,3 +339,131 @@ async def test_conversation_graph_does_not_write_assistant_message_on_failure() 
     assert EventType.RUN_STATUS_CHANGED not in {
         event.event_type for event in runtime_events
     }
+
+
+@pytest.mark.asyncio
+async def test_graph_injects_enabled_memory_context(tmp_path: Path) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "hello")
+    await _replace_run_created_memory(
+        runtime,
+        run.id,
+        {"local_enabled": True, "provider": None},
+    )
+    memory_service = _memory_service(tmp_path, builtin_enabled=True)
+    await memory_service.add(
+        target=MemoryTarget.USER,
+        content="Prefer concise answers.",
+        source="explicit_user_request",
+        run_id=run.id,
+        agent_id=leader.id,
+    )
+    provider = CapturingProvider("hello")
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        memory_service=memory_service,
+    )
+
+    await graph.execute(run, leader)
+
+    assert any(
+        isinstance(message, SystemMessage)
+        and "Prefer concise answers." in message.content
+        for message in provider.requests[0].messages
+    )
+    events = await runtime.list_events(run.id)
+    assert any(
+        event.event_type is EventType.MEMORY_OPERATION_CREATED
+        and event.payload["operation"] == "context_injected"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_does_not_expose_memory_tool_when_disabled(tmp_path: Path) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "hello")
+    await _replace_run_created_memory(
+        runtime,
+        run.id,
+        {"local_enabled": False, "provider": None},
+    )
+    provider = CapturingProvider("hello")
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        memory_service=_memory_service(tmp_path, builtin_enabled=True),
+    )
+
+    await graph.execute(run, leader)
+
+    assert provider.requests[0].tools == []
+
+
+@pytest.mark.asyncio
+async def test_graph_executes_memory_manage_tool(tmp_path: Path) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "remember this")
+    await _replace_run_created_memory(
+        runtime,
+        run.id,
+        {"local_enabled": True, "provider": None},
+    )
+    memory_service = _memory_service(tmp_path, builtin_enabled=True)
+    registry = ToolRegistry()
+    register_memory_tools(registry, memory_service)
+    provider = MemoryToolProvider()
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        memory_service=memory_service,
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    await graph.execute(run, leader)
+
+    entries = memory_service.builtin.list_entries(MemoryTarget.USER)
+    assert entries[0].content == "Prefer concise engineering updates."
+    events = await runtime.list_events(run.id)
+    assert any(
+        event.event_type is EventType.MEMORY_OPERATION_CREATED
+        and event.payload.get("operation") == "add"
+        and event.payload.get("status") == "added"
+        and "content" not in event.payload
+        for event in events
+    )
+
+
+async def _replace_run_created_memory(
+    runtime: InMemoryRuntimeRepository,
+    run_id: UUID,
+    memory: dict[str, object],
+) -> None:
+    for event in await runtime.list_events(run_id):
+        if event.event_type is EventType.RUN_CREATED:
+            event.payload["memory"] = memory
+            return
+    raise AssertionError("missing run.created event")
+
+
+def _memory_service(tmp_path: Path, *, builtin_enabled: bool) -> MemoryService:
+    return MemoryService(
+        builtin=BuiltinMemoryStore(root=tmp_path / "memory", policy=MemoryPolicy()),
+        provider=NoopMemoryProvider(),
+        builtin_enabled=builtin_enabled,
+        provider_enabled=False,
+    )

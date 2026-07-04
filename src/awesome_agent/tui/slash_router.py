@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 from awesome_agent.cli.slash_commands import (
     SlashCommand,
@@ -267,16 +267,28 @@ def _format_status(status: dict[str, object], state: ChatSessionState) -> str:
 
 
 def _format_memory(memory: dict[str, object]) -> str:
-    enabled = "on" if memory.get("enabled") is True else "off"
-    local = "on" if memory.get("builtin") is True else "off"
-    provider = "on" if memory.get("mem0") is True else "off"
+    builtin = "on" if memory.get("builtin_enabled") is True else "off"
+    provider_enabled = "on" if memory.get("provider_enabled") is True else "off"
+    provider_status = memory.get("provider_status", "disabled")
+    counts = (
+        cast(dict[str, object], memory.get("counts"))
+        if isinstance(memory.get("counts"), dict)
+        else {}
+    )
+    files = (
+        cast(dict[str, object], memory.get("files"))
+        if isinstance(memory.get("files"), dict)
+        else {}
+    )
     return "\n".join(
         [
             "Memory",
             "",
-            f"  Local memory: {local}",
-            f"  Provider memory: {provider}",
-            f"  Overall: {enabled}",
+            f"  Builtin: {builtin}",
+            f"  Provider: {provider_enabled} ({provider_status})",
+            f"  Entries: user={counts.get('user', 0)} memory={counts.get('memory', 0)}",
+            f"  USER.md: {files.get('user', '-')}",
+            f"  MEMORY.md: {files.get('memory', '-')}",
         ]
     )
 

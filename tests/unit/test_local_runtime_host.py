@@ -13,6 +13,7 @@ from tests.type_helpers import test_settings
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.domain.enums import EventType, RunStatus
+from awesome_agent.memory.models import MemoryTarget
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
@@ -336,7 +337,7 @@ def test_local_runtime_host_forwards_turn_options(tmp_path: Path) -> None:
     assert metadata["turn_options"] == {
         "model": "alternate-model",
         "thinking": "off",
-        "memory": {"local_enabled": True},
+        "memory": {"local_enabled": False, "provider": None},
         "skill_ids": ["repository-inspection"],
     }
 
@@ -468,24 +469,35 @@ def test_local_runtime_host_usage_summary_reads_persisted_turn_usage(
     }
 
 
-def test_local_runtime_host_extracts_local_memory_facts(tmp_path: Path) -> None:
+def test_local_runtime_host_lists_real_memory_entries(tmp_path: Path) -> None:
     host = LocalRuntimeHost(
-        settings=test_settings(local_state_dir=tmp_path / "state"),
+        settings=test_settings(
+            local_state_dir=tmp_path / "state",
+            builtin_memory_enabled=True,
+        ),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
     )
-    thread = host.create_thread("Memory")
 
-    list(
-        host.stream_turn(
-            thread.id,
-            "\u6211\u76ee\u524d\u5728\u5b66\u4e60python",
-            memory={"local_enabled": True},
+    added = asyncio.run(
+        host._container.memory_service.add(
+            target=MemoryTarget.USER,
+            content="Prefer concise engineering updates.",
+            source="explicit_user_request",
+            run_id=None,
+            agent_id=None,
         )
     )
 
-    assert host.local_memory_facts(thread.id) == [
-        "\u7528\u6237\u76ee\u524d\u5728\u5b66\u4e60python\u3002"
+    assert added.status == "added"
+    assert added.entry is not None
+    assert host.memory_entries("user") == [
+        {
+            "id": added.entry.id,
+            "target": "user",
+            "content": "Prefer concise engineering updates.",
+            "created_at": None,
+        }
     ]
 
 

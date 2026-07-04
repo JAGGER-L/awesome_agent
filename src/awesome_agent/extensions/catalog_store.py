@@ -35,6 +35,7 @@ class InMemoryExtensionCatalogStore:
         if self._active_version is None:
             catalog = empty_extension_catalog()
             self.put(catalog, active=True)
+        assert self._active_version is not None
         return self.get(self._active_version)
 
 

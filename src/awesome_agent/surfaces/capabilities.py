@@ -45,9 +45,7 @@ class CapabilitySurfaceService:
                 groups["builtin"].append(item)
 
         source_by_id = {source.id: source for source in self.catalog.sources}
-        registered_tool_names = {
-            spec.name for spec in self.tool_registry.list_specs()
-        }
+        registered_tool_names = {spec.name for spec in self.tool_registry.list_specs()}
         for tool in self.catalog.tools:
             source = source_by_id.get(tool.source_id)
             is_mcp = _is_mcp_source(source)

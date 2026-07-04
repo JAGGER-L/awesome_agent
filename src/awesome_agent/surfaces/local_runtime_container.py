@@ -20,6 +20,10 @@ from awesome_agent.extensions.models import (
     ExtensionSourceType,
 )
 from awesome_agent.extensions.runtime_catalog import build_startup_extension_runtime
+from awesome_agent.memory.builtin import BuiltinMemoryStore
+from awesome_agent.memory.external import NoopMemoryProvider
+from awesome_agent.memory.policy import MemoryPolicy
+from awesome_agent.memory.service import MemoryService
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.local_approvals import LocalApprovalRepository
@@ -36,6 +40,7 @@ from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_worker_pump import LocalWorkerPump
+from awesome_agent.tools.memory import register_memory_tools
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ProgressCallback, ToolRegistry
 from awesome_agent.tools.repository import (
@@ -89,7 +94,17 @@ class LocalRuntimeContainer:
             settings=settings,
             profile="local-cli",
         )
+        self.memory_service = MemoryService(
+            builtin=BuiltinMemoryStore(
+                root=settings.local_state_dir / "memory",
+                policy=MemoryPolicy(),
+            ),
+            provider=NoopMemoryProvider(),
+            builtin_enabled=settings.builtin_memory_enabled,
+            provider_enabled=settings.mem0_enabled,
+        )
         self.tool_registry = build_modifying_registry(sandbox=sandbox)
+        register_memory_tools(self.tool_registry, self.memory_service)
         _register_extension_tools(
             self.tool_registry,
             source_configs=self.extension_source_configs,
@@ -112,6 +127,7 @@ class LocalRuntimeContainer:
             tool_executor=self.tool_executor,
             tool_registry=self.tool_registry,
             extension_catalog_store=self.extension_catalog_store,
+            memory_service=self.memory_service,
         )
         self.conversation_service = ConversationService(
             repository=self.conversations,
@@ -119,6 +135,8 @@ class LocalRuntimeContainer:
             conversation_run_intake=self.conversation_intake,
             default_model=self.default_model,
             event_poll_interval=0,
+            global_builtin_memory_enabled=settings.builtin_memory_enabled,
+            global_provider_memory_enabled=settings.mem0_enabled,
         )
         self.worker = DurableWorker(
             dispatcher=self.dispatcher,

@@ -882,18 +882,7 @@ class AwesomeAgentTui(App[None]):
 
     def _apply_local_memory_picker(self, item: PickerItem) -> None:
         if item.id == "view":
-            facts = self._local_memory_facts()
-            content = "Remembered facts"
-            if facts:
-                content = "\n".join([content, "", *[f"- {fact}" for fact in facts]])
-            else:
-                content = "\n".join(
-                    [
-                        content,
-                        "",
-                        "No local memory facts for this conversation.",
-                    ]
-                )
+            content = self._local_memory_entries_text()
             self.state = self.state.close_picker().append(ChatMessage.system(content))
             return
         enabled = item.id == "enabled"
@@ -905,14 +894,21 @@ class AwesomeAgentTui(App[None]):
             )
         )
 
-    def _local_memory_facts(self) -> list[str]:
-        facts = getattr(self.client, "local_memory_facts", None)
-        if not callable(facts):
-            return []
+    def _local_memory_entries_text(self) -> str:
+        entries = getattr(self.client, "memory_entries", None)
+        if not callable(entries):
+            return "Memory\n\nNo local memory entries."
         try:
-            return [str(item) for item in facts(self.state.backend_thread_id)]
+            user_entries = [dict(item) for item in entries("user")]
+            memory_entries = [dict(item) for item in entries("memory")]
         except Exception:
-            return []
+            return "Memory\n\nNo local memory entries."
+        lines = ["Memory", "", "USER.md"]
+        lines.extend(_memory_entry_lines(user_entries))
+        lines.append("")
+        lines.append("MEMORY.md")
+        lines.extend(_memory_entry_lines(memory_entries))
+        return "\n".join(lines)
 
     def _restore_thread(self, thread_id: str) -> None:
         thread = self.client.resume_thread(thread_id)
@@ -1170,6 +1166,17 @@ def _changed_file_label(count: int) -> str:
     if count == 1:
         return "1 changed file"
     return f"{count} changed files"
+
+
+def _memory_entry_lines(entries: list[dict[str, object]]) -> list[str]:
+    if not entries:
+        return ["  none"]
+    lines: list[str] = []
+    for entry in entries:
+        memory_id = str(entry.get("id") or "-")
+        content = str(entry.get("content") or "")
+        lines.append(f"  {memory_id} {content}")
+    return lines
 
 
 def _stream_event_run_id(event: ConversationStreamEvent) -> str | None:

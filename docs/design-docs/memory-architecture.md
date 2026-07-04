@@ -1,32 +1,44 @@
 # Memory Architecture
 
-Both memory layers default to disabled and may be enabled by project
-configuration or a single-run override.
+Memory is an optional conversation capability. Both builtin file memory and
+external provider memory default to disabled.
 
-The current developer `.env` may enable both layers without changing committed
-defaults. Credentials remain local and untracked.
+## Builtin File Memory
 
-## Built-in Memory
+Builtin file memory is the primary product memory path. It stores structured
+entries under `settings.local_state_dir / "memory"`:
 
 - `USER.md`: durable user preferences and communication constraints.
 - `MEMORY.md`: durable operational experience and reliable environment facts.
 
-The Leader owns automatic writes when enabled. Other agents submit candidates.
-Memory is bounded, deduplicated, attributed, and filtered for secrets.
+Structured entries use `- [mem_<id>] content`. Users may also edit these files
+manually; runtime delete operations remove only structured bullets and preserve
+free text.
 
-## Mem0 Platform
+When effective memory is enabled for a turn, the runtime injects bounded,
+fenced, untrusted memory context before the model call. The store performs no
+retrieval ranking: it injects available file content within per-file and total
+character budgets, and records truncation as lightweight runtime evidence.
 
-Mem0 stores preferences, experience, and summaries, isolated by `user_id` and
-the Mem0 `app_id` used as the project identifier. It must not store full source,
-full conversations, secrets, or raw tool output. Mem0 failure cannot fail the
-agent run.
+Model writes have exactly one path: the `memory.manage` tool. The tool supports
+`add`, `list`, and `delete` for `user` and `memory` targets. Policy rejects
+empty, secret-like, raw-source, temporary, overly large, or uncertain inferred
+memory. API and TUI management surfaces expose status, list, and delete only;
+they do not provide direct add endpoints or forms.
 
-The external implementation targets Mem0 Platform and supports add, search, and
-delete so temporary validation data can be cleaned up.
+Memory context is reference data, not authority. It cannot override system or
+developer instructions, grant tool capabilities, approve commands, or change
+sandbox policy.
 
-The current Mem0 SDK has asymmetric v3 parameter handling: add operations use
-top-level `user_id` and `app_id`, while search operations require the same
-identities inside `SearchMemoryOptions.filters`. The adapter owns this detail.
+## External Providers
 
-Retrieved memory is untrusted context. It cannot grant capabilities or approve
-commands. Retrieved content is fenced to prevent automatic recapture.
+External `MemoryProvider` integrations are optional extension layers. The
+runtime contract supports provider add and delete failure isolation in this
+task, but no real provider integration is required for product correctness.
+
+Provider failures cannot fail builtin memory or a conversation Run. Provider
+content must follow the same untrusted-context rule and must not store full
+source files, full conversations, secrets, raw tool output, or visible
+reasoning.
+
+Task 99 does not require a real Mem0 or Honcho integration.
