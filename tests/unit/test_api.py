@@ -266,7 +266,7 @@ def test_post_runs_is_removed_from_product_api(tmp_path: Path) -> None:
     assert response.status_code == 405
 
 
-def test_inspect_and_cancel_run(tmp_path: Path) -> None:
+def test_inspect_run_and_removed_top_level_write_endpoints(tmp_path: Path) -> None:
     client, repository = _client(tmp_path)
 
     created = _create_run(client, repository, goal="Implement feature")
@@ -293,19 +293,17 @@ def test_inspect_and_cancel_run(tmp_path: Path) -> None:
     assert todos[0]["status"] == "in_progress"
 
     cancelled = client.post(f"/runs/{run_id}/cancel")
-    assert cancelled.json()["status"] == "cancelled"
-    assert cancelled.json()["dispatch_status"] == "terminal"
-
     resumed = client.post(f"/runs/{run_id}/resume")
-    assert resumed.status_code == 409
-
     approval_id = uuid4()
     decided = client.post(
         f"/runs/{run_id}/approvals/{approval_id}",
         json={"approved": True},
     )
-    assert decided.status_code == 200
-    assert len(client.get(f"/runs/{run_id}/approvals").json()) == 1
+
+    assert cancelled.status_code in {404, 405}
+    assert resumed.status_code in {404, 405}
+    assert decided.status_code in {404, 405}
+    assert client.get(f"/runs/{run_id}/approvals").json() == []
 
 
 def test_list_runs_returns_recent_runs(tmp_path: Path) -> None:

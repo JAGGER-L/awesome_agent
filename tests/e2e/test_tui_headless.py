@@ -124,7 +124,6 @@ class FakeClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         self.turn_options.append(
@@ -170,6 +169,24 @@ class FakeClient:
             ),
         ]
 
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        turn_id = uuid4()
+        return [
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.TURN_CONTINUED,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=1,
+                trace_id="trace-continue",
+                payload={"run_id": expected_run_id, "resumed": True},
+            )
+        ]
+
     def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
         return [run for run in self.runs if run.get("thread_id") == thread_id]
 
@@ -210,7 +227,12 @@ class FakeClient:
     def config_summary(self) -> dict[str, object]:
         return {"mode": "embedded", "default_model": "deepseek-v4-pro"}
 
-    def cancel(self, run_id: str) -> dict[str, object]:
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, object]:
         self.cancelled_runs.append(run_id)
         return {"id": run_id, "status": "cancelled"}
 
@@ -220,11 +242,13 @@ class FakeClient:
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, object]:
         decision = {
             "run_id": run_id,
             "approval_id": approval_id,
             "approved": approved,
+            "thread_id": thread_id,
             "status": "decided",
         }
         self.approval_decisions.append(decision)
@@ -253,7 +277,7 @@ class SlowStreamingClient(FakeClient):
         self.deltas = deltas
         self.run_id = run_id
         self.delay_seconds = delay_seconds
-        self.resume_run_ids: list[str | None] = []
+        self.continued_run_ids: list[str | None] = []
 
     def stream_turn(
         self,
@@ -264,10 +288,20 @@ class SlowStreamingClient(FakeClient):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
-        self.resume_run_ids.append(resume_run_id)
+        yield from self._events()
+
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        self.continued_run_ids.append(expected_run_id)
+        yield from self._events()
+
+    def _events(self) -> Iterable[ConversationStreamEvent]:
         turn_id = uuid4()
         for sequence, delta in enumerate(self.deltas, start=1):
             sleep(self.delay_seconds)
@@ -302,7 +336,6 @@ class ReasoningStreamingClient(FakeClient):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         turn_id = uuid4()
@@ -357,7 +390,6 @@ class MultiReasoningStreamingClient(FakeClient):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.calls += 1
         self.turns.append((thread_id, content))
@@ -498,7 +530,7 @@ async def test_tui_streams_first_delta_before_completion() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ctrl_c_pauses_active_stream_and_keeps_prompt() -> None:
+async def test_ctrl_c_requests_cancellation_and_keeps_prompt() -> None:
     client = SlowStreamingClient(
         ["hello", " world"],
         run_id="run-1",
@@ -518,8 +550,8 @@ async def test_ctrl_c_pauses_active_stream_and_keeps_prompt() -> None:
 
     rendered = str(transcript)
     assert "hello" in rendered
-    assert "Response paused" in rendered
-    assert app.state.last_resumable_run_id is not None
+    assert "Cancellation requested" in rendered
+    assert app.state.last_resumable_run_id is None
     assert prompt.value == "x"
 
 
@@ -527,14 +559,16 @@ async def test_ctrl_c_pauses_active_stream_and_keeps_prompt() -> None:
 async def test_continue_resumes_last_resumable_run() -> None:
     client = SlowStreamingClient(["continued"], run_id="run-1")
     app = AwesomeAgentTui(client=client)
-    app.state = app.state.mark_operation_paused("run-1")
+    app.state = app.state.with_backend_thread(client.thread_id).mark_operation_paused(
+        "run-1"
+    )
 
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("c", "o", "n", "t", "i", "n", "u", "e", "enter")
         await pilot.pause(0.1)
 
-    assert client.resume_run_ids == ["run-1"]
+    assert client.continued_run_ids == ["run-1"]
 
 
 @pytest.mark.asyncio
@@ -1047,7 +1081,6 @@ async def test_tui_details_on_expands_tool_event_details() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
-            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             turn_id = uuid4()
@@ -1107,7 +1140,6 @@ async def test_tui_retry_resends_last_failed_message() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
-            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.calls += 1
             if self.calls == 1:
@@ -1190,7 +1222,6 @@ async def test_tui_renders_approval_required_stream_error_as_actionable() -> Non
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
-            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             return [
@@ -1234,7 +1265,6 @@ async def test_tui_approval_prompt_choice_calls_client() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
-            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             return [
@@ -1264,7 +1294,7 @@ async def test_tui_approval_prompt_choice_calls_client() -> None:
         await pilot.press("h", "i", "enter")
         await pilot.pause()
         palette = str(app.query_one("#command-palette").render())
-        await pilot.press("down", "enter")
+        await pilot.press("enter")
         transcript = app.query_one("#transcript").render()
 
     assert "Leader wants to create:" in palette
@@ -1274,16 +1304,16 @@ async def test_tui_approval_prompt_choice_calls_client() -> None:
             "run_id": "run-1",
             "approval_id": "approval-1",
             "approved": True,
+            "thread_id": client.thread_id,
             "status": "decided",
         }
     ]
-    assert app.state.session_allow_rules == ("edit:*",)
     assert app.state.pending_approval is None
-    assert "Approval approved: snake-game.html status=decided" in str(transcript)
+    assert "Approved once. Continuing response." in str(transcript)
 
 
 @pytest.mark.asyncio
-async def test_tui_session_allow_auto_decides_matching_approval() -> None:
+async def test_tui_second_matching_approval_still_requires_decision() -> None:
     class ApprovalClient(FakeClient):
         def __init__(self) -> None:
             super().__init__()
@@ -1298,7 +1328,6 @@ async def test_tui_session_allow_auto_decides_matching_approval() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
-            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.calls += 1
             self.turns.append((thread_id, content))
@@ -1328,7 +1357,7 @@ async def test_tui_session_allow_auto_decides_matching_approval() -> None:
         await pilot.click("#prompt")
         await pilot.press("f", "i", "r", "s", "t", "enter")
         await pilot.pause()
-        await pilot.press("down", "enter")
+        await pilot.press("enter")
         await pilot.press("s", "e", "c", "o", "n", "d", "enter")
         await pilot.pause()
 
@@ -1337,16 +1366,12 @@ async def test_tui_session_allow_auto_decides_matching_approval() -> None:
             "run_id": "run-1",
             "approval_id": "approval-1",
             "approved": True,
-            "status": "decided",
-        },
-        {
-            "run_id": "run-2",
-            "approval_id": "approval-2",
-            "approved": True,
+            "thread_id": client.thread_id,
             "status": "decided",
         },
     ]
-    assert app.state.pending_approval is None
+    assert app.state.pending_approval is not None
+    assert app.state.pending_approval.approval_id == "approval-2"
 
 
 @pytest.mark.asyncio
@@ -1361,7 +1386,6 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
-            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             turn_id = uuid4()
@@ -1432,7 +1456,6 @@ async def test_tui_renders_changed_files_after_completed_message() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
-            resume_run_id: str | None = None,
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             turn_id = uuid4()

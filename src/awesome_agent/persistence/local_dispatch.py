@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from awesome_agent.domain.enums import (
+    ApprovalStatus,
     DispatchStatus,
     EventType,
     ExecutionKind,
@@ -11,13 +12,23 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Run, RunLease, RuntimeEvent
+from awesome_agent.persistence.approval_contracts import (
+    ApprovalExpired,
+    ApprovalRepository,
+)
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
 
 
 class LocalRunDispatcher(RunDispatcher):
-    def __init__(self, runtime: LocalRuntimeRepository) -> None:
+    def __init__(
+        self,
+        runtime: LocalRuntimeRepository,
+        *,
+        approval_repository: ApprovalRepository | None = None,
+    ) -> None:
         self.runtime = runtime
+        self.approval_repository = approval_repository
 
     async def claim_next(
         self,
@@ -211,6 +222,12 @@ class LocalRunDispatcher(RunDispatcher):
             }
         )
         await self.runtime.update_run(updated)
+        if updated.dispatch_status is DispatchStatus.WAITING:
+            await self._close_pending_approvals_for_cancel(
+                run_id=run_id,
+                requested_by=requested_by,
+                now=now,
+            )
         _cancelled, event = await self.runtime.cancel_run(run_id)
         return event
 
@@ -296,10 +313,55 @@ class LocalRunDispatcher(RunDispatcher):
         approval_id: UUID,
         reason: str,
     ) -> None:
+        if not await self.is_waiting_for_approval(
+            run_id=run_id,
+            approval_id=approval_id,
+        ):
+            return
         await self.runtime.requeue_waiting_run(run_id, reason=reason)
 
+    async def is_waiting_for_approval(
+        self,
+        *,
+        run_id: UUID,
+        approval_id: UUID,
+    ) -> bool:
+        run = await self.runtime.get_run(run_id)
+        if run.dispatch_status is not DispatchStatus.WAITING or run.status not in {
+            RunStatus.PAUSED,
+            RunStatus.WAITING,
+        }:
+            return False
+        current = await self._current_waiting_approval_id(run_id)
+        return current == approval_id
+
     async def expire_pending_approvals(self, *, batch_size: int = 100) -> int:
-        return 0
+        if batch_size < 1:
+            raise ValueError("Batch size must be positive.")
+        if self.approval_repository is None:
+            return 0
+        expired = await self.approval_repository.expire_expired(
+            datetime.now(UTC),
+            batch_size=batch_size,
+        )
+        processed = 0
+        for approval in expired:
+            await self.runtime.append_event(
+                run_id=approval.run_id,
+                event_type=EventType.APPROVAL_DECIDED,
+                payload={
+                    "approval_id": str(approval.id),
+                    "status": ApprovalStatus.EXPIRED.value,
+                },
+                transition_id=f"approval-expired:{approval.id}",
+            )
+            await self.requeue_after_approval(
+                run_id=approval.run_id,
+                approval_id=approval.id,
+                reason="approval_expired",
+            )
+            processed += 1
+        return processed
 
     async def release_for_retry(
         self,
@@ -526,6 +588,53 @@ class LocalRunDispatcher(RunDispatcher):
             },
         )
 
+    async def _current_waiting_approval_id(self, run_id: UUID) -> UUID | None:
+        for event in reversed(await self.runtime.list_events(run_id)):
+            if event.event_type not in {
+                EventType.DISPATCH_RELEASED,
+                EventType.RUN_STATUS_CHANGED,
+            }:
+                continue
+            approval_id = _approval_id_from_wait_event(event)
+            if approval_id is not None:
+                return approval_id
+        return None
+
+    async def _close_pending_approvals_for_cancel(
+        self,
+        *,
+        run_id: UUID,
+        requested_by: str | None,
+        now: datetime,
+    ) -> None:
+        if self.approval_repository is None:
+            return
+        pending = await self.approval_repository.list_for_run(
+            run_id,
+            status=ApprovalStatus.PENDING,
+        )
+        for approval in pending:
+            try:
+                decided = await self.approval_repository.decide(
+                    approval.id,
+                    approved=False,
+                    decided_by=requested_by,
+                    reason="run_cancelled",
+                    now=now,
+                )
+            except ApprovalExpired as error:
+                decided = error.approval
+            await self.runtime.append_event(
+                run_id=run_id,
+                event_type=EventType.APPROVAL_DECIDED,
+                payload={
+                    "approval_id": str(decided.id),
+                    "status": decided.status.value,
+                    "reason": "run_cancelled",
+                },
+                transition_id=f"approval-cancelled:{decided.id}",
+            )
+
     @staticmethod
     def _released_run(
         run: Run,
@@ -553,3 +662,28 @@ class LocalRunDispatcher(RunDispatcher):
                 "heartbeat_at": None,
             }
         )
+
+
+def _approval_id_from_wait_event(event: RuntimeEvent) -> UUID | None:
+    payload = event.payload
+    approval_id = payload.get("approval_id")
+    if not isinstance(approval_id, str):
+        return None
+    if event.event_type is EventType.DISPATCH_RELEASED:
+        dispatch_status = payload.get("dispatch_status") or payload.get("next_status")
+        if dispatch_status != DispatchStatus.WAITING.value:
+            return None
+    elif event.event_type is EventType.RUN_STATUS_CHANGED:
+        if payload.get("dispatch_status") != DispatchStatus.WAITING.value:
+            return None
+        if payload.get("status") not in {
+            RunStatus.PAUSED.value,
+            RunStatus.WAITING.value,
+        }:
+            return None
+    else:
+        return None
+    try:
+        return UUID(approval_id)
+    except ValueError:
+        return None

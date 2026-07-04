@@ -29,6 +29,14 @@ input enters the Leader AgentLoop through an internal conversation Run. The
 system creates the appropriate durable Run semantics behind the conversation
 turn.
 
+Thread turns are the product execution entrypoint. A new message creates one
+internal conversation Run through `POST /threads/{thread_id}/turns/stream`.
+Continuation resumes the current thread's latest recoverable Run through
+`POST /threads/{thread_id}/turns/continue/stream`; it does not create a Run,
+append a user message, or expose run-first resume as a product API. Run
+resources remain observable for events, approvals, cancellation, usage,
+artifacts, and diagnostics.
+
 The full-screen TUI may own:
 
 - input widgets, focus, keyboard bindings, scrolling, and layout;
@@ -68,8 +76,9 @@ The normal local TUI flow is:
 4. The shared service layer records the user message and creates an internal
    conversation Run with the initial Leader Agent.
 5. The leader AgentLoop decides whether the turn can finish with no tool calls,
-   needs leader-visible tools, delegates to teammates/subagents, moves to
-   background work, or resumes interrupted work.
+   needs leader-visible tools, delegates to teammates/subagents, or moves to
+   background work. Explicit continuation resumes an existing recoverable Run
+   for the current thread without adding a user message.
 6. Runtime/provider services stream normalized events such as
    `run.started`, `reasoning.delta`, `message.delta`, `tool.completed`,
    `artifact.created`, `message.completed`, `usage.updated`, and `error`.
@@ -102,7 +111,7 @@ The Run flow is:
    thread transcript.
 7. Artifacts remain run-scoped for audit but become discoverable from the
    containing thread.
-8. Cancellation, pause, resume, approvals, retries, validation, and recovery
+8. Cancellation, continuation, approvals, retries, validation, and recovery
    stay service/runtime owned.
 
 ## Slash-Command Metadata

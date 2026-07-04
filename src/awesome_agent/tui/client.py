@@ -58,7 +58,6 @@ class HttpSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         return self._conversation.stream_turn(
             thread_id=thread_id,
@@ -67,6 +66,17 @@ class HttpSurfaceClient:
             thinking=thinking,
             memory=memory,
             skill_ids=skill_ids,
+        )
+
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        return self._conversation.continue_turn(
+            thread_id=thread_id,
+            expected_run_id=expected_run_id,
         )
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:
@@ -122,7 +132,7 @@ class HttpSurfaceClient:
 
     def resume_thread(self, query: str) -> SurfaceThread:
         response = self._client.get(
-            f"{self.api_url}/threads/resume",
+            f"{self.api_url}/threads/resolve",
             params={"query": query},
         )
         if response.status_code not in {404, 405}:
@@ -235,13 +245,17 @@ class HttpSurfaceClient:
     def artifacts(self, run_id: str) -> list[dict[str, Any]]:
         return self._get_list(f"/runs/{run_id}/artifacts")
 
-    def cancel(self, run_id: str) -> dict[str, Any]:
-        response = self._client.post(f"{self.api_url}/runs/{run_id}/cancel")
-        response.raise_for_status()
-        return dict(response.json())
-
-    def resume(self, run_id: str) -> dict[str, Any]:
-        response = self._client.post(f"{self.api_url}/runs/{run_id}/resume")
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not thread_id:
+            raise ValueError("thread_id is required for cancelling a Run.")
+        response = self._client.post(
+            f"{self.api_url}/threads/{thread_id}/runs/{run_id}/cancel"
+        )
         response.raise_for_status()
         return dict(response.json())
 
@@ -251,9 +265,12 @@ class HttpSurfaceClient:
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, Any]:
+        if not thread_id:
+            raise ValueError("thread_id is required for deciding an approval.")
         response = self._client.post(
-            f"{self.api_url}/runs/{run_id}/approvals/{approval_id}",
+            f"{self.api_url}/threads/{thread_id}/runs/{run_id}/approvals/{approval_id}",
             json={"approved": approved},
         )
         response.raise_for_status()

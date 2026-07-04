@@ -10,7 +10,8 @@ out as those surfaces mature.
   evidence.
 - Team mode: distributed Leader, Teammate, Verifier, assignments, and mailbox
   remain runtime capabilities; chat-first product controls are roadmap work.
-- Approvals: `approve`, `resume`, and durable approval records.
+- Approvals: exact-invocation approve once, deny, cancel Run, and durable
+  approval records.
 - Extensions: project `skills/`, `awesome-agent.yaml`, and MCP sources.
 - Diagnostics: `probe`, `diagnostics`, `recovery-metrics`, `budget`, and
   `context-compactions`.
@@ -40,7 +41,21 @@ message turn creates an internal conversation Run with a Leader Agent and
 executes through the embedded local runtime. Conversation and Run failures are
 rendered as structured transcript items with request IDs, retryability, and
 remediation hints when the API provides them. Use `Ctrl+R` to retry the last
-failed conversation turn and `Ctrl+C` to cancel the current Run.
+failed conversation turn and `Ctrl+C` to request cancellation of the current
+Run.
+
+Type `continue` to continue the latest paused or waiting response in the
+current conversation. `continue` is a control action; it is not sent to the
+model as a new user message.
+
+`Ctrl+C` requests cancellation of the active Run. Cancellation is confirmed only
+after the runtime reaches terminal `cancelled` state or reports
+`recovery_required`.
+
+Approval prompts support `approve once`, `deny`, and `cancel run`. Denying one
+tool call lets the agent continue with a denied tool result; cancelling stops
+the Run. Session-wide and always approval grants are intentionally not part of
+this lifecycle.
 
 | Command | Purpose |
 | --- | --- |
@@ -63,7 +78,7 @@ Useful chat-first TUI keys:
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+C` | Cancel the current Run when one is active. |
+| `Ctrl+C` | Request cancellation of the current Run when one is active. |
 | `Ctrl+O` | Expand or collapse the latest thought block when reasoning was streamed. |
 | `Ctrl+R` | Retry the last failed conversation turn. |
 
@@ -81,8 +96,9 @@ metadata is absent, the provider did not return it.
 ## TUI Operator Console
 
 Use `awesome-agent tui` when you want an interactive local view over active and
-recent Runs. The console reads from the API and uses the same approval, cancel,
-and resume endpoints as the CLI.
+recent Runs. The console reads from the API and uses thread-scoped approval and
+cancel endpoints; user-facing continuation belongs to the current thread turn,
+not to a run-first resume endpoint.
 
 Useful keys:
 
@@ -90,7 +106,6 @@ Useful keys:
 | --- | --- |
 | `r` | Refresh |
 | `c` | Cancel selected Run |
-| `u` | Resume selected Run |
 | `a` | Approve latest pending approval for selected Run |
 | `d` | Deny latest pending approval for selected Run |
 | `q` | Quit |

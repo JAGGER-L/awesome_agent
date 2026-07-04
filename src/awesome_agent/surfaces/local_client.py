@@ -59,7 +59,6 @@ class LocalSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         return self.host.stream_turn(
             thread_id,
@@ -68,7 +67,17 @@ class LocalSurfaceClient:
             thinking=thinking,
             memory=memory,
             skill_ids=skill_ids,
-            resume_run_id=resume_run_id,
+        )
+
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        return self.host.continue_turn(
+            thread_id,
+            expected_run_id=expected_run_id,
         )
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:
@@ -105,7 +114,12 @@ class LocalSurfaceClient:
     def config_summary(self) -> dict[str, object]:
         return self.host.config_summary()
 
-    def cancel(self, run_id: str) -> dict[str, Any]:
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
         return dict(self.host.cancel(run_id))
 
     def decide_approval(
@@ -114,6 +128,7 @@ class LocalSurfaceClient:
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, Any]:
         return dict(
             self.host.decide_approval(

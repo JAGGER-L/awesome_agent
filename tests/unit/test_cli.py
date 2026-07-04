@@ -292,6 +292,90 @@ def test_cli_run_command_is_removed() -> None:
     assert "No such command" in result.output
 
 
+def test_cli_resume_command_is_removed() -> None:
+    result = runner.invoke(app, ["resume", str(uuid4())])
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
+
+
+def test_cancel_command_uses_thread_scoped_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    thread_id = uuid4()
+    request: dict[str, Any] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, str]:
+            return {"status": "cancel_requested"}
+
+    def post(url: str, **kwargs: Any) -> Response:
+        request["url"] = url
+        request.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(httpx, "post", post)
+
+    result = runner.invoke(
+        app,
+        ["cancel", str(run_id), "--thread-id", str(thread_id)],
+    )
+
+    assert result.exit_code == 0
+    assert request["url"].endswith(f"/threads/{thread_id}/runs/{run_id}/cancel")
+    assert "cancel_requested" in result.stdout
+
+
+def test_cancel_command_requires_thread_id() -> None:
+    result = runner.invoke(app, ["cancel", str(uuid4())])
+
+    assert result.exit_code != 0
+    assert "thread-id" in result.output
+
+
+def test_approve_command_uses_thread_scoped_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    approval_id = uuid4()
+    thread_id = uuid4()
+    request: dict[str, Any] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+    def post(url: str, **kwargs: Any) -> Response:
+        request["url"] = url
+        request.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(httpx, "post", post)
+
+    result = runner.invoke(
+        app,
+        [
+            "approve",
+            str(run_id),
+            str(approval_id),
+            "--thread-id",
+            str(thread_id),
+            "--deny",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert request["url"].endswith(
+        f"/threads/{thread_id}/runs/{run_id}/approvals/{approval_id}"
+    )
+    assert request["json"] == {"approved": False}
+    assert "denied" in result.stdout
+
+
 def test_probe_sends_diagnostic_request(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

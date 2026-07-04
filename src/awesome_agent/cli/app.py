@@ -643,21 +643,14 @@ def team_mailbox(
 @app.command()
 def cancel(
     run_id: UUID,
+    thread_id: Annotated[UUID, typer.Option("--thread-id")],
     api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
 ) -> None:
     """Cancel a run."""
-    response = httpx.post(f"{api_url}/runs/{run_id}/cancel", timeout=30)
-    response.raise_for_status()
-    typer.echo(response.json()["status"])
-
-
-@app.command()
-def resume(
-    run_id: UUID,
-    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
-) -> None:
-    """Resume a paused or cancelled local run."""
-    response = httpx.post(f"{api_url}/runs/{run_id}/resume", timeout=30)
+    response = httpx.post(
+        f"{api_url}/threads/{thread_id}/runs/{run_id}/cancel",
+        timeout=30,
+    )
     response.raise_for_status()
     typer.echo(response.json()["status"])
 
@@ -666,12 +659,13 @@ def resume(
 def approve(
     run_id: UUID,
     approval_id: UUID,
+    thread_id: Annotated[UUID, typer.Option("--thread-id")],
     approved: Annotated[bool, typer.Option("--approve/--deny")] = True,
     api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
 ) -> None:
     """Approve or deny a pending action."""
     response = httpx.post(
-        f"{api_url}/runs/{run_id}/approvals/{approval_id}",
+        f"{api_url}/threads/{thread_id}/runs/{run_id}/approvals/{approval_id}",
         json={"approved": approved},
         timeout=30,
     )

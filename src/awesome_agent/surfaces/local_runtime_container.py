@@ -11,6 +11,7 @@ from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.domain.models import Run
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
+from awesome_agent.persistence.local_approvals import LocalApprovalRepository
 from awesome_agent.persistence.local_artifacts import LocalArtifactMetadataRepository
 from awesome_agent.persistence.local_conversations import LocalConversationRepository
 from awesome_agent.persistence.local_dispatch import LocalRunDispatcher
@@ -53,7 +54,11 @@ class LocalRuntimeContainer:
         self.conversations = LocalConversationRepository(database_path)
         self.runtime = LocalRuntimeRepository(database_path)
         self.artifacts = LocalArtifactMetadataRepository(database_path)
-        self.dispatcher = LocalRunDispatcher(self.runtime)
+        self.approvals = LocalApprovalRepository(database_path)
+        self.dispatcher = LocalRunDispatcher(
+            self.runtime,
+            approval_repository=self.approvals,
+        )
         self.events = EventStream()
 
         factory = provider_factory or ModelProviderFactory(settings).create
@@ -108,3 +113,4 @@ class LocalRuntimeContainer:
         self.conversations.close()
         self.runtime.close()
         self.artifacts.close()
+        self.approvals.close()

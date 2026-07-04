@@ -69,7 +69,6 @@ class HtmlGameSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append(content)
         target = self.workspace / "snake-game.html"
@@ -113,6 +112,22 @@ class HtmlGameSurfaceClient:
             },
         )
 
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        turn_id = uuid4()
+        yield ConversationStreamEvent(
+            event=ConversationStreamEventKind.TURN_CONTINUED,
+            thread_id=uuid4(),
+            turn_id=turn_id,
+            sequence=1,
+            trace_id="trace-continue",
+            payload={"run_id": expected_run_id, "resumed": True},
+        )
+
     def runtime_status(self) -> dict[str, object]:
         return {"api": "embedded", "sandbox": "local"}
 
@@ -147,7 +162,12 @@ class HtmlGameSurfaceClient:
     def config_summary(self) -> dict[str, object]:
         return {"mode": "embedded"}
 
-    def cancel(self, run_id: str) -> dict[str, object]:
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, object]:
         return {"id": run_id, "status": "cancelled"}
 
     def decide_approval(
@@ -156,6 +176,7 @@ class HtmlGameSurfaceClient:
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, object]:
         return {"status": "decided", "approved": approved}
 

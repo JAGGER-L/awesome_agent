@@ -20,7 +20,7 @@ def test_conversation_turn_streams_deltas_before_completion() -> None:
     ).json()
 
     response = client.post(
-        f"/threads/{thread['id']}/turns",
+        f"/threads/{thread['id']}/turns/stream",
         json={"content": "hello?"},
     )
 
@@ -41,7 +41,7 @@ def test_conversation_turn_error_does_not_persist_assistant_message() -> None:
     ).json()
 
     response = client.post(
-        f"/threads/{thread['id']}/turns",
+        f"/threads/{thread['id']}/turns/stream",
         json={"content": "hello?"},
     )
 
@@ -60,7 +60,7 @@ def test_conversation_turn_accepts_runtime_options() -> None:
     ).json()
 
     response = client.post(
-        f"/threads/{thread['id']}/turns",
+        f"/threads/{thread['id']}/turns/stream",
         json={
             "content": "hello?",
             "model": "alternate-model",

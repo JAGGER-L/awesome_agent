@@ -70,7 +70,25 @@ class ConversationClient:
             payload["skill_ids"] = list(skill_ids)
         with self._client.stream(
             "POST",
-            f"{self.api_url}/threads/{thread_id}/turns",
+            f"{self.api_url}/threads/{thread_id}/turns/stream",
+            json=payload,
+        ) as response:
+            if response.status_code >= 400:
+                raise _http_error(response)
+            yield from parse_sse_lines(response.iter_lines())
+
+    def continue_turn(
+        self,
+        *,
+        thread_id: str,
+        expected_run_id: str | None = None,
+    ) -> Iterator[ConversationStreamEvent]:
+        payload: dict[str, object] = {}
+        if expected_run_id is not None:
+            payload["expected_run_id"] = expected_run_id
+        with self._client.stream(
+            "POST",
+            f"{self.api_url}/threads/{thread_id}/turns/continue/stream",
             json=payload,
         ) as response:
             if response.status_code >= 400:

@@ -105,7 +105,7 @@ usage metadata, changed files, and terminal state.
 Slash commands such as `/new`, `/threads`, `/model`, `/thinking`, `/memory`,
 `/status`, and `/help` are local interaction syntax over semantic runtime
 operations. The API remains resource-oriented: `POST /threads`,
-`POST /threads/{thread_id}/turns`, read-only Run inspection, readiness,
+`POST /threads/{thread_id}/turns/stream`, read-only Run inspection, readiness,
 `POST /runtime/probes`, models, memory, and approval resources, not
 slash-command route names.
 

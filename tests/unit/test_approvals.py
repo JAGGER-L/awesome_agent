@@ -81,6 +81,20 @@ async def test_approval_repository_expires_pending_approvals() -> None:
 
 
 @pytest.mark.asyncio
+async def test_approval_repository_expire_expired_respects_batch_size() -> None:
+    repository = InMemoryApprovalRepository()
+    now = datetime.now(UTC)
+    first = await repository.upsert(_approval(expires_at=now - timedelta(seconds=2)))
+    second = await repository.upsert(_approval(expires_at=now - timedelta(seconds=1)))
+
+    expired_items = await repository.expire_expired(now, batch_size=1)
+
+    assert [item.id for item in expired_items] == [first.id]
+    assert (await repository.get(first.id)).status is ApprovalStatus.EXPIRED
+    assert (await repository.get(second.id)).status is ApprovalStatus.PENDING
+
+
+@pytest.mark.asyncio
 async def test_approval_repository_rejects_decision_after_expiry() -> None:
     repository = InMemoryApprovalRepository()
     now = datetime.now(UTC)

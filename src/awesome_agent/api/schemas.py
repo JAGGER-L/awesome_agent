@@ -54,6 +54,12 @@ class CreateConversationTurnRequest(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
 
 
+class ContinueConversationTurnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_run_id: UUID | None = None
+
+
 class ErrorResponse(BaseModel):
     code: str
     message: str

@@ -130,6 +130,27 @@ async def test_claimed_run_cancellation_is_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_service_does_not_fake_resume_by_setting_running(
+    tmp_path: Path,
+) -> None:
+    repository = InMemoryRuntimeRepository()
+    service = RuntimeService(
+        repository=repository,
+        events=EventStream(),
+        artifacts=LocalArtifactStore(tmp_path),
+        model_resolver=_models(),
+    )
+    run = await service.create_run("Goal")
+    await repository.update_run(run.model_copy(update={"status": RunStatus.PAUSED}))
+
+    with pytest.raises(ValueError, match="thread continuation"):
+        await service.resume_run(run.id)
+
+    current = await repository.get_run(run.id)
+    assert current.status is RunStatus.PAUSED
+
+
+@pytest.mark.asyncio
 async def test_in_memory_runtime_events_redact_payload_before_storage() -> None:
     repository = InMemoryRuntimeRepository()
     run = Run(goal="redact")

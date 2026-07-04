@@ -12,16 +12,10 @@ def test_approval_prompt_cycles_choices() -> None:
         subject="snake-game.html",
     )
 
+    assert prompt.options == ("approve once", "deny", "cancel run")
+    assert prompt.choices == prompt.options
     assert prompt.move(1).active_index == 1
     assert prompt.move(-1).active_index == 2
-
-
-def test_session_allow_rules_are_in_memory_state_only() -> None:
-    state = ChatSessionState.new().add_session_allow_rule("edit")
-
-    assert state.session_allow_rules == ("edit",)
-    assert state.add_session_allow_rule("edit").session_allow_rules == ("edit",)
-    assert ChatSessionState.new().session_allow_rules == ()
 
 
 def test_switch_thread_clears_pending_approval() -> None:

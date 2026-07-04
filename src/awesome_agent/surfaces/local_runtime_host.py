@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 from queue import Queue
 from threading import Thread
@@ -14,13 +15,22 @@ from awesome_agent.conversation.events import (
     ConversationStreamEventKind,
 )
 from awesome_agent.conversation.models import ThreadMessage
+from awesome_agent.domain.enums import (
+    ApprovalStatus,
+    DispatchStatus,
+    EventType,
+    RunStatus,
+)
 from awesome_agent.domain.models import Run, RuntimeEvent
 from awesome_agent.modeling.provider import ModelProvider
+from awesome_agent.persistence.approval_contracts import (
+    ApprovalExpired,
+    DurableApproval,
+)
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import (
     ChangedFileSummary,
-    SurfaceClientError,
     SurfaceThread,
     changed_file_summaries_from_payload,
 )
@@ -228,18 +238,7 @@ class LocalRuntimeHost:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
-        normalized = content.strip().casefold()
-        if resume_run_id is not None and normalized in {
-            "continue",
-            "resume",
-            "\u7ee7\u7eed",
-        }:
-            raise SurfaceClientError(
-                "Durable turn resume is not available yet.",
-                code="resume_not_available",
-            )
         yield from _iter_async_in_thread(
             self._stream_turn_async(
                 thread_id=UUID(thread_id),
@@ -250,6 +249,74 @@ class LocalRuntimeHost:
                 skill_ids=skill_ids,
             )
         )
+
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        yield from _iter_async_in_thread(
+            self._continue_turn_async(
+                thread_id=UUID(thread_id),
+                expected_run_id=UUID(expected_run_id)
+                if expected_run_id is not None
+                else None,
+            )
+        )
+
+    async def _continue_turn_async(
+        self,
+        *,
+        thread_id: UUID,
+        expected_run_id: UUID | None,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        drained_run_ids: set[UUID] = set()
+        async for event in self._conversation.continue_turn(
+            thread_id=thread_id,
+            expected_run_id=expected_run_id,
+        ):
+            yield event
+            if event.event is not ConversationStreamEventKind.TURN_CONTINUED:
+                continue
+            run_id_value = event.payload.get("run_id")
+            if not isinstance(run_id_value, str):
+                continue
+            run_id = UUID(run_id_value)
+            if run_id in drained_run_ids:
+                continue
+            drained_run_ids.add(run_id)
+            await self._container.worker_pump.drain_until_run_terminal_or_waiting(
+                str(run_id)
+            )
+            sequence = event.sequence
+            async for projected in self._project_current_run_events(
+                thread_id=thread_id,
+                turn_id=event.turn_id,
+                trace_id=event.trace_id,
+                run_id=run_id,
+            ):
+                sequence += 1
+                yield projected.model_copy(update={"sequence": sequence})
+            return
+
+    async def _project_current_run_events(
+        self,
+        *,
+        thread_id: UUID,
+        turn_id: UUID,
+        trace_id: str,
+        run_id: UUID,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        for runtime_event in await self.runtime_repository.list_events(run_id):
+            projected = self._conversation._project_runtime_event(
+                runtime_event,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                trace_id=trace_id,
+            )
+            if projected is not None:
+                yield projected
 
     async def _stream_turn_async(
         self,
@@ -354,13 +421,140 @@ class LocalRuntimeHost:
         *,
         approved: bool,
     ) -> dict[str, object]:
+        return _run_async(
+            self._decide_approval_async(
+                run_id,
+                approval_id,
+                approved=approved,
+            )
+        )
+
+    async def _decide_approval_async(
+        self,
+        run_id: str,
+        approval_id: str,
+        *,
+        approved: bool,
+    ) -> dict[str, object]:
+        try:
+            run_uuid = UUID(run_id)
+            approval_uuid = UUID(approval_id)
+        except ValueError:
+            return _approval_not_found_response(
+                run_id,
+                approval_id,
+                approved=approved,
+            )
+        try:
+            run = await self.runtime_repository.get_run(run_uuid)
+            approval = await self._container.approvals.get(approval_uuid)
+        except KeyError:
+            return _approval_not_found_response(
+                run_id,
+                approval_id,
+                approved=approved,
+            )
+        if approval.run_id != run_uuid:
+            return _approval_not_found_response(
+                run_id,
+                approval_id,
+                approved=approved,
+            )
+
+        if approval.status is not ApprovalStatus.PENDING:
+            return _approval_conflict_response(
+                run_id,
+                approval_id,
+                approved=approved,
+                status=approval.status.value,
+                reason="approval_not_pending",
+            )
+        if not _is_waiting_for_approval(run):
+            return _approval_conflict_response(
+                run_id,
+                approval_id,
+                approved=approved,
+                status=approval.status.value,
+                reason="run_not_waiting_for_approval",
+            )
+        if not await self._container.dispatcher.is_waiting_for_approval(
+            run_id=run_uuid,
+            approval_id=approval_uuid,
+        ):
+            return _approval_conflict_response(
+                run_id,
+                approval_id,
+                approved=approved,
+                status=approval.status.value,
+                reason="approval_not_current",
+            )
+
+        now = datetime.now(UTC)
+        try:
+            decided = await self._container.approvals.decide(
+                approval_uuid,
+                approved=approved,
+                decided_by="local-surface",
+                reason="approval_decided",
+                now=now,
+            )
+        except ApprovalExpired as error:
+            decided = error.approval
+            await self._append_approval_decision_event(
+                decided,
+                approved=approved,
+                reason="approval_expired",
+            )
+            await self._container.dispatcher.requeue_after_approval(
+                run_id=run_uuid,
+                approval_id=approval_uuid,
+                reason="approval_expired",
+            )
+            return {
+                "run_id": run_id,
+                "approval_id": approval_id,
+                "approved": approved,
+                "status": ApprovalStatus.EXPIRED.value,
+                "reason": "approval_expired",
+            }
+
+        await self._append_approval_decision_event(
+            decided,
+            approved=approved,
+            reason="approval_decided",
+        )
+        await self._container.dispatcher.requeue_after_approval(
+            run_id=run_uuid,
+            approval_id=approval_uuid,
+            reason="approval_decided",
+        )
+        await self._container.worker_pump.drain_until_run_terminal_or_waiting(run_id)
         return {
             "run_id": run_id,
             "approval_id": approval_id,
             "approved": approved,
-            "status": "not_found",
-            "reason": "approval_not_found",
+            "status": decided.status.value,
+            "reason": "approval_decided",
         }
+
+    async def _append_approval_decision_event(
+        self,
+        approval: DurableApproval,
+        *,
+        approved: bool,
+        reason: str,
+    ) -> None:
+        await self.runtime_repository.append_event(
+            run_id=approval.run_id,
+            event_type=EventType.APPROVAL_DECIDED,
+            payload={
+                "approval_id": str(approval.id),
+                "approved": approved,
+                "status": approval.status.value,
+                "reason": reason,
+            },
+            transition_id=f"approval-decided:{approval.id}",
+        )
 
     async def _run_created_event(self, run_id: UUID) -> RuntimeEvent | None:
         for event in await self.runtime_repository.list_events(run_id):
@@ -501,6 +695,45 @@ def _cancel_run_not_found_response(run_id: str) -> dict[str, object]:
         "reason": "run_not_found",
         "dispatch_status": None,
         "event_sequence": None,
+    }
+
+
+def _approval_not_found_response(
+    run_id: str,
+    approval_id: str,
+    *,
+    approved: bool,
+) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "approval_id": approval_id,
+        "approved": approved,
+        "status": "not_found",
+        "reason": "approval_not_found",
+    }
+
+
+def _approval_conflict_response(
+    run_id: str,
+    approval_id: str,
+    *,
+    approved: bool,
+    status: str,
+    reason: str,
+) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "approval_id": approval_id,
+        "approved": approved,
+        "status": status,
+        "reason": reason,
+    }
+
+
+def _is_waiting_for_approval(run: Run) -> bool:
+    return run.dispatch_status is DispatchStatus.WAITING and run.status in {
+        RunStatus.PAUSED,
+        RunStatus.WAITING,
     }
 
 

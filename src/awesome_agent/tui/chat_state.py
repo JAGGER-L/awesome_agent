@@ -102,7 +102,6 @@ class ChatSessionState:
     staged_skill_ids: tuple[str, ...] = ()
     active_picker: PickerState | None = None
     pending_approval: ApprovalPromptState | None = None
-    session_allow_rules: tuple[str, ...] = ()
     last_requested_model: str | None = None
     last_response_model: str | None = None
     last_model_provider: str | None = None
@@ -236,11 +235,6 @@ class ChatSessionState:
         prompt: ApprovalPromptState | None,
     ) -> ChatSessionState:
         return replace(self, pending_approval=prompt)
-
-    def add_session_allow_rule(self, rule: str) -> ChatSessionState:
-        if rule in self.session_allow_rules:
-            return self
-        return replace(self, session_allow_rules=(*self.session_allow_rules, rule))
 
     def with_last_failed_user_message(
         self,

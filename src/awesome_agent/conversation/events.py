@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 class ConversationStreamEventKind(StrEnum):
     TURN_STARTED = "turn.started"
+    TURN_CONTINUED = "turn.continued"
     MESSAGE_CREATED = "message.created"
     MESSAGE_DELTA = "message.delta"
     MESSAGE_COMPLETED = "message.completed"

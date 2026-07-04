@@ -92,7 +92,13 @@ class SurfaceClient(Protocol):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]: ...
+
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]: ...
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]: ...
@@ -119,7 +125,12 @@ class SurfaceClient(Protocol):
 
     def config_summary(self) -> dict[str, object]: ...
 
-    def cancel(self, run_id: str) -> dict[str, Any]: ...
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]: ...
 
     def decide_approval(
         self,
@@ -127,6 +138,7 @@ class SurfaceClient(Protocol):
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 
