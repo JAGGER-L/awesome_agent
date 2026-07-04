@@ -11,16 +11,13 @@ from awesome_agent.conversation.events import (
 )
 from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.conversation.repository import ConversationRepository
+from awesome_agent.conversation.runtime_turns import project_runtime_event
 from awesome_agent.domain.enums import (
     DispatchStatus,
     EventType,
     RunStatus,
 )
 from awesome_agent.domain.models import Run, RuntimeEvent
-from awesome_agent.modeling.errors import (
-    ModelErrorCode,
-    ModelErrorInfo,
-)
 from awesome_agent.runtime.repository import RuntimeRepository
 
 
@@ -81,6 +78,7 @@ class ConversationService:
             turn_id=turn_id,
             sequence=sequence,
             trace_id=trace_id,
+            run_id=run.id,
             payload={
                 "run_id": str(run.id),
                 "status": run.status.value,
@@ -119,6 +117,7 @@ class ConversationService:
             turn_id=stream_id,
             sequence=sequence,
             trace_id=trace_id,
+            run_id=run.id,
             payload={
                 "run_id": str(run.id),
                 "stream_id": str(stream_id),
@@ -239,10 +238,12 @@ class ConversationService:
         trace_id: str,
     ) -> ConversationStreamEvent | None:
         event_type = getattr(runtime_event, "event_type", None)
-        payload = getattr(runtime_event, "payload", {})
-        if not isinstance(payload, dict):
-            payload = {}
+        if event_type is EventType.RUN_CREATED:
+            return None
         if event_type is EventType.MESSAGE_CREATED:
+            payload = getattr(runtime_event, "payload", {})
+            if not isinstance(payload, dict):
+                payload = {}
             role = payload.get("role")
             if role == ThreadMessageRole.USER.value:
                 kind = ConversationStreamEventKind.MESSAGE_CREATED
@@ -256,114 +257,18 @@ class ConversationService:
                 turn_id=turn_id,
                 sequence=1,
                 trace_id=trace_id,
+                run_id=getattr(runtime_event, "run_id", None),
+                runtime_sequence=getattr(runtime_event, "sequence", None),
                 payload=payload,
             )
-        if event_type is EventType.MODEL_CALL_CREATED:
-            if payload.get("reasoning_started") is True:
-                return _event(
-                    ConversationStreamEventKind.REASONING_STARTED,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    sequence=1,
-                    trace_id=trace_id,
-                    payload={},
-                )
-            reasoning_delta = payload.get("reasoning_delta")
-            if isinstance(reasoning_delta, str) and reasoning_delta:
-                return _event(
-                    ConversationStreamEventKind.REASONING_DELTA,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    sequence=1,
-                    trace_id=trace_id,
-                    payload={"text": reasoning_delta},
-                )
-            if "reasoning_completed" in payload:
-                return _event(
-                    ConversationStreamEventKind.REASONING_COMPLETED,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    sequence=1,
-                    trace_id=trace_id,
-                    payload={"failed": bool(payload.get("reasoning_failed", False))},
-                )
-            usage = {
-                key: payload[key]
-                for key in (
-                    "input_tokens",
-                    "output_tokens",
-                    "reasoning_tokens",
-                    "cache_read_tokens",
-                    "cache_write_tokens",
-                )
-                if key in payload
-            }
-            if usage:
-                return _event(
-                    ConversationStreamEventKind.USAGE_UPDATED,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    sequence=1,
-                    trace_id=trace_id,
-                    payload=usage,
-                )
-            text_delta = payload.get("text_delta")
-            if isinstance(text_delta, str) and text_delta:
-                return _event(
-                    ConversationStreamEventKind.MESSAGE_DELTA,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    sequence=1,
-                    trace_id=trace_id,
-                    payload={
-                        "text": text_delta,
-                        "run_id": str(getattr(runtime_event, "run_id", "")),
-                    },
-                )
-        if event_type is EventType.TOOL_CALL_CREATED:
-            tool_name = payload.get("tool") or payload.get("name")
-            return _event(
-                ConversationStreamEventKind.MESSAGE_DELTA,
+        if isinstance(runtime_event, RuntimeEvent):
+            projected = project_runtime_event(
                 thread_id=thread_id,
                 turn_id=turn_id,
-                sequence=1,
-                trace_id=trace_id,
-                payload={
-                    "run_id": str(getattr(runtime_event, "run_id", "")),
-                    "tool_event": {
-                        "name": str(tool_name or "tool"),
-                        "summary": str(payload.get("status") or "completed"),
-                    },
-                },
+                event=runtime_event,
             )
-        if event_type is EventType.RUN_STATUS_CHANGED:
-            status = str(payload.get("status") or "")
-            if status == RunStatus.COMPLETED.value:
-                return _event(
-                    ConversationStreamEventKind.TURN_COMPLETED,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    sequence=1,
-                    trace_id=trace_id,
-                    payload={"status": status},
-                )
-            if status in {
-                RunStatus.FAILED.value,
-                RunStatus.CANCELLED.value,
-                RunStatus.RECOVERY_REQUIRED.value,
-            }:
-                return _error_event(
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    sequence=1,
-                    trace_id=trace_id,
-                    error=ModelErrorInfo(
-                        code=ModelErrorCode.PROVIDER_PROTOCOL,
-                        message=str(payload.get("error") or status),
-                        retryable=status == RunStatus.RECOVERY_REQUIRED.value,
-                        provider="runtime",
-                    ),
-                )
+            if projected:
+                return projected[0].model_copy(update={"trace_id": trace_id})
         return None
 
 
@@ -374,6 +279,8 @@ def _event(
     turn_id: UUID,
     sequence: int,
     trace_id: str,
+    run_id: UUID | None = None,
+    runtime_sequence: int | None = None,
     payload: dict[str, object],
 ) -> ConversationStreamEvent:
     return ConversationStreamEvent(
@@ -382,6 +289,8 @@ def _event(
         turn_id=turn_id,
         sequence=sequence,
         trace_id=trace_id,
+        run_id=run_id,
+        runtime_sequence=runtime_sequence,
         payload=payload,
     )
 
@@ -401,24 +310,6 @@ def _is_resumable_run(run: Run) -> bool:
             RunStatus.RECOVERY_REQUIRED,
         }
         or run.dispatch_status is DispatchStatus.WAITING
-    )
-
-
-def _error_event(
-    *,
-    thread_id: UUID,
-    turn_id: UUID,
-    sequence: int,
-    trace_id: str,
-    error: ModelErrorInfo,
-) -> ConversationStreamEvent:
-    return _event(
-        ConversationStreamEventKind.ERROR,
-        thread_id=thread_id,
-        turn_id=turn_id,
-        sequence=sequence,
-        trace_id=trace_id,
-        payload=error.model_dump(mode="json"),
     )
 
 

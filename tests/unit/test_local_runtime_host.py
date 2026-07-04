@@ -9,6 +9,7 @@ from uuid import UUID
 import pytest
 from tests.type_helpers import test_settings
 
+from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.domain.enums import EventType, RunStatus
 from awesome_agent.modeling.messages import AssistantMessage
@@ -130,10 +131,9 @@ def test_local_runtime_host_streams_leader_turn(
         "turn.completed",
     ]
     assert "run_id" in events[0].payload
-    assert events[2].payload == {
-        "text": "hello",
-        "run_id": events[0].payload["run_id"],
-    }
+    assert str(events[2].run_id) == events[0].payload["run_id"]
+    assert events[2].runtime_sequence is not None
+    assert events[2].payload == {"text": "hello"}
 
 
 def test_local_runtime_host_stream_turn_creates_durable_conversation_run(
@@ -307,11 +307,11 @@ def test_local_runtime_host_executes_leader_tools_in_thread_workspace(
     assert target.read_text(encoding="utf-8") == "result = 1 + 1\nprint(result)\n"
     assert len(provider.requests) == 2
     tool_events = [
-        cast(dict[str, object], event.payload["tool_event"])
+        event
         for event in events
-        if isinstance(event.payload.get("tool_event"), dict)
+        if event.event is ConversationStreamEventKind.TOOL_COMPLETED
     ]
-    assert any(event.get("name") == "repo.apply_patch" for event in tool_events)
+    assert any(event.payload.get("tool") == "repo.apply_patch" for event in tool_events)
     assert any(
         event.payload.get("changed_files")
         == [{"path": "calculate_1_plus_1.py", "status": "created"}]

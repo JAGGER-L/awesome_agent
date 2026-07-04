@@ -16,6 +16,12 @@ class ConversationStreamEventKind(StrEnum):
     REASONING_STARTED = "reasoning.started"
     REASONING_DELTA = "reasoning.delta"
     REASONING_COMPLETED = "reasoning.completed"
+    TOOL_STARTED = "tool.started"
+    TOOL_PROGRESS = "tool.progress"
+    TOOL_COMPLETED = "tool.completed"
+    TEAM_EVENT = "team.event"
+    VALIDATION_EVENT = "validation.event"
+    MODEL_ATTEMPT = "model.attempt"
     USAGE_UPDATED = "usage.updated"
     TURN_COMPLETED = "turn.completed"
     ERROR = "error"
@@ -30,6 +36,8 @@ class ConversationStreamEvent(BaseModel):
     sequence: int = Field(ge=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     trace_id: str
+    run_id: UUID | None = None
+    runtime_sequence: int | None = Field(default=None, ge=1)
     payload: dict[str, object] = Field(default_factory=dict)
 
 
