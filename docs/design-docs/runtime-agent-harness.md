@@ -138,6 +138,19 @@ artifacts, runtime evidence, validation summaries, application logs, API/SSE
 payloads, diagnostics, TUI details, or model-context projections persist or
 display.
 
+## CWD Instruction Context
+
+Conversation Runs may inject local instruction context from direct
+`AGENTS.md` and `CLAUDE.md` files under the Run `working_directory`. The API
+process working directory is never used as a fallback; API turns only receive
+this context when thread `context_path` has produced a Run `working_directory`.
+
+`AGENTS.md` has precedence over `CLAUDE.md`. `CLAUDE.md` lines that duplicate
+normalized `AGENTS.md` lines are removed before injection. The runtime records
+snapshot metadata and per-run evidence, but it does not persist full
+instruction file contents. This context source affects model requests only and
+is not a tool policy, UI status surface, or repository metadata source.
+
 ## Repository and Validation Policy
 
 All Runs require a clean primary Git base and execute in a retained Run
