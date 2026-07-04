@@ -83,6 +83,7 @@ class FakeHost:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         self.streamed.append((thread_id, content))
         return []

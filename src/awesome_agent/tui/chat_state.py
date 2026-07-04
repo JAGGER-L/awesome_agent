@@ -28,13 +28,25 @@ class ChatMessage:
     role: str
     content: str
     kind: ChatEventKind = ChatEventKind.MESSAGE
+    attachments: tuple[dict[str, object], ...] = ()
     id: str = field(default_factory=lambda: uuid4().hex)
     turn_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @classmethod
-    def user(cls, content: str, *, turn_id: str | None = None) -> ChatMessage:
-        return cls(role="user", content=content, turn_id=turn_id)
+    def user(
+        cls,
+        content: str,
+        *,
+        turn_id: str | None = None,
+        attachments: tuple[dict[str, object], ...] = (),
+    ) -> ChatMessage:
+        return cls(
+            role="user",
+            content=content,
+            turn_id=turn_id,
+            attachments=attachments,
+        )
 
     @classmethod
     def assistant(cls, content: str, *, turn_id: str | None = None) -> ChatMessage:
@@ -100,6 +112,7 @@ class ChatSessionState:
     local_memory_enabled: bool = False
     provider_memory: str | None = None
     staged_skill_ids: tuple[str, ...] = ()
+    pending_attachments: tuple[dict[str, object], ...] = ()
     active_picker: PickerState | None = None
     pending_approval: ApprovalPromptState | None = None
     last_requested_model: str | None = None
@@ -184,6 +197,7 @@ class ChatSessionState:
             thought_truncated=False,
             thought_blocks={},
             staged_skill_ids=(),
+            pending_attachments=(),
             active_picker=None,
             pending_approval=None,
             status_label="ready",
@@ -223,6 +237,33 @@ class ChatSessionState:
 
     def clear_staged_skills(self) -> ChatSessionState:
         return replace(self, staged_skill_ids=())
+
+    def with_pending_attachment(
+        self,
+        attachment: dict[str, object],
+    ) -> ChatSessionState:
+        attachment_id = attachment.get("id")
+        if attachment_id is not None and any(
+            item.get("id") == attachment_id for item in self.pending_attachments
+        ):
+            return self
+        return replace(
+            self,
+            pending_attachments=(*self.pending_attachments, dict(attachment)),
+        )
+
+    def without_pending_attachment(self, attachment_id: str) -> ChatSessionState:
+        return replace(
+            self,
+            pending_attachments=tuple(
+                item
+                for item in self.pending_attachments
+                if str(item.get("id") or "") != attachment_id
+            ),
+        )
+
+    def clear_pending_attachments(self) -> ChatSessionState:
+        return replace(self, pending_attachments=())
 
     def open_picker(self, picker: PickerState) -> ChatSessionState:
         return replace(self, active_picker=picker)
@@ -474,7 +515,7 @@ def _chat_message_from_record(record: dict[str, Any]) -> ChatMessage:
     except ValueError:
         kind = ChatEventKind.MESSAGE
     if role == "user":
-        return ChatMessage.user(content)
+        return ChatMessage.user(content, attachments=_record_attachments(record))
     if role == "assistant":
         return ChatMessage.assistant(content)
     return ChatMessage.system(content, kind=kind)
@@ -483,3 +524,13 @@ def _chat_message_from_record(record: dict[str, Any]) -> ChatMessage:
 def _optional_payload_str(payload: dict[str, object], key: str) -> str | None:
     value = payload.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _record_attachments(record: dict[str, Any]) -> tuple[dict[str, object], ...]:
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        return ()
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        return ()
+    return tuple(dict(item) for item in attachments if isinstance(item, dict))

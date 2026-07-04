@@ -51,6 +51,7 @@ class ProjectedConversationRunIntake:
         thinking: str | None,
         memory: dict[str, object],
         skill_ids: tuple[str, ...],
+        attachment_ids: tuple[UUID, ...] = (),
     ) -> Run:
         self.created.append(content)
         selected_model = model or "fake-model"
@@ -81,6 +82,7 @@ class ProjectedConversationRunIntake:
                 "thinking": thinking,
                 "memory": memory,
                 "skill_ids": list(skill_ids),
+                "attachment_ids": [str(item) for item in attachment_ids],
             },
             agent_id=leader.id,
         )
@@ -89,6 +91,7 @@ class ProjectedConversationRunIntake:
             "thinking": thinking,
             "memory": memory,
             "skill_ids": list(skill_ids),
+            "attachment_ids": [str(item) for item in attachment_ids],
         }
         user_message = await self.conversations.append_message(
             thread_id=thread_id,

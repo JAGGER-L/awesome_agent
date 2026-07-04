@@ -89,6 +89,21 @@ The normal local TUI flow is:
 The TUI must be able to reconnect or resume from persisted thread messages
 instead of relying on its local transcript cache.
 
+## Thread Attachments
+
+Thread attachments are user-provided input files for a specific next turn.
+They are copied into the local attachment store, explicitly bound to a
+conversation Run by `attachment_ids`, and exposed to the model only through
+bounded fenced context or current-Run `attachment.list` / `attachment.read`
+tools. Attachments are not artifacts, memory, workspace files, or long-lived
+thread resources.
+
+The product object is `thread attachment`; upload is only a transport for
+creating one. TUI and API surfaces may create pending `next_turn` attachments,
+but a conversation turn binds only the attachment ids passed with that turn.
+The runtime records attachment events with metadata only and never stores full
+attachment contents in runtime events.
+
 ## Run Semantics
 
 Plain user messages are the only execution creation path. Every user message

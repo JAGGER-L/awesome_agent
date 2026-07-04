@@ -7,6 +7,7 @@ from enum import StrEnum
 class SlashCommandKind(StrEnum):
     NEW = "new"
     THREADS = "threads"
+    ATTACH = "attach"
     STATUS = "status"
     MODEL = "model"
     THINKING = "thinking"
@@ -59,6 +60,14 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
         kind=SlashCommandKind.THREADS,
         description="Switch conversation.",
         category="thread",
+    ),
+    SlashCommandDefinition(
+        name="attach",
+        kind=SlashCommandKind.ATTACH,
+        description="Attach a local file to the next turn.",
+        category="context",
+        argument_hint="<path>",
+        requires_thread=True,
     ),
     SlashCommandDefinition(
         name="status",

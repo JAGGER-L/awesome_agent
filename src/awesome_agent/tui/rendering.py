@@ -18,7 +18,11 @@ def render_message(message: ChatMessage) -> Text:
     if message.kind is ChatEventKind.COMMAND:
         return Text.assemble(("> ", "bold magenta"), (message.content, "bold"))
     if message.role == "user":
-        return Text.assemble(("> ", "bold cyan"), (message.content, "bold"))
+        rendered = Text.assemble(("> ", "bold cyan"), (message.content, "bold"))
+        attachment_line = _attachment_summary(message.attachments)
+        if attachment_line:
+            rendered.append(f"\n{attachment_line}", style="dim")
+        return rendered
     if message.role == "assistant":
         return Text.assemble(("assistant\n", "dim"), (message.content, "white"))
     if message.kind is ChatEventKind.ERROR:
@@ -125,6 +129,19 @@ def render_changed_files(files: Iterable[ChangedFileSummary]) -> Text:
     return rendered
 
 
+def render_pending_attachments(attachments: Iterable[dict[str, object]]) -> Text:
+    attachment_list = list(attachments)
+    if not attachment_list:
+        return Text()
+    rendered = Text("Pending attachments", style="cyan")
+    for item in attachment_list:
+        filename = str(item.get("filename") or "attachment")
+        size = item.get("size")
+        size_label = f" ({size} bytes)" if isinstance(size, int) else ""
+        rendered.append(f"\n  {filename}{size_label}")
+    return rendered
+
+
 def _labeled(label: str, content: str, *, label_style: str) -> Text:
     return Text.assemble((f"{label}: ", label_style), (content, ""))
 
@@ -134,3 +151,14 @@ def _bounded(value: str, *, max_chars: int = 600) -> str:
     if len(redacted) <= max_chars:
         return redacted
     return f"{redacted[:300]}\n  ...\n  {redacted[-300:]}"
+
+
+def _attachment_summary(attachments: Iterable[dict[str, object]]) -> str:
+    names = [
+        str(item.get("filename") or "attachment")
+        for item in attachments
+        if isinstance(item, dict)
+    ]
+    if not names:
+        return ""
+    return f"Attachments: {', '.join(names)}"

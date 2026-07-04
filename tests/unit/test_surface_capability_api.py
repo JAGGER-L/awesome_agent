@@ -95,7 +95,7 @@ def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> N
     missing_delete = client.delete("/memory/entries/mem_missing?target=user")
     assert missing_delete.status_code == 404
     assert missing_delete.json()["code"] == "memory_entry_not_found"
-    assert responses[f"/threads/{thread['id']}/uploads"].json()["configured"] is False
+    assert responses[f"/threads/{thread['id']}/uploads"].json()["configured"] is True
     assert responses[f"/threads/{thread['id']}/uploads"].json()["items"] == []
     assert responses[f"/threads/{thread['id']}/artifacts"].json()["items"] == []
     assert responses[f"/threads/{thread['id']}/usage"].json()["threshold_status"] == (
@@ -178,6 +178,43 @@ def test_thread_surface_endpoints_return_404_for_missing_thread(
     assert client.get(f"/threads/{missing}/uploads").status_code == 404
     assert client.get(f"/threads/{missing}/artifacts").status_code == 404
     assert client.get(f"/threads/{missing}/usage").status_code == 404
+
+
+def test_thread_attachment_api_lifecycle(tmp_path: Path) -> None:
+    client, _threads, _runtime, _budget = _client(tmp_path)
+    thread = client.post("/threads", json={"title": "Attach"}).json()
+
+    created = client.post(
+        f"/threads/{thread['id']}/attachments",
+        files={"file": ("spec.md", b"# Spec\n", "text/markdown")},
+        data={"scope": "next_turn"},
+    )
+    assert created.status_code == 200
+    attachment = created.json()
+    assert attachment["status"] == "pending"
+    assert attachment["filename"] == "spec.md"
+
+    listed = client.get(f"/threads/{thread['id']}/attachments")
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["id"] == attachment["id"]
+
+    uploads = client.get(f"/threads/{thread['id']}/uploads")
+    assert uploads.status_code == 200
+    assert uploads.json()["configured"] is True
+    assert uploads.json()["items"][0]["id"] == attachment["id"]
+
+    content = client.get(
+        f"/threads/{thread['id']}/attachments/{attachment['id']}/content"
+    )
+    assert content.status_code == 200
+    assert content.content == b"# Spec\n"
+
+    deleted = client.delete(f"/threads/{thread['id']}/attachments/{attachment['id']}")
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == "deleted"
+
+    gone = client.get(f"/threads/{thread['id']}/attachments/{attachment['id']}/content")
+    assert gone.status_code == 410
 
 
 class FakeRuntime:

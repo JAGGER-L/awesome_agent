@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -102,6 +102,7 @@ class InMemoryConversationRepository:
     async def append_message(
         self,
         *,
+        message_id: UUID | None = None,
         thread_id: UUID,
         role: ThreadMessageRole,
         content: str,
@@ -112,6 +113,7 @@ class InMemoryConversationRepository:
         thread = await self.get_thread(thread_id)
         messages = self._messages.setdefault(thread_id, [])
         message = ThreadMessage(
+            id=message_id or uuid4(),
             thread_id=thread_id,
             role=role,
             content=content,
@@ -229,6 +231,7 @@ class PostgresConversationRepository:
     async def append_message(
         self,
         *,
+        message_id: UUID | None = None,
         thread_id: UUID,
         role: ThreadMessageRole,
         content: str,
@@ -247,6 +250,7 @@ class PostgresConversationRepository:
             )
             next_sequence = (max_sequence or 0) + 1
             message = ThreadMessage(
+                id=message_id or uuid4(),
                 thread_id=thread_id,
                 role=role,
                 content=content,

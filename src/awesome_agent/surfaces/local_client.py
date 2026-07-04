@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from awesome_agent.conversation.events import ConversationStreamEvent
@@ -26,6 +27,26 @@ class LocalSurfaceClient:
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]:
         return self.host.list_thread_messages(thread_id)
+
+    def create_attachment(self, thread_id: str, path: Path) -> dict[str, Any]:
+        return dict(self.host.create_attachment(thread_id, path))
+
+    def list_attachments(
+        self,
+        thread_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        return [
+            dict(item)
+            for item in self.host.list_attachments(
+                thread_id,
+                include_deleted=include_deleted,
+            )
+        ]
+
+    def delete_attachment(self, thread_id: str, attachment_id: str) -> dict[str, Any]:
+        return dict(self.host.delete_attachment(thread_id, attachment_id))
 
     def last_resumable_run(self, thread_id: str) -> dict[str, Any] | None:
         if hasattr(self.host, "last_resumable_run"):
@@ -59,6 +80,7 @@ class LocalSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         return self.host.stream_turn(
             thread_id,
@@ -67,6 +89,7 @@ class LocalSurfaceClient:
             thinking=thinking,
             memory=memory,
             skill_ids=skill_ids,
+            attachment_ids=attachment_ids,
         )
 
     def continue_turn(

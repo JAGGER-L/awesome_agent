@@ -101,6 +101,8 @@ class EventType(StrEnum):
     MESSAGE_CREATED = "message.created"
     MODEL_CALL_CREATED = "model_call.created"
     TOOL_CALL_CREATED = "tool_call.created"
+    ATTACHMENT_ATTACHED = "attachment.attached"
+    ATTACHMENT_CONTEXT_INJECTED = "attachment.context_injected"
     TOOL_PROGRESS = "tool.progress"
     APPROVAL_REQUESTED = "approval.requested"
     APPROVAL_DECIDED = "approval.decided"

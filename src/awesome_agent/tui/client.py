@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -58,6 +59,7 @@ class HttpSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         return self._conversation.stream_turn(
             thread_id=thread_id,
@@ -66,6 +68,7 @@ class HttpSurfaceClient:
             thinking=thinking,
             memory=memory,
             skill_ids=skill_ids,
+            attachment_ids=attachment_ids,
         )
 
     def continue_turn(
@@ -161,6 +164,44 @@ class HttpSurfaceClient:
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]:
         return self._get_list_or_empty(f"/threads/{thread_id}/messages")
+
+    def create_attachment(self, thread_id: str, path: Path) -> dict[str, Any]:
+        with path.open("rb") as handle:
+            response = self._client.post(
+                f"{self.api_url}/threads/{thread_id}/attachments",
+                files={"file": (path.name, handle, "application/octet-stream")},
+                data={"scope": "next_turn"},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Expected object response from attachment creation.")
+        return dict(payload)
+
+    def list_attachments(
+        self,
+        thread_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]:
+        payload = self._get_object(
+            f"/threads/{thread_id}/attachments",
+            params={"include_deleted": include_deleted},
+        )
+        items = payload.get("items", [])
+        if not isinstance(items, Iterable) or isinstance(items, dict | str | bytes):
+            raise ValueError("Expected attachment items list response.")
+        return [dict(item) for item in items]
+
+    def delete_attachment(self, thread_id: str, attachment_id: str) -> dict[str, Any]:
+        response = self._client.delete(
+            f"{self.api_url}/threads/{thread_id}/attachments/{attachment_id}"
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Expected object response from attachment deletion.")
+        return dict(payload)
 
     def last_resumable_run(self, thread_id: str) -> dict[str, Any] | None:
         for run in self._get_list_or_empty(f"/threads/{thread_id}/runs"):

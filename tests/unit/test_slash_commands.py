@@ -32,6 +32,7 @@ def test_help_lists_expected_interactive_commands() -> None:
         "/help",
         "/new",
         "/threads",
+        "/attach",
         "/model",
         "/thinking",
         "/memory",
@@ -57,6 +58,7 @@ def test_command_suggestions_exclude_deleted_commands() -> None:
     assert suggestions == {
         "new",
         "threads",
+        "attach",
         "status",
         "model",
         "thinking",

@@ -54,6 +54,7 @@ class CreateConversationTurnRequest(BaseModel):
     thinking_mode: str | None = Field(default=None, max_length=32)
     memory: dict[str, object] = Field(default_factory=dict)
     skill_ids: list[str] = Field(default_factory=list)
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=5)
 
 
 class ContinueConversationTurnRequest(BaseModel):
@@ -224,6 +225,28 @@ class ThreadUploadsResponse(BaseModel):
     thread_id: UUID
     configured: bool = False
     items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ThreadAttachmentResponse(BaseModel):
+    id: UUID
+    thread_id: UUID
+    scope: str
+    status: str
+    filename: str
+    mime_type: str
+    media_type: str
+    size: int
+    sha256: str
+    run_id: UUID | None = None
+    message_id: UUID | None = None
+    created_at: datetime
+    attached_at: datetime | None = None
+    deleted_at: datetime | None = None
+
+
+class ThreadAttachmentsResponse(BaseModel):
+    thread_id: UUID
+    items: list[ThreadAttachmentResponse] = Field(default_factory=list)
 
 
 class ThreadArtifactsResponse(BaseModel):

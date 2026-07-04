@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -163,6 +164,108 @@ def test_tui_client_sends_turn_options() -> None:
             b'"skill_ids":["repository-inspection"]}'
         )
     ]
+
+
+def test_tui_client_sends_attachment_ids() -> None:
+    bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.read())
+        payload = (
+            '{"event":"message.completed",'
+            '"thread_id":"00000000-0000-0000-0000-000000000001",'
+            '"turn_id":"00000000-0000-0000-0000-000000000002",'
+            '"sequence":1,'
+            '"trace_id":"trace",'
+            '"payload":{"content":"ok"}}'
+        )
+        return httpx.Response(
+            200,
+            text=f"event: message.completed\ndata: {payload}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = TuiApiClient(
+        "http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+
+    list(
+        client.stream_turn(
+            "thread-1",
+            "hi",
+            attachment_ids=("00000000-0000-0000-0000-000000000003",),
+        )
+    )
+
+    assert json.loads(bodies[0].decode()) == {
+        "content": "hi",
+        "attachment_ids": ["00000000-0000-0000-0000-000000000003"],
+    }
+
+
+def test_tui_client_creates_lists_and_deletes_attachment(tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/threads/thread-1/attachments":
+            if request.method == "POST":
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "attachment-1",
+                        "thread_id": "thread-1",
+                        "scope": "next_turn",
+                        "status": "pending",
+                        "filename": "spec.md",
+                        "mime_type": "text/markdown",
+                        "media_type": "text",
+                        "size": 7,
+                        "sha256": "a" * 64,
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "thread_id": "thread-1",
+                    "items": [
+                        {
+                            "id": "attachment-1",
+                            "thread_id": "thread-1",
+                            "filename": "spec.md",
+                        }
+                    ],
+                },
+            )
+        if request.url.path == "/threads/thread-1/attachments/attachment-1":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "attachment-1",
+                    "thread_id": "thread-1",
+                    "status": "deleted",
+                    "filename": "spec.md",
+                },
+            )
+        return httpx.Response(404)
+
+    path = tmp_path / "spec.md"
+    path.write_text("# Spec\n", encoding="utf-8")
+    client = TuiApiClient(
+        "http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+
+    created = client.create_attachment("thread-1", path)
+    listed = client.list_attachments("thread-1")
+    deleted = client.delete_attachment("thread-1", "attachment-1")
+
+    assert created["filename"] == "spec.md"
+    assert listed[0]["id"] == "attachment-1"
+    assert deleted["status"] == "deleted"
+    assert [request.method for request in requests] == ["POST", "GET", "DELETE"]
 
 
 def test_tui_client_continues_turn_with_expected_run_id() -> None:

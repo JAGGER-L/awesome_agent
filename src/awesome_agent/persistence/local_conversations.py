@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from awesome_agent.conversation.models import (
     ThreadMessage,
@@ -158,6 +158,7 @@ class LocalConversationRepository:
     async def append_message(
         self,
         *,
+        message_id: UUID | None = None,
         thread_id: UUID,
         role: ThreadMessageRole,
         content: str,
@@ -180,6 +181,7 @@ class LocalConversationRepository:
             + 1
         )
         message = ThreadMessage(
+            id=message_id or uuid4(),
             thread_id=thread_id,
             role=role,
             content=content,

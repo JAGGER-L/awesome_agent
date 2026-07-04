@@ -53,6 +53,7 @@ class ConversationRepository(Protocol):
     async def append_message(
         self,
         *,
+        message_id: UUID | None = None,
         thread_id: UUID,
         role: ThreadMessageRole,
         content: str,

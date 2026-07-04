@@ -10,6 +10,7 @@ from threading import Thread
 from typing import cast
 from uuid import UUID
 
+from awesome_agent.attachments.models import AttachmentSource
 from awesome_agent.conversation.events import (
     ConversationStreamEvent,
     ConversationStreamEventKind,
@@ -230,6 +231,62 @@ class LocalRuntimeHost:
         messages = await self.repository.list_messages(UUID(thread_id))
         return [message.model_dump(mode="json") for message in messages]
 
+    def create_attachment(self, thread_id: str, path: Path) -> dict[str, object]:
+        return _run_async(self._create_attachment_async(thread_id, path))
+
+    async def _create_attachment_async(
+        self,
+        thread_id: str,
+        path: Path,
+    ) -> dict[str, object]:
+        attachment = await self._container.attachment_service.create_from_path(
+            thread_id=UUID(thread_id),
+            path=path,
+            source=AttachmentSource.TUI,
+        )
+        return attachment.model_dump(mode="json")
+
+    def list_attachments(
+        self,
+        thread_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, object]]:
+        return _run_async(
+            self._list_attachments_async(
+                thread_id,
+                include_deleted=include_deleted,
+            )
+        )
+
+    async def _list_attachments_async(
+        self,
+        thread_id: str,
+        *,
+        include_deleted: bool,
+    ) -> list[dict[str, object]]:
+        attachments = await self._container.attachment_service.list_thread(
+            UUID(thread_id),
+            include_deleted=include_deleted,
+        )
+        return [attachment.model_dump(mode="json") for attachment in attachments]
+
+    def delete_attachment(
+        self, thread_id: str, attachment_id: str
+    ) -> dict[str, object]:
+        return _run_async(self._delete_attachment_async(thread_id, attachment_id))
+
+    async def _delete_attachment_async(
+        self,
+        thread_id: str,
+        attachment_id: str,
+    ) -> dict[str, object]:
+        attachment = await self._container.attachment_service.delete(
+            thread_id=UUID(thread_id),
+            attachment_id=UUID(attachment_id),
+        )
+        return attachment.model_dump(mode="json")
+
     def last_resumable_run(self, thread_id: str) -> dict[str, object] | None:
         for run in self.list_thread_runs(thread_id):
             if run.get("status") in {
@@ -249,6 +306,7 @@ class LocalRuntimeHost:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         yield from _iter_async_in_thread(
             self._stream_turn_async(
@@ -258,6 +316,7 @@ class LocalRuntimeHost:
                 thinking=thinking,
                 memory=memory,
                 skill_ids=skill_ids,
+                attachment_ids=attachment_ids,
             )
         )
 
@@ -415,6 +474,7 @@ class LocalRuntimeHost:
         thinking: str | None,
         memory: dict[str, object] | None,
         skill_ids: tuple[str, ...],
+        attachment_ids: tuple[str, ...],
     ) -> AsyncIterator[ConversationStreamEvent]:
         executed_run_ids: set[UUID] = set()
         async for event in self._conversation.start_turn(
@@ -424,6 +484,7 @@ class LocalRuntimeHost:
             thinking=thinking,
             memory=memory,
             skill_ids=skill_ids,
+            attachment_ids=tuple(UUID(item) for item in attachment_ids),
         ):
             yield event
             if event.event is not ConversationStreamEventKind.TURN_STARTED:

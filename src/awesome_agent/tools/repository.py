@@ -20,6 +20,10 @@ from awesome_agent.sandbox.process import run_process
 from awesome_agent.settings import Settings
 from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.artifacts import ArtifactReadArguments, register_artifact_tools
+from awesome_agent.tools.attachments import (
+    AttachmentListArguments,
+    AttachmentReadArguments,
+)
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.guardrails import (
     evaluate_patch_write,
@@ -96,6 +100,8 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "shell.execute": ShellExecuteArguments,
     "artifact.read": ArtifactReadArguments,
     "memory.manage": MemoryManageArguments,
+    "attachment.list": AttachmentListArguments,
+    "attachment.read": AttachmentReadArguments,
 }
 
 
