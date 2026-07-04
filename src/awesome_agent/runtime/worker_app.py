@@ -28,6 +28,7 @@ from awesome_agent.persistence.attachments import PostgresAttachmentRepository
 from awesome_agent.persistence.budget import PostgresBudgetRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.conversations import PostgresConversationRepository
+from awesome_agent.persistence.cwd_context import PostgresCwdContextSnapshotRepository
 from awesome_agent.persistence.database import create_engine, create_session_factory
 from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.runtime_repository import PostgresRuntimeRepository
@@ -41,6 +42,7 @@ from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.context import ContextManager, DeterministicSummaryProvider
 from awesome_agent.runtime.conversation_graph import ConversationGraph
+from awesome_agent.runtime.cwd_context import CwdContextService
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
@@ -154,6 +156,9 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         repository=PostgresAttachmentRepository(sessions),
         store=AttachmentContentStore(configured.local_state_dir / "attachments"),
     )
+    cwd_context_service = CwdContextService(
+        repository=PostgresCwdContextSnapshotRepository(sessions),
+    )
     conversation_tool_registry = build_modifying_registry(sandbox=sandbox)
     register_memory_tools(conversation_tool_registry, memory_service)
     register_attachment_tools(conversation_tool_registry, attachment_service)
@@ -226,6 +231,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     tool_registry=conversation_tool_registry,
                     memory_service=memory_service,
                     attachment_service=attachment_service,
+                    cwd_context_service=cwd_context_service,
                 )
                 if providers.coding_available
                 else None
