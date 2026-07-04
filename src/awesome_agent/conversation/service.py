@@ -12,6 +12,7 @@ from awesome_agent.conversation.events import (
 from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.conversation.repository import ConversationRepository
 from awesome_agent.domain.enums import (
+    DispatchStatus,
     EventType,
     RunStatus,
 )
@@ -95,6 +96,70 @@ class ConversationService:
         ):
             sequence += 1
             yield projected.model_copy(update={"sequence": sequence})
+
+    async def continue_turn(
+        self,
+        *,
+        thread_id: UUID,
+        expected_run_id: UUID | None = None,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        await self._repository.get_thread(thread_id)
+        run = await self.latest_resumable_thread_run(thread_id)
+        if run is None:
+            raise ValueError("no_resumable_turn")
+        if expected_run_id is not None and expected_run_id != run.id:
+            raise ValueError("resumable_run_changed")
+
+        stream_id = uuid4()
+        trace_id = uuid4().hex
+        sequence = 1
+        yield _event(
+            ConversationStreamEventKind.TURN_CONTINUED,
+            thread_id=thread_id,
+            turn_id=stream_id,
+            sequence=sequence,
+            trace_id=trace_id,
+            payload={
+                "run_id": str(run.id),
+                "stream_id": str(stream_id),
+                "status": run.status.value,
+                "dispatch_status": run.dispatch_status.value,
+                "resumed": True,
+            },
+        )
+        async for projected in self._project_run_events(
+            thread_id=thread_id,
+            turn_id=stream_id,
+            trace_id=trace_id,
+            run_id=run.id,
+            after_sequence=0,
+        ):
+            sequence += 1
+            yield projected.model_copy(update={"sequence": sequence})
+
+    async def latest_resumable_thread_run(self, thread_id: UUID) -> Run | None:
+        await self._repository.get_thread(thread_id)
+        candidates: list[tuple[RuntimeEvent, Run]] = []
+        for run in await self._runtime_repository.list_runs():
+            if not _is_resumable_run(run):
+                continue
+            created_event = await self._run_created_event(run.id)
+            if created_event is None:
+                continue
+            if created_event.payload.get("thread_id") != str(thread_id):
+                continue
+            candidates.append((created_event, run))
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda item: (
+                item[0].created_at,
+                item[1].created_at,
+                item[1].id.hex,
+            ),
+            reverse=True,
+        )
+        return candidates[0][1]
 
     async def list_thread_runs(self, thread_id: UUID) -> list[dict[str, object]]:
         await self._repository.get_thread(thread_id)
@@ -318,6 +383,18 @@ def _event(
         sequence=sequence,
         trace_id=trace_id,
         payload=payload,
+    )
+
+
+def _is_resumable_run(run: Run) -> bool:
+    return (
+        run.status
+        in {
+            RunStatus.PAUSED,
+            RunStatus.WAITING,
+            RunStatus.RECOVERY_REQUIRED,
+        }
+        or run.dispatch_status is DispatchStatus.WAITING
     )
 
 
