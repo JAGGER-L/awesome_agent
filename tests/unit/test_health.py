@@ -5,7 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+import pytest
 from pydantic import SecretStr
+from tests.type_helpers import test_settings
 
 from awesome_agent.health import (
     CheckSeverity,
@@ -22,7 +24,6 @@ from awesome_agent.health import (
     readiness_status,
     workspace_root_check,
 )
-from awesome_agent.settings import Settings
 
 
 def test_is_healthy_accepts_passing_required_checks() -> None:
@@ -145,7 +146,7 @@ def test_docker_health_reports_server_version() -> None:
 
 
 def test_provider_missing_is_degraded_for_api_profile() -> None:
-    settings = Settings(deepseek_api_key=None)
+    settings = test_settings(deepseek_api_key=None)
 
     check = provider_key_check(settings, ReadinessProfile.API)
 
@@ -154,7 +155,7 @@ def test_provider_missing_is_degraded_for_api_profile() -> None:
 
 
 def test_provider_missing_is_unhealthy_for_runtime_profile() -> None:
-    settings = Settings(deepseek_api_key=None)
+    settings = test_settings(deepseek_api_key=None)
 
     check = provider_key_check(settings, ReadinessProfile.RUNTIME)
 
@@ -162,8 +163,36 @@ def test_provider_missing_is_unhealthy_for_runtime_profile() -> None:
     assert check.severity is CheckSeverity.REQUIRED
 
 
+def test_provider_custom_base_url_is_unhealthy() -> None:
+    settings = test_settings(
+        deepseek_api_key="key",
+        deepseek_base_url="https://gateway.local/v1",
+    )
+
+    check = provider_key_check(settings, ReadinessProfile.API)
+
+    assert check.status is HealthStatus.UNHEALTHY
+    assert check.metadata == {"code": "unsupported_provider_configuration"}
+    assert check.remediation == (
+        "Use the official DeepSeek endpoint: https://api.deepseek.com."
+    )
+
+
+def test_provider_readiness_ignores_openai_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWESOME_AGENT_OPENAI_API_KEY", "openai-secret")
+    settings = test_settings(deepseek_api_key=None)
+
+    check = provider_key_check(settings, ReadinessProfile.API)
+
+    assert check.status is HealthStatus.DEGRADED
+    assert "OpenAI" not in check.detail
+    assert "openai" not in str(check.metadata).casefold()
+
+
 def test_model_routes_check_reports_all_runtime_graph_identities() -> None:
-    settings = Settings(deepseek_api_key=SecretStr("key"))
+    settings = test_settings(deepseek_api_key=SecretStr("key"))
 
     check = model_routes_check(settings, ReadinessProfile.RUNTIME)
 
@@ -177,8 +206,28 @@ def test_model_routes_check_reports_all_runtime_graph_identities() -> None:
             "team-coding",
             "team-role",
             "team-verifier",
-        ]
+        ],
+        "role_models": {
+            "leader": "deepseek-v4-pro",
+            "teammate": "deepseek-v4-flash",
+            "verifier": "deepseek-v4-flash",
+            "subagent": "deepseek-v4-flash",
+        },
     }
+
+
+def test_model_routes_check_rejects_invalid_role_model() -> None:
+    settings = test_settings(
+        deepseek_api_key=SecretStr("key"),
+        leader_model="gpt-4o",
+    )
+
+    check = model_routes_check(settings, ReadinessProfile.RUNTIME)
+
+    assert check.status is HealthStatus.UNHEALTHY
+    assert check.metadata is not None
+    assert check.metadata["code"] == "invalid_role_model"
+    assert "leader" in check.detail
 
 
 def test_workspace_root_is_healthy_when_it_exists_and_is_writable(

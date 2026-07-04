@@ -21,6 +21,11 @@ from awesome_agent.extensions.models import (
     ExtensionHealthStatus,
     ExtensionSourceType,
 )
+from awesome_agent.modeling.catalog import (
+    DEEPSEEK_PROVIDER_ID,
+    ModelCatalog,
+    ModelCatalogError,
+)
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.runtime.graphs import (
@@ -336,54 +341,77 @@ def mcp_catalog_check(project_root: Path | None = None) -> HealthCheck:
     return HealthCheck("mcp", HealthStatus.HEALTHY, detail)
 
 
-def provider_key_check(settings: Settings, profile: ReadinessProfile) -> HealthCheck:
-    key = settings.deepseek_api_key
-    has_key = bool(key and key.get_secret_value())
-    if has_key:
+def provider_profile_check(
+    settings: Settings,
+    profile: ReadinessProfile,
+) -> HealthCheck:
+    catalog = ModelCatalog.from_settings(settings)
+    try:
+        catalog.require_supported_configuration()
+        catalog.require_configured_provider(DEEPSEEK_PROVIDER_ID)
+    except ModelCatalogError as error:
+        if error.code == "provider_not_configured":
+            if profile is ReadinessProfile.RUNTIME:
+                return HealthCheck(
+                    "provider",
+                    HealthStatus.UNHEALTHY,
+                    error.message,
+                    severity=CheckSeverity.REQUIRED,
+                    remediation=error.hint,
+                    metadata={"code": error.code},
+                )
+            return HealthCheck(
+                "provider",
+                HealthStatus.DEGRADED,
+                error.message,
+                severity=CheckSeverity.DEGRADED,
+                remediation="Set AWESOME_AGENT_DEEPSEEK_API_KEY before running agents.",
+                metadata={"code": error.code},
+            )
         return HealthCheck(
-            "provider",
-            HealthStatus.HEALTHY,
-            "DeepSeek API key configured",
-        )
-    if profile is ReadinessProfile.RUNTIME:
-        return HealthCheck(
-            "provider",
-            HealthStatus.UNHEALTHY,
-            "DeepSeek API key is not configured",
+            name="provider",
+            status=HealthStatus.UNHEALTHY,
+            detail=error.message,
             severity=CheckSeverity.REQUIRED,
-            remediation="Set AWESOME_AGENT_DEEPSEEK_API_KEY.",
+            remediation=error.hint,
+            metadata={"code": error.code},
         )
     return HealthCheck(
         "provider",
-        HealthStatus.DEGRADED,
-        "DeepSeek API key is not configured",
-        severity=CheckSeverity.DEGRADED,
-        remediation="Set AWESOME_AGENT_DEEPSEEK_API_KEY before running agents.",
+        HealthStatus.HEALTHY,
+        "DeepSeek provider configured",
+        metadata={
+            "provider_id": DEEPSEEK_PROVIDER_ID,
+            "model_ids": sorted(catalog.model_ids()),
+        },
     )
+
+
+def provider_key_check(settings: Settings, profile: ReadinessProfile) -> HealthCheck:
+    return provider_profile_check(settings, profile)
 
 
 def model_routes_check(settings: Settings, profile: ReadinessProfile) -> HealthCheck:
     graph_identities = _graph_identities()
-    configured_models = [
-        settings.leader_model,
-        settings.teammate_model,
-        settings.verifier_model,
-        settings.subagent_model,
-    ]
-    missing_models = [model for model in configured_models if not model]
-    if missing_models:
+    catalog = ModelCatalog.from_settings(settings)
+    try:
+        catalog.validate_role_models()
+    except ModelCatalogError as error:
         return HealthCheck(
             "model_routes",
             HealthStatus.UNHEALTHY,
-            "one or more role models are not configured",
-            remediation="Set role model names in environment or config.",
-            metadata={"graph_identities": graph_identities},
+            error.message,
+            remediation=error.hint,
+            metadata={"code": error.code, "graph_identities": graph_identities},
         )
     return HealthCheck(
         "model_routes",
         HealthStatus.HEALTHY,
         f"{profile.value} runtime routes configured",
-        metadata={"graph_identities": graph_identities},
+        metadata={
+            "graph_identities": graph_identities,
+            "role_models": dict(catalog.role_models),
+        },
     )
 
 
@@ -431,7 +459,7 @@ async def collect_readiness(
             local_config_path_check(settings.local_config_path),
             workspace_root_check(workspace_root),
             thread_workspace_check(workspace_root),
-            provider_key_check(settings, profile),
+            provider_profile_check(settings, profile),
             model_routes_check(settings, profile),
             mcp_catalog_check(),
             await database_check(settings.database_url),

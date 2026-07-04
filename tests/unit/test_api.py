@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
+from tests.type_helpers import test_settings
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.api.app import create_app
@@ -164,6 +165,7 @@ def _client(
                 service,
                 intake=intake,
                 registry=registry,
+                settings=test_settings(readiness_check_docker=False),
                 validation_repository=validation_repository,
                 observability_repository=observability_repository,
                 observability_facade=observability_facade,  # type: ignore[arg-type]
