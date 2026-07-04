@@ -59,7 +59,6 @@ class LocalSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         return self.host.stream_turn(
             thread_id,
@@ -68,7 +67,6 @@ class LocalSurfaceClient:
             thinking=thinking,
             memory=memory,
             skill_ids=skill_ids,
-            resume_run_id=resume_run_id,
         )
 
     def continue_turn(

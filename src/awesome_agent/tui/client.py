@@ -58,7 +58,6 @@ class HttpSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         return self._conversation.stream_turn(
             thread_id=thread_id,

@@ -92,7 +92,6 @@ class SurfaceClient(Protocol):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]: ...
 
     def continue_turn(

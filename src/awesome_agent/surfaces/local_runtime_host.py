@@ -31,7 +31,6 @@ from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.client import (
     ChangedFileSummary,
-    SurfaceClientError,
     SurfaceThread,
     changed_file_summaries_from_payload,
 )
@@ -239,18 +238,7 @@ class LocalRuntimeHost:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
-        resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
-        normalized = content.strip().casefold()
-        if resume_run_id is not None and normalized in {
-            "continue",
-            "resume",
-            "\u7ee7\u7eed",
-        }:
-            raise SurfaceClientError(
-                "Durable turn resume is not available yet.",
-                code="resume_not_available",
-            )
         yield from _iter_async_in_thread(
             self._stream_turn_async(
                 thread_id=UUID(thread_id),
