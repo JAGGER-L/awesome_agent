@@ -1,16 +1,34 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from uuid import UUID, uuid4
 
 from tests.type_helpers import test_settings
 
-from awesome_agent.conversation.events import ConversationStreamEvent
+from awesome_agent.conversation.events import (
+    ConversationStreamEvent,
+    ConversationStreamEventKind,
+)
+from awesome_agent.conversation.models import ThreadMessageRole
+from awesome_agent.domain.enums import (
+    AgentKind,
+    AgentStatus,
+    ApprovalStatus,
+    DispatchStatus,
+    EventType,
+    ExecutionKind,
+    RunIntent,
+    RunStatus,
+)
+from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
+from awesome_agent.persistence.approval_contracts import DurableApproval
 from awesome_agent.surfaces.client import SurfaceThread
 from awesome_agent.surfaces.local_client import LocalSurfaceClient
 from awesome_agent.surfaces.local_runtime_host import LocalRuntimeHost
@@ -37,6 +55,7 @@ class FakeHost:
             context_label="workspace",
         )
         self.streamed: list[tuple[str, str]] = []
+        self.continued: list[tuple[str, str | None]] = []
         self.cancelled: list[str] = []
         self.approvals: list[tuple[str, str, bool]] = []
 
@@ -67,6 +86,15 @@ class FakeHost:
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]:
         self.streamed.append((thread_id, content))
+        return []
+
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        self.continued.append((thread_id, expected_run_id))
         return []
 
     def runtime_status(self) -> dict[str, object]:
@@ -114,6 +142,15 @@ def test_local_surface_client_streams_without_http() -> None:
     list(client.stream_turn("thread-1", "hi"))
 
     assert host.streamed == [("thread-1", "hi")]
+
+
+def test_local_surface_client_continue_delegates_to_host() -> None:
+    host = FakeHost()
+    client = LocalSurfaceClient(host=cast(Any, host))
+
+    list(client.continue_turn("thread-1", expected_run_id="run-1"))
+
+    assert host.continued == [("thread-1", "run-1")]
 
 
 def test_local_surface_client_status_does_not_reference_http_health() -> None:
@@ -173,6 +210,53 @@ def test_local_surface_cancel_reports_missing_run_as_not_found(tmp_path: Path) -
     host.close()
 
 
+def test_local_host_continue_turn_resumes_existing_run_without_new_message(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread("Chat", context_path=str(tmp_path))
+    run = _waiting_conversation_run(tmp_path)
+    _run_async(host._container.runtime.create_run(run, _leader(run)))
+    _run_async(
+        host._container.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_CREATED,
+            payload={
+                "thread_id": thread.id,
+                "goal": "original request",
+                "model": "fake-model",
+            },
+        )
+    )
+    _run_async(
+        host._container.conversations.append_message(
+            thread_id=UUID(thread.id),
+            role=ThreadMessageRole.USER,
+            content="original request",
+            run_id=run.id,
+            metadata={"run_id": str(run.id)},
+        )
+    )
+
+    events = list(host.continue_turn(thread.id, expected_run_id=str(run.id)))
+    messages = host.list_thread_messages(thread.id)
+    stored_run = _run_async(host._container.runtime.get_run(run.id))
+
+    assert events[0].event is ConversationStreamEventKind.TURN_CONTINUED
+    assert events[0].payload["run_id"] == str(run.id)
+    assert [
+        message["content"]
+        for message in messages
+        if message["role"] == ThreadMessageRole.USER.value
+    ] == ["original request"]
+    assert stored_run.status is RunStatus.PAUSED
+    host.close()
+
+
 def test_local_surface_client_cancel_delegates_to_host() -> None:
     host = FakeHost()
     client = LocalSurfaceClient(host=cast(Any, host))
@@ -208,6 +292,38 @@ def test_local_surface_approval_reports_no_pending_invocation_without_fake_unsup
     host.close()
 
 
+def test_local_surface_approval_decision_requeues_waiting_run(tmp_path: Path) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    run = _waiting_conversation_run(tmp_path)
+    approval = _approval(run.id, tmp_path)
+    _run_async(host._container.runtime.create_run(run, _leader(run)))
+    _run_async(host._container.approvals.upsert(approval))
+
+    result = host.decide_approval(str(run.id), str(approval.id), approved=True)
+    stored_approval = _run_async(host._container.approvals.get(approval.id))
+    stored_run = _run_async(host._container.runtime.get_run(run.id))
+    events = _run_async(host._container.runtime.list_events(run.id))
+
+    assert result == {
+        "run_id": str(run.id),
+        "approval_id": str(approval.id),
+        "approved": True,
+        "status": "approved",
+        "reason": "approval_decided",
+    }
+    assert stored_approval.status is ApprovalStatus.APPROVED
+    assert stored_run.dispatch_status in {
+        DispatchStatus.QUEUED,
+        DispatchStatus.TERMINAL,
+    }
+    assert EventType.APPROVAL_DECIDED in [event.event_type for event in events]
+    host.close()
+
+
 def test_local_surface_client_approval_delegates_without_fake_unsupported() -> None:
     host = FakeHost()
     client = LocalSurfaceClient(host=cast(Any, host))
@@ -222,3 +338,50 @@ def test_local_surface_client_approval_delegates_without_fake_unsupported() -> N
         "status": "not_found",
         "reason": "approval_not_found",
     }
+
+
+def _run_async[T](awaitable: Any) -> T:
+    import asyncio
+
+    return asyncio.run(awaitable)
+
+
+def _waiting_conversation_run(tmp_path: Path) -> Run:
+    return Run(
+        goal="original request",
+        intent=RunIntent.CONVERSATION,
+        execution_kind=ExecutionKind.CONVERSATION,
+        runtime_route="conversation-turn",
+        status=RunStatus.PAUSED,
+        dispatch_status=DispatchStatus.WAITING,
+        working_directory=tmp_path,
+    )
+
+
+def _leader(run: Run) -> Agent:
+    return Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake-model",
+        status=AgentStatus.READY,
+    )
+
+
+def _approval(run_id: UUID, tmp_path: Path) -> DurableApproval:
+    approval_id = uuid4()
+    return DurableApproval(
+        id=approval_id,
+        run_id=run_id,
+        tool_invocation_id=approval_id,
+        tool_call_id="call_shell",
+        tool_name="shell.execute",
+        tool_version="1",
+        canonical_arguments={"argv": ["git", "status"]},
+        arguments_hash="hash",
+        workspace_path=str(tmp_path),
+        workspace_fingerprint="fingerprint",
+        capabilities=["shell:execute"],
+        risk_level="medium",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )

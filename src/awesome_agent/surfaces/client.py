@@ -95,6 +95,13 @@ class SurfaceClient(Protocol):
         resume_run_id: str | None = None,
     ) -> Iterable[ConversationStreamEvent]: ...
 
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]: ...
+
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]: ...
 
     def runtime_status(self) -> dict[str, object]: ...

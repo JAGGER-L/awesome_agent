@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from awesome_agent.domain.enums import (
     AgentKind,
     AgentStatus,
+    ApprovalStatus,
     DispatchStatus,
     EventType,
     ExecutionKind,
@@ -16,6 +17,8 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.persistence.approval_contracts import DurableApproval
+from awesome_agent.persistence.local_approvals import LocalApprovalRepository
 from awesome_agent.persistence.local_dispatch import LocalRunDispatcher
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost
@@ -270,6 +273,78 @@ async def test_local_dispatcher_requeues_paused_approval_wait(
 
 
 @pytest.mark.asyncio
+async def test_local_dispatcher_expires_pending_approvals_and_requeues_waiting_run(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    approvals = LocalApprovalRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime, approval_repository=approvals)
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+        }
+    )
+    await runtime.create_run(run, _leader(run))
+    expired = await approvals.upsert(
+        _approval(
+            run.id,
+            tmp_path,
+            expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
+    )
+    live = await approvals.upsert(
+        _approval(
+            uuid4(),
+            tmp_path,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+    )
+
+    processed = await dispatcher.expire_pending_approvals(batch_size=1)
+
+    stored_run = await runtime.get_run(run.id)
+    assert processed == 1
+    assert (await approvals.get(expired.id)).status is ApprovalStatus.EXPIRED
+    assert (await approvals.get(live.id)).status is ApprovalStatus.PENDING
+    assert stored_run.status is RunStatus.RUNNING
+    assert stored_run.dispatch_status is DispatchStatus.QUEUED
+    assert stored_run.last_release_reason == "approval_expired"
+    runtime.close()
+    approvals.close()
+
+
+@pytest.mark.asyncio
+async def test_local_dispatcher_cancel_waiting_run_closes_pending_approval(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    approvals = LocalApprovalRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime, approval_repository=approvals)
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+        }
+    )
+    await runtime.create_run(run, _leader(run))
+    approval = await approvals.upsert(_approval(run.id, tmp_path))
+
+    await dispatcher.request_cancellation(
+        run_id=run.id,
+        requested_by="local-surface",
+        reason="user_requested",
+    )
+
+    stored = await approvals.get(approval.id)
+    assert stored.status is ApprovalStatus.DENIED
+    assert stored.decided_by == "local-surface"
+    assert stored.decision_reason == "run_cancelled"
+    runtime.close()
+    approvals.close()
+
+
+@pytest.mark.asyncio
 async def test_local_dispatcher_does_not_cancel_terminal_run(
     tmp_path: Path,
 ) -> None:
@@ -351,4 +426,28 @@ def _leader(run: Run) -> Agent:
         profile="leader",
         model="fake-model",
         status=AgentStatus.READY,
+    )
+
+
+def _approval(
+    run_id: UUID,
+    tmp_path: Path,
+    *,
+    expires_at: datetime | None = None,
+) -> DurableApproval:
+    approval_id = uuid4()
+    return DurableApproval(
+        id=approval_id,
+        run_id=run_id,
+        tool_invocation_id=approval_id,
+        tool_call_id=f"call_{approval_id.hex}",
+        tool_name="shell.execute",
+        tool_version="1",
+        canonical_arguments={"argv": ["git", "status"]},
+        arguments_hash=approval_id.hex,
+        workspace_path=str(tmp_path),
+        workspace_fingerprint="fingerprint",
+        capabilities=["shell:execute"],
+        risk_level="medium",
+        expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=5),
     )

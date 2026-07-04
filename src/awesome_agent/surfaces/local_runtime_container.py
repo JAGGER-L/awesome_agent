@@ -55,7 +55,10 @@ class LocalRuntimeContainer:
         self.runtime = LocalRuntimeRepository(database_path)
         self.artifacts = LocalArtifactMetadataRepository(database_path)
         self.approvals = LocalApprovalRepository(database_path)
-        self.dispatcher = LocalRunDispatcher(self.runtime)
+        self.dispatcher = LocalRunDispatcher(
+            self.runtime,
+            approval_repository=self.approvals,
+        )
         self.events = EventStream()
 
         factory = provider_factory or ModelProviderFactory(settings).create

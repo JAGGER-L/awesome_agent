@@ -71,6 +71,17 @@ class LocalSurfaceClient:
             resume_run_id=resume_run_id,
         )
 
+    def continue_turn(
+        self,
+        thread_id: str,
+        *,
+        expected_run_id: str | None = None,
+    ) -> Iterable[ConversationStreamEvent]:
+        return self.host.continue_turn(
+            thread_id,
+            expected_run_id=expected_run_id,
+        )
+
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:
         return [dict(item) for item in self.host.list_thread_runs(thread_id)]
 

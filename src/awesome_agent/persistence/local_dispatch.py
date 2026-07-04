@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from awesome_agent.domain.enums import (
+    ApprovalStatus,
     DispatchStatus,
     EventType,
     ExecutionKind,
@@ -11,13 +12,23 @@ from awesome_agent.domain.enums import (
     RunStatus,
 )
 from awesome_agent.domain.models import Run, RunLease, RuntimeEvent
+from awesome_agent.persistence.approval_contracts import (
+    ApprovalExpired,
+    ApprovalRepository,
+)
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
 
 
 class LocalRunDispatcher(RunDispatcher):
-    def __init__(self, runtime: LocalRuntimeRepository) -> None:
+    def __init__(
+        self,
+        runtime: LocalRuntimeRepository,
+        *,
+        approval_repository: ApprovalRepository | None = None,
+    ) -> None:
         self.runtime = runtime
+        self.approval_repository = approval_repository
 
     async def claim_next(
         self,
@@ -211,6 +222,12 @@ class LocalRunDispatcher(RunDispatcher):
             }
         )
         await self.runtime.update_run(updated)
+        if updated.dispatch_status is DispatchStatus.WAITING:
+            await self._close_pending_approvals_for_cancel(
+                run_id=run_id,
+                requested_by=requested_by,
+                now=now,
+            )
         _cancelled, event = await self.runtime.cancel_run(run_id)
         return event
 
@@ -299,7 +316,29 @@ class LocalRunDispatcher(RunDispatcher):
         await self.runtime.requeue_waiting_run(run_id, reason=reason)
 
     async def expire_pending_approvals(self, *, batch_size: int = 100) -> int:
-        return 0
+        if batch_size < 1:
+            raise ValueError("Batch size must be positive.")
+        if self.approval_repository is None:
+            return 0
+        expired = await self.approval_repository.expire_expired(datetime.now(UTC))
+        processed = 0
+        for approval in expired[:batch_size]:
+            await self.runtime.append_event(
+                run_id=approval.run_id,
+                event_type=EventType.APPROVAL_DECIDED,
+                payload={
+                    "approval_id": str(approval.id),
+                    "status": ApprovalStatus.EXPIRED.value,
+                },
+                transition_id=f"approval-expired:{approval.id}",
+            )
+            await self.requeue_after_approval(
+                run_id=approval.run_id,
+                approval_id=approval.id,
+                reason="approval_expired",
+            )
+            processed += 1
+        return processed
 
     async def release_for_retry(
         self,
@@ -525,6 +564,41 @@ class LocalRunDispatcher(RunDispatcher):
                 "reason": reason,
             },
         )
+
+    async def _close_pending_approvals_for_cancel(
+        self,
+        *,
+        run_id: UUID,
+        requested_by: str | None,
+        now: datetime,
+    ) -> None:
+        if self.approval_repository is None:
+            return
+        pending = await self.approval_repository.list_for_run(
+            run_id,
+            status=ApprovalStatus.PENDING,
+        )
+        for approval in pending:
+            try:
+                decided = await self.approval_repository.decide(
+                    approval.id,
+                    approved=False,
+                    decided_by=requested_by,
+                    reason="run_cancelled",
+                    now=now,
+                )
+            except ApprovalExpired as error:
+                decided = error.approval
+            await self.runtime.append_event(
+                run_id=run_id,
+                event_type=EventType.APPROVAL_DECIDED,
+                payload={
+                    "approval_id": str(decided.id),
+                    "status": decided.status.value,
+                    "reason": "run_cancelled",
+                },
+                transition_id=f"approval-cancelled:{decided.id}",
+            )
 
     @staticmethod
     def _released_run(
