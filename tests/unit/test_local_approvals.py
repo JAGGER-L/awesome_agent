@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import builtins
+import importlib
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,8 +11,16 @@ from uuid import UUID, uuid4
 import pytest
 
 from awesome_agent.domain.enums import ApprovalStatus
-from awesome_agent.persistence.approvals import ApprovalExpired, DurableApproval
-from awesome_agent.persistence.local_approvals import LocalApprovalRepository
+from awesome_agent.persistence.approval_contracts import (
+    ApprovalExpired,
+    DurableApproval,
+)
+
+
+def _local_approval_repository() -> type:
+    from awesome_agent.persistence.local_approvals import LocalApprovalRepository
+
+    return LocalApprovalRepository
 
 
 def _approval(
@@ -44,10 +55,33 @@ def _approval(
     )
 
 
+def test_local_approvals_imports_without_sqlalchemy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals: dict[str, object] | None = None,
+        locals: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name.startswith("sqlalchemy"):
+            raise AssertionError(f"unexpected SQLAlchemy import: {name}")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    sys.modules.pop("awesome_agent.persistence.local_approvals", None)
+
+    importlib.import_module("awesome_agent.persistence.local_approvals")
+
+
 @pytest.mark.asyncio
 async def test_local_approval_repository_round_trips_and_lists_by_run(
     tmp_path: Path,
 ) -> None:
+    LocalApprovalRepository = _local_approval_repository()
     repository = LocalApprovalRepository(tmp_path / "state.db")
     run_id = uuid4()
     same_created_at = datetime(2026, 1, 1, tzinfo=UTC)
@@ -96,6 +130,7 @@ async def test_local_approval_repository_round_trips_and_lists_by_run(
 
 @pytest.mark.asyncio
 async def test_local_approval_repository_get_by_call(tmp_path: Path) -> None:
+    LocalApprovalRepository = _local_approval_repository()
     repository = LocalApprovalRepository(tmp_path / "state.db")
     approval = await repository.upsert(_approval(tmp_path, tool_call_id="call_1"))
 
@@ -111,6 +146,7 @@ async def test_local_approval_repository_get_by_call(tmp_path: Path) -> None:
 async def test_local_approval_repository_decide_is_idempotent(
     tmp_path: Path,
 ) -> None:
+    LocalApprovalRepository = _local_approval_repository()
     repository = LocalApprovalRepository(tmp_path / "state.db")
     approval = await repository.upsert(_approval(tmp_path))
     now = datetime(2026, 1, 1, 0, 1, tzinfo=UTC)
@@ -143,6 +179,7 @@ async def test_local_approval_repository_decide_is_idempotent(
 async def test_local_approval_repository_decide_denies_pending_approval(
     tmp_path: Path,
 ) -> None:
+    LocalApprovalRepository = _local_approval_repository()
     repository = LocalApprovalRepository(tmp_path / "state.db")
     approval = await repository.upsert(_approval(tmp_path))
     now = datetime(2026, 1, 1, 0, 1, tzinfo=UTC)
@@ -167,6 +204,7 @@ async def test_local_approval_repository_decide_denies_pending_approval(
 async def test_local_approval_repository_expired_decision_raises_and_persists(
     tmp_path: Path,
 ) -> None:
+    LocalApprovalRepository = _local_approval_repository()
     repository = LocalApprovalRepository(tmp_path / "state.db")
     now = datetime(2026, 1, 1, 0, 10, tzinfo=UTC)
     approval = await repository.upsert(
@@ -192,6 +230,7 @@ async def test_local_approval_repository_expired_decision_raises_and_persists(
 async def test_local_approval_repository_expire_expired_returns_and_persists(
     tmp_path: Path,
 ) -> None:
+    LocalApprovalRepository = _local_approval_repository()
     repository = LocalApprovalRepository(tmp_path / "state.db")
     now = datetime(2026, 1, 1, 0, 10, tzinfo=UTC)
     expired = await repository.upsert(
@@ -222,6 +261,7 @@ async def test_local_approval_repository_expire_expired_returns_and_persists(
 async def test_local_approval_repository_persists_after_close_and_reopen(
     tmp_path: Path,
 ) -> None:
+    LocalApprovalRepository = _local_approval_repository()
     database_path = tmp_path / "state.db"
     repository = LocalApprovalRepository(database_path)
     approval = await repository.upsert(_approval(tmp_path))

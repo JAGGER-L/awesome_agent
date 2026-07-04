@@ -9,7 +9,10 @@ from typing import Any
 from uuid import UUID
 
 from awesome_agent.domain.enums import ApprovalStatus
-from awesome_agent.persistence.approvals import ApprovalExpired, DurableApproval
+from awesome_agent.persistence.approval_contracts import (
+    ApprovalExpired,
+    DurableApproval,
+)
 
 
 class LocalApprovalRepository:
