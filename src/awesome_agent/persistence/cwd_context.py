@@ -3,14 +3,14 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.persistence.models import CwdContextSnapshotRecord
 from awesome_agent.runtime.cwd_context import CwdContextSnapshot
 
 
 class PostgresCwdContextSnapshotRepository:
-    def __init__(self, sessions: async_sessionmaker) -> None:
+    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
 
     async def latest_for_thread(

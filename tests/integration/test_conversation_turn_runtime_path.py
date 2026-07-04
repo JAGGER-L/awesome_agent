@@ -10,8 +10,11 @@ from tests.type_helpers import test_settings
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
-from awesome_agent.modeling.messages import AssistantMessage, ModelMessage
-from awesome_agent.modeling.messages import SystemMessage
+from awesome_agent.modeling.messages import (
+    AssistantMessage,
+    ModelMessage,
+    SystemMessage,
+)
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason

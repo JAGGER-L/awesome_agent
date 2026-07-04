@@ -57,7 +57,9 @@ async def test_only_reads_working_directory_direct_children(tmp_path: Path) -> N
 
     assert result.status == "none_found"
     assert result.rendered == ""
-    assert all(item["exists"] is False for item in result.evidence["files"])
+    files = result.evidence["files"]
+    assert isinstance(files, list)
+    assert all(isinstance(item, dict) and item["exists"] is False for item in files)
 
 
 @pytest.mark.asyncio

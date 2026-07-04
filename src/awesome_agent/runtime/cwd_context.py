@@ -51,11 +51,9 @@ class CwdContextSnapshotRepository(Protocol):
         self,
         thread_id: UUID,
         working_directory: str,
-    ) -> CwdContextSnapshot | None:
-        ...
+    ) -> CwdContextSnapshot | None: ...
 
-    async def save(self, snapshot: CwdContextSnapshot) -> None:
-        ...
+    async def save(self, snapshot: CwdContextSnapshot) -> None: ...
 
 
 class InMemoryCwdContextSnapshotRepository:
@@ -109,8 +107,7 @@ class CwdContextService:
 
         files, rendered_parts = self._read_files(directory)
         has_context_result = any(
-            file.exists and (file.included or file.skipped_reason)
-            for file in files
+            file.exists and (file.included or file.skipped_reason) for file in files
         )
         initial_status = "created" if has_context_result else "none_found"
         snapshot = CwdContextSnapshot(

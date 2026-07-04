@@ -3,7 +3,9 @@ from uuid import uuid4
 
 import pytest
 
-from awesome_agent.persistence.local_cwd_context import LocalCwdContextSnapshotRepository
+from awesome_agent.persistence.local_cwd_context import (
+    LocalCwdContextSnapshotRepository,
+)
 from awesome_agent.runtime.cwd_context import CwdContextFileSnapshot, CwdContextSnapshot
 
 
