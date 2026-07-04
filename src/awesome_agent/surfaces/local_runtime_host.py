@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from datetime import UTC, datetime
@@ -290,19 +291,94 @@ class LocalRuntimeHost:
             if run_id in drained_run_ids:
                 continue
             drained_run_ids.add(run_id)
-            await self._container.worker_pump.drain_until_run_terminal_or_waiting(
-                str(run_id)
-            )
             sequence = event.sequence
-            async for projected in self._project_current_run_events(
+            async for projected in self._stream_run_with_worker(
                 thread_id=thread_id,
                 turn_id=event.turn_id,
                 trace_id=event.trace_id,
                 run_id=run_id,
+                after_sequence=after_sequence,
             ):
                 sequence += 1
                 yield projected.model_copy(update={"sequence": sequence})
             return
+
+    async def _stream_run_with_worker(
+        self,
+        *,
+        thread_id: UUID,
+        turn_id: UUID,
+        trace_id: str,
+        run_id: UUID,
+        after_sequence: int,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        pump = asyncio.create_task(
+            self._container.worker_pump.drain_until_run_terminal_or_waiting(
+                str(run_id)
+            )
+        )
+        try:
+            async for projected in self._stream_existing_run_events(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                trace_id=trace_id,
+                run_id=run_id,
+                after_sequence=after_sequence,
+            ):
+                yield projected
+            await pump
+        except BaseException:
+            if not pump.done():
+                pump.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pump
+            raise
+
+    async def _stream_existing_run_events(
+        self,
+        *,
+        thread_id: UUID,
+        turn_id: UUID,
+        trace_id: str,
+        run_id: UUID,
+        after_sequence: int,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        last_sequence = after_sequence
+        while True:
+            runtime_events = await self.runtime_repository.list_events(
+                run_id,
+                after_sequence=last_sequence,
+            )
+            if runtime_events:
+                for runtime_event in runtime_events:
+                    last_sequence = max(last_sequence, runtime_event.sequence)
+                    projected = self._conversation._project_runtime_event(
+                        runtime_event,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        trace_id=trace_id,
+                    )
+                    if projected is not None:
+                        yield projected
+                    if _is_stream_terminal(projected):
+                        return
+                continue
+            try:
+                run = await self.runtime_repository.get_run(run_id)
+            except KeyError:
+                return
+            if run.status in {
+                RunStatus.COMPLETED,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.RECOVERY_REQUIRED,
+            }:
+                return
+            if run.dispatch_status is DispatchStatus.WAITING:
+                return
+            await asyncio.sleep(
+                min(max(self.settings.event_poll_interval_seconds, 0.001), 0.01)
+            )
 
     async def _project_current_run_events(
         self,
@@ -351,9 +427,15 @@ class LocalRuntimeHost:
             if run_id in executed_run_ids:
                 continue
             executed_run_ids.add(run_id)
-            await self._container.worker_pump.drain_until_run_terminal_or_waiting(
-                str(run_id)
-            )
+            async for projected in self._stream_run_with_worker(
+                thread_id=thread_id,
+                turn_id=event.turn_id,
+                trace_id=event.trace_id,
+                run_id=run_id,
+                after_sequence=0,
+            ):
+                yield projected
+            return
 
     def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
         return _run_async(self._list_thread_runs_async(thread_id))
@@ -738,6 +820,15 @@ def _is_waiting_for_approval(run: Run) -> bool:
     return run.dispatch_status is DispatchStatus.WAITING and run.status in {
         RunStatus.PAUSED,
         RunStatus.WAITING,
+    }
+
+
+def _is_stream_terminal(event: ConversationStreamEvent | None) -> bool:
+    if event is None:
+        return False
+    return event.event in {
+        ConversationStreamEventKind.TURN_COMPLETED,
+        ConversationStreamEventKind.ERROR,
     }
 
 

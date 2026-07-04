@@ -92,6 +92,7 @@ class FakeHost:
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
         self.continued.append((thread_id, expected_run_id))
         return []
@@ -293,12 +294,10 @@ def test_local_host_continue_turn_yields_current_projected_wait_event(
 
     assert [event.event for event in events] == [
         ConversationStreamEventKind.TURN_CONTINUED,
-        ConversationStreamEventKind.MESSAGE_DELTA,
+        ConversationStreamEventKind.TOOL_PROGRESS,
     ]
-    assert events[1].payload["tool_event"] == {
-        "name": "shell.execute",
-        "summary": "approval_pending",
-    }
+    assert events[1].payload["tool"] == "shell.execute"
+    assert events[1].payload["status"] == "approval_pending"
     host.close()
 
 

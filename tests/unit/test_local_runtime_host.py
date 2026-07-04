@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -56,6 +57,21 @@ class FailingProvider(StructuredModelProvider):
         yield TurnCompleted(  # pragma: no cover
             turn=ModelTurn(
                 assistant=AssistantMessage(content="unreachable"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        )
+
+
+class SlowProvider(StructuredModelProvider):
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        yield TextDelta(text="first")
+        await asyncio.sleep(0.35)
+        yield TextDelta(text=" second")
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="first second"),
                 stop_reason=StopReason.COMPLETED,
                 model="fake-model",
                 provider="fake",
@@ -155,6 +171,33 @@ def test_local_runtime_host_stream_turn_creates_durable_conversation_run(
     assert runs[0]["status"] == "completed"
 
 
+def test_local_runtime_host_yields_delta_before_worker_finishes(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: SlowProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread("Live")
+
+    started_at = time.monotonic()
+    iterator = iter(host.stream_turn(thread.id, "hi"))
+    first = next(iterator)
+    second = next(iterator)
+    third = next(iterator)
+    elapsed = time.monotonic() - started_at
+
+    assert first.event is ConversationStreamEventKind.TURN_STARTED
+    assert second.event is ConversationStreamEventKind.MESSAGE_CREATED
+    assert third.event is ConversationStreamEventKind.MESSAGE_DELTA
+    assert third.payload["text"] == "first"
+    assert elapsed < 0.25
+
+    remaining = list(iterator)
+    assert remaining[-1].event is ConversationStreamEventKind.TURN_COMPLETED
+
+
 def test_local_runtime_host_uses_worker_pump_for_user_message_turn(
     tmp_path: Path,
 ) -> None:
@@ -237,6 +280,36 @@ def test_local_runtime_host_last_resumable_run_uses_persisted_runtime_status(
     assert resumable is not None
     assert resumable["id"] == created["id"]
     assert resumable["status"] == "waiting"
+
+
+def test_local_runtime_host_continue_turn_uses_after_sequence(tmp_path: Path) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread("Catchup")
+    events = list(host.stream_turn(thread.id, "hi"))
+    run_id = next(
+        event.run_id for event in events if event.event.value == "turn.started"
+    )
+    first_delta = next(
+        event for event in events if event.event.value == "message.delta"
+    )
+
+    catchup = list(
+        host.continue_turn(
+            thread.id,
+            expected_run_id=str(run_id),
+            after_sequence=first_delta.runtime_sequence or 0,
+        )
+    )
+
+    assert all(
+        event.runtime_sequence is None
+        or event.runtime_sequence > (first_delta.runtime_sequence or 0)
+        for event in catchup
+    )
 
 
 def test_local_runtime_host_forwards_turn_options(tmp_path: Path) -> None:
