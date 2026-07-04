@@ -102,24 +102,10 @@ class RuntimeService:
         return run
 
     async def resume_run(self, run_id: UUID) -> Run:
-        current = await self.repository.get_run(run_id)
-        if current.repository_id is not None:
-            raise ValueError(
-                "Durable Run resume is unavailable before dispatch recovery."
-            )
-        if current.status in {
-            RunStatus.COMPLETED,
-            RunStatus.RECOVERY_REQUIRED,
-        }:
-            raise ValueError("Run cannot be resumed.")
-        run = current.model_copy(update={"status": RunStatus.RUNNING})
-        await self.repository.update_run(run)
-        await self._emit(
-            run_id,
-            EventType.RUN_STATUS_CHANGED,
-            {"status": run.status.value},
+        await self.repository.get_run(run_id)
+        raise ValueError(
+            "Run-first resume is not a product entrypoint; use thread continuation."
         )
-        return run
 
     async def decide_approval(
         self,
