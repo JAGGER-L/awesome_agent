@@ -11,6 +11,14 @@ from awesome_agent.modeling import (
     ModelTurn,
 )
 from awesome_agent.modeling.errors import ModelProviderError
+from awesome_agent.modeling.stream import (
+    ReasoningDelta,
+    ReasoningStarted,
+    TextDelta,
+    ToolArgumentsDelta,
+    ToolCallStarted,
+    TurnCompleted,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +185,88 @@ class ModelCallExecutor:
             last_error=RuntimeError("no model route candidates"),
         )
 
+    async def stream(
+        self,
+        decision: ModelRouteDecision,
+        request: ModelRequest,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        attempts: list[ModelRouteAttempt] = []
+        for index, candidate in enumerate(decision.candidates, start=1):
+            if self._token_budget_check is not None:
+                self._token_budget_check(candidate, request)
+            provider = self._provider_factory(candidate)
+            yielded_visible = False
+            completed_turn: ModelTurn | None = None
+            try:
+                async for event in provider.stream(request):
+                    if _is_user_visible_stream_event(event):
+                        yielded_visible = True
+                    if isinstance(event, TurnCompleted):
+                        completed_turn = event.turn
+                    yield event
+            except ModelProviderError as error:
+                fallback_reason = (
+                    error.info.code.value
+                    if (
+                        not yielded_visible
+                        and error.info.retryable
+                        and index < len(decision.candidates)
+                    )
+                    else None
+                )
+                attempt = ModelRouteAttempt(
+                    route_id=decision.route_id,
+                    attempt_number=index,
+                    provider=candidate.provider,
+                    model=candidate.model,
+                    outcome="failed",
+                    fallback_reason=fallback_reason,
+                    error_code=error.info.code.value,
+                )
+                attempts.append(attempt)
+                self._record_attempt(attempt)
+                if fallback_reason is not None:
+                    continue
+                raise ModelRouteExecutionError(
+                    "Model route streaming failed.",
+                    attempts=tuple(attempts),
+                    last_error=error,
+                ) from error
+            if completed_turn is None:
+                error = RuntimeError("provider stream ended without turn.completed")
+                attempt = ModelRouteAttempt(
+                    route_id=decision.route_id,
+                    attempt_number=index,
+                    provider=candidate.provider,
+                    model=candidate.model,
+                    outcome="failed",
+                    error_code="provider_protocol",
+                )
+                attempts.append(attempt)
+                self._record_attempt(attempt)
+                raise ModelRouteExecutionError(
+                    "Model route streaming failed.",
+                    attempts=tuple(attempts),
+                    last_error=error,
+                ) from error
+            if self._token_usage_recorder is not None:
+                self._token_usage_recorder(candidate, completed_turn)
+            attempt = ModelRouteAttempt(
+                route_id=decision.route_id,
+                attempt_number=index,
+                provider=candidate.provider,
+                model=candidate.model,
+                outcome="completed",
+            )
+            attempts.append(attempt)
+            self._record_attempt(attempt)
+            return
+        raise ModelRouteExecutionError(
+            "Model route decision did not contain candidates.",
+            attempts=tuple(attempts),
+            last_error=RuntimeError("no model route candidates"),
+        )
+
     def _record_attempt(self, attempt: ModelRouteAttempt) -> None:
         if self._attempt_recorder is not None:
             self._attempt_recorder(attempt)
@@ -203,9 +293,8 @@ class RoutedModelProvider:
         )
 
     def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        raise NotImplementedError(
-            "Route-aware streaming is not implemented for runtime graphs."
-        )
+        decision = self._router.resolve(self._route_request)
+        return self._executor.stream(decision, request)
 
     async def complete(self, request: ModelRequest) -> ModelTurn:
         decision = self._router.resolve(self._route_request)
@@ -222,6 +311,19 @@ def _route_id(
     role = request.agent_role or "default"
     task = request.task_kind or "coding"
     return f"{request.runtime_route}:{role}:{task}:{candidate_key}"
+
+
+def _is_user_visible_stream_event(event: ModelStreamEvent) -> bool:
+    return isinstance(
+        event,
+        (
+            TextDelta,
+            ReasoningStarted,
+            ReasoningDelta,
+            ToolCallStarted,
+            ToolArgumentsDelta,
+        ),
+    )
 
 
 def _route_execution_message(
