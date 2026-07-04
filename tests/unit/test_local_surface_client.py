@@ -257,6 +257,52 @@ def test_local_host_continue_turn_resumes_existing_run_without_new_message(
     host.close()
 
 
+def test_local_host_continue_turn_yields_current_projected_wait_event(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread("Chat", context_path=str(tmp_path))
+    run = _waiting_conversation_run(tmp_path)
+    _run_async(host._container.runtime.create_run(run, _leader(run)))
+    _run_async(
+        host._container.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_CREATED,
+            payload={
+                "thread_id": thread.id,
+                "goal": "original request",
+                "model": "fake-model",
+            },
+        )
+    )
+    _run_async(
+        host._container.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.TOOL_CALL_CREATED,
+            payload={
+                "tool": "shell.execute",
+                "status": "approval_pending",
+            },
+        )
+    )
+
+    events = list(host.continue_turn(thread.id, expected_run_id=str(run.id)))
+
+    assert [event.event for event in events] == [
+        ConversationStreamEventKind.TURN_CONTINUED,
+        ConversationStreamEventKind.MESSAGE_DELTA,
+    ]
+    assert events[1].payload["tool_event"] == {
+        "name": "shell.execute",
+        "summary": "approval_pending",
+    }
+    host.close()
+
+
 def test_local_surface_client_cancel_delegates_to_host() -> None:
     host = FakeHost()
     client = LocalSurfaceClient(host=cast(Any, host))
@@ -300,6 +346,8 @@ def test_local_surface_approval_decision_requeues_waiting_run(tmp_path: Path) ->
     )
     run = _waiting_conversation_run(tmp_path)
     approval = _approval(run.id, tmp_path)
+    pump = _RecordingPump()
+    host._container.worker_pump = cast(Any, pump)
     _run_async(host._container.runtime.create_run(run, _leader(run)))
     _run_async(host._container.approvals.upsert(approval))
 
@@ -316,11 +364,99 @@ def test_local_surface_approval_decision_requeues_waiting_run(tmp_path: Path) ->
         "reason": "approval_decided",
     }
     assert stored_approval.status is ApprovalStatus.APPROVED
-    assert stored_run.dispatch_status in {
-        DispatchStatus.QUEUED,
-        DispatchStatus.TERMINAL,
-    }
+    assert stored_run.status is RunStatus.RUNNING
+    assert stored_run.dispatch_status is DispatchStatus.QUEUED
+    assert pump.drained == [str(run.id)]
     assert EventType.APPROVAL_DECIDED in [event.event_type for event in events]
+    host.close()
+
+
+def test_local_surface_repeated_approval_decision_does_not_requeue(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    run = _waiting_conversation_run(tmp_path)
+    approval = _approval(run.id, tmp_path)
+    pump = _RecordingPump()
+    host._container.worker_pump = cast(Any, pump)
+    _run_async(host._container.runtime.create_run(run, _leader(run)))
+    _run_async(host._container.approvals.upsert(approval))
+    first = host.decide_approval(str(run.id), str(approval.id), approved=True)
+    rewaiting = _run_async(host._container.runtime.get_run(run.id)).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+            "last_release_reason": "waiting_new_approval",
+        }
+    )
+    _run_async(host._container.runtime.update_run(rewaiting))
+
+    replay = host.decide_approval(str(run.id), str(approval.id), approved=False)
+    stored_run = _run_async(host._container.runtime.get_run(run.id))
+
+    assert first["status"] == "approved"
+    assert replay == {
+        "run_id": str(run.id),
+        "approval_id": str(approval.id),
+        "approved": False,
+        "status": "approved",
+        "reason": "approval_not_pending",
+    }
+    assert stored_run.status is RunStatus.PAUSED
+    assert stored_run.dispatch_status is DispatchStatus.WAITING
+    assert stored_run.last_release_reason == "waiting_new_approval"
+    assert pump.drained == [str(run.id)]
+    host.close()
+
+
+def test_local_surface_cancelled_approval_decision_does_not_requeue(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    run = _waiting_conversation_run(tmp_path)
+    approval = _approval(run.id, tmp_path)
+    pump = _RecordingPump()
+    host._container.worker_pump = cast(Any, pump)
+    _run_async(host._container.runtime.create_run(run, _leader(run)))
+    _run_async(host._container.approvals.upsert(approval))
+    host.cancel(str(run.id))
+    event_count = len(
+        [
+            event
+            for event in _run_async(host._container.runtime.list_events(run.id))
+            if event.event_type is EventType.APPROVAL_DECIDED
+        ]
+    )
+
+    result = host.decide_approval(str(run.id), str(approval.id), approved=True)
+    stored_run = _run_async(host._container.runtime.get_run(run.id))
+    final_event_count = len(
+        [
+            event
+            for event in _run_async(host._container.runtime.list_events(run.id))
+            if event.event_type is EventType.APPROVAL_DECIDED
+        ]
+    )
+
+    assert result == {
+        "run_id": str(run.id),
+        "approval_id": str(approval.id),
+        "approved": True,
+        "status": "denied",
+        "reason": "approval_not_pending",
+    }
+    assert stored_run.status is RunStatus.CANCELLED
+    assert stored_run.dispatch_status is DispatchStatus.TERMINAL
+    assert final_event_count == event_count
+    assert pump.drained == []
     host.close()
 
 
@@ -385,3 +521,12 @@ def _approval(run_id: UUID, tmp_path: Path) -> DurableApproval:
         risk_level="medium",
         expires_at=datetime.now(UTC) + timedelta(minutes=5),
     )
+
+
+class _RecordingPump:
+    def __init__(self) -> None:
+        self.drained: list[str] = []
+
+    async def drain_until_run_terminal_or_waiting(self, run_id: str) -> int:
+        self.drained.append(run_id)
+        return 0

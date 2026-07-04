@@ -301,12 +301,34 @@ class LocalRuntimeHost:
             await self._container.worker_pump.drain_until_run_terminal_or_waiting(
                 str(run_id)
             )
-            run = await self.runtime_repository.get_run(run_id)
-            if run.dispatch_status is DispatchStatus.WAITING or run.status in {
-                RunStatus.PAUSED,
-                RunStatus.WAITING,
-            }:
-                break
+            sequence = event.sequence
+            async for projected in self._project_current_run_events(
+                thread_id=thread_id,
+                turn_id=event.turn_id,
+                trace_id=event.trace_id,
+                run_id=run_id,
+            ):
+                sequence += 1
+                yield projected.model_copy(update={"sequence": sequence})
+            return
+
+    async def _project_current_run_events(
+        self,
+        *,
+        thread_id: UUID,
+        turn_id: UUID,
+        trace_id: str,
+        run_id: UUID,
+    ) -> AsyncIterator[ConversationStreamEvent]:
+        for runtime_event in await self.runtime_repository.list_events(run_id):
+            projected = self._conversation._project_runtime_event(
+                runtime_event,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                trace_id=trace_id,
+            )
+            if projected is not None:
+                yield projected
 
     async def _stream_turn_async(
         self,
@@ -436,7 +458,7 @@ class LocalRuntimeHost:
                 approved=approved,
             )
         try:
-            await self.runtime_repository.get_run(run_uuid)
+            run = await self.runtime_repository.get_run(run_uuid)
             approval = await self._container.approvals.get(approval_uuid)
         except KeyError:
             return _approval_not_found_response(
@@ -449,6 +471,23 @@ class LocalRuntimeHost:
                 run_id,
                 approval_id,
                 approved=approved,
+            )
+
+        if approval.status is not ApprovalStatus.PENDING:
+            return _approval_conflict_response(
+                run_id,
+                approval_id,
+                approved=approved,
+                status=approval.status.value,
+                reason="approval_not_pending",
+            )
+        if not _is_waiting_for_approval(run):
+            return _approval_conflict_response(
+                run_id,
+                approval_id,
+                approved=approved,
+                status=approval.status.value,
+                reason="run_not_waiting_for_approval",
             )
 
         now = datetime.now(UTC)
@@ -672,6 +711,30 @@ def _approval_not_found_response(
         "approved": approved,
         "status": "not_found",
         "reason": "approval_not_found",
+    }
+
+
+def _approval_conflict_response(
+    run_id: str,
+    approval_id: str,
+    *,
+    approved: bool,
+    status: str,
+    reason: str,
+) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "approval_id": approval_id,
+        "approved": approved,
+        "status": status,
+        "reason": reason,
+    }
+
+
+def _is_waiting_for_approval(run: Run) -> bool:
+    return run.dispatch_status is DispatchStatus.WAITING and run.status in {
+        RunStatus.PAUSED,
+        RunStatus.WAITING,
     }
 
 
