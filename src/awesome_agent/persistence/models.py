@@ -220,6 +220,25 @@ class ContextCompactionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class CwdContextSnapshotRecord(Base):
+    __tablename__ = "cwd_context_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_cwd_context_thread_dir_created",
+            "thread_id",
+            "working_directory",
+            "created_at",
+        ),
+    )
+
+    snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    thread_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), index=True)
+    working_directory: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(64), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class TeamAssignmentRecord(Base):
     __tablename__ = "team_assignments"
     __table_args__ = (

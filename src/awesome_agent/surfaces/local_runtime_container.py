@@ -32,10 +32,14 @@ from awesome_agent.persistence.local_approvals import LocalApprovalRepository
 from awesome_agent.persistence.local_artifacts import LocalArtifactMetadataRepository
 from awesome_agent.persistence.local_attachments import LocalAttachmentRepository
 from awesome_agent.persistence.local_conversations import LocalConversationRepository
+from awesome_agent.persistence.local_cwd_context import (
+    LocalCwdContextSnapshotRepository,
+)
 from awesome_agent.persistence.local_dispatch import LocalRunDispatcher
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.providers.factory import ModelProviderFactory
 from awesome_agent.runtime.conversation_graph import ConversationGraph
+from awesome_agent.runtime.cwd_context import CwdContextService
 from awesome_agent.runtime.dispatch import IncompatibleGraphError
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
@@ -79,6 +83,7 @@ class LocalRuntimeContainer:
         self.runtime = LocalRuntimeRepository(database_path)
         self.artifacts = LocalArtifactMetadataRepository(database_path)
         self.attachments = LocalAttachmentRepository(database_path)
+        self.cwd_context_snapshots = LocalCwdContextSnapshotRepository(database_path)
         self.approvals = LocalApprovalRepository(database_path)
         self.dispatcher = LocalRunDispatcher(
             self.runtime,
@@ -112,6 +117,9 @@ class LocalRuntimeContainer:
             repository=self.attachments,
             store=AttachmentContentStore(settings.local_state_dir / "attachments"),
         )
+        self.cwd_context_service = CwdContextService(
+            repository=self.cwd_context_snapshots,
+        )
         self.tool_registry = build_modifying_registry(sandbox=sandbox)
         register_memory_tools(self.tool_registry, self.memory_service)
         register_attachment_tools(self.tool_registry, self.attachment_service)
@@ -140,6 +148,7 @@ class LocalRuntimeContainer:
             extension_catalog_store=self.extension_catalog_store,
             memory_service=self.memory_service,
             attachment_service=self.attachment_service,
+            cwd_context_service=self.cwd_context_service,
         )
         self.conversation_service = ConversationService(
             repository=self.conversations,
@@ -173,6 +182,7 @@ class LocalRuntimeContainer:
         self.runtime.close()
         self.artifacts.close()
         self.attachments.close()
+        self.cwd_context_snapshots.close()
         self.approvals.close()
         self.extension_catalog_store.close()
 
