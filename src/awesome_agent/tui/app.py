@@ -158,12 +158,12 @@ class AwesomeAgentTui(App[None]):
             return
         parsed = parse_slash_command(raw)
         if parsed.kind is SlashCommandKind.USER_MESSAGE:
-            resume_run_id = (
-                self.state.last_resumable_run_id
-                if should_resume_last_run(raw)
-                else None
-            )
-            self._start_user_message(raw, resume_run_id=resume_run_id)
+            if should_resume_last_run(raw):
+                self._start_continue_turn(
+                    expected_run_id=self.state.last_resumable_run_id
+                )
+            else:
+                self._start_user_message(raw)
         else:
             if parsed.kind is not SlashCommandKind.QUIT:
                 self.state = self.state.append(ChatMessage.command(raw))
@@ -276,21 +276,24 @@ class AwesomeAgentTui(App[None]):
         if self.state.active_operation_id is not None:
             if self._active_worker is not None:
                 self._active_worker.cancel()
-            resumable_run_id = (
-                self.state.current_run_id or self.state.active_operation_id
-            )
             if self.state.current_run_id is not None:
                 with suppress(Exception):
-                    self.client.cancel(self.state.current_run_id)
-            self.state = self.state.mark_operation_paused(resumable_run_id).append(
+                    self.client.cancel(
+                        self.state.current_run_id,
+                        thread_id=self.state.backend_thread_id,
+                    )
+            self.state = self.state.with_status("cancelling").append(
                 ChatMessage.system(
-                    'Response paused. Type "continue" to continue.',
+                    "Cancellation requested. Waiting for the runtime to stop safely.",
                     kind=ChatEventKind.RUN,
                 )
             )
         elif self.state.current_run_id is not None:
             try:
-                cancelled = self.client.cancel(self.state.current_run_id)
+                cancelled = self.client.cancel(
+                    self.state.current_run_id,
+                    thread_id=self.state.backend_thread_id,
+                )
                 status = cancelled.get("status", "cancelled")
                 message = ChatMessage.system(
                     f"Cancelled Run {self.state.current_run_id}: status={status}",
@@ -381,12 +384,7 @@ class AwesomeAgentTui(App[None]):
             return raw
         return f"/{active.name}"
 
-    def _start_user_message(
-        self,
-        content: str,
-        *,
-        resume_run_id: str | None = None,
-    ) -> None:
+    def _start_user_message(self, content: str) -> None:
         if self.state.active_operation_id is not None:
             self.state = self.state.append(
                 ChatMessage.system(
@@ -406,7 +404,6 @@ class AwesomeAgentTui(App[None]):
                 lambda: self._conversation_worker(
                     thread_id,
                     content,
-                    resume_run_id,
                 ),
                 thread=True,
                 name=f"conversation-{self.state.active_operation_id}",
@@ -422,7 +419,6 @@ class AwesomeAgentTui(App[None]):
         self,
         thread_id: str,
         content: str,
-        resume_run_id: str | None,
     ) -> None:
         failed = False
         try:
@@ -436,7 +432,6 @@ class AwesomeAgentTui(App[None]):
                     "provider": self.state.provider_memory,
                 },
                 skill_ids=self.state.staged_skill_ids,
-                resume_run_id=resume_run_id,
             ):
                 if stream_event.event is ConversationStreamEventKind.ERROR:
                     failed = True
@@ -451,11 +446,59 @@ class AwesomeAgentTui(App[None]):
                 failed=failed,
             )
 
+    def _start_continue_turn(self, *, expected_run_id: str | None = None) -> None:
+        if self.state.backend_thread_id is None:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    "No active conversation is available to continue.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        if self.state.active_operation_id is not None:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    "Finish or pause the current response first.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        operation_id = str(uuid4())
+        thread_id = self.state.backend_thread_id
+        self.state = self.state.begin_operation(operation_id, "continuing")
+        self._active_worker = self.run_worker(
+            lambda: self._continue_worker(thread_id, expected_run_id),
+            thread=True,
+            name=f"continue-{operation_id}",
+        )
+
+    def _continue_worker(self, thread_id: str, expected_run_id: str | None) -> None:
+        failed = False
+        try:
+            for stream_event in self.client.continue_turn(
+                thread_id,
+                expected_run_id=expected_run_id,
+            ):
+                if stream_event.event is ConversationStreamEventKind.ERROR:
+                    failed = True
+                self.call_from_thread(self._apply_stream_event, stream_event)
+        except Exception as error:
+            failed = True
+            self.call_from_thread(self._record_continue_exception, error)
+        finally:
+            self.call_from_thread(
+                self._finish_stream_worker,
+                "",
+                failed=failed,
+            )
+
     def _apply_stream_event(self, stream_event: ConversationStreamEvent) -> None:
         run_id = stream_event.payload.get("run_id")
         if isinstance(run_id, str):
             self.state = self.state.note_run_started(run_id)
-        if stream_event.event is ConversationStreamEventKind.REASONING_STARTED:
+        if stream_event.event is ConversationStreamEventKind.TURN_CONTINUED:
+            self.state = self.state.begin_turn(str(stream_event.turn_id))
+        elif stream_event.event is ConversationStreamEventKind.REASONING_STARTED:
             if self.state.thinking_mode == "off":
                 return
             self.state = self.state.begin_thought(stream_event.created_at)
@@ -515,10 +558,6 @@ class AwesomeAgentTui(App[None]):
             if stream_event.payload.get("approval_required") is True:
                 prompt = _approval_prompt_from_payload(stream_event.payload)
                 if prompt is not None:
-                    if _session_allow_rule(prompt) in self.state.session_allow_rules:
-                        self.state = self.state.with_approval_prompt(prompt)
-                        self._apply_approval_choice(0)
-                        return
                     self.state = self.state.with_approval_prompt(prompt)
             message = self._format_stream_error(
                 stream_event.payload,
@@ -534,27 +573,51 @@ class AwesomeAgentTui(App[None]):
         prompt = self.state.pending_approval
         if prompt is None:
             return
-        approved = index in {0, 1}
-        if index == 1:
-            self.state = self.state.add_session_allow_rule(_session_allow_rule(prompt))
-        result = self.client.decide_approval(
-            prompt.run_id,
-            prompt.approval_id,
-            approved=approved,
-        )
-        label = "approved" if approved else "denied"
-        status = result.get("status", "-")
-        self.state = self.state.with_approval_prompt(None).append(
-            ChatMessage.system(
-                f"Approval {label}: {prompt.subject} status={status}",
-                kind=ChatEventKind.APPROVAL,
+        if index == 0:
+            self.client.decide_approval(
+                prompt.run_id,
+                prompt.approval_id,
+                approved=True,
+                thread_id=self.state.backend_thread_id,
             )
-        )
+            self.state = self.state.with_approval_prompt(None).append(
+                ChatMessage.system(
+                    "Approved once. Continuing response.",
+                    kind=ChatEventKind.APPROVAL,
+                )
+            )
+            self._start_continue_turn(expected_run_id=prompt.run_id)
+        elif index == 1:
+            self.client.decide_approval(
+                prompt.run_id,
+                prompt.approval_id,
+                approved=False,
+                thread_id=self.state.backend_thread_id,
+            )
+            self.state = self.state.with_approval_prompt(None).append(
+                ChatMessage.system(
+                    "Denied. Continuing response with the denied tool result.",
+                    kind=ChatEventKind.APPROVAL,
+                )
+            )
+            self._start_continue_turn(expected_run_id=prompt.run_id)
+        elif index == 2:
+            self.client.cancel(prompt.run_id, thread_id=self.state.backend_thread_id)
+            self.state = self.state.with_approval_prompt(None).append(
+                ChatMessage.system("Cancelling Run...", kind=ChatEventKind.RUN)
+            )
         self._render()
         self._focus_prompt()
 
     def _record_stream_exception(self, content: str, error: Exception) -> None:
         self.state = self.state.with_last_failed_user_message(content)
+        self.state = self.state.append(
+            ChatMessage.system(self._format_error(error), kind=ChatEventKind.ERROR)
+        )
+        self._render()
+        self._focus_prompt()
+
+    def _record_continue_exception(self, error: Exception) -> None:
         self.state = self.state.append(
             ChatMessage.system(self._format_error(error), kind=ChatEventKind.ERROR)
         )
@@ -1154,10 +1217,3 @@ def _approval_prompt_from_payload(
         subject=subject,
         approval_type=approval_type,
     )
-
-
-def _session_allow_rule(prompt: ApprovalPromptState) -> str:
-    if prompt.approval_type == "command":
-        command_family = prompt.subject.strip().split(maxsplit=1)[0].casefold()
-        return f"command:{command_family or 'unknown'}"
-    return "edit:*"

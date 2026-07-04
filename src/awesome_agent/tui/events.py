@@ -27,18 +27,12 @@ class ApprovalPromptState:
     active_index: int = 0
 
     @property
+    def options(self) -> tuple[str, str, str]:
+        return ("approve once", "deny", "cancel run")
+
+    @property
     def choices(self) -> tuple[str, str, str]:
-        if self.approval_type == "command":
-            return (
-                "Yes",
-                "Yes, allow similar commands during this session",
-                "No",
-            )
-        return (
-            "Yes",
-            "Yes, allow all file edits during this session",
-            "No",
-        )
+        return self.options
 
     def move(self, delta: int) -> ApprovalPromptState:
         return ApprovalPromptState(

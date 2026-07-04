@@ -215,8 +215,9 @@ def test_approval_prompt_renders_choices() -> None:
 
     assert "Leader wants to create:" in rendered
     assert "snake-game.html" in rendered
-    assert "> 1. Yes" in rendered
-    assert "allow all file edits during this session" in rendered
+    assert "> 1. approve once" in rendered
+    assert "2. deny" in rendered
+    assert "3. cancel run" in rendered
 
 
 def test_changed_files_render_workspace_relative_paths() -> None:
