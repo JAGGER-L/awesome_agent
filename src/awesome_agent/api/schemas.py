@@ -58,6 +58,7 @@ class ContinueConversationTurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_run_id: UUID | None = None
+    after_sequence: int = Field(default=0, ge=0)
 
 
 class ErrorResponse(BaseModel):

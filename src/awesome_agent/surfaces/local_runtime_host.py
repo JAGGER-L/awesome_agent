@@ -255,6 +255,7 @@ class LocalRuntimeHost:
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
         yield from _iter_async_in_thread(
             self._continue_turn_async(
@@ -262,6 +263,7 @@ class LocalRuntimeHost:
                 expected_run_id=UUID(expected_run_id)
                 if expected_run_id is not None
                 else None,
+                after_sequence=after_sequence,
             )
         )
 
@@ -270,11 +272,13 @@ class LocalRuntimeHost:
         *,
         thread_id: UUID,
         expected_run_id: UUID | None,
+        after_sequence: int,
     ) -> AsyncIterator[ConversationStreamEvent]:
         drained_run_ids: set[UUID] = set()
         async for event in self._conversation.continue_turn(
             thread_id=thread_id,
             expected_run_id=expected_run_id,
+            after_sequence=after_sequence,
         ):
             yield event
             if event.event is not ConversationStreamEventKind.TURN_CONTINUED:

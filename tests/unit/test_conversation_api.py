@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 from fastapi.testclient import TestClient
@@ -79,6 +80,56 @@ def test_conversation_turn_accepts_runtime_options() -> None:
         "memory": {"local_enabled": True, "provider": "mem0"},
         "skill_ids": ["repository-inspection"],
     }
+
+
+def test_continue_turn_stream_uses_after_sequence_for_runtime_catchup() -> None:
+    client = _client()
+    thread = client.post(
+        "/threads",
+        json={"title": "Catchup", "context_path": "E:/project"},
+    ).json()
+    first_response = client.post(
+        f"/threads/{thread['id']}/turns/stream",
+        json={"content": "hello?"},
+    )
+    assert first_response.status_code == 200
+    first_events = _sse_events(first_response.text)
+    run_id = next(
+        event["run_id"] for event in first_events if event["event"] == "turn.started"
+    )
+    first_delta = next(
+        event for event in first_events if event["event"] == "message.delta"
+    )
+
+    response = client.post(
+        f"/threads/{thread['id']}/turns/continue/stream",
+        json={
+            "expected_run_id": run_id,
+            "after_sequence": first_delta["runtime_sequence"],
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    assert all(
+        event.get("runtime_sequence") is None
+        or event["runtime_sequence"] > first_delta["runtime_sequence"]
+        for event in events
+    )
+    assert events[-1]["event"] in {"turn.completed", "error"}
+
+
+def _sse_events(body: str) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for block in body.strip().split("\n\n"):
+        data_lines = [
+            line.removeprefix("data:").strip()
+            for line in block.splitlines()
+            if line.startswith("data:")
+        ]
+        if data_lines:
+            events.append(json.loads("\n".join(data_lines)))
+    return events
 
 
 def _client(

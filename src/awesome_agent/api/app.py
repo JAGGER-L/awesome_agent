@@ -802,10 +802,22 @@ def create_app(
     async def continue_conversation_turn(
         thread_id: UUID,
         request: ContinueConversationTurnRequest,
+        http_request: Request,
     ) -> StreamingResponse:
         try:
-            run = await conversations().latest_resumable_thread_run(thread_id)
+            run = await conversations().continuable_thread_run(
+                thread_id,
+                expected_run_id=request.expected_run_id,
+            )
             if run is None:
+                if request.expected_run_id is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "resumable_run_changed",
+                            "message": "The requested Run is not continuable.",
+                        },
+                    )
                 raise HTTPException(
                     status_code=409,
                     detail={
@@ -813,20 +825,12 @@ def create_app(
                         "message": "No resumable turn is available for this thread.",
                     },
                 )
-            if (
-                request.expected_run_id is not None
-                and request.expected_run_id != run.id
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "resumable_run_changed",
-                        "message": "The resumable Run changed.",
-                    },
-                )
+            header_after_sequence = _last_event_id_sequence(http_request)
+            after_sequence = max(request.after_sequence, header_after_sequence)
             events = conversations().continue_turn(
                 thread_id=thread_id,
                 expected_run_id=request.expected_run_id,
+                after_sequence=after_sequence,
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
@@ -1463,6 +1467,13 @@ def _redacted_dict(value: Mapping[str, object]) -> dict[str, object]:
     if isinstance(redacted, Mapping):
         return {str(key): item for key, item in redacted.items()}
     return {}
+
+
+def _last_event_id_sequence(request: Request) -> int:
+    value = request.headers.get("last-event-id")
+    if value is None or not value.isdigit():
+        return 0
+    return int(value)
 
 
 def _is_text_artifact(mime_type: str, path: Path) -> bool:

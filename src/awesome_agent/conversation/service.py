@@ -100,13 +100,15 @@ class ConversationService:
         *,
         thread_id: UUID,
         expected_run_id: UUID | None = None,
+        after_sequence: int = 0,
     ) -> AsyncIterator[ConversationStreamEvent]:
         await self._repository.get_thread(thread_id)
-        run = await self.latest_resumable_thread_run(thread_id)
+        run = await self.continuable_thread_run(
+            thread_id,
+            expected_run_id=expected_run_id,
+        )
         if run is None:
             raise ValueError("no_resumable_turn")
-        if expected_run_id is not None and expected_run_id != run.id:
-            raise ValueError("resumable_run_changed")
 
         stream_id = uuid4()
         trace_id = uuid4().hex
@@ -124,6 +126,7 @@ class ConversationService:
                 "status": run.status.value,
                 "dispatch_status": run.dispatch_status.value,
                 "resumed": True,
+                "after_sequence": after_sequence,
             },
         )
         async for projected in self._project_run_events(
@@ -131,10 +134,21 @@ class ConversationService:
             turn_id=stream_id,
             trace_id=trace_id,
             run_id=run.id,
-            after_sequence=0,
+            after_sequence=after_sequence,
         ):
             sequence += 1
             yield projected.model_copy(update={"sequence": sequence})
+
+    async def continuable_thread_run(
+        self,
+        thread_id: UUID,
+        *,
+        expected_run_id: UUID | None = None,
+    ) -> Run | None:
+        await self._repository.get_thread(thread_id)
+        if expected_run_id is not None:
+            return await self._thread_run_by_id(thread_id, expected_run_id)
+        return await self.latest_resumable_thread_run(thread_id)
 
     async def latest_resumable_thread_run(self, thread_id: UUID) -> Run | None:
         await self._repository.get_thread(thread_id)
@@ -159,6 +173,18 @@ class ConversationService:
             reverse=True,
         )
         return candidates[0][1]
+
+    async def _thread_run_by_id(self, thread_id: UUID, run_id: UUID) -> Run | None:
+        try:
+            run = await self._runtime_repository.get_run(run_id)
+        except KeyError:
+            return None
+        created_event = await self._run_created_event(run.id)
+        if created_event is None:
+            return None
+        if created_event.payload.get("thread_id") != str(thread_id):
+            return None
+        return run
 
     async def list_thread_runs(self, thread_id: UUID) -> list[dict[str, object]]:
         await self._repository.get_thread(thread_id)
@@ -214,6 +240,17 @@ class ConversationService:
                 after_sequence=last_sequence,
             )
             if not runtime_events:
+                try:
+                    run = await self._runtime_repository.get_run(run_id)
+                except KeyError:
+                    return
+                if run.status in {
+                    RunStatus.COMPLETED,
+                    RunStatus.FAILED,
+                    RunStatus.CANCELLED,
+                    RunStatus.RECOVERY_REQUIRED,
+                }:
+                    return
                 await asyncio.sleep(max(self._event_poll_interval, 0.001))
                 continue
             for runtime_event in runtime_events:
