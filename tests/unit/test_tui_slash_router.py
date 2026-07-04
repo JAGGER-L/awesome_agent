@@ -21,8 +21,8 @@ class FakeSemanticClient:
     def runtime_status(self) -> dict[str, object]:
         return {"api": "ready", "sandbox": "local"}
 
-    def list_models(self) -> list[dict[str, object]]:
-        return [{"name": "deepseek-v4-pro", "role": "leader"}]
+    def list_models(self) -> dict[str, object]:
+        return _model_catalog(configured=False)
 
     def memory_summary(self) -> dict[str, object]:
         return {
@@ -186,3 +186,31 @@ def _summary(
         model_api_key_env="AWESOME_AGENT_DEEPSEEK_API_KEY",
         model_api_key_configured=model_api_key_configured,
     )
+
+
+def _model_catalog(*, configured: bool = True) -> dict[str, object]:
+    return {
+        "providers": [
+            {
+                "id": "deepseek",
+                "display_name": "DeepSeek",
+                "configured": configured,
+                "credential_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                "api_key_present": configured,
+                "models": [
+                    {
+                        "id": "deepseek-v4-pro",
+                        "display_name": "DeepSeek V4 Pro",
+                        "provider_id": "deepseek",
+                        "capabilities": ["streaming", "tools", "reasoning"],
+                        "recommended_for": ["leader"],
+                        "selected": True,
+                    }
+                ],
+            }
+        ],
+        "current": {
+            "provider_id": "deepseek",
+            "model_id": "deepseek-v4-pro",
+        },
+    }

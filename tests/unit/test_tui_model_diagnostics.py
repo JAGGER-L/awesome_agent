@@ -16,18 +16,32 @@ class ModelClient(ChatSemanticClient):
     def runtime_status(self) -> dict[str, object]:
         raise AssertionError("not used by this test")
 
-    def list_models(self) -> list[dict[str, object]]:
-        return [
-            {
-                "role": "leader",
-                "name": "deepseek-v4-pro",
-                "provider": "deepseek",
-                "configured": True,
-                "api_key_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
-                "api_key_present": True,
-                "base_url": "https://api.deepseek.com",
-            }
-        ]
+    def list_models(self) -> dict[str, object]:
+        return {
+            "providers": [
+                {
+                    "id": "deepseek",
+                    "display_name": "DeepSeek",
+                    "configured": True,
+                    "credential_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                    "api_key_present": True,
+                    "models": [
+                        {
+                            "id": "deepseek-v4-pro",
+                            "display_name": "DeepSeek V4 Pro",
+                            "provider_id": "deepseek",
+                            "capabilities": ["streaming", "tools", "reasoning"],
+                            "recommended_for": ["leader"],
+                            "selected": True,
+                        }
+                    ],
+                }
+            ],
+            "current": {
+                "provider_id": "deepseek",
+                "model_id": "deepseek-v4-pro",
+            },
+        }
 
     def memory_summary(self) -> dict[str, object]:
         raise AssertionError("not used by this test")
@@ -71,9 +85,10 @@ def test_model_output_includes_last_turn_metadata() -> None:
     )
 
     assert "Models" in message.content
-    assert "leader: deepseek-v4-pro" in message.content
+    assert "DeepSeek" in message.content
+    assert "DeepSeek V4 Pro" in message.content
     assert "configured=yes" in message.content
-    assert "base_url: https://api.deepseek.com" in message.content
+    assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in message.content
     assert "last turn: requested=deepseek-v4-pro" in message.content
     assert "response_id=response-123" in message.content
     assert "self-description is not authoritative" in message.content
@@ -101,6 +116,6 @@ def test_model_output_uses_first_run_summary_without_secret(tmp_path: Path) -> N
         state,
     )
 
-    assert "default: deepseek-v4-pro" in message.content
+    assert "deepseek-v4-pro" in message.content
     assert "present=no" in message.content
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in message.content

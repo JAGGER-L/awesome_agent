@@ -785,28 +785,28 @@ class AwesomeAgentTui(App[None]):
             )
             return
         if parsed.kind is SlashCommandKind.MODEL:
-            models = self.client.list_models()
+            catalog = self.client.list_models()
+            providers = _model_catalog_providers(catalog)
             items = [
                 PickerItem(
-                    id=str(item.get("name") or item.get("id") or "model"),
-                    label=str(
-                        item.get("display_name")
-                        or item.get("name")
-                        or item.get("id")
-                        or "Model"
+                    id=str(provider.get("id")),
+                    label=str(provider.get("display_name") or provider.get("id")),
+                    description=(
+                        "configured"
+                        if provider.get("configured") is True
+                        else f"missing {provider.get('credential_env')}"
                     ),
-                    disabled=item.get("configured") is False,
+                    disabled=provider.get("configured") is not True,
                 )
-                for item in models
-            ] or [
-                PickerItem(id=self.state.current_model, label=self.state.current_model)
-            ]
+                for provider in providers
+                if provider.get("id")
+            ] or [PickerItem(id="none", label="No providers available", disabled=True)]
             self.state = self.state.open_picker(
                 PickerState.open(
-                    kind="model",
-                    title="Select model for this conversation",
+                    kind="model_provider",
+                    title="Select provider",
                     items=items,
-                    selected_id=self.state.current_model,
+                    selected_id=_current_provider_id(catalog),
                 )
             )
             return
@@ -879,11 +879,32 @@ class AwesomeAgentTui(App[None]):
             return
         item = picker.apply()
         if item is None:
-            self.state = self.state.close_picker()
+            if picker.kind == "model_provider" and picker.items:
+                active = picker.active_item
+                if active.disabled:
+                    self.state = self.state.close_picker().append(
+                        ChatMessage.system(
+                            (
+                                "Set AWESOME_AGENT_DEEPSEEK_API_KEY before "
+                                "selecting DeepSeek."
+                            ),
+                            kind=ChatEventKind.ERROR,
+                        )
+                    )
+                else:
+                    self.state = self.state.close_picker()
+            else:
+                self.state = self.state.close_picker()
             self._render()
             return
-        if picker.kind == "model":
-            self.state = self.state.with_model(item.id).close_picker()
+        if picker.kind == "model_provider":
+            self._open_model_picker(item.id)
+        elif picker.kind == "model_model":
+            self.state = (
+                self.state.with_model(item.id)
+                .with_pending_model_provider(None)
+                .close_picker()
+            )
             self._persist_thread_settings(default_model=item.id)
             self.state = self.state.append(
                 ChatMessage.system(
@@ -927,6 +948,57 @@ class AwesomeAgentTui(App[None]):
                 )
         self._render()
         self._focus_prompt()
+
+    def _open_model_picker(self, provider_id: str) -> None:
+        catalog = self.client.list_models()
+        provider = next(
+            (
+                item
+                for item in _model_catalog_providers(catalog)
+                if item.get("id") == provider_id
+            ),
+            None,
+        )
+        if provider is None:
+            self.state = self.state.close_picker().append(
+                ChatMessage.system(
+                    f"Provider is not available: {provider_id}",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        raw_models = provider.get("models")
+        models = raw_models if isinstance(raw_models, list) else []
+        items = [
+            PickerItem(
+                id=str(model.get("id")),
+                label=str(model.get("display_name") or model.get("id")),
+                description=", ".join(
+                    str(role)
+                    for role in model.get("recommended_for", [])
+                    if isinstance(role, str)
+                ),
+                disabled=False,
+            )
+            for model in models
+            if isinstance(model, dict) and model.get("id")
+        ]
+        if not items:
+            self.state = self.state.close_picker().append(
+                ChatMessage.system(
+                    f"No models are available for provider: {provider_id}",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        self.state = self.state.with_pending_model_provider(provider_id).open_picker(
+            PickerState.open(
+                kind="model_model",
+                title=f"{provider.get('display_name') or provider_id} models",
+                items=items,
+                selected_id=self.state.current_model,
+            )
+        )
 
     def _open_memory_picker(self, item_id: str) -> None:
         if item_id == "local":
@@ -1254,6 +1326,21 @@ def _memory_entry_lines(entries: list[dict[str, object]]) -> list[str]:
         content = str(entry.get("content") or "")
         lines.append(f"  {memory_id} {content}")
     return lines
+
+
+def _model_catalog_providers(catalog: dict[str, object]) -> list[dict[str, object]]:
+    providers = catalog.get("providers")
+    if not isinstance(providers, list):
+        return []
+    return [dict(item) for item in providers if isinstance(item, dict)]
+
+
+def _current_provider_id(catalog: dict[str, object]) -> str | None:
+    current = catalog.get("current")
+    if not isinstance(current, dict):
+        return None
+    value = current.get("provider_id")
+    return value if isinstance(value, str) else None
 
 
 def _stream_event_run_id(event: ConversationStreamEvent) -> str | None:

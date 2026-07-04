@@ -113,6 +113,7 @@ class ChatSessionState:
     provider_memory: str | None = None
     staged_skill_ids: tuple[str, ...] = ()
     pending_attachments: tuple[dict[str, object], ...] = ()
+    pending_model_provider_id: str | None = None
     active_picker: PickerState | None = None
     pending_approval: ApprovalPromptState | None = None
     last_requested_model: str | None = None
@@ -198,6 +199,7 @@ class ChatSessionState:
             thought_blocks={},
             staged_skill_ids=(),
             pending_attachments=(),
+            pending_model_provider_id=None,
             active_picker=None,
             pending_approval=None,
             status_label="ready",
@@ -210,6 +212,12 @@ class ChatSessionState:
 
     def with_model(self, model_id: str) -> ChatSessionState:
         return replace(self, current_model=model_id)
+
+    def with_pending_model_provider(
+        self,
+        provider_id: str | None,
+    ) -> ChatSessionState:
+        return replace(self, pending_model_provider_id=provider_id)
 
     def with_thinking(self, mode: str) -> ChatSessionState:
         if mode not in {"on_high", "on_max", "off"}:
