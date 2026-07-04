@@ -126,7 +126,12 @@ class SurfaceClient(Protocol):
 
     def config_summary(self) -> dict[str, object]: ...
 
-    def cancel(self, run_id: str) -> dict[str, Any]: ...
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]: ...
 
     def decide_approval(
         self,
@@ -134,6 +139,7 @@ class SurfaceClient(Protocol):
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 

@@ -116,7 +116,12 @@ class LocalSurfaceClient:
     def config_summary(self) -> dict[str, object]:
         return self.host.config_summary()
 
-    def cancel(self, run_id: str) -> dict[str, Any]:
+    def cancel(
+        self,
+        run_id: str,
+        *,
+        thread_id: str | None = None,
+    ) -> dict[str, Any]:
         return dict(self.host.cancel(run_id))
 
     def decide_approval(
@@ -125,6 +130,7 @@ class LocalSurfaceClient:
         approval_id: str,
         *,
         approved: bool,
+        thread_id: str | None = None,
     ) -> dict[str, Any]:
         return dict(
             self.host.decide_approval(

@@ -22,6 +22,7 @@ from awesome_agent.api.schemas import (
     BudgetLedgerResponse,
     ConfigStatusResponse,
     ContextCompactionResponse,
+    ContinueConversationTurnRequest,
     CreateConversationTurnRequest,
     CreateProbeRequest,
     CreateThreadMessageRequest,
@@ -676,15 +677,15 @@ def create_app(
             for thread in await threads().list_threads()
         ]
 
-    @app.get("/threads/resume")
-    async def resume_thread(query: str) -> dict[str, object]:
+    @app.get("/threads/resolve")
+    async def resolve_thread(query: str) -> dict[str, object]:
         try:
             thread = await threads().resolve_thread(query)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
         return _redacted_dict(thread.api_payload())
 
-    @app.get("/threads/{thread_id}")
+    @app.get("/threads/{thread_id:uuid}")
     async def get_thread(thread_id: UUID) -> dict[str, object]:
         try:
             thread = await threads().get_thread(thread_id)
@@ -778,7 +779,7 @@ def create_app(
             threshold_status=ledger.threshold_status,
         )
 
-    @app.post("/threads/{thread_id}/turns")
+    @app.post("/threads/{thread_id}/turns/stream")
     async def create_conversation_turn(
         thread_id: UUID,
         request: CreateConversationTurnRequest,
@@ -797,6 +798,43 @@ def create_app(
             media_type="text/event-stream",
         )
 
+    @app.post("/threads/{thread_id}/turns/continue/stream")
+    async def continue_conversation_turn(
+        thread_id: UUID,
+        request: ContinueConversationTurnRequest,
+    ) -> StreamingResponse:
+        try:
+            run = await conversations().latest_resumable_thread_run(thread_id)
+            if run is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "no_resumable_turn",
+                        "message": "No resumable turn is available for this thread.",
+                    },
+                )
+            if (
+                request.expected_run_id is not None
+                and request.expected_run_id != run.id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "resumable_run_changed",
+                        "message": "The resumable Run changed.",
+                    },
+                )
+            events = conversations().continue_turn(
+                thread_id=thread_id,
+                expected_run_id=request.expected_run_id,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Thread not found.") from error
+        return StreamingResponse(
+            _conversation_sse(events),
+            media_type="text/event-stream",
+        )
+
     @app.get("/threads/{thread_id}/runs")
     async def list_thread_runs(thread_id: UUID) -> list[dict[str, object]]:
         try:
@@ -807,6 +845,49 @@ def create_app(
             projections,
             getattr(app.state, "runtime", None),
         )
+
+    @app.post("/threads/{thread_id}/runs/{run_id}/cancel")
+    async def cancel_thread_run(thread_id: UUID, run_id: UUID) -> dict[str, object]:
+        await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
+        try:
+            run = await runtime().cancel_run(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found.") from error
+        except DispatchConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return _redacted_dict(run.model_dump(mode="json"))
+
+    @app.get("/threads/{thread_id}/runs/{run_id}/approvals")
+    async def list_thread_run_approvals(
+        thread_id: UUID,
+        run_id: UUID,
+    ) -> list[dict[str, object]]:
+        await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
+        return [
+            _redacted_dict(event.model_dump(mode="json"))
+            for event in await runtime().list_events(run_id)
+            if event.event_type.value.startswith("approval.")
+        ]
+
+    @app.post("/threads/{thread_id}/runs/{run_id}/approvals/{approval_id}")
+    async def decide_thread_run_approval(
+        thread_id: UUID,
+        run_id: UUID,
+        approval_id: UUID,
+        request: ApprovalDecisionRequest,
+    ) -> dict[str, object]:
+        await _assert_run_belongs_to_thread(conversations(), thread_id, run_id)
+        try:
+            event = await runtime().decide_approval(
+                run_id,
+                approval_id=approval_id,
+                approved=request.approved,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Run not found.") from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return _redacted_dict(event.model_dump(mode="json"))
 
     @app.get("/runs")
     async def list_runs(
@@ -927,26 +1008,6 @@ def create_app(
                 else None
             ),
         )
-
-    @app.post("/runs/{run_id}/cancel")
-    async def cancel_run(run_id: UUID) -> dict[str, object]:
-        try:
-            run = await runtime().cancel_run(run_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Run not found.") from error
-        except DispatchConflict as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return _redacted_dict(run.model_dump(mode="json"))
-
-    @app.post("/runs/{run_id}/resume")
-    async def resume_run(run_id: UUID) -> dict[str, object]:
-        try:
-            run = await runtime().resume_run(run_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Run not found.") from error
-        except ValueError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return _redacted_dict(run.model_dump(mode="json"))
 
     @app.get("/runs/{run_id}/agents")
     async def list_agents(run_id: UUID) -> list[dict[str, object]]:
@@ -1092,24 +1153,6 @@ def create_app(
             for event in await runtime().list_events(run_id)
             if event.event_type.value.startswith("approval.")
         ]
-
-    @app.post("/runs/{run_id}/approvals/{approval_id}")
-    async def decide_approval(
-        run_id: UUID,
-        approval_id: UUID,
-        request: ApprovalDecisionRequest,
-    ) -> dict[str, object]:
-        try:
-            event = await runtime().decide_approval(
-                run_id,
-                approval_id=approval_id,
-                approved=request.approved,
-            )
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Run not found.") from error
-        except ValueError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return _redacted_dict(event.model_dump(mode="json"))
 
     @app.get("/runs/{run_id}/verification")
     async def list_verification(run_id: UUID) -> list[dict[str, object]]:
@@ -1300,7 +1343,14 @@ def _structured_error_response(
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     message = redact_text(_error_message(detail)).text
-    classified_code = code or _classify_error(status_code, message)
+    classified_code = (
+        code
+        or _error_code(detail)
+        or _classify_error(
+            status_code,
+            message,
+        )
+    )
     request_id = str(getattr(request.state, "request_id", "") or uuid4().hex)
     payload = ErrorResponse(
         code=classified_code,
@@ -1330,6 +1380,13 @@ def _error_message(detail: object) -> str:
         if isinstance(message, str):
             return message
     return str(detail)
+
+
+def _error_code(detail: object) -> str | None:
+    if not isinstance(detail, dict):
+        return None
+    code = detail.get("code")
+    return code if isinstance(code, str) and code else None
 
 
 def _classify_error(status_code: int, message: str) -> str:
@@ -1620,6 +1677,22 @@ async def _thread_run_ids(
         except (KeyError, TypeError, ValueError):
             continue
     return run_ids
+
+
+async def _assert_run_belongs_to_thread(
+    conversation_service: ConversationService,
+    thread_id: UUID,
+    run_id: UUID,
+) -> None:
+    try:
+        projections = await conversation_service.list_thread_runs(thread_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Thread not found.") from error
+    if not any(
+        str(projection.get("run_id") or projection.get("id")) == str(run_id)
+        for projection in projections
+    ):
+        raise HTTPException(status_code=404, detail="Run not found for thread.")
 
 
 async def _thread_artifact_items(

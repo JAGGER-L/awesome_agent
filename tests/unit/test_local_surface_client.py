@@ -307,7 +307,7 @@ def test_local_surface_client_cancel_delegates_to_host() -> None:
     host = FakeHost()
     client = LocalSurfaceClient(host=cast(Any, host))
 
-    result = client.cancel("run-1")
+    result = client.cancel("run-1", thread_id="thread-1")
 
     assert host.cancelled == ["run-1"]
     assert result == {
@@ -504,7 +504,12 @@ def test_local_surface_client_approval_delegates_without_fake_unsupported() -> N
     host = FakeHost()
     client = LocalSurfaceClient(host=cast(Any, host))
 
-    result = client.decide_approval("run-1", "approval-1", approved=False)
+    result = client.decide_approval(
+        "run-1",
+        "approval-1",
+        approved=False,
+        thread_id="thread-1",
+    )
 
     assert host.approvals == [("run-1", "approval-1", False)]
     assert result == {

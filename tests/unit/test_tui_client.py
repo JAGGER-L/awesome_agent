@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from awesome_agent.tui.client import TuiApiClient
 
@@ -33,12 +34,56 @@ def test_tui_client_decides_approval() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    result = client.decide_approval("run-1", "approval-1", approved=False)
+    result = client.decide_approval(
+        "run-1",
+        "approval-1",
+        approved=False,
+        thread_id="thread-1",
+    )
 
     assert result["event_type"] == "approval.decided"
     assert requests[0].method == "POST"
-    assert requests[0].url.path == "/runs/run-1/approvals/approval-1"
+    assert requests[0].url.path == "/threads/thread-1/runs/run-1/approvals/approval-1"
     assert requests[0].read() == b'{"approved":false}'
+
+
+def test_tui_client_decide_approval_requires_thread_id() -> None:
+    client = TuiApiClient(
+        "http://127.0.0.1:8000",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+
+    with pytest.raises(ValueError, match="thread_id"):
+        client.decide_approval("run-1", "approval-1", approved=False)
+
+
+def test_tui_client_cancel_uses_thread_scoped_endpoint() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"id": "run-1", "status": "cancelled"})
+
+    client = TuiApiClient(
+        "http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = client.cancel("run-1", thread_id="thread-1")
+
+    assert result["status"] == "cancelled"
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == "/threads/thread-1/runs/run-1/cancel"
+
+
+def test_tui_client_cancel_requires_thread_id() -> None:
+    client = TuiApiClient(
+        "http://127.0.0.1:8000",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+
+    with pytest.raises(ValueError, match="thread_id"):
+        client.cancel("run-1")
 
 
 def test_tui_client_reads_runtime_status_models_and_memory() -> None:
@@ -72,8 +117,10 @@ def test_tui_client_reads_runtime_status_models_and_memory() -> None:
 
 def test_tui_client_sends_turn_options() -> None:
     bodies: list[bytes] = []
+    paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
         bodies.append(request.read())
         payload = (
             '{"event":"message.completed",'
@@ -106,6 +153,7 @@ def test_tui_client_sends_turn_options() -> None:
     )
 
     assert events[0].payload["content"] == "ok"
+    assert paths == ["/threads/thread-1/turns/stream"]
     assert bodies == [
         (
             b'{"content":"hi","model":"deepseek-v4-flash","thinking_mode":"off",'
@@ -113,6 +161,39 @@ def test_tui_client_sends_turn_options() -> None:
             b'"skill_ids":["repository-inspection"]}'
         )
     ]
+
+
+def test_tui_client_continues_turn_with_expected_run_id() -> None:
+    bodies: list[bytes] = []
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        bodies.append(request.read())
+        payload = (
+            '{"event":"turn.continued",'
+            '"thread_id":"00000000-0000-0000-0000-000000000001",'
+            '"turn_id":"00000000-0000-0000-0000-000000000002",'
+            '"sequence":1,'
+            '"trace_id":"trace",'
+            '"payload":{"run_id":"run-1","resumed":true}}'
+        )
+        return httpx.Response(
+            200,
+            text=f"event: turn.continued\ndata: {payload}\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = TuiApiClient(
+        "http://127.0.0.1:8000",
+        transport=httpx.MockTransport(handler),
+    )
+
+    events = list(client.continue_turn("thread-1", expected_run_id="run-1"))
+
+    assert events[0].payload["run_id"] == "run-1"
+    assert paths == ["/threads/thread-1/turns/continue/stream"]
+    assert bodies == [b'{"expected_run_id":"run-1"}']
 
 
 def test_tui_client_reads_surface_capability_endpoints() -> None:
@@ -174,7 +255,7 @@ def test_tui_client_resumes_thread_and_reads_messages() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested_paths.append(request.url.path)
-        if request.url.path == "/threads/resume":
+        if request.url.path == "/threads/resolve":
             assert request.url.params["query"] == "snake"
             return httpx.Response(
                 200,
@@ -198,7 +279,7 @@ def test_tui_client_resumes_thread_and_reads_messages() -> None:
     assert thread.id == "thread-1"
     assert thread.context_label == "E:\\repo"
     assert messages[0]["content"] == "hi"
-    assert requested_paths == ["/threads/resume", "/threads/thread-1/messages"]
+    assert requested_paths == ["/threads/resolve", "/threads/thread-1/messages"]
 
 
 def test_tui_client_finds_last_resumable_run_from_thread_runs() -> None:
