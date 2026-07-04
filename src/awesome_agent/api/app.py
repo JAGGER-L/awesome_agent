@@ -38,7 +38,7 @@ from awesome_agent.api.schemas import (
     MemoryEntriesResponse,
     MemoryEntryResponse,
     MemoryStatusResponse,
-    ModelProfileResponse,
+    ModelCatalogResponse,
     ReadinessReportResponse,
     SurfaceToolsResponse,
     ThreadArtifactsResponse,
@@ -85,6 +85,7 @@ from awesome_agent.memory.external import NoopMemoryProvider
 from awesome_agent.memory.models import MemoryTarget
 from awesome_agent.memory.policy import MemoryPolicy
 from awesome_agent.memory.service import MemoryService
+from awesome_agent.modeling.catalog import ModelCatalog
 from awesome_agent.observability.facade import (
     ObservabilityFacade,
     ObservabilitySpanInput,
@@ -637,8 +638,10 @@ def create_app(
             return _readiness_report_response(report)
 
     @app.get("/models")
-    async def list_model_profiles() -> list[ModelProfileResponse]:
-        return _model_profiles(settings)
+    async def list_model_profiles() -> ModelCatalogResponse:
+        return ModelCatalogResponse.model_validate(
+            ModelCatalog.from_settings(settings).response_payload()
+        )
 
     @app.get("/surface/tools")
     async def get_surface_tools() -> SurfaceToolsResponse:
@@ -1843,29 +1846,6 @@ def _workspace_candidate_response(
         dirty=candidate.dirty,
         can_cleanup=candidate.can_cleanup,
     )
-
-
-def _model_profiles(settings: Settings) -> list[ModelProfileResponse]:
-    roles = [
-        ("leader", settings.leader_model),
-        ("teammate", settings.teammate_model),
-        ("verifier", settings.verifier_model),
-        ("subagent", settings.subagent_model),
-    ]
-    return [
-        ModelProfileResponse(
-            role=role,
-            name=model,
-            provider="deepseek",
-            configured=settings.deepseek_api_key is not None,
-            api_key_env="AWESOME_AGENT_DEEPSEEK_API_KEY",
-            api_key_present=settings.deepseek_api_key is not None,
-            base_url=settings.deepseek_base_url,
-            source="settings",
-            overridden_by_env=False,
-        )
-        for role, model in roles
-    ]
 
 
 async def _thread_run_ids(

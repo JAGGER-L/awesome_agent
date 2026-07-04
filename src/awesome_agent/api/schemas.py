@@ -152,16 +152,32 @@ class ContextCompactionResponse(BaseModel):
     created_at: datetime
 
 
-class ModelProfileResponse(BaseModel):
-    role: str
-    name: str
-    provider: str
+class ModelItemResponse(BaseModel):
+    id: str
+    display_name: str
+    provider_id: str
+    capabilities: list[str] = Field(default_factory=list)
+    recommended_for: list[str] = Field(default_factory=list)
+    selected: bool = False
+
+
+class ModelProviderResponse(BaseModel):
+    id: str
+    display_name: str
     configured: bool
-    api_key_env: str
+    credential_env: str
     api_key_present: bool
-    base_url: str | None = None
-    source: str = "settings"
-    overridden_by_env: bool = False
+    models: list[ModelItemResponse] = Field(default_factory=list)
+
+
+class CurrentModelResponse(BaseModel):
+    provider_id: str
+    model_id: str
+
+
+class ModelCatalogResponse(BaseModel):
+    providers: list[ModelProviderResponse] = Field(default_factory=list)
+    current: CurrentModelResponse
 
 
 class SurfaceToolItemResponse(BaseModel):

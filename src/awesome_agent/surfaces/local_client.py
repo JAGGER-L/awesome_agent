@@ -111,8 +111,8 @@ class LocalSurfaceClient:
     def runtime_status(self) -> dict[str, object]:
         return self.host.runtime_status()
 
-    def list_models(self) -> list[dict[str, Any]]:
-        return [dict(item) for item in self.host.list_models()]
+    def list_models(self) -> dict[str, Any]:
+        return dict(self.host.list_models())
 
     def memory_summary(self) -> dict[str, object]:
         return self.host.memory_summary()

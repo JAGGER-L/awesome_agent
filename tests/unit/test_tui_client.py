@@ -99,7 +99,38 @@ def test_tui_client_reads_runtime_status_models_and_memory() -> None:
         if request.url.path == "/ready":
             return httpx.Response(200, json={"status": "healthy"})
         if request.url.path == "/models":
-            return httpx.Response(200, json=[{"name": "deepseek-v4-pro"}])
+            return httpx.Response(
+                200,
+                json={
+                    "providers": [
+                        {
+                            "id": "deepseek",
+                            "display_name": "DeepSeek",
+                            "configured": True,
+                            "credential_env": "AWESOME_AGENT_DEEPSEEK_API_KEY",
+                            "api_key_present": True,
+                            "models": [
+                                {
+                                    "id": "deepseek-v4-pro",
+                                    "display_name": "DeepSeek V4 Pro",
+                                    "provider_id": "deepseek",
+                                    "capabilities": [
+                                        "streaming",
+                                        "tools",
+                                        "reasoning",
+                                    ],
+                                    "recommended_for": ["leader"],
+                                    "selected": True,
+                                }
+                            ],
+                        }
+                    ],
+                    "current": {
+                        "provider_id": "deepseek",
+                        "model_id": "deepseek-v4-pro",
+                    },
+                },
+            )
         if request.url.path == "/memory":
             return httpx.Response(200, json={"enabled": False})
         return httpx.Response(404)
@@ -114,7 +145,10 @@ def test_tui_client_reads_runtime_status_models_and_memory() -> None:
     assert thread.title == "Snake game"
     assert thread.short_id == "thread-1"
     assert client.runtime_status()["api"] == "healthy"
-    assert client.list_models() == [{"name": "deepseek-v4-pro"}]
+    assert client.list_models()["current"] == {
+        "provider_id": "deepseek",
+        "model_id": "deepseek-v4-pro",
+    }
     assert client.memory_summary() == {"enabled": False}
 
 

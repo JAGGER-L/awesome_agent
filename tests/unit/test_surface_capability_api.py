@@ -75,7 +75,25 @@ def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> N
     assert "super-secret-value" not in serialized
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in serialized
 
-    assert responses["/models"].json()[0]["configured"] is True
+    models = responses["/models"].json()
+    assert set(models) == {"providers", "current"}
+    assert models["current"] == {
+        "provider_id": "deepseek",
+        "model_id": "deepseek-v4-pro",
+    }
+    assert [provider["id"] for provider in models["providers"]] == ["deepseek"]
+    deepseek = models["providers"][0]
+    assert deepseek["display_name"] == "DeepSeek"
+    assert deepseek["configured"] is True
+    assert deepseek["credential_env"] == "AWESOME_AGENT_DEEPSEEK_API_KEY"
+    assert deepseek["api_key_present"] is True
+    assert [model["id"] for model in deepseek["models"]] == [
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+    ]
+    response_text = responses["/models"].text
+    assert "openai" not in response_text.casefold()
+    assert "super-secret-value" not in response_text
     assert responses["/surface/tools"].json()["builtin"][0]["name"].startswith("repo.")
     assert responses["/surface/tools"].json()["mcp"][0]["name"] == "mcp.github.search"
     assert responses["/extensions/skills"].json()["items"][0]["id"] == (
@@ -102,6 +120,25 @@ def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> N
         "not_configured"
     )
     assert responses["/config"].json()["deepseek_api_key_configured"] is True
+
+
+def test_models_api_returns_unconfigured_deepseek_without_failing(
+    tmp_path: Path,
+) -> None:
+    client, _threads, _runtime, _budget = _client(
+        tmp_path,
+        settings=test_settings(deepseek_api_key=None),
+    )
+
+    response = client.get("/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    [provider] = body["providers"]
+    assert provider["id"] == "deepseek"
+    assert provider["configured"] is False
+    assert provider["api_key_present"] is False
+    assert body["current"]["model_id"] == "deepseek-v4-pro"
 
 
 def test_thread_usage_and_artifacts_use_latest_thread_run(
