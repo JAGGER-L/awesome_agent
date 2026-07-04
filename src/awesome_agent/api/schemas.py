@@ -5,16 +5,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from awesome_agent.conversation.models import ThreadMessageKind, ThreadMessageRole
-from awesome_agent.domain.enums import RunIntent, RunMode
-
-
-class CreateRunRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    repository_id: UUID
-    goal: str = Field(min_length=1)
-    intent: RunIntent = RunIntent.MODIFYING
-    mode: RunMode = RunMode.SOLO
 
 
 class CreateProbeRequest(BaseModel):
@@ -62,16 +52,6 @@ class CreateConversationTurnRequest(BaseModel):
     thinking_mode: str | None = Field(default=None, max_length=32)
     memory: dict[str, object] = Field(default_factory=dict)
     skill_ids: list[str] = Field(default_factory=list)
-
-
-class CreateThreadRunRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    goal: str = Field(min_length=1)
-    intent: RunIntent = RunIntent.MODIFYING
-    mode: RunMode = RunMode.SOLO
-    repository_id: UUID | None = None
-    repository_path: str | None = Field(default=None, min_length=1)
 
 
 class ErrorResponse(BaseModel):

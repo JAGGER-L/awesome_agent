@@ -4,15 +4,19 @@ This guide indexes user-facing runtime surfaces. Detailed pages can be split
 out as those surfaces mature.
 
 - Interactive CLI: `awesome`, `awesome commands`, and slash commands.
-- Runs: `awesome-agent run`, `status`, `agents`, and `todos`.
-- Team mode: `awesome-agent run --team`, child Runs, assignments, and mailbox.
+- User message turns: chat-first input creates internal conversation Runs with
+  Leader agents.
+- Run inspection: `status`, `agents`, and `todos` inspect existing runtime
+  evidence.
+- Team mode: distributed Leader, Teammate, Verifier, assignments, and mailbox
+  remain runtime capabilities; chat-first product controls are roadmap work.
 - Approvals: `approve`, `resume`, and durable approval records.
 - Extensions: project `skills/`, `awesome-agent.yaml`, and MCP sources.
-- Diagnostics: `diagnostics`, `recovery-metrics`, `budget`, and
+- Diagnostics: `probe`, `diagnostics`, `recovery-metrics`, `budget`, and
   `context-compactions`.
 
-Start with the [quickstart](../getting-started/quickstart.md) before creating
-real coding Runs.
+Start with the [quickstart](../getting-started/quickstart.md) before sending
+model-backed user message turns.
 
 ## Interactive CLI
 
@@ -31,10 +35,12 @@ then keeps the main screen focused on the transcript and input prompt. Runtime
 details are available through slash commands such as `/status`, `/tools`,
 `/mcp`, `/usage`, and `/config`.
 
-Conversation and Run failures are rendered as structured transcript items with
-request IDs, retryability, and remediation hints when the API provides them.
-Use `Ctrl+R` to retry the last failed conversation turn and `Ctrl+C` to cancel
-the current Run.
+Plain user messages are the only product execution creation path. A user
+message turn creates an internal conversation Run with a Leader Agent and
+executes through the embedded local runtime. Conversation and Run failures are
+rendered as structured transcript items with request IDs, retryability, and
+remediation hints when the API provides them. Use `Ctrl+R` to retry the last
+failed conversation turn and `Ctrl+C` to cancel the current Run.
 
 | Command | Purpose |
 | --- | --- |
@@ -47,11 +53,10 @@ the current Run.
 | `/skills` | Apply skills to the next turn. |
 | `/tools` | Show leader-visible tools. |
 | `/mcp` | Show MCP server status. |
-| `/status` | Show current thread/run/runtime status. |
+| `/status` | Show current thread, run, and runtime status. |
 | `/usage` | Show token usage and context. |
 | `/config` | Show configuration. |
 | `/details` | Choose detail level. |
-| `/run` | Force advanced execution mode. |
 | `/quit` | Exit the TUI. |
 
 Useful chat-first TUI keys:
@@ -63,8 +68,8 @@ Useful chat-first TUI keys:
 | `Ctrl+R` | Retry the last failed conversation turn. |
 
 Slash commands are CLI/TUI interaction syntax. API routes should expose
-semantic resources such as threads, runs, models, memory, readiness, and
-approvals rather than slash-command route names.
+semantic resources such as threads, read-only runs, runtime probes, models,
+memory, readiness, and approvals rather than slash-command route names.
 
 Model self-descriptions are not authoritative identity evidence. Use
 `/model` to choose the current model and inspect configured model names,

@@ -69,47 +69,6 @@ class HttpSurfaceClient:
             skill_ids=skill_ids,
         )
 
-    def start_explicit_run(
-        self,
-        thread_id: str,
-        goal: str,
-        *,
-        intent: str = "modifying",
-        mode: str = "solo",
-        repository_id: str | None = None,
-        repository_path: str | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, object] = {"goal": goal, "intent": intent, "mode": mode}
-        if repository_id is not None:
-            payload["repository_id"] = repository_id
-        if repository_path is not None:
-            payload["repository_path"] = repository_path
-        response = self._client.post(
-            f"{self.api_url}/threads/{thread_id}/runs",
-            json=payload,
-        )
-        response.raise_for_status()
-        return dict(response.json())
-
-    def create_thread_run(
-        self,
-        thread_id: str,
-        goal: str,
-        *,
-        intent: str = "modifying",
-        mode: str = "solo",
-        repository_id: str | None = None,
-        repository_path: str | None = None,
-    ) -> dict[str, Any]:
-        return self.start_explicit_run(
-            thread_id,
-            goal,
-            intent=intent,
-            mode=mode,
-            repository_id=repository_id,
-            repository_path=repository_path,
-        )
-
     def list_thread_runs(self, thread_id: str) -> list[dict[str, Any]]:
         return self._get_list(f"/threads/{thread_id}/runs")
 

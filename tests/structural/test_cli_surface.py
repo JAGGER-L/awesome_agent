@@ -7,6 +7,8 @@ from awesome_agent.cli.slash_commands import (
     slash_command_help,
 )
 
+REMOVED_RUN_COMMAND = "/" + "run"
+
 RETAINED_COMMANDS = [
     "/help",
     "/new",
@@ -21,11 +23,17 @@ RETAINED_COMMANDS = [
     "/usage",
     "/config",
     "/details",
-    "/run",
     "/quit",
 ]
 
-DELETED_COMMANDS = ["/resume", "/models", "/uploads", "/artifacts", "/switch"]
+DELETED_COMMANDS = [
+    "/resume",
+    "/models",
+    "/uploads",
+    "/artifacts",
+    "/switch",
+    REMOVED_RUN_COMMAND,
+]
 
 
 def test_awesome_script_is_declared() -> None:

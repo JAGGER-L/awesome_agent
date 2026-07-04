@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -10,8 +11,17 @@ from tests.type_helpers import test_settings
 
 from awesome_agent.api.app import create_app
 from awesome_agent.artifacts.store import ArtifactMetadata
-from awesome_agent.conversation.models import ThreadMessageKind, ThreadMessageRole
-from awesome_agent.domain.enums import RiskLevel
+from awesome_agent.domain.enums import (
+    AgentKind,
+    AgentStatus,
+    DispatchStatus,
+    EventType,
+    ExecutionKind,
+    RiskLevel,
+    RunIntent,
+    RunStatus,
+)
+from awesome_agent.domain.models import Agent, Run
 from awesome_agent.extensions.models import (
     ExtensionCatalog,
     ExtensionHealthSnapshot,
@@ -27,6 +37,8 @@ from awesome_agent.persistence.budget import (
     RunBudgetLedgerRecord,
 )
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.runtime.graphs import CONVERSATION_TURN_ROUTE
+from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.settings import Settings
 
 
@@ -101,25 +113,19 @@ def test_thread_usage_and_artifacts_use_latest_thread_run(
     thread = client.post("/threads", json={"title": "Run"}).json()
     old_run_id = uuid4()
     latest_run_id = uuid4()
-    asyncio.run(
-        threads.append_message(
-            thread_id=UUID(thread["id"]),
-            role=ThreadMessageRole.SYSTEM,
-            content="Started old run",
-            kind=ThreadMessageKind.RUN,
-            run_id=old_run_id,
-            metadata={"run_id": str(old_run_id), "status": "created"},
-        )
+    _record_thread_run(
+        runtime,
+        thread_id=UUID(thread["id"]),
+        run_id=old_run_id,
+        goal="Old run",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    asyncio.run(
-        threads.append_message(
-            thread_id=UUID(thread["id"]),
-            role=ThreadMessageRole.SYSTEM,
-            content="Started latest run",
-            kind=ThreadMessageKind.RUN,
-            run_id=latest_run_id,
-            metadata={"run_id": str(latest_run_id), "status": "created"},
-        )
+    _record_thread_run(
+        runtime,
+        thread_id=UUID(thread["id"]),
+        run_id=latest_run_id,
+        goal="Latest run",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=1),
     )
     asyncio.run(
         budget.upsert_ledger(
@@ -171,7 +177,11 @@ def test_thread_surface_endpoints_return_404_for_missing_thread(
 class FakeRuntime:
     def __init__(self, root: Path) -> None:
         self.root = root
+        self.repository = InMemoryRuntimeRepository()
         self.artifacts: dict[UUID, list[ArtifactMetadata]] = {}
+
+    async def get_run(self, run_id: UUID) -> Run:
+        return await self.repository.get_run(run_id)
 
     async def list_artifacts(self, run_id: UUID) -> list[ArtifactMetadata]:
         return self.artifacts.get(run_id, [])
@@ -245,3 +255,42 @@ def _catalog() -> ExtensionCatalog:
             )
         ],
     )
+
+
+def _record_thread_run(
+    runtime: FakeRuntime,
+    *,
+    thread_id: UUID,
+    run_id: UUID,
+    goal: str,
+    created_at: datetime,
+) -> Run:
+    run = Run(
+        id=run_id,
+        goal=goal,
+        intent=RunIntent.CONVERSATION,
+        execution_kind=ExecutionKind.CONVERSATION,
+        runtime_route=CONVERSATION_TURN_ROUTE,
+        status=RunStatus.COMPLETED,
+        dispatch_status=DispatchStatus.TERMINAL,
+        result_text="done",
+        created_at=created_at,
+    )
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake-model",
+        status=AgentStatus.READY,
+    )
+    asyncio.run(runtime.repository.create_run(run, leader))
+    event = asyncio.run(
+        runtime.repository.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_CREATED,
+            payload={"thread_id": str(thread_id), "goal": goal},
+            agent_id=leader.id,
+        )
+    )
+    event.created_at = created_at
+    return run

@@ -97,7 +97,7 @@ awesome commands
 Run `awesome` from the project directory you want the agent to work on. The
 launch directory becomes the default thread context. If it is a Git checkout,
 Runs inherit that repository. If it is not a Git checkout, the CLI uses
-workspace-only mode and still accepts ordinary chat messages.
+workspace-only mode and still accepts user message turns.
 
 `awesome` does not require an API before launch. It defaults to the local CLI
 profile and LocalSandbox, then opens the chat-first local CLI/TUI. This is a
@@ -133,7 +133,8 @@ Use an already running API + Worker:
 The script installs local dependencies, ensures `.env` exists, starts
 PostgreSQL, runs migrations, starts API + Worker, creates an ignored sample
 repository, verifies a diagnostic probe, and prints the first read-only run
-command. It does not require a model key unless you pass `-RunReadOnly`.
+inspection steps. It does not require a model key unless you pass
+`-RunReadOnly`.
 
 ## Manual Local API Fallback
 
@@ -235,16 +236,18 @@ For Docker API mode, add `--api-url http://127.0.0.1:8000` to the CLI commands.
 `/ready?profile=runtime` also checks runtime dependencies such as provider
 configuration and Worker heartbeat.
 
-## First Model-Backed Read-Only Run
+## First Model-Backed User Message
 
-Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the runtime, then run:
+Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the local interactive
+runtime, open `awesome` from the project directory, then send a plain user
+message:
 
-```powershell
-.\.venv\Scripts\awesome-agent.exe run "Inspect this repository" --repo <repository-path> --read-only
+```text
+Build a single-file HTML timer in this folder.
 ```
 
-Use `--team` only when you want the distributed Leader, Teammate, and Verifier
-runtime.
+The message creates an internal conversation Run with a Leader Agent and
+executes through the embedded local runtime path.
 
 ## Shutdown And Cleanup
 

@@ -16,7 +16,6 @@ class ThreadMessageRole(StrEnum):
 
 class ThreadMessageKind(StrEnum):
     MESSAGE = "message"
-    RUN = "run"
     TOOL = "tool"
     MODEL = "model"
     APPROVAL = "approval"

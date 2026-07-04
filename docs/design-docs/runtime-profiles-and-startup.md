@@ -24,7 +24,8 @@ Startup commands should map to user intent:
 ## Sandbox Targets
 
 `LocalSandbox` executes local shell commands for the local CLI/TUI profile. It
-is not the default backend for API-created Runs and is not a security boundary.
+is not the default backend for Worker-owned API profile Runs and is not a
+security boundary.
 Trusted local execution uses Hermes-style soft guardrails: validation and
 read-only commands may run automatically, risky mutation commands require
 approval, extreme destructive commands are blocked, patch writes can be
@@ -39,7 +40,7 @@ next sandbox hardening step.
 
 ## Storage Contract
 
-For embedded local ordinary turns, the model-visible working directory is the
+For embedded local user message turns, the model-visible working directory is the
 thread context path. When a thread is created without an explicit context path,
 that path is the process launch/current working directory. Reads, writes, and
 commands therefore target the same project tree a user would target from their
@@ -89,28 +90,30 @@ awesome commands
 ```
 
 The local CLI/TUI profile defaults to embedded local runtime mode and
-LocalSandbox. It does not require an API server before ordinary conversation or
-local coding-agent work can begin. Use `awesome --api-url <url>` only when the
-TUI should connect to a local, Docker, or remote API server.
+LocalSandbox. It does not require an API server before user message
+conversation or local coding-agent work can begin. Use `awesome --api-url
+<url>` only when the TUI should connect to a local, Docker, or remote API
+server.
 
-Ordinary text input is the main execution entry. It creates a durable
-conversation Run and executes through the `conversation-turn` graph route.
-`ConversationService` only starts the Run and projects runtime events; the graph
-owns model calls, tool calls, thread message writes, usage metadata, changed
-files, and terminal state. `/run` remains an advanced/manual command for
-explicit execution control; it is not required for normal work.
+User message input is the only product execution creation entry. It creates an
+internal durable conversation Run with an initial Leader Agent, then executes
+through the dispatcher, Worker, `conversation-turn` graph route, and Leader
+AgentLoop. `ConversationService` only starts the internal Run and projects
+runtime events; the graph owns model calls, tool calls, thread message writes,
+usage metadata, changed files, and terminal state.
 
 Slash commands such as `/new`, `/threads`, `/model`, `/thinking`, `/memory`,
 `/status`, and `/help` are local interaction syntax over semantic runtime
-operations. The API remains resource-oriented: `POST /threads`, `POST /runs`,
-readiness, models, memory, and approval resources, not slash-command route
-names.
+operations. The API remains resource-oriented: `POST /threads`,
+`POST /threads/{thread_id}/turns`, read-only Run inspection, readiness,
+`POST /runtime/probes`, models, memory, and approval resources, not
+slash-command route names.
 
 ## Non-Goals
 
 - Docker mode does not start the CLI.
 - CLI/TUI profile does not require configuring an API before launch.
-- CLI/TUI profile does not require `/run` before ordinary agent work can begin.
+- CLI/TUI profile uses user message input for product execution creation.
 - Slash commands are CLI/TUI interaction syntax; API should expose semantic
   resources such as threads, runs, models, memory, and status instead of
   slash-command strings.

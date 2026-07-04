@@ -871,15 +871,7 @@ class AwesomeAgentTui(App[None]):
     ) -> None:
         failed = False
         try:
-            if parsed.kind is SlashCommandKind.RUN:
-                backend_thread_id, run, message = self._start_coding_run(parsed, state)
-                self.call_from_thread(
-                    self._append_coding_run_message,
-                    backend_thread_id,
-                    run,
-                    message,
-                )
-            elif parsed.kind is SlashCommandKind.NEW:
+            if parsed.kind is SlashCommandKind.NEW:
                 thread, message = self._create_thread(parsed, state)
                 self.call_from_thread(
                     self._switch_to_thread,
@@ -903,22 +895,6 @@ class AwesomeAgentTui(App[None]):
             )
 
     def _append_command_message(self, message: ChatMessage) -> None:
-        self.state = self.state.append(message)
-        self._render()
-        self._focus_prompt()
-
-    def _append_coding_run_message(
-        self,
-        backend_thread_id: str | None,
-        run: dict[str, object] | None,
-        message: ChatMessage,
-    ) -> None:
-        if backend_thread_id is not None:
-            self.state = self.state.with_backend_thread(backend_thread_id)
-        if run is not None:
-            self.state = self.state.with_run(
-                str(run["id"]), status_label=str(run["status"])
-            )
         self.state = self.state.append(message)
         self._render()
         self._focus_prompt()
@@ -988,66 +964,6 @@ class AwesomeAgentTui(App[None]):
             thread,
             ChatMessage.system(
                 f"New conversation started: {_thread_title(thread)}",
-                kind=ChatEventKind.RUN,
-            ),
-        )
-
-    def _start_coding_run(
-        self,
-        parsed: SlashCommand,
-        state: ChatSessionState,
-    ) -> tuple[str | None, dict[str, object] | None, ChatMessage]:
-        goal = parsed.argument
-        if not goal:
-            return (
-                None,
-                None,
-                ChatMessage.system(
-                    "Usage: /run <goal>",
-                    kind=ChatEventKind.ERROR,
-                ),
-            )
-        thread_id = state.backend_thread_id
-        new_backend_thread_id: str | None = None
-        if thread_id is None:
-            context = state.launch_context
-            thread = self.client.create_thread(
-                title=goal[:80] or "New conversation",
-                context_kind=context.context_kind if context is not None else None,
-                context_path=context.display_path if context is not None else None,
-                default_model=state.current_model,
-                thinking_mode=state.thinking_mode,
-                local_memory_enabled=state.local_memory_enabled,
-                provider_memory=state.provider_memory,
-            )
-            thread_id = _thread_id(thread)
-            new_backend_thread_id = thread_id
-        context = state.launch_context
-        repository_path = (
-            context.display_path
-            if context is not None and context.context_kind == "repo"
-            else None
-        )
-        if hasattr(self.client, "start_explicit_run"):
-            run = self.client.start_explicit_run(
-                thread_id,
-                goal,
-                repository_path=repository_path,
-            )
-        else:
-            run = self.client.create_thread_run(  # type: ignore[attr-defined]
-                thread_id,
-                goal,
-                repository_path=repository_path,
-            )
-        return (
-            new_backend_thread_id,
-            run,
-            ChatMessage.system(
-                (
-                    f"Started Coding Run {run['id']}: "
-                    f"{run['goal']} status={run['status']}"
-                ),
                 kind=ChatEventKind.RUN,
             ),
         )

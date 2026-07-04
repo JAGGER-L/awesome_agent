@@ -6,9 +6,13 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from awesome_agent.conversation.models import ThreadMessageKind, ThreadMessageRole
+from awesome_agent.conversation.models import (
+    ThreadMessage,
+    ThreadMessageKind,
+    ThreadMessageRole,
+)
 from awesome_agent.conversation.repository import ConversationRepository
-from awesome_agent.domain.enums import DispatchStatus, EventType, RunStatus
+from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling.messages import (
     AssistantMessage,
@@ -65,53 +69,15 @@ class ConversationGraph:
             "memory": _dict_payload(created.get("memory")),
             "skill_ids": _list_payload(created.get("skill_ids")),
         }
-        running = run.model_copy(
-            update={
-                "status": RunStatus.RUNNING,
-                "dispatch_status": DispatchStatus.EXECUTING,
-            }
+        return await self._execute_turn(
+            run=run,
+            leader=leader,
+            thread_id=thread_id,
+            content=content,
+            selected_model=selected_model,
+            thinking=thinking,
+            turn_options=turn_options,
         )
-        await self.runtime.update_run(running)
-        await self.runtime.append_event(
-            run_id=run.id,
-            event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": running.status.value,
-                "dispatch_status": running.dispatch_status.value,
-            },
-            agent_id=leader.id,
-        )
-        try:
-            state = await self._execute_turn(
-                run=running,
-                leader=leader,
-                thread_id=thread_id,
-                content=content,
-                selected_model=selected_model,
-                thinking=thinking,
-                turn_options=turn_options,
-            )
-        except Exception:
-            await self._mark_failed(running, leader)
-            raise
-        completed = running.model_copy(
-            update={
-                "status": RunStatus.COMPLETED,
-                "dispatch_status": DispatchStatus.TERMINAL,
-                "result_text": str(state.get("final_answer") or ""),
-            }
-        )
-        await self.runtime.update_run(completed)
-        await self.runtime.append_event(
-            run_id=run.id,
-            event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": completed.status.value,
-                "dispatch_status": completed.dispatch_status.value,
-            },
-            agent_id=leader.id,
-        )
-        return state
 
     async def _execute_turn(
         self,
@@ -124,31 +90,45 @@ class ConversationGraph:
         thinking: str | None,
         turn_options: dict[str, object],
     ) -> ConversationGraphState:
-        user_message = await self.conversations.append_message(
+        user_message = await self._message_for_run_role(
             thread_id=thread_id,
+            run_id=run.id,
             role=ThreadMessageRole.USER,
-            content=content,
-            run_id=run.id,
-            metadata={
-                "run_id": str(run.id),
-                "turn_options": turn_options,
-                "working_directory": str(run.working_directory)
-                if run.working_directory
-                else None,
-            },
         )
-        await self.runtime.append_event(
+        if user_message is None:
+            user_message = await self.conversations.append_message(
+                thread_id=thread_id,
+                role=ThreadMessageRole.USER,
+                content=content,
+                run_id=run.id,
+                metadata={
+                    "run_id": str(run.id),
+                    "turn_options": turn_options,
+                    "working_directory": str(run.working_directory)
+                    if run.working_directory
+                    else None,
+                },
+            )
+            await self.runtime.append_event(
+                run_id=run.id,
+                event_type=EventType.MESSAGE_CREATED,
+                payload={
+                    "thread_id": str(thread_id),
+                    "message_id": str(user_message.id),
+                    "role": user_message.role.value,
+                    "content": user_message.content,
+                    "run_id": str(run.id),
+                },
+                agent_id=leader.id,
+            )
+
+        assistant = await self._message_for_run_role(
+            thread_id=thread_id,
             run_id=run.id,
-            event_type=EventType.MESSAGE_CREATED,
-            payload={
-                "thread_id": str(thread_id),
-                "message_id": str(user_message.id),
-                "role": user_message.role.value,
-                "content": user_message.content,
-                "run_id": str(run.id),
-            },
-            agent_id=leader.id,
+            role=ThreadMessageRole.ASSISTANT,
         )
+        if assistant is not None:
+            return _state_from_assistant_message(assistant)
 
         messages = await self._model_messages(thread_id)
         model_state = await self._run_model(
@@ -255,6 +235,18 @@ class ConversationGraph:
             if event.event_type is EventType.RUN_CREATED:
                 return event.payload
         raise RuntimeError("Conversation Run is missing run.created payload.")
+
+    async def _message_for_run_role(
+        self,
+        *,
+        thread_id: UUID,
+        run_id: UUID,
+        role: ThreadMessageRole,
+    ) -> ThreadMessage | None:
+        for message in await self.conversations.list_messages(thread_id):
+            if message.run_id == run_id and message.role == role:
+                return message
+        return None
 
     async def _model_messages(self, thread_id: UUID) -> list[ModelMessage]:
         messages: list[ModelMessage] = []
@@ -369,24 +361,6 @@ class ConversationGraph:
             "changed_files": _dedupe_changed_files(changed_files),
         }
 
-    async def _mark_failed(self, run: Run, leader: Agent) -> None:
-        failed = run.model_copy(
-            update={
-                "status": RunStatus.FAILED,
-                "dispatch_status": DispatchStatus.TERMINAL,
-            }
-        )
-        await self.runtime.update_run(failed)
-        await self.runtime.append_event(
-            run_id=run.id,
-            event_type=EventType.RUN_STATUS_CHANGED,
-            payload={
-                "status": failed.status.value,
-                "dispatch_status": failed.dispatch_status.value,
-            },
-            agent_id=leader.id,
-        )
-
 
 async def _identity_state(state: ConversationGraphState) -> ConversationGraphState:
     return state
@@ -404,6 +378,24 @@ def _dict_payload(value: object) -> dict[str, object]:
 
 def _list_payload(value: object) -> list[object]:
     return value if isinstance(value, list) else []
+
+
+def _state_from_assistant_message(message: ThreadMessage) -> ConversationGraphState:
+    usage = _dict_payload(message.metadata.get("usage"))
+    changed_files = [
+        item
+        for item in _list_payload(message.metadata.get("changed_files"))
+        if isinstance(item, dict)
+    ]
+    return {
+        "final_answer": message.content,
+        "result_summary": "Conversation completed.",
+        "usage": usage,
+        "response_model": message.metadata.get("response_model"),
+        "provider": message.metadata.get("provider"),
+        "response_id": message.metadata.get("response_id"),
+        "changed_files": changed_files,
+    }
 
 
 def _has_usage(usage: ModelUsage) -> bool:

@@ -12,12 +12,24 @@ class FakeHost:
 
     def cancel(self, run_id: str) -> dict[str, object]:
         self.cancelled.append(run_id)
-        return {"id": run_id, "status": "cancelled"}
+        return {
+            "run_id": run_id,
+            "status": "completed",
+            "dispatch_status": "terminal",
+            "event_sequence": None,
+        }
 
 
 def test_local_surface_cancel_returns_resumable_shape() -> None:
-    client = LocalSurfaceClient(host=FakeHost())  # type: ignore[arg-type]
+    host = FakeHost()
+    client = LocalSurfaceClient(host=host)  # type: ignore[arg-type]
 
     result = client.cancel("run-1")
 
-    assert result == {"id": "run-1", "status": "cancelled", "transport": "embedded"}
+    assert host.cancelled == ["run-1"]
+    assert result == {
+        "run_id": "run-1",
+        "status": "completed",
+        "dispatch_status": "terminal",
+        "event_sequence": None,
+    }

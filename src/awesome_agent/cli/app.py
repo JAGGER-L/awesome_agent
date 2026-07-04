@@ -531,45 +531,6 @@ def start(
 
 
 @app.command()
-def run(
-    goal: Annotated[str, typer.Argument(help="Coding task goal.")],
-    repo: Annotated[
-        Path,
-        typer.Option(
-            "--repo",
-            exists=True,
-            file_okay=False,
-            resolve_path=True,
-            help="Registered Git repository path.",
-        ),
-    ],
-    read_only: Annotated[
-        bool,
-        typer.Option("--read-only", help="Deny repository mutation tools."),
-    ] = False,
-    team: Annotated[
-        bool,
-        typer.Option("--team", help="Run through the explicit team runtime."),
-    ] = False,
-    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
-) -> None:
-    """Create a run through the local API."""
-    repository = _run_with_repository_service(lambda service: service.register(repo))
-    response = httpx.post(
-        f"{api_url}/runs",
-        json={
-            "repository_id": str(repository.id),
-            "goal": goal,
-            "intent": "read_only" if read_only else "modifying",
-            "mode": "team" if team else "solo",
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    typer.echo(response.json()["id"])
-
-
-@app.command()
 def probe(
     repo: Annotated[
         Path,

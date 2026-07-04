@@ -170,45 +170,6 @@ class FakeClient:
             ),
         ]
 
-    def create_thread_run(
-        self,
-        thread_id: str,
-        goal: str,
-        *,
-        intent: str = "modifying",
-        mode: str = "solo",
-        repository_id: str | None = None,
-        repository_path: str | None = None,
-    ) -> dict[str, object]:
-        run_id = str(uuid4())
-        payload: dict[str, object] = {
-            "id": run_id,
-            "thread_id": thread_id,
-            "goal": goal,
-            "intent": intent,
-            "mode": mode,
-            "repository_id": repository_id,
-            "repository_path": repository_path,
-            "status": "created",
-        }
-        self.runs.append(payload)
-        return payload
-
-    def start_explicit_run(
-        self,
-        thread_id: str,
-        goal: str,
-        **kwargs: object,
-    ) -> dict[str, object]:
-        return self.create_thread_run(
-            thread_id,
-            goal,
-            intent=str(kwargs.get("intent") or "modifying"),
-            mode=str(kwargs.get("mode") or "solo"),
-            repository_id=_optional_string(kwargs.get("repository_id")),
-            repository_path=_optional_string(kwargs.get("repository_path")),
-        )
-
     def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
         return [run for run in self.runs if run.get("thread_id") == thread_id]
 
@@ -432,10 +393,6 @@ class FakeProvider(StructuredModelProvider):
                 provider="fake",
             )
         )
-
-
-def _optional_string(value: object) -> str | None:
-    return value if isinstance(value, str) else None
 
 
 @pytest.mark.asyncio
@@ -982,8 +939,11 @@ async def test_tui_can_answer_with_real_local_surface_client(tmp_path: Path) -> 
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
-        await pilot.pause()
-        transcript = app.query_one("#transcript").render()
+        for _ in range(20):
+            await pilot.pause(0.1)
+            transcript = app.query_one("#transcript").render()
+            if "embedded" in str(transcript):
+                break
 
     assert "embedded" in str(transcript)
 
@@ -1008,7 +968,7 @@ async def test_tui_status_includes_launch_context(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_run_uses_current_repo_context(tmp_path: Path) -> None:
+async def test_tui_plain_message_uses_current_repo_context(tmp_path: Path) -> None:
     client = FakeClient()
     app = AwesomeAgentTui(
         api_url="http://127.0.0.1:8000",
@@ -1022,22 +982,12 @@ async def test_tui_run_uses_current_repo_context(tmp_path: Path) -> None:
 
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
-        await pilot.press("/", "r", "u", "n", " ", "b", "u", "i", "l", "d", "enter")
+        await pilot.press("b", "u", "i", "l", "d", "enter")
         transcript = app.query_one("#transcript").render()
 
-    assert "Started Coding Run" in str(transcript)
-    assert client.runs == [
-        {
-            "id": app.state.current_run_id,
-            "thread_id": client.thread_id,
-            "goal": "build",
-            "intent": "modifying",
-            "mode": "solo",
-            "repository_id": None,
-            "repository_path": str(tmp_path),
-            "status": "created",
-        }
-    ]
+    assert "hello world" in str(transcript)
+    assert client.turns == [(client.thread_id, "build")]
+    assert client.threads[0]["context_path"] == str(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -1213,17 +1163,18 @@ async def test_tui_local_memory_view_uses_client_facts() -> None:
 
 @pytest.mark.asyncio
 async def test_tui_cancel_current_run_calls_api() -> None:
-    client = FakeClient()
+    client = SlowStreamingClient(["done"], run_id="run-1", delay_seconds=0)
     app = AwesomeAgentTui(api_url="http://127.0.0.1:8000", client=client)
 
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
-        await pilot.press("/", "r", "u", "n", " ", "b", "u", "i", "l", "d", "enter")
-        assert app.state.current_run_id is not None
+        await pilot.press("b", "u", "i", "l", "d", "enter")
+        await pilot.pause()
+        assert app.state.current_run_id == "run-1"
         await pilot.press("ctrl+c")
         transcript = app.query_one("#transcript").render()
 
-    assert client.cancelled_runs == [app.state.current_run_id]
+    assert client.cancelled_runs == ["run-1"]
     assert "Cancelled Run" in str(transcript)
 
 

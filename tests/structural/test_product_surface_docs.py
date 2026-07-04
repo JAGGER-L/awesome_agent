@@ -7,17 +7,23 @@ def test_product_surface_docs_keep_tui_as_client_surface() -> None:
     text = _normalized("docs/design-docs/product-surface-architecture.md")
 
     assert "surfaceclient" in text or "surface client" in text
-    assert "ordinary input is the primary execution route" in text
-    assert "/run" in text
-    assert "advanced" in text or "manual" in text
+    assert "plain user messages are the only execution creation path" in text
+    assert "`/" + "run`" not in text
 
 
 def test_product_surface_docs_make_leader_agentloop_primary_turn_path() -> None:
     text = _normalized("docs/design-docs/product-surface-architecture.md")
 
-    assert "ordinary input enters the leader agentloop" in text
+    assert "user message input enters the leader agentloop" in text
     assert "simple questions are leader turns with no tool calls" in text
     assert "tui never imports provider" in text
+
+
+def test_docs_describe_user_message_turn_as_primary_execution_route() -> None:
+    text = _normalized("docs/design-docs/runtime-agent-harness.md")
+
+    assert "user message turn -> conversation run -> initial leader agent" in text
+    assert "surfaces do not execute graphs" in text
 
 
 def test_runtime_profile_docs_keep_docker_api_without_cli() -> None:

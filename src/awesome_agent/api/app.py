@@ -24,10 +24,8 @@ from awesome_agent.api.schemas import (
     ContextCompactionResponse,
     CreateConversationTurnRequest,
     CreateProbeRequest,
-    CreateRunRequest,
     CreateThreadMessageRequest,
     CreateThreadRequest,
-    CreateThreadRunRequest,
     DispatchResponse,
     ErrorResponse,
     ExtensionSkillsResponse,
@@ -49,10 +47,7 @@ from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.repository import ConversationRepository
-from awesome_agent.conversation.service import (
-    ConversationService,
-    MissingThreadRepositoryContext,
-)
+from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import ExecutionKind, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
 from awesome_agent.extensions.config import build_project_extension_catalog_sync
@@ -117,7 +112,6 @@ from awesome_agent.persistence.worker_heartbeats import (
 )
 from awesome_agent.repositories.config import LocalRepositoryConfigStore
 from awesome_agent.repositories.registry import RepositoryRegistry
-from awesome_agent.repositories.service import RepositoryService
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.asyncio import configure_event_loop_policy
 from awesome_agent.runtime.capabilities import CapabilityPurpose, CapabilityResolver
@@ -803,43 +797,6 @@ def create_app(
             media_type="text/event-stream",
         )
 
-    @app.post("/threads/{thread_id}/runs", status_code=201)
-    async def create_thread_run(
-        thread_id: UUID,
-        request: CreateThreadRunRequest,
-    ) -> dict[str, object]:
-        if request.repository_id is not None and request.repository_path is not None:
-            raise HTTPException(
-                status_code=422,
-                detail="Provide either repository_id or repository_path, not both.",
-            )
-        repository_id = request.repository_id
-        if request.repository_path is not None:
-            try:
-                repository = await RepositoryService(
-                    registry=repositories(),
-                    config=LocalRepositoryConfigStore(settings.local_config_path),
-                ).register(Path(request.repository_path))
-            except ValueError as error:
-                raise HTTPException(status_code=409, detail=str(error)) from error
-            repository_id = repository.id
-        try:
-            run = await conversations().create_thread_run(
-                thread_id=thread_id,
-                goal=request.goal,
-                intent=request.intent,
-                mode=request.mode,
-                run_intake=run_intake(),
-                repository_id=repository_id,
-            )
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail="Thread not found.") from error
-        except MissingThreadRepositoryContext as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        except (RunIntakeError, ValueError) as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-        return _redacted_dict(run.model_dump(mode="json"))
-
     @app.get("/threads/{thread_id}/runs")
     async def list_thread_runs(thread_id: UUID) -> list[dict[str, object]]:
         try:
@@ -861,35 +818,6 @@ def create_app(
                 _redacted_dict(run.model_dump(mode="json"))
                 for run in await runtime().list_runs(limit=limit)
             ]
-
-    @app.post("/runs", status_code=201)
-    async def create_run(request: CreateRunRequest) -> dict[str, object]:
-        span_run_id = _NIL_RUN_ID
-        attributes = _api_attributes("POST", "/runs", 201)
-        async with api_span(
-            "api.runs.create",
-            run_id=lambda: span_run_id,
-            attributes=attributes,
-        ):
-            try:
-                run = await run_intake().create_run(
-                    repository_id=request.repository_id,
-                    goal=request.goal,
-                    intent=request.intent,
-                    mode=request.mode,
-                )
-            except KeyError as error:
-                attributes["http.status_code"] = 404
-                raise HTTPException(
-                    status_code=404,
-                    detail="Repository not found.",
-                ) from error
-            except (RunIntakeError, ValueError) as error:
-                attributes["http.status_code"] = 409
-                raise HTTPException(status_code=409, detail=str(error)) from error
-            span_run_id = run.id
-            attributes["run_id"] = str(run.id)
-            return _redacted_dict(run.model_dump(mode="json"))
 
     @app.post("/runtime/probes", status_code=201)
     async def create_probe(request: CreateProbeRequest) -> dict[str, object]:

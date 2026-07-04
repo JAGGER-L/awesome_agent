@@ -116,14 +116,6 @@ class HtmlGameSurfaceClient:
     def runtime_status(self) -> dict[str, object]:
         return {"api": "embedded", "sandbox": "local"}
 
-    def start_explicit_run(
-        self,
-        thread_id: str,
-        goal: str,
-        **kwargs: object,
-    ) -> dict[str, object]:
-        return {"id": str(uuid4()), "status": "completed", "goal": goal}
-
     def list_thread_runs(self, thread_id: str) -> list[dict[str, object]]:
         return []
 

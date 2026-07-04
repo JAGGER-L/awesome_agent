@@ -6,11 +6,11 @@ from awesome_agent.cli.slash_commands import (
 )
 
 
-def test_parse_known_command_with_argument() -> None:
+def test_run_command_is_removed() -> None:
     command = parse_slash_command("/run build a game")
 
-    assert command.kind is SlashCommandKind.RUN
-    assert command.argument == "build a game"
+    assert command.kind is SlashCommandKind.UNKNOWN
+    assert command.argument == "run build a game"
 
 
 def test_parse_model_command() -> None:
@@ -42,10 +42,9 @@ def test_help_lists_expected_interactive_commands() -> None:
         "/usage",
         "/config",
         "/details",
-        "/run",
         "/quit",
     ]
-    deleted = ["/resume", "/models", "/uploads", "/artifacts", "/switch"]
+    deleted = ["/resume", "/models", "/uploads", "/artifacts", "/switch", "/run"]
     for command in retained:
         assert command in help_text
     for command in deleted:
@@ -58,7 +57,6 @@ def test_command_suggestions_exclude_deleted_commands() -> None:
     assert suggestions == {
         "new",
         "threads",
-        "run",
         "status",
         "model",
         "thinking",

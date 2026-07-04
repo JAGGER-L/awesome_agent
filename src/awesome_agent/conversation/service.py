@@ -9,35 +9,18 @@ from awesome_agent.conversation.events import (
     ConversationStreamEvent,
     ConversationStreamEventKind,
 )
-from awesome_agent.conversation.models import (
-    ThreadMessageKind,
-    ThreadMessageRole,
-)
+from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.conversation.repository import ConversationRepository
 from awesome_agent.domain.enums import (
     EventType,
-    RunIntent,
-    RunMode,
     RunStatus,
 )
-from awesome_agent.domain.models import Run
+from awesome_agent.domain.models import Run, RuntimeEvent
 from awesome_agent.modeling.errors import (
     ModelErrorCode,
     ModelErrorInfo,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
-
-
-class ThreadRunIntake(Protocol):
-    async def create_run(
-        self,
-        *,
-        repository_id: UUID,
-        goal: str,
-        intent: RunIntent,
-        mode: RunMode = RunMode.SOLO,
-    ) -> Run:
-        pass
 
 
 class ConversationRunIntake(Protocol):
@@ -52,10 +35,6 @@ class ConversationRunIntake(Protocol):
         skill_ids: tuple[str, ...],
     ) -> Run:
         pass
-
-
-class MissingThreadRepositoryContext(RuntimeError):
-    pass
 
 
 class ConversationService:
@@ -117,63 +96,43 @@ class ConversationService:
             sequence += 1
             yield projected.model_copy(update={"sequence": sequence})
 
-    async def create_thread_run(
-        self,
-        *,
-        thread_id: UUID,
-        goal: str,
-        intent: RunIntent,
-        mode: RunMode,
-        run_intake: ThreadRunIntake,
-        repository_id: UUID | None = None,
-    ) -> Run:
-        thread = await self._repository.get_thread(thread_id)
-        effective_repository_id = thread.repository_id or repository_id
-        if effective_repository_id is None:
-            raise MissingThreadRepositoryContext(
-                "Thread does not have a repository_id; register a repository "
-                "context before starting a Coding Run."
-            )
-        if thread.repository_id is None:
-            thread = await self._repository.bind_repository(
-                thread_id,
-                effective_repository_id,
-            )
-        run = await run_intake.create_run(
-            repository_id=thread.repository_id or effective_repository_id,
-            goal=goal,
-            intent=intent,
-            mode=mode,
-        )
-        await self._repository.append_message(
-            thread_id=thread_id,
-            role=ThreadMessageRole.SYSTEM,
-            content=f"Started Coding Run {run.id}: {goal}",
-            kind=ThreadMessageKind.RUN,
-            run_id=run.id,
-            metadata={
-                "run_id": str(run.id),
-                "goal": goal,
-                "status": run.status.value,
-                "intent": run.intent.value,
-                "mode": run.mode.value,
-            },
-        )
-        return run
-
     async def list_thread_runs(self, thread_id: UUID) -> list[dict[str, object]]:
-        messages = await self._repository.list_messages(thread_id)
-        runs = [
-            {
-                **message.metadata,
-                "message_id": str(message.id),
-                "run_id": str(message.run_id),
-                "created_at": message.created_at.isoformat(),
-            }
-            for message in messages
-            if message.kind is ThreadMessageKind.RUN and message.run_id is not None
-        ]
-        return list(reversed(runs))
+        await self._repository.get_thread(thread_id)
+        projections: list[tuple[RuntimeEvent, Run, dict[str, object]]] = []
+        for run in await self._runtime_repository.list_runs():
+            created_event = await self._run_created_event(run.id)
+            if created_event is None:
+                continue
+            created_payload = created_event.payload
+            if created_payload.get("thread_id") != str(thread_id):
+                continue
+            projections.append(
+                (
+                    created_event,
+                    run,
+                    {
+                        "run_id": str(run.id),
+                        "thread_id": str(thread_id),
+                        "goal": str(created_payload.get("goal") or run.goal),
+                        "status": run.status.value,
+                        "dispatch_status": run.dispatch_status.value,
+                        "runtime_route": run.runtime_route,
+                        "execution_kind": run.execution_kind.value,
+                        "result_text": run.result_text,
+                    },
+                )
+            )
+        projections.sort(
+            key=lambda item: (item[0].created_at, item[1].created_at, item[1].id.hex),
+            reverse=True,
+        )
+        return [projection for _event, _run, projection in projections]
+
+    async def _run_created_event(self, run_id: UUID) -> RuntimeEvent | None:
+        for event in await self._runtime_repository.list_events(run_id):
+            if event.event_type is EventType.RUN_CREATED:
+                return event
+        return None
 
     async def _project_run_events(
         self,

@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
-from awesome_agent.cli.slash_commands import SlashCommand, SlashCommandKind
+from awesome_agent.cli.slash_commands import (
+    SlashCommand,
+    SlashCommandKind,
+    parse_slash_command,
+)
 from awesome_agent.tui.chat_state import ChatSessionState
 from awesome_agent.tui.slash_router import SlashRouter
 
@@ -143,6 +147,12 @@ def test_router_unknown_command_is_actionable() -> None:
 
     assert "Unknown command: /resume" in message.content
     assert "Type /help" in message.content
+
+
+def test_run_slash_command_is_removed() -> None:
+    parsed = parse_slash_command("/" + "run build a game")
+
+    assert parsed.kind is SlashCommandKind.UNKNOWN
 
 
 def _summary(

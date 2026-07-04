@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import httpx
 
+import awesome_agent.surfaces.client as surface_client_module
 from awesome_agent.surfaces.client import SurfaceThread, surface_thread_from_mapping
 from awesome_agent.tui.client import HttpSurfaceClient
 
@@ -47,3 +48,14 @@ def test_http_surface_client_preserves_stream_event_parsing() -> None:
 
     assert thread.short_id == "12345678"
     assert requests[0].url.path == "/threads"
+
+
+def test_surface_client_contract_has_no_explicit_run_creation() -> None:
+    client = HttpSurfaceClient("http://127.0.0.1:8000")
+    method_name = "start_" + "explicit_run"
+    compatibility_name = "create_thread_" + "run"
+
+    assert not hasattr(surface_client_module, "SurfaceRun")
+    assert method_name not in surface_client_module.SurfaceClient.__dict__
+    assert not hasattr(client, method_name)
+    assert not hasattr(client, compatibility_name)

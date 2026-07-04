@@ -10,17 +10,13 @@ import pytest
 from tests.type_helpers import test_settings
 
 from awesome_agent.conversation.models import ThreadMessageRole
+from awesome_agent.domain.enums import EventType, RunStatus
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
-from awesome_agent.persistence.conversations import InMemoryConversationRepository
-from awesome_agent.surfaces.local_runtime_host import (
-    ExecutionMode,
-    LocalRuntimeHost,
-    plan_execution_mode,
-)
+from awesome_agent.surfaces.local_runtime_host import LocalRuntimeHost
 
 
 class FakeProvider(StructuredModelProvider):
@@ -46,6 +42,19 @@ class CaptureRequestProvider(StructuredModelProvider):
         yield TurnCompleted(
             turn=ModelTurn(
                 assistant=AssistantMessage(content="done"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        )
+
+
+class FailingProvider(StructuredModelProvider):
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        raise RuntimeError("model failed")
+        yield TurnCompleted(  # pragma: no cover
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="unreachable"),
                 stop_reason=StopReason.COMPLETED,
                 model="fake-model",
                 provider="fake",
@@ -98,31 +107,15 @@ class PatchToolProvider(StructuredModelProvider):
         )
 
 
-def test_simple_question_uses_leader_turn() -> None:
-    assert plan_execution_mode("What can you do?") is ExecutionMode.LEADER
-
-
-def test_coding_request_uses_coding_execution_mode() -> None:
-    assert plan_execution_mode("build a simple html snake game") is ExecutionMode.CODING
-
-
-def test_continue_resumes_last_resumable_run() -> None:
-    assert (
-        plan_execution_mode("continue", resumable_run_id="run-1")
-        is ExecutionMode.RESUME
-    )
-    assert (
-        plan_execution_mode("\u7ee7\u7eed", resumable_run_id="run-1")
-        is ExecutionMode.RESUME
-    )
-
-
 @pytest.mark.parametrize("content", ["hi", "What can you do?"])
-def test_local_runtime_host_streams_leader_turn(content: str) -> None:
+def test_local_runtime_host_streams_leader_turn(
+    tmp_path: Path,
+    content: str,
+) -> None:
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Test")
 
@@ -159,28 +152,98 @@ def test_local_runtime_host_stream_turn_creates_durable_conversation_run(
     runs = host.list_thread_runs(thread.id)
     assert runs
     assert runs[0]["runtime_route"] == "conversation-turn"
+    assert runs[0]["status"] == "completed"
 
 
-def test_local_runtime_host_reports_coding_mode_boundary() -> None:
+def test_local_runtime_host_uses_worker_pump_for_user_message_turn(
+    tmp_path: Path,
+) -> None:
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
     )
-    thread = host.create_thread("Build")
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
 
-    result = host.start_explicit_run(thread.id, "build a game")
+    list(host.stream_turn(thread.id, "hi"))
 
-    assert result["status"] == "planned"
-    assert result["execution_mode"] == "coding"
-    assert result["transport"] == "embedded"
+    [run] = host.list_thread_runs(thread.id)
+    assert run["status"] == "completed"
+    assert run["runtime_route"] == "conversation-turn"
+    runtime_events = asyncio.run(
+        host.runtime_repository.list_events(UUID(str(run["id"])))
+    )
+    runtime_event_types = [event.event_type for event in runtime_events]
+    assert EventType.DISPATCH_CLAIMED in runtime_event_types
+    assert EventType.GRAPH_COMPLETED in runtime_event_types
 
 
-def test_local_runtime_host_forwards_turn_options() -> None:
+def test_local_runtime_host_stream_turn_returns_error_after_retry_exhaustion(
+    tmp_path: Path,
+) -> None:
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FailingProvider(),
+        default_model="fake-model",
+    )
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
+
+    events = list(host.stream_turn(thread.id, "hi"))
+
+    assert events[-1].event.value == "error"
+    assert events[-1].payload["message"] == "model failed"
+    [run] = host.list_thread_runs(thread.id)
+    assert run["status"] == "recovery_required"
+    runtime_events = asyncio.run(
+        host.runtime_repository.list_events(UUID(str(run["id"])))
+    )
+    runtime_event_types = [event.event_type for event in runtime_events]
+    assert EventType.RUN_STATUS_CHANGED in runtime_event_types
+    assert EventType.DISPATCH_RECOVERY_REQUIRED in runtime_event_types
+
+
+def test_local_runtime_host_rejects_conversation_repository_injection(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="no longer accepts"):
+        LocalRuntimeHost(
+            settings=test_settings(local_state_dir=tmp_path / "state"),
+            provider_factory=lambda _model: FakeProvider(),
+            default_model="fake-model",
+            repository=object(),
+        )
+
+
+def test_local_runtime_host_last_resumable_run_uses_persisted_runtime_status(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
+    )
+    thread = host.create_thread("Resume")
+    list(host.stream_turn(thread.id, "hi"))
+    [created] = host.list_thread_runs(thread.id)
+    run = asyncio.run(host.runtime_repository.get_run(UUID(str(created["id"]))))
+
+    asyncio.run(
+        host.runtime_repository.update_run(
+            run.model_copy(update={"status": RunStatus.WAITING})
+        )
+    )
+
+    resumable = host.last_resumable_run(thread.id)
+    assert resumable is not None
+    assert resumable["id"] == created["id"]
+    assert resumable["status"] == "waiting"
+
+
+def test_local_runtime_host_forwards_turn_options(tmp_path: Path) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
     )
     thread = host.create_thread("Options")
 
@@ -205,12 +268,14 @@ def test_local_runtime_host_forwards_turn_options() -> None:
     }
 
 
-def test_local_runtime_host_passes_thinking_mode_into_model_request() -> None:
+def test_local_runtime_host_passes_thinking_mode_into_model_request(
+    tmp_path: Path,
+) -> None:
     provider = CaptureRequestProvider()
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: provider,
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Options")
 
@@ -225,9 +290,9 @@ def test_local_runtime_host_executes_leader_tools_in_thread_workspace(
 ) -> None:
     provider = PatchToolProvider()
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: provider,
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Workspace", context_path=str(tmp_path))
 
@@ -259,9 +324,9 @@ def test_local_runtime_host_usage_summary_reads_persisted_turn_usage(
 ) -> None:
     provider = PatchToolProvider()
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: provider,
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Usage", context_path=str(tmp_path))
 
@@ -278,11 +343,11 @@ def test_local_runtime_host_usage_summary_reads_persisted_turn_usage(
     }
 
 
-def test_local_runtime_host_extracts_local_memory_facts() -> None:
+def test_local_runtime_host_extracts_local_memory_facts(tmp_path: Path) -> None:
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Memory")
 
@@ -299,11 +364,13 @@ def test_local_runtime_host_extracts_local_memory_facts() -> None:
     ]
 
 
-def test_local_runtime_host_thread_summary_includes_changed_files() -> None:
+def test_local_runtime_host_thread_summary_includes_changed_files(
+    tmp_path: Path,
+) -> None:
     host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
         provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
-        repository=InMemoryConversationRepository(),
     )
     thread = host.create_thread("Snake")
     asyncio.run(
@@ -360,3 +427,28 @@ def test_local_runtime_host_persists_threads_across_instances(tmp_path: Path) ->
     assert restored.local_memory_enabled is True
     assert restored.provider_memory == "mem0"
     assert [message["content"] for message in messages] == ["hi", "hello world"]
+
+
+def test_local_runtime_host_persists_runtime_runs_across_instances(
+    tmp_path: Path,
+) -> None:
+    settings = test_settings(local_state_dir=tmp_path / "state")
+    first = LocalRuntimeHost(
+        settings=settings,
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = first.create_thread("Durable", context_path=str(tmp_path))
+    list(first.stream_turn(thread.id, "hi"))
+    [created] = first.list_thread_runs(thread.id)
+    first.close()
+
+    second = LocalRuntimeHost(
+        settings=settings,
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    runs = second.list_thread_runs(thread.id)
+    second.close()
+
+    assert runs == [created]
