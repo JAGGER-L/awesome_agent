@@ -1,5 +1,9 @@
+import pytest
+from tests.type_helpers import test_settings
+
 from awesome_agent.agents.profiles import RoleModelResolver, default_profiles
 from awesome_agent.domain.enums import AgentKind
+from awesome_agent.modeling.catalog import ModelCatalogError
 
 
 def _resolver(overrides: dict[str, str] | None = None) -> RoleModelResolver:
@@ -39,3 +43,21 @@ def test_role_model_override_wins() -> None:
         )
         == "deepseek-v4-pro"
     )
+
+
+def test_role_model_resolver_from_settings_rejects_invalid_role_model() -> None:
+    with pytest.raises(ModelCatalogError) as raised:
+        RoleModelResolver.from_settings(test_settings(leader_model="gpt-4o"))
+
+    assert raised.value.code == "invalid_role_model"
+    assert "leader" in str(raised.value)
+
+
+def test_role_model_resolver_from_settings_rejects_invalid_override() -> None:
+    with pytest.raises(ModelCatalogError) as raised:
+        RoleModelResolver.from_settings(
+            test_settings(role_model_overrides={"reviewer": "gpt-4o"})
+        )
+
+    assert raised.value.code == "invalid_role_model"
+    assert "reviewer" in str(raised.value)
