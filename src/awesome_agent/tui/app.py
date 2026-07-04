@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from pathlib import Path
 from typing import ClassVar, cast
 from uuid import UUID, uuid4
 
@@ -47,6 +48,7 @@ from awesome_agent.tui.pickers import PickerItem, PickerState
 from awesome_agent.tui.rendering import (
     render_approval_prompt,
     render_changed_files,
+    render_pending_attachments,
     render_team_event,
     render_tool_event,
     render_transcript,
@@ -184,6 +186,8 @@ class AwesomeAgentTui(App[None]):
                 SlashCommandKind.THREADS,
             }:
                 self._open_picker(parsed)
+            elif parsed.kind is SlashCommandKind.ATTACH:
+                self._start_attach(parsed)
             else:
                 self._start_command(parsed)
         self._render()
@@ -372,6 +376,11 @@ class AwesomeAgentTui(App[None]):
                     self.state.active_picker.render()
                 )
                 return
+            if self.state.pending_attachments:
+                self.query_one("#command-palette", Static).update(
+                    render_pending_attachments(self.state.pending_attachments)
+                )
+                return
             self.query_one("#command-palette", Static).update(
                 self.command_palette.render()
             )
@@ -398,7 +407,15 @@ class AwesomeAgentTui(App[None]):
         turn_id = str(uuid4())
         self.state = self.state.begin_operation(turn_id, "streaming")
         self.state = self.state.begin_turn(turn_id)
-        self.state = self.state.append(ChatMessage.user(content, turn_id=turn_id))
+        attachments = self.state.pending_attachments
+        attachment_ids = tuple(
+            str(item["id"])
+            for item in attachments
+            if isinstance(item.get("id"), str) and item.get("id")
+        )
+        self.state = self.state.append(
+            ChatMessage.user(content, turn_id=turn_id, attachments=attachments)
+        )
         self._render()
         try:
             thread_id = self._ensure_backend_thread(content)
@@ -406,6 +423,7 @@ class AwesomeAgentTui(App[None]):
                 lambda: self._conversation_worker(
                     thread_id,
                     content,
+                    attachment_ids,
                 ),
                 thread=True,
                 name=f"conversation-{self.state.active_operation_id}",
@@ -421,6 +439,7 @@ class AwesomeAgentTui(App[None]):
         self,
         thread_id: str,
         content: str,
+        attachment_ids: tuple[str, ...],
     ) -> None:
         failed = False
         try:
@@ -434,6 +453,7 @@ class AwesomeAgentTui(App[None]):
                     "provider": self.state.provider_memory,
                 },
                 skill_ids=self.state.staged_skill_ids,
+                attachment_ids=attachment_ids,
             ):
                 if stream_event.event is ConversationStreamEventKind.ERROR:
                     failed = True
@@ -503,6 +523,8 @@ class AwesomeAgentTui(App[None]):
             self.state = self.state.note_run_started(run_id)
         if stream_event.event is ConversationStreamEventKind.TURN_CONTINUED:
             self.state = self.state.begin_turn(str(stream_event.turn_id))
+        elif stream_event.event is ConversationStreamEventKind.TURN_STARTED:
+            self.state = self.state.clear_pending_attachments()
         elif stream_event.event is ConversationStreamEventKind.REASONING_STARTED:
             if self.state.thinking_mode == "off":
                 return
@@ -694,6 +716,61 @@ class AwesomeAgentTui(App[None]):
             thread=True,
             name=f"command-{self.state.active_operation_id}",
         )
+
+    def _start_attach(self, parsed: SlashCommand) -> None:
+        if self.state.active_operation_id is not None:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    "Finish or pause the current response first.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        if not parsed.argument:
+            self.state = self.state.append(
+                ChatMessage.system("Usage: /attach <path>", kind=ChatEventKind.ERROR)
+            )
+            return
+        thread_id = self.state.backend_thread_id
+        if thread_id is None:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    "Start or open a conversation before attaching a file.",
+                    kind=ChatEventKind.ERROR,
+                )
+            )
+            return
+        self.state = self.state.begin_operation(str(uuid4()), "attaching")
+        self._active_worker = self.run_worker(
+            lambda: self._attach_worker(thread_id, parsed.argument),
+            thread=True,
+            name=f"attach-{self.state.active_operation_id}",
+        )
+
+    def _attach_worker(self, thread_id: str, raw_path: str) -> None:
+        failed = False
+        try:
+            attachment = self.client.create_attachment(thread_id, Path(raw_path))
+            self.call_from_thread(self._record_attachment_added, attachment)
+        except Exception as error:
+            failed = True
+            self.call_from_thread(
+                self._append_command_message,
+                ChatMessage.system(self._format_error(error), kind=ChatEventKind.ERROR),
+            )
+        finally:
+            self.call_from_thread(self._finish_command_worker, failed=failed)
+
+    def _record_attachment_added(self, attachment: dict[str, object]) -> None:
+        self.state = self.state.with_pending_attachment(attachment)
+        filename = str(attachment.get("filename") or "attachment")
+        size = attachment.get("size")
+        size_label = f" ({size} bytes)" if isinstance(size, int) else ""
+        self.state = self.state.append(
+            ChatMessage.system(f"Attached for next turn: {filename}{size_label}")
+        )
+        self._render()
+        self._focus_prompt()
 
     def _open_picker(self, parsed: SlashCommand) -> None:
         if parsed.argument:

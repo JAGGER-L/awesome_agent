@@ -5,6 +5,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 
+from awesome_agent.attachments.service import AttachmentService
+from awesome_agent.attachments.store import AttachmentContentStore
 from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import ExecutionOrigin
@@ -28,6 +30,7 @@ from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.local_approvals import LocalApprovalRepository
 from awesome_agent.persistence.local_artifacts import LocalArtifactMetadataRepository
+from awesome_agent.persistence.local_attachments import LocalAttachmentRepository
 from awesome_agent.persistence.local_conversations import LocalConversationRepository
 from awesome_agent.persistence.local_dispatch import LocalRunDispatcher
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
@@ -40,6 +43,7 @@ from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_worker_pump import LocalWorkerPump
+from awesome_agent.tools.attachments import register_attachment_tools
 from awesome_agent.tools.memory import register_memory_tools
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ProgressCallback, ToolRegistry
@@ -74,6 +78,7 @@ class LocalRuntimeContainer:
         self.conversations = LocalConversationRepository(database_path)
         self.runtime = LocalRuntimeRepository(database_path)
         self.artifacts = LocalArtifactMetadataRepository(database_path)
+        self.attachments = LocalAttachmentRepository(database_path)
         self.approvals = LocalApprovalRepository(database_path)
         self.dispatcher = LocalRunDispatcher(
             self.runtime,
@@ -103,8 +108,13 @@ class LocalRuntimeContainer:
             builtin_enabled=settings.builtin_memory_enabled,
             provider_enabled=settings.mem0_enabled,
         )
+        self.attachment_service = AttachmentService(
+            repository=self.attachments,
+            store=AttachmentContentStore(settings.local_state_dir / "attachments"),
+        )
         self.tool_registry = build_modifying_registry(sandbox=sandbox)
         register_memory_tools(self.tool_registry, self.memory_service)
+        register_attachment_tools(self.tool_registry, self.attachment_service)
         _register_extension_tools(
             self.tool_registry,
             source_configs=self.extension_source_configs,
@@ -118,6 +128,7 @@ class LocalRuntimeContainer:
             events=self.events,
             default_model=self.default_model,
             extension_catalog_version=self.extension_runtime.catalog.version,
+            attachment_service=self.attachment_service,
         )
         self.conversation_graph = ConversationGraph(
             conversations=self.conversations,
@@ -128,6 +139,7 @@ class LocalRuntimeContainer:
             tool_registry=self.tool_registry,
             extension_catalog_store=self.extension_catalog_store,
             memory_service=self.memory_service,
+            attachment_service=self.attachment_service,
         )
         self.conversation_service = ConversationService(
             repository=self.conversations,
@@ -160,6 +172,7 @@ class LocalRuntimeContainer:
         self.conversations.close()
         self.runtime.close()
         self.artifacts.close()
+        self.attachments.close()
         self.approvals.close()
         self.extension_catalog_store.close()
 

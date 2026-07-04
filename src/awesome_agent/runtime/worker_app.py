@@ -8,6 +8,8 @@ from typing import Any
 
 from awesome_agent.agents.profiles import RoleModelResolver
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.attachments.service import AttachmentService
+from awesome_agent.attachments.store import AttachmentContentStore
 from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.memory.builtin import BuiltinMemoryStore
 from awesome_agent.memory.external import NoopMemoryProvider
@@ -22,6 +24,7 @@ from awesome_agent.observability.otel import (
 from awesome_agent.observability.repository import PostgresObservabilityRepository
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
+from awesome_agent.persistence.attachments import PostgresAttachmentRepository
 from awesome_agent.persistence.budget import PostgresBudgetRepository
 from awesome_agent.persistence.checkpoints import checkpoint_saver
 from awesome_agent.persistence.conversations import PostgresConversationRepository
@@ -50,6 +53,7 @@ from awesome_agent.runtime.token_accounting import default_token_accountant
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
+from awesome_agent.tools.attachments import register_attachment_tools
 from awesome_agent.tools.memory import register_memory_tools
 from awesome_agent.tools.repository import (
     build_modifying_executor,
@@ -146,8 +150,13 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         builtin_enabled=configured.builtin_memory_enabled,
         provider_enabled=configured.mem0_enabled,
     )
+    attachment_service = AttachmentService(
+        repository=PostgresAttachmentRepository(sessions),
+        store=AttachmentContentStore(configured.local_state_dir / "attachments"),
+    )
     conversation_tool_registry = build_modifying_registry(sandbox=sandbox)
     register_memory_tools(conversation_tool_registry, memory_service)
+    register_attachment_tools(conversation_tool_registry, attachment_service)
     conversation_tool_executor = build_modifying_executor(conversation_tool_registry)
     context_manager = ContextManager(
         summary_provider=DeterministicSummaryProvider(),
@@ -216,6 +225,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     tool_executor=conversation_tool_executor,
                     tool_registry=conversation_tool_registry,
                     memory_service=memory_service,
+                    attachment_service=attachment_service,
                 )
                 if providers.coding_available
                 else None

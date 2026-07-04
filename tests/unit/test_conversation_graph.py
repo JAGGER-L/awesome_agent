@@ -4,6 +4,10 @@ from uuid import UUID
 
 import pytest
 
+from awesome_agent.attachments.models import AttachmentSource
+from awesome_agent.attachments.repository import InMemoryAttachmentRepository
+from awesome_agent.attachments.service import AttachmentService
+from awesome_agent.attachments.store import AttachmentContentStore
 from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.domain.enums import (
     AgentKind,
@@ -445,6 +449,52 @@ async def test_graph_executes_memory_manage_tool(tmp_path: Path) -> None:
         and event.payload.get("status") == "added"
         and "content" not in event.payload
         for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_injects_current_run_attachment_context(tmp_path: Path) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "use attachment")
+    attachment_service = AttachmentService(
+        repository=InMemoryAttachmentRepository(),
+        store=AttachmentContentStore(tmp_path / "attachments"),
+    )
+    attachment = await attachment_service.create(
+        thread_id=thread.id,
+        filename="spec.md",
+        content=b"# Spec\nUse this.\n",
+        mime_type="text/markdown",
+        source=AttachmentSource.API,
+    )
+    await attachment_service.bind_to_run(
+        thread_id=thread.id,
+        attachment_ids=[attachment.id],
+        run_id=run.id,
+        message_id=leader.id,
+    )
+    provider = CapturingProvider("done")
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        attachment_service=attachment_service,
+    )
+
+    await graph.execute(run, leader)
+
+    assert any(
+        isinstance(message, SystemMessage)
+        and "awesome_agent_attachments" in message.content
+        and "# Spec" in message.content
+        for message in provider.requests[0].messages
+    )
+    events = await runtime.list_events(run.id)
+    assert any(
+        event.event_type is EventType.ATTACHMENT_CONTEXT_INJECTED for event in events
     )
 
 

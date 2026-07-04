@@ -31,6 +31,7 @@ class ConversationRunIntake(Protocol):
         thinking: str | None,
         memory: dict[str, object],
         skill_ids: tuple[str, ...],
+        attachment_ids: tuple[UUID, ...] = (),
     ) -> Run:
         pass
 
@@ -64,6 +65,7 @@ class ConversationService:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[UUID, ...] = (),
     ) -> AsyncIterator[ConversationStreamEvent]:
         turn_id = uuid4()
         trace_id = uuid4().hex
@@ -83,6 +85,7 @@ class ConversationService:
             thinking=thinking,
             memory=effective_memory,
             skill_ids=skill_ids,
+            attachment_ids=attachment_ids,
         )
         yield _event(
             ConversationStreamEventKind.TURN_STARTED,
@@ -96,6 +99,7 @@ class ConversationService:
                 "status": run.status.value,
                 "model": model or self._default_model,
                 "memory": effective_memory,
+                "attachment_ids": [str(item) for item in attachment_ids],
             },
         )
         async for projected in self._project_run_events(

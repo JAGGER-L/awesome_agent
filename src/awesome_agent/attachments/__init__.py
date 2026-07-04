@@ -1,0 +1,1 @@
+"""Thread attachment lifecycle primitives."""

@@ -47,6 +47,7 @@ for the durable startup, sandbox, and workspace contract.
 | PostgreSQL port | `54329` host, `5432` container | Durable runtime state. |
 | AIO sandbox port | `127.0.0.1:8765` host, `8765` container | Sandbox service health and command execution. |
 | Runtime data | `~/.awesome-agent/runs/` local, `/var/lib/awesome-agent/runs/` Docker | Per-run artifacts and runtime evidence. |
+| Attachment data | `settings.local_state_dir / "attachments"` | Copied user input files bound to a specific next turn. |
 | Thread workspace | `~/.awesome-agent/threads/<thread_id>/workspace/` local, `/mnt/user-data/workspace/` in AIO Docker | Model-visible generated files and per-thread `.venv`. |
 | Compose volume | `awesome_agent_runtime` | Container runtime state. |
 | Compose user-data volume | `awesome_agent_user_data` | Model-visible workspace mounted into API, Worker, and sandbox. |
@@ -88,6 +89,16 @@ execution or a one-shot Docker container. LocalSandbox is reserved for the
 local CLI/TUI profile or explicit trusted local operation. LocalSandbox
 currently executes arbitrary local commands by design and is tracked as
 technical debt.
+
+## Attachment Storage
+
+Thread attachments are user input, not Run artifacts. Attachment metadata is
+stored in the local or PostgreSQL repository, while copied file content lives
+under `settings.local_state_dir / "attachments" / <thread_id> /
+<attachment_id>/content`. Default limits are five pending attachments per
+thread, five attachments per turn, 5 MB per file, 16 KB injected per text file,
+and 48 KB injected per turn. Deleting an attachment physically removes content
+and keeps a metadata tombstone.
 
 ## TUI
 

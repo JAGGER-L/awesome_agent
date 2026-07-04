@@ -62,6 +62,7 @@ this lifecycle.
 | `/help` | Show commands. |
 | `/new` | Start a new conversation. |
 | `/threads` | Switch conversation. |
+| `/attach <path>` | Attach a local file to the next message. |
 | `/model` | Choose model. |
 | `/thinking` | Choose thinking mode. |
 | `/memory` | Manage memory. |
@@ -92,6 +93,21 @@ provider, base URL, API-key presence, and the last completed turn's requested
 and observed response model.
 Gateways and compatible base URLs may route aliases internally; when response
 metadata is absent, the provider did not return it.
+
+## Thread Attachments
+
+Use `/attach <path>` in the chat-first TUI to attach a local file to the next
+message in the current conversation. Pending attachments are shown above the
+input area and are cleared only after the next turn has started successfully.
+If turn creation fails before `turn.started`, the pending attachment remains
+available for retry.
+
+Attachments are copied into Awesome Agent's local attachment store. They are
+not copied into the project directory, not written to memory, and not treated
+as generated artifacts. Small UTF-8 text attachments may be injected into the
+current Run as bounded untrusted context; binary files are exposed as metadata
+only. Deleting an attachment removes its stored content, so the content cannot
+be downloaded again.
 
 ## TUI Operator Console
 

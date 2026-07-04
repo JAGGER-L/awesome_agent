@@ -35,6 +35,7 @@ class FakeClient:
         self.resumed_queries: list[str] = []
         self.turn_options: list[dict[str, object]] = []
         self.approval_decisions: list[dict[str, object]] = []
+        self.attachments: list[dict[str, object]] = []
 
     def close(self) -> None:
         pass
@@ -93,6 +94,45 @@ class FakeClient:
     def list_thread_messages(self, thread_id: str) -> list[dict[str, object]]:
         return list(self.messages_by_thread.get(thread_id, []))
 
+    def create_attachment(self, thread_id: str, path: Path) -> dict[str, object]:
+        attachment = {
+            "id": str(uuid4()),
+            "thread_id": thread_id,
+            "scope": "next_turn",
+            "status": "pending",
+            "filename": path.name,
+            "mime_type": "application/octet-stream",
+            "media_type": "text",
+            "size": path.stat().st_size,
+            "sha256": "a" * 64,
+        }
+        self.attachments.append(attachment)
+        return attachment
+
+    def list_attachments(
+        self,
+        thread_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, object]]:
+        return [
+            item
+            for item in self.attachments
+            if item["thread_id"] == thread_id
+            and (include_deleted or item.get("status") != "deleted")
+        ]
+
+    def delete_attachment(
+        self,
+        thread_id: str,
+        attachment_id: str,
+    ) -> dict[str, object]:
+        for item in self.attachments:
+            if item["thread_id"] == thread_id and item["id"] == attachment_id:
+                item["status"] = "deleted"
+                return item
+        raise ValueError(f"Attachment not found: {attachment_id}")
+
     def update_thread_settings(
         self,
         thread_id: str,
@@ -124,6 +164,7 @@ class FakeClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         self.turn_options.append(
@@ -132,6 +173,7 @@ class FakeClient:
                 "thinking": thinking,
                 "memory": memory,
                 "skill_ids": skill_ids,
+                "attachment_ids": attachment_ids,
             }
         )
         self.messages_by_thread.setdefault(thread_id, []).append(
@@ -292,6 +334,7 @@ class SlowStreamingClient(FakeClient):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         yield from self._events()
@@ -341,6 +384,7 @@ class ReasoningStreamingClient(FakeClient):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append((thread_id, content))
         turn_id = uuid4()
@@ -395,6 +439,7 @@ class MultiReasoningStreamingClient(FakeClient):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         self.calls += 1
         self.turns.append((thread_id, content))
@@ -417,6 +462,120 @@ class MultiReasoningStreamingClient(FakeClient):
                 trace_id=f"trace-{self.calls}",
                 payload=payload,
             )
+
+
+@pytest.mark.asyncio
+async def test_tui_attach_file_sends_attachment_ids_and_clears_pending(
+    tmp_path: Path,
+) -> None:
+    class AttachmentStartedClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
+        ) -> Iterable[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            self.turn_options.append(
+                {
+                    "model": model,
+                    "thinking": thinking,
+                    "memory": memory,
+                    "skill_ids": skill_ids,
+                    "attachment_ids": attachment_ids,
+                }
+            )
+            turn_id = uuid4()
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.TURN_STARTED,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=1,
+                    trace_id="trace-attach",
+                    payload={"run_id": str(uuid4())},
+                ),
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.MESSAGE_COMPLETED,
+                    thread_id=uuid4(),
+                    turn_id=turn_id,
+                    sequence=2,
+                    trace_id="trace-attach",
+                    payload={"content": "done"},
+                ),
+            ]
+
+    path = tmp_path / "spec.md"
+    path.write_text("# Spec\n", encoding="utf-8")
+    client = AttachmentStartedClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "/new Attach"
+        await pilot.press("enter")
+        await pilot.pause()
+        prompt.value = f"/attach {path}"
+        await pilot.press("enter")
+        await pilot.pause()
+        attachment_id = str(app.state.pending_attachments[0]["id"])
+        assert "spec.md" in str(app.query_one("#command-palette").render())
+        prompt.value = "Use the attachment"
+        await pilot.press("enter")
+        await pilot.pause()
+        transcript = app.query_one("#transcript").render()
+
+    assert client.turn_options[-1]["attachment_ids"] == (attachment_id,)
+    assert app.state.pending_attachments == ()
+    assert "Attachments: spec.md" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_attach_file_preserves_pending_when_turn_creation_fails(
+    tmp_path: Path,
+) -> None:
+    class FailingTurnClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
+        ) -> Iterable[ConversationStreamEvent]:
+            self.turn_options.append({"attachment_ids": attachment_ids})
+            raise RuntimeError("turn failed before start")
+
+    path = tmp_path / "spec.md"
+    path.write_text("# Spec\n", encoding="utf-8")
+    client = FailingTurnClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        prompt = app.query_one("#prompt", Input)
+        prompt.value = "/new Attach"
+        await pilot.press("enter")
+        await pilot.pause()
+        prompt.value = f"/attach {path}"
+        await pilot.press("enter")
+        await pilot.pause()
+        attachment_id = str(app.state.pending_attachments[0]["id"])
+        prompt.value = "Use the attachment"
+        await pilot.press("enter")
+        await pilot.pause()
+        transcript = app.query_one("#transcript").render()
+
+    assert client.turn_options[-1]["attachment_ids"] == (attachment_id,)
+    assert app.state.pending_attachments[0]["id"] == attachment_id
+    assert "turn failed before start" in str(transcript)
 
 
 class FakeProvider(StructuredModelProvider):
@@ -1086,6 +1245,7 @@ async def test_tui_details_on_expands_tool_event_details() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             turn_id = uuid4()
@@ -1143,6 +1303,7 @@ async def test_tui_retry_resends_last_failed_message() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
         ) -> list[ConversationStreamEvent]:
             self.calls += 1
             if self.calls == 1:
@@ -1234,6 +1395,7 @@ async def test_tui_renders_approval_required_stream_error_as_actionable() -> Non
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             return [
@@ -1277,6 +1439,7 @@ async def test_tui_approval_prompt_choice_calls_client() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             return [
@@ -1340,6 +1503,7 @@ async def test_tui_second_matching_approval_still_requires_decision() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
         ) -> list[ConversationStreamEvent]:
             self.calls += 1
             self.turns.append((thread_id, content))
@@ -1398,6 +1562,7 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             turn_id = uuid4()
@@ -1464,6 +1629,7 @@ async def test_tui_renders_changed_files_after_completed_message() -> None:
             thinking: str | None = None,
             memory: dict[str, object] | None = None,
             skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
         ) -> list[ConversationStreamEvent]:
             self.turns.append((thread_id, content))
             turn_id = uuid4()

@@ -74,6 +74,7 @@ class FakeConversationRunIntake:
         thinking: str | None,
         memory: dict[str, object],
         skill_ids: tuple[str, ...],
+        attachment_ids: tuple[UUID, ...] = (),
     ) -> Run:
         self.created.append(content)
         run = Run(

@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, cast
@@ -40,6 +42,8 @@ from awesome_agent.api.schemas import (
     ReadinessReportResponse,
     SurfaceToolsResponse,
     ThreadArtifactsResponse,
+    ThreadAttachmentResponse,
+    ThreadAttachmentsResponse,
     ThreadUploadsResponse,
     ThreadUsageResponse,
     UpdateThreadSettingsRequest,
@@ -47,6 +51,15 @@ from awesome_agent.api.schemas import (
     WorkspaceCleanupRequest,
 )
 from awesome_agent.artifacts.store import LocalArtifactStore
+from awesome_agent.attachments.models import (
+    AttachmentError,
+    AttachmentScope,
+    AttachmentSource,
+    AttachmentStatus,
+    ThreadAttachment,
+)
+from awesome_agent.attachments.service import AttachmentService
+from awesome_agent.attachments.store import AttachmentContentStore
 from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.repository import ConversationRepository
@@ -88,6 +101,7 @@ from awesome_agent.observability.repository import (
 )
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
 from awesome_agent.persistence.artifacts import PostgresArtifactMetadataRepository
+from awesome_agent.persistence.attachments import PostgresAttachmentRepository
 from awesome_agent.persistence.budget import BudgetRepository, PostgresBudgetRepository
 from awesome_agent.persistence.conversations import (
     InMemoryConversationRepository,
@@ -101,6 +115,7 @@ from awesome_agent.persistence.dispatch import PostgresRunDispatcher
 from awesome_agent.persistence.intake_reservations import (
     PostgresIntakeReservationStore,
 )
+from awesome_agent.persistence.local_attachments import LocalAttachmentRepository
 from awesome_agent.persistence.repository_registry import (
     PostgresRepositoryRegistry,
 )
@@ -176,6 +191,7 @@ def create_app(
     thread_repository: ConversationRepository | None = None,
     conversation_service: ConversationService | None = None,
     memory_service: MemoryService | None = None,
+    attachment_service: AttachmentService | None = None,
 ) -> FastAPI:
     install_redacting_log_filter(logger)
     settings = settings or Settings()
@@ -193,6 +209,12 @@ def create_app(
         builtin_enabled=settings.builtin_memory_enabled,
         provider_enabled=settings.mem0_enabled,
     )
+    default_attachment_service = attachment_service or AttachmentService(
+        repository=LocalAttachmentRepository(
+            settings.local_state_dir / "awesome-agent.db"
+        ),
+        store=AttachmentContentStore(settings.local_state_dir / "attachments"),
+    )
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
         active_extension_catalog = build_project_extension_catalog_sync(project_root)
@@ -206,6 +228,7 @@ def create_app(
         events=default_event_stream,
         default_model=settings.leader_model,
         extension_catalog_version=active_extension_catalog.version,
+        attachment_service=default_attachment_service,
     )
     default_conversation_service = conversation_service or ConversationService(
         repository=threads_repository,
@@ -230,6 +253,7 @@ def create_app(
             app.state.threads = threads_repository
             app.state.conversations = default_conversation_service
             app.state.memory_service = configured_memory_service
+            app.state.attachment_service = default_attachment_service
             app.state.extension_catalogs_by_version = extension_catalogs_by_version
             if workspace_service is not None:
                 app.state.workspaces = workspace_service
@@ -296,12 +320,17 @@ def create_app(
         )
         app.state.extension_catalog = active_extension_catalog
         app.state.threads = PostgresConversationRepository(sessions)
+        configured_attachment_service = attachment_service or AttachmentService(
+            repository=PostgresAttachmentRepository(sessions),
+            store=AttachmentContentStore(settings.local_state_dir / "attachments"),
+        )
         conversation_intake = ConversationRunIntakeService(
             conversations=app.state.threads,
             runtime=runtime_repository,
             events=event_stream,
             default_model=settings.leader_model,
             extension_catalog_version=active_extension_catalog.version,
+            attachment_service=configured_attachment_service,
         )
         app.state.conversations = conversation_service or ConversationService(
             repository=app.state.threads,
@@ -313,6 +342,7 @@ def create_app(
             global_provider_memory_enabled=settings.mem0_enabled,
         )
         app.state.memory_service = configured_memory_service
+        app.state.attachment_service = configured_attachment_service
         app.state.extension_catalogs_by_version = extension_catalogs_by_version
         app.state.registry = repository_registry
         app.state.validation_repository = validation
@@ -420,6 +450,7 @@ def create_app(
     app.state.threads = threads_repository
     app.state.conversations = default_conversation_service
     app.state.memory_service = configured_memory_service
+    app.state.attachment_service = default_attachment_service
     app.state.extension_catalogs_by_version = extension_catalogs_by_version
     if workspace_service is not None:
         app.state.workspaces = workspace_service
@@ -534,6 +565,9 @@ def create_app(
 
     def memory() -> MemoryService:
         return cast(MemoryService, app.state.memory_service)
+
+    def attachments() -> AttachmentService:
+        return cast(AttachmentService, app.state.attachment_service)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -781,13 +815,116 @@ def create_app(
             raise HTTPException(status_code=404, detail="Thread not found.") from error
         return [_redacted_dict(message.model_dump(mode="json")) for message in messages]
 
+    @app.post("/threads/{thread_id}/attachments")
+    async def create_thread_attachment(
+        thread_id: UUID,
+        request: Request,
+    ) -> ThreadAttachmentResponse:
+        try:
+            await threads().get_thread(thread_id)
+            upload = await _read_multipart_attachment(request)
+            attachment = await attachments().create(
+                thread_id=thread_id,
+                filename=cast(str, upload["filename"]),
+                content=cast(bytes, upload["content"]),
+                mime_type=cast(str | None, upload["mime_type"]),
+                source=AttachmentSource.API,
+                scope=AttachmentScope(str(upload["scope"])),
+            )
+            return _attachment_response(attachment)
+        except Exception as error:
+            raise _attachment_http_error(error) from error
+
+    @app.get("/threads/{thread_id}/attachments")
+    async def list_thread_attachments(
+        thread_id: UUID,
+        status: str | None = None,
+        include_deleted: bool = False,
+        limit: int = Query(default=50, ge=1, le=50),
+    ) -> ThreadAttachmentsResponse:
+        try:
+            await threads().get_thread(thread_id)
+            parsed_status = AttachmentStatus(status) if status is not None else None
+            items = await attachments().list_thread(
+                thread_id,
+                status=parsed_status,
+                include_deleted=include_deleted,
+                limit=limit,
+            )
+            return ThreadAttachmentsResponse(
+                thread_id=thread_id,
+                items=[_attachment_response(item) for item in items],
+            )
+        except Exception as error:
+            raise _attachment_http_error(error) from error
+
+    @app.get("/threads/{thread_id}/attachments/{attachment_id}")
+    async def get_thread_attachment(
+        thread_id: UUID,
+        attachment_id: UUID,
+    ) -> ThreadAttachmentResponse:
+        try:
+            return _attachment_response(
+                await attachments().get(
+                    thread_id=thread_id,
+                    attachment_id=attachment_id,
+                )
+            )
+        except Exception as error:
+            raise _attachment_http_error(error) from error
+
+    @app.get("/threads/{thread_id}/attachments/{attachment_id}/content")
+    async def get_thread_attachment_content(
+        thread_id: UUID,
+        attachment_id: UUID,
+    ) -> Response:
+        try:
+            attachment = await attachments().get(
+                thread_id=thread_id,
+                attachment_id=attachment_id,
+            )
+            if attachment.status is AttachmentStatus.DELETED:
+                raise ValueError("attachment_content_deleted")
+            content = attachments().store.read_bytes(attachment.storage_path)
+            return Response(
+                content=content,
+                media_type=attachment.mime_type,
+                headers={
+                    "content-disposition": (
+                        f'attachment; filename="{attachment.filename}"'
+                    )
+                },
+            )
+        except Exception as error:
+            raise _attachment_http_error(error) from error
+
+    @app.delete("/threads/{thread_id}/attachments/{attachment_id}")
+    async def delete_thread_attachment(
+        thread_id: UUID,
+        attachment_id: UUID,
+    ) -> ThreadAttachmentResponse:
+        try:
+            return _attachment_response(
+                await attachments().delete(
+                    thread_id=thread_id,
+                    attachment_id=attachment_id,
+                )
+            )
+        except Exception as error:
+            raise _attachment_http_error(error) from error
+
     @app.get("/threads/{thread_id}/uploads")
     async def list_thread_uploads(thread_id: UUID) -> ThreadUploadsResponse:
         try:
             await threads().get_thread(thread_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Thread not found.") from error
-        return ThreadUploadsResponse(thread_id=thread_id, configured=False, items=[])
+        items = await attachments().list_thread(thread_id, include_deleted=False)
+        return ThreadUploadsResponse(
+            thread_id=thread_id,
+            configured=True,
+            items=[item.model_dump(mode="json") for item in items],
+        )
 
     @app.get("/threads/{thread_id}/artifacts")
     async def list_thread_artifacts(thread_id: UUID) -> ThreadArtifactsResponse:
@@ -838,6 +975,7 @@ def create_app(
                     thinking=request.thinking_mode,
                     memory=request.memory,
                     skill_ids=tuple(request.skill_ids),
+                    attachment_ids=tuple(request.attachment_ids),
                 )
             ),
             media_type="text/event-stream",
@@ -1418,6 +1556,79 @@ def _structured_error_response(
         status_code=status_code,
         content=payload.model_dump(mode="json"),
         headers=response_headers,
+    )
+
+
+def _attachment_response(attachment: ThreadAttachment) -> ThreadAttachmentResponse:
+    return ThreadAttachmentResponse.model_validate(attachment.model_dump(mode="json"))
+
+
+async def _read_multipart_attachment(request: Request) -> dict[str, object]:
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type:
+        raise ValueError("invalid_attachment_content_type")
+    body = await request.body()
+    message = BytesParser(policy=email_policy).parsebytes(
+        (f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n").encode() + body
+    )
+    filename = None
+    mime_type = None
+    content = None
+    scope = AttachmentScope.NEXT_TURN.value
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if name == "scope":
+            raw_payload = part.get_payload(decode=True)
+            payload = raw_payload if isinstance(raw_payload, bytes) else b""
+            scope = payload.decode("utf-8").strip() or scope
+        if name == "file":
+            filename = part.get_filename() or "attachment"
+            mime_type = part.get_content_type()
+            raw_content = part.get_payload(decode=True)
+            content = raw_content if isinstance(raw_content, bytes) else b""
+    if content is None:
+        raise ValueError("attachment_not_found")
+    return {
+        "filename": filename or "attachment",
+        "mime_type": mime_type,
+        "content": content,
+        "scope": scope,
+    }
+
+
+def _attachment_http_error(error: Exception) -> HTTPException:
+    if isinstance(error, HTTPException):
+        return error
+    if isinstance(error, KeyError):
+        return HTTPException(status_code=404, detail="attachment_not_found")
+    code = None
+    if isinstance(error, AttachmentError):
+        code = error.code
+    elif isinstance(error, ValueError) and error.args:
+        code = str(error.args[0])
+    status = {
+        "attachment_too_large": 413,
+        "too_many_pending_attachments": 409,
+        "too_many_turn_attachments": 409,
+        "attachment_not_found": 404,
+        "attachment_thread_mismatch": 404,
+        "attachment_content_deleted": 410,
+        "attachment_deleted": 410,
+        "invalid_attachment_filename": 422,
+        "invalid_attachment_path": 422,
+        "unsupported_attachment_scope": 422,
+        "attachment_not_pending": 422,
+        "attachment_not_text_like": 422,
+        "attachment_read_out_of_range": 422,
+        "attachment_not_bound_to_run": 422,
+        "invalid_attachment_content_type": 422,
+    }.get(code or "", 500)
+    return HTTPException(
+        status_code=status,
+        detail={
+            "code": code or "attachment_error",
+            "message": str(error),
+        },
     )
 
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from awesome_agent.attachments.service import AttachmentService
 from awesome_agent.conversation.models import (
     ThreadMessage,
     ThreadMessageKind,
@@ -62,6 +63,7 @@ class ConversationGraph:
         extension_catalog_store: object | None = None,
         skill_context_middleware: SkillContextMiddleware | None = None,
         memory_service: MemoryService | None = None,
+        attachment_service: AttachmentService | None = None,
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
@@ -75,6 +77,7 @@ class ConversationGraph:
             skill_context_middleware or SkillContextMiddleware()
         )
         self.memory_service = memory_service
+        self.attachment_service = attachment_service
 
     async def execute(self, run: Run, leader: Agent) -> ConversationGraphState:
         created = await self._run_created_payload(run)
@@ -98,6 +101,7 @@ class ConversationGraph:
             thinking=thinking,
             turn_options=turn_options,
             skill_ids=skill_ids,
+            created=created,
         )
 
     async def _execute_turn(
@@ -111,6 +115,7 @@ class ConversationGraph:
         thinking: str | None,
         turn_options: dict[str, object],
         skill_ids: list[str],
+        created: dict[str, object],
     ) -> ConversationGraphState:
         catalog = self._catalog_for_run(run)
         skill_runtime_view = _skill_runtime_view(
@@ -126,7 +131,9 @@ class ConversationGraph:
             role=ThreadMessageRole.USER,
         )
         if user_message is None:
+            user_message_id = _optional_uuid(created.get("user_message_id"))
             user_message = await self.conversations.append_message(
+                message_id=user_message_id,
                 thread_id=thread_id,
                 role=ThreadMessageRole.USER,
                 content=content,
@@ -139,6 +146,10 @@ class ConversationGraph:
                     else None,
                     "extension_catalog_version": run.extension_catalog_version,
                     "resolved_skills": skill_runtime_view.model_dump(mode="json"),
+                    "attachment_ids": _string_list_payload(
+                        created.get("attachment_ids")
+                    ),
+                    "attachments": _list_payload(created.get("attachments")),
                 },
             )
             await self.runtime.append_event(
@@ -168,6 +179,11 @@ class ConversationGraph:
             leader=leader,
             messages=messages,
             turn_options=turn_options,
+        )
+        messages = await self._with_attachment_context(
+            run=run,
+            leader=leader,
+            messages=messages,
         )
         model_state = await self._run_model(
             run=run,
@@ -317,7 +333,7 @@ class ConversationGraph:
     ) -> ConversationGraphState:
         provider = self.provider_factory(selected_model)
         model_messages = redact_model_messages(list(messages))
-        tool_names = self._tool_names_for_turn(run, turn_options)
+        tool_names = await self._tool_names_for_turn(run, turn_options)
         tools = (
             model_tool_definitions(self.tool_registry, names=tool_names)
             if self.tool_registry is not None
@@ -479,7 +495,43 @@ class ConversationGraph:
             return messages
         return [SystemMessage(content=rendered), *messages]
 
-    def _tool_names_for_turn(
+    async def _with_attachment_context(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        messages: list[ModelMessage],
+    ) -> list[ModelMessage]:
+        if self.attachment_service is None:
+            return messages
+        snapshot = await self.attachment_service.build_context(run.id)
+        if not snapshot.items:
+            return messages
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.ATTACHMENT_CONTEXT_INJECTED,
+            payload={
+                "run_id": str(run.id),
+                "attachments": [
+                    {
+                        "id": str(item.attachment_id),
+                        "filename": item.filename,
+                        "media_type": item.media_type.value,
+                        "injected_chars": item.injected_chars,
+                        "truncated": item.truncated,
+                        "redacted": item.redacted,
+                    }
+                    for item in snapshot.items
+                ],
+            },
+            agent_id=leader.id,
+        )
+        rendered = snapshot.render()
+        if not rendered:
+            return messages
+        return [SystemMessage(content=rendered), *messages]
+
+    async def _tool_names_for_turn(
         self,
         run: Run,
         turn_options: dict[str, object],
@@ -493,6 +545,11 @@ class ConversationGraph:
         }
         if self._memory_enabled_for_turn(turn_options):
             tool_names.add("memory.manage")
+        if (
+            self.attachment_service is not None
+            and await self.attachment_service.list_for_tool(run_id=run.id)
+        ):
+            tool_names.update({"attachment.list", "attachment.read"})
         return tool_names
 
     def _memory_enabled_for_turn(self, turn_options: dict[str, object]) -> bool:
@@ -527,6 +584,15 @@ def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_uuid(value: object) -> UUID | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return UUID(value)
+    except ValueError:
+        return None
 
 
 def _dict_payload(value: object) -> dict[str, object]:

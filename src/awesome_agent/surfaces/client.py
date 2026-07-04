@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from awesome_agent.conversation.events import ConversationStreamEvent
@@ -71,6 +72,25 @@ class SurfaceClient(Protocol):
 
     def list_thread_messages(self, thread_id: str) -> list[dict[str, Any]]: ...
 
+    def create_attachment(
+        self,
+        thread_id: str,
+        path: Path,
+    ) -> dict[str, Any]: ...
+
+    def list_attachments(
+        self,
+        thread_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, Any]]: ...
+
+    def delete_attachment(
+        self,
+        thread_id: str,
+        attachment_id: str,
+    ) -> dict[str, Any]: ...
+
     def last_resumable_run(self, thread_id: str) -> dict[str, Any] | None: ...
 
     def update_thread_settings(
@@ -92,6 +112,7 @@ class SurfaceClient(Protocol):
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]: ...
 
     def continue_turn(

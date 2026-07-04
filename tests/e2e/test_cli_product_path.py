@@ -57,6 +57,32 @@ class HtmlGameSurfaceClient:
     def list_thread_messages(self, thread_id: str) -> list[dict[str, object]]:
         return list(self.messages)
 
+    def create_attachment(self, thread_id: str, path: Path) -> dict[str, object]:
+        return {
+            "id": str(uuid4()),
+            "thread_id": thread_id,
+            "scope": "next_turn",
+            "status": "pending",
+            "filename": path.name,
+            "mime_type": "application/octet-stream",
+            "media_type": "text",
+            "size": path.stat().st_size,
+            "sha256": "a" * 64,
+        }
+
+    def list_attachments(
+        self,
+        thread_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[dict[str, object]]:
+        return []
+
+    def delete_attachment(
+        self, thread_id: str, attachment_id: str
+    ) -> dict[str, object]:
+        return {"id": attachment_id, "thread_id": thread_id, "status": "deleted"}
+
     def last_resumable_run(self, thread_id: str) -> dict[str, object] | None:
         return None
 
@@ -69,6 +95,7 @@ class HtmlGameSurfaceClient:
         thinking: str | None = None,
         memory: dict[str, object] | None = None,
         skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
     ) -> Iterable[ConversationStreamEvent]:
         self.turns.append(content)
         target = self.workspace / "snake-game.html"
