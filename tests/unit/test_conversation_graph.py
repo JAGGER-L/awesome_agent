@@ -36,6 +36,10 @@ from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.conversation_graph import ConversationGraph
+from awesome_agent.runtime.cwd_context import (
+    CwdContextService,
+    InMemoryCwdContextSnapshotRepository,
+)
 from awesome_agent.runtime.graphs import CONVERSATION_TURN_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.tools.approval import ApprovalPolicy
@@ -495,6 +499,96 @@ async def test_graph_injects_current_run_attachment_context(tmp_path: Path) -> N
     events = await runtime.list_events(run.id)
     assert any(
         event.event_type is EventType.ATTACHMENT_CONTEXT_INJECTED for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_injects_cwd_context_for_all_model_calls(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text(
+        "Always mention constraints.\n",
+        encoding="utf-8",
+    )
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "hello")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    await _replace_run_created_memory(
+        runtime,
+        run.id,
+        {"local_enabled": True, "provider": None},
+    )
+    memory_service = _memory_service(tmp_path, builtin_enabled=True)
+    registry = ToolRegistry()
+    register_memory_tools(registry, memory_service)
+    provider = MemoryToolProvider()
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        memory_service=memory_service,
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        cwd_context_service=CwdContextService(
+            repository=InMemoryCwdContextSnapshotRepository()
+        ),
+    )
+
+    await graph.execute(run, leader)
+
+    assert len(provider.requests) == 2
+    for request in provider.requests:
+        assert any(
+            isinstance(message, SystemMessage)
+            and "awesome_agent_cwd_context" in message.content
+            and "Always mention constraints." in message.content
+            for message in request.messages
+        )
+    events = await runtime.list_events(run.id)
+    assert any(
+        event.event_type is EventType.CWD_CONTEXT_EVALUATED
+        and event.payload["status"] == "created"
+        and "Always mention constraints." not in str(event.payload)
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_graph_soft_fails_invalid_cwd_context_without_blocking_turn(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "hello")
+    run = run.model_copy(update={"working_directory": tmp_path / "missing"})
+    await runtime.update_run(run)
+    provider = CapturingProvider("done")
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        cwd_context_service=CwdContextService(
+            repository=InMemoryCwdContextSnapshotRepository()
+        ),
+    )
+
+    state = await graph.execute(run, leader)
+
+    assert state["final_answer"] == "done"
+    assert not any(
+        isinstance(message, SystemMessage)
+        and "awesome_agent_cwd_context" in message.content
+        for message in provider.requests[0].messages
+    )
+    events = await runtime.list_events(run.id)
+    assert any(
+        event.event_type is EventType.CWD_CONTEXT_EVALUATED
+        and event.payload["status"] == "disabled_invalid_working_directory"
+        for event in events
     )
 
 

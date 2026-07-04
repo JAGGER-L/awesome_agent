@@ -35,6 +35,7 @@ from awesome_agent.runtime.agent_loop.contracts import MiddlewareContext
 from awesome_agent.runtime.agent_loop.skill_context_middleware import (
     SkillContextMiddleware,
 )
+from awesome_agent.runtime.cwd_context import CwdContextService
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
 from awesome_agent.safety.redaction import redact_model_messages, redact_value
@@ -64,6 +65,7 @@ class ConversationGraph:
         skill_context_middleware: SkillContextMiddleware | None = None,
         memory_service: MemoryService | None = None,
         attachment_service: AttachmentService | None = None,
+        cwd_context_service: CwdContextService | None = None,
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
@@ -78,6 +80,7 @@ class ConversationGraph:
         )
         self.memory_service = memory_service
         self.attachment_service = attachment_service
+        self.cwd_context_service = cwd_context_service
 
     async def execute(self, run: Run, leader: Agent) -> ConversationGraphState:
         created = await self._run_created_payload(run)
@@ -174,15 +177,21 @@ class ConversationGraph:
             return _state_from_assistant_message(assistant)
 
         messages = await self._model_messages(thread_id)
+        messages = await self._with_attachment_context(
+            run=run,
+            leader=leader,
+            messages=messages,
+        )
         messages = await self._with_memory_context(
             run=run,
             leader=leader,
             messages=messages,
             turn_options=turn_options,
         )
-        messages = await self._with_attachment_context(
+        messages = await self._with_cwd_context(
             run=run,
             leader=leader,
+            thread_id=thread_id,
             messages=messages,
         )
         model_state = await self._run_model(
@@ -530,6 +539,31 @@ class ConversationGraph:
         if not rendered:
             return messages
         return [SystemMessage(content=rendered), *messages]
+
+    async def _with_cwd_context(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        thread_id: UUID,
+        messages: list[ModelMessage],
+    ) -> list[ModelMessage]:
+        if self.cwd_context_service is None:
+            return messages
+        evaluation = await self.cwd_context_service.evaluate(
+            thread_id=thread_id,
+            run_id=run.id,
+            working_directory=run.working_directory,
+        )
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.CWD_CONTEXT_EVALUATED,
+            payload=evaluation.evidence,
+            agent_id=leader.id,
+        )
+        if not evaluation.rendered:
+            return messages
+        return [SystemMessage(content=evaluation.rendered), *messages]
 
     async def _tool_names_for_turn(
         self,
