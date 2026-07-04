@@ -313,9 +313,7 @@ class LocalRuntimeHost:
         after_sequence: int,
     ) -> AsyncIterator[ConversationStreamEvent]:
         pump = asyncio.create_task(
-            self._container.worker_pump.drain_until_run_terminal_or_waiting(
-                str(run_id)
-            )
+            self._container.worker_pump.drain_until_run_terminal_or_waiting(str(run_id))
         )
         try:
             async for projected in self._stream_existing_run_events(

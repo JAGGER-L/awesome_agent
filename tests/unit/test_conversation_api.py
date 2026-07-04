@@ -100,12 +100,14 @@ def test_continue_turn_stream_uses_after_sequence_for_runtime_catchup() -> None:
     first_delta = next(
         event for event in first_events if event["event"] == "message.delta"
     )
+    first_runtime_sequence = first_delta["runtime_sequence"]
+    assert isinstance(first_runtime_sequence, int)
 
     response = client.post(
         f"/threads/{thread['id']}/turns/continue/stream",
         json={
             "expected_run_id": run_id,
-            "after_sequence": first_delta["runtime_sequence"],
+            "after_sequence": first_runtime_sequence,
         },
     )
 
@@ -113,7 +115,10 @@ def test_continue_turn_stream_uses_after_sequence_for_runtime_catchup() -> None:
     events = _sse_events(response.text)
     assert all(
         event.get("runtime_sequence") is None
-        or event["runtime_sequence"] > first_delta["runtime_sequence"]
+        or (
+            isinstance(event["runtime_sequence"], int)
+            and event["runtime_sequence"] > first_runtime_sequence
+        )
         for event in events
     )
     assert events[-1]["event"] in {"turn.completed", "error"}

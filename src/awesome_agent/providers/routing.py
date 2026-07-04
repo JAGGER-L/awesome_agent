@@ -233,7 +233,9 @@ class ModelCallExecutor:
                     last_error=error,
                 ) from error
             if completed_turn is None:
-                error = RuntimeError("provider stream ended without turn.completed")
+                protocol_error = RuntimeError(
+                    "provider stream ended without turn.completed"
+                )
                 attempt = ModelRouteAttempt(
                     route_id=decision.route_id,
                     attempt_number=index,
@@ -247,8 +249,8 @@ class ModelCallExecutor:
                 raise ModelRouteExecutionError(
                     "Model route streaming failed.",
                     attempts=tuple(attempts),
-                    last_error=error,
-                ) from error
+                    last_error=protocol_error,
+                ) from protocol_error
             if self._token_usage_recorder is not None:
                 self._token_usage_recorder(candidate, completed_turn)
             attempt = ModelRouteAttempt(
