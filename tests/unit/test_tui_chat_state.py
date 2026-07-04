@@ -8,6 +8,7 @@ from awesome_agent.tui.chat_state import (
     ChatSessionState,
     chat_messages_from_thread_records,
 )
+from awesome_agent.tui.status_panel import StatusPanelTab
 
 
 def test_chat_session_starts_empty() -> None:
@@ -46,6 +47,38 @@ def test_chat_state_toggles_details() -> None:
 
     assert updated.details_enabled is True
     assert updated.toggle_details().details_enabled is False
+
+
+def test_chat_state_opens_and_closes_status_panel() -> None:
+    state = ChatSessionState.new()
+
+    opened = state.open_status_panel()
+
+    assert opened.active_status_tab is StatusPanelTab.STATUS
+    assert opened.close_status_panel().active_status_tab is None
+
+
+def test_chat_state_cycles_status_tabs() -> None:
+    state = ChatSessionState.new().open_status_panel()
+
+    assert state.next_status_tab().active_status_tab is StatusPanelTab.CONFIG
+    assert state.next_status_tab().next_status_tab().active_status_tab is (
+        StatusPanelTab.USAGE
+    )
+    assert state.previous_status_tab().active_status_tab is StatusPanelTab.USAGE
+
+
+def test_switch_thread_closes_status_panel() -> None:
+    state = ChatSessionState.new().open_status_panel()
+
+    switched = state.switch_thread(
+        backend_thread_id="thread-1",
+        title="Restored",
+        context_label="E:/project",
+        messages=[],
+    )
+
+    assert switched.active_status_tab is None
 
 
 def test_assistant_message_can_carry_changed_files() -> None:

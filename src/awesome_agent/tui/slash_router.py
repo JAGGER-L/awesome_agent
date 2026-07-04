@@ -16,8 +16,6 @@ from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSession
 class ChatSemanticClient(Protocol):
     def create_thread(self, title: str) -> SurfaceThread | dict[str, object]: ...
 
-    def runtime_status(self) -> dict[str, object]: ...
-
     def list_models(self) -> dict[str, object]: ...
 
     def memory_summary(self) -> dict[str, object]: ...
@@ -54,12 +52,6 @@ class SlashRouter:
             threads = self.client.list_threads()
             return ChatMessage.system(
                 format_thread_list(thread_summaries(threads, state.backend_thread_id))
-            )
-        if command.kind is SlashCommandKind.STATUS:
-            status = self.client.runtime_status()
-            return ChatMessage.system(
-                _format_status(status, state),
-                kind=ChatEventKind.RUN,
             )
         if command.kind is SlashCommandKind.MODEL:
             if state.first_run_summary is not None:
@@ -262,24 +254,6 @@ def _display_group_name(name: str) -> str:
         "approvals": "Approvals",
     }
     return mapping.get(normalized.casefold(), normalized.title() or "Other")
-
-
-def _format_status(status: dict[str, object], state: ChatSessionState) -> str:
-    context = state.launch_context
-    workspace = context.display_path if context is not None else "-"
-    lines = [
-        "Status",
-        "",
-        f"Conversation: {state.thread_title}",
-        f"Model: {state.last_requested_model or 'default'}",
-        f"Thinking: {state.thinking_mode}",
-        f"Task: {state.status_label}",
-        "Team: leader only",
-        f"Runtime: {status.get('runtime') or status.get('api') or '-'}",
-        f"Sandbox: {status.get('sandbox') or '-'}",
-        f"Workspace: {workspace}",
-    ]
-    return "\n".join(lines)
 
 
 def _format_memory(memory: dict[str, object]) -> str:

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
+from awesome_agent.cli.slash_commands import SlashCommandKind
 from awesome_agent.conversation.events import (
     ConversationStreamEvent,
     ConversationStreamEventKind,
@@ -12,6 +13,7 @@ from awesome_agent.conversation.events import (
 from awesome_agent.tui.app import AwesomeAgentTui
 from awesome_agent.tui.chat_state import ChatEventKind
 from awesome_agent.tui.events import ApprovalPromptState
+from awesome_agent.tui.status_panel import StatusPanelTab
 
 
 class FakeSurfaceClient:
@@ -70,6 +72,30 @@ def test_tui_continue_input_uses_continuation_without_user_message() -> None:
 
     assert started == ["run-1"]
     assert [message.content for message in app.state.messages] == []
+
+
+def test_tui_user_message_closes_status_panel() -> None:
+    app = _app(FakeSurfaceClient())
+    started: list[str] = []
+    app._start_user_message = lambda content: started.append(content)  # type: ignore[method-assign]
+    app.state = app.state.open_status_panel(StatusPanelTab.CONFIG)
+
+    app.on_input_submitted(cast(Any, _submitted("hello")))
+
+    assert started == ["hello"]
+    assert app.state.active_status_tab is None
+
+
+def test_tui_non_status_command_closes_status_panel() -> None:
+    app = _app(FakeSurfaceClient())
+    started: list[SlashCommandKind] = []
+    app._start_command = lambda parsed: started.append(parsed.kind)  # type: ignore[method-assign]
+    app.state = app.state.open_status_panel(StatusPanelTab.USAGE)
+
+    app.on_input_submitted(cast(Any, _submitted("/usage")))
+
+    assert started == [SlashCommandKind.USAGE]
+    assert app.state.active_status_tab is None
 
 
 def test_tui_approval_approve_once_decides_and_continues() -> None:

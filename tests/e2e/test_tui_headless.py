@@ -698,11 +698,13 @@ async def test_tui_enter_executes_active_prefix_candidate() -> None:
         await pilot.click("#prompt")
         await pilot.press("/", "s", "enter")
         transcript = app.query_one("#transcript").render()
+        panel = app.query_one("#status-panel").render()
 
-    rendered = str(transcript)
-    assert "Status" in rendered
-    assert "Runtime: ready" in rendered
-    assert "Sandbox: local" in rendered
+    rendered = str(panel)
+    assert "[Status]" in rendered
+    assert "Version:" in rendered
+    assert "Conversation name:" in rendered
+    assert "Runtime:" not in str(transcript)
     assert "> /status" in str(transcript)
 
 
@@ -718,6 +720,38 @@ async def test_tui_status_does_not_block_input_focus() -> None:
         await pilot.press("h", "i")
 
     assert prompt.value == "hi"
+
+
+@pytest.mark.asyncio
+async def test_tui_status_panel_switches_tabs_and_closes(tmp_path: Path) -> None:
+    app = AwesomeAgentTui(
+        api_url="http://127.0.0.1:8000",
+        client=FakeClient(),
+        launch_context=CliLaunchContext(
+            project_root=tmp_path,
+            context_kind="workspace",
+        ),
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("/", "s", "t", "a", "t", "u", "s", "enter")
+        status_panel = str(app.query_one("#status-panel").render())
+        assert "[Status]" in status_panel
+        assert f"cwd:                {tmp_path}" in status_panel
+
+        await pilot.press("right")
+        config_panel = str(app.query_one("#status-panel").render())
+        assert "[Config]" in config_panel
+        assert "Provider:           deepseek" in config_panel
+
+        await pilot.press("right")
+        usage_panel = str(app.query_one("#status-panel").render())
+        assert "[Usage]" in usage_panel
+        assert "Total cost:         -" in usage_panel
+
+        await pilot.press("escape")
+        assert str(app.query_one("#status-panel").render()) == ""
 
 
 @pytest.mark.asyncio
@@ -1231,9 +1265,9 @@ async def test_tui_status_includes_launch_context(tmp_path: Path) -> None:
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("/", "s", "t", "a", "t", "u", "s", "enter")
-        transcript = app.query_one("#transcript").render()
+        panel = app.query_one("#status-panel").render()
 
-    assert f"Workspace: {tmp_path}" in str(transcript)
+    assert f"cwd:                {tmp_path}" in str(panel)
 
 
 @pytest.mark.asyncio

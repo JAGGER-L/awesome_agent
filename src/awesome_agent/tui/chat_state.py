@@ -14,6 +14,7 @@ from awesome_agent.surfaces.client import (
 )
 from awesome_agent.tui.events import ApprovalPromptState
 from awesome_agent.tui.pickers import PickerState
+from awesome_agent.tui.status_panel import StatusPanelTab
 
 
 class ChatEventKind(StrEnum):
@@ -127,6 +128,7 @@ class ChatSessionState:
     pending_attachments: tuple[dict[str, object], ...] = ()
     pending_model_provider_id: str | None = None
     active_picker: PickerState | None = None
+    active_status_tab: StatusPanelTab | None = None
     pending_approval: ApprovalPromptState | None = None
     last_requested_model: str | None = None
     last_response_model: str | None = None
@@ -214,6 +216,7 @@ class ChatSessionState:
             pending_attachments=(),
             pending_model_provider_id=None,
             active_picker=None,
+            active_status_tab=None,
             pending_approval=None,
             status_label="ready",
             last_failed_user_message=None,
@@ -288,10 +291,33 @@ class ChatSessionState:
         return replace(self, pending_attachments=())
 
     def open_picker(self, picker: PickerState) -> ChatSessionState:
-        return replace(self, active_picker=picker)
+        return replace(self, active_picker=picker, active_status_tab=None)
 
     def close_picker(self) -> ChatSessionState:
         return replace(self, active_picker=None)
+
+    def open_status_panel(
+        self,
+        tab: StatusPanelTab = StatusPanelTab.STATUS,
+    ) -> ChatSessionState:
+        return replace(self, active_status_tab=tab, active_picker=None)
+
+    def close_status_panel(self) -> ChatSessionState:
+        return replace(self, active_status_tab=None)
+
+    def next_status_tab(self) -> ChatSessionState:
+        if self.active_status_tab is None:
+            return self
+        tabs = StatusPanelTab.ordered()
+        index = tabs.index(self.active_status_tab)
+        return replace(self, active_status_tab=tabs[(index + 1) % len(tabs)])
+
+    def previous_status_tab(self) -> ChatSessionState:
+        if self.active_status_tab is None:
+            return self
+        tabs = StatusPanelTab.ordered()
+        index = tabs.index(self.active_status_tab)
+        return replace(self, active_status_tab=tabs[(index - 1) % len(tabs)])
 
     def with_approval_prompt(
         self,
