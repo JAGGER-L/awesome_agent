@@ -225,6 +225,73 @@ async def test_continue_turn_emits_turn_continued_for_latest_resumable_run() -> 
 
 
 @pytest.mark.asyncio
+async def test_continue_turn_ignores_terminal_run_with_waiting_dispatch() -> None:
+    thread_id = uuid4()
+    terminal_newer = uuid4()
+    resumable_older = uuid4()
+    runtime = FakeRuntimeRepository(
+        [
+            _run(
+                terminal_newer,
+                status=RunStatus.COMPLETED,
+                dispatch_status=DispatchStatus.WAITING,
+                created_at=datetime(2026, 1, 3, tzinfo=UTC),
+            ),
+            _run(
+                resumable_older,
+                status=RunStatus.PAUSED,
+                dispatch_status=DispatchStatus.WAITING,
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+        ],
+        {
+            terminal_newer: [
+                _event(
+                    terminal_newer,
+                    1,
+                    EventType.RUN_CREATED,
+                    {"thread_id": str(thread_id), "goal": "terminal"},
+                    created_at=datetime(2026, 1, 3, tzinfo=UTC),
+                ),
+                _event(
+                    terminal_newer,
+                    2,
+                    EventType.RUN_STATUS_CHANGED,
+                    {"status": RunStatus.COMPLETED.value},
+                    created_at=datetime(2026, 1, 3, 0, 0, 1, tzinfo=UTC),
+                ),
+            ],
+            resumable_older: [
+                _event(
+                    resumable_older,
+                    1,
+                    EventType.RUN_CREATED,
+                    {"thread_id": str(thread_id), "goal": "resumable"},
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+                _event(
+                    resumable_older,
+                    2,
+                    EventType.RUN_STATUS_CHANGED,
+                    {"status": RunStatus.COMPLETED.value},
+                    created_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+                ),
+            ],
+        },
+    )
+    service, _repository, intake = _service(
+        thread_id=thread_id,
+        runtime_repository=runtime,
+    )
+
+    events = [event async for event in service.continue_turn(thread_id=thread_id)]
+
+    assert intake.create_turn_run_calls == 0
+    assert events[0].event is ConversationStreamEventKind.TURN_CONTINUED
+    assert events[0].payload["run_id"] == str(resumable_older)
+
+
+@pytest.mark.asyncio
 async def test_continue_turn_rejects_expected_run_mismatch() -> None:
     thread_id = uuid4()
     latest = uuid4()

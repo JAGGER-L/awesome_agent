@@ -387,6 +387,12 @@ def _event(
 
 
 def _is_resumable_run(run: Run) -> bool:
+    if run.status in {
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+    }:
+        return False
     return (
         run.status
         in {
