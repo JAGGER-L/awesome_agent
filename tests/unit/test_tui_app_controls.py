@@ -3,15 +3,20 @@ from __future__ import annotations
 from collections.abc import Iterable
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import UUID
 
-from awesome_agent.conversation.events import ConversationStreamEvent
+from awesome_agent.conversation.events import (
+    ConversationStreamEvent,
+    ConversationStreamEventKind,
+)
 from awesome_agent.tui.app import AwesomeAgentTui
+from awesome_agent.tui.chat_state import ChatEventKind
 from awesome_agent.tui.events import ApprovalPromptState
 
 
 class FakeSurfaceClient:
     def __init__(self) -> None:
-        self.continued: list[tuple[str, str | None]] = []
+        self.continued: list[tuple[str, str | None, int]] = []
         self.cancelled: list[tuple[str, str | None]] = []
         self.approvals: list[tuple[str, str, bool, str | None]] = []
 
@@ -26,8 +31,9 @@ class FakeSurfaceClient:
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
-        self.continued.append((thread_id, expected_run_id))
+        self.continued.append((thread_id, expected_run_id, after_sequence))
         return []
 
     def cancel(
@@ -164,6 +170,60 @@ def test_tui_continue_failure_is_not_retryable_as_user_message() -> None:
     app._finish_stream_worker("", failed=True)
 
     assert not app.state.last_failed_user_message
+
+
+def test_tui_renders_explicit_tool_stream_event_without_message_delta() -> None:
+    app = _app(FakeSurfaceClient())
+
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.TOOL_STARTED,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=3,
+            trace_id="trace",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=10,
+            payload={"tool": "repo.apply_patch", "status": "started"},
+        )
+    )
+
+    assert app.state.messages[-1].kind is ChatEventKind.TOOL
+    assert "repo.apply_patch" in app.state.messages[-1].content
+    assert "started" in app.state.messages[-1].content
+
+
+def test_tui_ignores_duplicate_runtime_sequence() -> None:
+    app = _app(FakeSurfaceClient())
+    event = ConversationStreamEvent(
+        event=ConversationStreamEventKind.MESSAGE_DELTA,
+        thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+        turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+        sequence=1,
+        trace_id="trace",
+        run_id=UUID("00000000-0000-0000-0000-000000000003"),
+        runtime_sequence=12,
+        payload={"text": "hello"},
+    )
+
+    app._apply_stream_event(event)
+    app._apply_stream_event(event)
+
+    assert app.state.messages[-1].content == "hello"
+
+
+def test_tui_continue_worker_uses_last_runtime_sequence() -> None:
+    client = FakeSurfaceClient()
+    app = _app(client)
+    app._last_runtime_sequence_by_run["run-1"] = 12
+    app.call_from_thread = lambda callback, *args, **kwargs: callback(  # type: ignore[method-assign]
+        *args,
+        **kwargs,
+    )
+
+    app._continue_worker("thread-1", "run-1")
+
+    assert client.continued == [("thread-1", "run-1", 12)]
 
 
 def _app(client: FakeSurfaceClient) -> AwesomeAgentTui:

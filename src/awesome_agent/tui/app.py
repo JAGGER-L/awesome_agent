@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 from typing import ClassVar, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from textual import events
 from textual.app import App, ComposeResult
@@ -121,6 +121,8 @@ class AwesomeAgentTui(App[None]):
         if run_id is not None:
             self.state = self.state.with_run(run_id)
         self._active_worker: Worker[object] | None = None
+        self._seen_runtime_events: set[tuple[str, int]] = set()
+        self._last_runtime_sequence_by_run: dict[str, int] = {}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="chat-root"):
@@ -478,6 +480,7 @@ class AwesomeAgentTui(App[None]):
             for stream_event in self.client.continue_turn(
                 thread_id,
                 expected_run_id=expected_run_id,
+                after_sequence=self._last_runtime_sequence(expected_run_id),
             ):
                 if stream_event.event is ConversationStreamEventKind.ERROR:
                     failed = True
@@ -493,8 +496,10 @@ class AwesomeAgentTui(App[None]):
             )
 
     def _apply_stream_event(self, stream_event: ConversationStreamEvent) -> None:
-        run_id = stream_event.payload.get("run_id")
-        if isinstance(run_id, str):
+        if not self._remember_stream_event(stream_event):
+            return
+        run_id = _stream_event_run_id(stream_event)
+        if run_id is not None:
             self.state = self.state.note_run_started(run_id)
         if stream_event.event is ConversationStreamEventKind.TURN_CONTINUED:
             self.state = self.state.begin_turn(str(stream_event.turn_id))
@@ -516,26 +521,43 @@ class AwesomeAgentTui(App[None]):
             text = stream_event.payload.get("text")
             if isinstance(text, str):
                 self.state = self.state.append_stream_delta(text)
-            tool_event = stream_event.payload.get("tool_event")
-            if isinstance(tool_event, dict):
-                self.state = self.state.append(
-                    ChatMessage.system(
-                        render_tool_event(
-                            _tool_display_event(tool_event),
-                            details_enabled=self.state.details_enabled,
-                        ).plain,
-                        kind=ChatEventKind.TOOL,
-                    )
+        elif stream_event.event in {
+            ConversationStreamEventKind.TOOL_STARTED,
+            ConversationStreamEventKind.TOOL_PROGRESS,
+            ConversationStreamEventKind.TOOL_COMPLETED,
+        }:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    render_tool_event(
+                        _tool_display_event(stream_event.payload),
+                        details_enabled=self.state.details_enabled,
+                    ).plain,
+                    kind=ChatEventKind.TOOL,
                 )
-            team_event = stream_event.payload.get("team_event")
-            if isinstance(team_event, dict):
+            )
+        elif stream_event.event is ConversationStreamEventKind.TEAM_EVENT:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    render_team_event(
+                        _team_display_event(stream_event.payload),
+                        details_enabled=self.state.details_enabled,
+                    ).plain,
+                    kind=ChatEventKind.RUN,
+                )
+            )
+        elif stream_event.event is ConversationStreamEventKind.VALIDATION_EVENT:
+            self.state = self.state.append(
+                ChatMessage.system(
+                    _validation_event_text(stream_event.payload),
+                    kind=ChatEventKind.RUN,
+                )
+            )
+        elif stream_event.event is ConversationStreamEventKind.MODEL_ATTEMPT:
+            if self.state.details_enabled:
                 self.state = self.state.append(
                     ChatMessage.system(
-                        render_team_event(
-                            _team_display_event(team_event),
-                            details_enabled=self.state.details_enabled,
-                        ).plain,
-                        kind=ChatEventKind.RUN,
+                        _model_attempt_text(stream_event.payload),
+                        kind=ChatEventKind.MODEL,
                     )
                 )
         elif stream_event.event is ConversationStreamEventKind.MESSAGE_COMPLETED:
@@ -568,6 +590,26 @@ class AwesomeAgentTui(App[None]):
             )
         self._render()
         self._focus_prompt()
+
+    def _remember_stream_event(self, stream_event: ConversationStreamEvent) -> bool:
+        run_id = _stream_event_run_id(stream_event)
+        sequence = stream_event.runtime_sequence
+        if run_id is None or sequence is None:
+            return True
+        key = (run_id, sequence)
+        if key in self._seen_runtime_events:
+            return False
+        self._seen_runtime_events.add(key)
+        self._last_runtime_sequence_by_run[run_id] = max(
+            sequence,
+            self._last_runtime_sequence_by_run.get(run_id, 0),
+        )
+        return True
+
+    def _last_runtime_sequence(self, run_id: str | None) -> int:
+        if run_id is None:
+            return 0
+        return self._last_runtime_sequence_by_run.get(run_id, 0)
 
     def _apply_approval_choice(self, index: int) -> None:
         prompt = self.state.pending_approval
@@ -1130,6 +1172,17 @@ def _changed_file_label(count: int) -> str:
     return f"{count} changed files"
 
 
+def _stream_event_run_id(event: ConversationStreamEvent) -> str | None:
+    if event.run_id is not None:
+        return str(event.run_id)
+    run_id = event.payload.get("run_id")
+    if isinstance(run_id, UUID):
+        return str(run_id)
+    if isinstance(run_id, str) and run_id:
+        return run_id
+    return None
+
+
 def _apply_thread_settings(
     state: ChatSessionState,
     thread: SurfaceThread | dict[str, object],
@@ -1189,6 +1242,24 @@ def _team_display_event(payload: dict[str, object]) -> TeamDisplayEvent:
     }
     title = "Review" if "verifier" in role.casefold() else "Team"
     return TeamDisplayEvent(title=title, summary=f"{role}: {summary}", details=details)
+
+
+def _validation_event_text(payload: dict[str, object]) -> str:
+    status = str(payload.get("status") or payload.get("result") or "validation")
+    summary = payload.get("summary") or payload.get("message") or payload.get("reason")
+    if isinstance(summary, str) and summary:
+        return f"Validation - {status}: {summary}"
+    return f"Validation - {status}"
+
+
+def _model_attempt_text(payload: dict[str, object]) -> str:
+    provider = str(payload.get("provider") or "provider")
+    model = str(payload.get("model") or "model")
+    outcome = str(payload.get("outcome") or payload.get("status") or "attempt")
+    reason = payload.get("fallback_reason") or payload.get("error_code")
+    if isinstance(reason, str) and reason:
+        return f"Model attempt - {provider}/{model}: {outcome} ({reason})"
+    return f"Model attempt - {provider}/{model}: {outcome}"
 
 
 def _approval_prompt_from_payload(

@@ -174,6 +174,7 @@ class FakeClient:
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
         turn_id = uuid4()
         return [
@@ -297,6 +298,7 @@ class SlowStreamingClient(FakeClient):
         thread_id: str,
         *,
         expected_run_id: str | None = None,
+        after_sequence: int = 0,
     ) -> Iterable[ConversationStreamEvent]:
         self.continued_run_ids.append(expected_run_id)
         yield from self._events()
@@ -1086,18 +1088,16 @@ async def test_tui_details_on_expands_tool_event_details() -> None:
             turn_id = uuid4()
             return [
                 ConversationStreamEvent(
-                    event=ConversationStreamEventKind.MESSAGE_DELTA,
+                    event=ConversationStreamEventKind.TOOL_COMPLETED,
                     thread_id=uuid4(),
                     turn_id=turn_id,
                     sequence=1,
                     trace_id="trace-tool-details",
                     payload={
-                        "tool_event": {
-                            "name": "run_command",
-                            "summary": "completed",
-                            "command": "python -m pytest",
-                            "exit_code": 0,
-                        }
+                        "name": "run_command",
+                        "summary": "completed",
+                        "command": "python -m pytest",
+                        "exit_code": 0,
                     },
                 ),
                 ConversationStreamEvent(
@@ -1391,31 +1391,27 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
             turn_id = uuid4()
             return [
                 ConversationStreamEvent(
-                    event=ConversationStreamEventKind.MESSAGE_DELTA,
+                    event=ConversationStreamEventKind.TOOL_COMPLETED,
                     thread_id=uuid4(),
                     turn_id=turn_id,
                     sequence=1,
                     trace_id="trace-events",
                     payload={
-                        "tool_event": {
-                            "name": "write_file",
-                            "summary": "created snake-game.html",
-                            "path": "snake-game.html",
-                        }
+                        "name": "write_file",
+                        "summary": "created snake-game.html",
+                        "path": "snake-game.html",
                     },
                 ),
                 ConversationStreamEvent(
-                    event=ConversationStreamEventKind.MESSAGE_DELTA,
+                    event=ConversationStreamEventKind.TEAM_EVENT,
                     thread_id=uuid4(),
                     turn_id=turn_id,
                     sequence=2,
                     trace_id="trace-events",
                     payload={
-                        "team_event": {
-                            "role": "leader",
-                            "summary": "created 2 teammates",
-                            "message": "leader -> frontend-engineer",
-                        }
+                        "role": "leader",
+                        "summary": "created 2 teammates",
+                        "message": "leader -> frontend-engineer",
                     },
                 ),
                 ConversationStreamEvent(
