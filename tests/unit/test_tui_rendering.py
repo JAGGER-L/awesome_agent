@@ -39,6 +39,60 @@ def test_assistant_message_uses_answer_marker() -> None:
     assert not rendered.startswith("[message]")
 
 
+def test_assistant_message_renders_collapsed_changed_files() -> None:
+    message = ChatMessage.assistant(
+        "Done.",
+        changed_files=(
+            ChangedFileSummary(path="a.py", status="created"),
+            ChangedFileSummary(path="b.py", status="updated"),
+            ChangedFileSummary(path="c.py", status="deleted"),
+            ChangedFileSummary(path="d.py", status="updated"),
+        ),
+    )
+
+    rendered = render_message(message, changed_files_expanded=False).plain
+
+    assert "assistant\nDone." in rendered
+    assert "Changed files" in rendered
+    assert "created a.py" in rendered
+    assert "updated b.py" in rendered
+    assert "deleted c.py" in rendered
+    assert "d.py" not in rendered
+    assert "1 more file (ctrl+e to expand)" in rendered
+
+
+def test_assistant_message_renders_expanded_changed_files() -> None:
+    message = ChatMessage.assistant(
+        "Done.",
+        changed_files=(
+            ChangedFileSummary(path="a.py", status="created"),
+            ChangedFileSummary(path="b.py", status="updated"),
+            ChangedFileSummary(path="c.py", status="deleted"),
+            ChangedFileSummary(path="d.py", status="updated"),
+        ),
+    )
+
+    rendered = render_message(message, changed_files_expanded=True).plain
+
+    assert "updated d.py" in rendered
+    assert "ctrl+e to collapse" in rendered
+
+
+def test_assistant_changed_files_bounds_long_paths_to_one_line() -> None:
+    message = ChatMessage.assistant(
+        "Done.",
+        changed_files=(
+            ChangedFileSummary(path=f"src/{'nested/' * 30}file.py", status="updated"),
+        ),
+    )
+
+    rendered = render_message(message, changed_files_expanded=False).plain
+
+    changed_line = next(line for line in rendered.splitlines() if "updated" in line)
+    assert len(changed_line) <= 120
+    assert "\n" not in changed_line
+
+
 def test_error_message_is_actionable() -> None:
     rendered = render_message(ChatMessage.error("Provider timed out")).plain
 

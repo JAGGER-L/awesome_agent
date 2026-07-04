@@ -28,7 +28,6 @@ from awesome_agent.conversation.events import (
 from awesome_agent.surfaces.client import (
     SurfaceClient,
     SurfaceThread,
-    changed_file_summaries_from_payload,
 )
 from awesome_agent.tui.chat_state import (
     ChatEventKind,
@@ -47,7 +46,6 @@ from awesome_agent.tui.events import (
 from awesome_agent.tui.pickers import PickerItem, PickerState
 from awesome_agent.tui.rendering import (
     render_approval_prompt,
-    render_changed_files,
     render_pending_attachments,
     render_team_event,
     render_tool_event,
@@ -87,6 +85,12 @@ class AwesomeAgentTui(App[None]):
     """
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         ("ctrl+c", "cancel", "Cancel"),
+        Binding(
+            "ctrl+e",
+            "toggle_changed_files",
+            "Toggle changed files",
+            priority=True,
+        ),
         ("ctrl+o", "toggle_thought", "Toggle thought"),
         ("ctrl+r", "retry", "Retry"),
         ("q", "quit", "Quit"),
@@ -340,6 +344,11 @@ class AwesomeAgentTui(App[None]):
         self._render()
         self._focus_prompt()
 
+    def action_toggle_changed_files(self) -> None:
+        self.state = self.state.toggle_changed_files()
+        self._render()
+        self._focus_prompt()
+
     def _render(self, *, follow: bool = True) -> None:
         try:
             self.query_one("#welcome", Static).update(self._welcome_text())
@@ -347,6 +356,7 @@ class AwesomeAgentTui(App[None]):
                 render_transcript(
                     self.state.messages,
                     thought_blocks=self.state.thought_blocks,
+                    changed_files_expanded=self.state.changed_files_expanded,
                 )
             )
         except NoMatches:
@@ -588,15 +598,8 @@ class AwesomeAgentTui(App[None]):
                 self.state = self.state.upsert_streaming_assistant(final_content)
             self.state = self.state.note_model_metadata(stream_event.payload)
             if "changed_files" in stream_event.payload:
-                self.state = self.state.append(
-                    ChatMessage.system(
-                        render_changed_files(
-                            changed_file_summaries_from_payload(
-                                stream_event.payload.get("changed_files")
-                            )
-                        ).plain,
-                        kind=ChatEventKind.RUN,
-                    )
+                self.state = self.state.with_latest_assistant_changed_files(
+                    stream_event.payload.get("changed_files")
                 )
         elif stream_event.event is ConversationStreamEventKind.ERROR:
             if stream_event.payload.get("approval_required") is True:

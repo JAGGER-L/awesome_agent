@@ -8,6 +8,10 @@ from uuid import UUID, uuid4
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 from awesome_agent.cli.repo_context import CliLaunchContext
+from awesome_agent.surfaces.client import (
+    ChangedFileSummary,
+    changed_file_summaries_from_payload,
+)
 from awesome_agent.tui.events import ApprovalPromptState
 from awesome_agent.tui.pickers import PickerState
 
@@ -29,6 +33,7 @@ class ChatMessage:
     content: str
     kind: ChatEventKind = ChatEventKind.MESSAGE
     attachments: tuple[dict[str, object], ...] = ()
+    changed_files: tuple[ChangedFileSummary, ...] = ()
     id: str = field(default_factory=lambda: uuid4().hex)
     turn_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -49,12 +54,19 @@ class ChatMessage:
         )
 
     @classmethod
-    def assistant(cls, content: str, *, turn_id: str | None = None) -> ChatMessage:
+    def assistant(
+        cls,
+        content: str,
+        *,
+        turn_id: str | None = None,
+        changed_files: tuple[ChangedFileSummary, ...] = (),
+    ) -> ChatMessage:
         return cls(
             role="assistant",
             content=content,
             kind=ChatEventKind.MODEL,
             turn_id=turn_id,
+            changed_files=changed_files,
         )
 
     @classmethod
@@ -122,6 +134,7 @@ class ChatSessionState:
     last_model_response_id: str | None = None
     status_label: str = "ready"
     details_enabled: bool = False
+    changed_files_expanded: bool = False
     last_failed_user_message: str | None = None
     messages: list[ChatMessage] = field(default_factory=list)
 
@@ -204,6 +217,7 @@ class ChatSessionState:
             pending_approval=None,
             status_label="ready",
             last_failed_user_message=None,
+            changed_files_expanded=False,
             messages=messages or [],
         )
 
@@ -298,10 +312,29 @@ class ChatSessionState:
                 self,
                 messages=[
                     *self.messages[:-1],
-                    ChatMessage.assistant(content, turn_id=existing.turn_id),
+                    ChatMessage.assistant(
+                        content,
+                        turn_id=existing.turn_id,
+                        changed_files=existing.changed_files,
+                    ),
                 ],
             )
         return self.append(ChatMessage.assistant(content, turn_id=self.active_turn_id))
+
+    def with_latest_assistant_changed_files(
+        self,
+        value: object,
+    ) -> ChatSessionState:
+        changed_files = changed_file_summaries_from_payload(value)
+        if not changed_files:
+            return self
+        for index in range(len(self.messages) - 1, -1, -1):
+            existing = self.messages[index]
+            if existing.role == "assistant":
+                messages = list(self.messages)
+                messages[index] = replace(existing, changed_files=changed_files)
+                return replace(self, messages=messages)
+        return self
 
     def begin_turn(self, turn_id: str) -> ChatSessionState:
         return replace(
@@ -491,6 +524,9 @@ class ChatSessionState:
     def toggle_details(self) -> ChatSessionState:
         return replace(self, details_enabled=not self.details_enabled)
 
+    def toggle_changed_files(self) -> ChatSessionState:
+        return replace(self, changed_files_expanded=not self.changed_files_expanded)
+
     def with_run(
         self,
         run_id: str,
@@ -525,7 +561,13 @@ def _chat_message_from_record(record: dict[str, Any]) -> ChatMessage:
     if role == "user":
         return ChatMessage.user(content, attachments=_record_attachments(record))
     if role == "assistant":
-        return ChatMessage.assistant(content)
+        metadata = record.get("metadata")
+        changed_files: tuple[ChangedFileSummary, ...] = ()
+        if isinstance(metadata, dict):
+            changed_files = changed_file_summaries_from_payload(
+                metadata.get("changed_files")
+            )
+        return ChatMessage.assistant(content, changed_files=changed_files)
     return ChatMessage.system(content, kind=kind)
 
 

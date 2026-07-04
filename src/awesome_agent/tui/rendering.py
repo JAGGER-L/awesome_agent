@@ -14,7 +14,11 @@ from awesome_agent.tui.events import (
 )
 
 
-def render_message(message: ChatMessage) -> Text:
+def render_message(
+    message: ChatMessage,
+    *,
+    changed_files_expanded: bool = False,
+) -> Text:
     if message.kind is ChatEventKind.COMMAND:
         return Text.assemble(("> ", "bold magenta"), (message.content, "bold"))
     if message.role == "user":
@@ -24,7 +28,16 @@ def render_message(message: ChatMessage) -> Text:
             rendered.append(f"\n{attachment_line}", style="dim")
         return rendered
     if message.role == "assistant":
-        return Text.assemble(("assistant\n", "dim"), (message.content, "white"))
+        rendered = Text.assemble(("assistant\n", "dim"), (message.content, "white"))
+        if message.changed_files:
+            rendered.append("\n")
+            rendered.append_text(
+                render_changed_files(
+                    message.changed_files,
+                    expanded=changed_files_expanded,
+                )
+            )
+        return rendered
     if message.kind is ChatEventKind.ERROR:
         return _labeled("error", message.content, label_style="bold red")
     if message.kind is ChatEventKind.RUN:
@@ -43,6 +56,7 @@ def render_transcript(
     *,
     thought: ThoughtBlock | None = None,
     thought_blocks: dict[str, ThoughtBlock] | None = None,
+    changed_files_expanded: bool = False,
 ) -> Text:
     rendered = Text()
     message_list = list(messages)
@@ -52,7 +66,12 @@ def render_transcript(
     for index, message in enumerate(message_list):
         if index:
             rendered.append("\n\n")
-        rendered.append_text(render_message(message))
+        rendered.append_text(
+            render_message(
+                message,
+                changed_files_expanded=changed_files_expanded,
+            )
+        )
         if (
             message.role == "user"
             and message.turn_id is not None
@@ -118,15 +137,46 @@ def render_approval_prompt(prompt: ApprovalPromptState) -> Text:
     return Text(prompt.render(), style="yellow")
 
 
-def render_changed_files(files: Iterable[ChangedFileSummary]) -> Text:
+def render_changed_files(
+    files: Iterable[ChangedFileSummary],
+    *,
+    expanded: bool = False,
+    visible_limit: int = 3,
+) -> Text:
     file_list = list(files)
     rendered = Text("Changed files", style="green")
     if not file_list:
         rendered.append("\n  none")
         return rendered
-    for item in file_list:
-        rendered.append(f"\n  {item.status:<7} {item.visible_path}")
+    visible = file_list if expanded else file_list[:visible_limit]
+    for item in visible:
+        rendered.append(
+            f"\n  {_changed_file_status(item.status):<7} "
+            f"{_single_line_path(item.visible_path)}"
+        )
+    remaining = len(file_list) - len(visible)
+    if remaining > 0:
+        suffix = "file" if remaining == 1 else "files"
+        rendered.append(
+            f"\n  {remaining} more {suffix} (ctrl+e to expand)",
+            style="dim",
+        )
+    elif len(file_list) > visible_limit:
+        rendered.append("\n  ctrl+e to collapse", style="dim")
     return rendered
+
+
+def _changed_file_status(value: str) -> str:
+    if value in {"created", "updated", "deleted", "unknown"}:
+        return value
+    return "unknown"
+
+
+def _single_line_path(value: str, *, max_chars: int = 96) -> str:
+    one_line = value.replace("\r", " ").replace("\n", " ")
+    if len(one_line) <= max_chars:
+        return one_line
+    return f"...{one_line[-(max_chars - 3) :]}"
 
 
 def render_pending_attachments(attachments: Iterable[dict[str, object]]) -> Text:
