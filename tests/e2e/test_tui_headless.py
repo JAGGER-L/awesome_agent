@@ -1725,7 +1725,10 @@ async def test_tui_renders_changed_files_after_completed_message() -> None:
                             {
                                 "path": "/mnt/user-data/workspace/snake-game.html",
                                 "status": "created",
-                            }
+                            },
+                            {"path": "README.md", "status": "updated"},
+                            {"path": "old.html", "status": "deleted"},
+                            {"path": "styles.css", "status": "updated"},
                         ],
                     },
                 ),
@@ -1738,12 +1741,21 @@ async def test_tui_renders_changed_files_after_completed_message() -> None:
         await pilot.press("b", "u", "i", "l", "d", "enter")
         transcript = app.query_one("#transcript").render()
 
-    rendered = str(transcript)
-    assert "Done." in rendered
-    assert "Changed files" in rendered
-    assert "created snake-game.html" in rendered
-    assert rendered.index("Done.") < rendered.index("Changed files")
-    assert "/mnt/user-data/workspace" not in rendered
+        rendered = str(transcript)
+        assert "Done." in rendered
+        assert "Changed files" in rendered
+        assert "created snake-game.html" in rendered
+        assert "updated README.md" in rendered
+        assert "deleted old.html" in rendered
+        assert "styles.css" not in rendered
+        assert "1 more file (ctrl+e to expand)" in rendered
+        assert rendered.index("Done.") < rendered.index("Changed files")
+        assert "/mnt/user-data/workspace" not in rendered
+
+        await pilot.press("ctrl+e")
+        expanded = str(app.query_one("#transcript").render())
+        assert "updated styles.css" in expanded
+        assert "ctrl+e to collapse" in expanded
 
 
 @pytest.mark.asyncio

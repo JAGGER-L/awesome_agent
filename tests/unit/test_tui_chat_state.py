@@ -1,10 +1,12 @@
 from pathlib import Path
 
 from awesome_agent.cli.repo_context import CliLaunchContext
+from awesome_agent.surfaces.client import ChangedFileSummary
 from awesome_agent.tui.chat_state import (
     ChatEventKind,
     ChatMessage,
     ChatSessionState,
+    chat_messages_from_thread_records,
 )
 
 
@@ -44,3 +46,52 @@ def test_chat_state_toggles_details() -> None:
 
     assert updated.details_enabled is True
     assert updated.toggle_details().details_enabled is False
+
+
+def test_assistant_message_can_carry_changed_files() -> None:
+    message = ChatMessage.assistant(
+        "Done.",
+        changed_files=(ChangedFileSummary(path="snake.html", status="created"),),
+    )
+
+    assert message.changed_files[0].path == "snake.html"
+    assert message.changed_files[0].status == "created"
+
+
+def test_chat_state_attaches_changed_files_to_latest_assistant() -> None:
+    state = ChatSessionState.new().upsert_streaming_assistant("Done.")
+
+    updated = state.with_latest_assistant_changed_files(
+        [
+            {"path": "/mnt/user-data/workspace/snake.html", "status": "created"},
+            {"path": "README.md", "status": "updated"},
+        ]
+    )
+
+    assert len(updated.messages) == 1
+    assert updated.messages[0].role == "assistant"
+    assert [item.visible_path for item in updated.messages[0].changed_files] == [
+        "snake.html",
+        "README.md",
+    ]
+
+
+def test_thread_record_restore_reads_assistant_changed_files_metadata() -> None:
+    messages = chat_messages_from_thread_records(
+        [
+            {
+                "role": "assistant",
+                "content": "Done.",
+                "metadata": {
+                    "changed_files": [
+                        {
+                            "path": "/mnt/user-data/workspace/snake.html",
+                            "status": "created",
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+
+    assert messages[0].changed_files[0].visible_path == "snake.html"
