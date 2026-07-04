@@ -273,6 +273,70 @@ async def test_local_dispatcher_requeues_paused_approval_wait(
 
 
 @pytest.mark.asyncio
+async def test_local_dispatcher_does_not_requeue_stale_waiting_approval(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime)
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+        }
+    )
+    stale_approval = uuid4()
+    current_approval = uuid4()
+    await runtime.create_run(run, _leader(run))
+    await _append_approval_wait(runtime, run.id, stale_approval)
+    await _append_approval_wait(runtime, run.id, current_approval)
+
+    requeued = await dispatcher.requeue_after_approval(
+        run_id=run.id,
+        approval_id=stale_approval,
+        reason="approval_decided",
+    )
+
+    stored = await runtime.get_run(run.id)
+    assert requeued is False
+    assert stored.status is RunStatus.PAUSED
+    assert stored.dispatch_status is DispatchStatus.WAITING
+    assert stored.last_release_reason is None
+    runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_local_dispatcher_requeues_current_waiting_approval(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime)
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+        }
+    )
+    stale_approval = uuid4()
+    current_approval = uuid4()
+    await runtime.create_run(run, _leader(run))
+    await _append_approval_wait(runtime, run.id, stale_approval)
+    await _append_approval_wait(runtime, run.id, current_approval)
+
+    requeued = await dispatcher.requeue_after_approval(
+        run_id=run.id,
+        approval_id=current_approval,
+        reason="approval_decided",
+    )
+
+    stored = await runtime.get_run(run.id)
+    assert requeued is True
+    assert stored.status is RunStatus.RUNNING
+    assert stored.dispatch_status is DispatchStatus.QUEUED
+    assert stored.last_release_reason == "approval_decided"
+    runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_local_dispatcher_expires_pending_approvals_and_requeues_waiting_run(
     tmp_path: Path,
 ) -> None:
@@ -300,6 +364,7 @@ async def test_local_dispatcher_expires_pending_approvals_and_requeues_waiting_r
             expires_at=datetime.now(UTC) + timedelta(minutes=5),
         )
     )
+    await _append_approval_wait(runtime, run.id, expired.id)
 
     processed = await dispatcher.expire_pending_approvals(batch_size=1)
 
@@ -310,6 +375,39 @@ async def test_local_dispatcher_expires_pending_approvals_and_requeues_waiting_r
     assert stored_run.status is RunStatus.RUNNING
     assert stored_run.dispatch_status is DispatchStatus.QUEUED
     assert stored_run.last_release_reason == "approval_expired"
+    runtime.close()
+    approvals.close()
+
+
+@pytest.mark.asyncio
+async def test_local_dispatcher_expired_stale_approval_does_not_requeue_run(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    approvals = LocalApprovalRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime, approval_repository=approvals)
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+        }
+    )
+    await runtime.create_run(run, _leader(run))
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    stale = await approvals.upsert(_approval(run.id, tmp_path, expires_at=expired_at))
+    current = await approvals.upsert(_approval(run.id, tmp_path))
+    await _append_approval_wait(runtime, run.id, stale.id)
+    await _append_approval_wait(runtime, run.id, current.id)
+
+    processed = await dispatcher.expire_pending_approvals(batch_size=1)
+
+    stored = await runtime.get_run(run.id)
+    assert processed == 1
+    assert (await approvals.get(stale.id)).status is ApprovalStatus.EXPIRED
+    assert (await approvals.get(current.id)).status is ApprovalStatus.PENDING
+    assert stored.status is RunStatus.PAUSED
+    assert stored.dispatch_status is DispatchStatus.WAITING
+    assert stored.last_release_reason is None
     runtime.close()
     approvals.close()
 
@@ -342,6 +440,8 @@ async def test_local_dispatcher_expire_pending_approvals_respects_batch_size(
     second_approval = await approvals.upsert(
         _approval(second_run.id, tmp_path, expires_at=expired_at)
     )
+    await _append_approval_wait(runtime, first_run.id, first_approval.id)
+    await _append_approval_wait(runtime, second_run.id, second_approval.id)
 
     first_count = await dispatcher.expire_pending_approvals(batch_size=1)
     first_statuses = {
@@ -483,6 +583,32 @@ def _leader(run: Run) -> Agent:
         profile="leader",
         model="fake-model",
         status=AgentStatus.READY,
+    )
+
+
+async def _append_approval_wait(
+    runtime: LocalRuntimeRepository,
+    run_id: UUID,
+    approval_id: UUID,
+) -> None:
+    await runtime.append_event(
+        run_id=run_id,
+        event_type=EventType.DISPATCH_RELEASED,
+        payload={
+            "dispatch_status": DispatchStatus.WAITING.value,
+            "approval_id": str(approval_id),
+            "reason": "approval_wait",
+        },
+    )
+    await runtime.append_event(
+        run_id=run_id,
+        event_type=EventType.RUN_STATUS_CHANGED,
+        payload={
+            "status": RunStatus.PAUSED.value,
+            "dispatch_status": DispatchStatus.WAITING.value,
+            "approval_id": str(approval_id),
+            "reason": "approval_wait",
+        },
     )
 
 

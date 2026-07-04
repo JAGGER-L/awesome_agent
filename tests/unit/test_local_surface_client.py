@@ -350,6 +350,7 @@ def test_local_surface_approval_decision_requeues_waiting_run(tmp_path: Path) ->
     host._container.worker_pump = cast(Any, pump)
     _run_async(host._container.runtime.create_run(run, _leader(run)))
     _run_async(host._container.approvals.upsert(approval))
+    _run_async(_append_approval_wait(host, run.id, approval.id))
 
     result = host.decide_approval(str(run.id), str(approval.id), approved=True)
     stored_approval = _run_async(host._container.approvals.get(approval.id))
@@ -385,6 +386,7 @@ def test_local_surface_repeated_approval_decision_does_not_requeue(
     host._container.worker_pump = cast(Any, pump)
     _run_async(host._container.runtime.create_run(run, _leader(run)))
     _run_async(host._container.approvals.upsert(approval))
+    _run_async(_append_approval_wait(host, run.id, approval.id))
     first = host.decide_approval(str(run.id), str(approval.id), approved=True)
     rewaiting = _run_async(host._container.runtime.get_run(run.id)).model_copy(
         update={
@@ -413,6 +415,43 @@ def test_local_surface_repeated_approval_decision_does_not_requeue(
     host.close()
 
 
+def test_local_surface_stale_pending_approval_decision_does_not_requeue(
+    tmp_path: Path,
+) -> None:
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    run = _waiting_conversation_run(tmp_path)
+    stale_approval = _approval(run.id, tmp_path)
+    current_approval = _approval(run.id, tmp_path)
+    pump = _RecordingPump()
+    host._container.worker_pump = cast(Any, pump)
+    _run_async(host._container.runtime.create_run(run, _leader(run)))
+    _run_async(host._container.approvals.upsert(stale_approval))
+    _run_async(host._container.approvals.upsert(current_approval))
+    _run_async(_append_approval_wait(host, run.id, stale_approval.id))
+    _run_async(_append_approval_wait(host, run.id, current_approval.id))
+
+    result = host.decide_approval(str(run.id), str(stale_approval.id), approved=True)
+    stored_run = _run_async(host._container.runtime.get_run(run.id))
+    stored_stale = _run_async(host._container.approvals.get(stale_approval.id))
+
+    assert result == {
+        "run_id": str(run.id),
+        "approval_id": str(stale_approval.id),
+        "approved": True,
+        "status": "pending",
+        "reason": "approval_not_current",
+    }
+    assert stored_stale.status is ApprovalStatus.PENDING
+    assert stored_run.status is RunStatus.PAUSED
+    assert stored_run.dispatch_status is DispatchStatus.WAITING
+    assert pump.drained == []
+    host.close()
+
+
 def test_local_surface_cancelled_approval_decision_does_not_requeue(
     tmp_path: Path,
 ) -> None:
@@ -427,6 +466,7 @@ def test_local_surface_cancelled_approval_decision_does_not_requeue(
     host._container.worker_pump = cast(Any, pump)
     _run_async(host._container.runtime.create_run(run, _leader(run)))
     _run_async(host._container.approvals.upsert(approval))
+    _run_async(_append_approval_wait(host, run.id, approval.id))
     host.cancel(str(run.id))
     event_count = len(
         [
@@ -501,6 +541,32 @@ def _leader(run: Run) -> Agent:
         profile="leader",
         model="fake-model",
         status=AgentStatus.READY,
+    )
+
+
+async def _append_approval_wait(
+    host: LocalRuntimeHost,
+    run_id: UUID,
+    approval_id: UUID,
+) -> None:
+    await host._container.runtime.append_event(
+        run_id=run_id,
+        event_type=EventType.DISPATCH_RELEASED,
+        payload={
+            "dispatch_status": DispatchStatus.WAITING.value,
+            "approval_id": str(approval_id),
+            "reason": "approval_wait",
+        },
+    )
+    await host._container.runtime.append_event(
+        run_id=run_id,
+        event_type=EventType.RUN_STATUS_CHANGED,
+        payload={
+            "status": RunStatus.PAUSED.value,
+            "dispatch_status": DispatchStatus.WAITING.value,
+            "approval_id": str(approval_id),
+            "reason": "approval_wait",
+        },
     )
 
 

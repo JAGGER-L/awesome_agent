@@ -489,6 +489,17 @@ class LocalRuntimeHost:
                 status=approval.status.value,
                 reason="run_not_waiting_for_approval",
             )
+        if not await self._container.dispatcher.is_waiting_for_approval(
+            run_id=run_uuid,
+            approval_id=approval_uuid,
+        ):
+            return _approval_conflict_response(
+                run_id,
+                approval_id,
+                approved=approved,
+                status=approval.status.value,
+                reason="approval_not_current",
+            )
 
         now = datetime.now(UTC)
         try:

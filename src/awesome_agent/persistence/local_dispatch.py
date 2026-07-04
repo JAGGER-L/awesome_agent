@@ -312,8 +312,29 @@ class LocalRunDispatcher(RunDispatcher):
         run_id: UUID,
         approval_id: UUID,
         reason: str,
-    ) -> None:
+    ) -> bool:
+        if not await self.is_waiting_for_approval(
+            run_id=run_id,
+            approval_id=approval_id,
+        ):
+            return False
         await self.runtime.requeue_waiting_run(run_id, reason=reason)
+        return True
+
+    async def is_waiting_for_approval(
+        self,
+        *,
+        run_id: UUID,
+        approval_id: UUID,
+    ) -> bool:
+        run = await self.runtime.get_run(run_id)
+        if run.dispatch_status is not DispatchStatus.WAITING or run.status not in {
+            RunStatus.PAUSED,
+            RunStatus.WAITING,
+        }:
+            return False
+        current = await self._current_waiting_approval_id(run_id)
+        return current == approval_id
 
     async def expire_pending_approvals(self, *, batch_size: int = 100) -> int:
         if batch_size < 1:
@@ -568,6 +589,18 @@ class LocalRunDispatcher(RunDispatcher):
             },
         )
 
+    async def _current_waiting_approval_id(self, run_id: UUID) -> UUID | None:
+        for event in reversed(await self.runtime.list_events(run_id)):
+            if event.event_type not in {
+                EventType.DISPATCH_RELEASED,
+                EventType.RUN_STATUS_CHANGED,
+            }:
+                continue
+            approval_id = _approval_id_from_wait_event(event)
+            if approval_id is not None:
+                return approval_id
+        return None
+
     async def _close_pending_approvals_for_cancel(
         self,
         *,
@@ -630,3 +663,28 @@ class LocalRunDispatcher(RunDispatcher):
                 "heartbeat_at": None,
             }
         )
+
+
+def _approval_id_from_wait_event(event: RuntimeEvent) -> UUID | None:
+    payload = event.payload
+    approval_id = payload.get("approval_id")
+    if not isinstance(approval_id, str):
+        return None
+    if event.event_type is EventType.DISPATCH_RELEASED:
+        dispatch_status = payload.get("dispatch_status") or payload.get("next_status")
+        if dispatch_status != DispatchStatus.WAITING.value:
+            return None
+    elif event.event_type is EventType.RUN_STATUS_CHANGED:
+        if payload.get("dispatch_status") != DispatchStatus.WAITING.value:
+            return None
+        if payload.get("status") not in {
+            RunStatus.PAUSED.value,
+            RunStatus.WAITING.value,
+        }:
+            return None
+    else:
+        return None
+    try:
+        return UUID(approval_id)
+    except ValueError:
+        return None
