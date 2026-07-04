@@ -8,6 +8,9 @@ from awesome_agent.modeling.catalog import (
     ModelCatalog,
     ModelCatalogError,
 )
+from awesome_agent.providers.deepseek import DeepSeekProvider
+from awesome_agent.providers.factory import ModelProviderFactory
+from awesome_agent.providers.routing import ModelRouteCandidate
 
 
 def test_model_catalog_is_deepseek_only() -> None:
@@ -104,3 +107,58 @@ def test_model_catalog_rejects_invalid_role_model() -> None:
 
     assert raised.value.code == "invalid_role_model"
     assert "leader" in str(raised.value)
+
+
+def test_provider_factory_creates_deepseek_catalog_model() -> None:
+    provider = ModelProviderFactory(
+        test_settings(deepseek_api_key="secret")
+    ).create("deepseek-v4-pro")
+
+    assert isinstance(provider, DeepSeekProvider)
+
+
+def test_provider_factory_rejects_openai_route_candidate() -> None:
+    factory = ModelProviderFactory(test_settings(deepseek_api_key="secret"))
+
+    with pytest.raises(ModelCatalogError) as raised:
+        factory.create_candidate(
+            ModelRouteCandidate(
+                provider="openai",
+                model="gpt-4o",
+                reason="test",
+            )
+        )
+
+    assert raised.value.code == "unsupported_provider"
+
+
+def test_provider_factory_rejects_unknown_model() -> None:
+    factory = ModelProviderFactory(test_settings(deepseek_api_key="secret"))
+
+    with pytest.raises(ModelCatalogError) as raised:
+        factory.create("gpt-4o")
+
+    assert raised.value.code == "unsupported_model"
+
+
+def test_provider_factory_rejects_missing_key() -> None:
+    factory = ModelProviderFactory(test_settings(deepseek_api_key=None))
+
+    with pytest.raises(ModelCatalogError) as raised:
+        factory.create("deepseek-v4-pro")
+
+    assert raised.value.code == "provider_not_configured"
+
+
+def test_provider_factory_rejects_custom_base_url() -> None:
+    factory = ModelProviderFactory(
+        test_settings(
+            deepseek_api_key="secret",
+            deepseek_base_url="https://gateway.local/v1",
+        )
+    )
+
+    with pytest.raises(ModelCatalogError) as raised:
+        factory.create("deepseek-v4-pro")
+
+    assert raised.value.code == "unsupported_provider_configuration"

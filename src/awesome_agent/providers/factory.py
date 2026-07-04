@@ -3,6 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from awesome_agent.modeling import ModelProvider
+from awesome_agent.modeling.catalog import (
+    DEEPSEEK_OFFICIAL_BASE_URL,
+    DEEPSEEK_PROVIDER_ID,
+    ModelCatalog,
+)
 from awesome_agent.providers.deepseek import DeepSeekProvider
 from awesome_agent.providers.routing import (
     ModelRouteCandidate,
@@ -16,26 +21,34 @@ from awesome_agent.settings import Settings
 class ModelProviderFactory:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.catalog = ModelCatalog.from_settings(settings)
 
     @property
     def coding_available(self) -> bool:
-        return self.settings.deepseek_api_key is not None
+        try:
+            self.catalog.require_supported_configuration()
+            self.catalog.require_configured_provider(DEEPSEEK_PROVIDER_ID)
+            self.catalog.validate_role_models()
+        except Exception:
+            return False
+        return True
 
     def create(self, model: str) -> ModelProvider:
+        self.catalog.require_supported_configuration()
+        self.catalog.require_model(model)
+        self.catalog.require_configured_provider(DEEPSEEK_PROVIDER_ID)
         key = self.settings.deepseek_api_key
-        if key is None:
-            raise RuntimeError("DeepSeek API key is not configured.")
+        assert key is not None
         return DeepSeekProvider(
             api_key=key.get_secret_value(),
             model=model,
-            base_url=self.settings.deepseek_base_url,
+            base_url=DEEPSEEK_OFFICIAL_BASE_URL,
             thinking_enabled=self.settings.deepseek_thinking_enabled,
             reasoning_effort=self.settings.deepseek_reasoning_effort,
         )
 
     def create_candidate(self, candidate: ModelRouteCandidate) -> ModelProvider:
-        if candidate.provider != "deepseek":
-            raise RuntimeError(f"Unsupported provider route: {candidate.provider}.")
+        self.catalog.require_provider(candidate.provider)
         return self.create(candidate.model)
 
     def create_routed_resolver(
