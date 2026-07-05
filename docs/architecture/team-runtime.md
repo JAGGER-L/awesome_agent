@@ -23,12 +23,12 @@ free-form chat conventions.
 ## Product Route Boundary
 
 Distributed `team-coding`, `team-role`, and `team-verifier` are the forward
-product routes. `team-coding-scoped` is a compatibility route and must not be
-treated as the source of truth for new product behavior.
+product routes. The legacy scoped team route `team-coding-scoped` has been
+retired and is not executable by current Workers.
 
-Runtime readiness requires the distributed team routes. `team-coding-scoped`
-may still be injected explicitly for compatibility tests or legacy operation,
-but it is not part of the default worker heartbeat contract.
+Runtime readiness requires the distributed team routes. Historical scoped run
+records may remain as stored data, but non-terminal historical scoped rows
+should be cancelled and recreated through `team-coding`.
 
 ## Subagent Contract
 

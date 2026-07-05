@@ -31,7 +31,6 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_ROUTE,
     READ_ONLY_CODING_ROUTE,
     RUNTIME_PROBE_ROUTE,
-    SCOPED_TEAM_CODING_ROUTE,
     TEAM_CODING_ROUTE,
     TEAM_ROLE_ROUTE,
     TEAM_VERIFIER_ROUTE,
@@ -261,7 +260,9 @@ async def test_runtime_readiness_requires_distributed_team_routes_only() -> None
 
     assert check.status is HealthStatus.HEALTHY
     assert check.metadata is not None
-    assert SCOPED_TEAM_CODING_ROUTE not in check.metadata["required_runtime_routes"]
+    assert TEAM_CODING_ROUTE in check.metadata["required_runtime_routes"]
+    assert TEAM_ROLE_ROUTE in check.metadata["required_runtime_routes"]
+    assert TEAM_VERIFIER_ROUTE in check.metadata["required_runtime_routes"]
 
 
 def test_model_routes_check_rejects_invalid_role_model() -> None:

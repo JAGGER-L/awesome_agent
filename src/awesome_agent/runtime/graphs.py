@@ -4,8 +4,6 @@ MODIFYING_CODING_ROUTE = "solo-modifying"
 
 CONVERSATION_TURN_ROUTE = "conversation-turn"
 
-SCOPED_TEAM_CODING_ROUTE = "team-coding-scoped"
-
 TEAM_CODING_ROUTE = "team-coding"
 
 TEAM_ROLE_ROUTE = "team-role"

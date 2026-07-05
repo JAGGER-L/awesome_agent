@@ -118,7 +118,7 @@ async def test_intake_publishes_queued_run_after_worktree_is_ready(
 
 
 @pytest.mark.asyncio
-async def test_team_intake_routes_to_team_graph_without_precreating_teammates(
+async def test_team_intake_routes_to_distributed_team_without_precreating_teammates(
     tmp_path: Path,
 ) -> None:
     repository, registry = await _registered_repository(tmp_path)

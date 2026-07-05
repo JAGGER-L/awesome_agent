@@ -1361,7 +1361,7 @@ def test_modifying_run_has_executable_graph_route(tmp_path: Path) -> None:
     assert body["dispatch_status"] == "queued"
 
 
-def test_team_run_uses_team_graph_and_starts_with_leader_only(
+def test_team_run_uses_distributed_team_route_and_starts_with_leader_only(
     tmp_path: Path,
 ) -> None:
     client, repository = _client(tmp_path)

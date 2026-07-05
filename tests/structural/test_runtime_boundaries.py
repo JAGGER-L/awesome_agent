@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+LEGACY_ORCHESTRATION = ".".join(("awesome_agent", "orchestration"))
 
 
 def _imports(path: Path) -> set[str]:
@@ -17,14 +18,7 @@ def _imports(path: Path) -> set[str]:
     return result
 
 
-LEGACY_RUNTIME_IMPORT_ALLOWLIST = {
-    "src/awesome_agent/runtime/team_graph.py": [
-        "awesome_agent.orchestration.team",
-    ],
-}
-
-
-def test_runtime_legacy_orchestration_imports_are_allowlisted() -> None:
+def test_runtime_does_not_import_legacy_orchestration() -> None:
     runtime_files = [
         path
         for path in (REPO_ROOT / "src" / "awesome_agent" / "runtime").rglob("*.py")
@@ -34,13 +28,14 @@ def test_runtime_legacy_orchestration_imports_are_allowlisted() -> None:
         path.relative_to(REPO_ROOT).as_posix(): sorted(
             item
             for item in _imports(path)
-            if item.startswith("awesome_agent.orchestration")
+            if item == LEGACY_ORCHESTRATION
+            or item.startswith(f"{LEGACY_ORCHESTRATION}.")
         )
         for path in runtime_files
     }
     offenders = {path: imports for path, imports in offenders.items() if imports}
 
-    assert offenders == LEGACY_RUNTIME_IMPORT_ALLOWLIST
+    assert offenders == {}
 
 
 def test_api_layer_does_not_import_legacy_orchestration() -> None:
@@ -53,7 +48,7 @@ def test_api_layer_does_not_import_legacy_orchestration() -> None:
         path.relative_to(REPO_ROOT).as_posix(): sorted(
             item
             for item in _imports(path)
-            if item.startswith("awesome_agent.orchestration")
+            if item.startswith(LEGACY_ORCHESTRATION)
         )
         for path in api_files
     }

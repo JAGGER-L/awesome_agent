@@ -47,7 +47,6 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_ROUTE,
     READ_ONLY_CODING_ROUTE,
     RUNTIME_PROBE_ROUTE,
-    SCOPED_TEAM_CODING_ROUTE,
     TEAM_CODING_ROUTE,
     TEAM_ROLE_ROUTE,
     TEAM_VERIFIER_ROUTE,
@@ -59,7 +58,6 @@ from awesome_agent.runtime.modifying_graph import (
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph, RuntimeProbeState
 from awesome_agent.runtime.readonly_graph import ReadOnlyAgentState, ReadOnlyCodingGraph
 from awesome_agent.runtime.repository import RuntimeRepository
-from awesome_agent.runtime.team_graph import TeamCodingGraph, TeamCodingState
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph, TeamLeaderState
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph, TeamRoleState
 from awesome_agent.runtime.team_verifier_graph import (
@@ -105,7 +103,6 @@ class DurableWorker:
         coding_graph: ReadOnlyCodingGraph | None = None,
         modifying_graph: ModifyingCodingGraph | None = None,
         conversation_graph: ConversationGraph | None = None,
-        team_graph: TeamCodingGraph | None = None,
         team_leader_graph: TeamLeaderGraph | None = None,
         team_role_graph: TeamRoleGraph | None = None,
         team_verifier_graph: TeamVerifierGraph | None = None,
@@ -125,7 +122,6 @@ class DurableWorker:
         self.coding_graph = coding_graph
         self.modifying_graph = modifying_graph
         self.conversation_graph = conversation_graph
-        self.team_graph = team_graph
         self.team_leader_graph = team_leader_graph
         self.team_role_graph = team_role_graph
         self.team_verifier_graph = team_verifier_graph
@@ -134,7 +130,6 @@ class DurableWorker:
             conversation_graph=self.conversation_graph,
             coding_graph=self.coding_graph,
             modifying_graph=self.modifying_graph,
-            team_graph=self.team_graph,
             team_leader_graph=self.team_leader_graph,
             team_role_graph=self.team_role_graph,
             team_verifier_graph=self.team_verifier_graph,
@@ -187,9 +182,6 @@ class DurableWorker:
         if self.conversation_graph is not None:
             runtime_routes.add(CONVERSATION_TURN_ROUTE)
             execution_kinds.add(ExecutionKind.CONVERSATION)
-        if self.team_graph is not None:
-            runtime_routes.add(SCOPED_TEAM_CODING_ROUTE)
-            execution_kinds.add(ExecutionKind.CODING)
         if self.team_leader_graph is not None:
             runtime_routes.add(TEAM_CODING_ROUTE)
             execution_kinds.add(ExecutionKind.CODING)
@@ -223,8 +215,6 @@ class DurableWorker:
             routes.append(RuntimeRoute(MODIFYING_CODING_ROUTE))
         if self.conversation_graph is not None:
             routes.append(RuntimeRoute(CONVERSATION_TURN_ROUTE))
-        if self.team_graph is not None:
-            routes.append(RuntimeRoute(SCOPED_TEAM_CODING_ROUTE))
         if self.team_leader_graph is not None:
             routes.append(RuntimeRoute(TEAM_CODING_ROUTE))
         if self.team_role_graph is not None:
@@ -346,7 +336,6 @@ class DurableWorker:
         | ReadOnlyAgentState
         | ModifyingAgentState
         | ConversationGraphState
-        | TeamCodingState
         | TeamLeaderState
         | TeamRoleState
         | TeamVerifierState,
@@ -550,7 +539,6 @@ class DurableWorker:
         | ReadOnlyAgentState
         | ModifyingAgentState
         | ConversationGraphState
-        | TeamCodingState
         | TeamLeaderState
         | TeamRoleState
         | TeamVerifierState,
@@ -630,17 +618,6 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if selected.name == "team-scoped":
-                    team_graph = selected.graph
-                    return await self._execute_with_active_budget(
-                        run,
-                        lambda: team_graph.execute(
-                            run,
-                            primary_agent,
-                            repository=self.repository,
-                            event_sink=emit,
-                        ),
-                    )
                 if selected.name == "team-leader":
                     team_leader_graph = selected.graph
                     return await self._execute_with_active_budget(
@@ -706,7 +683,6 @@ class DurableWorker:
                     ReadOnlyAgentState
                     | ModifyingAgentState
                     | ConversationGraphState
-                    | TeamCodingState
                     | TeamLeaderState
                     | TeamRoleState
                     | TeamVerifierState,
@@ -718,7 +694,6 @@ class DurableWorker:
         ReadOnlyAgentState
         | ModifyingAgentState
         | ConversationGraphState
-        | TeamCodingState
         | TeamLeaderState
         | TeamRoleState
         | TeamVerifierState,
@@ -935,7 +910,7 @@ class DurableWorker:
             return "conversation"
         if run.execution_kind is not ExecutionKind.CODING:
             return "runtime_probe"
-        if run.runtime_route in {SCOPED_TEAM_CODING_ROUTE, TEAM_CODING_ROUTE}:
+        if run.runtime_route == TEAM_CODING_ROUTE:
             return "team_validated"
         if run.runtime_route == MODIFYING_CODING_ROUTE:
             return "modifying_validated"

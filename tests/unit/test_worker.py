@@ -30,7 +30,6 @@ from awesome_agent.runtime.dispatch import (
 from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_ROUTE,
     RUNTIME_PROBE_ROUTE,
-    SCOPED_TEAM_CODING_ROUTE,
     TEAM_CODING_ROUTE,
     TEAM_ROLE_ROUTE,
     TEAM_VERIFIER_ROUTE,
@@ -269,7 +268,7 @@ class FakeModifyingGraph:
         )
 
 
-class FakeTeamGraph:
+class FakeDistributedTeamGraph:
     async def execute(
         self,
         _: Run,
@@ -286,7 +285,7 @@ class FakeTeamGraph:
             {
                 "run_id": "run",
                 "agent_id": "agent",
-                "runtime_route": SCOPED_TEAM_CODING_ROUTE,
+                "runtime_route": TEAM_CODING_ROUTE,
                 "phase": "completed",
                 "final_answer": "Team completed after verification.",
                 "result_summary": "team done",
@@ -295,7 +294,7 @@ class FakeTeamGraph:
         )
 
 
-class EmittingTeamGraph(FakeTeamGraph):
+class EmittingTeamGraph(FakeDistributedTeamGraph):
     async def execute(
         self,
         run: Run,
@@ -432,7 +431,7 @@ def _team_run(lease: RunLease) -> Run:
         goal="team",
         intent=RunIntent.MODIFYING,
         execution_kind=ExecutionKind.CODING,
-        runtime_route=SCOPED_TEAM_CODING_ROUTE,
+        runtime_route=TEAM_CODING_ROUTE,
         graph_thread_id=f"run:{lease.run_id}",
     )
 
@@ -592,25 +591,7 @@ async def test_worker_claims_modifying_graph_when_configured() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_claims_scoped_team_graph_when_configured() -> None:
-    dispatcher = FakeDispatcher(None)
-    worker = DurableWorker(
-        dispatcher=dispatcher,
-        repository=FakeRepository(Run(goal="unused")),  # type: ignore[arg-type]
-        probe_graph=FakeGraph(),  # type: ignore[arg-type]
-        team_graph=object(),  # type: ignore[arg-type]
-        config=_config(),
-    )
-
-    assert not await worker.run_once()
-    claim = dispatcher.calls[0][1]
-
-    assert isinstance(claim, dict)
-    assert SCOPED_TEAM_CODING_ROUTE in claim["runtime_routes"]
-
-
-@pytest.mark.asyncio
-async def test_worker_advertises_distributed_team_graphs_when_configured() -> None:
+async def test_worker_advertises_distributed_team_routes_when_configured() -> None:
     dispatcher = FakeDispatcher(None)
     worker = DurableWorker(
         dispatcher=dispatcher,
@@ -629,10 +610,11 @@ async def test_worker_advertises_distributed_team_graphs_when_configured() -> No
     assert TEAM_CODING_ROUTE in claim["runtime_routes"]
     assert TEAM_ROLE_ROUTE in claim["runtime_routes"]
     assert TEAM_VERIFIER_ROUTE in claim["runtime_routes"]
+    assert "team-coding" + "-scoped" not in claim["runtime_routes"]
 
 
 @pytest.mark.asyncio
-async def test_worker_marks_unsupported_team_graph_for_recovery() -> None:
+async def test_worker_marks_unsupported_team_route_for_recovery() -> None:
     lease = _lease()
     run = _team_run(lease).model_copy(update={"runtime_route": TEAM_CODING_ROUTE})
     dispatcher = FakeDispatcher(lease)
@@ -640,7 +622,6 @@ async def test_worker_marks_unsupported_team_graph_for_recovery() -> None:
         dispatcher=dispatcher,
         repository=FakeRepository(run),  # type: ignore[arg-type]
         probe_graph=FakeGraph(),  # type: ignore[arg-type]
-        team_graph=FakeTeamGraph(),  # type: ignore[arg-type]
         config=_config(),
     )
 
@@ -752,7 +733,7 @@ async def test_worker_closes_active_budget_window_for_approval_wait() -> None:
 
 
 @pytest.mark.asyncio
-async def test_worker_executes_team_graph_with_validated_completion() -> None:
+async def test_worker_executes_team_leader_route_with_validated_completion() -> None:
     lease = _lease()
     run = _team_run(lease)
     leader = Agent(
@@ -766,7 +747,7 @@ async def test_worker_executes_team_graph_with_validated_completion() -> None:
         dispatcher=dispatcher,
         repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
         probe_graph=FakeGraph(),  # type: ignore[arg-type]
-        team_graph=FakeTeamGraph(),  # type: ignore[arg-type]
+        team_leader_graph=FakeDistributedTeamGraph(),  # type: ignore[arg-type]
         config=_config(),
     )
 
@@ -815,46 +796,6 @@ async def test_worker_records_boundary_spans_through_observability_facade() -> N
     assert {span.name for span in exporter.spans} == {"run.execute", "graph.execute"}
     assert not model_calls
     assert any(metric.name == "run.duration_ms" for metric in metrics)
-
-
-@pytest.mark.asyncio
-async def test_worker_keeps_event_projection_for_unmigrated_team_routes() -> None:
-    lease = _lease()
-    run = _team_run(lease)
-    leader = Agent(
-        run_id=run.id,
-        kind=AgentKind.LEADER,
-        profile="leader",
-        model="fake",
-    )
-    dispatcher = FakeDispatcher(lease)
-    observability = InMemoryObservabilityRepository()
-    worker = DurableWorker(
-        dispatcher=dispatcher,
-        repository=FakeRepository(run, [leader]),  # type: ignore[arg-type]
-        probe_graph=FakeGraph(),  # type: ignore[arg-type]
-        team_graph=EmittingTeamGraph(),  # type: ignore[arg-type]
-        config=_config(),
-        observability_repository=observability,
-    )
-
-    assert await worker.run_once()
-
-    spans = await observability.list_spans_for_run(run.id)
-    metrics = await observability.list_metrics_for_run(run.id)
-    model_calls = await observability.list_model_calls_for_run(run.id)
-
-    assert {span.name for span in spans} >= {
-        "run.execute",
-        "graph.execute",
-        "model.call",
-        "tool.call",
-        "sandbox.execute",
-    }
-    assert any(metric.name == "model.latency_ms" for metric in metrics)
-    assert any(metric.name == "tool.duration_ms" for metric in metrics)
-    assert model_calls[0].model == "deepseek-v4-flash"
-    assert model_calls[0].latency_ms == 31
 
 
 @pytest.mark.parametrize(
