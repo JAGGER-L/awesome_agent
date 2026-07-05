@@ -62,6 +62,13 @@ chat transcript, or long historical task table. Historical detail belongs in
 `docs/governance/archive/roadmap-history.md`. Open durable gaps belong in
 `docs/governance/technical-debt.md`.
 
+## Redirect Policy
+
+Tracked docs should not preserve moved-only redirect shells. When a document is
+moved during a docs reorganization, update inbound links in the same change and
+delete the old file unless an external compatibility requirement is explicitly
+documented.
+
 ## Update Procedure
 
 Before changing docs, identify the reader, canonical file, and links that must

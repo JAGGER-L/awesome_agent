@@ -36,8 +36,12 @@ setup and reports actionable `OK`, `WARN`, `ERROR`, and `INFO` lines.
 | Key | Action |
 | --- | --- |
 | `Ctrl+C` | Request cancellation of the current turn when one is active. |
+| `Ctrl+I` | Expand or collapse the tool timeline. |
+| `Ctrl+E` | Expand or collapse changed files. |
 | `Ctrl+O` | Expand or collapse the latest thought block when reasoning was streamed. |
 | `Ctrl+R` | Retry the last failed conversation turn. |
+| `Enter` | Submit input, or confirm the selected approval option when an approval is pending. |
+| `1`, `2`, `3` | Choose approve once, deny, or cancel run when an approval is pending. |
 
 Slash commands are a local interaction syntax. API routes use semantic
 resources rather than slash-command names.

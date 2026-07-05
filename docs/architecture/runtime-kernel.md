@@ -37,6 +37,13 @@ plans under `.codex/`, or long-term roadmap sequencing.
 Legacy orchestration modules are compatibility paths only; new durable runtime
 work follows [Legacy Runtime Paths](legacy-runtime-paths.md).
 
+## Approval Resume Contract
+
+Approval wait is a user decision interrupt, not an execution failure. Resuming
+after approval must not consume a retry attempt, must not request the same
+approval again, and must revalidate the original tool binding before side
+effects continue.
+
 ## Runtime Budgets
 
 Runtime limits are token, reasoning-token, active-time, model-call, retry, and

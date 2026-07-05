@@ -329,7 +329,7 @@ Durable state:
 ```text
 tracked repository governance
   AGENTS.md
-  docs/engineering/
+  docs/development/
   scripts/ and structural tests
 
 ignored development-agent state
@@ -669,4 +669,4 @@ Unsafe shell commands are denied without approval.
 See [docs/architecture/README.md](docs/architecture/README.md).
 
 Repository engineering rules are under
-[docs/engineering](docs/engineering/engineering-harness.md).
+[docs/development](docs/development/repository-harness.md).

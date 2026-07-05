@@ -26,6 +26,10 @@ Approval is scoped to the exact canonical tool invocation. A resumed operation
 must revalidate arguments, tool version, workspace fingerprint, and requested
 capabilities before side effects continue.
 
+Approval is not a blanket session grant. It is scoped to tool name, tool
+version, canonical arguments, workspace path, workspace fingerprint, requested
+capabilities, and run context.
+
 ## Related Documents
 
 - [Tool capabilities](tool-capabilities.md)

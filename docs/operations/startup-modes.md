@@ -37,6 +37,12 @@ Docker API starts API, Worker, PostgreSQL, and sandbox services. Docker mode
 does not start the CLI; run `awesome` separately for the terminal chat
 interface.
 
+## Before Switching Modes
+
+Check which state store the mode uses, whether migrations are current, and
+whether provider keys live in the user environment or `<AWESOME_HOME>/.env`.
+Do not assume a healthy Local CLI implies a healthy PostgreSQL-backed API mode.
+
 ## Fallback And Debug Commands
 
 `awesome-agent start` is a fallback/debug supervisor for API and Worker in one

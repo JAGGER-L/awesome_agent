@@ -21,6 +21,12 @@ awesome-agent doctor --profile runtime
 as configuration, database, migrations, checkpoint storage, sandbox health,
 provider configuration, extension catalog health, and Worker heartbeat.
 
+## What To Capture
+
+When reporting a runtime problem, capture the command, profile, request id,
+thread id, run id, approval id when present, and the first failing readiness
+component. Do not paste secrets or full raw logs into tracked docs.
+
 ## Logs
 
 ```powershell

@@ -16,3 +16,10 @@
 Thread attachments are user input, not generated artifacts. Deleting an
 attachment physically removes stored content and leaves metadata needed for
 auditability.
+
+## Cleanup Boundary
+
+Runtime data cleanup must not delete the user's project checkout. Remove only
+state under `AWESOME_HOME`, Docker volumes created for Awesome Agent, retained
+run worktrees explicitly owned by the runtime, or attachment/artifact stores
+identified by diagnostics.
