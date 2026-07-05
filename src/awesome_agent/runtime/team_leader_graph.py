@@ -943,7 +943,7 @@ class TeamLeaderGraph:
             update={
                 "workspace_path": workspace.workspace_path,
                 "integration_branch": workspace.integration_branch,
-                "workspace_state": parent.workspace_state,
+                "workspace_state": workspace.workspace_state,
             }
         )
 

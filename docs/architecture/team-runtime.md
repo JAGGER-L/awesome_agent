@@ -26,6 +26,10 @@ Distributed `team-coding`, `team-role`, and `team-verifier` are the forward
 product routes. `team-coding-scoped` is a compatibility route and must not be
 treated as the source of truth for new product behavior.
 
+Runtime readiness requires the distributed team routes. `team-coding-scoped`
+may still be injected explicitly for compatibility tests or legacy operation,
+but it is not part of the default worker heartbeat contract.
+
 ## Subagent Contract
 
 A Subagent is created only when a Teammate calls `team.create_subagent`.
@@ -38,6 +42,11 @@ Writing Teammates use isolated managed worktrees. The Leader aggregates child
 patch artifacts back into the root workspace after child completion. Read-only
 Teammates, Subagents, and Verifiers may inherit the parent workspace.
 
+Isolated writing children persist the workspace path, integration branch, and
+explicit workspace state returned by the allocator. Inherited workspace users
+keep the parent workspace state instead of pretending they own a managed
+worktree.
+
 ## Role Tool And Approval Contract
 
 Team role tool calls are recorded as durable tool invocations with a
@@ -45,17 +54,35 @@ run-scoped idempotency key. Approval continuation payloads are typed around the
 original tool call, message snapshot, workspace binding, and role-loop counters
 so approval resume can replay the approved invocation before model re-entry.
 
+Approval wait is a runtime pause, not a retryable tool failure. A pending
+approval stores a durable approval row and an `approval.requested` event with a
+`team_role_approval_continuation` payload. Approved resume validates the tool
+version, argument hash, workspace path, workspace fingerprint, and granted
+capabilities before executing the original invocation once with
+`approval_granted=True`. Denied or expired approvals produce a tool-result
+error and do not execute the tool.
+
 ## Extension And Skill Contract
 
 Team RoleLoop resolves tool exposure from the active extension catalog instead
 of an empty catalog. Allowed skills resolve into prompt instructions, with
 missing or incompatible skills recorded as denied reasons.
 
+The same runtime tool registry and executor used by the API/local worker
+assembly execute team role repo, shell, artifact, memory, attachment, MCP, and
+community tools. Team-native control tools such as `team.create_subagent` and
+team mailbox calls remain in-process role-loop tools but still receive durable
+tool invocation records.
+
 ## Team Tree Surface
 
 API, CLI, and TUI surfaces should prefer the team execution tree over raw event
 order when explaining Leader, Teammate, Subagent, Verifier, rework, and waiting
 state.
+
+The team tree reports effective tools, denied tool counts/reasons, pending
+approval tool/risk/status, workspace isolation summary, child results, and
+specific waiting reasons such as `waiting_approval` or `waiting_subagents`.
 
 ## Rework
 

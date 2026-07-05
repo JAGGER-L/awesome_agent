@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -15,6 +17,7 @@ from awesome_agent.health import (
     HealthStatus,
     ReadinessProfile,
     _docker_health,
+    _runtime_worker_heartbeat_check,
     aio_sandbox_check,
     bind_policy_check,
     collect_health,
@@ -23,6 +26,21 @@ from awesome_agent.health import (
     provider_key_check,
     readiness_status,
     workspace_root_check,
+)
+from awesome_agent.runtime.graphs import (
+    MODIFYING_CODING_ROUTE,
+    READ_ONLY_CODING_ROUTE,
+    RUNTIME_PROBE_ROUTE,
+    SCOPED_TEAM_CODING_ROUTE,
+    TEAM_CODING_ROUTE,
+    TEAM_ROLE_ROUTE,
+    TEAM_VERIFIER_ROUTE,
+)
+from awesome_agent.runtime.worker_heartbeats import (
+    InMemoryWorkerHeartbeatRepository,
+    RuntimeRoute,
+    WorkerHeartbeat,
+    WorkerHeartbeatStatus,
 )
 
 
@@ -213,6 +231,37 @@ def test_model_routes_check_reports_all_runtime_graph_identities() -> None:
             "subagent": "deepseek-v4-flash",
         },
     }
+
+
+async def test_runtime_readiness_requires_distributed_team_routes_only() -> None:
+    settings = test_settings(deepseek_api_key=SecretStr("key"))
+    heartbeats = InMemoryWorkerHeartbeatRepository()
+    await heartbeats.upsert(
+        WorkerHeartbeat(
+            worker_id=uuid4(),
+            worker_name="worker",
+            started_at=datetime.now(UTC),
+            heartbeat_at=datetime.now(UTC),
+            supported_runtime_routes=[
+                RuntimeRoute(RUNTIME_PROBE_ROUTE),
+                RuntimeRoute(READ_ONLY_CODING_ROUTE),
+                RuntimeRoute(MODIFYING_CODING_ROUTE),
+                RuntimeRoute(TEAM_CODING_ROUTE),
+                RuntimeRoute(TEAM_ROLE_ROUTE),
+                RuntimeRoute(TEAM_VERIFIER_ROUTE),
+            ],
+            status=WorkerHeartbeatStatus.ONLINE,
+        )
+    )
+
+    check = await _runtime_worker_heartbeat_check(
+        settings,
+        worker_heartbeat_repository=heartbeats,
+    )
+
+    assert check.status is HealthStatus.HEALTHY
+    assert check.metadata is not None
+    assert SCOPED_TEAM_CODING_ROUTE not in check.metadata["required_runtime_routes"]
 
 
 def test_model_routes_check_rejects_invalid_role_model() -> None:

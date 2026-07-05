@@ -44,3 +44,23 @@ Use `GET /runs/{run_id}/team/tree` or `awesome team-tree <run_id>` to inspect
 Leader, Teammate, Subagent, and Verifier state. Prefer the tree over raw event
 order when diagnosing child waits, verifier rework, patch aggregation, and why
 a team run is paused or still active.
+
+Important fields:
+
+- `waiting_approval`: the child Run is paused on a durable approval decision.
+- `pending_approval`: approval id, tool name, risk, and status for the wait.
+- `effective_tools`: tools currently exposed and executable for the assignment.
+- `denied_tools`: tools requested by the assignment but blocked by capability,
+  actor, delegation, write-scope, or catalog rules.
+- `workspace_summary`: whether the child uses an inherited or isolated
+  workspace and its persisted state.
+- `result_summary` and `failure_kind`: child result or failure evidence.
+
+The CLI renders compact lines such as:
+
+```text
+teammate backend waiting waiting_approval tools=1 denied=1 tool=repo.apply_patch workspace=isolated:ready
+```
+
+Use this surface before inspecting raw runtime events; it is the product view of
+Leader plan, Teammate work, Subagent evidence, Verifier decision, and rework.

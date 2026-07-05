@@ -33,6 +33,16 @@ Built-in, MCP, skill, and community tools should flow through the same
 capability and executor contracts. Extension discovery may add tools to the
 catalog, but it must not bypass runtime authorization.
 
+Team role exposure and execution use the same runtime tool assembly. A tool may
+not be treated as product-executable for a Teammate or Subagent unless the
+runtime executor can resolve the same tool name, schema version, risk level,
+and required capabilities that the exposure policy presents to the model.
+
+When a team role calls a risky executable tool, approval binds to that exact
+tool invocation. Approval resume validates the canonical arguments hash,
+workspace fingerprint, tool version, and effective capabilities before replay;
+it does not grant a session-wide permission.
+
 ## Related Documents
 
 - [Extensions](extensions.md)

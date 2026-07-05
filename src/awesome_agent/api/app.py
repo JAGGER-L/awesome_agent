@@ -1602,6 +1602,8 @@ def create_app(
             runtime=runtime().repository,
             teams=team_repository_state(),
             run_id=run_id,
+            catalog=extensions_catalog(),
+            approval_repository=runtime().approval_repository,
         )
         return _redacted_dict(tree.model_dump(mode="json"))
 

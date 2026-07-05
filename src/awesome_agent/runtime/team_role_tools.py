@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from awesome_agent.domain.enums import RiskLevel
 from awesome_agent.domain.models import Agent, Run
@@ -12,8 +14,7 @@ from awesome_agent.persistence.tool_invocations import (
     ToolInvocationRepository,
 )
 from awesome_agent.tools.repository import (
-    canonical_arguments_hash,
-    parse_tool_call_arguments,
+    canonical_arguments_hash_from_arguments,
     repository_tool_effect_metadata,
     tool_invocation_uuid,
 )
@@ -40,8 +41,8 @@ async def start_team_role_tool_invocation(
 ) -> DurableToolInvocation | None:
     if repository is None:
         return None
-    arguments = parse_tool_call_arguments(call)
-    arguments_hash = canonical_arguments_hash(call)
+    arguments = parse_team_role_tool_arguments(call)
+    arguments_hash = canonical_arguments_hash_from_arguments(arguments)
     idempotency_key = team_role_tool_idempotency_key(
         run=run,
         agent=agent,
@@ -50,9 +51,9 @@ async def start_team_role_tool_invocation(
     existing = await repository.get_by_idempotency_key(run.id, idempotency_key)
     if existing is not None:
         return existing
-    path_refs, preimage_hashes = repository_tool_effect_metadata(
-        call.name,
-        arguments,
+    path_refs, preimage_hashes = team_role_tool_effect_metadata(
+        tool_name=call.name,
+        arguments=arguments,
         workspace=workspace,
     )
     now = datetime.now(UTC)
@@ -72,6 +73,31 @@ async def start_team_role_tool_invocation(
         updated_at=now,
     )
     return await repository.upsert(invocation)
+
+
+def parse_team_role_tool_arguments(call: ToolCall) -> dict[str, Any]:
+    try:
+        raw = json.loads(call.arguments_json)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Arguments are not valid JSON: {error.msg}") from error
+    if not isinstance(raw, dict):
+        raise ValueError("Tool arguments must be a JSON object.")
+    return dict(raw)
+
+
+def team_role_tool_effect_metadata(
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    workspace: Path,
+) -> tuple[list[str], dict[str, str]]:
+    if tool_name != "repo.apply_patch":
+        return [], {}
+    return repository_tool_effect_metadata(
+        tool_name,
+        arguments,
+        workspace=workspace,
+    )
 
 
 async def complete_team_role_tool_invocation(

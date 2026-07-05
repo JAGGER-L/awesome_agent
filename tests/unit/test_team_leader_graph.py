@@ -17,6 +17,7 @@ from awesome_agent.domain.enums import (
     RunIntent,
     RunMode,
     RunStatus,
+    WorkspaceState,
 )
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.persistence.budget import (
@@ -135,6 +136,7 @@ async def test_leader_assigns_isolated_workspace_for_writing_teammate(
     child = (await runtime.list_child_runs(run.id))[0]
     assert child.workspace_path == tmp_path / "isolated"
     assert child.integration_branch == f"isolated/{child.id}"
+    assert child.workspace_state is WorkspaceState.READY
     assert allocator.calls == [(run.id, child.id)]
 
 
@@ -1693,4 +1695,5 @@ class RecordingWorkspaceAllocator(TeamWorkspaceAllocator):
             workspace_path=self.target,
             integration_branch=f"isolated/{child.id}",
             isolated=can_write,
+            workspace_state=WorkspaceState.READY,
         )
