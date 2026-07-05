@@ -587,24 +587,13 @@ class ConversationGraph:
                         result=result,
                     )
                     continue
-                effects = _changed_files_from_tool_result(result)
-                changed_files.extend(effects)
-                payload: dict[str, object] = {
-                    "tool": call.name,
-                    "status": "failed" if result.is_error else "completed",
-                    "changed_files": effects,
-                }
-                redacted_payload, _report = redact_value(payload)
-                if isinstance(redacted_payload, dict):
-                    payload = {
-                        str(key): value for key, value in redacted_payload.items()
-                    }
-                await self.runtime.append_event(
-                    run_id=run.id,
-                    event_type=EventType.TOOL_CALL_CREATED,
-                    payload=payload,
-                    agent_id=leader.id,
+                effects = await self._append_tool_call_event(
+                    run=run,
+                    leader=leader,
+                    tool_name=call.name,
+                    result=result,
                 )
+                changed_files.extend(effects)
         if completed is None:
             raise RuntimeError("Provider stream ended without a completed turn.")
         return {
@@ -690,6 +679,12 @@ class ConversationGraph:
                 approval_granted=True,
             )
         model_messages.append(result)
+        await self._append_tool_call_event(
+            run=run,
+            leader=leader,
+            tool_name=continuation.tool_name,
+            result=result,
+        )
         await self._append_conversation_tool_result(
             run=run,
             leader=leader,
@@ -884,6 +879,31 @@ class ConversationGraph:
             agent_id=leader.id,
         )
         raise ApprovalInterrupt(approval.id)
+
+    async def _append_tool_call_event(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        tool_name: str,
+        result: ToolResultMessage,
+    ) -> list[dict[str, object]]:
+        effects = _changed_files_from_tool_result(result)
+        payload: dict[str, object] = {
+            "tool": tool_name,
+            "status": "failed" if result.is_error else "completed",
+            "changed_files": effects,
+        }
+        redacted_payload, _report = redact_value(payload)
+        if isinstance(redacted_payload, dict):
+            payload = {str(key): value for key, value in redacted_payload.items()}
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.TOOL_CALL_CREATED,
+            payload=payload,
+            agent_id=leader.id,
+        )
+        return effects
 
     async def _find_existing_approval(
         self,
