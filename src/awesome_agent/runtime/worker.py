@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Event as ThreadingEvent
 from time import monotonic
 from uuid import UUID, uuid4
 
@@ -130,7 +131,7 @@ class DurableWorker:
         self.worker_id = worker_id or uuid4()
         self.worker_name = worker_name or default_worker_name()
         self.sleep = sleep
-        self.stop_requested = asyncio.Event()
+        self.stop_requested = ThreadingEvent()
         self.observability_repository = (
             observability_repository or NoopObservabilityRepository()
         )
@@ -349,7 +350,7 @@ class DurableWorker:
             name=f"graph:{lease.run_id}",
         )
         stop_task = asyncio.create_task(
-            self.stop_requested.wait(),
+            self._wait_for_stop_requested(),
             name=f"stop:{lease.run_id}",
         )
         lost_task = asyncio.create_task(
@@ -409,6 +410,10 @@ class DurableWorker:
                 cancel_task,
                 return_exceptions=True,
             )
+
+    async def _wait_for_stop_requested(self) -> None:
+        while not self.stop_requested.is_set():
+            await self.sleep(min(max(self.config.poll_interval, 0.001), 1.0))
 
     async def _heartbeat_loop(
         self,

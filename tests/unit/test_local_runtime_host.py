@@ -249,6 +249,58 @@ def test_local_runtime_host_default_path_uses_process_model_backend(
     assert run["status"] == "completed"
 
 
+def test_local_runtime_host_default_process_backend_accepts_consecutive_turns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "test")
+    monkeypatch.setenv("AWESOME_AGENT_MODEL_WORKER_FAKE", "echo")
+    host = LocalRuntimeHost(
+        settings=test_settings(
+            local_state_dir=tmp_path / "state",
+            deepseek_api_key="test-key",
+        ),
+        default_model="deepseek-v4-pro",
+    )
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
+    second_events: list[ConversationStreamEventKind] = []
+    errors: list[BaseException] = []
+    collector: threading.Thread | None = None
+
+    try:
+        first_events = list(host.stream_turn(thread.id, "first"))
+
+        def collect_second() -> None:
+            try:
+                second_events.extend(
+                    event.event for event in host.stream_turn(thread.id, "second")
+                )
+            except BaseException as error:
+                errors.append(error)
+
+        collector = threading.Thread(target=collect_second, daemon=True)
+        collector.start()
+        collector.join(timeout=2)
+
+        assert not collector.is_alive()
+        assert errors == []
+        assert ConversationStreamEventKind.MESSAGE_DELTA in [
+            event.event for event in first_events
+        ]
+        assert ConversationStreamEventKind.MESSAGE_DELTA in second_events
+        assert second_events[-1] is ConversationStreamEventKind.TURN_COMPLETED
+        assert {
+            run["status"] for run in host.list_thread_runs(thread.id)
+        } == {"completed"}
+    finally:
+        for run in host.list_thread_runs(thread.id):
+            if run["status"] not in {"completed", "failed", "cancelled"}:
+                host.cancel(str(run["id"]))
+        if collector is not None and collector.is_alive():
+            collector.join(timeout=2)
+        host.close()
+
+
 def test_local_runtime_host_yields_delta_before_worker_finishes(
     tmp_path: Path,
 ) -> None:

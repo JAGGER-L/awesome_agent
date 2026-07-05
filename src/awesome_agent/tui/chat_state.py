@@ -388,6 +388,21 @@ class ChatSessionState:
     def note_run_started(self, run_id: str) -> ChatSessionState:
         return replace(self, current_run_id=run_id)
 
+    def note_run_terminal(self, run_id: str | None = None) -> ChatSessionState:
+        return replace(
+            self,
+            current_run_id=(
+                None
+                if run_id is None or self.current_run_id == run_id
+                else self.current_run_id
+            ),
+            last_resumable_run_id=(
+                None
+                if run_id is None or self.last_resumable_run_id == run_id
+                else self.last_resumable_run_id
+            ),
+        )
+
     def note_model_metadata(self, payload: dict[str, object]) -> ChatSessionState:
         return replace(
             self,
