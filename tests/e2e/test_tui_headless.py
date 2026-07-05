@@ -1294,7 +1294,7 @@ async def test_tui_plain_message_uses_current_repo_context(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_tui_renders_minimal_welcome_card(tmp_path: Path) -> None:
+async def test_tui_renders_gradient_solid_banner_welcome(tmp_path: Path) -> None:
     app = AwesomeAgentTui(
         api_url="http://127.0.0.1:8000",
         client=FakeClient(),
@@ -1308,9 +1308,24 @@ async def test_tui_renders_minimal_welcome_card(tmp_path: Path) -> None:
         welcome = app.query_one("#welcome").render()
         footer = app.query_one("#shortcuts").render()
 
-    assert "Awesome Agent" in str(welcome)
-    assert str(tmp_path) in str(welcome)
+    plain = welcome.plain if hasattr(welcome, "plain") else str(welcome)
+    assert "┏" in plain
+    assert "┗" in plain
+    assert "cwd:" in plain
+    assert str(tmp_path) in plain
+    assert "Type a message to start. Use /help for commands." in plain
+    assert "A W E S O M E" not in plain
+    assert "AWESOM" not in plain
     assert "? for shortcuts" in str(footer)
+
+
+def test_solid_banner_source_contains_full_awesome() -> None:
+    from awesome_agent.tui.welcome import AWESOME_LOGO_WORD, SOLID_BANNER_LINES
+
+    assert AWESOME_LOGO_WORD == "AWESOME"
+    assert len(SOLID_BANNER_LINES) == 7
+    assert all(line.startswith(("┏", "┃", "┗")) for line in SOLID_BANNER_LINES)
+    assert all(line.endswith(("┓", "┃", "┛")) for line in SOLID_BANNER_LINES)
 
 
 @pytest.mark.asyncio
@@ -1816,5 +1831,6 @@ async def test_tui_welcome_shows_first_run_model_guidance(tmp_path: Path) -> Non
     async with app.run_test():
         welcome = app.query_one("#welcome").render()
 
-    assert "awesome init" in str(welcome)
+    assert "API key is missing" in str(welcome)
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in str(welcome)
+    assert "Run: awesome doctor" in str(welcome)

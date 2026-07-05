@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 from uuid import UUID, uuid4
 
+from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -58,6 +59,7 @@ from awesome_agent.tui.status_panel import (
     build_status_panel_snapshot,
     render_status_panel,
 )
+from awesome_agent.tui.welcome import render_welcome
 
 
 class AwesomeAgentTui(App[None]):
@@ -1345,20 +1347,13 @@ class AwesomeAgentTui(App[None]):
             parts.append("retryable=true")
         return " | ".join(parts)
 
-    def _welcome_text(self) -> str:
+    def _welcome_text(self) -> Text | str:
         if self.state.messages:
             return ""
-        lines = [
-            "+-- Awesome Agent --------------------------------------+",
-            "| Welcome back                                          |",
-            f"| cwd: {self.state.context_label}",
-            "| tips: /help, /model, /status                          |",
-        ]
-        summary = self.state.first_run_summary
-        if summary is not None and summary.needs_model_setup:
-            lines.append(f"| setup: run awesome init; set {summary.model_api_key_env}")
-        lines.append("+-------------------------------------------------------+")
-        return "\n".join(lines)
+        return render_welcome(
+            context_label=self.state.context_label,
+            first_run_summary=self.state.first_run_summary,
+        )
 
 
 def _thread_id(thread: SurfaceThread | dict[str, object]) -> str:
