@@ -1,7 +1,7 @@
 # Quickstart
 
 This guide shows how to configure, start, verify, and run `awesome_agent`
-through local CLI, local API, Docker CLI, and Docker API/Web lanes.
+through local CLI, local API, and Docker API/Web lanes.
 
 The current "Web" surface is the local FastAPI inspection surface and generated
 API docs. It is not yet a hosted multi-user web application.
@@ -56,7 +56,6 @@ and Subagent.
 | Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | `/health` and `/ready?profile=api` return healthy JSON. |
 | Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | `http://127.0.0.1:8000/docs` opens the FastAPI docs. |
 | Local CLI fallback | First local run and development | `.\scripts\quickstart.ps1` | Probe Run completes and diagnostics are printable. |
-| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Docker API becomes ready and CLI can point at `--api-url`. |
 
 ## Local API
 
@@ -80,6 +79,7 @@ For a first local CLI launch:
 
 ```powershell
 awesome init
+awesome doctor
 cd E:\my-project
 awesome
 ```
@@ -88,6 +88,13 @@ awesome
 names and environment-variable names only. Set `AWESOME_AGENT_DEEPSEEK_API_KEY`
 in your shell, operating-system environment, password manager, or local `.env`
 file before model-backed use.
+
+`awesome doctor` checks only the local CLI first-run path: user config,
+`AWESOME_AGENT_DEEPSEEK_API_KEY` in the current process environment, official
+DeepSeek base URL, current project config presence, and current project `.env`
+presence. It does not check API server, Docker, PostgreSQL, Worker, or sandbox
+health. Use `awesome-agent doctor --profile api` or
+`awesome-agent doctor --profile runtime` for developer/operator diagnostics.
 
 Open the local interactive entrypoint:
 
@@ -177,7 +184,7 @@ Docker mode does not start the CLI. Use `awesome` locally for CLI/TUI after
 Task 60. Docker Compose starts PostgreSQL, the AIO sandbox service, API, and
 Worker. Open `http://127.0.0.1:8000/docs` after startup.
 
-## Docker CLI Fallback
+## Docker API Compatibility Script
 
 Run the containerized API + Worker lane:
 
@@ -194,6 +201,8 @@ Preview the Docker steps:
 The script ensures `.env` exists, runs
 `docker compose up -d --build postgres sandbox api worker`, waits for API readiness,
 and prints CLI next steps that target the containerized API with `--api-url`.
+This is a developer/operator compatibility path, not the main local CLI product
+first-run path.
 
 ## Manual Docker API Fallback
 

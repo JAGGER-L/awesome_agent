@@ -11,10 +11,10 @@ from awesome_agent.cli.config_flow import (
     create_default_user_config,
     inspect_config_flow,
 )
-from awesome_agent.cli.first_run import inspect_first_run_state
-from awesome_agent.cli.profile import local_cli_profile
 from awesome_agent.cli.repo_context import CliLaunchContext, discover_launch_context
 from awesome_agent.cli.slash_commands import slash_command_help
+from awesome_agent.settings import Settings
+from awesome_agent.surfaces.guidance import build_cli_doctor_report
 
 
 class _ChatTui(Protocol):
@@ -63,26 +63,11 @@ def launch(
         return
     resolved_project_root = project_root or Path.cwd()
     launch_context = discover_launch_context(resolved_project_root)
-    profile = local_cli_profile()
-    state = inspect_first_run_state(
-        project_root=launch_context.project_root,
-        home=Path.home(),
-    )
     config_summary = inspect_config_flow(
         home=Path.home(),
         project_root=launch_context.project_root,
         environ=environ,
     )
-    typer.echo(f"awesome.profile={profile.name}")
-    typer.echo(f"awesome.sandbox={profile.default_sandbox_backend}")
-    typer.echo(
-        "awesome.transport="
-        + (f"http:{api_url}" if api_url is not None else "embedded")
-    )
-    typer.echo(
-        f"awesome.context={launch_context.context_kind}:{launch_context.display_path}"
-    )
-    typer.echo(f"awesome.first_run_setup_required={str(state.needs_setup).lower()}")
     _load_tui()(
         api_url=api_url,
         run_id=None,
@@ -101,10 +86,36 @@ def commands() -> None:
 def init_config() -> None:
     """Create the default user config without storing secrets."""
     path = create_default_user_config(Path.home())
-    typer.echo(f"Created or verified {path}")
-    typer.echo(
-        "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment or project .env."
+    typer.echo("Awesome Agent initialized")
+    typer.echo("")
+    typer.echo(f"OK    User config: {path}")
+    typer.echo("")
+    typer.echo("Next:")
+    typer.echo("  Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment.")
+    typer.echo("  Run: awesome doctor")
+    typer.echo("  Start: cd <project>; awesome")
+
+
+@app.command("doctor")
+def doctor(
+    project_root: Annotated[
+        Path | None,
+        typer.Option("--project-root", exists=True, file_okay=False),
+    ] = None,
+) -> None:
+    """Check local CLI first-run setup."""
+    resolved_project_root = project_root or Path.cwd()
+    summary = inspect_config_flow(
+        home=Path.home(),
+        project_root=resolved_project_root,
+        environ=environ,
     )
+    report = build_cli_doctor_report(
+        summary,
+        deepseek_base_url=Settings().deepseek_base_url,
+    )
+    typer.echo(report.render())
+    raise typer.Exit(report.exit_code)
 
 
 def main() -> None:

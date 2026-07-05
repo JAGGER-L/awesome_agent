@@ -110,6 +110,23 @@ def test_router_config_uses_first_run_summary_when_available(tmp_path: Path) -> 
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY: missing" in message.content
 
 
+def test_router_config_adds_api_key_recovery_guidance(tmp_path: Path) -> None:
+    summary = _summary(tmp_path, model_api_key_configured=False)
+    state = ChatSessionState.new(first_run_summary=summary)
+
+    message = SlashRouter(FakeSemanticClient()).handle(
+        SlashCommand(SlashCommandKind.CONFIG),
+        state,
+    )
+
+    assert "AWESOME_AGENT_DEEPSEEK_API_KEY: missing" in message.content
+    assert (
+        "Next: Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment."
+        in message.content
+    )
+    assert "Restart awesome after changing environment variables." in message.content
+
+
 def test_status_command_is_owned_by_tui_app_not_slash_router() -> None:
     message = SlashRouter(FakeSemanticClient()).handle(
         SlashCommand(SlashCommandKind.STATUS),

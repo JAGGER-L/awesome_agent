@@ -1294,7 +1294,7 @@ async def test_tui_plain_message_uses_current_repo_context(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_tui_renders_minimal_welcome_card(tmp_path: Path) -> None:
+async def test_tui_renders_gradient_solid_banner_welcome(tmp_path: Path) -> None:
     app = AwesomeAgentTui(
         api_url="http://127.0.0.1:8000",
         client=FakeClient(),
@@ -1308,9 +1308,24 @@ async def test_tui_renders_minimal_welcome_card(tmp_path: Path) -> None:
         welcome = app.query_one("#welcome").render()
         footer = app.query_one("#shortcuts").render()
 
-    assert "Awesome Agent" in str(welcome)
-    assert str(tmp_path) in str(welcome)
+    plain = welcome.plain if hasattr(welcome, "plain") else str(welcome)
+    assert "┏" in plain
+    assert "┗" in plain
+    assert "cwd:" in plain
+    assert str(tmp_path) in plain
+    assert "Type a message to start. Use /help for commands." in plain
+    assert "A W E S O M E" not in plain
+    assert "AWESOM" not in plain
     assert "? for shortcuts" in str(footer)
+
+
+def test_solid_banner_source_contains_full_awesome() -> None:
+    from awesome_agent.tui.welcome import AWESOME_LOGO_WORD, SOLID_BANNER_LINES
+
+    assert AWESOME_LOGO_WORD == "AWESOME"
+    assert len(SOLID_BANNER_LINES) == 7
+    assert all(line.startswith(("┏", "┃", "┗")) for line in SOLID_BANNER_LINES)
+    assert all(line.endswith(("┓", "┃", "┛")) for line in SOLID_BANNER_LINES)
 
 
 @pytest.mark.asyncio
@@ -1486,6 +1501,51 @@ async def test_tui_cancel_current_run_calls_api() -> None:
 
     assert client.cancelled_runs == ["run-1"]
     assert "Cancelled Run" in str(transcript)
+
+
+@pytest.mark.asyncio
+async def test_tui_renders_authentication_error_with_recovery_steps() -> None:
+    class AuthenticationErrorClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
+        ) -> list[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.ERROR,
+                    thread_id=uuid4(),
+                    turn_id=uuid4(),
+                    sequence=1,
+                    trace_id="trace-auth",
+                    payload={
+                        "code": "authentication",
+                        "message": "Provider rejected the API key.",
+                        "hint": "Check the configured key.",
+                        "retryable": False,
+                    },
+                )
+            ]
+
+    app = AwesomeAgentTui(client=AuthenticationErrorClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "API key is missing" in rendered
+    assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in rendered
+    assert "Restart awesome" in rendered
+    assert "Provider rejected the API key." in rendered
 
 
 @pytest.mark.asyncio
@@ -1816,5 +1876,6 @@ async def test_tui_welcome_shows_first_run_model_guidance(tmp_path: Path) -> Non
     async with app.run_test():
         welcome = app.query_one("#welcome").render()
 
-    assert "awesome init" in str(welcome)
+    assert "API key is missing" in str(welcome)
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in str(welcome)
+    assert "Run: awesome doctor" in str(welcome)

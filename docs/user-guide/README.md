@@ -26,6 +26,7 @@ choosing API topology:
 
 ```powershell
 awesome
+awesome doctor
 awesome commands
 ```
 
@@ -35,6 +36,15 @@ The local TUI is intentionally chat-first. It shows a welcome panel at launch,
 then keeps the main screen focused on the transcript and input prompt. Runtime
 details are available through slash commands such as `/status`, `/tools`,
 `/mcp`, `/usage`, and `/config`.
+
+Use `awesome doctor` before the first model-backed local CLI session when setup
+is unclear. It reports `OK`, `WARN`, `ERROR`, and `INFO` lines plus executable
+next steps. Missing project `awesome-agent.yaml` and `.env` are informational;
+missing `AWESOME_AGENT_DEEPSEEK_API_KEY` is an error.
+
+The startup welcome panel appears once per TUI session. It is not available as a
+slash command; use `/config`, `/model`, `/status`, or `awesome doctor` to inspect
+setup after launch.
 
 Plain user messages are the only product execution creation path. A user
 message turn creates an internal conversation Run with a Leader Agent and

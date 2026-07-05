@@ -47,8 +47,78 @@ def test_awesome_init_creates_user_config(
 
     assert result.exit_code == 0
     assert (tmp_path / ".awesome-agent" / "config.yaml").exists()
-    assert "Created or verified" in result.output
-    assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in result.output
+    assert "Awesome Agent initialized" in result.output
+    assert (
+        f"OK    User config: {tmp_path / '.awesome-agent' / 'config.yaml'}"
+        in result.output
+    )
+    assert "Next:" in result.output
+    assert "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment." in result.output
+    assert "Run: awesome doctor" in result.output
+    assert "Start: cd <project>; awesome" in result.output
+
+
+def test_awesome_doctor_reports_missing_key_and_exits_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AWESOME_AGENT_DEEPSEEK_API_KEY", raising=False)
+
+    result = runner.invoke(app, ["doctor", "--project-root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "Awesome Agent CLI check" in result.output
+    assert "WARN  User config:" in result.output
+    assert "ERROR API key: AWESOME_AGENT_DEEPSEEK_API_KEY is missing" in result.output
+    assert "INFO  Project config:" in result.output
+    assert "INFO  Project env:" in result.output
+    assert "Runtime:" not in result.output
+    assert "Worker:" not in result.output
+    assert "Docker" not in result.output
+    assert "Postgres" not in result.output
+
+
+def test_awesome_doctor_exits_zero_with_key_and_official_base_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.delenv("AWESOME_AGENT_DEEPSEEK_BASE_URL", raising=False)
+    (tmp_path / ".awesome-agent").mkdir()
+    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+        "version: 1\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["doctor", "--project-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "OK    User config:" in result.output
+    assert "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is set" in result.output
+    assert "OK    Base URL: https://api.deepseek.com" in result.output
+    assert "Start: awesome" in result.output
+
+
+def test_awesome_doctor_rejects_custom_deepseek_base_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_BASE_URL", "https://example.test")
+    (tmp_path / ".awesome-agent").mkdir()
+    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+        "version: 1\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["doctor", "--project-root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "ERROR Base URL: https://example.test is unsupported" in result.output
+    assert "https://api.deepseek.com" in result.output
 
 
 def test_awesome_launches_chat_tui(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,4 +187,4 @@ def test_awesome_defaults_to_embedded_local_runtime(
     assert launched["api_url"] is None
     assert launched["run_id"] is None
     assert launched["ran"] is True
-    assert "awesome.transport=embedded" in result.output
+    assert result.output == ""
