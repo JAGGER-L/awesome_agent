@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Event as ThreadingEvent
 from time import monotonic
+from typing import cast
 from uuid import UUID, uuid4
 
 from awesome_agent.domain.enums import EventType, ExecutionKind
@@ -40,6 +41,7 @@ from awesome_agent.runtime.dispatch import (
     RunCancelled,
     RunDispatcher,
 )
+from awesome_agent.runtime.graph_router import GraphRouteMap
 from awesome_agent.runtime.graphs import (
     CONVERSATION_TURN_ROUTE,
     MODIFYING_CODING_ROUTE,
@@ -127,6 +129,16 @@ class DurableWorker:
         self.team_leader_graph = team_leader_graph
         self.team_role_graph = team_role_graph
         self.team_verifier_graph = team_verifier_graph
+        self.graph_routes = GraphRouteMap(
+            probe_graph=self.probe_graph,
+            conversation_graph=self.conversation_graph,
+            coding_graph=self.coding_graph,
+            modifying_graph=self.modifying_graph,
+            team_graph=self.team_graph,
+            team_leader_graph=self.team_leader_graph,
+            team_role_graph=self.team_role_graph,
+            team_verifier_graph=self.team_verifier_graph,
+        )
         self.config = config
         self.worker_id = worker_id or uuid4()
         self.worker_name = worker_name or default_worker_name()
@@ -527,48 +539,7 @@ class DurableWorker:
             return
 
     def _validate_run(self, run: Run) -> None:
-        if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
-            return
-        if (
-            run.execution_kind is ExecutionKind.CONVERSATION
-            and run.runtime_route == CONVERSATION_TURN_ROUTE
-            and self.conversation_graph is not None
-        ):
-            return
-        if run.execution_kind is not ExecutionKind.CODING:
-            raise IncompatibleGraphError(
-                f"Worker cannot execute kind {run.execution_kind.value}."
-            )
-        if (
-            run.runtime_route == READ_ONLY_CODING_ROUTE
-            and self.coding_graph is not None
-        ):
-            return
-        if (
-            run.runtime_route == MODIFYING_CODING_ROUTE
-            and self.modifying_graph is not None
-        ):
-            return
-        if (
-            run.runtime_route == SCOPED_TEAM_CODING_ROUTE
-            and self.team_graph is not None
-        ):
-            return
-        if (
-            run.runtime_route == TEAM_CODING_ROUTE
-            and self.team_leader_graph is not None
-        ):
-            return
-        if run.runtime_route == TEAM_ROLE_ROUTE and self.team_role_graph is not None:
-            return
-        if (
-            run.runtime_route == TEAM_VERIFIER_ROUTE
-            and self.team_verifier_graph is not None
-        ):
-            return
-        raise IncompatibleGraphError(
-            "Worker has no compatible Coding graph configured."
-        )
+        self.graph_routes.select(run)
 
     async def _execute_graph(
         self,
@@ -590,13 +561,11 @@ class DurableWorker:
         status = "completed"
         error_text: str | None = None
         try:
-            if run.execution_kind is ExecutionKind.RUNTIME_PROBE:
-                return await self.probe_graph.execute(run)
-            if run.execution_kind is ExecutionKind.CONVERSATION:
-                if self.conversation_graph is None:
-                    raise IncompatibleGraphError(
-                        "Worker has no Conversation graph configured."
-                    )
+            selected = self.graph_routes.select(run)
+            if selected.name == "probe":
+                probe_graph = cast(RuntimeProbeGraph, selected.graph)
+                return await probe_graph.execute(run)
+            if selected.name == "conversation":
                 agents = await self.repository.list_agents(run.id)
                 leader = next(
                     (agent for agent in agents if agent.parent_agent_id is None),
@@ -608,7 +577,7 @@ class DurableWorker:
                     raise CorruptRuntimeStateError(
                         "Conversation Run has no Leader Agent."
                     )
-                conversation_graph = self.conversation_graph
+                conversation_graph = selected.graph
 
                 async def execute_conversation() -> tuple[ConversationGraphState, bool]:
                     return await conversation_graph.execute(run, leader), False
@@ -617,7 +586,7 @@ class DurableWorker:
                     run,
                     execute_conversation,
                 )
-            if run.execution_kind is ExecutionKind.CODING:
+            if selected.execution_kind is ExecutionKind.CODING:
                 agents = await self.repository.list_agents(run.id)
                 primary_agent = next(
                     (agent for agent in agents if agent.parent_agent_id is None),
@@ -641,8 +610,8 @@ class DurableWorker:
                     )
                     await self._record_event_observability(run, primary_agent, event)
 
-                if run.runtime_route == READ_ONLY_CODING_ROUTE and self.coding_graph:
-                    coding_graph = self.coding_graph
+                if selected.name == "readonly":
+                    coding_graph = selected.graph
                     return await self._execute_with_active_budget(
                         run,
                         lambda: coding_graph.execute(
@@ -651,8 +620,8 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.runtime_route == MODIFYING_CODING_ROUTE and self.modifying_graph:
-                    modifying_graph = self.modifying_graph
+                if selected.name == "modifying":
+                    modifying_graph = selected.graph
                     return await self._execute_with_active_budget(
                         run,
                         lambda: modifying_graph.execute(
@@ -661,8 +630,8 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.runtime_route == SCOPED_TEAM_CODING_ROUTE and self.team_graph:
-                    team_graph = self.team_graph
+                if selected.name == "team-scoped":
+                    team_graph = selected.graph
                     return await self._execute_with_active_budget(
                         run,
                         lambda: team_graph.execute(
@@ -672,8 +641,8 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.runtime_route == TEAM_CODING_ROUTE and self.team_leader_graph:
-                    team_leader_graph = self.team_leader_graph
+                if selected.name == "team-leader":
+                    team_leader_graph = selected.graph
                     return await self._execute_with_active_budget(
                         run,
                         lambda: team_leader_graph.execute(
@@ -683,8 +652,8 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if run.runtime_route == TEAM_ROLE_ROUTE and self.team_role_graph:
-                    team_role_graph = self.team_role_graph
+                if selected.name == "team-role":
+                    team_role_graph = selected.graph
                     return await self._execute_with_active_budget(
                         run,
                         lambda: team_role_graph.execute(
@@ -694,11 +663,8 @@ class DurableWorker:
                             event_sink=emit,
                         ),
                     )
-                if (
-                    run.runtime_route == TEAM_VERIFIER_ROUTE
-                    and self.team_verifier_graph
-                ):
-                    team_verifier_graph = self.team_verifier_graph
+                if selected.name == "team-verifier":
+                    team_verifier_graph = selected.graph
                     return await self._execute_with_active_budget(
                         run,
                         lambda: team_verifier_graph.execute(
