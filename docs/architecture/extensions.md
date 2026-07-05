@@ -22,6 +22,13 @@ user should live under `<AWESOME_HOME>`.
 Extension discovery produces catalog entries. Catalog entries become executable
 only when runtime capability policy grants them to a route, role, or assignment.
 
+## Catalog, Surface, And Execution
+
+The extension catalog records what was discovered. Capability surfaces explain
+what users and clients can see. The execution registry defines what the worker
+can actually invoke. These three views must be assembled from the same source
+so a tool is not displayed as executable when no handler is registered.
+
 ## Related Documents
 
 - [User memory, skills, and MCP](../user-guide/memory-skills-mcp.md)

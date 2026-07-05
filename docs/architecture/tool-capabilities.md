@@ -21,6 +21,12 @@ The model requests a tool call. The runtime validates canonical arguments,
 capability grants, approval state, workspace fingerprint, and tool version
 before execution. Side-effecting tools produce durable evidence.
 
+## Approval Scope
+
+Approval belongs to one canonical invocation. A later tool request with a
+different schema version, argument hash, workspace path, workspace fingerprint,
+or capability set must request a new approval instead of reusing an old one.
+
 ## Extension Tools
 
 Built-in, MCP, skill, and community tools should flow through the same

@@ -9,6 +9,20 @@ first local setup path.
 - [Runtime data](runtime-data.md)
 - [Troubleshooting](troubleshooting.md)
 
+## Choose A Mode
+
+Use Local CLI for ordinary repository work. Use Local API when another client
+needs HTTP/SSE contracts. Use Docker API when you need the API, Worker,
+PostgreSQL, and sandbox services started together with container-managed
+dependencies.
+
+## Readiness Signals
+
+`/health` proves only that the API process can respond. `/ready` and
+`awesome-agent doctor` inspect dependencies such as database migrations,
+checkpoint storage, provider configuration, sandbox health, extension catalog
+health, and worker heartbeats.
+
 `awesome-agent start` is a fallback/debug supervisor for local API development,
 not the normal Local CLI path.
 

@@ -19,6 +19,24 @@ new user message.
 Use `Ctrl+R` to retry the last failed conversation turn. Use `Ctrl+C` to
 request cancellation of the active turn.
 
+## Approval Flow
+
+When a tool needs approval, the response pauses and the TUI shows a fixed
+approval control. Approving once resumes the same run. Denying continues with a
+denied tool result. Cancelling requests run cancellation.
+
+## Tool Timeline
+
+Tool calls are grouped into a timeline so users can scan what happened during a
+turn. The collapsed view shows call counts and status counts; the expanded view
+shows individual tools and failure details.
+
+## Recovery
+
+If a response pauses, type `continue` to resume the latest resumable turn. If
+the active run changed, the product reports a conflict instead of creating a new
+user message.
+
 ## Model And Thinking Controls
 
 Use `/model` to choose the current conversation model. Use `/thinking` to choose

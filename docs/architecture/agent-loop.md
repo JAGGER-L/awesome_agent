@@ -26,6 +26,13 @@ model turn until a final answer, cancellation, approval wait, or failure state
 is reached. Tool execution remains outside provider child processes so the
 runtime can enforce capability and approval policy.
 
+## Replay Boundary
+
+The loop may replay persisted model/tool context, but it must not silently
+repeat side effects. Tool observations, approval decisions, and continuation
+state need stable identifiers so recovery can distinguish already-executed work
+from work that still needs execution.
+
 ## Related Documents
 
 - [Runtime kernel](runtime-kernel.md)

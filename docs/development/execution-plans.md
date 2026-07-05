@@ -18,7 +18,3 @@ Use `active/` for the current task, `pending/` for approved future work, and
 `completed/` for closed local plans. Durable decisions must be extracted into
 tracked documentation such as [architecture](../architecture/README.md),
 [governance](../governance/README.md), or [operations](../operations/README.md).
-
-The legacy plan guide remains at
-[engineering execution plans](../engineering/execution-plans.md) until all
-inbound links move.

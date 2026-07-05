@@ -30,6 +30,12 @@ Common recovery states include approval wait, cancellation, provider timeout,
 tool failure, ambiguous shell completion, checkpoint replay, and workspace
 cleanup requirement. Operations docs explain how to inspect these states.
 
+## Approval Wait Persistence
+
+A waiting approval stores the approval record, runtime event, dispatch state,
+and enough continuation data to resume the original tool call. Recovery must
+distinguish approval wait from retry after execution failure.
+
 ## Related Documents
 
 - [Operations guide](../operations/README.md)
