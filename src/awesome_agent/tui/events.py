@@ -38,6 +38,13 @@ class TeamDisplayEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class TeamStatusDisplay:
+    root_role: str
+    phase: str
+    lines: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ApprovalPromptState:
     run_id: str
     approval_id: str

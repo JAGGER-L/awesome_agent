@@ -12,6 +12,7 @@ from awesome_agent.tui.chat_state import (
 from awesome_agent.tui.events import (
     ApprovalPromptState,
     TeamDisplayEvent,
+    TeamStatusDisplay,
     ToolDisplayEvent,
     ToolTimelineEntry,
 )
@@ -20,6 +21,7 @@ from awesome_agent.tui.rendering import (
     render_changed_files,
     render_message,
     render_team_event,
+    render_team_status,
     render_thought,
     render_tool_event,
     render_transcript,
@@ -358,6 +360,24 @@ def test_team_event_hides_details_until_details_mode() -> None:
     assert "Leader created 2 teammates" in collapsed
     assert "leader -> frontend-engineer" not in collapsed
     assert "leader -> frontend-engineer" in expanded
+
+
+def test_team_status_tree_renders_roles_and_waiting_reason() -> None:
+    event = TeamStatusDisplay(
+        root_role="leader",
+        phase="waiting_children",
+        lines=(
+            "leader executing root",
+            "  teammate backend waiting waiting_children",
+            "    subagent subagent completed README evidence returned.",
+        ),
+    )
+
+    rendered = render_team_status(event).plain
+
+    assert "leader executing root" in rendered
+    assert "teammate backend waiting waiting_children" in rendered
+    assert "subagent subagent completed README evidence returned." in rendered
 
 
 def test_approval_prompt_renders_choices() -> None:

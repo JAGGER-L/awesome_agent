@@ -9,6 +9,7 @@ from awesome_agent.tui.chat_state import (
     ToolGroup,
     chat_messages_from_thread_records,
 )
+from awesome_agent.tui.events import ToolTimelineEntry
 from awesome_agent.tui.status_panel import StatusPanelTab
 
 
@@ -127,12 +128,18 @@ def test_chat_state_groups_continuous_tool_messages() -> None:
     ]
     assert updated.messages[0].tool_group == ToolGroup(
         entries=(
-            "Tool - repo.instructions\ncompleted",
-            "Tool - repo.list\ncompleted",
+            ToolTimelineEntry(
+                name="tool",
+                summary="Tool - repo.instructions\ncompleted",
+            ),
+            ToolTimelineEntry(
+                name="tool",
+                summary="Tool - repo.list\ncompleted",
+            ),
         )
     )
-    assert updated.messages[0].content == "已调用2个工具"
-    assert updated.messages[2].content == "已调用1个工具"
+    assert updated.messages[0].content == "called 2, 2 completed"
+    assert updated.messages[2].content == "called 1, 1 failed"
 
 
 def test_chat_state_toggles_tool_group_expansion() -> None:

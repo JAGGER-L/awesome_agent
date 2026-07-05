@@ -640,6 +640,36 @@ def team_mailbox(
         )
 
 
+@app.command("team-tree")
+def team_tree(
+    run_id: UUID,
+    api_url: Annotated[str, typer.Option()] = "http://127.0.0.1:8000",
+) -> None:
+    """Show the team execution tree for a run."""
+    response = httpx.get(f"{api_url}/runs/{run_id}/team/tree", timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+    for line in _team_tree_lines(payload["root"]):
+        typer.echo(line)
+
+
+def _team_tree_lines(node: dict[str, object], *, depth: int = 0) -> list[str]:
+    indent = "  " * depth
+    profile = str(node.get("profile") or "")
+    status = str(node.get("status") or "")
+    waiting = node.get("waiting_reason")
+    result = node.get("result_summary")
+    suffix = str(waiting or result or "").strip()
+    line = f"{indent}{node['role']} {profile} {status}".rstrip()
+    if suffix:
+        line = f"{line} {suffix}"
+    lines = [line]
+    for child in node.get("children", []):
+        if isinstance(child, dict):
+            lines.extend(_team_tree_lines(child, depth=depth + 1))
+    return lines
+
+
 @app.command()
 def cancel(
     run_id: UUID,

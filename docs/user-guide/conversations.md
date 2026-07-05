@@ -31,6 +31,13 @@ Tool calls are grouped into a timeline so users can scan what happened during a
 turn. The collapsed view shows call counts and status counts; the expanded view
 shows individual tools and failure details.
 
+## Team Runs
+
+Team runs show a tree of work: Leader plan, Teammate assignments, Subagent
+evidence, Verifier decision, and rework or completion. The tree is the user
+surface for understanding why a team run is waiting, which child run produced
+evidence, and whether patch aggregation or verifier feedback already happened.
+
 ## Recovery
 
 If a response pauses, type `continue` to resume the latest resumable turn. If

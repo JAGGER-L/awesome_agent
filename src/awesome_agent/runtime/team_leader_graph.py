@@ -8,9 +8,7 @@ from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
-    DispatchStatus,
     EventType,
-    RunMode,
 )
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.observability.facade import ObservabilityFacade
@@ -28,7 +26,6 @@ from awesome_agent.runtime.dispatch import (
 )
 from awesome_agent.runtime.graphs import (
     TEAM_ROLE_ROUTE,
-    TEAM_VERIFIER_ROUTE,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
@@ -36,9 +33,13 @@ from awesome_agent.runtime.team_assignments import (
     TeamAssignmentKind,
     TeamAssignmentStatus,
     TeamChildResult,
-    validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
+from awesome_agent.runtime.team_child_runs import (
+    TeamChildWorkspace,
+    create_teammate_child,
+    create_verifier_child,
+)
 from awesome_agent.runtime.team_context import compact_team_payload
 from awesome_agent.runtime.team_patch_aggregation import (
     apply_team_patch,
@@ -69,6 +70,7 @@ from awesome_agent.runtime.team_rework import (
     rework_attempt_for_lineage,
     rework_budget_for_failure,
 )
+from awesome_agent.runtime.team_workspaces import TeamWorkspaceAllocator
 from awesome_agent.runtime.token_accounting import (
     TokenAccountant,
     default_token_accountant,
@@ -101,6 +103,7 @@ class TeamLeaderGraph:
         observability: ObservabilityFacade | None = None,
         team_recovery_policy: TeamRecoveryPolicy | None = None,
         token_accountant: TokenAccountant | None = None,
+        workspace_allocator: TeamWorkspaceAllocator | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.provider_resolver = provider_resolver
@@ -111,6 +114,7 @@ class TeamLeaderGraph:
         self.budget_policy = budget_policy
         self.team_recovery_policy = team_recovery_policy or TeamRecoveryPolicy()
         self.token_accountant = token_accountant or default_token_accountant()
+        self.workspace_allocator = workspace_allocator
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.team_planning = TeamPlanningMiddleware(
             provider_resolver=provider_resolver,
@@ -276,43 +280,46 @@ class TeamLeaderGraph:
         repository: RuntimeRepository,
         event_sink: object | None,
     ) -> None:
-        child = Run(
-            goal=teammate_plan.goal,
-            mode=RunMode.TEAM,
-            repository_id=run.repository_id,
-            base_commit=run.base_commit,
-            intent=run.intent,
-            execution_kind=run.execution_kind,
-            parent_run_id=run.id,
-            root_run_id=run.root_run_id or run.id,
-            depth=1,
-            child_role=TeamAssignmentKind.TEAMMATE.value,
-            runtime_route=TEAM_ROLE_ROUTE,
-            extension_catalog_version=run.extension_catalog_version,
-            dispatch_status=DispatchStatus.QUEUED,
-            workspace_path=run.workspace_path,
-            integration_branch=run.integration_branch,
-            workspace_state=run.workspace_state,
-            graph_thread_id=f"run:{run.id}:teammate:{index}",
-        )
         if self.model_resolver is None:
             raise PermanentExecutionError("team_model_resolver_unavailable")
         teammate_model = self.model_resolver.resolve(
             kind=AgentKind.TEAMMATE,
             profile=teammate_plan.role_profile,
         )
-        teammate_agent = Agent(
-            run_id=child.id,
-            parent_agent_id=leader.id,
-            kind=AgentKind.TEAMMATE,
-            profile=teammate_plan.role_profile,
-            model=teammate_model,
-        )
         handoff_context = {
             "leader_plan_rationale": plan.rationale,
             "plan_attempt": plan_attempt,
             "plan_teammate_index": index,
         }
+        bundle = create_teammate_child(
+            parent=run,
+            leader=leader,
+            role_profile=teammate_plan.role_profile,
+            goal=teammate_plan.goal,
+            model=teammate_model,
+            allowed_tools=teammate_plan.allowed_tools,
+            deferred_tools=teammate_plan.deferred_tools,
+            promoted_tools=[],
+            allowed_skills=teammate_plan.allowed_skills,
+            can_write=teammate_plan.can_write,
+            can_delegate=teammate_plan.can_delegate,
+            max_subagents=teammate_plan.max_subagents,
+            acceptance_criteria=teammate_plan.acceptance_criteria,
+            handoff_context=handoff_context,
+            workspace=TeamChildWorkspace(
+                workspace_path=run.workspace_path,
+                integration_branch=run.integration_branch,
+                workspace_state=run.workspace_state,
+            ),
+            graph_thread_id=f"run:{run.id}:teammate:{index}",
+        )
+        child = bundle.run
+        teammate_agent = bundle.agent
+        child = await self._assign_writing_workspace(
+            run,
+            child,
+            can_write=teammate_plan.can_write,
+        )
         compacted_handoff = await compact_team_payload(
             run_id=child.id,
             agent_id=teammate_agent.id,
@@ -325,24 +332,9 @@ class TeamLeaderGraph:
             max_inline_tokens=_TEAM_INLINE_PAYLOAD_TOKENS,
             token_accountant=self.token_accountant,
         )
-        assignment = TeamAssignment(
-            root_run_id=child.root_run_id or run.id,
-            parent_run_id=run.id,
-            child_run_id=child.id,
-            kind=TeamAssignmentKind.TEAMMATE,
-            role_profile=teammate_plan.role_profile,
-            runtime_route=TEAM_ROLE_ROUTE,
-            goal=child.goal,
-            allowed_tools=teammate_plan.allowed_tools,
-            deferred_tools=teammate_plan.deferred_tools,
-            allowed_skills=teammate_plan.allowed_skills,
-            can_write=teammate_plan.can_write,
-            can_delegate=teammate_plan.can_delegate,
-            max_subagents=teammate_plan.max_subagents,
-            acceptance_criteria=teammate_plan.acceptance_criteria,
-            handoff_context=compacted_handoff.inline_payload,
+        assignment = bundle.assignment.model_copy(
+            update={"handoff_context": compacted_handoff.inline_payload}
         )
-        validate_assignment_graph(assignment)
         await repository.create_run(child, teammate_agent)
         await self.team_repository.create_assignment(assignment)
         if callable(event_sink):
@@ -475,51 +467,24 @@ class TeamLeaderGraph:
             )
             + 1
         )
-        child = Run(
-            goal=f"Verify team result for: {run.goal}",
-            mode=RunMode.TEAM,
-            repository_id=run.repository_id,
-            base_commit=run.base_commit,
-            intent=run.intent,
-            execution_kind=run.execution_kind,
-            parent_run_id=run.id,
-            root_run_id=run.root_run_id or run.id,
-            depth=1,
-            child_role=TeamAssignmentKind.VERIFIER.value,
-            runtime_route=TEAM_VERIFIER_ROUTE,
-            extension_catalog_version=run.extension_catalog_version,
-            dispatch_status=DispatchStatus.QUEUED,
-            workspace_path=run.workspace_path,
-            integration_branch=run.integration_branch,
-            workspace_state=run.workspace_state,
-            graph_thread_id=f"run:{run.id}:verifier:{verifier_index}",
-        )
-        verifier = Agent(
-            run_id=child.id,
-            parent_agent_id=leader.id,
+        verifier_model = self.model_resolver.resolve(
             kind=AgentKind.VERIFIER,
             profile="verifier",
-            model=self.model_resolver.resolve(
-                kind=AgentKind.VERIFIER,
-                profile="verifier",
+        )
+        bundle = create_verifier_child(
+            parent=run,
+            leader=leader,
+            index=verifier_index,
+            model=verifier_model,
+            workspace=TeamChildWorkspace(
+                workspace_path=run.workspace_path,
+                integration_branch=run.integration_branch,
+                workspace_state=run.workspace_state,
             ),
         )
-        assignment = TeamAssignment(
-            root_run_id=child.root_run_id or run.id,
-            parent_run_id=run.id,
-            child_run_id=child.id,
-            kind=TeamAssignmentKind.VERIFIER,
-            role_profile="verifier",
-            runtime_route=TEAM_VERIFIER_ROUTE,
-            goal=child.goal,
-            allowed_tools=["repo.diff"],
-            allowed_skills=[],
-            can_write=False,
-            can_delegate=False,
-            max_subagents=0,
-            acceptance_criteria=["Verify aggregated teammate evidence."],
-        )
-        validate_assignment_graph(assignment)
+        child = bundle.run
+        verifier = bundle.agent
+        assignment = bundle.assignment
         await repository.create_run(child, verifier)
         await self.team_repository.create_assignment(assignment)
         if callable(event_sink):
@@ -713,37 +678,9 @@ class TeamLeaderGraph:
             if original is None:
                 raise PermanentExecutionError("team_plan_repair_target_not_found")
         teammate_plan = action.teammate
-        child = Run(
-            goal=teammate_plan.goal,
-            mode=RunMode.TEAM,
-            repository_id=run.repository_id,
-            base_commit=run.base_commit,
-            intent=run.intent,
-            execution_kind=run.execution_kind,
-            parent_run_id=run.id,
-            root_run_id=run.root_run_id or run.id,
-            depth=1,
-            child_role=TeamAssignmentKind.TEAMMATE.value,
-            runtime_route=TEAM_ROLE_ROUTE,
-            extension_catalog_version=run.extension_catalog_version,
-            dispatch_status=DispatchStatus.QUEUED,
-            workspace_path=run.workspace_path,
-            integration_branch=run.integration_branch,
-            workspace_state=run.workspace_state,
-            graph_thread_id=(
-                f"run:{run.id}:plan-repair:{verifier_result.child_run_id}:"
-                f"{attempt}:{action_index}"
-            ),
-        )
-        agent = Agent(
-            run_id=child.id,
-            parent_agent_id=leader.id,
+        teammate_model = self.model_resolver.resolve(
             kind=AgentKind.TEAMMATE,
             profile=teammate_plan.role_profile,
-            model=self.model_resolver.resolve(
-                kind=AgentKind.TEAMMATE,
-                profile=teammate_plan.role_profile,
-            ),
         )
         handoff_context: dict[str, object] = {
             "plan_repair_reason": PLAN_REPAIR_REASON_VERIFIER_REWORK,
@@ -765,24 +702,39 @@ class TeamLeaderGraph:
                     "previous_child_run_id": str(original.child_run_id),
                 }
             )
-        assignment = TeamAssignment(
-            root_run_id=child.root_run_id or run.id,
-            parent_run_id=run.id,
-            child_run_id=child.id,
-            kind=TeamAssignmentKind.TEAMMATE,
+        bundle = create_teammate_child(
+            parent=run,
+            leader=leader,
             role_profile=teammate_plan.role_profile,
-            runtime_route=TEAM_ROLE_ROUTE,
             goal=teammate_plan.goal,
+            model=teammate_model,
             allowed_tools=teammate_plan.allowed_tools,
             deferred_tools=teammate_plan.deferred_tools,
+            promoted_tools=[],
             allowed_skills=teammate_plan.allowed_skills,
             can_write=teammate_plan.can_write,
             can_delegate=teammate_plan.can_delegate,
             max_subagents=teammate_plan.max_subagents,
             acceptance_criteria=teammate_plan.acceptance_criteria,
             handoff_context=handoff_context,
+            workspace=TeamChildWorkspace(
+                workspace_path=run.workspace_path,
+                integration_branch=run.integration_branch,
+                workspace_state=run.workspace_state,
+            ),
+            graph_thread_id=(
+                f"run:{run.id}:plan-repair:{verifier_result.child_run_id}:"
+                f"{attempt}:{action_index}"
+            ),
         )
-        validate_assignment_graph(assignment)
+        child = bundle.run
+        agent = bundle.agent
+        child = await self._assign_writing_workspace(
+            run,
+            child,
+            can_write=teammate_plan.can_write,
+        )
+        assignment = bundle.assignment
         await repository.create_run(child, agent)
         await self.team_repository.create_assignment(assignment)
         await _emit_if_callable(
@@ -867,50 +819,30 @@ class TeamLeaderGraph:
             conflict_summary=conflict_summary,
             acceptance_criteria=original.acceptance_criteria,
         )
-        child = Run(
-            goal=goal,
-            mode=RunMode.TEAM,
-            repository_id=run.repository_id,
-            base_commit=run.base_commit,
-            intent=run.intent,
-            execution_kind=run.execution_kind,
-            parent_run_id=run.id,
-            root_run_id=run.root_run_id or run.id,
-            depth=1,
-            child_role=TeamAssignmentKind.TEAMMATE.value,
-            runtime_route=TEAM_ROLE_ROUTE,
-            extension_catalog_version=run.extension_catalog_version,
-            dispatch_status=DispatchStatus.QUEUED,
-            workspace_path=run.workspace_path,
-            integration_branch=run.integration_branch,
-            workspace_state=run.workspace_state,
-            graph_thread_id=(
-                f"run:{run.id}:patch-conflict-rework:{original.child_run_id}:{attempt}"
-            ),
-        )
-        agent = Agent(
-            run_id=child.id,
-            parent_agent_id=leader.id,
+        teammate_model = self.model_resolver.resolve(
             kind=AgentKind.TEAMMATE,
             profile=original.role_profile,
-            model=self.model_resolver.resolve(
-                kind=AgentKind.TEAMMATE,
-                profile=original.role_profile,
-            ),
         )
         patch_artifact_id = (
             str(result.patch_artifact_id)
             if result.patch_artifact_id is not None
             else None
         )
-        assignment = TeamAssignment(
-            root_run_id=child.root_run_id or run.id,
-            parent_run_id=run.id,
-            child_run_id=child.id,
-            kind=TeamAssignmentKind.TEAMMATE,
+        handoff_context = {
+            "rework_reason": PATCH_CONFLICT_REWORK_REASON,
+            "previous_assignment_id": lineage_id,
+            "previous_child_run_id": str(original.child_run_id),
+            "conflicting_patch_artifact_id": patch_artifact_id,
+            "patch_conflict_kind": conflict_kind,
+            "patch_conflict_summary": conflict_summary,
+            "rework_attempt": attempt,
+        }
+        bundle = create_teammate_child(
+            parent=run,
+            leader=leader,
             role_profile=original.role_profile,
-            runtime_route=TEAM_ROLE_ROUTE,
             goal=goal,
+            model=teammate_model,
             allowed_tools=original.allowed_tools,
             deferred_tools=original.deferred_tools,
             promoted_tools=original.promoted_tools,
@@ -919,17 +851,24 @@ class TeamLeaderGraph:
             can_delegate=original.can_delegate,
             max_subagents=original.max_subagents,
             acceptance_criteria=original.acceptance_criteria,
-            handoff_context={
-                "rework_reason": PATCH_CONFLICT_REWORK_REASON,
-                "previous_assignment_id": lineage_id,
-                "previous_child_run_id": str(original.child_run_id),
-                "conflicting_patch_artifact_id": patch_artifact_id,
-                "patch_conflict_kind": conflict_kind,
-                "patch_conflict_summary": conflict_summary,
-                "rework_attempt": attempt,
-            },
+            handoff_context=handoff_context,
+            workspace=TeamChildWorkspace(
+                workspace_path=run.workspace_path,
+                integration_branch=run.integration_branch,
+                workspace_state=run.workspace_state,
+            ),
+            graph_thread_id=(
+                f"run:{run.id}:patch-conflict-rework:{original.child_run_id}:{attempt}"
+            ),
         )
-        validate_assignment_graph(assignment)
+        child = bundle.run
+        agent = bundle.agent
+        child = await self._assign_writing_workspace(
+            run,
+            child,
+            can_write=original.can_write,
+        )
+        assignment = bundle.assignment
         await repository.create_run(child, agent)
         await self.team_repository.create_assignment(assignment)
         await _emit_if_callable(
@@ -981,6 +920,32 @@ class TeamLeaderGraph:
             f"team-patch-conflict-rework:{child.id}",
         )
         return True
+
+    async def _assign_writing_workspace(
+        self,
+        parent: Run,
+        child: Run,
+        *,
+        can_write: bool,
+    ) -> Run:
+        if not can_write:
+            return child
+        if self.workspace_allocator is None:
+            if parent.workspace_path is not None:
+                raise PermanentExecutionError("team_worktree_manager_unavailable")
+            return child
+        workspace = await self.workspace_allocator.assign_for_child(
+            parent=parent,
+            child=child,
+            can_write=True,
+        )
+        return child.model_copy(
+            update={
+                "workspace_path": workspace.workspace_path,
+                "integration_branch": workspace.integration_branch,
+                "workspace_state": parent.workspace_state,
+            }
+        )
 
 
 def _find_assignment_by_child(

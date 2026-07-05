@@ -12,10 +12,16 @@ from awesome_agent.domain.enums import (
     AgentKind,
     DispatchStatus,
     EventType,
+    RiskLevel,
     RunIntent,
     RunMode,
 )
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.extensions.models import (
+    ExtensionCatalog,
+    ExtensionSkillInventoryItem,
+    ExtensionToolInventoryItem,
+)
 from awesome_agent.modeling import (
     AssistantMessage,
     ModelRequest,
@@ -28,6 +34,7 @@ from awesome_agent.modeling import (
 )
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
+from awesome_agent.persistence.tool_invocations import InMemoryToolInvocationRepository
 from awesome_agent.persistence.validation import (
     DurableValidationGateResult,
     DurableValidationReport,
@@ -100,7 +107,118 @@ async def test_teammate_loads_assignment_permissions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_teammate_can_create_limited_subagents() -> None:
+async def test_team_role_loop_uses_active_extension_catalog_for_tool_exposure() -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    catalog = _catalog_with_extension_tool("mcp.fs.read")
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        extension_catalog_resolver=lambda _version: catalog,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read", "mcp.fs.read"],
+            can_write=False,
+        )
+    )
+
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    assert "mcp.fs.read" in state["allowed_tools"]
+
+
+@pytest.mark.asyncio
+async def test_allowed_skills_are_resolved_into_role_prompt(tmp_path: Path) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    catalog = _catalog_with_skill(
+        skill_id="repository-inspection",
+        instructions="Always cite README evidence.",
+    )
+    provider = SequenceProvider([_turn(content="done")])
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        extension_catalog_resolver=lambda _version: catalog,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read"],
+            allowed_skills=["repository-inspection"],
+            can_write=True,
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    prompt = "\n".join(message.content for message in provider.requests[0].messages)
+    assert "Always cite README evidence." in prompt
+
+
+@pytest.mark.asyncio
+async def test_team_role_tool_execution_persists_invocation_record(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    tools = InMemoryToolInvocationRepository()
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="read-readme",
+                        name="repo.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="README evidence returned."),
+        ]
+    )
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        tool_repository=tools,
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["repo.read"],
+            can_write=False,
+        )
+    )
+
+    await graph.execute(run, agent, repository=runtime)
+
+    invocations = await tools.list_for_run(run.id)
+    assert len(invocations) == 1
+    assert invocations[0].tool_name == "repo.read"
+    assert invocations[0].status == "completed"
+    assert invocations[0].idempotency_key == (
+        f"team-role:{run.id}:{agent.id}:read-readme"
+    )
+    assert invocations[0].result_content is not None
+
+
+@pytest.mark.asyncio
+async def test_teammate_does_not_create_subagents_from_handoff_context() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
     graph = TeamRoleGraph(team_repository=teams)
@@ -118,8 +236,7 @@ async def test_teammate_can_create_limited_subagents() -> None:
         )
     )
 
-    with pytest.raises(ChildRunWait, match="waiting_subagents"):
-        await graph.execute(run, agent, repository=runtime)
+    state, recovered = await graph.execute(run, agent, repository=runtime)
 
     subagents = await runtime.list_child_runs(run.id)
     assignments = await teams.list_assignments(run.root_run_id or run.id)
@@ -127,17 +244,10 @@ async def test_teammate_can_create_limited_subagents() -> None:
         item for item in assignments if item.parent_run_id == run.id
     ]
 
-    assert len(subagents) == 2
-    assert all(child.depth == 2 for child in subagents)
-    assert all(
-        child.extension_catalog_version == run.extension_catalog_version
-        for child in subagents
-    )
-    assert [item.kind for item in subagent_assignments] == [
-        TeamAssignmentKind.SUBAGENT,
-        TeamAssignmentKind.SUBAGENT,
-    ]
-    assert all(item.allowed_tools == ["repo.read"] for item in subagent_assignments)
+    assert not recovered
+    assert state["phase"] == "completed"
+    assert subagents == []
+    assert subagent_assignments == []
 
 
 @pytest.mark.asyncio
@@ -168,7 +278,37 @@ async def test_teammate_resumes_after_subagents_terminal() -> None:
             kind=TeamAssignmentKind.TEAMMATE,
             can_delegate=True,
             max_subagents=1,
-            handoff_context={"subagent_goals": ["Read README"]},
+        )
+    )
+    subagent = Run(
+        goal="Read README",
+        mode=RunMode.TEAM,
+        parent_run_id=run.id,
+        root_run_id=run.root_run_id,
+        depth=2,
+        child_role="subagent",
+        runtime_route=TEAM_ROLE_ROUTE,
+    )
+    await runtime.create_run(
+        subagent,
+        Agent(
+            run_id=subagent.id,
+            parent_agent_id=agent.id,
+            kind=AgentKind.SUBAGENT,
+            profile="subagent",
+            model="fake",
+        ),
+    )
+    await teams.create_assignment(
+        TeamAssignment(
+            root_run_id=run.root_run_id or run.id,
+            parent_run_id=run.id,
+            child_run_id=subagent.id,
+            kind=TeamAssignmentKind.SUBAGENT,
+            role_profile="subagent",
+            runtime_route=TEAM_ROLE_ROUTE,
+            goal=subagent.goal,
+            allowed_tools=["repo.read"],
         )
     )
 
@@ -1344,7 +1484,7 @@ async def test_subagent_cannot_call_unexposed_dynamic_subagent_tool(
 
 
 @pytest.mark.asyncio
-async def test_teammate_dynamic_subagent_active_limit(tmp_path: Path) -> None:
+async def test_teammate_dynamic_subagent_lifetime_quota(tmp_path: Path) -> None:
     workspace = _git_workspace(tmp_path)
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
@@ -1400,22 +1540,25 @@ async def test_teammate_dynamic_subagent_active_limit(tmp_path: Path) -> None:
                 model="fake",
             ),
         )
-        await teams.create_assignment(
-            TeamAssignment(
-                root_run_id=run.root_run_id or run.id,
-                parent_run_id=run.id,
-                child_run_id=child.id,
-                kind=TeamAssignmentKind.SUBAGENT,
-                role_profile="subagent",
-                runtime_route=TEAM_ROLE_ROUTE,
-                goal=child.goal,
-                allowed_tools=["repo.read"],
-            )
+        assignment = TeamAssignment(
+            root_run_id=run.root_run_id or run.id,
+            parent_run_id=run.id,
+            child_run_id=child.id,
+            kind=TeamAssignmentKind.SUBAGENT,
+            role_profile="subagent",
+            runtime_route=TEAM_ROLE_ROUTE,
+            goal=child.goal,
+            allowed_tools=["repo.read"],
+        )
+        await teams.create_assignment(assignment)
+        await teams.record_child_terminal(
+            child.id,
+            status=TeamAssignmentStatus.COMPLETED,
         )
 
-    with pytest.raises(ChildRunWait, match="waiting_subagents"):
+    with pytest.raises(PermanentExecutionError, match="subagent lifetime quota"):
         await graph.execute(run, agent, repository=runtime)
-    assert provider.requests == []
+    assert len(await runtime.list_child_runs(run.id)) == 3
 
 
 @pytest.mark.asyncio
@@ -1904,7 +2047,7 @@ async def test_teammate_mailbox_response_marks_original_responded(
 
 
 @pytest.mark.asyncio
-async def test_legacy_subagent_goals_receive_resolved_read_only_tools() -> None:
+async def test_legacy_subagent_goals_do_not_create_subagents() -> None:
     runtime = InMemoryRuntimeRepository()
     teams = InMemoryTeamRepository()
     graph = TeamRoleGraph(team_repository=teams)
@@ -1927,16 +2070,15 @@ async def test_legacy_subagent_goals_receive_resolved_read_only_tools() -> None:
         )
     )
 
-    with pytest.raises(ChildRunWait, match="waiting_subagents"):
-        await graph.execute(run, agent, repository=runtime)
+    state, recovered = await graph.execute(run, agent, repository=runtime)
 
     assignments = await teams.list_assignments(run.root_run_id or run.id)
-    subagent_assignment = next(
+    assert not recovered
+    assert state["phase"] == "completed"
+    assert [
         item for item in assignments if item.kind is TeamAssignmentKind.SUBAGENT
-    )
-    assert subagent_assignment.allowed_tools == ["repo.read"]
-    assert not subagent_assignment.can_write
-    assert not subagent_assignment.can_delegate
+    ] == []
+    assert await runtime.list_child_runs(run.id) == []
 
 
 @pytest.mark.asyncio
@@ -2209,6 +2351,49 @@ def _git_workspace(tmp_path: Path) -> Path:
     _git(workspace, "add", "README.md")
     _git(workspace, "commit", "-m", "Initial")
     return workspace
+
+
+def _catalog_with_extension_tool(tool_name: str) -> ExtensionCatalog:
+    return ExtensionCatalog(
+        version="team-test-catalog",
+        sources=[],
+        tools=[
+            ExtensionToolInventoryItem(
+                name=tool_name,
+                source_id="mcp-test",
+                description="Read from fixture MCP.",
+                risk_level=RiskLevel.LOW,
+                required_capabilities={"repository:read"},
+                input_schema={"type": "object", "properties": {}},
+            )
+        ],
+        skills=[],
+    )
+
+
+def _catalog_with_skill(
+    *,
+    skill_id: str,
+    instructions: str,
+) -> ExtensionCatalog:
+    return ExtensionCatalog(
+        version="team-test-catalog",
+        sources=[],
+        tools=[],
+        skills=[
+            ExtensionSkillInventoryItem(
+                id=skill_id,
+                source_id="skills-test",
+                version="1.0.0",
+                instructions=instructions,
+                requested_tools=[],
+                required_capabilities=set(),
+                compatible_actor_kinds={"teammate"},
+                compatible_routes={TEAM_ROLE_ROUTE},
+                risk_level=RiskLevel.LOW,
+            )
+        ],
+    )
 
 
 def _git(path: Path, *arguments: str) -> None:
