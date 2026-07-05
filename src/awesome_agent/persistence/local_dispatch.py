@@ -237,6 +237,9 @@ class LocalRunDispatcher(RunDispatcher):
 
     async def mark_cancelled(self, lease: RunLease, *, reason: str) -> None:
         run = await self._owned_run(lease)
+        await self._mark_run_cancelled(run, reason=reason)
+
+    async def _mark_run_cancelled(self, run: Run, *, reason: str) -> None:
         updated = run.model_copy(
             update={
                 "status": RunStatus.CANCELLED,
@@ -246,7 +249,7 @@ class LocalRunDispatcher(RunDispatcher):
         )
         await self.runtime.update_run(self._clear_lease(updated))
         await self.runtime.append_event(
-            run_id=lease.run_id,
+            run_id=run.id,
             event_type=EventType.RUN_STATUS_CHANGED,
             payload={
                 "status": updated.status.value,
@@ -412,7 +415,12 @@ class LocalRunDispatcher(RunDispatcher):
                 continue
             expired_worker = run.current_worker_id
             expired_token = run.fencing_token
-            if run.attempt >= max_attempts:
+            if run.cancel_requested_at is not None:
+                await self._mark_run_cancelled(
+                    run,
+                    reason=run.cancel_reason or "cancel_requested",
+                )
+            elif run.attempt >= max_attempts:
                 await self._mark_run_recovery_required(
                     run,
                     reason="maximum attempts exceeded",

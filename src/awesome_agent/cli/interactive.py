@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from os import environ
 from pathlib import Path
 from typing import Annotated, Protocol
@@ -15,6 +16,7 @@ from awesome_agent.cli.repo_context import CliLaunchContext, discover_launch_con
 from awesome_agent.cli.slash_commands import slash_command_help
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.guidance import build_cli_doctor_report
+from awesome_agent.surfaces.local_runtime_host import reconcile_local_runtime_state
 
 
 class _ChatTui(Protocol):
@@ -108,6 +110,8 @@ def doctor(
     """Check local CLI first-run setup."""
     resolved_project_root = project_root or Path.cwd()
     settings = Settings()
+    with suppress(Exception):
+        reconcile_local_runtime_state(settings)
     summary = inspect_config_flow(
         home=Path.home(),
         project_root=resolved_project_root,

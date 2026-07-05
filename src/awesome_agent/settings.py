@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     team_model_output_rework_budget: int = Field(default=10, ge=1, le=100)
     team_default_rework_budget: int = Field(default=1, ge=1, le=20)
     max_model_concurrency: int = Field(default=8, ge=1)
+    model_first_event_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     max_tool_concurrency: int = Field(default=12, ge=1)
     max_sandbox_concurrency: int = Field(default=6, ge=1)
     observability_enabled: bool = True

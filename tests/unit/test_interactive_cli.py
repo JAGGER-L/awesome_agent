@@ -133,6 +133,36 @@ def test_awesome_doctor_accepts_settings_loaded_api_key(
     assert "ERROR API key" not in result.output
 
 
+def test_awesome_doctor_reconciles_local_runtime_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called: list[object] = []
+
+    def record_reconcile(settings: object) -> int:
+        called.append(settings)
+        return 0
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "awesome_agent.cli.interactive.reconcile_local_runtime_state",
+        record_reconcile,
+    )
+    (tmp_path / ".awesome-agent").mkdir()
+    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+        "version: 1\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["doctor", "--project-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert len(called) == 1
+    assert "Runtime:" not in result.output
+    assert "Worker:" not in result.output
+
+
 def test_awesome_doctor_rejects_custom_deepseek_base_url(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

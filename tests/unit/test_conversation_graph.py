@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID
@@ -35,6 +36,9 @@ from awesome_agent.modeling.stream import (
 from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
+from awesome_agent.runtime.agent_loop.skill_context_middleware import (
+    SkillContextMiddleware,
+)
 from awesome_agent.runtime.conversation_graph import ConversationGraph
 from awesome_agent.runtime.cwd_context import (
     CwdContextService,
@@ -94,6 +98,18 @@ class FailingProvider:
         raise RuntimeError("model failed")
 
 
+class HangingBeforeFirstEventProvider:
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            await asyncio.Event().wait()
+            yield TextDelta(text="unreachable")
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        raise RuntimeError("unreachable")
+
+
 class CapturingProvider:
     def __init__(self, content: str = "hello") -> None:
         self.content = content
@@ -123,7 +139,7 @@ class CapturingProvider:
         )
 
 
-class PrependingSystemMiddleware:
+class PrependingSystemMiddleware(SkillContextMiddleware):
     async def before_model_call(
         self,
         request: ModelRequest,
@@ -302,6 +318,16 @@ async def test_conversation_graph_writes_user_then_assistant_messages() -> None:
     assert EventType.RUN_STATUS_CHANGED not in {
         event.event_type for event in runtime_events
     }
+    model_phase_events = [
+        event.payload
+        for event in runtime_events
+        if event.event_type is EventType.MODEL_CALL_CREATED
+        and isinstance(event.payload.get("phase"), str)
+    ]
+    assert [payload["phase"] for payload in model_phase_events] == [
+        "stream_started",
+        "stream_completed",
+    ]
 
 
 @pytest.mark.asyncio
@@ -363,6 +389,40 @@ async def test_conversation_graph_does_not_write_assistant_message_on_failure() 
     assert EventType.RUN_STATUS_CHANGED not in {
         event.event_type for event in runtime_events
     }
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_bounds_provider_stream_before_first_event() -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(
+        title="Chat", context_path=str(Path.cwd())
+    )
+    run, leader = await _conversation_run(runtime, thread.id, "hello")
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: HangingBeforeFirstEventProvider(),
+        default_model="fake-model",
+        model_first_event_timeout_seconds=0.01,
+    )
+
+    with pytest.raises(TimeoutError, match="Model stream did not emit"):
+        await graph.execute(run, leader)
+
+    events = await runtime.list_events(run.id)
+    model_events = [
+        event for event in events if event.event_type is EventType.MODEL_CALL_CREATED
+    ]
+    assert [event.payload["status"] for event in model_events] == [
+        "started",
+        "failed",
+    ]
+    assert model_events[0].payload["phase"] == "stream_started"
+    assert model_events[1].payload["phase"] == "first_event_timeout"
+    assert "0.01" in str(model_events[1].payload["error"])
+    messages = await conversations.list_messages(thread.id)
+    assert [message.role for message in messages] == [ThreadMessageRole.USER]
 
 
 @pytest.mark.asyncio

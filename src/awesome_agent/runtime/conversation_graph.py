@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -29,7 +31,12 @@ from awesome_agent.modeling.messages import (
     UserMessage,
 )
 from awesome_agent.modeling.provider import ModelProvider
-from awesome_agent.modeling.stream import TextDelta, TurnCompleted, TurnFailed
+from awesome_agent.modeling.stream import (
+    ModelStreamEvent,
+    TextDelta,
+    TurnCompleted,
+    TurnFailed,
+)
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage
 from awesome_agent.runtime.agent_loop import ReadOnlyAgentLoop
 from awesome_agent.runtime.agent_loop.contracts import MiddlewareContext
@@ -67,6 +74,7 @@ class ConversationGraph:
         memory_service: MemoryService | None = None,
         attachment_service: AttachmentService | None = None,
         cwd_context_service: CwdContextService | None = None,
+        model_first_event_timeout_seconds: float = 60.0,
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
@@ -82,6 +90,7 @@ class ConversationGraph:
         self.memory_service = memory_service
         self.attachment_service = attachment_service
         self.cwd_context_service = cwd_context_service
+        self.model_first_event_timeout_seconds = model_first_event_timeout_seconds
 
     async def execute(self, run: Run, leader: Agent) -> ConversationGraphState:
         created = await self._run_created_payload(run)
@@ -410,21 +419,77 @@ class ConversationGraph:
                     )
                 }
             )
-            async for event in provider.stream(request):
-                if isinstance(event, TextDelta):
-                    final_text += event.text
-                    await self.runtime.append_event(
-                        run_id=run.id,
-                        event_type=EventType.MODEL_CALL_CREATED,
-                        payload={"text_delta": event.text},
-                        agent_id=leader.id,
-                    )
-                elif isinstance(event, TurnFailed):
-                    raise RuntimeError(event.error.message)
-                elif isinstance(event, TurnCompleted):
-                    completed = event.turn
+            await self._append_model_phase_event(
+                run=run,
+                leader=leader,
+                selected_provider=selected_provider,
+                selected_model=selected_model,
+                status="started",
+                phase="stream_started",
+                turn=_round + 1,
+            )
+            try:
+                async for event in _stream_with_first_event_timeout(
+                    provider.stream(request),
+                    timeout_seconds=self.model_first_event_timeout_seconds,
+                ):
+                    if isinstance(event, TextDelta):
+                        final_text += event.text
+                        await self.runtime.append_event(
+                            run_id=run.id,
+                            event_type=EventType.MODEL_CALL_CREATED,
+                            payload={"text_delta": event.text},
+                            agent_id=leader.id,
+                        )
+                    elif isinstance(event, TurnFailed):
+                        raise RuntimeError(event.error.message)
+                    elif isinstance(event, TurnCompleted):
+                        completed = event.turn
+            except TimeoutError as error:
+                await self._append_model_phase_event(
+                    run=run,
+                    leader=leader,
+                    selected_provider=selected_provider,
+                    selected_model=selected_model,
+                    status="failed",
+                    phase="first_event_timeout",
+                    turn=_round + 1,
+                    error=str(error),
+                )
+                raise
+            except Exception as error:
+                await self._append_model_phase_event(
+                    run=run,
+                    leader=leader,
+                    selected_provider=selected_provider,
+                    selected_model=selected_model,
+                    status="failed",
+                    phase="stream_failed",
+                    turn=_round + 1,
+                    error=str(error),
+                )
+                raise
             if completed is None:
+                await self._append_model_phase_event(
+                    run=run,
+                    leader=leader,
+                    selected_provider=selected_provider,
+                    selected_model=selected_model,
+                    status="failed",
+                    phase="stream_incomplete",
+                    turn=_round + 1,
+                    error="Provider stream ended without a completed turn.",
+                )
                 raise RuntimeError("Provider stream ended without a completed turn.")
+            await self._append_model_phase_event(
+                run=run,
+                leader=leader,
+                selected_provider=completed.provider or selected_provider,
+                selected_model=completed.model or selected_model,
+                status="completed",
+                phase="stream_completed",
+                turn=_round + 1,
+            )
             usage = _merge_usage(usage, completed.usage)
             if _has_usage(completed.usage):
                 await self.runtime.append_event(
@@ -486,6 +551,35 @@ class ConversationGraph:
             "response_id": completed.response_id,
             "changed_files": _dedupe_changed_files(changed_files),
         }
+
+    async def _append_model_phase_event(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        selected_provider: str,
+        selected_model: str,
+        status: str,
+        phase: str,
+        turn: int,
+        error: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "status": status,
+            "phase": phase,
+            "provider": selected_provider,
+            "model": selected_model,
+            "agent_id": str(leader.id),
+            "turn": turn,
+        }
+        if error:
+            payload["error"] = error
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.MODEL_CALL_CREATED,
+            payload=payload,
+            agent_id=leader.id,
+        )
 
     def _catalog_for_run(self, run: Run) -> ExtensionCatalog:
         version = run.extension_catalog_version
@@ -710,6 +804,36 @@ def _product_identity_prompt(
 def _prompt_metadata_value(value: str) -> str:
     normalized = " ".join(value.split())
     return normalized or "unknown"
+
+
+async def _stream_with_first_event_timeout(
+    stream: AsyncIterator[ModelStreamEvent],
+    *,
+    timeout_seconds: float,
+) -> AsyncIterator[ModelStreamEvent]:
+    iterator = stream.__aiter__()
+    try:
+        try:
+            first = await asyncio.wait_for(anext(iterator), timeout=timeout_seconds)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as error:
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                with suppress(Exception):
+                    await close()
+            raise TimeoutError(
+                f"Model stream did not emit a first event within "
+                f"{timeout_seconds:g} seconds."
+            ) from error
+        yield first
+        async for event in iterator:
+            yield event
+    finally:
+        close = getattr(iterator, "aclose", None)
+        if callable(close):
+            with suppress(Exception):
+                await close()
 
 
 def _optional_uuid(value: object) -> UUID | None:

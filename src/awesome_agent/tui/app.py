@@ -327,6 +327,13 @@ class AwesomeAgentTui(App[None]):
 
     def action_cancel(self) -> None:
         if self.state.active_operation_id is not None:
+            if (
+                self.state.current_run_id is not None
+                and self.state.status_label == "cancelling"
+            ):
+                self._render()
+                self._focus_prompt()
+                return
             if self.state.current_run_id is not None:
                 with suppress(Exception):
                     self.client.cancel(

@@ -117,6 +117,48 @@ async def test_local_dispatcher_requeues_expired_run_before_max_attempts(
 
 
 @pytest.mark.asyncio
+async def test_local_dispatcher_marks_expired_cancel_requested_run_cancelled(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime)
+    run = _run(tmp_path)
+    await runtime.create_run(run, _leader(run))
+    lease = await dispatcher.claim_next(
+        worker_id=uuid4(),
+        worker_name="local-worker",
+        lease_duration=timedelta(seconds=30),
+        max_attempts=3,
+    )
+    assert lease is not None
+    await dispatcher.start_execution(lease, runtime_route=CONVERSATION_TURN_ROUTE)
+    await dispatcher.request_cancellation(
+        run_id=run.id,
+        requested_by="local-surface",
+        reason="user_requested",
+    )
+    executing = await runtime.get_run(run.id)
+    await runtime.update_run(
+        executing.model_copy(
+            update={"lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+        )
+    )
+
+    recovered = await dispatcher.recover_expired(max_attempts=3)
+
+    assert recovered == 1
+    stored = await runtime.get_run(run.id)
+    assert stored.status is RunStatus.CANCELLED
+    assert stored.dispatch_status is DispatchStatus.TERMINAL
+    assert stored.current_worker_id is None
+    assert stored.lease_expires_at is None
+    assert [event.event_type for event in await runtime.list_events(run.id)][-1] is (
+        EventType.RUN_STATUS_CHANGED
+    )
+    runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_local_dispatcher_marks_expired_run_recovery_required_at_max_attempts(
     tmp_path: Path,
 ) -> None:

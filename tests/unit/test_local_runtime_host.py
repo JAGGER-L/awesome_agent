@@ -3,22 +3,33 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from tests.type_helpers import test_settings
 
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.conversation.models import ThreadMessageRole
-from awesome_agent.domain.enums import EventType, RunStatus
+from awesome_agent.domain.enums import (
+    AgentKind,
+    AgentStatus,
+    DispatchStatus,
+    EventType,
+    ExecutionKind,
+    RunIntent,
+    RunStatus,
+)
+from awesome_agent.domain.models import Agent, Run
 from awesome_agent.memory.models import MemoryTarget
 from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.provider import StructuredModelProvider
 from awesome_agent.modeling.stream import ModelStreamEvent, TextDelta, TurnCompleted
 from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage, StopReason
+from awesome_agent.runtime.graphs import CONVERSATION_TURN_ROUTE
 from awesome_agent.surfaces.local_runtime_host import LocalRuntimeHost
 
 
@@ -393,7 +404,10 @@ def test_local_runtime_host_pins_catalog_and_injects_staged_skill_context(
     metadata = cast(dict[str, object], user["metadata"])
     assert metadata["extension_catalog_version"] == run["extension_catalog_version"]
     assert provider.requests
-    assert "Prefer repo.search first." in provider.requests[0].messages[0].content
+    assert any(
+        "Prefer repo.search first." in message.content
+        for message in provider.requests[0].messages
+    )
 
 
 def test_local_runtime_host_config_summary_matches_http_status_fields(
@@ -635,3 +649,69 @@ def test_local_runtime_host_persists_runtime_runs_across_instances(
     second.close()
 
     assert runs == [created]
+
+
+def test_local_runtime_host_reconciles_stale_cancel_requested_run_on_startup(
+    tmp_path: Path,
+) -> None:
+    settings = test_settings(local_state_dir=tmp_path / "state")
+    first = LocalRuntimeHost(
+        settings=settings,
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    thread = first.create_thread("Stale", context_path=str(tmp_path))
+    worker_id = uuid4()
+    run = Run(
+        goal="stale",
+        intent=RunIntent.CONVERSATION,
+        execution_kind=ExecutionKind.CONVERSATION,
+        runtime_route=CONVERSATION_TURN_ROUTE,
+        status=RunStatus.RUNNING,
+        dispatch_status=DispatchStatus.EXECUTING,
+        working_directory=tmp_path,
+        current_worker_id=worker_id,
+        current_worker_name="old-worker",
+        fencing_token=1,
+        attempt=1,
+        lease_acquired_at=datetime.now(UTC) - timedelta(minutes=10),
+        lease_expires_at=datetime.now(UTC) - timedelta(minutes=5),
+        heartbeat_at=datetime.now(UTC) - timedelta(minutes=10),
+        cancel_requested_at=datetime.now(UTC) - timedelta(minutes=5),
+        cancel_requested_by="local-surface",
+        cancel_reason="user_requested",
+    )
+    leader = Agent(
+        run_id=run.id,
+        kind=AgentKind.LEADER,
+        profile="leader",
+        model="fake-model",
+        status=AgentStatus.RUNNING,
+    )
+    asyncio.run(first.runtime_repository.create_run(run, leader))
+    asyncio.run(
+        first.runtime_repository.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_CREATED,
+            payload={
+                "thread_id": thread.id,
+                "goal": "stale",
+                "model": "fake-model",
+                "runtime_route": CONVERSATION_TURN_ROUTE,
+            },
+            agent_id=leader.id,
+        )
+    )
+    first.close()
+
+    second = LocalRuntimeHost(
+        settings=settings,
+        provider_factory=lambda _model: FakeProvider(),
+        default_model="fake-model",
+    )
+    stored = asyncio.run(second.runtime_repository.get_run(run.id))
+    second.close()
+
+    assert stored.status is RunStatus.CANCELLED
+    assert stored.dispatch_status is DispatchStatus.TERMINAL
+    assert stored.current_worker_id is None
