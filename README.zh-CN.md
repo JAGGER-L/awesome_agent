@@ -58,7 +58,6 @@ Makefile 命令是主要 API 启动契约。Docker API 使用 `make docker-init`
 | Local API | 从宿主 Python 检查 API + Worker | `make check`, `make install`, `make setup-sandbox`, `make dev` | 主要入口 |
 | Docker API/Web | 通过容器化 API 使用浏览器/API inspection | `make docker-init`, `make docker-start` | 主要入口 |
 | Local CLI fallback | 首次本地运行和开发 | `.\scripts\quickstart.ps1` | 备用 |
-| Docker CLI | 面向容器化 runtime 的 CLI inspection | `.\scripts\docker-quickstart.ps1` | 备用 |
 
 当前 “Web” surface 是本地 FastAPI inspection surface 和生成的 API docs at `/docs`，还不是托管式多用户 Web 应用。
 
@@ -68,11 +67,16 @@ Makefile 命令是主要 API 启动契约。Docker API 使用 `make docker-init`
 
 ```powershell
 awesome init
+awesome doctor
 cd E:\my-project
 awesome
 ```
 
 `awesome init` 会创建 `~/.awesome-agent/config.yaml`。这个文件只保存模型名称和环境变量名，不保存真实 API key。模型调用前，请把 `AWESOME_AGENT_DEEPSEEK_API_KEY` 设置在 shell、操作系统环境变量、密码管理器或本地 `.env` 文件中。
+
+`awesome doctor` 用于本地 CLI 首次使用检查。它不替代
+`awesome-agent doctor --profile api/runtime`，后者仍用于 API/runtime 依赖的
+开发者和运维诊断。
 
 从项目目录运行 `awesome`：
 
@@ -149,11 +153,14 @@ Distributed Leader、Teammate 和 Verifier 仍是 runtime 能力；聊天优先�
 
 它使用 diagnostic probe 作为必要成功检查。只有在配置 provider key 并明确想运行脚本的可选模型驱动验证路径时，才添加 `-RunReadOnly`。
 
-Docker 路径：
+Docker API 兼容脚本：
 
 ```powershell
 .\scripts\docker-quickstart.ps1
 ```
+
+`docker-quickstart.ps1` 是面向容器化 API 路径的开发者/运维兼容入口，
+不是本地 CLI 的常规首次启动路径。
 
 ## 手动启动
 

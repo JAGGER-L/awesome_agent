@@ -91,7 +91,6 @@ The existing PowerShell scripts remain Windows fallback entrypoints.
 | Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | Primary |
 | Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | Primary |
 | Local CLI fallback | First local run and development | `.\scripts\quickstart.ps1` | Fallback |
-| Docker CLI | Containerized runtime with CLI-driven inspection | `.\scripts\docker-quickstart.ps1` | Fallback |
 
 The current "Web" surface is the local FastAPI inspection surface and
 generated API docs at `/docs`. It is not yet a hosted multi-user web
@@ -137,6 +136,9 @@ The PowerShell quickstart remains available:
 .\scripts\docker-quickstart.ps1
 ```
 
+`docker-quickstart.ps1` is a developer/operator compatibility path for the
+containerized API lane. It is not the normal local CLI first-run path.
+
 The API binds to `http://127.0.0.1:8000` by default. Use `/health` for process
 liveness and `/ready?profile=api` or `/ready?profile=runtime` for dependency
 readiness.
@@ -147,6 +149,7 @@ For a first local CLI launch:
 
 ```powershell
 awesome init
+awesome doctor
 cd E:\my-project
 awesome
 ```
@@ -155,6 +158,10 @@ awesome
 names and environment-variable names only. Set `AWESOME_AGENT_DEEPSEEK_API_KEY`
 in your shell, operating-system environment, password manager, or local `.env`
 file before model-backed use.
+
+`awesome doctor` is for local CLI first-run checks. It does not replace
+`awesome-agent doctor --profile api/runtime`, which remains the developer and
+operator diagnostic surface for API/runtime dependencies.
 
 ```powershell
 cd E:\my-project
