@@ -50,10 +50,14 @@ def test_list_thread_runs_returns_newest_projection_first() -> None:
     response = client.get(f"/threads/{thread['id']}/runs")
 
     assert response.status_code == 200
-    assert [item["run_id"] for item in response.json()] == [
+    body = response.json()
+    assert [item["run_id"] for item in body["items"]] == [
         str(second.id),
         str(first.id),
     ]
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert body["has_more"] is False
 
 
 def test_list_thread_runs_exposes_runtime_status_and_artifacts(
@@ -70,7 +74,9 @@ def test_list_thread_runs_exposes_runtime_status_and_artifacts(
     response = client.get(f"/threads/{thread['id']}/runs")
 
     assert response.status_code == 200
-    [projection] = response.json()
+    body = response.json()
+    [projection] = body["items"]
+    assert body["has_more"] is False
     assert projection["run_id"] == str(created.id)
     assert projection["status"] == "completed"
     assert projection["result_text"] == "done"
