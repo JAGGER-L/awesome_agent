@@ -11,6 +11,26 @@ class ToolDisplayEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolTimelineEntry:
+    name: str
+    summary: str
+    details: dict[str, object] = field(default_factory=dict)
+
+    @property
+    def failed(self) -> bool:
+        normalized = self.summary.casefold()
+        return any(value in normalized for value in ("failed", "error", "cancelled"))
+
+    @property
+    def completed(self) -> bool:
+        normalized = self.summary.casefold()
+        return any(
+            value in normalized
+            for value in ("completed", "success", "succeeded", "done")
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TeamDisplayEvent:
     title: str
     summary: str

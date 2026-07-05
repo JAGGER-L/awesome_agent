@@ -6,7 +6,12 @@ from rich.text import Text
 
 from awesome_agent.safety.redaction import redact_text
 from awesome_agent.surfaces.client import ChangedFileSummary
-from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
+from awesome_agent.tui.chat_state import (
+    ChatEventKind,
+    ChatMessage,
+    ThoughtBlock,
+    ToolGroup,
+)
 from awesome_agent.tui.events import (
     ApprovalPromptState,
     TeamDisplayEvent,
@@ -141,14 +146,32 @@ def render_tool_event(event: ToolDisplayEvent, *, details_enabled: bool) -> Text
 def _render_tool_group(message: ChatMessage, *, expanded: bool) -> Text:
     assert message.tool_group is not None
     action = "collapse" if expanded else "expand"
-    content = f"{message.content} (ctrl+t to {action})"
-    if expanded:
-        content = "\n".join((content, *message.tool_group.entries))
-    return _labeled(
-        "tool",
-        content,
+    summary = message.content or _tool_group_summary(message.tool_group)
+    rendered = _labeled(
+        "tools",
+        f"{summary} (ctrl+i to {action})",
         label_style="cyan",
     )
+    if not expanded:
+        return rendered
+    for entry in message.tool_group.entries:
+        style = "red" if entry.failed else "green" if entry.completed else "dim"
+        rendered.append(f"\n  {entry.name} - {entry.summary}", style=style)
+        for key, value in entry.details.items():
+            rendered.append(f"\n    {key}: {_bounded(str(value))}", style="dim")
+    return rendered
+
+
+def _tool_group_summary(group: ToolGroup) -> str:
+    total = group.total
+    completed = group.completed
+    failed = group.failed
+    pieces = [f"called {total}"]
+    if completed:
+        pieces.append(f"{completed} completed")
+    if failed:
+        pieces.append(f"{failed} failed")
+    return ", ".join(pieces)
 
 
 def _tool_label_style(summary: str) -> str:

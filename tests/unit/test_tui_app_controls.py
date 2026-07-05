@@ -255,10 +255,53 @@ def test_tui_renders_explicit_tool_stream_event_without_message_delta() -> None:
     )
 
     assert app.state.messages[-1].kind is ChatEventKind.TOOL
-    assert app.state.messages[-1].content == "已调用1个工具"
+    assert app.state.messages[-1].content == "called 1"
     assert app.state.messages[-1].tool_group is not None
-    assert "repo.apply_patch" in app.state.messages[-1].tool_group.entries[0]
-    assert "started" in app.state.messages[-1].tool_group.entries[0]
+    entry = app.state.messages[-1].tool_group.entries[0]
+    assert entry.name == "repo.apply_patch"
+    assert entry.summary == "started"
+
+
+def test_tui_tool_timeline_keeps_failure_details_without_details_mode() -> None:
+    app = _app(FakeSurfaceClient())
+
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.TOOL_COMPLETED,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=3,
+            trace_id="trace-success",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=10,
+            payload={
+                "tool": "write_file",
+                "summary": "created square.py",
+                "path": "square.py",
+            },
+        )
+    )
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.TOOL_COMPLETED,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=4,
+            trace_id="trace-failed",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=11,
+            payload={
+                "tool": "shell.execute",
+                "summary": "failed",
+                "error": "approval denied",
+            },
+        )
+    )
+
+    assert app.state.messages[-1].tool_group is not None
+    success, failure = app.state.messages[-1].tool_group.entries
+    assert success.details == {}
+    assert failure.details == {"error": "approval denied"}
 
 
 def test_tui_renders_approval_required_without_error_message() -> None:
@@ -294,10 +337,37 @@ def test_tui_renders_approval_required_without_error_message() -> None:
         approval_type="command",
     )
     assert not [
-        message
-        for message in app.state.messages
-        if message.kind is ChatEventKind.ERROR
+        message for message in app.state.messages if message.kind is ChatEventKind.ERROR
     ]
+
+
+def test_tui_approval_required_error_sets_prompt_without_error_message() -> None:
+    app = _app(FakeSurfaceClient())
+
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.ERROR,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=3,
+            trace_id="trace",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=10,
+            payload={
+                "run_id": "run-1",
+                "approval_id": "approval-1",
+                "approval_required": True,
+                "approval_type": "command",
+                "message": "Approval required for shell.execute.",
+            },
+        )
+    )
+
+    assert app.state.pending_approval is not None
+    assert app.state.pending_approval.approval_id == "approval-1"
+    assert all(
+        message.kind is not ChatEventKind.ERROR for message in app.state.messages
+    )
 
 
 def test_tui_ignores_duplicate_runtime_sequence() -> None:

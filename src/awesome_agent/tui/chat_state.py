@@ -12,7 +12,7 @@ from awesome_agent.surfaces.client import (
     ChangedFileSummary,
     changed_file_summaries_from_payload,
 )
-from awesome_agent.tui.events import ApprovalPromptState
+from awesome_agent.tui.events import ApprovalPromptState, ToolTimelineEntry
 from awesome_agent.tui.pickers import PickerState
 from awesome_agent.tui.status_panel import StatusPanelTab
 
@@ -30,7 +30,19 @@ class ChatEventKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ToolGroup:
-    entries: tuple[str, ...] = ()
+    entries: tuple[ToolTimelineEntry, ...] = ()
+
+    @property
+    def total(self) -> int:
+        return len(self.entries)
+
+    @property
+    def completed(self) -> int:
+        return sum(1 for entry in self.entries if entry.completed and not entry.failed)
+
+    @property
+    def failed(self) -> int:
+        return sum(1 for entry in self.entries if entry.failed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,28 +188,38 @@ class ChatSessionState:
     def append(self, message: ChatMessage) -> ChatSessionState:
         return replace(self, messages=[*self.messages, message])
 
-    def append_tool_event(self, content: str) -> ChatSessionState:
+    def append_tool_event(
+        self,
+        content: str,
+        *,
+        name: str = "tool",
+        summary: str | None = None,
+        details: dict[str, object] | None = None,
+    ) -> ChatSessionState:
+        entry = ToolTimelineEntry(
+            name=name,
+            summary=summary or content,
+            details=details or {},
+        )
         if self.messages and self.messages[-1].kind is ChatEventKind.TOOL:
             existing = self.messages[-1]
             entries = (
-                existing.tool_group.entries
-                if existing.tool_group is not None
-                else (existing.content,)
+                existing.tool_group.entries if existing.tool_group is not None else ()
             )
-            group = ToolGroup(entries=(*entries, content))
+            group = ToolGroup(entries=(*entries, entry))
             messages = [
                 *self.messages[:-1],
                 ChatMessage.system(
-                    _tool_group_summary(len(group.entries)),
+                    _tool_group_summary(group),
                     kind=ChatEventKind.TOOL,
                     tool_group=group,
                 ),
             ]
             return replace(self, messages=messages)
-        group = ToolGroup(entries=(content,))
+        group = ToolGroup(entries=(entry,))
         return self.append(
             ChatMessage.system(
-                _tool_group_summary(1),
+                _tool_group_summary(group),
                 kind=ChatEventKind.TOOL,
                 tool_group=group,
             )
@@ -656,8 +678,13 @@ def _optional_payload_str(payload: dict[str, object], key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _tool_group_summary(count: int) -> str:
-    return f"已调用{count}个工具"
+def _tool_group_summary(group: ToolGroup) -> str:
+    pieces = [f"called {group.total}"]
+    if group.completed:
+        pieces.append(f"{group.completed} completed")
+    if group.failed:
+        pieces.append(f"{group.failed} failed")
+    return ", ".join(pieces)
 
 
 def _record_attachments(record: dict[str, Any]) -> tuple[dict[str, object], ...]:
