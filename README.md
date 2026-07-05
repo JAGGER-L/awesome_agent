@@ -1,366 +1,154 @@
-# awesome_agent
+﻿# Awesome Agent
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`awesome_agent` is a local-first coding-agent runtime for durable, observable,
-permissioned coding runs.
+```text
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  ███  █   █ █████ █████  ███  █   █ █████        ┃
+┃ █   █ █   █ █     █     █   █ ██ ██ █            ┃
+┃ █████ █ █ █ ████  █████ █   █ █ █ █ ████         ┃
+┃ █   █ ██ ██ █         █ █   █ █   █ █            ┃
+┃ █   █ █   █ █████ █████  ███  █   █ █████        ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+```
 
-## What It Is
+Awesome Agent is a local-project AI coding agent. It is a lightweight local
+development assistant that runs on your own machine. It can read repository
+context, edit files, run commands, and help with debugging, refactoring, and
+feature work. Unlike traditional code completion tools, Awesome works at the
+task level: you describe a goal, and it reasons across the current repository,
+edits, verifies, and prepares the work for review. The main entry point is the
+local CLI; if you need to connect another client, you can use Local API or
+Docker API mode.
 
-`awesome_agent` runs coding tasks against local Git repositories through a Typer
-CLI, a local FastAPI API, PostgreSQL-backed durable state, and Worker processes.
-It supports solo read-only runs, solo modifying runs, and an explicit
-Leader/Teammate/Subagent team runtime with an independent Verifier.
 
-The project is a runtime kernel first: it focuses on crash recovery, auditable
-side effects, bounded model/tool loops, local repository safety, and inspection
-surfaces before higher-level product UI.
 
-## Why It Exists
+## Choose A Mode
 
-Most coding-agent prototypes are easy to start and hard to trust after
-something goes wrong. This project optimizes for the other half of the problem:
-recoverability, least-privilege tool access, operator visibility, and local
-control.
+| Mode | Use it when | Start command |
+| --- | --- | --- |
+| Local CLI | You want to work inside a local project from the terminal. It uses embedded local runtime mode and does not require an API server. | `cd <your-project>` then `awesome` |
+| Local API | You want a local API endpoint for clients or API docs. Currently Windows only. | `make dev` |
+| Docker API | You want the API to run through Docker. Currently Windows only. | `make docker-start` |
 
-The runtime is designed so a Run can be inspected after a crash, approval wait,
-validation failure, cancellation, or team rework without relying on hidden
-process memory.
+Most users should start with **Local CLI**. The API modes are for people who
+want to connect another client to Awesome. To connect the TUI to an existing
+API instead of the embedded runtime, use `awesome --api-url <url>`.
 
-## Core Capabilities
-
-- Durable Run intake, dispatch leases, Worker heartbeats, retries, cancellation,
-  and checkpoint resume through PostgreSQL and LangGraph checkpointing.
-- Repository-aware execution with allowed roots, registered repositories, clean
-  base commits, and managed per-Run worktrees.
-- Solo read-only and modifying AgentLoop routes with bounded repository tools,
-  Docker-backed shell execution for mutation, approval interrupts, validation
-  gates, and rework.
-- Distributed team mode with model-planned Teammates, assignment-scoped tools,
-  Teammate-owned read-only Subagents, independent Verifier review, and targeted
-  rework.
-- Token and active-time budget ledgers. The runtime intentionally does not
-  enforce money-based limits.
-- Durable observability through query-table spans, model-call summaries,
-  metrics, diagnostics, recovery metrics, trace IDs, and redacted API/CLI
-  inspection.
-- Extension catalog foundations for project and user-level `skills/`,
-  user-level MCP sources, and community tool packages, all gated by capability
-  resolution.
+Run `awesome` from the project directory. The launch directory becomes the
+default thread context. If it is a Git checkout, runs inherit that repository;
+otherwise Awesome uses workspace-only mode and still accepts user message
+turns. Plain user messages are the only product execution creation path.
 
 ## Quick Start
 
-For the full guide, see
-[docs/getting-started/quickstart.md](docs/getting-started/quickstart.md)
-or [docs/getting-started/quickstart.zh-CN.md](docs/getting-started/quickstart.zh-CN.md).
-The target startup profile contract is defined in
-[docs/design-docs/runtime-profiles-and-startup.md](docs/design-docs/runtime-profiles-and-startup.md).
+Clone and install Awesome:
 
-### Prerequisites
-
-- Python 3.12
-- `uv`
-- Git
-- Docker Desktop or a compatible Docker engine
-- Windows PowerShell for the current helper scripts
-
-### Clone And Prepare
-
-Start from a source checkout:
+Windows PowerShell:
 
 ```powershell
 git clone https://github.com/JAGGER-L/awesome_agent.git
 cd awesome_agent
-make check
 make install
 ```
 
-`make check` verifies host prerequisites. `make install` syncs the Python
-environment and installs the local `awesome` and `awesome-agent` commands.
+macOS/Linux:
 
-### Configure Awesome Home
-
-```powershell
-awesome init
-```
-
-`awesome init` creates the user-level Awesome home. By default that is
-`%LOCALAPPDATA%\awesome-agent` on Windows and `~/.awesome-agent` on other
-platforms; set `AWESOME_HOME` to override it. Put provider secrets in the OS
-environment or `<AWESOME_HOME>/.env`, not in the project checkout. The current
-product build supports only the official DeepSeek provider for conversation
-turns. Configure `AWESOME_AGENT_DEEPSEEK_API_KEY`; custom DeepSeek-compatible
-base URLs are not supported by the product runtime.
-
-Keep extension source configuration in `awesome-agent.yaml`. Project skills
-are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
-
-Run a local CLI setup check after adding a provider key:
-
-```powershell
-awesome doctor
-```
-
-### Choose A Run Mode
-
-The Makefile commands are the primary API startup contract. Docker API mode
-uses `make docker-init` and `make docker-start`; local API development uses
-`make check`, `make install`, `make setup-sandbox`, and `make dev`. Local
-interactive CLI/TUI mode uses `awesome` directly and defaults to embedded local
-runtime mode; it does not require a running API server for ordinary local use.
-The existing PowerShell scripts remain Windows fallback entrypoints.
-
-| Mode | Best for | Command | Status |
-| --- | --- | --- | --- |
-| Local CLI | Interactive local coding-agent entrypoint | `awesome`, `awesome commands` | Primary |
-| Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | Primary |
-| Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | Primary |
-| Local CLI fallback | First local run and development | `.\scripts\quickstart.ps1` | Fallback |
-
-The current "Web" surface is the local FastAPI inspection surface and
-generated API docs at `/docs`. It is not yet a hosted multi-user web
-application.
-
-### Run Local API
-
-```powershell
-make check
+```bash
+git clone https://github.com/JAGGER-L/awesome_agent.git
+cd awesome_agent
 make install
-make setup-sandbox
-make dev
 ```
 
-This checks host dependencies, installs Python dependencies, builds the AIO
-sandbox service image, runs migrations, starts API + Worker, and prints
-readiness URLs.
+Create Awesome's user directory:
 
-### Run Docker API
-
-```powershell
-make docker-init
-make docker-start
-```
-
-Docker mode does not start the CLI. It starts PostgreSQL, the AIO sandbox
-service, API, and Worker.
-
-### PowerShell Fallback
-
-```powershell
-.\scripts\bootstrap.ps1
-awesome init
-docker compose up -d postgres
-.\scripts\migrate.ps1
-.\.venv\Scripts\awesome-agent.exe doctor --profile api
-.\.venv\Scripts\awesome-agent.exe start
-```
-
-The PowerShell quickstart remains available:
-
-```powershell
-.\scripts\quickstart.ps1
-.\scripts\docker-quickstart.ps1
-```
-
-Use the read-only validation option only when a provider key is configured and
-you explicitly want the optional model-backed validation path, for example
-`awesome-agent.exe probe --read-only`.
-
-`docker-quickstart.ps1` is a developer/operator compatibility path for the
-containerized API lane. It is not the normal local CLI first-run path.
-
-The API binds to `http://127.0.0.1:8000` by default. Use `/health` for process
-liveness and `/ready?profile=api` or `/ready?profile=runtime` for dependency
-readiness.
-
-### Run Local CLI
-
-For a first local CLI launch:
+Windows PowerShell:
 
 ```powershell
 awesome init
-awesome doctor
+```
+
+macOS/Linux:
+
+```bash
+awesome init
+```
+
+Set your model key in your operating-system environment or in
+`<AWESOME_HOME>/.env`:
+
+Windows PowerShell:
+
+```powershell
+setx AWESOME_AGENT_DEEPSEEK_API_KEY "your-key"
+```
+
+macOS/Linux:
+
+```bash
+mkdir -p "${AWESOME_HOME:-$HOME/.awesome-agent}"
+printf 'AWESOME_AGENT_DEEPSEEK_API_KEY=your-key\n' >> "${AWESOME_HOME:-$HOME/.awesome-agent}/.env"
+```
+
+Then open a project and start Awesome:
+
+Windows PowerShell:
+
+```powershell
 cd E:\my-project
 awesome
 ```
 
-`awesome init` creates `<AWESOME_HOME>/config.yaml`, `<AWESOME_HOME>/.env`,
-`<AWESOME_HOME>/awesome-agent.yaml`, and the runtime `skills`, `state`, `runs`,
-and `logs` directories without overwriting existing secrets. Set
-`AWESOME_AGENT_DEEPSEEK_API_KEY` in your shell, operating-system environment,
-password manager, or `<AWESOME_HOME>/.env` before model-backed use.
+macOS/Linux:
 
-`awesome doctor` is for local CLI first-run checks. It does not replace
-`awesome-agent doctor --profile api/runtime`, which remains the developer and
-operator diagnostic surface for API/runtime dependencies.
-
-```powershell
-cd E:\my-project
+```bash
+cd ~/my-project
 awesome
-awesome commands
 ```
 
-Run `awesome` from the project directory you want the agent to work on. The
-launch directory becomes the default thread context. If it is a Git checkout,
-Runs inherit that repository. If it is not a Git checkout, the CLI uses
-workspace-only mode and still accepts user message turns.
+Send a normal message, for example:
 
-`awesome` is the default chat-first local CLI/TUI. Use `awesome-agent`
-subcommands for direct operations, diagnostics, and scripting.
+```text
+Read this project and explain how it is organized.
+```
 
-Plain user messages are the only product execution creation path. A user
-message turn creates an internal conversation Run with a Leader Agent and
-executes through the embedded local runtime. Use
-`awesome --api-url http://127.0.0.1:8000` only when you explicitly want the TUI
-to connect to a local, Docker, or remote API server.
+For the full step-by-step guide, see
+[Quickstart](docs/getting-started/quickstart.md) or
+[快速开始](docs/getting-started/quickstart.zh-CN.md).
 
-The local TUI is intentionally chat-first. It shows a welcome panel at launch,
-then keeps the main screen focused on the transcript and input prompt. Runtime
-details are available through slash commands such as `/status`, `/tools`,
-`/mcp`, `/usage`, and `/config`.
+## Configuration Basics
+
+Awesome keeps its own user files outside your projects.
+
+| Path | Purpose |
+| --- | --- |
+| `<AWESOME_HOME>/.env` | User-level model keys and local settings. |
+| `<AWESOME_HOME>/skills/` | Personal skills available across projects. |
+| `<AWESOME_HOME>/awesome-agent.yaml` | User-level extension settings, including MCP sources. |
+| `<your-project>/skills/` | Project skills for the current repository. |
+| `<your-project>/awesome-agent.yaml` | Project extension settings. |
+
+On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent`. On other
+platforms, it defaults to `~/.awesome-agent`. You can override it with the
+`AWESOME_HOME` environment variable.
+
+Provider keys are not read from your project `.env`.
+
+## Common Commands
+
+Run these inside `awesome`:
 
 | Command | Purpose |
 | --- | --- |
-| `/new` | Start a new durable local conversation/thread. |
-| `/threads` | Switch conversation. |
-| `/status` | Show current thread, run, and runtime status. |
-| `/model` | Choose provider, then model, for the current conversation. |
-| `/thinking` | Choose thinking mode. |
-| `/skills` | Browse enabled and available skills. |
-| `/tools` | Show built-in, MCP, and sandbox tools. |
-| `/mcp` | Show MCP server status. |
-| `/memory` | Show memory configuration and current memory summary. |
-| `/details` | Toggle verbose activity rendering. |
-| `/usage` | Show token usage and context. |
-| `/config` | Show resolved config paths and overrides. |
-| `/help` | Show help. |
+| `/help` | Show available commands. |
+| `/config` | Show the resolved Awesome paths and key status. |
+| `/status` | Show the current conversation status. |
+| `/skills` | List available skills. |
+| `/mcp` | Show configured MCP servers. |
 | `/quit` | Exit the TUI. |
 
-Slash commands are CLI/TUI interaction syntax. API routes expose semantic
-resources such as threads, runs, models, memory, readiness, and approvals
-rather than slash-command route names.
-
-### Verify
-
-Authorize a parent directory and register a clean Git checkout:
-
-```powershell
-.\.venv\Scripts\awesome-agent.exe config root add <parent-directory>
-.\.venv\Scripts\awesome-agent.exe repo add <repository-path>
-```
-
-Verify the durable runtime without a model key:
-
-```powershell
-.\.venv\Scripts\awesome-agent.exe probe --repo <repository-path>
-.\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
-```
-
-### First Model-Backed User Message
-
-Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the OS environment or
-`<AWESOME_HOME>/.env`, restart the local interactive runtime, open `awesome`
-from the project directory, then send a plain user message:
-
-```text
-Build a single-file HTML timer in this folder.
-```
-
-Committed defaults route Leader work to `deepseek-v4-pro` and Teammate,
-Verifier, and Subagent work to `deepseek-v4-flash`. Override them with
-`AWESOME_AGENT_LEADER_MODEL`, `AWESOME_AGENT_TEAMMATE_MODEL`,
-`AWESOME_AGENT_VERIFIER_MODEL`, and `AWESOME_AGENT_SUBAGENT_MODEL`.
-
-Distributed Leader, Teammate, and Verifier work remains a runtime capability;
-chat-first product entry and team controls continue through the roadmap.
-
-## First Run
-
-The fastest safe first run is the automated quickstart:
-
-```powershell
-.\scripts\quickstart.ps1
-```
-
-It uses a diagnostic probe for the required success check. Add `-RunReadOnly`
-only after configuring a provider key and deciding to exercise the script's
-optional model-backed validation path.
-
-## Extensions
-
-Project extension configuration lives in `awesome-agent.yaml`. It is for
-project-local extension sources such as project skill roots, not for secrets.
-Keep provider keys and runtime settings in `<AWESOME_HOME>/.env` or
-environment variables.
-
-Project skills live under `skills/`, and user-level skills live under
-`<AWESOME_HOME>/skills/`; each skill package contains a `SKILL.md`. Skills
-can request instructions, context, and tool capabilities, but they do not grant
-execution authority by themselves. MCP sources are loaded from the user-level
-Awesome configuration path, not from project configuration. MCP and community
-tools enter through the extension catalog and still pass through exposure,
-capability, approval, budget, execution, and observability boundaries.
-
-## Operations
-
-Useful local operations:
-
-```powershell
-.\.venv\Scripts\awesome-agent.exe doctor --profile api --no-docker
-.\.venv\Scripts\awesome-agent.exe doctor --profile runtime
-.\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
-.\.venv\Scripts\awesome-agent.exe recovery-metrics <run-id>
-.\.venv\Scripts\awesome-agent.exe budget <run-id>
-.\.venv\Scripts\awesome-agent.exe context-compactions <run-id>
-.\.venv\Scripts\awesome-agent.exe workspace list
-.\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id>
-```
-
-Open the local TUI operator console:
-
-```powershell
-.\.venv\Scripts\awesome-agent.exe tui
-.\.venv\Scripts\awesome-agent.exe tui --run-id <run-id>
-```
-
-The TUI is a local API-backed inspection and control surface for Runs,
-diagnostics, events, and approvals. It is not a hosted web dashboard.
-
-`awesome-agent start` is a fallback/debug supervisor for API + Worker in one
-local process group. Use `make dev` for the normal local API development path,
-or use `awesome-agent serve` and `awesome-agent worker` separately when another
-process manager should own them. The local API is unauthenticated and binds to
-loopback by default; non-loopback binding requires explicit unsafe consent.
-
-## Architecture At A Glance
-
-The target architecture is a small durable kernel surrounded by policy and
-extension layers:
-
-- API and CLI own intake, inspection, approval, cancellation, and operator
-  commands.
-- Worker and dispatch own claims, leases, heartbeats, retries, and execution
-  ownership.
-- Graph modules own durable state transitions, checkpoints, interrupts,
-  resume, child-run coordination, and terminal projections.
-- AgentLoop owns one bounded model-to-tool loop for one agent role.
-- Middleware and hooks own context assembly, observability, budget checks,
-  permission checks, tool exposure, retries, error classification, validation,
-  and artifact offload.
-- Capability resolution is the authority for tool exposure and execution.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) and
-[docs/design-docs/index.md](docs/design-docs/index.md) for the detailed
-contracts.
-
-## Current Maturity
-
-The project is suitable for local development and runtime-kernel iteration. It
-has real durable execution, repository registration, Worker recovery, solo and
-team runtime paths, diagnostics, budgets, and extension catalog foundations.
-
-It is not a hosted multi-user service. Production deployment, dashboards, and
-hosted product workflows remain future work tracked in the roadmap.
+Use `awesome-agent start` only as a fallback/debug supervisor for local API
+development.
 
 ## Documentation
 
@@ -370,22 +158,9 @@ hosted product workflows remain future work tracked in the roadmap.
 - [User guide](docs/user-guide/README.md)
 - [Operations guide](docs/operations/README.md)
 - [Architecture](ARCHITECTURE.md)
-- [Design documents](docs/design-docs/index.md)
-- [Security](docs/SECURITY.md)
-- [Reliability](docs/RELIABILITY.md)
-- [Runtime roadmap](docs/project-governance/runtime-roadmap.md)
-- [Technical debt tracker](docs/project-governance/tech-debt-tracker.md)
+- [Security model](docs/architecture/security-model.md)
 
-## Security Note
+## Safety
 
-Keep secrets out of committed files. Use the OS environment or
-`<AWESOME_HOME>/.env` for local provider keys and machine-specific runtime
-settings. Run untrusted code through Docker-backed `aio-docker` sandboxing for
-API-created Runs. LocalSandbox is reserved for the local CLI/TUI profile or
-explicit trusted local operation.
-
-Thread workspaces persist under
-`<AWESOME_HOME>/threads/<thread_id>/workspace/`. Generated files are presented
-as workspace changes in the TUI. Internal run evidence can persist under
-`<AWESOME_HOME>/runs/<run_id>/artifacts/`, but users normally interact with the
-files in their launch workspace/project.
+Run Awesome only in projects you trust. Keep API keys out of Git and store them
+in your operating-system environment or `<AWESOME_HOME>/.env`.

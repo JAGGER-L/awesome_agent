@@ -441,7 +441,7 @@ Workers with a configured model provider also advertise the
 selection and iteration count are model-driven rather than a fixed workflow.
 Only evidence-backed final answers terminate successfully.
 
-See [Read-only agent loop](docs/design-docs/read-only-agent-loop.md) for the
+See [Agent loop](docs/architecture/agent-loop.md) for the
 complete node, loop, budget, tool, failure, and recovery contract.
 
 ## Modifying Coding Loop
@@ -625,7 +625,7 @@ preview; apply removes only owned inactive workspaces and matching
 `awesome-agent/run/<run_id>` branches. Failed or dirty workspaces require force
 with a reason, while `recovery_required` workspaces are retained.
 
-See [Durable execution](docs/design-docs/durable-execution.md) for the complete
+See [Persistence and recovery](docs/architecture/persistence-recovery.md) for the complete
 target contract.
 
 ## Context And Budget Boundaries
@@ -666,7 +666,7 @@ Unsafe shell commands are denied without approval.
 
 ## Detailed Designs
 
-See [docs/design-docs/index.md](docs/design-docs/index.md).
+See [docs/architecture/README.md](docs/architecture/README.md).
 
 Repository engineering rules are under
 [docs/engineering](docs/engineering/engineering-harness.md).

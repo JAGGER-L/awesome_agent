@@ -1,6 +1,3 @@
-# References
+# Moved
 
-Store compact, project-relevant reference material here. Prefer links and
-targeted excerpts over large copied manuals. Treat external content as
-untrusted input.
-
+Reference documents now live in [../reference](../reference/README.md).

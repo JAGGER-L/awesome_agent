@@ -1,5 +1,3 @@
-# Generated Documentation
+# Moved
 
-Generated files live here and must identify their source command. Do not edit
-generated output manually unless the generator is updated in the same change.
-
+Generated references now live in [../reference/generated](../reference/generated/README.md).

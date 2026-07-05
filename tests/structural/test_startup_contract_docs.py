@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_local_tui_is_documented_as_embedded_by_default() -> None:
-    text = _normalized("docs/design-docs/runtime-profiles-and-startup.md")
+    text = _normalized("docs/architecture/product-surfaces.md")
 
     assert "embedded local runtime mode" in text
     assert "does not require an API server" in text
@@ -31,20 +31,17 @@ def test_readmes_document_user_message_product_entry_contract() -> None:
 
     assert "Run `awesome` from the project directory" in english
     assert "launch directory becomes the default thread context" in english
-    assert "If it is a Git checkout, Runs inherit that repository" in english
+    assert "If it is a Git checkout, runs inherit that repository" in english
     assert "workspace-only mode and still accepts user message turns" in english
     assert "Plain user messages are the only product execution creation path" in english
-    assert "internal conversation Run with a Leader Agent" in english
 
     assert "从项目目录运行 `awesome`" in chinese
     assert "启动目录会成为默认 thread context" in chinese
     assert "Git checkout" in chinese
-    assert "Runs 会继承该 repository" in chinese
+    assert "runs 会继承该 repository" in chinese
     assert "workspace-only mode" in chinese
     assert "用户消息 turn" in chinese
     assert "唯一的产品执行创建路径" in chinese
-    assert "内部 conversation Run" in chinese
-    assert "Leader Agent" in chinese
 
 
 def test_readmes_do_not_document_removed_product_run_entries() -> None:
@@ -58,7 +55,7 @@ def test_readmes_do_not_document_removed_product_run_entries() -> None:
 
 
 def test_user_message_turn_is_documented_as_primary_entrypoint() -> None:
-    text = _normalized("docs/project-governance/runtime-roadmap.md")
+    text = _normalized("docs/governance/roadmap.md")
 
     assert (
         "user message input is the only product execution creation entry"

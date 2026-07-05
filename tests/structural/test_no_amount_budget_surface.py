@@ -7,18 +7,17 @@ ROOT = Path(__file__).resolve().parents[2]
 DOC_PATHS = [
     ROOT / "README.md",
     ROOT / "README.zh-CN.md",
-    ROOT / "docs" / "QUALITY_SCORE.md",
-    ROOT / "docs" / "product-specs" / "local-coding-agent.md",
-    ROOT / "docs" / "design-docs" / "durable-execution.md",
-    ROOT / "docs" / "design-docs" / "observability.md",
-    ROOT / "docs" / "project-governance" / "runtime-roadmap.md",
-    ROOT / "docs" / "project-governance" / "tech-debt-tracker.md",
+    ROOT / "docs" / "governance" / "quality.md",
+    ROOT / "docs" / "architecture" / "persistence-recovery.md",
+    ROOT / "docs" / "architecture" / "observability.md",
+    ROOT / "docs" / "governance" / "roadmap.md",
+    ROOT / "docs" / "governance" / "technical-debt.md",
 ]
 
 SOURCE_PATHS = [
     *list((ROOT / "src" / "awesome_agent").rglob("*.py")),
     *list((ROOT / "migrations" / "versions").rglob("*.py")),
-    ROOT / "docs" / "generated" / "db-schema.md",
+    ROOT / "docs" / "reference" / "generated" / "db-schema.md",
 ]
 
 BANNED_DOC_PHRASES = [

@@ -47,6 +47,7 @@ Do not turn every task into a broad redesign. Apply this thinking to guide imple
 * `.codex/exec-plans/active/` should contain only the current active plan. If explicitly requested by the user, it may also contain the next approved plan.
 * Accepted but not-yet-started plans belong in `.codex/exec-plans/pending/`.
 * Completed, merged, or otherwise closed plans belong in `.codex/exec-plans/completed/`.
+* Local execution plans are development coordination state; they do not define the behavior of the `awesome_agent` product runtime.
 
 ## Code Change Rules
 
@@ -150,17 +151,17 @@ Before ending, confirm that:
 - `docs/user-guide/README.md`: user-facing runtime surfaces.
 - `docs/operations/README.md`: local operation, readiness, diagnostics, and
   workspace guidance.
-- `docs/design-docs/index.md`: durable architecture design contracts.
-- `docs/project-governance/documentation-governance.md`: where project
-  information belongs.
-- `docs/project-governance/runtime-roadmap.md`: durable runtime roadmap.
-- `docs/project-governance/tech-debt-tracker.md`: durable debt registry.
-- `docs/engineering/execution-plans.md`: local execution-plan rules.
-- `docs/engineering/engineering-harness.md`: rules for repository agents.
-- `docs/design-docs/runtime-agent-harness.md`: product runtime harness.
-- `docs/QUALITY_SCORE.md`: quality gates and current score.
-- `docs/RELIABILITY.md`: failure and recovery requirements.
-- `docs/SECURITY.md`: sandbox, approval, and data-safety rules.
+- `docs/architecture/README.md`: durable architecture design contracts.
+- `docs/api/README.md`: API resource contracts.
+- `docs/development/README.md`: repository development rules and validation.
+- `docs/governance/documentation.md`: where project information belongs.
+- `docs/governance/roadmap.md`: durable product and runtime roadmap.
+- `docs/governance/technical-debt.md`: durable debt registry.
+- `docs/governance/quality.md`: quality gates and current score.
+- `docs/reference/README.md`: generated and compact reference material.
+- `docs/architecture/runtime-kernel.md`: product runtime harness.
+- `docs/architecture/security-model.md`: sandbox, approval, and data-safety
+  rules.
 - `.codex/exec-plans/active/`: ignored local current execution plans.
 - `.codex/exec-plans/completed/`: ignored local completed execution plans.
 - `.codex/exec-plans/pending/`: ignored local future accepted plans.
