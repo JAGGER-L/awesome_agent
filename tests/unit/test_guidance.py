@@ -26,6 +26,7 @@ def _summary(
         user_config=tmp_path / ".awesome-agent" / "config.yaml",
         project_config=tmp_path / "project" / "awesome-agent.yaml",
         project_env=tmp_path / "project" / ".env",
+        awesome_env=tmp_path / ".awesome-agent" / ".env",
         user_config_exists=user_config_exists,
         project_config_exists=project_config_exists,
         project_env_exists=project_env_exists,
@@ -43,7 +44,8 @@ def test_missing_api_key_guidance_is_actionable() -> None:
     assert guidance.title == "API key is missing"
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in guidance.detail
     assert guidance.next_steps == (
-        "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment.",
+        "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your OS environment or "
+        "the Awesome env file.",
         "Restart awesome after changing environment variables.",
         "Run: awesome doctor",
     )
@@ -81,7 +83,7 @@ def test_cli_doctor_report_uses_expected_status_levels(tmp_path: Path) -> None:
     assert "WARN  User config:" in rendered
     assert "ERROR API key:" in rendered
     assert "INFO  Project config:" in rendered
-    assert "INFO  Project env:" in rendered
+    assert "INFO  Awesome env:" in rendered
     assert report.exit_code == 1
 
 
@@ -105,15 +107,15 @@ def test_cli_doctor_report_accepts_settings_configured_api_key(
             tmp_path,
             user_config_exists=True,
             api_key_configured=True,
-            api_key_source="settings",
+            api_key_source="awesome_env",
         ),
         deepseek_base_url=OFFICIAL_DEEPSEEK_BASE_URL,
     )
 
     rendered = report.render()
     assert (
-        "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is configured through Settings"
-        in rendered
+        "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is configured through "
+        "Awesome env" in rendered
     )
     assert "ERROR API key" not in rendered
     assert report.exit_code == 0

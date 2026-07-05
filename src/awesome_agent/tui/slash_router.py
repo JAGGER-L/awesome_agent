@@ -168,16 +168,17 @@ class SlashRouter:
             if state.first_run_summary is not None:
                 summary = state.first_run_summary
                 key_status = "set" if summary.model_api_key_configured else "missing"
+                awesome_env = summary.awesome_env or summary.home / ".env"
                 lines = [
                     "Configuration",
                     "",
                     "Project",
                     f"  Root: {summary.project_root}",
                     f"  Config: {summary.project_config}",
-                    f"  Env: {summary.project_env}",
                     "Runtime",
                     f"  Home: {summary.home}",
                     f"  User config: {summary.user_config}",
+                    f"  Awesome env: {awesome_env}",
                     "Secrets",
                     f"  {summary.model_api_key_env}: {key_status}",
                 ]

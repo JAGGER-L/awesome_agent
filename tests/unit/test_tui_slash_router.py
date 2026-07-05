@@ -121,8 +121,8 @@ def test_router_config_adds_api_key_recovery_guidance(tmp_path: Path) -> None:
 
     assert "AWESOME_AGENT_DEEPSEEK_API_KEY: missing" in message.content
     assert (
-        "Next: Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment."
-        in message.content
+        "Next: Set AWESOME_AGENT_DEEPSEEK_API_KEY in your OS environment or "
+        "the Awesome env file." in message.content
     )
     assert "Restart awesome after changing environment variables." in message.content
 
@@ -203,6 +203,7 @@ def _summary(
         user_config=tmp_path / ".awesome-agent" / "config.yaml",
         project_config=tmp_path / "project" / "awesome-agent.yaml",
         project_env=tmp_path / "project" / ".env",
+        awesome_env=tmp_path / ".awesome-agent" / ".env",
         user_config_exists=True,
         project_config_exists=False,
         project_env_exists=False,

@@ -115,7 +115,7 @@ def _rows_for(
     if active_tab is StatusPanelTab.CONFIG:
         return (
             ("Project config:", snapshot.project_config),
-            ("Project env:", snapshot.project_env),
+            ("Awesome env:", snapshot.project_env),
             ("Provider:", snapshot.provider),
             ("API key:", snapshot.api_key),
             ("Base URL:", snapshot.base_url),
@@ -149,9 +149,10 @@ def _project_config_label(state: ChatSessionState, cwd: str) -> str:
 def _project_env_label(state: ChatSessionState, cwd: str) -> str:
     summary = state.first_run_summary
     if summary is not None:
-        return _path_with_missing(summary.project_env, summary.project_env_exists)
+        path = summary.awesome_env or summary.home / ".env"
+        return _path_with_missing(path, summary.awesome_env_exists)
     if cwd != "-":
-        return str(Path(cwd) / ".env")
+        return "Awesome env"
     return "-"
 
 

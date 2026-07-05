@@ -310,6 +310,8 @@ class ConfigStatusResponse(BaseModel):
     deepseek_base_url: str
     mem0_api_key_env: str = "AWESOME_AGENT_MEM0_API_KEY"
     mem0_api_key_configured: bool
+    awesome_env_path: str | None = None
+    awesome_env_exists: bool | None = None
     project_config_path: str | None = None
     project_config_exists: bool | None = None
     project_env_path: str | None = None

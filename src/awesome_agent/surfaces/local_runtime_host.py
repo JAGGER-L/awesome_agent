@@ -32,7 +32,7 @@ from awesome_agent.persistence.approval_contracts import (
 from awesome_agent.persistence.local_dispatch import LocalRunDispatcher
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.runtime.dispatch import DispatchConflict
-from awesome_agent.settings import Settings
+from awesome_agent.settings import Settings, default_settings_env_file
 from awesome_agent.surfaces.capabilities import CapabilitySurfaceService
 from awesome_agent.surfaces.client import (
     ChangedFileSummary,
@@ -915,6 +915,7 @@ class LocalRuntimeHost:
     def config_summary(self) -> dict[str, object]:
         project_config = self._container.project_root / "awesome-agent.yaml"
         project_env = self._container.project_root / ".env"
+        awesome_env = default_settings_env_file()
         return {
             "mode": "embedded",
             "api_host": "embedded",
@@ -934,6 +935,8 @@ class LocalRuntimeHost:
             "deepseek_base_url": self.settings.deepseek_base_url,
             "mem0_api_key_env": "AWESOME_AGENT_MEM0_API_KEY",
             "mem0_api_key_configured": self.settings.mem0_api_key is not None,
+            "awesome_env_path": str(awesome_env),
+            "awesome_env_exists": awesome_env.exists(),
             "project_config_path": str(project_config),
             "project_config_exists": project_config.exists(),
             "project_env_path": str(project_env),

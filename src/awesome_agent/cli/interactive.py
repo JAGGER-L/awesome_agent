@@ -9,11 +9,12 @@ import typer
 
 from awesome_agent.cli.config_flow import (
     ConfigFlowSummary,
-    create_default_user_config,
+    initialize_user_config,
     inspect_config_flow,
 )
 from awesome_agent.cli.repo_context import CliLaunchContext, discover_launch_context
 from awesome_agent.cli.slash_commands import slash_command_help
+from awesome_agent.paths import awesome_paths
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.guidance import build_cli_doctor_report
 from awesome_agent.surfaces.local_runtime_host import reconcile_local_runtime_state
@@ -66,8 +67,9 @@ def launch(
     resolved_project_root = project_root or Path.cwd()
     launch_context = discover_launch_context(resolved_project_root)
     settings = Settings()
+    paths = awesome_paths()
     config_summary = inspect_config_flow(
-        home=Path.home(),
+        home=paths.home,
         project_root=launch_context.project_root,
         environ=environ,
         settings_api_key_configured=settings.deepseek_api_key is not None,
@@ -89,13 +91,20 @@ def commands() -> None:
 @app.command("init")
 def init_config() -> None:
     """Create the default user config without storing secrets."""
-    path = create_default_user_config(Path.home())
+    paths = awesome_paths()
+    summary = initialize_user_config(paths)
     typer.echo("Awesome Agent initialized")
     typer.echo("")
-    typer.echo(f"OK    User config: {path}")
+    typer.echo(f"OK    Awesome home: {summary.home}")
+    typer.echo(f"OK    User config: {summary.config_file}")
+    typer.echo(f"OK    Awesome env: {summary.env_file}")
+    typer.echo(f"OK    Extension config: {summary.user_extension_config}")
     typer.echo("")
     typer.echo("Next:")
-    typer.echo("  Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment.")
+    typer.echo(
+        "  Set AWESOME_AGENT_DEEPSEEK_API_KEY in your OS environment or "
+        "the Awesome env file."
+    )
     typer.echo("  Run: awesome doctor")
     typer.echo("  Start: cd <project>; awesome")
 
@@ -112,8 +121,9 @@ def doctor(
     settings = Settings()
     with suppress(Exception):
         reconcile_local_runtime_state(settings)
+    paths = awesome_paths()
     summary = inspect_config_flow(
-        home=Path.home(),
+        home=paths.home,
         project_root=resolved_project_root,
         environ=environ,
         settings_api_key_configured=settings.deepseek_api_key is not None,

@@ -1,18 +1,23 @@
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from awesome_agent.paths import AwesomePaths, awesome_paths
 
 
 class Settings(BaseSettings):
     """Application configuration loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
         env_prefix="AWESOME_AGENT_",
         extra="ignore",
     )
+
+    def __init__(self, **values: Any) -> None:
+        values.setdefault("_env_file", default_settings_env_file())
+        super().__init__(**values)
 
     log_level: str = "INFO"
     database_url: str = (
@@ -35,15 +40,11 @@ class Settings(BaseSettings):
     mem0_api_key: SecretStr | None = None
     api_host: str = "127.0.0.1"
     unsafe_bind_public: bool = False
-    artifact_root: Path = Field(
-        default_factory=lambda: Path.home() / ".awesome-agent" / "runs"
-    )
+    artifact_root: Path = Field(default_factory=lambda: awesome_paths().runs_dir)
     local_config_path: Path = Field(
-        default_factory=lambda: Path.home() / ".awesome-agent" / "config.toml"
+        default_factory=lambda: awesome_paths().local_config_path
     )
-    local_state_dir: Path = Field(
-        default_factory=lambda: Path.home() / ".awesome-agent" / "state"
-    )
+    local_state_dir: Path = Field(default_factory=lambda: awesome_paths().state_dir)
     workspace_root: Path | None = None
     sandbox_backend: Literal["aio-docker", "local"] = "aio-docker"
     local_cli_sandbox_backend: Literal["local", "aio-docker"] = "local"
@@ -106,3 +107,13 @@ class Settings(BaseSettings):
         if self.recent_context_tokens >= self.hard_context_tokens:
             raise ValueError("Recent context token limit must be below hard limit.")
         return self
+
+
+def awesome_agent_home(home: Path | None = None) -> Path:
+    if home is not None:
+        return AwesomePaths.from_home(home).home
+    return awesome_paths().home
+
+
+def default_settings_env_file(home: Path | None = None) -> Path:
+    return AwesomePaths.from_home(home).env_file if home else awesome_paths().env_file

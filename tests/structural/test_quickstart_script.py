@@ -16,7 +16,8 @@ def test_quickstart_script_exists_and_has_required_switches() -> None:
         "[switch]$RunReadOnly",
     ]:
         assert switch in text
-    assert ".awesome-agent\\runs\\quickstart" in text
+    assert "Get-AwesomeHome" in text
+    assert "runs\\quickstart" in text
     assert "quickstart.status=completed" in text
 
 
@@ -45,6 +46,13 @@ def test_quickstart_does_not_embed_secret_values() -> None:
     assert "your-api-key" not in text
     assert "deepseek_api_key=" not in text
     assert "api_key=" not in text
+
+
+def test_quickstart_uses_awesome_home_env_not_repository_env() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert 'Join-Path $Root ".env"' not in text
+    assert 'Join-Path $AwesomeHome ".env"' in text
+    assert "AWESOME_HOME" in text
 
 
 def test_quickstart_plan_only_prints_expected_steps() -> None:
@@ -95,3 +103,5 @@ def test_docker_quickstart_script_exists_and_has_plan_mode() -> None:
     assert "[switch]$PlanOnly" in text
     assert "docker compose up" in text
     assert "/ready?profile=api" in text
+    assert 'Join-Path $Root ".env"' not in text
+    assert "Get-AwesomeHome" in text

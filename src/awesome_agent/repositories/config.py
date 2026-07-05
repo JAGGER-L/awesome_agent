@@ -7,15 +7,14 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from awesome_agent.paths import awesome_paths
 from awesome_agent.repositories.policy import normalize_path
 
 
 class LocalRepositoryConfig(BaseModel):
     version: int = 1
     allowed_roots: list[Path] = Field(default_factory=list)
-    workspace_root: Path = Field(
-        default_factory=lambda: Path.home() / ".awesome-agent" / "worktrees"
-    )
+    workspace_root: Path = Field(default_factory=lambda: awesome_paths().worktrees_dir)
 
 
 class LocalRepositoryConfigStore:
@@ -38,7 +37,7 @@ class LocalRepositoryConfigStore:
                 Path(
                     workspaces.get(
                         "root",
-                        Path.home() / ".awesome-agent" / "worktrees",
+                        awesome_paths().worktrees_dir,
                     )
                 )
             ),

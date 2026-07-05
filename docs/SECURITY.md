@@ -52,14 +52,16 @@
   likely secrets before storage or display. Treat artifact storage as sensitive
   execution evidence, not as a public cache; redaction is defense in depth, not
   a guarantee that arbitrary user-authored files or third-party logs are clean.
-- DeepSeek and Mem0 credentials are read from the ignored local `.env` or the
-  process environment and are never committed, logged, or persisted in memory.
+- DeepSeek and Mem0 credentials are read from the process environment or the
+  ignored Awesome user env at `<AWESOME_HOME>/.env`; project `.env` files are
+  not provider credential sources.
 - `.env.example` contains names and non-secret defaults only.
 - `.codex/` contains local development-agent plans and is ignored.
 - `.agents/` contains tracked runtime-agent configuration only; secrets and
   generated run state are forbidden there.
-- `.awesome-agent/` contains ignored local runtime data. Durable runtime state
-  belongs in PostgreSQL.
+- The Awesome user home contains ignored local runtime data. By default this
+  is `%LOCALAPPDATA%\awesome-agent` on Windows and `~/.awesome-agent` on other
+  platforms; durable runtime state belongs in PostgreSQL.
 - API run creation accepts a registered repository ID, not an arbitrary local
   path.
 - PostgreSQL repository registration does not grant access by itself; resolved

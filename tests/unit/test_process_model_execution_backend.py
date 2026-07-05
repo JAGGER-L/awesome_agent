@@ -157,6 +157,28 @@ async def test_process_model_execution_backend_cancellation_terminates_child(
         await asyncio.wait_for(task, timeout=2)
 
 
+def test_process_model_execution_backend_child_env_sets_resolved_awesome_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    localappdata = tmp_path / "LocalAppData"
+    monkeypatch.delenv("AWESOME_HOME", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+    backend = ProcessModelExecutionBackend(
+        python_executable=sys.executable,
+        first_event_timeout_seconds=5,
+        idle_timeout_seconds=5,
+        total_timeout_seconds=10,
+        shutdown_grace_seconds=0.2,
+    )
+
+    child_env = backend._child_env()
+
+    assert child_env["AWESOME_HOME"] == str(localappdata / "awesome-agent")
+    assert child_env["PYTHONIOENCODING"] == "utf-8"
+    assert child_env["PYTHONUTF8"] == "1"
+
+
 async def _collect(stream: AsyncIterator[ModelStreamEvent]) -> list[ModelStreamEvent]:
     return [event async for event in stream]
 

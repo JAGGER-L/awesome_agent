@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
@@ -17,10 +18,12 @@ from awesome_agent.extensions.models import (
 )
 from awesome_agent.extensions.service import ExtensionDiscoveryService
 from awesome_agent.extensions.sources import ExtensionSourceFactory
+from awesome_agent.paths import AwesomePaths, awesome_paths
 
 PROJECT_CONFIG_FILENAME = "awesome-agent.yaml"
 PROJECT_SKILLS_ROOT = "skills"
 PROJECT_SKILLS_SOURCE_ID = "project-skills"
+USER_SKILLS_SOURCE_ID = "user-skills"
 
 
 class ProjectSkillsConfig(BaseModel):
@@ -50,14 +53,29 @@ class ProjectExtensionConfig(BaseModel):
 
 def load_project_extension_config(
     project_root: Path | None = None,
+    *,
+    home: Path | None = None,
 ) -> ProjectExtensionConfig:
     root = (project_root or Path.cwd()).resolve()
-    config_path = root / PROJECT_CONFIG_FILENAME
-    raw = _load_yaml(config_path)
-    config = ProjectExtensionConfig.model_validate(raw)
+    user_root = _awesome_home(home)
+    user_config = _load_scoped_config(
+        root=user_root,
+        config_path=user_root / PROJECT_CONFIG_FILENAME,
+        skills_source_id=USER_SKILLS_SOURCE_ID,
+        trust=ExtensionTrustLevel.USER,
+        source_filter=None,
+    )
+    project_config = _load_scoped_config(
+        root=root,
+        config_path=root / PROJECT_CONFIG_FILENAME,
+        skills_source_id=PROJECT_SKILLS_SOURCE_ID,
+        trust=ExtensionTrustLevel.PROJECT,
+        source_filter=_is_project_extension_source_allowed,
+    )
+    config = ProjectExtensionConfig()
     sources = [
-        *_project_skill_sources(root, config),
-        *[_resolve_source_paths(root, source) for source in config.extensions.sources],
+        *user_config.sources,
+        *project_config.sources,
     ]
     config.extensions.sources = sources
     return config
@@ -65,8 +83,10 @@ def load_project_extension_config(
 
 async def build_project_extension_catalog(
     project_root: Path | None = None,
+    *,
+    home: Path | None = None,
 ) -> ExtensionCatalog:
-    config = load_project_extension_config(project_root)
+    config = load_project_extension_config(project_root, home=home)
     if not config.sources:
         return empty_extension_catalog()
     factory = ExtensionSourceFactory()
@@ -76,18 +96,22 @@ async def build_project_extension_catalog(
 
 def build_project_extension_catalog_sync(
     project_root: Path | None = None,
+    *,
+    home: Path | None = None,
 ) -> ExtensionCatalog:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(build_project_extension_catalog(project_root))
+        return asyncio.run(build_project_extension_catalog(project_root, home=home))
     result: ExtensionCatalog | None = None
     error: BaseException | None = None
 
     def run_in_thread() -> None:
         nonlocal error, result
         try:
-            result = asyncio.run(build_project_extension_catalog(project_root))
+            result = asyncio.run(
+                build_project_extension_catalog(project_root, home=home)
+            )
         except BaseException as caught:
             error = caught
 
@@ -112,9 +136,39 @@ def _load_yaml(path: Path) -> dict[str, object]:
     return {str(key): value for key, value in loaded.items()}
 
 
+def _load_scoped_config(
+    *,
+    root: Path,
+    config_path: Path,
+    skills_source_id: str,
+    trust: ExtensionTrustLevel,
+    source_filter: Callable[[ExtensionSourceConfig], bool] | None,
+) -> ProjectExtensionConfig:
+    raw = _load_yaml(config_path)
+    config = ProjectExtensionConfig.model_validate(raw)
+    sources = [
+        *_project_skill_sources(
+            root,
+            config,
+            source_id=skills_source_id,
+            trust=trust,
+        ),
+        *[
+            _scope_source(_resolve_source_paths(root, source), trust)
+            for source in config.extensions.sources
+            if source_filter is None or source_filter(source)
+        ],
+    ]
+    config.extensions.sources = sources
+    return config
+
+
 def _project_skill_sources(
     root: Path,
     config: ProjectExtensionConfig,
+    *,
+    source_id: str = PROJECT_SKILLS_SOURCE_ID,
+    trust: ExtensionTrustLevel = ExtensionTrustLevel.PROJECT,
 ) -> list[ExtensionSourceConfig]:
     roots: list[Path] = []
     default_root = root / PROJECT_SKILLS_ROOT
@@ -126,16 +180,12 @@ def _project_skill_sources(
             roots.append(resolved)
     sources: list[ExtensionSourceConfig] = []
     for index, skill_root in enumerate(roots):
-        source_id = (
-            PROJECT_SKILLS_SOURCE_ID
-            if index == 0
-            else f"{PROJECT_SKILLS_SOURCE_ID}-{index + 1}"
-        )
+        scoped_source_id = source_id if index == 0 else f"{source_id}-{index + 1}"
         sources.append(
             ExtensionSourceConfig(
-                id=source_id,
+                id=scoped_source_id,
                 type=ExtensionSourceType.SKILL_DIRECTORY,
-                trust=ExtensionTrustLevel.PROJECT,
+                trust=trust,
                 path=skill_root,
             )
         )
@@ -153,3 +203,23 @@ def _resolve_source_paths(
 
 def _resolve_path(root: Path, path: Path) -> Path:
     return path if path.is_absolute() else root / path
+
+
+def _scope_source(
+    source: ExtensionSourceConfig,
+    trust: ExtensionTrustLevel,
+) -> ExtensionSourceConfig:
+    return source.model_copy(update={"trust": trust})
+
+
+def _is_project_extension_source_allowed(source: ExtensionSourceConfig) -> bool:
+    return source.type not in {
+        ExtensionSourceType.MCP_STDIO,
+        ExtensionSourceType.MCP_STREAMABLE_HTTP,
+    }
+
+
+def _awesome_home(home: Path | None) -> Path:
+    if home is not None:
+        return AwesomePaths.from_home(home).home.resolve()
+    return awesome_paths().home.resolve()

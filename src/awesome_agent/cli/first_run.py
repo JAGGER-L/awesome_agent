@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from awesome_agent.cli.config_flow import user_config_path
+from awesome_agent.cli.config_flow import user_config_path, user_env_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +23,7 @@ class FirstRunState:
 
 def inspect_first_run_state(*, project_root: Path, home: Path) -> FirstRunState:
     return FirstRunState(
-        env_file_exists=(project_root / ".env").exists(),
+        env_file_exists=user_env_path(home).exists(),
         project_config_exists=(project_root / "awesome-agent.yaml").exists(),
         local_config_exists=user_config_path(home).exists(),
     )

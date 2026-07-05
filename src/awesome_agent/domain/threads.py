@@ -6,6 +6,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from awesome_agent.paths import AwesomePaths, awesome_paths
+
 LOGICAL_THREAD_WORKSPACE = "/mnt/user-data/workspace/"
 
 
@@ -24,8 +26,12 @@ class Thread(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     def host_workspace_path(self, *, home: Path | None = None) -> Path:
-        root = home or Path.home()
-        return root / ".awesome-agent" / "threads" / str(self.id) / "workspace"
+        root = (
+            AwesomePaths.from_home(home).threads_dir
+            if home
+            else awesome_paths().threads_dir
+        )
+        return root / str(self.id) / "workspace"
 
     @property
     def logical_workspace_path(self) -> str:

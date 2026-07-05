@@ -40,6 +40,9 @@ next sandbox hardening step.
 
 ## Storage Contract
 
+`AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent` on Windows and
+`~/.awesome-agent` on other platforms.
+
 For embedded local user message turns, the model-visible working directory is the
 thread context path. When a thread is created without an explicit context path,
 that path is the process launch/current working directory. Reads, writes, and
@@ -49,14 +52,14 @@ terminal.
 Run audit evidence remains separate and internal:
 
 ```text
-~/.awesome-agent/runs/<run_id>/artifacts/
+<AWESOME_HOME>/runs/<run_id>/artifacts/
 ```
 
 The previous logical thread workspace remains a Docker/API design input rather
 than the default product-closure path:
 
 ```text
-~/.awesome-agent/threads/<thread_id>/workspace/
+<AWESOME_HOME>/threads/<thread_id>/workspace/
 ```
 
 Docker API mode and AIO Docker path equivalence are deferred hardening work.
