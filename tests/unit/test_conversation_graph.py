@@ -604,8 +604,11 @@ async def test_graph_injects_product_identity_before_cwd_context(
         for message in provider.requests[0].messages
         if isinstance(message, SystemMessage)
     ]
-    assert "You are Awesome Agent" in system_messages[0].content
+    assert "You are Awesome" in system_messages[0].content
+    assert "Provider: deepseek" in system_messages[0].content
+    assert "Model: fake-model" in system_messages[0].content
     assert "Do not claim to be Claude" in system_messages[0].content
+    assert "local chat-first coding agent product" not in system_messages[0].content
     assert system_messages[1].content == "Middleware context"
     assert "awesome_agent_cwd_context" in system_messages[2].content
     assert "Claude Repository Instructions" in system_messages[2].content
