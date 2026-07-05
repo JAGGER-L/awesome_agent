@@ -1504,6 +1504,51 @@ async def test_tui_cancel_current_run_calls_api() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tui_renders_authentication_error_with_recovery_steps() -> None:
+    class AuthenticationErrorClient(FakeClient):
+        def stream_turn(
+            self,
+            thread_id: str,
+            content: str,
+            *,
+            model: str | None = None,
+            thinking: str | None = None,
+            memory: dict[str, object] | None = None,
+            skill_ids: tuple[str, ...] = (),
+            attachment_ids: tuple[str, ...] = (),
+        ) -> list[ConversationStreamEvent]:
+            self.turns.append((thread_id, content))
+            return [
+                ConversationStreamEvent(
+                    event=ConversationStreamEventKind.ERROR,
+                    thread_id=uuid4(),
+                    turn_id=uuid4(),
+                    sequence=1,
+                    trace_id="trace-auth",
+                    payload={
+                        "code": "authentication",
+                        "message": "Provider rejected the API key.",
+                        "hint": "Check the configured key.",
+                        "retryable": False,
+                    },
+                )
+            ]
+
+    app = AwesomeAgentTui(client=AuthenticationErrorClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("h", "i", "enter")
+        transcript = app.query_one("#transcript").render()
+
+    rendered = str(transcript)
+    assert "API key is missing" in rendered
+    assert "AWESOME_AGENT_DEEPSEEK_API_KEY" in rendered
+    assert "Restart awesome" in rendered
+    assert "Provider rejected the API key." in rendered
+
+
+@pytest.mark.asyncio
 async def test_tui_renders_approval_required_stream_error_as_actionable() -> None:
     class ApprovalClient(FakeClient):
         def stream_turn(

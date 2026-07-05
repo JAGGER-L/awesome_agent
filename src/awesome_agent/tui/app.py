@@ -31,6 +31,7 @@ from awesome_agent.surfaces.client import (
     SurfaceClient,
     SurfaceThread,
 )
+from awesome_agent.surfaces.guidance import guidance_for_model_error
 from awesome_agent.tui.chat_state import (
     ChatEventKind,
     ChatMessage,
@@ -1308,6 +1309,7 @@ class AwesomeAgentTui(App[None]):
     def _format_error(self, error: Exception) -> str:
         message = str(error)
         if isinstance(error, ConversationHttpError):
+            guidance_text = self._guidance_text_for_code(error.code)
             parts = [
                 f"{error.code or 'http_error'}: {message}",
                 f"status={error.status_code}",
@@ -1318,8 +1320,19 @@ class AwesomeAgentTui(App[None]):
                 parts.append(f"hint={error.hint}")
             if error.recoverable:
                 parts.append("retryable=true")
-            return " | ".join(parts)
+            details = " | ".join(parts)
+            return f"{guidance_text}\n{details}" if guidance_text else details
         return message
+
+    def _guidance_text_for_code(self, code: object) -> str | None:
+        if not isinstance(code, str):
+            return None
+        guidance = guidance_for_model_error(code)
+        if guidance is None:
+            return None
+        lines = [f"{guidance.title}: {guidance.detail}"]
+        lines.extend(f"Next: {step}" for step in guidance.next_steps)
+        return "\n".join(lines)
 
     def _format_stream_error(
         self,
@@ -1345,7 +1358,9 @@ class AwesomeAgentTui(App[None]):
             parts.append(f"hint={hint}")
         if retryable is True:
             parts.append("retryable=true")
-        return " | ".join(parts)
+        guidance_text = None if action_required else self._guidance_text_for_code(code)
+        details = " | ".join(parts)
+        return f"{guidance_text}\n{details}" if guidance_text else details
 
     def _welcome_text(self) -> Text | str:
         if self.state.messages:

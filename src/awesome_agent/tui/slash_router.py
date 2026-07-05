@@ -9,6 +9,7 @@ from awesome_agent.cli.slash_commands import (
     SlashCommandKind,
     slash_command_help,
 )
+from awesome_agent.surfaces.guidance import missing_api_key_guidance
 from awesome_agent.surfaces.client import ChangedFileSummary, SurfaceThread
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 
@@ -167,23 +168,24 @@ class SlashRouter:
             if state.first_run_summary is not None:
                 summary = state.first_run_summary
                 key_status = "set" if summary.model_api_key_configured else "missing"
-                return ChatMessage.system(
-                    "\n".join(
-                        [
-                            "Configuration",
-                            "",
-                            "Project",
-                            f"  Root: {summary.project_root}",
-                            f"  Config: {summary.project_config}",
-                            f"  Env: {summary.project_env}",
-                            "Runtime",
-                            f"  Home: {summary.home}",
-                            f"  User config: {summary.user_config}",
-                            "Secrets",
-                            f"  {summary.model_api_key_env}: {key_status}",
-                        ]
-                    )
-                )
+                lines = [
+                    "Configuration",
+                    "",
+                    "Project",
+                    f"  Root: {summary.project_root}",
+                    f"  Config: {summary.project_config}",
+                    f"  Env: {summary.project_env}",
+                    "Runtime",
+                    f"  Home: {summary.home}",
+                    f"  User config: {summary.user_config}",
+                    "Secrets",
+                    f"  {summary.model_api_key_env}: {key_status}",
+                ]
+                if not summary.model_api_key_configured:
+                    guidance = missing_api_key_guidance(summary.model_api_key_env)
+                    lines.extend(["", guidance.title, f"  {guidance.detail}"])
+                    lines.extend(f"  Next: {step}" for step in guidance.next_steps)
+                return ChatMessage.system("\n".join(lines))
             config = self.client.config_summary()
             return ChatMessage.system(_format_config(config))
         if command.kind is SlashCommandKind.NEW:
