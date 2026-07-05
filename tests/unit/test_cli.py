@@ -944,7 +944,17 @@ def test_team_tree_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
                             "role": "teammate",
                             "profile": "backend",
                             "status": "waiting",
-                            "waiting_reason": "waiting_subagents",
+                            "waiting_reason": "waiting_approval",
+                            "effective_tools": ["repo.read"],
+                            "denied_tools": [
+                                {"tool": "repo.apply_patch", "reason": "requires_write"}
+                            ],
+                            "pending_approval": {
+                                "tool": "repo.apply_patch",
+                                "risk": "medium",
+                                "status": "pending",
+                            },
+                            "workspace_summary": "isolated ready",
                             "children": [
                                 {
                                     "role": "subagent",
@@ -970,7 +980,10 @@ def test_team_tree_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     assert calls[0].endswith(f"/runs/{run_id}/team/tree")
     assert "leader leader running" in result.stdout
-    assert "  teammate backend waiting waiting_subagents" in result.stdout
+    assert (
+        "  teammate backend waiting waiting_approval tools=1 denied=1 "
+        "tool=repo.apply_patch workspace=isolated:ready"
+    ) in result.stdout
     assert "    subagent subagent completed README evidence returned." in result.stdout
 
 

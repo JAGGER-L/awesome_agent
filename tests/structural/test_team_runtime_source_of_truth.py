@@ -23,6 +23,7 @@ def test_worker_app_does_not_construct_scoped_team_graph() -> None:
     )
 
     assert "TeamCodingGraph(" not in text
+    assert "SCOPED_TEAM_CODING_ROUTE" not in text
     assert "team_provider_resolver" not in text
 
 

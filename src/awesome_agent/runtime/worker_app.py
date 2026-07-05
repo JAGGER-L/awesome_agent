@@ -287,6 +287,12 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 observability=observability,
                 token_accountant=token_accountant,
                 tool_repository=PostgresToolInvocationRepository(sessions),
+                approval_repository=PostgresApprovalRepository(sessions),
+                approval_default_expiry=timedelta(
+                    seconds=configured.approval_default_expiry_seconds
+                ),
+                tool_registry=conversation_tool_registry,
+                tool_executor=conversation_tool_executor,
                 extension_catalog_resolver=lambda _version: tool_assembly.catalog,
             ),
             team_verifier_graph=TeamVerifierGraph(

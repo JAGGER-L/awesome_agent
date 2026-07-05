@@ -1,6 +1,7 @@
 import json
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepositor
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
+    ApprovalStatus,
     DispatchStatus,
     EventType,
     RiskLevel,
@@ -32,6 +34,7 @@ from awesome_agent.modeling import (
     ToolCall,
     TurnCompleted,
 )
+from awesome_agent.persistence.approval_contracts import InMemoryApprovalRepository
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.team import InMemoryTeamRepository
 from awesome_agent.persistence.tool_invocations import InMemoryToolInvocationRepository
@@ -48,7 +51,11 @@ from awesome_agent.runtime.agent_loop import (
     MiddlewareStage,
     TeamAgentLoop,
 )
-from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
+from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
+    ChildRunWait,
+    PermanentExecutionError,
+)
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.team_assignments import (
@@ -65,6 +72,10 @@ from awesome_agent.runtime.team_mailbox import (
 )
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 from awesome_agent.runtime.validation.models import ValidationGate, ValidationPlan
+from awesome_agent.tools.approval import ApprovalPolicy
+from awesome_agent.tools.executor import ToolExecutor
+from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
+from awesome_agent.tools.registry import ToolRegistry
 
 
 class SequenceProvider(StructuredModelProvider):
@@ -215,6 +226,215 @@ async def test_team_role_tool_execution_persists_invocation_record(
         f"team-role:{run.id}:{agent.id}:read-readme"
     )
     assert invocations[0].result_content is not None
+
+
+@pytest.mark.asyncio
+async def test_team_role_executes_extension_tool_through_shared_executor(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    tools = InMemoryToolInvocationRepository()
+    calls: list[ToolInvocation] = []
+    registry = ToolRegistry()
+
+    async def handle_extension_tool(
+        invocation: ToolInvocation,
+        _: object,
+    ) -> ToolResult:
+        calls.append(invocation)
+        return ToolResult(
+            invocation_id=invocation.id,
+            output={"status": "ok", "path": invocation.arguments["path"]},
+        )
+
+    registry.register(
+        ToolSpec(
+            name="mcp.fs.read",
+            description="Read a file through an MCP filesystem server.",
+            risk_level=RiskLevel.LOW,
+            required_capabilities={"repository:read"},
+            sandbox_required=False,
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        ),
+        handle_extension_tool,
+    )
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="extension-read",
+                        name="mcp.fs.read",
+                        arguments_json='{"path":"README.md"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Extension evidence returned."),
+        ]
+    )
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        tool_repository=tools,
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        extension_catalog_resolver=lambda _version: _catalog_with_extension_tool(
+            "mcp.fs.read"
+        ),
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["mcp.fs.read"],
+            can_write=False,
+        )
+    )
+
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    invocations = await tools.list_for_run(run.id)
+    assert state["phase"] == "completed"
+    assert len(calls) == 1
+    assert calls[0].tool_name == "mcp.fs.read"
+    assert calls[0].workspace == workspace
+    assert calls[0].capabilities == {"repository:read"}
+    assert calls[0].effective_tool_names == {"mcp.fs.read"}
+    assert len(invocations) == 1
+    assert invocations[0].tool_name == "mcp.fs.read"
+    assert invocations[0].status == "completed"
+    assert invocations[0].result_content is not None
+    assert "README.md" in invocations[0].result_content
+
+
+@pytest.mark.asyncio
+async def test_team_role_approval_pause_resume_is_durable_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    workspace = _git_workspace(tmp_path)
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    tools = InMemoryToolInvocationRepository()
+    approvals = InMemoryApprovalRepository()
+    calls: list[ToolInvocation] = []
+    registry = ToolRegistry()
+
+    async def handle_high_risk_tool(
+        invocation: ToolInvocation,
+        _: object,
+    ) -> ToolResult:
+        calls.append(invocation)
+        return ToolResult(
+            invocation_id=invocation.id,
+            output={"status": "completed", "command": invocation.arguments["command"]},
+        )
+
+    registry.register(
+        ToolSpec(
+            name="mcp.deploy",
+            description="Run a high-risk deployment action.",
+            risk_level=RiskLevel.HIGH,
+            required_capabilities={"repository:write"},
+            sandbox_required=False,
+            input_schema={
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
+        ),
+        handle_high_risk_tool,
+    )
+    provider = SequenceProvider(
+        [
+            _turn(
+                tool_calls=[
+                    ToolCall(
+                        call_id="deploy",
+                        name="mcp.deploy",
+                        arguments_json='{"command":"deploy preview"}',
+                    )
+                ],
+                stop_reason=StopReason.TOOL_CALLS,
+            ),
+            _turn(content="Deployment command completed."),
+        ]
+    )
+    graph = TeamRoleGraph(
+        team_repository=teams,
+        provider_resolver=lambda _: provider,
+        tool_repository=tools,
+        approval_repository=approvals,
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        extension_catalog_resolver=lambda _version: _catalog_with_extension_tool(
+            "mcp.deploy",
+            risk_level=RiskLevel.HIGH,
+            required_capabilities=["repository:write"],
+        ),
+    )
+    run, agent = _role_run(kind=TeamAssignmentKind.TEAMMATE)
+    run = run.model_copy(update={"workspace_path": workspace})
+    await runtime.create_run(run, agent)
+    await teams.create_assignment(
+        _assignment(
+            run,
+            kind=TeamAssignmentKind.TEAMMATE,
+            allowed_tools=["mcp.deploy"],
+            can_write=True,
+        )
+    )
+
+    with pytest.raises(ApprovalInterrupt):
+        await graph.execute(run, agent, repository=runtime)
+
+    assert calls == []
+    pending = await approvals.list_for_run(run.id, status=ApprovalStatus.PENDING)
+    invocations = await tools.list_for_run(run.id)
+    approval_events = [
+        event
+        for event in await runtime.list_events(run.id)
+        if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    assert len(pending) == 1
+    assert len(invocations) == 1
+    assert invocations[0].status == "approval_pending"
+    assert len(approval_events) == 1
+    assert approval_events[0].payload["tool"] == "mcp.deploy"
+
+    await approvals.decide(
+        pending[0].id,
+        approved=True,
+        decided_by="test",
+        reason=None,
+        now=datetime.now(UTC),
+    )
+
+    state, _ = await graph.execute(run, agent, repository=runtime)
+
+    invocations = await tools.list_for_run(run.id)
+    approval_events = [
+        event
+        for event in await runtime.list_events(run.id)
+        if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    assert state["phase"] == "completed"
+    assert len(calls) == 1
+    assert calls[0].approval_granted is True
+    assert calls[0].id == invocations[0].id
+    assert len(invocations) == 1
+    assert invocations[0].status == "completed"
+    assert len(approval_events) == 1
+    assert len(provider.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -2353,7 +2573,12 @@ def _git_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
-def _catalog_with_extension_tool(tool_name: str) -> ExtensionCatalog:
+def _catalog_with_extension_tool(
+    tool_name: str,
+    *,
+    risk_level: RiskLevel = RiskLevel.LOW,
+    required_capabilities: list[str] | None = None,
+) -> ExtensionCatalog:
     return ExtensionCatalog(
         version="team-test-catalog",
         sources=[],
@@ -2362,8 +2587,10 @@ def _catalog_with_extension_tool(tool_name: str) -> ExtensionCatalog:
                 name=tool_name,
                 source_id="mcp-test",
                 description="Read from fixture MCP.",
-                risk_level=RiskLevel.LOW,
-                required_capabilities={"repository:read"},
+                risk_level=risk_level,
+                required_capabilities=set(
+                    required_capabilities or ["repository:read"]
+                ),
                 input_schema={"type": "object", "properties": {}},
             )
         ],

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from awesome_agent.domain.enums import WorkspaceState
 from awesome_agent.domain.models import Run
 from awesome_agent.repositories.worktrees import (
     ManagedRunWorktreeManager,
@@ -16,6 +17,7 @@ class TeamWorkspaceAssignment:
     workspace_path: Path | None
     integration_branch: str | None
     isolated: bool
+    workspace_state: WorkspaceState | None
 
 
 class TeamWorkspaceAllocator:
@@ -34,6 +36,7 @@ class TeamWorkspaceAllocator:
                 workspace_path=parent.workspace_path,
                 integration_branch=parent.integration_branch,
                 isolated=False,
+                workspace_state=parent.workspace_state,
             )
         if self.worktrees is None:
             raise PermanentExecutionError("team_worktree_manager_unavailable")
@@ -58,4 +61,5 @@ class TeamWorkspaceAllocator:
             workspace_path=workspace,
             integration_branch=self.worktrees.branch_for(child.id),
             isolated=True,
+            workspace_state=WorkspaceState.READY,
         )

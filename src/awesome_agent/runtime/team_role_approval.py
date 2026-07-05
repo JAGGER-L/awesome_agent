@@ -4,9 +4,16 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from awesome_agent.modeling import ToolCall
+from pydantic import TypeAdapter, ValidationError
+
+from awesome_agent.domain.enums import EventType
+from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.modeling import ModelMessage, ToolCall
 
 TEAM_ROLE_APPROVAL_CONTINUATION_VERSION = 1
+TEAM_ROLE_APPROVAL_CONTINUATION_PAYLOAD_KEY = "team_role_approval_continuation"
+
+_MESSAGE_LIST_ADAPTER = TypeAdapter(list[ModelMessage])
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,3 +99,38 @@ def continuation_from_payload(
         successful_writes=int(str(payload["successful_writes"])),
         diff_after_last_write=bool(payload["diff_after_last_write"]),
     )
+
+
+def message_payloads_from_messages(
+    messages: list[ModelMessage],
+) -> tuple[dict[str, Any], ...]:
+    return tuple(message.model_dump(mode="json") for message in messages)
+
+
+def messages_from_payloads(
+    payloads: tuple[dict[str, Any], ...],
+) -> list[ModelMessage]:
+    try:
+        return _MESSAGE_LIST_ADAPTER.validate_python(list(payloads))
+    except ValidationError:
+        return []
+
+
+def latest_open_team_role_approval_continuation(
+    events: list[RuntimeEvent],
+    *,
+    completed_invocation_ids: set[UUID],
+) -> TeamRoleApprovalContinuation | None:
+    for event in reversed(events):
+        if event.event_type is not EventType.APPROVAL_REQUESTED:
+            continue
+        payload = event.payload.get(TEAM_ROLE_APPROVAL_CONTINUATION_PAYLOAD_KEY)
+        if not isinstance(payload, dict):
+            continue
+        continuation = continuation_from_payload(payload)
+        if continuation is None:
+            continue
+        if continuation.tool_invocation_id in completed_invocation_ids:
+            continue
+        return continuation
+    return None

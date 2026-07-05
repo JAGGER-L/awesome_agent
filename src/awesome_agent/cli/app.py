@@ -659,15 +659,42 @@ def _team_tree_lines(node: dict[str, object], *, depth: int = 0) -> list[str]:
     status = str(node.get("status") or "")
     waiting = node.get("waiting_reason")
     result = node.get("result_summary")
-    suffix = str(waiting or result or "").strip()
+    suffix_parts = _team_tree_suffix_parts(node, waiting=waiting, result=result)
     line = f"{indent}{node['role']} {profile} {status}".rstrip()
-    if suffix:
-        line = f"{line} {suffix}"
+    if suffix_parts:
+        line = f"{line} {' '.join(suffix_parts)}"
     lines = [line]
     for child in node.get("children", []):
         if isinstance(child, dict):
             lines.extend(_team_tree_lines(child, depth=depth + 1))
     return lines
+
+
+def _team_tree_suffix_parts(
+    node: dict[str, object],
+    *,
+    waiting: object,
+    result: object,
+) -> list[str]:
+    parts: list[str] = []
+    primary = str(waiting or result or "").strip()
+    if primary:
+        parts.append(primary)
+    effective_tools = node.get("effective_tools")
+    denied_tools = node.get("denied_tools")
+    if isinstance(effective_tools, list) and effective_tools:
+        parts.append(f"tools={len(effective_tools)}")
+    if isinstance(denied_tools, list) and denied_tools:
+        parts.append(f"denied={len(denied_tools)}")
+    pending_approval = node.get("pending_approval")
+    if isinstance(pending_approval, dict):
+        tool = pending_approval.get("tool")
+        if isinstance(tool, str) and tool:
+            parts.append(f"tool={tool}")
+    workspace_summary = node.get("workspace_summary")
+    if isinstance(workspace_summary, str) and workspace_summary:
+        parts.append(f"workspace={workspace_summary.replace(' ', ':')}")
+    return parts
 
 
 @app.command()

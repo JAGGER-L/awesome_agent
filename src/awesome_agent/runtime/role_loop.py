@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
 
-from awesome_agent.domain.enums import EventType
+from awesome_agent.domain.enums import ApprovalStatus, EventType, RiskLevel
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.extensions.catalog import empty_extension_catalog
 from awesome_agent.extensions.models import ExtensionCatalog
@@ -27,9 +28,20 @@ from awesome_agent.modeling import (
     ToolResultMessage,
     UserMessage,
 )
+from awesome_agent.persistence.approval_contracts import (
+    ApprovalRepository,
+    DurableApproval,
+)
 from awesome_agent.persistence.team import TeamRepository
-from awesome_agent.persistence.tool_invocations import ToolInvocationRepository
+from awesome_agent.persistence.tool_invocations import (
+    DurableToolInvocation,
+    ToolInvocationRepository,
+)
 from awesome_agent.runtime.agent_loop import TeamAgentLoop
+from awesome_agent.runtime.agent_loop.modifying_middleware import (
+    approval_interrupt_payload,
+    workspace_fingerprint,
+)
 from awesome_agent.runtime.capabilities import (
     READ_ONLY_TEAM_TOOLS,
     WRITE_TEAM_TOOLS,
@@ -37,7 +49,12 @@ from awesome_agent.runtime.capabilities import (
     CapabilityResolver,
     EffectiveToolPolicy,
 )
-from awesome_agent.runtime.dispatch import ChildRunWait, PermanentExecutionError
+from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
+    ChildRunWait,
+    CorruptRuntimeStateError,
+    PermanentExecutionError,
+)
 from awesome_agent.runtime.graphs import TEAM_ROLE_ROUTE
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import (
@@ -61,6 +78,13 @@ from awesome_agent.runtime.team_mailbox_policy import (
     MailboxPolicyError,
     resolve_teammate_mailbox_route,
 )
+from awesome_agent.runtime.team_role_approval import (
+    TEAM_ROLE_APPROVAL_CONTINUATION_PAYLOAD_KEY,
+    TeamRoleApprovalContinuation,
+    latest_open_team_role_approval_continuation,
+    message_payloads_from_messages,
+    messages_from_payloads,
+)
 from awesome_agent.runtime.team_role_artifacts import (
     role_changed_files,
     role_git_diff,
@@ -68,19 +92,29 @@ from awesome_agent.runtime.team_role_artifacts import (
 from awesome_agent.runtime.team_role_tools import (
     complete_team_role_tool_invocation,
     fail_team_role_tool_invocation,
+    parse_team_role_tool_arguments,
     start_team_role_tool_invocation,
+    team_role_tool_idempotency_key,
 )
 from awesome_agent.runtime.tool_exposure import (
     ToolExposureSet,
     before_tool_call,
     resolve_tool_exposure,
 )
-from awesome_agent.tools.models import ApprovalRequired
+from awesome_agent.tools.executor import ToolExecutor
+from awesome_agent.tools.models import (
+    ApprovalRequired,
+    ToolDenied,
+    ToolInvocation,
+    ToolSpec,
+)
+from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
-    execute_repository_call,
+    canonical_arguments_hash_from_arguments,
     model_tool_definitions,
+    tool_invocation_uuid,
 )
 
 ProviderResolver = Callable[[str], ModelProvider]
@@ -89,6 +123,7 @@ RoleEventSink = Callable[[EventType, dict[str, object], str], Awaitable[None]]
 _WRITE_TOOLS = WRITE_TEAM_TOOLS
 _TEAM_CREATE_SUBAGENT = "team.create_subagent"
 _READ_ONLY_TEAM_TOOLS = READ_ONLY_TEAM_TOOLS
+_TOOL_RESULT_MAX_CHARS = 30_000
 
 
 class TeamCreateSubagentArguments(BaseModel):
@@ -146,6 +181,16 @@ class RoleLoopResult:
     no_change: bool
 
 
+@dataclass(frozen=True, slots=True)
+class _RoleLoopResumeState:
+    messages: list[ModelMessage]
+    model_turn_count: int
+    tool_call_count: int
+    successful_inspections: int
+    successful_writes: int
+    diff_after_last_write: bool
+
+
 class RoleLoop:
     def __init__(
         self,
@@ -155,12 +200,22 @@ class RoleLoop:
         max_model_turns: int = 20,
         max_tool_calls: int = 60,
         tool_repository: ToolInvocationRepository | None = None,
+        approval_repository: ApprovalRepository | None = None,
+        approval_default_expiry: timedelta = timedelta(hours=1),
+        tool_registry: ToolRegistry | None = None,
+        tool_executor: ToolExecutor | None = None,
     ) -> None:
         self.provider_resolver = provider_resolver
         self.team_loop = team_loop or TeamAgentLoop()
         self.max_model_turns = max_model_turns
         self.max_tool_calls = max_tool_calls
         self.tool_repository = tool_repository
+        self.approval_repository = approval_repository
+        self.approval_default_expiry = approval_default_expiry
+        self.tool_registry = tool_registry or build_modifying_registry()
+        self.tool_executor = tool_executor or build_modifying_executor(
+            self.tool_registry
+        )
 
     async def execute(
         self,
@@ -178,10 +233,8 @@ class RoleLoop:
         catalog: ExtensionCatalog | None = None,
     ) -> RoleLoopResult:
         active_catalog = catalog or empty_extension_catalog()
-        registry = build_modifying_registry()
-        executor = build_modifying_executor(registry)
         candidate_tool_definitions = [
-            *model_tool_definitions(registry),
+            *model_tool_definitions(self.tool_registry),
             _create_subagent_tool_definition(),
             _mailbox_list_tool_definition(),
             _mailbox_send_tool_definition(),
@@ -243,6 +296,27 @@ class RoleLoop:
         diff_after_last_write = False
         final_answer = ""
         force_final = False
+        resume_state = await _resume_approval_continuation_if_present(
+            run=run,
+            agent=agent,
+            assignment=assignment,
+            policy=policy,
+            workspace=workspace,
+            repository=repository,
+            team_repository=team_repository,
+            tool_registry=self.tool_registry,
+            tool_executor=self.tool_executor,
+            tool_repository=self.tool_repository,
+            approval_repository=self.approval_repository,
+            event_sink=event_sink,
+        )
+        if resume_state is not None:
+            messages = resume_state.messages
+            model_turn_count = resume_state.model_turn_count
+            tool_call_count = resume_state.tool_call_count
+            successful_inspections = resume_state.successful_inspections
+            successful_writes = resume_state.successful_writes
+            diff_after_last_write = resume_state.diff_after_last_write
 
         while model_turn_count < min(policy.max_model_turns, self.max_model_turns):
             model_turn_count += 1
@@ -320,29 +394,51 @@ class RoleLoop:
                             repository=repository,
                             team_repository=team_repository,
                             call=current_call,
-                            executor=executor,
+                            tool_registry=self.tool_registry,
+                            tool_executor=self.tool_executor,
                             tool_repository=self.tool_repository,
                             event_sink=event_sink,
                         )
 
-                    result = await self.team_loop.wrap_tool_call(
-                        object(),
-                        run=run,
-                        agent=agent,
-                        messages=tool_messages,
-                        assignment_id=assignment.id,
-                        team_role=assignment.kind.value,
-                        agent_kind=agent.kind.value,
-                        metadata={
-                            "team_operation": "role_tool",
-                            "tool": call.name,
-                            "call_id": call.call_id,
-                        },
-                        handler=execute_role_tool,
-                    )
+                    try:
+                        result = await self.team_loop.wrap_tool_call(
+                            object(),
+                            run=run,
+                            agent=agent,
+                            messages=tool_messages,
+                            assignment_id=assignment.id,
+                            team_role=assignment.kind.value,
+                            agent_kind=agent.kind.value,
+                            metadata={
+                                "team_operation": "role_tool",
+                                "tool": call.name,
+                                "call_id": call.call_id,
+                            },
+                            handler=execute_role_tool,
+                        )
+                    except ApprovalRequired as error:
+                        await _request_team_role_tool_approval(
+                            approval_error=error,
+                            run=run,
+                            agent=agent,
+                            assignment=assignment,
+                            call=call,
+                            policy=policy,
+                            workspace=workspace,
+                            repository=repository,
+                            tool_registry=self.tool_registry,
+                            approval_repository=self.approval_repository,
+                            approval_default_expiry=self.approval_default_expiry,
+                            messages=messages,
+                            model_turn_count=model_turn_count,
+                            tool_call_count=tool_call_count,
+                            successful_inspections=successful_inspections,
+                            successful_writes=successful_writes,
+                            diff_after_last_write=diff_after_last_write,
+                        )
                     tool_call_count += 1
                     if not result.is_error:
-                        if call.name in _READ_ONLY_TEAM_TOOLS:
+                        if _counts_as_successful_inspection(call.name, policy):
                             successful_inspections += 1
                         if call.name in _WRITE_TOOLS:
                             successful_writes += 1
@@ -407,9 +503,11 @@ async def _execute_call(
     repository: RuntimeRepository,
     team_repository: TeamRepository,
     call: ToolCall,
-    executor: object,
+    tool_registry: ToolRegistry,
+    tool_executor: ToolExecutor,
     tool_repository: ToolInvocationRepository | None,
     event_sink: RoleEventSink | None,
+    approval_granted: bool = False,
 ) -> ToolResultMessage:
     started = monotonic()
     if not isinstance(policy.effective_tools, ToolExposureSet):
@@ -421,12 +519,15 @@ async def _execute_call(
             content=f"Tool {call.name} is not exposed for this assignment.",
             is_error=True,
         )
+    spec = _tool_spec(tool_registry, call.name)
     invocation = await start_team_role_tool_invocation(
         repository=tool_repository,
         run=run,
         agent=agent,
         call=call,
         workspace=workspace,
+        tool_version=spec.version if spec is not None else "1",
+        risk_level=spec.risk_level if spec is not None else RiskLevel.LOW,
     )
     if (
         invocation is not None
@@ -506,20 +607,29 @@ async def _execute_call(
                 is_error=True,
             )
         else:
-            capabilities = (
-                set(policy.effective_tools.capabilities_for(call.name))
-                if policy.effective_tools is not None
-                else _legacy_capabilities(policy, call.name)
-            )
-            result = await execute_repository_call(
-                executor,  # type: ignore[arg-type]
-                call,
+            result = await _execute_runtime_tool(
+                run=run,
+                agent=agent,
+                call=call,
                 workspace=workspace,
-                agent_id=agent.id,
-                profile=agent.profile,
-                capabilities=capabilities,
-                effective_tools=policy.effective_tools,
+                tool_registry=tool_registry,
+                tool_executor=tool_executor,
+                invocation=invocation,
+                policy=policy,
+                approval_granted=approval_granted,
             )
+    except ToolDenied as error:
+        result = ToolResultMessage(
+            call_id=call.call_id,
+            content=f"{type(error).__name__}: {error}",
+            is_error=True,
+        )
+    except (ValueError, KeyError, TimeoutError, ValidationError) as error:
+        result = ToolResultMessage(
+            call_id=call.call_id,
+            content=f"{type(error).__name__}: {error}",
+            is_error=True,
+        )
     except ChildRunWait as error:
         await complete_team_role_tool_invocation(
             repository=tool_repository,
@@ -564,6 +674,410 @@ async def _execute_call(
         f"tool:{agent.id}:{call.call_id}",
     )
     return result
+
+
+async def _execute_runtime_tool(
+    *,
+    run: Run,
+    agent: Agent,
+    call: ToolCall,
+    workspace: Path,
+    tool_registry: ToolRegistry,
+    tool_executor: ToolExecutor,
+    invocation: DurableToolInvocation | None,
+    policy: RoleLoopPolicy,
+    approval_granted: bool,
+) -> ToolResultMessage:
+    arguments = parse_team_role_tool_arguments(call)
+    capabilities = (
+        set(policy.effective_tools.capabilities_for(call.name))
+        if policy.effective_tools is not None
+        else _legacy_capabilities(policy, call.name)
+    )
+    idempotency_key = team_role_tool_idempotency_key(
+        run=run,
+        agent=agent,
+        call=call,
+    )
+    result = await tool_executor.execute(
+        ToolInvocation(
+            id=invocation.id if invocation is not None else tool_invocation_uuid(
+                idempotency_key
+            ),
+            run_id=run.id,
+            tool_name=call.name,
+            agent_id=agent.id,
+            profile=agent.profile,
+            capabilities=capabilities,
+            effective_tool_names=(
+                set(policy.effective_tools.tool_names)
+                if policy.effective_tools is not None
+                else None
+            ),
+            arguments=arguments,
+            workspace=workspace,
+            approval_granted=approval_granted,
+        ),
+        progress=None,
+    )
+    return ToolResultMessage(
+        call_id=call.call_id,
+        content=_bounded_json(result.output),
+    )
+
+
+async def _request_team_role_tool_approval(
+    *,
+    approval_error: ApprovalRequired,
+    run: Run,
+    agent: Agent,
+    assignment: TeamAssignment,
+    call: ToolCall,
+    policy: RoleLoopPolicy,
+    workspace: Path,
+    repository: RuntimeRepository,
+    tool_registry: ToolRegistry,
+    approval_repository: ApprovalRepository | None,
+    approval_default_expiry: timedelta,
+    messages: list[ModelMessage],
+    model_turn_count: int,
+    tool_call_count: int,
+    successful_inspections: int,
+    successful_writes: int,
+    diff_after_last_write: bool,
+) -> None:
+    if approval_repository is None:
+        raise PermanentExecutionError("team_role_approval_repository_missing")
+    arguments = parse_team_role_tool_arguments(call)
+    arguments_hash = canonical_arguments_hash_from_arguments(arguments)
+    spec, _handler = tool_registry.resolve(call.name)
+    existing = await approval_repository.get_by_call(run.id, call.call_id)
+    now = datetime.now(UTC)
+    if existing is None:
+        approval = DurableApproval(
+            id=tool_invocation_uuid(
+                f"team-role:approval:{run.id}:{agent.id}:{call.call_id}"
+            ),
+            run_id=run.id,
+            agent_id=agent.id,
+            tool_invocation_id=approval_error.invocation.id,
+            tool_call_id=call.call_id,
+            tool_name=call.name,
+            tool_version=spec.version,
+            canonical_arguments=arguments,
+            arguments_hash=arguments_hash,
+            workspace_path=str(workspace.resolve()),
+            workspace_fingerprint=await workspace_fingerprint(workspace),
+            capabilities=sorted(approval_error.invocation.capabilities),
+            risk_level=spec.risk_level.value,
+            expires_at=now + approval_default_expiry,
+            status=ApprovalStatus.PENDING,
+            created_at=now,
+            updated_at=now,
+        )
+        approval = await approval_repository.upsert(approval)
+    else:
+        approval = existing
+        _validate_approval_binding(
+            approval,
+            run=run,
+            agent=agent,
+            call=call,
+            tool_version=spec.version,
+            arguments_hash=arguments_hash,
+            workspace=workspace,
+        )
+    if not await _approval_event_exists(
+        repository,
+        run=run,
+        approval_id=approval.id,
+    ):
+        continuation = TeamRoleApprovalContinuation(
+            approval_id=approval.id,
+            tool_invocation_id=approval.tool_invocation_id,
+            tool_call_id=call.call_id,
+            tool_name=call.name,
+            tool_version=approval.tool_version,
+            arguments_json=call.arguments_json,
+            arguments_hash=arguments_hash,
+            workspace_path=str(workspace.resolve()),
+            workspace_fingerprint=approval.workspace_fingerprint,
+            capabilities=tuple(approval.capabilities),
+            message_payloads=message_payloads_from_messages(messages),
+            model_turn_count=model_turn_count,
+            tool_call_count=tool_call_count,
+            successful_inspections=successful_inspections,
+            successful_writes=successful_writes,
+            diff_after_last_write=diff_after_last_write,
+        )
+        await repository.append_event(
+            run_id=run.id,
+            event_type=EventType.APPROVAL_REQUESTED,
+            payload={
+                **build_team_attribution(
+                    run=run,
+                    assignment=assignment,
+                    agent_id=agent.id,
+                ),
+                **approval_interrupt_payload(approval),
+                TEAM_ROLE_APPROVAL_CONTINUATION_PAYLOAD_KEY: (
+                    continuation.to_payload()
+                ),
+                "reason": "waiting_approval",
+                "agent_id": str(agent.id),
+            },
+            agent_id=agent.id,
+        )
+    raise ApprovalInterrupt(approval.id)
+
+
+async def _resume_approval_continuation_if_present(
+    *,
+    run: Run,
+    agent: Agent,
+    assignment: TeamAssignment,
+    policy: RoleLoopPolicy,
+    workspace: Path,
+    repository: RuntimeRepository,
+    team_repository: TeamRepository,
+    tool_registry: ToolRegistry,
+    tool_executor: ToolExecutor,
+    tool_repository: ToolInvocationRepository | None,
+    approval_repository: ApprovalRepository | None,
+    event_sink: RoleEventSink | None,
+) -> _RoleLoopResumeState | None:
+    if approval_repository is None:
+        return None
+    completed_invocation_ids = await _completed_team_role_invocation_ids(
+        tool_repository,
+        run=run,
+    )
+    continuation = latest_open_team_role_approval_continuation(
+        await repository.list_events(run.id),
+        completed_invocation_ids=completed_invocation_ids,
+    )
+    if continuation is None:
+        return None
+    approval = await approval_repository.get(continuation.approval_id)
+    if approval.status is ApprovalStatus.PENDING:
+        raise ApprovalInterrupt(approval.id)
+
+    call = continuation.to_tool_call()
+    messages = messages_from_payloads(continuation.message_payloads)
+    if not messages:
+        raise CorruptRuntimeStateError("Team role approval continuation is invalid.")
+    if approval.status in {ApprovalStatus.DENIED, ApprovalStatus.EXPIRED}:
+        result = _tool_error_result(
+            call,
+            approval.status.value,
+            f"Tool execution was {approval.status.value} by approval decision.",
+        )
+        await complete_team_role_tool_invocation(
+            repository=tool_repository,
+            invocation=await _team_role_invocation_by_id(
+                tool_repository,
+                continuation.tool_invocation_id,
+            ),
+            result=result,
+        )
+    else:
+        await _validate_approval_continuation(
+            continuation,
+            approval=approval,
+            run=run,
+            agent=agent,
+            workspace=workspace,
+            policy=policy,
+        )
+        result = await _execute_call(
+            run=run,
+            agent=agent,
+            assignment=assignment,
+            policy=policy,
+            workspace=workspace,
+            repository=repository,
+            team_repository=team_repository,
+            call=call,
+            tool_registry=tool_registry,
+            tool_executor=tool_executor,
+            tool_repository=tool_repository,
+            event_sink=event_sink,
+            approval_granted=True,
+        )
+    messages.append(result)
+    successful_inspections = continuation.successful_inspections
+    successful_writes = continuation.successful_writes
+    diff_after_last_write = continuation.diff_after_last_write
+    if not result.is_error:
+        if _counts_as_successful_inspection(call.name, policy):
+            successful_inspections += 1
+        if call.name in _WRITE_TOOLS:
+            successful_writes += 1
+            diff_after_last_write = False
+        if call.name == "repo.diff" and successful_writes:
+            diff_after_last_write = True
+    return _RoleLoopResumeState(
+        messages=messages,
+        model_turn_count=continuation.model_turn_count,
+        tool_call_count=continuation.tool_call_count + 1,
+        successful_inspections=successful_inspections,
+        successful_writes=successful_writes,
+        diff_after_last_write=diff_after_last_write,
+    )
+
+
+async def _validate_approval_continuation(
+    continuation: TeamRoleApprovalContinuation,
+    *,
+    approval: DurableApproval,
+    run: Run,
+    agent: Agent,
+    workspace: Path,
+    policy: RoleLoopPolicy,
+) -> None:
+    if approval.id != continuation.approval_id:
+        raise CorruptRuntimeStateError("Approval continuation id mismatch.")
+    if approval.run_id != run.id:
+        raise CorruptRuntimeStateError("Approval continuation run mismatch.")
+    if approval.agent_id != agent.id:
+        raise CorruptRuntimeStateError("Approval continuation agent mismatch.")
+    if approval.tool_invocation_id != continuation.tool_invocation_id:
+        raise CorruptRuntimeStateError("Approval continuation invocation mismatch.")
+    if approval.tool_call_id != continuation.tool_call_id:
+        raise CorruptRuntimeStateError("Approval continuation tool call mismatch.")
+    if approval.tool_name != continuation.tool_name:
+        raise CorruptRuntimeStateError("Approval continuation tool name mismatch.")
+    if approval.tool_version != continuation.tool_version:
+        raise CorruptRuntimeStateError("Approval continuation tool version mismatch.")
+    if approval.arguments_hash != continuation.arguments_hash:
+        raise CorruptRuntimeStateError("Approval continuation arguments mismatch.")
+    if Path(approval.workspace_path).resolve() != workspace.resolve():
+        raise CorruptRuntimeStateError("Approval continuation workspace mismatch.")
+    if approval.workspace_fingerprint != continuation.workspace_fingerprint:
+        raise CorruptRuntimeStateError("Approval continuation fingerprint mismatch.")
+    current_fingerprint = await workspace_fingerprint(workspace)
+    if current_fingerprint != approval.workspace_fingerprint:
+        raise CorruptRuntimeStateError("Approval workspace changed before resume.")
+    expected_capabilities = tuple(
+        sorted(
+            policy.effective_tools.capabilities_for(continuation.tool_name)
+            if policy.effective_tools is not None
+            else approval.capabilities
+        )
+    )
+    if tuple(sorted(approval.capabilities)) != expected_capabilities:
+        raise CorruptRuntimeStateError("Approval continuation capabilities mismatch.")
+
+
+def _validate_approval_binding(
+    approval: DurableApproval,
+    *,
+    run: Run,
+    agent: Agent,
+    call: ToolCall,
+    tool_version: str,
+    arguments_hash: str,
+    workspace: Path,
+) -> None:
+    if approval.run_id != run.id or approval.agent_id != agent.id:
+        raise CorruptRuntimeStateError("Approval binding run or agent mismatch.")
+    if approval.tool_call_id != call.call_id or approval.tool_name != call.name:
+        raise CorruptRuntimeStateError("Approval binding tool mismatch.")
+    if approval.tool_version != tool_version:
+        raise CorruptRuntimeStateError("Approval binding tool version mismatch.")
+    if approval.arguments_hash != arguments_hash:
+        raise CorruptRuntimeStateError("Approval binding arguments mismatch.")
+    if Path(approval.workspace_path).resolve() != workspace.resolve():
+        raise CorruptRuntimeStateError("Approval binding workspace mismatch.")
+
+
+async def _approval_event_exists(
+    repository: RuntimeRepository,
+    *,
+    run: Run,
+    approval_id: UUID,
+) -> bool:
+    return any(
+        event.event_type is EventType.APPROVAL_REQUESTED
+        and event.payload.get("approval_id") == str(approval_id)
+        for event in await repository.list_events(run.id)
+    )
+
+
+async def _completed_team_role_invocation_ids(
+    repository: ToolInvocationRepository | None,
+    *,
+    run: Run,
+) -> set[UUID]:
+    if repository is None:
+        return set()
+    return {
+        invocation.id
+        for invocation in await repository.list_for_run(run.id)
+        if invocation.status in {"completed", "failed"}
+        and invocation.result_content is not None
+    }
+
+
+async def _team_role_invocation_by_id(
+    repository: ToolInvocationRepository | None,
+    invocation_id: UUID,
+) -> DurableToolInvocation | None:
+    if repository is None:
+        return None
+    try:
+        return await repository.get(invocation_id)
+    except KeyError:
+        return None
+
+
+def _tool_error_result(
+    call: ToolCall,
+    status: str,
+    message: str,
+) -> ToolResultMessage:
+    return ToolResultMessage(
+        call_id=call.call_id,
+        content=json.dumps(
+            {"status": status, "error": message},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        is_error=True,
+    )
+
+
+def _tool_spec(tool_registry: ToolRegistry, tool_name: str) -> ToolSpec | None:
+    try:
+        spec, _handler = tool_registry.resolve(tool_name)
+        return spec
+    except KeyError:
+        return None
+
+
+def _counts_as_successful_inspection(
+    tool_name: str,
+    policy: RoleLoopPolicy,
+) -> bool:
+    if tool_name in _READ_ONLY_TEAM_TOOLS:
+        return True
+    if tool_name in _WRITE_TOOLS or tool_name in {
+        _TEAM_CREATE_SUBAGENT,
+        TEAM_MAILBOX_SEND_TOOL,
+    }:
+        return False
+    if policy.effective_tools is None:
+        return False
+    return "repository:read" in policy.effective_tools.capabilities_for(tool_name)
+
+
+def _bounded_json(value: dict[str, object]) -> str:
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if len(text) <= _TOOL_RESULT_MAX_CHARS:
+        return text
+    head = text[:8000]
+    tail = text[-3000:]
+    return f"{head}\n...[tool output truncated: {len(text)} characters]...\n{tail}"
 
 
 async def _execute_mailbox_list(

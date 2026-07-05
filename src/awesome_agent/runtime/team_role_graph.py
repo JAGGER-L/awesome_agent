@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, cast
 
@@ -11,6 +11,7 @@ from awesome_agent.domain.models import Agent, Run
 from awesome_agent.extensions.catalog import empty_extension_catalog
 from awesome_agent.extensions.models import ExtensionCatalog
 from awesome_agent.observability.facade import ObservabilityFacade
+from awesome_agent.persistence.approval_contracts import ApprovalRepository
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
 from awesome_agent.persistence.tool_invocations import ToolInvocationRepository
@@ -57,6 +58,8 @@ from awesome_agent.runtime.validation.config import load_validation_config
 from awesome_agent.runtime.validation.detection import detect_validation_plan
 from awesome_agent.runtime.validation.executor import execute_validation_plan
 from awesome_agent.runtime.validation.models import ValidationPlan
+from awesome_agent.tools.executor import ToolExecutor
+from awesome_agent.tools.registry import ToolRegistry
 
 _TEAM_INLINE_PAYLOAD_TOKENS = 1200
 
@@ -90,6 +93,10 @@ class TeamRoleGraph:
         capability_resolver: CapabilityResolver | None = None,
         token_accountant: TokenAccountant | None = None,
         tool_repository: ToolInvocationRepository | None = None,
+        approval_repository: ApprovalRepository | None = None,
+        approval_default_expiry: timedelta = timedelta(hours=1),
+        tool_registry: ToolRegistry | None = None,
+        tool_executor: ToolExecutor | None = None,
         extension_catalog_resolver: Callable[
             [str | None], ExtensionCatalog
         ] | None = None,
@@ -105,6 +112,10 @@ class TeamRoleGraph:
                 provider_resolver=provider_resolver,
                 team_loop=self.team_loop,
                 tool_repository=tool_repository,
+                approval_repository=approval_repository,
+                approval_default_expiry=approval_default_expiry,
+                tool_registry=tool_registry,
+                tool_executor=tool_executor,
             )
             if provider_resolver is not None
             else None

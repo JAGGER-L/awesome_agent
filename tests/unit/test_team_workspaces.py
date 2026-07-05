@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from awesome_agent.domain.enums import RunMode
+from awesome_agent.domain.enums import RunMode, WorkspaceState
 from awesome_agent.domain.models import Run
 from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.dispatch import PermanentExecutionError
@@ -48,6 +48,7 @@ def _parent(tmp_path: Path) -> Run:
         base_commit="abc123",
         workspace_path=tmp_path / "root",
         integration_branch="awesome-agent/run/root",
+        workspace_state=WorkspaceState.READY,
     )
 
 
@@ -77,6 +78,7 @@ async def test_read_only_child_inherits_parent_workspace(tmp_path: Path) -> None
 
     assert assignment.workspace_path == parent.workspace_path
     assert assignment.integration_branch == parent.integration_branch
+    assert assignment.workspace_state is WorkspaceState.READY
     assert assignment.isolated is False
 
 
@@ -95,6 +97,7 @@ async def test_writing_child_uses_managed_worktree(tmp_path: Path) -> None:
 
     assert assignment.workspace_path == tmp_path / "isolated"
     assert assignment.integration_branch == f"awesome-agent/run/{child.id}"
+    assert assignment.workspace_state is WorkspaceState.READY
     assert assignment.isolated is True
     assert fake.calls == [
         {

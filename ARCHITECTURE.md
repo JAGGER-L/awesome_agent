@@ -206,11 +206,13 @@ awesome-agent start
 
 Each Worker process executes at most one Run. Workers always claim the
 diagnostic `runtime-probe` route and, when model providers are configured, also
-claim `solo-readonly`, `solo-modifying`, and explicit `team-coding-scoped`
-Runs. Workers also publish process heartbeat rows for readiness; Run lease
-heartbeat remains a separate fencing mechanism. A crashed Worker leaves its
-checkpoint and lease; after lease expiry, a replacement Worker claims with a
-new fencing token and resumes from the checkpoint. Unsupported runtime routes
+claim `solo-readonly`, `solo-modifying`, and the distributed `team-coding`,
+`team-role`, and `team-verifier` routes. `team-coding-scoped` may still be
+injected explicitly as a compatibility route, but runtime readiness does not
+require it. Workers also publish process heartbeat rows for readiness; Run
+lease heartbeat remains a separate fencing mechanism. A crashed Worker leaves
+its checkpoint and lease; after lease expiry, a replacement Worker claims with
+a new fencing token and resumes from the checkpoint. Unsupported runtime routes
 enter `recovery_required`.
 
 ## Agent Orchestration Topology
@@ -464,9 +466,9 @@ failure marks the Run failed.
 
 ## Team Coding Loop
 
-Workers with a configured model provider also advertise explicit
-`coding + modifying + team-coding-scoped` and distributed `team-coding` routes.
-The caller must request team mode; default modifying Runs stay on the solo
+Workers with a configured model provider advertise solo coding routes and the
+distributed team routes `team-coding`, `team-role`, and `team-verifier`. The
+caller must request team mode; default modifying Runs stay on the solo
 modifying graph.
 
 `team-coding-scoped` is a real but bounded team runtime path. Intake creates only
@@ -475,6 +477,11 @@ the Leader. The graph then creates role assignments with `allowed_tools` and
 Verifier, and a backend-owned read-only Subagent. Repository tools still execute
 through the central `ToolExecutor`; tools not granted by the Leader assignment
 are rejected before execution.
+
+Distributed `team-role` uses the same runtime tool registry and executor as the
+API/local/worker tool assembly. Team-native control tools stay in-process, but
+all ordinary repo, shell, artifact, memory, attachment, MCP, and community tool
+calls share the executable registry that produced the exposed tool set.
 
 Verifier rejection caused by model or quality output can trigger bounded
 same-Teammate rework. Verifier execution or external failures have a separate
@@ -513,6 +520,18 @@ wait/requeue behavior, patch aggregation, result persistence, mailbox messages,
 and terminal mapping. Leader planning, Teammate/Subagent model/tool execution,
 delegation tool calls, Verifier decisions, and team observability run through
 `TeamAgentLoop` middleware.
+
+Team role tool calls are durable tool invocations. Risky calls create a durable
+approval and an `approval.requested` event with a typed
+`team_role_approval_continuation`. Approved resume validates tool version,
+argument hash, workspace fingerprint, and effective capabilities before
+executing the original tool once with `approval_granted=True`, before model
+re-entry. Denied or expired approvals become tool-result errors.
+
+Writing teammates persist the isolated workspace path, integration branch, and
+allocator-returned workspace state. Team tree diagnostics report effective
+tools, denied tools, pending approval tool/risk/status, waiting reason, child
+results, and whether each child workspace is inherited or isolated.
 
 AgentLoop middleware receives a typed `MiddlewareContext` rather than relying
 on route-specific metadata for stable runtime facts. The context exposes
@@ -652,7 +671,8 @@ Docker is the default command execution boundary. CLI users may explicitly opt
 into trusted local execution. Trusted local mode runs as the same OS user and
 uses soft command, path, write-root, approval, and environment-scrubbing
 guardrails; it is not a security boundary. FastAPI runs cannot use
-trusted-local mode. Writing Teammates use isolated Git worktrees.
+trusted-local mode. Writing Teammates use isolated Git worktrees with explicit
+workspace state persisted on the child Run.
 
 Approval is scoped to one exact canonical tool invocation. Repository
 validation configuration and inferred project commands are untrusted input;
@@ -663,6 +683,9 @@ worker lease as `paused + waiting`, and resumes with `Command(resume=...)`
 after API/CLI decision. Resume revalidates the canonical arguments hash, tool
 version, workspace fingerprint, and requested capabilities before execution.
 Unsafe shell commands are denied without approval.
+Distributed `team-role` uses the same approval binding checks, but stores its
+resume snapshot in runtime events because team role execution is not a
+conversation thread.
 
 ## Detailed Designs
 
