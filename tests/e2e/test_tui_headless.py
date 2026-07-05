@@ -1400,13 +1400,13 @@ async def test_tui_details_on_expands_tool_event_details() -> None:
         await pilot.press("/", "d", "e", "t", "a", "i", "l", "s", "enter")
         await pilot.press("r", "u", "n", "enter")
         collapsed = app.query_one("#transcript").render()
-        await pilot.press("ctrl+t")
+        await pilot.press("ctrl+i")
         transcript = app.query_one("#transcript").render()
 
-    assert "已调用1个工具" in str(collapsed)
-    assert "Tool - run_command" not in str(collapsed)
+    assert "tools: called 1, 1 completed" in str(collapsed)
+    assert "run_command - completed" not in str(collapsed)
     rendered = str(transcript)
-    assert "Tool - run_command" in rendered
+    assert "run_command - completed" in rendered
     assert "command: python -m pytest" in rendered
     assert "exit_code: 0" in rendered
 
@@ -1783,14 +1783,14 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
         await pilot.click("#prompt")
         await pilot.press("b", "u", "i", "l", "d", "enter")
         collapsed = app.query_one("#transcript").render()
-        await pilot.press("ctrl+t")
+        await pilot.press("ctrl+i")
         transcript = app.query_one("#transcript").render()
 
     collapsed_text = str(collapsed)
-    assert "已调用1个工具" in collapsed_text
-    assert "Tool - write_file" not in collapsed_text
+    assert "tools: called 1" in collapsed_text
+    assert "write_file - created snake-game.html" not in collapsed_text
     rendered = str(transcript)
-    assert "Tool - write_file" in rendered
+    assert "write_file - created snake-game.html" in rendered
     assert "created snake-game.html" in rendered
     assert "path:" not in rendered
     assert "Team" in rendered

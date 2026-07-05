@@ -105,9 +105,9 @@ class AwesomeAgentTui(App[None]):
             priority=True,
         ),
         Binding(
-            "ctrl+t",
+            "ctrl+i",
             "toggle_tool_groups",
-            "Toggle tools",
+            "Toggle tool timeline",
             priority=True,
         ),
         ("ctrl+o", "toggle_thought", "Toggle thought"),
@@ -658,11 +658,19 @@ class AwesomeAgentTui(App[None]):
             ConversationStreamEventKind.TOOL_PROGRESS,
             ConversationStreamEventKind.TOOL_COMPLETED,
         }:
+            tool_event = _tool_display_event(stream_event.payload)
             self.state = self.state.append_tool_event(
                 render_tool_event(
-                    _tool_display_event(stream_event.payload),
+                    tool_event,
                     details_enabled=self.state.details_enabled,
-                ).plain
+                ).plain,
+                name=tool_event.name,
+                summary=tool_event.summary,
+                details=(
+                    tool_event.details
+                    if self.state.details_enabled or _tool_event_failed(tool_event)
+                    else {}
+                ),
             )
         elif stream_event.event is ConversationStreamEventKind.APPROVAL_REQUIRED:
             prompt = _approval_prompt_from_payload(stream_event.payload)
@@ -1515,6 +1523,11 @@ def _tool_display_event(payload: dict[str, object]) -> ToolDisplayEvent:
         if key not in {"name", "tool", "summary", "result", "status"}
     }
     return ToolDisplayEvent(name=name, summary=summary, details=details)
+
+
+def _tool_event_failed(event: ToolDisplayEvent) -> bool:
+    normalized = event.summary.casefold()
+    return any(value in normalized for value in ("failed", "error", "cancelled"))
 
 
 def _team_display_event(payload: dict[str, object]) -> TeamDisplayEvent:

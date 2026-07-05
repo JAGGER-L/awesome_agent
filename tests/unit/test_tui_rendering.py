@@ -13,6 +13,7 @@ from awesome_agent.tui.events import (
     ApprovalPromptState,
     TeamDisplayEvent,
     ToolDisplayEvent,
+    ToolTimelineEntry,
 )
 from awesome_agent.tui.rendering import (
     render_approval_prompt,
@@ -279,42 +280,50 @@ def test_tool_message_failure_label_is_red() -> None:
     assert "red" in _styles_for_text(rendered, "tool")
 
 
-def test_tool_group_renders_collapsed_summary() -> None:
+def test_tool_call_renders_neutral_collapsed_timeline_summary() -> None:
     message = ChatMessage.system(
-        "已调用2个工具",
+        "",
         kind=ChatEventKind.TOOL,
         tool_group=ToolGroup(
             entries=(
-                "Tool - repo.instructions\ncompleted",
-                "Tool - repo.list\ncompleted",
+                ToolTimelineEntry(name="repo.read", summary="completed"),
+                ToolTimelineEntry(name="shell.execute", summary="failed"),
             )
         ),
     )
 
     rendered = render_message(message, tool_groups_expanded=False).plain
 
-    assert "tool: 已调用2个工具 (ctrl+t to expand)" in rendered
-    assert "repo.instructions" not in rendered
-    assert "repo.list" not in rendered
+    assert "tools: called 2" in rendered
+    assert "1 completed" in rendered
+    assert "1 failed" in rendered
+    assert "ctrl+i to expand" in rendered
+    assert "tool:" not in rendered
 
 
-def test_tool_group_renders_expanded_entries() -> None:
+def test_tool_call_expanded_timeline_shows_failure_details() -> None:
     message = ChatMessage.system(
-        "已调用2个工具",
+        "",
         kind=ChatEventKind.TOOL,
         tool_group=ToolGroup(
             entries=(
-                "Tool - repo.instructions\ncompleted",
-                "Tool - repo.list\ncompleted",
+                ToolTimelineEntry(name="repo.read", summary="completed"),
+                ToolTimelineEntry(
+                    name="shell.execute",
+                    summary="failed",
+                    details={"error": "approval denied"},
+                ),
             )
         ),
     )
 
     rendered = render_message(message, tool_groups_expanded=True).plain
 
-    assert "tool: 已调用2个工具 (ctrl+t to collapse)" in rendered
-    assert "Tool - repo.instructions" in rendered
-    assert "Tool - repo.list" in rendered
+    assert "tools: called 2" in rendered
+    assert "repo.read - completed" in rendered
+    assert "shell.execute - failed" in rendered
+    assert "error: approval denied" in rendered
+    assert "ctrl+i to collapse" in rendered
 
 
 def test_tool_call_details_are_bounded_and_redacted() -> None:
