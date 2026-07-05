@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from awesome_agent.domain.enums import (
@@ -29,6 +29,10 @@ from awesome_agent.persistence.models import (
     RuntimeEventRecord,
 )
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
+from awesome_agent.runtime.dispatch_reasons import (
+    APPROVAL_RESUME_REASONS,
+    is_approval_resume_reason,
+)
 from awesome_agent.safety.redaction import redact_runtime_payload
 
 
@@ -59,7 +63,10 @@ class PostgresRunDispatcher(RunDispatcher):
                     ]
                 ),
                 RunRecord.available_at <= now,
-                RunRecord.attempt < max_attempts,
+                or_(
+                    RunRecord.attempt < max_attempts,
+                    RunRecord.last_release_reason.in_(list(APPROVAL_RESUME_REASONS)),
+                ),
                 RunRecord.legacy.is_(False),
             )
             if execution_kinds is not None:
@@ -85,11 +92,13 @@ class PostgresRunDispatcher(RunDispatcher):
             )
             if record is None:
                 return None
+            approval_resume = is_approval_resume_reason(record.last_release_reason)
             record.dispatch_status = DispatchStatus.CLAIMED.value
             record.current_worker_id = worker_id
             record.current_worker_name = worker_name
             record.fencing_token += 1
-            record.attempt += 1
+            if not approval_resume:
+                record.attempt += 1
             record.lease_acquired_at = now
             record.lease_expires_at = now + lease_duration
             record.heartbeat_at = now

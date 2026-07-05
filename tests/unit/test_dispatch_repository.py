@@ -51,6 +51,7 @@ class FakeSession:
         self.rows = rows or []
         self.rows_by_table = rows_by_table or {}
         self.added: list[object] = []
+        self.scalar_statements: list[object] = []
 
     async def __aenter__(self) -> FakeSession:
         return self
@@ -59,6 +60,7 @@ class FakeSession:
         pass
 
     async def scalar(self, statement: object) -> object:
+        self.scalar_statements.append(statement)
         if self.scalar_results:
             return self.scalar_results.pop(0)
         rendered = str(statement)
@@ -323,6 +325,32 @@ async def test_requeue_after_approval_makes_waiting_run_claimable() -> None:
     assert record.status == RunStatus.RUNNING.value
     assert record.dispatch_status == DispatchStatus.QUEUED.value
     assert record.available_at == now
+
+
+@pytest.mark.asyncio
+async def test_claim_approval_resume_at_attempt_limit_preserves_attempt() -> None:
+    now = datetime.now(UTC)
+    record = _record(attempt=3)
+    record.last_release_reason = "approval_decided"
+    worker_id = uuid4()
+    session = FakeSession(scalar_results=[now, record, 0])
+    dispatcher = PostgresRunDispatcher(FakeFactory([session]))  # type: ignore[arg-type]
+
+    lease = await dispatcher.claim_next(
+        worker_id=worker_id,
+        worker_name="worker",
+        lease_duration=timedelta(seconds=60),
+        max_attempts=3,
+    )
+
+    assert lease is not None
+    assert lease.attempt == 3
+    assert record.attempt == 3
+    assert record.last_release_reason is None
+    assert any(
+        "last_release_reason" in str(statement) and "IN" in str(statement)
+        for statement in session.scalar_statements
+    )
 
 
 @pytest.mark.asyncio

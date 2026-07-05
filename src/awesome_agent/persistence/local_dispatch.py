@@ -18,12 +18,7 @@ from awesome_agent.persistence.approval_contracts import (
 )
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
-
-_APPROVAL_RESUME_REASONS = {
-    "approval_decided",
-    "approval_granted",
-    "approval_expired",
-}
+from awesome_agent.runtime.dispatch_reasons import is_approval_resume_reason
 
 
 class LocalRunDispatcher(RunDispatcher):
@@ -56,7 +51,7 @@ class LocalRunDispatcher(RunDispatcher):
                 continue
             if run.available_at > now:
                 continue
-            approval_resume = run.last_release_reason in _APPROVAL_RESUME_REASONS
+            approval_resume = is_approval_resume_reason(run.last_release_reason)
             if run.attempt >= max_attempts and not approval_resume:
                 await self._mark_run_recovery_required(
                     run,
