@@ -56,6 +56,10 @@ from awesome_agent.runtime.agent_loop.modifying_middleware import (
 from awesome_agent.runtime.agent_loop.skill_context_middleware import (
     SkillContextMiddleware,
 )
+from awesome_agent.runtime.approval_continuation import (
+    ApprovalContinuation,
+    latest_open_approval_continuation,
+)
 from awesome_agent.runtime.cwd_context import CwdContextService
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
@@ -220,6 +224,7 @@ class ConversationGraph:
         if assistant is not None:
             return _state_from_assistant_message(assistant)
 
+        thread_messages = await self.conversations.list_messages(thread_id)
         messages = await self._model_messages(thread_id)
         messages = await self._with_attachment_context(
             run=run,
@@ -238,6 +243,33 @@ class ConversationGraph:
             thread_id=thread_id,
             messages=messages,
         )
+        tool_names = await self._tool_names_for_turn(run, turn_options)
+        effective_tools = (
+            _RegistryToolPolicy.from_registry(self.tool_registry, names=tool_names)
+            if self.tool_registry is not None
+            else None
+        )
+        resumed_tool_result = await self._resume_approval_continuation_if_present(
+            run=run,
+            leader=leader,
+            thread_id=thread_id,
+            thread_messages=thread_messages,
+            model_messages=messages,
+            effective_tools=effective_tools,
+        )
+        if resumed_tool_result is not None:
+            changed_files = _dedupe_changed_files(
+                _changed_files_from_tool_result(resumed_tool_result)
+            )
+            return {
+                "final_answer": "Tool execution completed after approval.",
+                "result_summary": "Conversation approval resumed.",
+                "usage": ModelUsage().model_dump(mode="json"),
+                "response_model": None,
+                "provider": None,
+                "response_id": None,
+                "changed_files": changed_files,
+            }
         model_state = await self._run_model(
             run=run,
             leader=leader,
@@ -613,6 +645,141 @@ class ConversationGraph:
                 effective_tools=effective_tools,
             )
 
+    async def _resume_approval_continuation_if_present(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        thread_id: UUID,
+        thread_messages: list[ThreadMessage],
+        model_messages: list[ModelMessage],
+        effective_tools: _RegistryToolPolicy | None,
+    ) -> ToolResultMessage | None:
+        if self.approval_repository is None:
+            return None
+        events = await self.runtime.list_events(run.id)
+        continuation = latest_open_approval_continuation(events, thread_messages)
+        if continuation is None:
+            return None
+        approval = await self.approval_repository.get(continuation.approval_id)
+        call = continuation.to_tool_call()
+        if approval.status is ApprovalStatus.PENDING:
+            raise ApprovalInterrupt(approval.id)
+        if approval.status in {ApprovalStatus.DENIED, ApprovalStatus.EXPIRED}:
+            result = tool_error_result(
+                call,
+                approval.status.value,
+                f"Tool execution was {approval.status.value} by approval decision.",
+            )
+        else:
+            workspace = Path(continuation.workspace_path)
+            await self._validate_approval_continuation(
+                continuation,
+                approval=approval,
+                run=run,
+                workspace=workspace,
+                effective_tools=effective_tools,
+            )
+            result = await execute_repository_call(
+                self._require_tool_executor(),
+                call,
+                workspace=workspace,
+                agent_id=leader.id,
+                run_id=run.id,
+                effective_tools=effective_tools,
+                approval_granted=True,
+            )
+        model_messages.append(result)
+        await self._append_conversation_tool_result(
+            run=run,
+            leader=leader,
+            thread_id=thread_id,
+            result=result,
+            tool_name=continuation.tool_name,
+        )
+        return result
+
+    async def _append_conversation_tool_result(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        thread_id: UUID,
+        result: ToolResultMessage,
+        tool_name: str,
+    ) -> None:
+        message = await self.conversations.append_message(
+            thread_id=thread_id,
+            role=ThreadMessageRole.TOOL,
+            content=result.content,
+            kind=ThreadMessageKind.TOOL,
+            run_id=run.id,
+            metadata={
+                "kind": "tool_result",
+                "tool_call_id": result.call_id,
+                "tool_name": tool_name,
+                "is_error": result.is_error,
+            },
+        )
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.MESSAGE_CREATED,
+            payload={
+                "thread_id": str(thread_id),
+                "message_id": str(message.id),
+                "role": message.role.value,
+                "content": message.content,
+                "kind": message.kind.value,
+                "run_id": str(run.id),
+                "metadata": message.metadata,
+            },
+            agent_id=leader.id,
+        )
+
+    async def _validate_approval_continuation(
+        self,
+        continuation: ApprovalContinuation,
+        *,
+        approval: DurableApproval,
+        run: Run,
+        workspace: Path,
+        effective_tools: _RegistryToolPolicy | None,
+    ) -> None:
+        if approval.id != continuation.approval_id:
+            raise CorruptRuntimeStateError("Approval continuation id mismatch.")
+        if approval.run_id != run.id:
+            raise CorruptRuntimeStateError("Approval continuation run mismatch.")
+        if approval.tool_call_id != continuation.tool_call_id:
+            raise CorruptRuntimeStateError("Approval continuation tool call mismatch.")
+        if approval.tool_name != continuation.tool_name:
+            raise CorruptRuntimeStateError("Approval continuation tool name mismatch.")
+        if approval.tool_version != continuation.tool_version:
+            raise CorruptRuntimeStateError(
+                "Approval continuation tool version mismatch."
+            )
+        if approval.arguments_hash != continuation.arguments_hash:
+            raise CorruptRuntimeStateError("Approval continuation arguments mismatch.")
+        if Path(approval.workspace_path).resolve() != workspace.resolve():
+            raise CorruptRuntimeStateError("Approval continuation workspace mismatch.")
+        if approval.workspace_fingerprint != continuation.workspace_fingerprint:
+            raise CorruptRuntimeStateError(
+                "Approval continuation fingerprint mismatch."
+            )
+        current_fingerprint = await workspace_fingerprint(workspace)
+        if current_fingerprint != approval.workspace_fingerprint:
+            raise CorruptRuntimeStateError("Approval workspace changed before resume.")
+        expected_capabilities = tuple(
+            sorted(
+                effective_tools.capabilities_for(continuation.tool_name)
+                if effective_tools is not None
+                else approval.capabilities
+            )
+        )
+        if tuple(sorted(approval.capabilities)) != expected_capabilities:
+            raise CorruptRuntimeStateError(
+                "Approval continuation capabilities mismatch."
+            )
+
     async def _handle_tool_approval(
         self,
         call: Any,
@@ -694,11 +861,23 @@ class ConversationGraph:
             )
 
         approval = await self.approval_repository.upsert(approval)
+        continuation = ApprovalContinuation(
+            approval_id=approval.id,
+            tool_call_id=call.call_id,
+            tool_name=call.name,
+            tool_version=spec.version,
+            arguments_json=call.arguments_json,
+            arguments_hash=arguments_hash,
+            workspace_path=str(workspace.resolve()),
+            workspace_fingerprint=approval.workspace_fingerprint,
+            capabilities=tuple(approval.capabilities),
+        )
         await self.runtime.append_event(
             run_id=run.id,
             event_type=EventType.APPROVAL_REQUESTED,
             payload={
                 **approval_interrupt_payload(approval),
+                "approval_continuation": continuation.to_payload(),
                 "reason": "waiting_approval",
                 "agent_id": str(leader.id),
             },
