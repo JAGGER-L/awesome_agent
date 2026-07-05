@@ -327,14 +327,14 @@ class AwesomeAgentTui(App[None]):
 
     def action_cancel(self) -> None:
         if self.state.active_operation_id is not None:
-            if self._active_worker is not None:
-                self._active_worker.cancel()
             if self.state.current_run_id is not None:
                 with suppress(Exception):
                     self.client.cancel(
                         self.state.current_run_id,
                         thread_id=self.state.backend_thread_id,
                     )
+            elif self._active_worker is not None:
+                self._active_worker.cancel()
             self.state = self.state.with_status("cancelling").append(
                 ChatMessage.system(
                     "Cancellation requested. Waiting for the runtime to stop safely.",

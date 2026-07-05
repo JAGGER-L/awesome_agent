@@ -168,10 +168,16 @@ def test_tui_approval_cancel_requests_run_cancel() -> None:
     assert app.state.messages[-1].content == "Cancelling Run..."
 
 
-def test_tui_cancel_active_operation_requests_cancel_without_pausing() -> None:
+def test_tui_cancel_active_run_keeps_stream_worker_for_terminal_event() -> None:
     client = FakeSurfaceClient()
     app = _app(client)
-    app._active_worker = SimpleNamespace(cancel=lambda: None)  # type: ignore[assignment]
+    cancelled = False
+
+    def cancel_worker() -> None:
+        nonlocal cancelled
+        cancelled = True
+
+    app._active_worker = SimpleNamespace(cancel=cancel_worker)  # type: ignore[assignment]
     app.state = (
         app.state.with_backend_thread("thread-1")
         .begin_operation("op-1", "streaming")
@@ -181,6 +187,7 @@ def test_tui_cancel_active_operation_requests_cancel_without_pausing() -> None:
     app.action_cancel()
 
     assert client.cancelled == [("run-1", "thread-1")]
+    assert cancelled is False
     assert app.state.status_label == "cancelling"
     assert app.state.last_resumable_run_id is None
     assert app.state.messages[-1].content == (
