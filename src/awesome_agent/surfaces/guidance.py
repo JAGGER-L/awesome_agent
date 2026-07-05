@@ -143,7 +143,9 @@ def guidance_for_model_error(
             detail=(
                 f"{provider} returned a response Awesome Agent could not parse safely."
             ),
-            next_steps=("Keep the request id and error text when reporting this issue.",),
+            next_steps=(
+                "Keep the request id and error text when reporting this issue.",
+            ),
             severity=GuidanceSeverity.ERROR,
         )
     return None

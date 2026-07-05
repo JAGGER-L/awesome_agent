@@ -9,8 +9,8 @@ from awesome_agent.cli.slash_commands import (
     SlashCommandKind,
     slash_command_help,
 )
-from awesome_agent.surfaces.guidance import missing_api_key_guidance
 from awesome_agent.surfaces.client import ChangedFileSummary, SurfaceThread
+from awesome_agent.surfaces.guidance import missing_api_key_guidance
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ChatSessionState
 
 
