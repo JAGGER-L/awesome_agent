@@ -25,7 +25,7 @@ _STDERR_LIMIT = 8192
 
 class _WorkerItem(NamedTuple):
     kind: Literal["line", "eof", "exit_error", "error"]
-    value: str | BaseException | None
+    value: str | bytes | BaseException | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +67,7 @@ class ProcessModelExecutionBackend:
                     )
                     raise ModelExecutionTimeout(timeout_phase, timeout_seconds)
                 if item.kind == "line":
-                    if not isinstance(item.value, str):
+                    if not isinstance(item.value, (str, bytes)):
                         raise ModelExecutionProtocolError(
                             "Model worker emitted a non-text line."
                         )
@@ -115,15 +115,12 @@ class ProcessModelExecutionBackend:
     def _start_worker(
         self,
         payload: str,
-    ) -> tuple[subprocess.Popen[str], Queue[_WorkerItem]]:
+    ) -> tuple[subprocess.Popen[bytes], Queue[_WorkerItem]]:
         process = subprocess.Popen(
             [self.python_executable, "-m", self.module],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             env=self._child_env(),
         )
         queue: Queue[_WorkerItem] = Queue()
@@ -161,15 +158,17 @@ class ProcessModelExecutionBackend:
             src_root if not existing else f"{src_root}{os.pathsep}{existing}"
         )
         env.update(self.extra_env)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
         return env
 
 
 def _worker_io_loop(
-    process: subprocess.Popen[str],
+    process: subprocess.Popen[bytes],
     payload: str,
     queue: Queue[_WorkerItem],
 ) -> None:
-    stderr_buffer: list[str] = []
+    stderr_buffer: list[bytes] = []
     stderr_thread = threading.Thread(
         target=_drain_stderr,
         args=(process, stderr_buffer),
@@ -180,8 +179,8 @@ def _worker_io_loop(
         if process.stdin is None or process.stdout is None:
             queue.put(_WorkerItem("error", RuntimeError("worker pipes unavailable")))
             return
-        process.stdin.write(payload)
-        process.stdin.write("\n")
+        process.stdin.write(payload.encode("utf-8"))
+        process.stdin.write(b"\n")
         process.stdin.flush()
         process.stdin.close()
         for line in process.stdout:
@@ -201,15 +200,15 @@ def _worker_io_loop(
 
 
 def _drain_stderr(
-    process: subprocess.Popen[str],
-    stderr_buffer: list[str],
+    process: subprocess.Popen[bytes],
+    stderr_buffer: list[bytes],
 ) -> None:
     stderr = process.stderr
     if stderr is None:
         return
-    for chunk in iter(lambda: stderr.read(1024), ""):
+    for chunk in iter(lambda: stderr.read(1024), b""):
         stderr_buffer.append(chunk)
-        joined = "".join(stderr_buffer)
+        joined = b"".join(stderr_buffer)
         if len(joined) > _STDERR_LIMIT:
             stderr_buffer[:] = [joined[-_STDERR_LIMIT:]]
 
@@ -225,7 +224,7 @@ def _queue_get(
 
 
 def _terminate_child(
-    process: subprocess.Popen[str],
+    process: subprocess.Popen[bytes],
     shutdown_grace_seconds: float,
 ) -> None:
     if process.poll() is not None:
@@ -239,8 +238,8 @@ def _terminate_child(
         process.wait()
 
 
-def _child_exit_message(return_code: int, stderr_buffer: list[str]) -> str:
-    stderr = "".join(stderr_buffer).strip()
+def _child_exit_message(return_code: int, stderr_buffer: list[bytes]) -> str:
+    stderr = b"".join(stderr_buffer).decode("utf-8", errors="replace").strip()
     if stderr:
         return f"Model worker exited with code {return_code}: {stderr[-1000:]}"
     return f"Model worker exited with code {return_code}."

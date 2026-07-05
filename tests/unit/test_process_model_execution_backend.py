@@ -39,6 +39,59 @@ async def test_process_model_execution_backend_streams_worker_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_process_model_execution_backend_preserves_utf8_jsonl_text(
+    tmp_path: Path,
+) -> None:
+    module = _write_helper(
+        tmp_path,
+        "\n".join(
+            [
+                "import json, sys",
+                "payload = json.loads(sys.stdin.readline())",
+                'content = payload["request"]["messages"][0]["content"]',
+                'if content != "用户输入中文":',
+                "    print(",
+                '        "bad request content: " + ascii(content),',
+                "        file=sys.stderr,",
+                "        flush=True,",
+                "    )",
+                "    raise SystemExit(3)",
+                "print(",
+                "    json.dumps(",
+                '        {"type": "text.delta", "text": "中文回复"},',
+                "        ensure_ascii=False,",
+                "    ),",
+                "    flush=True,",
+                ")",
+                "print(json.dumps({",
+                '    "type": "turn.completed",',
+                '    "turn": {',
+                '        "assistant": {',
+                '            "role": "assistant",',
+                '            "content": "中文回复",',
+                '            "tool_calls": [],',
+                "        },",
+                '        "stop_reason": "completed",',
+                '        "model": payload["model"],',
+                '        "provider": payload["provider"],',
+                "    },",
+                "}, ensure_ascii=False), flush=True)",
+            ]
+        ),
+    )
+    backend = _backend_for_module(module, tmp_path)
+
+    events = await _collect(
+        backend.stream(_request("用户输入中文"), context=_context())
+    )
+
+    assert isinstance(events[0], TextDelta)
+    assert events[0].text == "中文回复"
+    assert isinstance(events[-1], TurnCompleted)
+    assert events[-1].turn.assistant.content == "中文回复"
+
+
+@pytest.mark.asyncio
 async def test_process_model_execution_backend_times_out_before_first_event(
     tmp_path: Path,
 ) -> None:
@@ -108,8 +161,8 @@ async def _collect(stream: AsyncIterator[ModelStreamEvent]) -> list[ModelStreamE
     return [event async for event in stream]
 
 
-def _request() -> ModelRequest:
-    return ModelRequest(messages=[UserMessage(content="hello")])
+def _request(content: str = "hello") -> ModelRequest:
+    return ModelRequest(messages=[UserMessage(content=content)])
 
 
 def _context() -> ModelExecutionContext:

@@ -690,6 +690,7 @@ class AwesomeAgentTui(App[None]):
                     stream_event.payload.get("changed_files")
                 )
         elif stream_event.event is ConversationStreamEventKind.TURN_COMPLETED:
+            self.state = self.state.note_run_terminal(run_id)
             if stream_event.payload.get("status") == "cancelled":
                 self.state = self.state.append(
                     ChatMessage.system(
