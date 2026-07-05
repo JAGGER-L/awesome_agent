@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import signal
+import sys
 from collections.abc import Callable
 from datetime import timedelta
 from types import FrameType
@@ -15,6 +16,8 @@ from awesome_agent.memory.builtin import BuiltinMemoryStore
 from awesome_agent.memory.external import NoopMemoryProvider
 from awesome_agent.memory.policy import MemoryPolicy
 from awesome_agent.memory.service import MemoryService
+from awesome_agent.modeling.execution import ModelExecutionService
+from awesome_agent.modeling.process_backend import ProcessModelExecutionBackend
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.observability.otel import (
     OTelConfig,
@@ -159,6 +162,15 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     cwd_context_service = CwdContextService(
         repository=PostgresCwdContextSnapshotRepository(sessions),
     )
+    model_execution_service = ModelExecutionService(
+        ProcessModelExecutionBackend(
+            python_executable=sys.executable,
+            first_event_timeout_seconds=configured.model_first_event_timeout_seconds,
+            idle_timeout_seconds=configured.model_idle_timeout_seconds,
+            total_timeout_seconds=configured.model_total_timeout_seconds,
+            shutdown_grace_seconds=(configured.model_process_shutdown_grace_seconds),
+        )
+    )
     conversation_tool_registry = build_modifying_registry(sandbox=sandbox)
     register_memory_tools(conversation_tool_registry, memory_service)
     register_attachment_tools(conversation_tool_registry, attachment_service)
@@ -232,6 +244,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     memory_service=memory_service,
                     attachment_service=attachment_service,
                     cwd_context_service=cwd_context_service,
+                    model_execution_service=model_execution_service,
                 )
                 if providers.coding_available
                 else None

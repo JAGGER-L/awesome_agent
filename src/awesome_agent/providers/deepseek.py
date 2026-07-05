@@ -57,14 +57,17 @@ class DeepSeekProvider(StructuredModelProvider):
         base_url: str = "https://api.deepseek.com",
         thinking_enabled: bool = True,
         reasoning_effort: Literal["high", "max"] = "high",
+        timeout_seconds: float = 60.0,
         client: AsyncOpenAI | None = None,
     ) -> None:
         self._model = model
         self._thinking_enabled = thinking_enabled
         self._reasoning_effort = reasoning_effort
+        self._timeout_seconds = timeout_seconds
         self._client = client or AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
+            timeout=timeout_seconds,
         )
 
     async def stream(
@@ -90,6 +93,7 @@ class DeepSeekProvider(StructuredModelProvider):
                         "type": ("enabled" if thinking_enabled else "disabled")
                     }
                 },
+                timeout=self._timeout_seconds,
                 stream=True,
                 stream_options={"include_usage": True},
             )

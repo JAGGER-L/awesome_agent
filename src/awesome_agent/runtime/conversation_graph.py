@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
-from contextlib import suppress
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -23,6 +21,12 @@ from awesome_agent.extensions.models import ExtensionCatalog
 from awesome_agent.extensions.skills import SkillRuntimeView
 from awesome_agent.memory.service import MemoryService
 from awesome_agent.modeling.catalog import DEEPSEEK_PROVIDER_ID
+from awesome_agent.modeling.execution import (
+    InProcessModelExecutionBackend,
+    ModelExecutionContext,
+    ModelExecutionService,
+    ModelExecutionTimeout,
+)
 from awesome_agent.modeling.messages import (
     AssistantMessage,
     ModelMessage,
@@ -32,7 +36,6 @@ from awesome_agent.modeling.messages import (
 )
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.modeling.stream import (
-    ModelStreamEvent,
     TextDelta,
     TurnCompleted,
     TurnFailed,
@@ -44,6 +47,7 @@ from awesome_agent.runtime.agent_loop.skill_context_middleware import (
     SkillContextMiddleware,
 )
 from awesome_agent.runtime.cwd_context import CwdContextService
+from awesome_agent.runtime.dispatch import PermanentExecutionError
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
 from awesome_agent.safety.redaction import redact_model_messages, redact_value
@@ -74,7 +78,7 @@ class ConversationGraph:
         memory_service: MemoryService | None = None,
         attachment_service: AttachmentService | None = None,
         cwd_context_service: CwdContextService | None = None,
-        model_first_event_timeout_seconds: float = 60.0,
+        model_execution_service: ModelExecutionService | None = None,
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
@@ -90,7 +94,9 @@ class ConversationGraph:
         self.memory_service = memory_service
         self.attachment_service = attachment_service
         self.cwd_context_service = cwd_context_service
-        self.model_first_event_timeout_seconds = model_first_event_timeout_seconds
+        self.model_execution_service = model_execution_service or ModelExecutionService(
+            InProcessModelExecutionBackend(provider_factory)
+        )
 
     async def execute(self, run: Run, leader: Agent) -> ConversationGraphState:
         created = await self._run_created_payload(run)
@@ -375,7 +381,6 @@ class ConversationGraph:
         skill_runtime_view: SkillRuntimeView | None,
         turn_options: dict[str, object],
     ) -> ConversationGraphState:
-        provider = self.provider_factory(selected_model)
         model_messages = redact_model_messages(list(messages))
         tool_names = await self._tool_names_for_turn(run, turn_options)
         tools = (
@@ -429,9 +434,15 @@ class ConversationGraph:
                 turn=_round + 1,
             )
             try:
-                async for event in _stream_with_first_event_timeout(
-                    provider.stream(request),
-                    timeout_seconds=self.model_first_event_timeout_seconds,
+                context = ModelExecutionContext(
+                    run_id=str(run.id),
+                    thread_id=str(run.graph_thread_id or run.id),
+                    model=selected_model,
+                    provider=selected_provider,
+                )
+                async for event in self.model_execution_service.stream(
+                    request,
+                    context=context,
                 ):
                     if isinstance(event, TextDelta):
                         final_text += event.text
@@ -445,18 +456,20 @@ class ConversationGraph:
                         raise RuntimeError(event.error.message)
                     elif isinstance(event, TurnCompleted):
                         completed = event.turn
-            except TimeoutError as error:
+            except ModelExecutionTimeout as error:
                 await self._append_model_phase_event(
                     run=run,
                     leader=leader,
                     selected_provider=selected_provider,
                     selected_model=selected_model,
                     status="failed",
-                    phase="first_event_timeout",
+                    phase=f"{error.phase}_timeout",
                     turn=_round + 1,
                     error=str(error),
                 )
-                raise
+                raise PermanentExecutionError(
+                    f"model_execution_{error.phase}_timeout: {error}"
+                ) from error
             except Exception as error:
                 await self._append_model_phase_event(
                     run=run,
@@ -804,36 +817,6 @@ def _product_identity_prompt(
 def _prompt_metadata_value(value: str) -> str:
     normalized = " ".join(value.split())
     return normalized or "unknown"
-
-
-async def _stream_with_first_event_timeout(
-    stream: AsyncIterator[ModelStreamEvent],
-    *,
-    timeout_seconds: float,
-) -> AsyncIterator[ModelStreamEvent]:
-    iterator = stream.__aiter__()
-    try:
-        try:
-            first = await asyncio.wait_for(anext(iterator), timeout=timeout_seconds)
-        except StopAsyncIteration:
-            return
-        except TimeoutError as error:
-            close = getattr(iterator, "aclose", None)
-            if callable(close):
-                with suppress(Exception):
-                    await close()
-            raise TimeoutError(
-                f"Model stream did not emit a first event within "
-                f"{timeout_seconds:g} seconds."
-            ) from error
-        yield first
-        async for event in iterator:
-            yield event
-    finally:
-        close = getattr(iterator, "aclose", None)
-        if callable(close):
-            with suppress(Exception):
-                await close()
 
 
 def _optional_uuid(value: object) -> UUID | None:

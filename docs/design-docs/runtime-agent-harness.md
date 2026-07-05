@@ -52,6 +52,9 @@ load user task and project policy
   writes.
 - User message turn -> conversation Run -> initial Leader Agent -> dispatcher
   -> Worker -> ConversationGraph -> Leader AgentLoop.
+- Runtime Workers do not directly await provider SDK streams for conversation
+  turns. Model provider I/O runs behind a parent-owned model execution boundary
+  with first-event, idle, total, and cancellation deadlines.
 - Surfaces do not create explicit product Runs and surfaces do not execute
   graphs.
 - Trusted local user message turns execute against the thread context path,
@@ -228,6 +231,13 @@ Production Worker graph construction injects route-aware provider resolvers for
 `solo-readonly`, `solo-modifying`, `team-coding-scoped`, `team-coding`,
 `team-role`, and `team-verifier`. Graphs still receive a provider-resolver
 boundary and do not own provider ordering or fallback policy.
+
+Conversation-turn model calls use `ModelExecutionService`. In production local
+and API Worker paths, the service uses a killable subprocess backend so a
+provider stream that hangs before the first event or stalls mid-stream cannot
+block Worker heartbeats, cancellation, or Run terminalization. The subprocess
+emits provider-neutral model stream events over JSONL and never owns Run state,
+tool execution, repository writes, or runtime event persistence.
 
 ## Runtime Documentation Discipline
 

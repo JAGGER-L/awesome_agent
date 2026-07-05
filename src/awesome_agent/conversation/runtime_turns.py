@@ -183,7 +183,17 @@ def project_runtime_event(
                     payload={"status": status},
                 )
             ]
-        if status in {"failed", "cancelled", "recovery_required"}:
+        if status == "cancelled":
+            return [
+                _conversation_event(
+                    ConversationStreamEventKind.TURN_COMPLETED,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    event=event,
+                    payload={"status": status},
+                )
+            ]
+        if status in {"failed", "recovery_required"}:
             return [
                 _conversation_event(
                     ConversationStreamEventKind.ERROR,

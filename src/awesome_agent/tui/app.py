@@ -689,6 +689,14 @@ class AwesomeAgentTui(App[None]):
                 self.state = self.state.with_latest_assistant_changed_files(
                     stream_event.payload.get("changed_files")
                 )
+        elif stream_event.event is ConversationStreamEventKind.TURN_COMPLETED:
+            if stream_event.payload.get("status") == "cancelled":
+                self.state = self.state.append(
+                    ChatMessage.system(
+                        "Response cancelled.",
+                        kind=ChatEventKind.RUN,
+                    )
+                )
         elif stream_event.event is ConversationStreamEventKind.ERROR:
             if stream_event.payload.get("approval_required") is True:
                 prompt = _approval_prompt_from_payload(stream_event.payload)

@@ -264,3 +264,31 @@ async def test_deepseek_uses_per_request_thinking_override() -> None:
     assert first.kwargs["reasoning_effort"] == "high"
     assert second.kwargs["extra_body"]["thinking"]["type"] == "enabled"
     assert second.kwargs["reasoning_effort"] == "max"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_stream_passes_explicit_timeout() -> None:
+    create = AsyncMock(
+        return_value=AsyncEvents([_chunk(content="done", finish_reason="stop")])
+    )
+    client = cast(
+        AsyncOpenAI,
+        cast(
+            Any,
+            SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+            ),
+        ),
+    )
+    provider = DeepSeekProvider(
+        api_key="test",
+        model="test",
+        timeout_seconds=7.5,
+        client=client,
+    )
+
+    await provider.complete(ModelRequest(messages=[UserMessage(content="hello")]))
+
+    call = create.await_args
+    assert call is not None
+    assert call.kwargs["timeout"] == 7.5

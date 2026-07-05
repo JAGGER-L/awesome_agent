@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -26,6 +27,11 @@ from awesome_agent.memory.builtin import BuiltinMemoryStore
 from awesome_agent.memory.external import NoopMemoryProvider
 from awesome_agent.memory.policy import MemoryPolicy
 from awesome_agent.memory.service import MemoryService
+from awesome_agent.modeling.execution import (
+    InProcessModelExecutionBackend,
+    ModelExecutionService,
+)
+from awesome_agent.modeling.process_backend import ProcessModelExecutionBackend
 from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.persistence.budget import InMemoryBudgetRepository
 from awesome_agent.persistence.local_approvals import LocalApprovalRepository
@@ -99,6 +105,23 @@ class LocalRuntimeContainer:
         self.extension_catalog_error = self.extension_runtime.error
 
         factory = provider_factory or ModelProviderFactory(settings).create
+        model_execution_service = (
+            ModelExecutionService(InProcessModelExecutionBackend(factory))
+            if provider_factory is not None
+            else ModelExecutionService(
+                ProcessModelExecutionBackend(
+                    python_executable=sys.executable,
+                    first_event_timeout_seconds=(
+                        settings.model_first_event_timeout_seconds
+                    ),
+                    idle_timeout_seconds=settings.model_idle_timeout_seconds,
+                    total_timeout_seconds=settings.model_total_timeout_seconds,
+                    shutdown_grace_seconds=(
+                        settings.model_process_shutdown_grace_seconds
+                    ),
+                )
+            )
+        )
         sandbox = create_sandbox(
             origin=ExecutionOrigin.CLI,
             settings=settings,
@@ -149,9 +172,7 @@ class LocalRuntimeContainer:
             memory_service=self.memory_service,
             attachment_service=self.attachment_service,
             cwd_context_service=self.cwd_context_service,
-            model_first_event_timeout_seconds=(
-                settings.model_first_event_timeout_seconds
-            ),
+            model_execution_service=model_execution_service,
         )
         self.conversation_service = ConversationService(
             repository=self.conversations,

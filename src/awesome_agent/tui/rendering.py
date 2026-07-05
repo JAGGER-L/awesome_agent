@@ -43,7 +43,11 @@ def render_message(
     if message.kind is ChatEventKind.RUN:
         return _labeled("run", message.content, label_style="blue")
     if message.kind is ChatEventKind.TOOL:
-        return _labeled("tool", message.content, label_style="magenta")
+        return _labeled(
+            "tool",
+            message.content,
+            label_style=_tool_label_style(message.content),
+        )
     if message.kind is ChatEventKind.ARTIFACT:
         return _labeled("artifact", message.content, label_style="green")
     if message.kind is ChatEventKind.APPROVAL:
@@ -116,13 +120,25 @@ def render_thought(thought: ThoughtBlock) -> Text:
 
 
 def render_tool_event(event: ToolDisplayEvent, *, details_enabled: bool) -> Text:
-    rendered = Text.assemble(("Tool - ", "magenta"), (event.name, "bold"))
+    label_style = _tool_label_style(event.summary)
+    rendered = Text.assemble(("Tool - ", label_style), (event.name, "bold"))
     if event.summary:
         rendered.append(f"\n  {event.summary}")
     if details_enabled:
         for key, value in event.details.items():
             rendered.append(f"\n  {key}: {_bounded(str(value))}", style="dim")
     return rendered
+
+
+def _tool_label_style(summary: str) -> str:
+    normalized = summary.strip().lower()
+    if any(value in normalized for value in ("failed", "error", "cancelled")):
+        return "red"
+    if any(
+        value in normalized for value in ("completed", "success", "succeeded", "done")
+    ):
+        return "green"
+    return "magenta"
 
 
 def render_team_event(event: TeamDisplayEvent, *, details_enabled: bool) -> Text:
