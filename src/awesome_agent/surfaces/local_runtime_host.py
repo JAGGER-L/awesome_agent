@@ -30,6 +30,8 @@ from awesome_agent.persistence.approval_contracts import (
     ApprovalExpired,
     DurableApproval,
 )
+from awesome_agent.persistence.local_dispatch import LocalRunDispatcher
+from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.runtime.dispatch import DispatchConflict
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.capabilities import CapabilitySurfaceService
@@ -71,6 +73,11 @@ class LocalRuntimeHost:
         self.tool_registry = self._container.tool_registry
         self.tool_executor = self._container.tool_executor
         self._conversation = self._container.conversation_service
+        _run_async(
+            self._container.dispatcher.recover_expired(
+                max_attempts=self._container.worker.config.max_attempts
+            )
+        )
 
     def close(self) -> None:
         self._container.close()
@@ -854,6 +861,17 @@ class LocalRuntimeHost:
             "project_env_path": str(project_env),
             "project_env_exists": project_env.exists(),
         }
+
+
+def reconcile_local_runtime_state(settings: Settings) -> int:
+    runtime = LocalRuntimeRepository(settings.local_state_dir / "awesome-agent.db")
+    dispatcher = LocalRunDispatcher(runtime)
+    try:
+        return _run_async(
+            dispatcher.recover_expired(max_attempts=settings.max_claim_attempts)
+        )
+    finally:
+        runtime.close()
 
 
 def _optional_str(value: object) -> str | None:

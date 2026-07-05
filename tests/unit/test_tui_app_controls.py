@@ -195,6 +195,29 @@ def test_tui_cancel_active_run_keeps_stream_worker_for_terminal_event() -> None:
     )
 
 
+def test_tui_cancel_active_run_is_idempotent_while_cancelling() -> None:
+    client = FakeSurfaceClient()
+    app = _app(client)
+    app.state = (
+        app.state.with_backend_thread("thread-1")
+        .begin_operation("op-1", "streaming")
+        .with_run("run-1")
+    )
+
+    app.action_cancel()
+    app.action_cancel()
+
+    assert client.cancelled == [("run-1", "thread-1")]
+    messages = [
+        message.content
+        for message in app.state.messages
+        if message.kind is ChatEventKind.RUN
+    ]
+    assert messages == [
+        "Cancellation requested. Waiting for the runtime to stop safely."
+    ]
+
+
 def test_tui_continue_failure_is_not_retryable_as_user_message() -> None:
     client = FakeSurfaceClient()
     app = _app(client)

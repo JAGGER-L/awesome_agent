@@ -149,6 +149,9 @@ class LocalRuntimeContainer:
             memory_service=self.memory_service,
             attachment_service=self.attachment_service,
             cwd_context_service=self.cwd_context_service,
+            model_first_event_timeout_seconds=(
+                settings.model_first_event_timeout_seconds
+            ),
         )
         self.conversation_service = ConversationService(
             repository=self.conversations,
