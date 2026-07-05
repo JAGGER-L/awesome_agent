@@ -223,6 +223,30 @@ def test_tool_call_renders_collapsed_by_default() -> None:
     assert "stdout:" not in rendered
 
 
+def test_completed_tool_call_uses_green_label() -> None:
+    event = ToolDisplayEvent(
+        name="repo.status",
+        summary="completed",
+    )
+
+    rendered = render_tool_event(event, details_enabled=False)
+
+    assert rendered.plain.startswith("Tool - repo.status")
+    assert rendered.spans[0].style == "green"
+
+
+def test_failed_tool_call_uses_red_label() -> None:
+    event = ToolDisplayEvent(
+        name="repo.status",
+        summary="failed",
+    )
+
+    rendered = render_tool_event(event, details_enabled=False)
+
+    assert rendered.plain.startswith("Tool - repo.status")
+    assert rendered.spans[0].style == "red"
+
+
 def test_tool_call_details_are_bounded_and_redacted() -> None:
     event = ToolDisplayEvent(
         name="run_command",

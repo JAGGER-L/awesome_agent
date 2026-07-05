@@ -3,6 +3,8 @@ from uuid import UUID
 
 import pytest
 
+from awesome_agent.conversation.events import ConversationStreamEventKind
+from awesome_agent.conversation.runtime_turns import project_runtime_event
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import (
     AgentKind,
@@ -13,7 +15,7 @@ from awesome_agent.domain.enums import (
     RunIntent,
     RunStatus,
 )
-from awesome_agent.domain.models import Agent, Run
+from awesome_agent.domain.models import Agent, Run, RuntimeEvent
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.graphs import CONVERSATION_TURN_ROUTE
@@ -53,6 +55,32 @@ async def test_start_turn_creates_run_and_projects_runtime_events() -> None:
     assert intake.created == ["hello"]
     assert events[0].event.value == "turn.started"
     assert events[-1].event.value == "turn.completed"
+
+
+def test_cancelled_run_status_projects_as_turn_completed() -> None:
+    thread_id = UUID("00000000-0000-0000-0000-000000000001")
+    turn_id = UUID("00000000-0000-0000-0000-000000000002")
+    run_id = UUID("00000000-0000-0000-0000-000000000003")
+    event = next(
+        iter(
+            project_runtime_event(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                event=RuntimeEvent(
+                    run_id=run_id,
+                    sequence=1,
+                    event_type=EventType.RUN_STATUS_CHANGED,
+                    payload={
+                        "status": RunStatus.CANCELLED.value,
+                        "dispatch_status": DispatchStatus.TERMINAL.value,
+                    },
+                ),
+            )
+        )
+    )
+
+    assert event.event is ConversationStreamEventKind.TURN_COMPLETED
+    assert event.payload == {"status": "cancelled"}
 
 
 class FakeConversationRunIntake:

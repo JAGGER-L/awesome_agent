@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -136,6 +137,24 @@ class PatchToolProvider(StructuredModelProvider):
         )
 
 
+class BlockingBeforeFirstEventProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        self.started.set()
+        self.release.wait(timeout=5)
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="late"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        )
+
+
 @pytest.mark.parametrize("content", ["hi", "What can you do?"])
 def test_local_runtime_host_streams_leader_turn(
     tmp_path: Path,
@@ -255,6 +274,49 @@ def test_local_runtime_host_stream_turn_returns_error_after_retry_exhaustion(
     runtime_event_types = [event.event_type for event in runtime_events]
     assert EventType.RUN_STATUS_CHANGED in runtime_event_types
     assert EventType.DISPATCH_RECOVERY_REQUIRED in runtime_event_types
+
+
+def test_local_runtime_host_cancel_terminalizes_when_provider_blocks_loop(
+    tmp_path: Path,
+) -> None:
+    provider = BlockingBeforeFirstEventProvider()
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+    )
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
+    iterator = iter(host.stream_turn(thread.id, "hi"))
+    started = next(iterator)
+    next(iterator)
+    run_id = str(started.payload["run_id"])
+    assert provider.started.wait(timeout=1)
+
+    host.cancel(run_id)
+
+    events: list[ConversationStreamEventKind] = []
+    errors: list[BaseException] = []
+
+    def collect_remaining() -> None:
+        try:
+            events.extend(event.event for event in iterator)
+        except BaseException as error:
+            errors.append(error)
+
+    collector = threading.Thread(target=collect_remaining, daemon=True)
+    collector.start()
+    collector.join(timeout=1)
+    finished_before_provider_release = not collector.is_alive()
+    provider.release.set()
+    if collector.is_alive():
+        collector.join(timeout=2)
+    stored = asyncio.run(host.runtime_repository.get_run(UUID(run_id)))
+    host.close()
+
+    assert finished_before_provider_release
+    assert errors == []
+    assert events[-1] is ConversationStreamEventKind.TURN_COMPLETED
+    assert stored.status is RunStatus.CANCELLED
 
 
 def test_local_runtime_host_rejects_conversation_repository_injection(

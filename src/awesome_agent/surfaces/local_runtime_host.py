@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from typing import cast
 from uuid import UUID
@@ -73,6 +72,7 @@ class LocalRuntimeHost:
         self.tool_registry = self._container.tool_registry
         self.tool_executor = self._container.tool_executor
         self._conversation = self._container.conversation_service
+        self._background_tasks: list[_BackgroundAsyncTask] = []
         _run_async(
             self._container.dispatcher.recover_expired(
                 max_attempts=self._container.worker.config.max_attempts
@@ -80,6 +80,10 @@ class LocalRuntimeHost:
         )
 
     def close(self) -> None:
+        for task in list(self._background_tasks):
+            task.join(timeout=2)
+        if any(task.running for task in self._background_tasks):
+            return
         self._container.close()
 
     def create_thread(self, title: str, **kwargs: object) -> SurfaceThread:
@@ -389,25 +393,21 @@ class LocalRuntimeHost:
         run_id: UUID,
         after_sequence: int,
     ) -> AsyncIterator[ConversationStreamEvent]:
-        pump = asyncio.create_task(
+        pump = _BackgroundAsyncTask(
             self._container.worker_pump.drain_until_run_terminal_or_waiting(str(run_id))
         )
-        try:
-            async for projected in self._stream_existing_run_events(
-                thread_id=thread_id,
-                turn_id=turn_id,
-                trace_id=trace_id,
-                run_id=run_id,
-                after_sequence=after_sequence,
-            ):
-                yield projected
-            await pump
-        except BaseException:
-            if not pump.done():
-                pump.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await pump
-            raise
+        self._background_tasks.append(pump)
+        async for projected in self._stream_existing_run_events(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            trace_id=trace_id,
+            run_id=run_id,
+            after_sequence=after_sequence,
+            pump=pump,
+        ):
+            yield projected
+        if pump.done:
+            pump.result()
 
     async def _stream_existing_run_events(
         self,
@@ -417,8 +417,10 @@ class LocalRuntimeHost:
         trace_id: str,
         run_id: UUID,
         after_sequence: int,
+        pump: _BackgroundAsyncTask | None = None,
     ) -> AsyncIterator[ConversationStreamEvent]:
         last_sequence = after_sequence
+        terminal_status_seen_at: datetime | None = None
         while True:
             runtime_events = await self.runtime_repository.list_events(
                 run_id,
@@ -442,18 +444,94 @@ class LocalRuntimeHost:
                 run = await self.runtime_repository.get_run(run_id)
             except KeyError:
                 return
+            if _should_force_local_cancel(run):
+                await self._force_local_cancel(run)
+                continue
+            if pump is not None and pump.done:
+                try:
+                    pump.result()
+                except Exception as error:
+                    await self._force_local_recovery_required(run, str(error))
+                    continue
             if run.status in {
                 RunStatus.COMPLETED,
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
                 RunStatus.RECOVERY_REQUIRED,
             }:
+                terminal_status_seen_at = terminal_status_seen_at or datetime.now(UTC)
+                terminal_event_pending = (
+                    datetime.now(UTC) - terminal_status_seen_at
+                    < _LOCAL_TERMINAL_EVENT_GRACE
+                )
+                if terminal_event_pending:
+                    await asyncio.sleep(
+                        min(max(self.settings.event_poll_interval_seconds, 0.001), 0.01)
+                    )
+                    continue
                 return
             if run.dispatch_status is DispatchStatus.WAITING:
                 return
             await asyncio.sleep(
                 min(max(self.settings.event_poll_interval_seconds, 0.001), 0.01)
             )
+
+    async def _force_local_cancel(self, run: Run) -> None:
+        if run.status in {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.RECOVERY_REQUIRED,
+        }:
+            return
+        reason = run.cancel_reason or "cancel_requested"
+        updated = _clear_local_run_lease(
+            run.model_copy(
+                update={
+                    "status": RunStatus.CANCELLED,
+                    "dispatch_status": DispatchStatus.TERMINAL,
+                    "cancel_reason": reason,
+                }
+            )
+        )
+        await self.runtime_repository.update_run(updated)
+        await self.runtime_repository.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_STATUS_CHANGED,
+            payload={
+                "status": updated.status.value,
+                "dispatch_status": updated.dispatch_status.value,
+                "reason": reason,
+            },
+        )
+
+    async def _force_local_recovery_required(self, run: Run, reason: str) -> None:
+        if run.status in {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.RECOVERY_REQUIRED,
+        }:
+            return
+        updated = _clear_local_run_lease(
+            run.model_copy(
+                update={
+                    "status": RunStatus.RECOVERY_REQUIRED,
+                    "dispatch_status": DispatchStatus.TERMINAL,
+                    "last_dispatch_error": reason,
+                }
+            )
+        )
+        await self.runtime_repository.update_run(updated)
+        await self.runtime_repository.append_event(
+            run_id=run.id,
+            event_type=EventType.RUN_STATUS_CHANGED,
+            payload={
+                "status": updated.status.value,
+                "dispatch_status": updated.dispatch_status.value,
+                "error": reason,
+            },
+        )
 
     async def _project_current_run_events(
         self,
@@ -950,6 +1028,86 @@ def _latest_changed_files(
 
 def _int_usage(value: object) -> int:
     return value if isinstance(value, int) else 0
+
+
+_LOCAL_CANCEL_TERMINALIZATION_GRACE = timedelta(seconds=0.25)
+_LOCAL_TERMINAL_EVENT_GRACE = timedelta(seconds=0.5)
+_PENDING_BACKGROUND_RESULT = object()
+
+
+class _BackgroundAsyncTask:
+    def __init__(self, awaitable: Awaitable[object]) -> None:
+        self._queue: Queue[object] = Queue(maxsize=1)
+        self._result: object = _PENDING_BACKGROUND_RESULT
+
+        async def collect() -> object:
+            return await awaitable
+
+        def runner() -> None:
+            try:
+                self._queue.put(asyncio.run(collect()))
+            except BaseException as error:
+                self._queue.put(error)
+
+        self._thread = Thread(target=runner, daemon=True)
+        self._thread.start()
+
+    @property
+    def done(self) -> bool:
+        self._poll()
+        return self._result is not _PENDING_BACKGROUND_RESULT
+
+    def result(self) -> object:
+        self._poll()
+        if self._result is _PENDING_BACKGROUND_RESULT:
+            raise RuntimeError("Background task has not completed.")
+        if isinstance(self._result, BaseException):
+            raise self._result
+        return self._result
+
+    def join(self, *, timeout: float) -> None:
+        self._thread.join(timeout=timeout)
+        self._poll()
+
+    @property
+    def running(self) -> bool:
+        return self._thread.is_alive()
+
+    def _poll(self) -> None:
+        if self._result is not _PENDING_BACKGROUND_RESULT:
+            return
+        try:
+            self._result = self._queue.get_nowait()
+        except Empty:
+            return
+
+
+def _should_force_local_cancel(run: Run) -> bool:
+    if run.cancel_requested_at is None:
+        return False
+    if run.status in {
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+        RunStatus.RECOVERY_REQUIRED,
+    }:
+        return False
+    requested_at = run.cancel_requested_at
+    if requested_at.tzinfo is None:
+        requested_at = requested_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) - requested_at >= _LOCAL_CANCEL_TERMINALIZATION_GRACE
+
+
+def _clear_local_run_lease(run: Run) -> Run:
+    return run.model_copy(
+        update={
+            "current_worker_id": None,
+            "current_worker_name": None,
+            "lease_acquired_at": None,
+            "lease_expires_at": None,
+            "heartbeat_at": None,
+        }
+    )
 
 
 def _run_async[T](awaitable: Awaitable[T]) -> T:

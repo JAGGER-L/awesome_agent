@@ -116,13 +116,23 @@ def render_thought(thought: ThoughtBlock) -> Text:
 
 
 def render_tool_event(event: ToolDisplayEvent, *, details_enabled: bool) -> Text:
-    rendered = Text.assemble(("Tool - ", "magenta"), (event.name, "bold"))
+    label_style = _tool_label_style(event.summary)
+    rendered = Text.assemble(("Tool - ", label_style), (event.name, "bold"))
     if event.summary:
         rendered.append(f"\n  {event.summary}")
     if details_enabled:
         for key, value in event.details.items():
             rendered.append(f"\n  {key}: {_bounded(str(value))}", style="dim")
     return rendered
+
+
+def _tool_label_style(summary: str) -> str:
+    normalized = summary.strip().lower()
+    if normalized in {"completed", "success", "succeeded", "done"}:
+        return "green"
+    if normalized in {"failed", "error", "cancelled"}:
+        return "red"
+    return "magenta"
 
 
 def render_team_event(event: TeamDisplayEvent, *, details_enabled: bool) -> Text:

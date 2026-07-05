@@ -282,6 +282,30 @@ def test_tui_continue_worker_uses_last_runtime_sequence() -> None:
     assert client.continued == [("thread-1", "run-1", 12)]
 
 
+def test_tui_cancelled_turn_completed_is_not_error() -> None:
+    app = _app(FakeSurfaceClient())
+    app.state = app.state.begin_operation("op-1", "streaming")
+
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.TURN_COMPLETED,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=3,
+            trace_id="trace",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=10,
+            payload={"status": "cancelled"},
+        )
+    )
+    app._finish_stream_worker("", failed=False)
+
+    assert app.state.active_operation_id is None
+    assert app.state.status_label == "ready"
+    assert app.state.messages[-1].kind is ChatEventKind.RUN
+    assert app.state.messages[-1].content == "Response cancelled."
+
+
 def _app(client: FakeSurfaceClient) -> AwesomeAgentTui:
     app = AwesomeAgentTui(client=client)  # type: ignore[arg-type]
     app._render = lambda *args, **kwargs: None  # type: ignore[method-assign]

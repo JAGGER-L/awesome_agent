@@ -45,6 +45,7 @@ class ModelProviderFactory:
             base_url=DEEPSEEK_OFFICIAL_BASE_URL,
             thinking_enabled=self.settings.deepseek_thinking_enabled,
             reasoning_effort=self.settings.deepseek_reasoning_effort,
+            timeout_seconds=self.settings.model_first_event_timeout_seconds,
         )
 
     def create_candidate(self, candidate: ModelRouteCandidate) -> ModelProvider:
