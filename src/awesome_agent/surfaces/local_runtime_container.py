@@ -12,16 +12,8 @@ from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.service import ConversationService
 from awesome_agent.domain.enums import ExecutionOrigin
 from awesome_agent.domain.models import Run
+from awesome_agent.extensions.assembly import assemble_runtime_tools
 from awesome_agent.extensions.catalog_store import LocalExtensionCatalogStore
-from awesome_agent.extensions.mcp import (
-    register_mcp_stdio_tools,
-    register_mcp_streamable_http_tools,
-)
-from awesome_agent.extensions.models import (
-    ExtensionCatalog,
-    ExtensionSourceConfig,
-    ExtensionSourceType,
-)
 from awesome_agent.extensions.runtime_catalog import build_startup_extension_runtime
 from awesome_agent.memory.builtin import BuiltinMemoryStore
 from awesome_agent.memory.external import NoopMemoryProvider
@@ -50,17 +42,8 @@ from awesome_agent.runtime.dispatch import IncompatibleGraphError
 from awesome_agent.runtime.events import EventStream
 from awesome_agent.runtime.probe_graph import RuntimeProbeState
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
-from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
 from awesome_agent.surfaces.local_worker_pump import LocalWorkerPump
-from awesome_agent.tools.attachments import register_attachment_tools
-from awesome_agent.tools.memory import register_memory_tools
-from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
-from awesome_agent.tools.registry import ProgressCallback, ToolRegistry
-from awesome_agent.tools.repository import (
-    build_modifying_executor,
-    build_modifying_registry,
-)
 
 
 class _UnsupportedLocalProbeGraph:
@@ -99,10 +82,6 @@ class LocalRuntimeContainer:
         self.extension_runtime = build_startup_extension_runtime(self.project_root)
         self.extension_catalog_store = LocalExtensionCatalogStore(database_path)
         self.extension_catalog_store.put(self.extension_runtime.catalog, active=True)
-        self.extension_source_configs = {
-            source.id: source for source in self.extension_runtime.source_configs
-        }
-        self.extension_catalog_error = self.extension_runtime.error
 
         factory = provider_factory or ModelProviderFactory(settings).create
         model_execution_service = (
@@ -122,11 +101,6 @@ class LocalRuntimeContainer:
                 )
             )
         )
-        sandbox = create_sandbox(
-            origin=ExecutionOrigin.CLI,
-            settings=settings,
-            profile="local-cli",
-        )
         self.memory_service = MemoryService(
             builtin=BuiltinMemoryStore(
                 root=settings.local_state_dir / "memory",
@@ -143,15 +117,19 @@ class LocalRuntimeContainer:
         self.cwd_context_service = CwdContextService(
             repository=self.cwd_context_snapshots,
         )
-        self.tool_registry = build_modifying_registry(sandbox=sandbox)
-        register_memory_tools(self.tool_registry, self.memory_service)
-        register_attachment_tools(self.tool_registry, self.attachment_service)
-        _register_extension_tools(
-            self.tool_registry,
-            source_configs=self.extension_source_configs,
-            catalog=self.extension_runtime.catalog,
+        tool_assembly = assemble_runtime_tools(
+            project_root=self.project_root,
+            settings=settings,
+            origin=ExecutionOrigin.CLI,
+            sandbox_profile="local-cli",
+            memory_service=self.memory_service,
+            attachment_service=self.attachment_service,
+            startup_runtime=self.extension_runtime,
         )
-        self.tool_executor = build_modifying_executor(self.tool_registry)
+        self.tool_registry = tool_assembly.tool_registry
+        self.tool_executor = tool_assembly.tool_executor
+        self.extension_source_configs = tool_assembly.source_configs
+        self.extension_catalog_error = tool_assembly.error
 
         self.conversation_intake = ConversationRunIntakeService(
             conversations=self.conversations,
@@ -213,59 +191,3 @@ class LocalRuntimeContainer:
         self.cwd_context_snapshots.close()
         self.approvals.close()
         self.extension_catalog_store.close()
-
-
-async def _community_tool_not_ready(
-    invocation: ToolInvocation,
-    _: ProgressCallback | None,
-) -> ToolResult:
-    raise ValueError(f"execution_backend_not_ready: {invocation.tool_name}")
-
-
-def _register_extension_tools(
-    registry: ToolRegistry,
-    *,
-    source_configs: dict[str, ExtensionSourceConfig],
-    catalog: ExtensionCatalog,
-) -> None:
-    source_by_id = {source.id: source for source in catalog.sources}
-    for source_id, config in source_configs.items():
-        source = source_by_id.get(source_id)
-        if source is None:
-            continue
-        if config.type is ExtensionSourceType.MCP_STDIO:
-            register_mcp_stdio_tools(
-                registry,
-                config=config,
-                catalog=catalog,
-                exposed_tool_names={
-                    tool.name for tool in catalog.tools if tool.source_id == source_id
-                },
-            )
-        elif config.type is ExtensionSourceType.MCP_STREAMABLE_HTTP:
-            register_mcp_streamable_http_tools(
-                registry,
-                config=config,
-                catalog=catalog,
-                exposed_tool_names={
-                    tool.name for tool in catalog.tools if tool.source_id == source_id
-                },
-            )
-    for tool in catalog.tools:
-        source = source_by_id.get(tool.source_id)
-        if (
-            source is None
-            or source.type is not ExtensionSourceType.COMMUNITY_TOOL_PACKAGE
-        ):
-            continue
-        registry.register(
-            ToolSpec(
-                name=tool.name,
-                description=tool.description,
-                risk_level=tool.risk_level,
-                required_capabilities=set(tool.required_capabilities),
-                sandbox_required=True,
-                input_schema=tool.input_schema,
-            ),
-            _community_tool_not_ready,
-        )

@@ -4,6 +4,7 @@ import signal
 import sys
 from collections.abc import Callable
 from datetime import timedelta
+from pathlib import Path
 from types import FrameType
 from typing import Any
 
@@ -12,6 +13,7 @@ from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.attachments.service import AttachmentService
 from awesome_agent.attachments.store import AttachmentContentStore
 from awesome_agent.domain.enums import ExecutionOrigin
+from awesome_agent.extensions.assembly import assemble_runtime_tools
 from awesome_agent.memory.builtin import BuiltinMemoryStore
 from awesome_agent.memory.external import NoopMemoryProvider
 from awesome_agent.memory.policy import MemoryPolicy
@@ -58,12 +60,6 @@ from awesome_agent.runtime.token_accounting import default_token_accountant
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.sandbox.factory import create_sandbox
 from awesome_agent.settings import Settings
-from awesome_agent.tools.attachments import register_attachment_tools
-from awesome_agent.tools.memory import register_memory_tools
-from awesome_agent.tools.repository import (
-    build_modifying_executor,
-    build_modifying_registry,
-)
 
 
 async def run_worker(*, once: bool = False, settings: Settings | None = None) -> bool:
@@ -171,10 +167,15 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
             shutdown_grace_seconds=(configured.model_process_shutdown_grace_seconds),
         )
     )
-    conversation_tool_registry = build_modifying_registry(sandbox=sandbox)
-    register_memory_tools(conversation_tool_registry, memory_service)
-    register_attachment_tools(conversation_tool_registry, attachment_service)
-    conversation_tool_executor = build_modifying_executor(conversation_tool_registry)
+    tool_assembly = assemble_runtime_tools(
+        project_root=Path.cwd(),
+        settings=configured,
+        origin=ExecutionOrigin.API,
+        memory_service=memory_service,
+        attachment_service=attachment_service,
+    )
+    conversation_tool_registry = tool_assembly.tool_registry
+    conversation_tool_executor = tool_assembly.tool_executor
     context_manager = ContextManager(
         summary_provider=DeterministicSummaryProvider(),
         artifact_store=artifact_store,

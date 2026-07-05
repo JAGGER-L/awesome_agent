@@ -140,6 +140,21 @@ def test_models_api_returns_unconfigured_deepseek_without_failing(
     assert body["current"]["model_id"] == "deepseek-v4-pro"
 
 
+def test_surface_tools_uses_shared_capability_surface(tmp_path: Path) -> None:
+    client, _threads, _runtime, _budget = _client(
+        tmp_path,
+        extension_catalog=_catalog(),
+    )
+
+    response = client.get("/surface/tools")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "builtin" in payload
+    assert "mcp" in payload
+    assert any(item["name"] == "mcp.github.search" for item in payload["mcp"])
+
+
 def test_thread_usage_and_artifacts_use_thread_run_projection(
     tmp_path: Path,
 ) -> None:
