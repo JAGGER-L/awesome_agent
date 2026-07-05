@@ -245,6 +245,10 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     attachment_service=attachment_service,
                     cwd_context_service=cwd_context_service,
                     model_execution_service=model_execution_service,
+                    approval_repository=PostgresApprovalRepository(sessions),
+                    approval_default_expiry=timedelta(
+                        seconds=configured.approval_default_expiry_seconds
+                    ),
                 )
                 if providers.coding_available
                 else None

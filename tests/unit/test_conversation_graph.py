@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -30,7 +31,11 @@ from awesome_agent.modeling.execution import (
     ModelExecutionService,
     ModelExecutionTimeout,
 )
-from awesome_agent.modeling.messages import AssistantMessage, SystemMessage
+from awesome_agent.modeling.messages import (
+    AssistantMessage,
+    SystemMessage,
+    ToolResultMessage,
+)
 from awesome_agent.modeling.stream import (
     ModelStreamEvent,
     TextDelta,
@@ -39,6 +44,7 @@ from awesome_agent.modeling.stream import (
 )
 from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
+from awesome_agent.persistence.approval_contracts import InMemoryApprovalRepository
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.agent_loop.skill_context_middleware import (
     SkillContextMiddleware,
@@ -48,13 +54,15 @@ from awesome_agent.runtime.cwd_context import (
     CwdContextService,
     InMemoryCwdContextSnapshotRepository,
 )
-from awesome_agent.runtime.dispatch import PermanentExecutionError
+from awesome_agent.runtime.dispatch import ApprovalInterrupt, PermanentExecutionError
 from awesome_agent.runtime.graphs import CONVERSATION_TURN_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
+from awesome_agent.sandbox.base import CommandRequest, CommandResult
 from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.memory import register_memory_tools
 from awesome_agent.tools.registry import ToolRegistry
+from awesome_agent.tools.repository import build_modifying_registry
 
 
 class FakeProvider:
@@ -211,6 +219,72 @@ class MemoryToolProvider:
             stop_reason=StopReason.COMPLETED,
             model="fake-model",
             provider="fake",
+        )
+
+
+class ToolCallProvider:
+    def __init__(self, call: ToolCall, *, final_after_tool: str = "done") -> None:
+        self.call = call
+        self.final_after_tool = final_after_tool
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            if any(
+                isinstance(message, ToolResultMessage)
+                for message in request.messages
+            ):
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(content=self.final_after_tool),
+                        stop_reason=StopReason.COMPLETED,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content="", tool_calls=[self.call]),
+                    stop_reason=StopReason.TOOL_CALLS,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        self.requests.append(request)
+        if any(isinstance(message, ToolResultMessage) for message in request.messages):
+            return ModelTurn(
+                assistant=AssistantMessage(content=self.final_after_tool),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        return ModelTurn(
+            assistant=AssistantMessage(content="", tool_calls=[self.call]),
+            stop_reason=StopReason.TOOL_CALLS,
+            model="fake-model",
+            provider="fake",
+        )
+
+
+class RecordingSandbox:
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.requests: list[CommandRequest] = []
+
+    async def execute(self, request: CommandRequest) -> CommandResult:
+        self.requests.append(request)
+        return CommandResult(
+            command=request.command_label,
+            exit_code=0,
+            stdout="ok\n",
+            stderr="",
         )
 
 
@@ -537,6 +611,171 @@ async def test_graph_executes_memory_manage_tool(tmp_path: Path) -> None:
         and "content" not in event.payload
         for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_interrupts_for_shell_approval(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "run script")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-shell",
+            name="shell.execute",
+            arguments_json='{"argv":["python","add.py"]}',
+        )
+    )
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as interrupted:
+        await graph.execute(run, leader)
+
+    approval = await approvals.get(interrupted.value.approval_id)
+    assert approval.tool_name == "shell.execute"
+    assert approval.tool_call_id == "call-shell"
+    assert approval.canonical_arguments["argv"] == ["python", "add.py"]
+    assert sandbox.requests == []
+    events = await runtime.list_events(run.id)
+    approval_events = [
+        event
+        for event in events
+        if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    assert len(approval_events) == 1
+    assert approval_events[0].payload["approval_id"] == str(approval.id)
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_reuses_approved_shell_call_by_arguments(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "run script")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    first_provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-shell-1",
+            name="shell.execute",
+            arguments_json='{"argv":["python","square.py"]}',
+        )
+    )
+    first_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: first_provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as interrupted:
+        await first_graph.execute(run, leader)
+    await approvals.decide(
+        interrupted.value.approval_id,
+        approved=True,
+        decided_by="tester",
+        reason="approved",
+        now=datetime.now(UTC),
+    )
+
+    second_provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-shell-2",
+            name="shell.execute",
+            arguments_json='{"argv":["python","square.py"]}',
+        )
+    )
+    second_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: second_provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    state = await second_graph.execute(run, leader)
+
+    assert state["final_answer"] == "done"
+    assert len(sandbox.requests) == 1
+    events = await runtime.list_events(run.id)
+    approval_events = [
+        event
+        for event in events
+        if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    assert len(approval_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_converts_denied_shell_to_tool_result(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "run script")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-shell",
+            name="shell.execute",
+            arguments_json='{"argv":["cmd.exe","/c","python","add.py"]}',
+        )
+    )
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    state = await graph.execute(run, leader)
+
+    assert state["final_answer"] == "done"
+    assert sandbox.requests == []
+    events = await runtime.list_events(run.id)
+    tool_events = [
+        event.payload
+        for event in events
+        if event.event_type is EventType.TOOL_CALL_CREATED
+    ]
+    assert tool_events == [
+        {
+            "tool": "shell.execute",
+            "status": "failed",
+            "changed_files": [],
+        }
+    ]
 
 
 @pytest.mark.asyncio

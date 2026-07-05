@@ -173,6 +173,10 @@ class LocalRuntimeContainer:
             attachment_service=self.attachment_service,
             cwd_context_service=self.cwd_context_service,
             model_execution_service=model_execution_service,
+            approval_repository=self.approvals,
+            approval_default_expiry=timedelta(
+                seconds=settings.approval_default_expiry_seconds
+            ),
         )
         self.conversation_service = ConversationService(
             repository=self.conversations,

@@ -311,6 +311,55 @@ async def test_local_dispatcher_requeues_paused_approval_wait(
     assert stored.lease_acquired_at is None
     assert stored.lease_expires_at is None
     assert stored.heartbeat_at is None
+
+    resumed = await dispatcher.claim_next(
+        worker_id=uuid4(),
+        worker_name="local-worker",
+        lease_duration=timedelta(seconds=30),
+        max_attempts=3,
+    )
+
+    assert resumed is not None
+    assert resumed.attempt == 1
+    stored = await runtime.get_run(run.id)
+    assert stored.attempt == 1
+    runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_local_dispatcher_claims_approval_resume_at_attempt_limit(
+    tmp_path: Path,
+) -> None:
+    runtime = LocalRuntimeRepository(tmp_path / "state.db")
+    dispatcher = LocalRunDispatcher(runtime)
+    approval_id = uuid4()
+    run = _run(tmp_path).model_copy(
+        update={
+            "status": RunStatus.PAUSED,
+            "dispatch_status": DispatchStatus.WAITING,
+            "attempt": 3,
+        }
+    )
+    await runtime.create_run(run, _leader(run))
+    await _append_approval_wait(runtime, run.id, approval_id)
+    await dispatcher.requeue_after_approval(
+        run_id=run.id,
+        approval_id=approval_id,
+        reason="approval_decided",
+    )
+
+    resumed = await dispatcher.claim_next(
+        worker_id=uuid4(),
+        worker_name="local-worker",
+        lease_duration=timedelta(seconds=30),
+        max_attempts=3,
+    )
+
+    assert resumed is not None
+    assert resumed.attempt == 3
+    stored = await runtime.get_run(run.id)
+    assert stored.dispatch_status is DispatchStatus.CLAIMED
+    assert stored.status is not RunStatus.RECOVERY_REQUIRED
     runtime.close()
 
 

@@ -19,6 +19,7 @@ class ConversationStreamEventKind(StrEnum):
     TOOL_STARTED = "tool.started"
     TOOL_PROGRESS = "tool.progress"
     TOOL_COMPLETED = "tool.completed"
+    APPROVAL_REQUIRED = "approval.required"
     TEAM_EVENT = "team.event"
     VALIDATION_EVENT = "validation.event"
     MODEL_ATTEMPT = "model.attempt"

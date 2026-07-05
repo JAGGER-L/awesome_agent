@@ -1399,8 +1399,12 @@ async def test_tui_details_on_expands_tool_event_details() -> None:
         await pilot.click("#prompt")
         await pilot.press("/", "d", "e", "t", "a", "i", "l", "s", "enter")
         await pilot.press("r", "u", "n", "enter")
+        collapsed = app.query_one("#transcript").render()
+        await pilot.press("ctrl+t")
         transcript = app.query_one("#transcript").render()
 
+    assert "已调用1个工具" in str(collapsed)
+    assert "Tool - run_command" not in str(collapsed)
     rendered = str(transcript)
     assert "Tool - run_command" in rendered
     assert "command: python -m pytest" in rendered
@@ -1549,7 +1553,7 @@ async def test_tui_renders_authentication_error_with_recovery_steps() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tui_renders_approval_required_stream_error_as_actionable() -> None:
+async def test_tui_renders_approval_required_stream_event_as_prompt() -> None:
     class ApprovalClient(FakeClient):
         def stream_turn(
             self,
@@ -1565,16 +1569,20 @@ async def test_tui_renders_approval_required_stream_error_as_actionable() -> Non
             self.turns.append((thread_id, content))
             return [
                 ConversationStreamEvent(
-                    event=ConversationStreamEventKind.ERROR,
+                    event=ConversationStreamEventKind.APPROVAL_REQUIRED,
                     thread_id=uuid4(),
                     turn_id=uuid4(),
                     sequence=1,
                     trace_id="trace-approval",
                     payload={
+                        "run_id": "run-1",
+                        "approval_id": "approval-1",
                         "code": "approval_required",
                         "message": "Tool approval is required.",
                         "hint": "Use the approvals view to decide.",
                         "approval_required": True,
+                        "approval_type": "command",
+                        "command": "python square.py",
                     },
                 )
             ]
@@ -1584,12 +1592,15 @@ async def test_tui_renders_approval_required_stream_error_as_actionable() -> Non
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
+        palette = app.query_one("#command-palette").render()
         transcript = app.query_one("#transcript").render()
 
+    prompt = str(palette)
     rendered = str(transcript)
-    assert "Action required" in rendered
-    assert "Tool approval is required" in rendered
-    assert "Use the approvals view to decide" in rendered
+    assert "Leader wants to run:" in prompt
+    assert "python square.py" in prompt
+    assert "Action required" not in rendered
+    assert "Tool approval is required" not in rendered
 
 
 @pytest.mark.asyncio
@@ -1609,7 +1620,7 @@ async def test_tui_approval_prompt_choice_calls_client() -> None:
             self.turns.append((thread_id, content))
             return [
                 ConversationStreamEvent(
-                    event=ConversationStreamEventKind.ERROR,
+                    event=ConversationStreamEventKind.APPROVAL_REQUIRED,
                     thread_id=uuid4(),
                     turn_id=uuid4(),
                     sequence=1,
@@ -1771,8 +1782,13 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("b", "u", "i", "l", "d", "enter")
+        collapsed = app.query_one("#transcript").render()
+        await pilot.press("ctrl+t")
         transcript = app.query_one("#transcript").render()
 
+    collapsed_text = str(collapsed)
+    assert "已调用1个工具" in collapsed_text
+    assert "Tool - write_file" not in collapsed_text
     rendered = str(transcript)
     assert "Tool - write_file" in rendered
     assert "created snake-game.html" in rendered

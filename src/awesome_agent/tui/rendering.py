@@ -18,6 +18,7 @@ def render_message(
     message: ChatMessage,
     *,
     changed_files_expanded: bool = False,
+    tool_groups_expanded: bool = False,
 ) -> Text:
     if message.kind is ChatEventKind.COMMAND:
         return Text.assemble(("> ", "bold magenta"), (message.content, "bold"))
@@ -43,6 +44,11 @@ def render_message(
     if message.kind is ChatEventKind.RUN:
         return _labeled("run", message.content, label_style="blue")
     if message.kind is ChatEventKind.TOOL:
+        if message.tool_group is not None:
+            return _render_tool_group(
+                message,
+                expanded=tool_groups_expanded,
+            )
         return _labeled(
             "tool",
             message.content,
@@ -61,6 +67,7 @@ def render_transcript(
     thought: ThoughtBlock | None = None,
     thought_blocks: dict[str, ThoughtBlock] | None = None,
     changed_files_expanded: bool = False,
+    tool_groups_expanded: bool = False,
 ) -> Text:
     rendered = Text()
     message_list = list(messages)
@@ -74,6 +81,7 @@ def render_transcript(
             render_message(
                 message,
                 changed_files_expanded=changed_files_expanded,
+                tool_groups_expanded=tool_groups_expanded,
             )
         )
         if (
@@ -128,6 +136,19 @@ def render_tool_event(event: ToolDisplayEvent, *, details_enabled: bool) -> Text
         for key, value in event.details.items():
             rendered.append(f"\n  {key}: {_bounded(str(value))}", style="dim")
     return rendered
+
+
+def _render_tool_group(message: ChatMessage, *, expanded: bool) -> Text:
+    assert message.tool_group is not None
+    action = "collapse" if expanded else "expand"
+    content = f"{message.content} (ctrl+t to {action})"
+    if expanded:
+        content = "\n".join((content, *message.tool_group.entries))
+    return _labeled(
+        "tool",
+        content,
+        label_style="cyan",
+    )
 
 
 def _tool_label_style(summary: str) -> str:

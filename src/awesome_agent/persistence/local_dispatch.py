@@ -19,6 +19,12 @@ from awesome_agent.persistence.approval_contracts import (
 from awesome_agent.persistence.local_runtime import LocalRuntimeRepository
 from awesome_agent.runtime.dispatch import DispatchConflict, LeaseLost, RunDispatcher
 
+_APPROVAL_RESUME_REASONS = {
+    "approval_decided",
+    "approval_granted",
+    "approval_expired",
+}
+
 
 class LocalRunDispatcher(RunDispatcher):
     def __init__(
@@ -50,7 +56,8 @@ class LocalRunDispatcher(RunDispatcher):
                 continue
             if run.available_at > now:
                 continue
-            if run.attempt >= max_attempts:
+            approval_resume = run.last_release_reason in _APPROVAL_RESUME_REASONS
+            if run.attempt >= max_attempts and not approval_resume:
                 await self._mark_run_recovery_required(
                     run,
                     reason="Local run exceeded maximum claim attempts.",
@@ -66,12 +73,13 @@ class LocalRunDispatcher(RunDispatcher):
             if runtime_routes is not None and run.runtime_route not in runtime_routes:
                 continue
 
+            next_attempt = run.attempt if approval_resume else run.attempt + 1
             lease = RunLease(
                 run_id=run.id,
                 worker_id=worker_id,
                 worker_name=worker_name,
                 fencing_token=run.fencing_token + 1,
-                attempt=run.attempt + 1,
+                attempt=next_attempt,
                 lease_acquired_at=now,
                 lease_expires_at=now + lease_duration,
                 heartbeat_at=now,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -13,7 +14,7 @@ from awesome_agent.conversation.models import (
     ThreadMessageRole,
 )
 from awesome_agent.conversation.repository import ConversationRepository
-from awesome_agent.domain.enums import EventType
+from awesome_agent.domain.enums import ApprovalStatus, EventType
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.extensions.catalog import empty_extension_catalog
 from awesome_agent.extensions.catalog_store import CatalogSnapshotMissing
@@ -41,22 +42,38 @@ from awesome_agent.modeling.stream import (
     TurnFailed,
 )
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage
+from awesome_agent.persistence.approval_contracts import (
+    ApprovalRepository,
+    DurableApproval,
+)
 from awesome_agent.runtime.agent_loop import ReadOnlyAgentLoop
 from awesome_agent.runtime.agent_loop.contracts import MiddlewareContext
+from awesome_agent.runtime.agent_loop.modifying_middleware import (
+    approval_interrupt_payload,
+    tool_error_result,
+    workspace_fingerprint,
+)
 from awesome_agent.runtime.agent_loop.skill_context_middleware import (
     SkillContextMiddleware,
 )
 from awesome_agent.runtime.cwd_context import CwdContextService
-from awesome_agent.runtime.dispatch import PermanentExecutionError
+from awesome_agent.runtime.dispatch import (
+    ApprovalInterrupt,
+    CorruptRuntimeStateError,
+    PermanentExecutionError,
+)
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
 from awesome_agent.safety.redaction import redact_model_messages, redact_value
 from awesome_agent.tools.executor import ToolExecutor
-from awesome_agent.tools.models import ToolSpec
+from awesome_agent.tools.models import ApprovalRequired, ToolDenied, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.repository import (
+    canonical_arguments_hash_from_arguments,
     execute_repository_call,
     model_tool_definitions,
+    parse_tool_call_arguments,
+    tool_invocation_uuid,
 )
 
 ConversationGraphState = dict[str, Any]
@@ -79,6 +96,8 @@ class ConversationGraph:
         attachment_service: AttachmentService | None = None,
         cwd_context_service: CwdContextService | None = None,
         model_execution_service: ModelExecutionService | None = None,
+        approval_repository: ApprovalRepository | None = None,
+        approval_default_expiry: timedelta = timedelta(minutes=60),
     ) -> None:
         self.conversations = conversations
         self.runtime = runtime
@@ -97,6 +116,8 @@ class ConversationGraph:
         self.model_execution_service = model_execution_service or ModelExecutionService(
             InProcessModelExecutionBackend(provider_factory)
         )
+        self.approval_repository = approval_repository
+        self.approval_default_expiry = approval_default_expiry
 
     async def execute(self, run: Run, leader: Agent) -> ConversationGraphState:
         created = await self._run_created_payload(run)
@@ -520,12 +541,10 @@ class ConversationGraph:
                 final_answer = "I cannot access workspace tools in this conversation."
                 break
             for call in assistant.tool_calls:
-                result = await execute_repository_call(
-                    self.tool_executor,
+                result = await self._execute_tool_call(
                     call,
-                    workspace=Path(run.working_directory),
-                    agent_id=leader.id,
-                    run_id=run.id,
+                    run=run,
+                    leader=leader,
                     effective_tools=effective_tools,
                 )
                 model_messages.append(result)
@@ -564,6 +583,160 @@ class ConversationGraph:
             "response_id": completed.response_id,
             "changed_files": _dedupe_changed_files(changed_files),
         }
+
+    async def _execute_tool_call(
+        self,
+        call: Any,
+        *,
+        run: Run,
+        leader: Agent,
+        effective_tools: _RegistryToolPolicy | None,
+    ) -> ToolResultMessage:
+        workspace = Path(str(run.working_directory))
+        try:
+            return await execute_repository_call(
+                self._require_tool_executor(),
+                call,
+                workspace=workspace,
+                agent_id=leader.id,
+                run_id=run.id,
+                effective_tools=effective_tools,
+            )
+        except ToolDenied as error:
+            return tool_error_result(call, "denied", str(error))
+        except ApprovalRequired:
+            return await self._handle_tool_approval(
+                call,
+                run=run,
+                leader=leader,
+                workspace=workspace,
+                effective_tools=effective_tools,
+            )
+
+    async def _handle_tool_approval(
+        self,
+        call: Any,
+        *,
+        run: Run,
+        leader: Agent,
+        workspace: Path,
+        effective_tools: _RegistryToolPolicy | None,
+    ) -> ToolResultMessage:
+        if self.approval_repository is None or self.tool_registry is None:
+            return tool_error_result(
+                call,
+                "approval_required",
+                "Tool approval is required but no approval repository is configured.",
+            )
+        arguments = parse_tool_call_arguments(call)
+        spec, _handler = self.tool_registry.resolve(call.name)
+        arguments_hash = canonical_arguments_hash_from_arguments(arguments)
+        existing = await self._find_existing_approval(
+            run=run,
+            call=call,
+            tool_version=spec.version,
+            arguments_hash=arguments_hash,
+            workspace=workspace,
+        )
+        now = datetime.now(UTC)
+        if existing is None:
+            approval = DurableApproval(
+                id=tool_invocation_uuid(f"{run.id}:{call.call_id}"),
+                run_id=run.id,
+                agent_id=leader.id,
+                tool_invocation_id=tool_invocation_uuid(f"{run.id}:{call.call_id}"),
+                tool_call_id=call.call_id,
+                tool_name=call.name,
+                tool_version=spec.version,
+                canonical_arguments=arguments,
+                arguments_hash=arguments_hash,
+                workspace_path=str(workspace.resolve()),
+                workspace_fingerprint=await workspace_fingerprint(workspace),
+                capabilities=sorted(
+                    effective_tools.capabilities_for(call.name)
+                    if effective_tools is not None
+                    else spec.required_capabilities
+                ),
+                risk_level=spec.risk_level.value,
+                expires_at=now + self.approval_default_expiry,
+                status=ApprovalStatus.PENDING,
+                created_at=now,
+                updated_at=now,
+            )
+        else:
+            approval = existing
+
+        if approval.status in {ApprovalStatus.DENIED, ApprovalStatus.EXPIRED}:
+            return tool_error_result(
+                call,
+                approval.status.value,
+                f"Tool execution was {approval.status.value} by approval decision.",
+            )
+        if (
+            approval.arguments_hash != arguments_hash
+            or approval.tool_version != spec.version
+            or Path(approval.workspace_path).resolve() != workspace.resolve()
+        ):
+            raise CorruptRuntimeStateError("Approval binding changed before resume.")
+        if approval.status is ApprovalStatus.APPROVED:
+            if await workspace_fingerprint(workspace) != approval.workspace_fingerprint:
+                raise CorruptRuntimeStateError(
+                    "Approval workspace changed before resume."
+                )
+            return await execute_repository_call(
+                self._require_tool_executor(),
+                call,
+                workspace=workspace,
+                agent_id=leader.id,
+                run_id=run.id,
+                effective_tools=effective_tools,
+                approval_granted=True,
+            )
+
+        approval = await self.approval_repository.upsert(approval)
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.APPROVAL_REQUESTED,
+            payload={
+                **approval_interrupt_payload(approval),
+                "reason": "waiting_approval",
+                "agent_id": str(leader.id),
+            },
+            agent_id=leader.id,
+        )
+        raise ApprovalInterrupt(approval.id)
+
+    async def _find_existing_approval(
+        self,
+        *,
+        run: Run,
+        call: Any,
+        tool_version: str,
+        arguments_hash: str,
+        workspace: Path,
+    ) -> DurableApproval | None:
+        if self.approval_repository is None:
+            return None
+        exact = await self.approval_repository.get_by_call(run.id, call.call_id)
+        if exact is not None:
+            return exact
+        workspace_path = workspace.resolve()
+        matches = [
+            approval
+            for approval in await self.approval_repository.list_for_run(run.id)
+            if approval.tool_name == call.name
+            and approval.tool_version == tool_version
+            and approval.arguments_hash == arguments_hash
+            and Path(approval.workspace_path).resolve() == workspace_path
+        ]
+        if not matches:
+            return None
+        return matches[-1]
+
+    def _require_tool_executor(self) -> ToolExecutor:
+        if self.tool_executor is None:
+            raise RuntimeError("Conversation tool executor is not configured.")
+        return self.tool_executor
 
     async def _append_model_phase_event(
         self,

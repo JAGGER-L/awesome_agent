@@ -3,7 +3,12 @@ from __future__ import annotations
 from rich.text import Text
 
 from awesome_agent.surfaces.client import ChangedFileSummary
-from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
+from awesome_agent.tui.chat_state import (
+    ChatEventKind,
+    ChatMessage,
+    ThoughtBlock,
+    ToolGroup,
+)
 from awesome_agent.tui.events import (
     ApprovalPromptState,
     TeamDisplayEvent,
@@ -272,6 +277,44 @@ def test_tool_message_failure_label_is_red() -> None:
     rendered = render_message(message)
 
     assert "red" in _styles_for_text(rendered, "tool")
+
+
+def test_tool_group_renders_collapsed_summary() -> None:
+    message = ChatMessage.system(
+        "已调用2个工具",
+        kind=ChatEventKind.TOOL,
+        tool_group=ToolGroup(
+            entries=(
+                "Tool - repo.instructions\ncompleted",
+                "Tool - repo.list\ncompleted",
+            )
+        ),
+    )
+
+    rendered = render_message(message, tool_groups_expanded=False).plain
+
+    assert "tool: 已调用2个工具 (ctrl+t to expand)" in rendered
+    assert "repo.instructions" not in rendered
+    assert "repo.list" not in rendered
+
+
+def test_tool_group_renders_expanded_entries() -> None:
+    message = ChatMessage.system(
+        "已调用2个工具",
+        kind=ChatEventKind.TOOL,
+        tool_group=ToolGroup(
+            entries=(
+                "Tool - repo.instructions\ncompleted",
+                "Tool - repo.list\ncompleted",
+            )
+        ),
+    )
+
+    rendered = render_message(message, tool_groups_expanded=True).plain
+
+    assert "tool: 已调用2个工具 (ctrl+t to collapse)" in rendered
+    assert "Tool - repo.instructions" in rendered
+    assert "Tool - repo.list" in rendered
 
 
 def test_tool_call_details_are_bounded_and_redacted() -> None:

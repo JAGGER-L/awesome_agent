@@ -29,12 +29,18 @@ class ChatEventKind(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ToolGroup:
+    entries: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ChatMessage:
     role: str
     content: str
     kind: ChatEventKind = ChatEventKind.MESSAGE
     attachments: tuple[dict[str, object], ...] = ()
     changed_files: tuple[ChangedFileSummary, ...] = ()
+    tool_group: ToolGroup | None = None
     id: str = field(default_factory=lambda: uuid4().hex)
     turn_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -84,8 +90,9 @@ class ChatMessage:
         content: str,
         *,
         kind: ChatEventKind = ChatEventKind.MESSAGE,
+        tool_group: ToolGroup | None = None,
     ) -> ChatMessage:
-        return cls(role="system", content=content, kind=kind)
+        return cls(role="system", content=content, kind=kind, tool_group=tool_group)
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +144,7 @@ class ChatSessionState:
     status_label: str = "ready"
     details_enabled: bool = False
     changed_files_expanded: bool = False
+    tool_groups_expanded: bool = False
     last_failed_user_message: str | None = None
     messages: list[ChatMessage] = field(default_factory=list)
 
@@ -167,6 +175,33 @@ class ChatSessionState:
 
     def append(self, message: ChatMessage) -> ChatSessionState:
         return replace(self, messages=[*self.messages, message])
+
+    def append_tool_event(self, content: str) -> ChatSessionState:
+        if self.messages and self.messages[-1].kind is ChatEventKind.TOOL:
+            existing = self.messages[-1]
+            entries = (
+                existing.tool_group.entries
+                if existing.tool_group is not None
+                else (existing.content,)
+            )
+            group = ToolGroup(entries=(*entries, content))
+            messages = [
+                *self.messages[:-1],
+                ChatMessage.system(
+                    _tool_group_summary(len(group.entries)),
+                    kind=ChatEventKind.TOOL,
+                    tool_group=group,
+                ),
+            ]
+            return replace(self, messages=messages)
+        group = ToolGroup(entries=(content,))
+        return self.append(
+            ChatMessage.system(
+                _tool_group_summary(1),
+                kind=ChatEventKind.TOOL,
+                tool_group=group,
+            )
+        )
 
     def with_backend_thread(
         self,
@@ -221,6 +256,7 @@ class ChatSessionState:
             status_label="ready",
             last_failed_user_message=None,
             changed_files_expanded=False,
+            tool_groups_expanded=False,
             messages=messages or [],
         )
 
@@ -568,6 +604,9 @@ class ChatSessionState:
     def toggle_changed_files(self) -> ChatSessionState:
         return replace(self, changed_files_expanded=not self.changed_files_expanded)
 
+    def toggle_tool_groups(self) -> ChatSessionState:
+        return replace(self, tool_groups_expanded=not self.tool_groups_expanded)
+
     def with_run(
         self,
         run_id: str,
@@ -615,6 +654,10 @@ def _chat_message_from_record(record: dict[str, Any]) -> ChatMessage:
 def _optional_payload_str(payload: dict[str, object], key: str) -> str | None:
     value = payload.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _tool_group_summary(count: int) -> str:
+    return f"已调用{count}个工具"
 
 
 def _record_attachments(record: dict[str, Any]) -> tuple[dict[str, object], ...]:

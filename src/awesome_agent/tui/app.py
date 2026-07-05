@@ -104,6 +104,12 @@ class AwesomeAgentTui(App[None]):
             "Toggle changed files",
             priority=True,
         ),
+        Binding(
+            "ctrl+t",
+            "toggle_tool_groups",
+            "Toggle tools",
+            priority=True,
+        ),
         ("ctrl+o", "toggle_thought", "Toggle thought"),
         ("ctrl+r", "retry", "Retry"),
         ("q", "quit", "Quit"),
@@ -399,6 +405,11 @@ class AwesomeAgentTui(App[None]):
         self._render()
         self._focus_prompt()
 
+    def action_toggle_tool_groups(self) -> None:
+        self.state = self.state.toggle_tool_groups()
+        self._render()
+        self._focus_prompt()
+
     def _render(self, *, follow: bool = True) -> None:
         try:
             self.query_one("#welcome", Static).update(self._welcome_text())
@@ -407,6 +418,7 @@ class AwesomeAgentTui(App[None]):
                     self.state.messages,
                     thought_blocks=self.state.thought_blocks,
                     changed_files_expanded=self.state.changed_files_expanded,
+                    tool_groups_expanded=self.state.tool_groups_expanded,
                 )
             )
         except NoMatches:
@@ -646,15 +658,16 @@ class AwesomeAgentTui(App[None]):
             ConversationStreamEventKind.TOOL_PROGRESS,
             ConversationStreamEventKind.TOOL_COMPLETED,
         }:
-            self.state = self.state.append(
-                ChatMessage.system(
-                    render_tool_event(
-                        _tool_display_event(stream_event.payload),
-                        details_enabled=self.state.details_enabled,
-                    ).plain,
-                    kind=ChatEventKind.TOOL,
-                )
+            self.state = self.state.append_tool_event(
+                render_tool_event(
+                    _tool_display_event(stream_event.payload),
+                    details_enabled=self.state.details_enabled,
+                ).plain
             )
+        elif stream_event.event is ConversationStreamEventKind.APPROVAL_REQUIRED:
+            prompt = _approval_prompt_from_payload(stream_event.payload)
+            if prompt is not None:
+                self.state = self.state.with_approval_prompt(prompt)
         elif stream_event.event is ConversationStreamEventKind.TEAM_EVENT:
             self.state = self.state.append(
                 ChatMessage.system(
@@ -703,6 +716,7 @@ class AwesomeAgentTui(App[None]):
                 prompt = _approval_prompt_from_payload(stream_event.payload)
                 if prompt is not None:
                     self.state = self.state.with_approval_prompt(prompt)
+                    return
             message = self._format_stream_error(
                 stream_event.payload,
                 fallback="Conversation failed.",

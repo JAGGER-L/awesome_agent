@@ -228,6 +228,16 @@ def test_tui_continue_failure_is_not_retryable_as_user_message() -> None:
     assert not app.state.last_failed_user_message
 
 
+def test_tui_toggle_tool_groups_action() -> None:
+    app = _app(FakeSurfaceClient())
+
+    app.action_toggle_tool_groups()
+
+    assert app.state.tool_groups_expanded is True
+    assert app.state.details_enabled is False
+    assert app.state.changed_files_expanded is False
+
+
 def test_tui_renders_explicit_tool_stream_event_without_message_delta() -> None:
     app = _app(FakeSurfaceClient())
 
@@ -245,8 +255,49 @@ def test_tui_renders_explicit_tool_stream_event_without_message_delta() -> None:
     )
 
     assert app.state.messages[-1].kind is ChatEventKind.TOOL
-    assert "repo.apply_patch" in app.state.messages[-1].content
-    assert "started" in app.state.messages[-1].content
+    assert app.state.messages[-1].content == "已调用1个工具"
+    assert app.state.messages[-1].tool_group is not None
+    assert "repo.apply_patch" in app.state.messages[-1].tool_group.entries[0]
+    assert "started" in app.state.messages[-1].tool_group.entries[0]
+
+
+def test_tui_renders_approval_required_without_error_message() -> None:
+    app = _app(FakeSurfaceClient())
+
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.APPROVAL_REQUIRED,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=3,
+            trace_id="trace",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=10,
+            payload={
+                "code": "approval_required",
+                "message": "Approval required for shell.execute.",
+                "approval_required": True,
+                "run_id": "run-1",
+                "approval_id": "approval-1",
+                "approval_type": "command",
+                "tool": "shell.execute",
+                "command": "python square.py",
+            },
+        )
+    )
+
+    assert app.state.pending_approval == ApprovalPromptState(
+        run_id="run-1",
+        approval_id="approval-1",
+        title="Leader wants to run:",
+        subject="python square.py",
+        approval_type="command",
+    )
+    assert not [
+        message
+        for message in app.state.messages
+        if message.kind is ChatEventKind.ERROR
+    ]
 
 
 def test_tui_ignores_duplicate_runtime_sequence() -> None:

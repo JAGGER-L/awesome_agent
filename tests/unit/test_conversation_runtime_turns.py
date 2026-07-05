@@ -146,6 +146,44 @@ def test_tool_team_and_validation_events_project_explicit_event_kinds() -> None:
     assert projected_team.payload == {"role": "verifier", "task": "review"}
 
 
+def test_approval_requested_projects_action_required_event() -> None:
+    thread_id = uuid4()
+    turn_id = uuid4()
+    run_id = uuid4()
+    event = RuntimeEvent(
+        run_id=run_id,
+        sequence=8,
+        event_type=EventType.APPROVAL_REQUESTED,
+        payload={
+            "approval_id": "approval-1",
+            "tool": "shell.execute",
+            "args_summary": "python add.py",
+            "risk": "medium",
+            "expires_at": "2026-07-05T12:00:00+00:00",
+        },
+    )
+
+    [projected] = project_runtime_event(
+        thread_id=thread_id,
+        turn_id=turn_id,
+        event=event,
+    )
+
+    assert projected.event is ConversationStreamEventKind.APPROVAL_REQUIRED
+    assert projected.payload == {
+        "code": "approval_required",
+        "message": "Approval required for shell.execute.",
+        "approval_required": True,
+        "run_id": str(run_id),
+        "approval_id": "approval-1",
+        "approval_type": "command",
+        "tool": "shell.execute",
+        "command": "python add.py",
+        "risk": "medium",
+        "expires_at": "2026-07-05T12:00:00+00:00",
+    }
+
+
 def test_usage_and_terminal_status_project_to_conversation_events() -> None:
     thread_id = uuid4()
     turn_id = uuid4()

@@ -6,6 +6,7 @@ from awesome_agent.tui.chat_state import (
     ChatEventKind,
     ChatMessage,
     ChatSessionState,
+    ToolGroup,
     chat_messages_from_thread_records,
 )
 from awesome_agent.tui.status_panel import StatusPanelTab
@@ -107,6 +108,40 @@ def test_chat_state_attaches_changed_files_to_latest_assistant() -> None:
         "snake.html",
         "README.md",
     ]
+
+
+def test_chat_state_groups_continuous_tool_messages() -> None:
+    state = ChatSessionState.new()
+
+    updated = (
+        state.append_tool_event("Tool - repo.instructions\ncompleted")
+        .append_tool_event("Tool - repo.list\ncompleted")
+        .append(ChatMessage.assistant("Done."))
+        .append_tool_event("Tool - repo.status\nfailed")
+    )
+
+    assert [message.kind for message in updated.messages] == [
+        ChatEventKind.TOOL,
+        ChatEventKind.MODEL,
+        ChatEventKind.TOOL,
+    ]
+    assert updated.messages[0].tool_group == ToolGroup(
+        entries=(
+            "Tool - repo.instructions\ncompleted",
+            "Tool - repo.list\ncompleted",
+        )
+    )
+    assert updated.messages[0].content == "已调用2个工具"
+    assert updated.messages[2].content == "已调用1个工具"
+
+
+def test_chat_state_toggles_tool_group_expansion() -> None:
+    state = ChatSessionState.new()
+
+    updated = state.toggle_tool_groups()
+
+    assert updated.tool_groups_expanded is True
+    assert updated.toggle_tool_groups().tool_groups_expanded is False
 
 
 def test_thread_record_restore_reads_assistant_changed_files_metadata() -> None:
