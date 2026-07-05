@@ -24,11 +24,13 @@ Runtime 的设计目标是：即使 Run 经历进程崩溃、审批等待、验�
 - Distributed team mode：模型规划 Teammates、assignment-scoped tools、Teammate-owned read-only Subagents、独立 Verifier review 和 targeted rework。
 - Token 和 active-time budget ledger。Runtime 明确不做金额限制。
 - 通过 query-table spans、model-call summaries、metrics、diagnostics、recovery metrics、trace IDs 和脱敏 API/CLI inspection 实现持久化观测。
-- Project `skills/`、`awesome-agent.yaml`、MCP sources 和 community tool packages 的 extension catalog 基础，统一经过 capability resolution。
+- Project 和用户级 `skills/`、用户级 MCP sources 和 community tool packages 的 extension catalog 基础，统一经过 capability resolution。
 
 ## 快速开始
 
-完整说明见 [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md)。目标启动 profile 契约见 [docs/design-docs/runtime-profiles-and-startup.md](docs/design-docs/runtime-profiles-and-startup.md)。
+完整说明见 [docs/getting-started/quickstart.md](docs/getting-started/quickstart.md)
+或 [docs/getting-started/quickstart.zh-CN.md](docs/getting-started/quickstart.zh-CN.md)。
+目标启动 profile 契约见 [docs/design-docs/runtime-profiles-and-startup.md](docs/design-docs/runtime-profiles-and-startup.md)。
 
 ### 前置依赖
 
@@ -38,15 +40,41 @@ Runtime 的设计目标是：即使 Run 经历进程崩溃、审批等待、验�
 - Docker Desktop 或兼容 Docker engine
 - 当前 helper scripts 使用 Windows PowerShell
 
-### 配置
+### 克隆并准备环境
+
+从源码 checkout 开始：
 
 ```powershell
-Copy-Item .env.example .env
+git clone https://github.com/JAGGER-L/awesome_agent.git
+cd awesome_agent
+make check
+make install
 ```
 
-Provider secrets 放在 `.env`。当前产品构建只支持官方 DeepSeek provider 的 conversation turns。配置 `AWESOME_AGENT_DEEPSEEK_API_KEY`；产品 runtime 不支持自定义 DeepSeek-compatible base URL。
+`make check` 检查宿主机前置依赖。`make install` 同步 Python 环境，并安装本地
+`awesome` 和 `awesome-agent` 命令。
+
+### 配置 Awesome Home
+
+```powershell
+awesome init
+```
+
+`awesome init` 会创建用户级 Awesome home。Windows 默认是
+`%LOCALAPPDATA%\awesome-agent`，其它平台默认是 `~/.awesome-agent`；可以用
+`AWESOME_HOME` 覆盖。Provider secrets 放在操作系统环境变量或
+`<AWESOME_HOME>/.env`，不要放在项目 checkout 里。当前产品构建只支持官方
+DeepSeek provider 的 conversation turns。配置
+`AWESOME_AGENT_DEEPSEEK_API_KEY`；产品 runtime 不支持自定义
+DeepSeek-compatible base URL。
 
 Extension source 配置放在 `awesome-agent.yaml`。Project skills 会从 `skills/` 发现。不要把 secrets 放进 `awesome-agent.yaml`。
+
+添加 provider key 后运行本地 CLI 配置检查：
+
+```powershell
+awesome doctor
+```
 
 ### 选择运行模式
 
@@ -72,7 +100,11 @@ cd E:\my-project
 awesome
 ```
 
-`awesome init` 会创建 `~/.awesome-agent/config.yaml`。这个文件只保存模型名称和环境变量名，不保存真实 API key。模型调用前，请把 `AWESOME_AGENT_DEEPSEEK_API_KEY` 设置在 shell、操作系统环境变量、密码管理器或本地 `.env` 文件中。
+`awesome init` 会创建 `<AWESOME_HOME>/config.yaml`、`<AWESOME_HOME>/.env`、
+`<AWESOME_HOME>/awesome-agent.yaml` 以及 `skills`、`state`、`runs`、`logs`
+运行目录，并且不会覆盖已有 secrets。模型调用前，请把
+`AWESOME_AGENT_DEEPSEEK_API_KEY` 设置在 shell、操作系统环境变量、密码管理器或
+`<AWESOME_HOME>/.env` 中。
 
 `awesome doctor` 用于本地 CLI 首次使用检查。它不替代
 `awesome-agent doctor --profile api/runtime`，后者仍用于 API/runtime 依赖的
@@ -133,7 +165,9 @@ Slash commands 是 CLI/TUI 交互语法。API routes 暴露 threads、runs、mod
 
 ### 第一条模型驱动用户消息
 
-在 `.env` 中设置 `AWESOME_AGENT_DEEPSEEK_API_KEY`，重启本地交互 runtime，在项目目录中打开 `awesome`，然后发送一条普通用户消息：
+在操作系统环境变量或 `<AWESOME_HOME>/.env` 中设置
+`AWESOME_AGENT_DEEPSEEK_API_KEY`，重启本地交互 runtime，在项目目录中打开
+`awesome`，然后发送一条普通用户消息：
 
 ```text
 Build a single-file HTML timer in this folder.
@@ -162,10 +196,11 @@ Docker API 兼容脚本：
 `docker-quickstart.ps1` 是面向容器化 API 路径的开发者/运维兼容入口，
 不是本地 CLI 的常规首次启动路径。
 
-## 手动启动
+### 手动启动
 
 ```powershell
 .\scripts\bootstrap.ps1
+awesome init
 docker compose up -d postgres
 .\scripts\migrate.ps1
 .\.venv\Scripts\awesome-agent.exe doctor --profile api
@@ -176,9 +211,9 @@ API 默认绑定到 `http://127.0.0.1:8000`。`/health` 用于进程 liveness，
 
 ## 扩展
 
-项目级 extension 配置放在 `awesome-agent.yaml`。它用于配置 project skill roots、MCP sources 等 extension sources，不用于保存 secrets。Provider keys 和 runtime settings 应放在 `.env` 或环境变量中。
+项目级 extension 配置放在 `awesome-agent.yaml`。它用于配置 project skill roots 等项目本地 extension sources，不用于保存 secrets。Provider keys 和 runtime settings 应放在 `<AWESOME_HOME>/.env` 或环境变量中。
 
-Project skills 位于 `skills/`；每个 skill package 包含一个 `SKILL.md`。Skills 可以请求 instructions、context 和 tool capabilities，但它们本身不授予执行权限。MCP 和 community tools 会进入 extension catalog，并继续经过 exposure、capability、approval、budget、execution 和 observability 边界。
+Project skills 位于 `skills/`，用户级 skills 位于 `<AWESOME_HOME>/skills/`；每个 skill package 包含一个 `SKILL.md`。Skills 可以请求 instructions、context 和 tool capabilities，但它们本身不授予执行权限。MCP sources 只从 Awesome 用户级配置路径读取，不从项目配置读取。MCP 和 community tools 会进入 extension catalog，并继续经过 exposure、capability、approval、budget、execution 和 observability 边界。
 
 ## 运维
 
@@ -228,7 +263,7 @@ TUI 是基于本地 API 的 Run、诊断、事件和审批检查/控制界面，
 ## 文档
 
 - [文档地图](docs/README.md)
-- [快速开始](docs/getting-started/quickstart.md)
+- [快速开始](docs/getting-started/quickstart.zh-CN.md)
 - [用户指南](docs/user-guide/README.md)
 - [运维指南](docs/operations/README.md)
 - [架构](ARCHITECTURE.md)
@@ -240,6 +275,6 @@ TUI 是基于本地 API 的 Run、诊断、事件和审批检查/控制界面，
 
 ## 安全提示
 
-不要把 secrets 提交进仓库。Provider keys 和本机 runtime settings 放在 `.env`。API profile 的命令执行默认使用 `aio-docker` sandbox；LocalSandbox 只用于本地 CLI/TUI 或显式可信本地执行。
+不要把 secrets 提交进仓库。Provider keys 和本机 runtime settings 放在操作系统环境变量或 `<AWESOME_HOME>/.env`。API profile 的命令执行默认使用 `aio-docker` sandbox；LocalSandbox 只用于本地 CLI/TUI 或显式可信本地执行。
 
-Thread 工作区会保存在 `~/.awesome-agent/threads/<thread_id>/workspace/`。生成文件会在 TUI 中显示为 workspace changes。内部 run evidence 可以保存在 `~/.awesome-agent/runs/<run_id>/artifacts/`，但用户通常直接使用 launch workspace/project 中的文件。LocalSandbox 只适用于 trusted-local 场景。
+Thread 工作区会保存在 `<AWESOME_HOME>/threads/<thread_id>/workspace/`。生成文件会在 TUI 中显示为 workspace changes。内部 run evidence 可以保存在 `<AWESOME_HOME>/runs/<run_id>/artifacts/`，但用户通常直接使用 launch workspace/project 中的文件。LocalSandbox 只适用于 trusted-local 场景。

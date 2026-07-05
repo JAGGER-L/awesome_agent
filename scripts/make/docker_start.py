@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import time
 import urllib.error
@@ -8,12 +7,15 @@ import urllib.request
 from http.client import RemoteDisconnected
 from pathlib import Path
 
+from awesome_agent.cli.config_flow import initialize_user_config
+from awesome_agent.paths import awesome_paths
+
 ROOT = Path(__file__).resolve().parents[2]
 API_URL = "http://127.0.0.1:8000"
 
 
 def main() -> None:
-    _ensure_env()
+    _ensure_awesome_home()
     if not _compose_declares_sandbox():
         raise SystemExit(
             "Docker Compose sandbox service is not present yet. Execute Task 63 "
@@ -36,13 +38,12 @@ def main() -> None:
     print("docker-start.status=completed")
 
 
-def _ensure_env() -> None:
-    env_path = ROOT / ".env"
-    if env_path.exists():
-        print("docker-start.config=exists .env")
-        return
-    shutil.copyfile(ROOT / ".env.example", env_path)
-    print("docker-start.config=created .env")
+def _ensure_awesome_home() -> None:
+    paths = awesome_paths()
+    env_exists = paths.env_file.exists()
+    initialize_user_config(paths)
+    status = "exists" if env_exists else "created"
+    print(f"docker-start.config={status} awesome_env {paths.env_file}")
 
 
 def _compose_declares_sandbox() -> bool:

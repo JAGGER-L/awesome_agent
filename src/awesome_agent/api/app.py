@@ -161,7 +161,7 @@ from awesome_agent.safety.redaction import (
     redact_text,
     redact_value,
 )
-from awesome_agent.settings import Settings
+from awesome_agent.settings import Settings, default_settings_env_file
 from awesome_agent.surfaces.capabilities import CapabilitySurfaceService
 from awesome_agent.surfaces.client import changed_file_summaries_from_payload
 from awesome_agent.tools.repository import build_modifying_registry
@@ -579,6 +579,7 @@ def create_app(
         project_config_exists: bool | None = None
         project_env_path: str | None = None
         project_env_exists: bool | None = None
+        awesome_env = default_settings_env_file()
         if thread_context_path:
             root = Path(thread_context_path)
             project_config = root / "awesome-agent.yaml"
@@ -602,6 +603,8 @@ def create_app(
             deepseek_api_key_configured=settings.deepseek_api_key is not None,
             deepseek_base_url=settings.deepseek_base_url,
             mem0_api_key_configured=settings.mem0_api_key is not None,
+            awesome_env_path=str(awesome_env),
+            awesome_env_exists=awesome_env.exists(),
             project_config_path=project_config_path,
             project_config_exists=project_config_exists,
             project_env_path=project_env_path,

@@ -12,7 +12,7 @@ out as those surfaces mature.
   remain runtime capabilities; chat-first product controls are roadmap work.
 - Approvals: exact-invocation approve once, deny, cancel Run, and durable
   approval records.
-- Extensions: project `skills/`, `awesome-agent.yaml`, and MCP sources.
+- Extensions: project and user-level `skills`, plus user-level MCP sources.
 - Diagnostics: `probe`, `diagnostics`, `recovery-metrics`, `budget`, and
   `context-compactions`.
 
@@ -39,8 +39,9 @@ details are available through slash commands such as `/status`, `/tools`,
 
 Use `awesome doctor` before the first model-backed local CLI session when setup
 is unclear. It reports `OK`, `WARN`, `ERROR`, and `INFO` lines plus executable
-next steps. Missing project `awesome-agent.yaml` and `.env` are informational;
-missing `AWESOME_AGENT_DEEPSEEK_API_KEY` is an error.
+next steps. Missing project `awesome-agent.yaml` is informational; a missing
+`AWESOME_AGENT_DEEPSEEK_API_KEY` in the OS environment and Awesome user env is
+an error for model-backed use.
 
 The startup welcome panel appears once per TUI session. It is not available as a
 slash command; use `/config`, `/model`, `/status`, or `awesome doctor` to inspect

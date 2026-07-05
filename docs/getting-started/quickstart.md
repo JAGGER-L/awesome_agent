@@ -1,5 +1,7 @@
 # Quickstart
 
+[English](quickstart.md) | [简体中文](quickstart.zh-CN.md)
+
 This guide shows how to configure, start, verify, and run `awesome_agent`
 through local CLI, local API, and Docker API/Web lanes.
 
@@ -9,7 +11,7 @@ API docs. It is not yet a hosted multi-user web application.
 The Makefile commands are the primary startup contract. Docker API mode uses
 `make docker-init` and `make docker-start`; local API development uses
 `make check`, `make install`, `make setup-sandbox`, and `make dev`; local
-interactive CLI uses `awesome` after Task 60. The existing PowerShell scripts
+interactive CLI uses `awesome`. The existing PowerShell scripts
 remain Windows fallback entrypoints.
 
 The durable profile and storage contract is defined in
@@ -24,27 +26,48 @@ The durable profile and storage contract is defined in
 - Git
 - Windows PowerShell for the helper scripts
 
+## Source Checkout
+
+Start from the repository source:
+
+```powershell
+git clone https://github.com/JAGGER-L/awesome_agent.git
+cd awesome_agent
+make check
+make install
+```
+
+`make check` validates host prerequisites. `make install` syncs the Python
+environment and installs the local `awesome` and `awesome-agent` commands.
+All startup lanes below assume this source checkout and installed environment.
+
 ## Configuration
 
 | File | Purpose |
 | --- | --- |
-| `.env` | Local secrets and runtime settings loaded by `Settings`. Copy from `.env.example`; do not commit real values. |
-| `awesome-agent.yaml` | Project extension sources such as skills and MCP. Do not store secrets here. |
+| `<AWESOME_HOME>/.env` | User-level Awesome secrets and runtime settings loaded by `Settings`; do not commit real values. |
+| `awesome-agent.yaml` | Project extension sources such as skills. Do not store secrets here. |
 | `skills/` | Project skill packages containing `SKILL.md`. |
-| `~/.awesome-agent/config.toml` | Local allowed-root state managed by `awesome-agent config root add/list/remove`. |
-| `~/.awesome-agent/threads/<thread_id>/workspace/` | Durable model-visible workspace for a Thread/Conversation. AIO Docker sees this as `/mnt/user-data/workspace/`. |
-| `~/.awesome-agent/runs/<run_id>/artifacts/` | Default local artifact storage. `AWESOME_AGENT_ARTIFACT_ROOT` overrides the runs root, not the per-run suffix. |
+| `<AWESOME_HOME>/awesome-agent.yaml` | User-level extension sources, including MCP sources. |
+| `<AWESOME_HOME>/skills/` | User-level skill packages containing `SKILL.md`. |
+| `<AWESOME_HOME>/config.toml` | Local allowed-root state managed by `awesome-agent config root add/list/remove`. |
+| `<AWESOME_HOME>/threads/<thread_id>/workspace/` | Durable model-visible workspace for a Thread/Conversation. AIO Docker sees this as `/mnt/user-data/workspace/`. |
+| `<AWESOME_HOME>/runs/<run_id>/artifacts/` | Default local artifact storage. `AWESOME_AGENT_ARTIFACT_ROOT` overrides the runs root, not the per-run suffix. |
 
-Create local configuration:
+`AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent` on Windows and
+`~/.awesome-agent` on other platforms. Set `AWESOME_HOME` to override it.
+
+Create the user-level Awesome home and env file:
 
 ```powershell
-Copy-Item .env.example .env
+awesome init
 ```
 
 Awesome Agent currently supports the official DeepSeek provider for product
 conversation turns. Configure `AWESOME_AGENT_DEEPSEEK_API_KEY` in your local
-ignored `.env` or shell environment. Custom DeepSeek-compatible base URLs are
-not supported by the product runtime. The default role models are
+Awesome env file or shell environment. Project `.env` files are not used for
+Awesome provider credentials. Custom DeepSeek-compatible base URLs are not
+supported by the product runtime. The default role models are
 `deepseek-v4-pro` for Leader and `deepseek-v4-flash` for Teammate, Verifier,
 and Subagent.
 
@@ -84,15 +107,16 @@ cd E:\my-project
 awesome
 ```
 
-`awesome init` creates `~/.awesome-agent/config.yaml`. The file stores model
-names and environment-variable names only. Set `AWESOME_AGENT_DEEPSEEK_API_KEY`
-in your shell, operating-system environment, password manager, or local `.env`
-file before model-backed use.
+`awesome init` creates `<AWESOME_HOME>/config.yaml`, `<AWESOME_HOME>/.env`,
+`<AWESOME_HOME>/awesome-agent.yaml`, and the runtime `skills`, `state`, `runs`,
+and `logs` directories without overwriting existing secrets. Set
+`AWESOME_AGENT_DEEPSEEK_API_KEY` in your shell, operating-system environment,
+password manager, or `<AWESOME_HOME>/.env` before model-backed use.
 
 `awesome doctor` checks only the local CLI first-run path: user config,
 the effective `AWESOME_AGENT_DEEPSEEK_API_KEY` from Settings, official DeepSeek
-base URL, current project config presence, and current project `.env` presence.
-It does not check API server, Docker, PostgreSQL, Worker, or sandbox health. Use
+base URL, current project config presence, and Awesome user env presence. It
+does not check API server, Docker, PostgreSQL, Worker, or sandbox health. Use
 `awesome-agent doctor --profile api` or
 `awesome-agent doctor --profile runtime` for developer/operator diagnostics.
 
@@ -140,7 +164,7 @@ Use an already running API + Worker:
 .\scripts\quickstart.ps1 -UseExistingRuntime
 ```
 
-The script installs local dependencies, ensures `.env` exists, starts
+The script installs local dependencies, ensures the Awesome user env exists, starts
 PostgreSQL, runs migrations, starts API + Worker, creates an ignored sample
 repository, verifies a diagnostic probe, and prints the first read-only run
 inspection steps. It does not require a model key unless you pass
@@ -152,7 +176,7 @@ Start local dependencies and the supervised runtime manually:
 
 ```powershell
 .\scripts\bootstrap.ps1
-Copy-Item .env.example .env
+awesome init
 docker compose up -d postgres
 .\scripts\migrate.ps1
 .\.venv\Scripts\awesome-agent.exe doctor --profile api
@@ -180,9 +204,9 @@ make docker-init
 make docker-start
 ```
 
-Docker mode does not start the CLI. Use `awesome` locally for CLI/TUI after
-Task 60. Docker Compose starts PostgreSQL, the AIO sandbox service, API, and
-Worker. Open `http://127.0.0.1:8000/docs` after startup.
+Docker mode does not start the CLI. Use `awesome` locally for CLI/TUI. Docker
+Compose starts PostgreSQL, the AIO sandbox service, API, and Worker. Open
+`http://127.0.0.1:8000/docs` after startup.
 
 ## Docker API Compatibility Script
 
@@ -198,11 +222,11 @@ Preview the Docker steps:
 .\scripts\docker-quickstart.ps1 -PlanOnly
 ```
 
-The script ensures `.env` exists, runs
-`docker compose up -d --build postgres sandbox api worker`, waits for API readiness,
-and prints CLI next steps that target the containerized API with `--api-url`.
-This is a developer/operator compatibility path, not the main local CLI product
-first-run path.
+The script ensures the Awesome user env exists, runs
+`docker compose up -d --build postgres sandbox api worker`, waits for API
+readiness, and prints CLI next steps that target the containerized API with
+`--api-url`. This is a developer/operator compatibility path, not the main
+local CLI product first-run path.
 
 ## Manual Docker API Fallback
 
@@ -250,9 +274,9 @@ configuration and Worker heartbeat.
 
 ## First Model-Backed User Message
 
-Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the local interactive
-runtime, open `awesome` from the project directory, then send a plain user
-message:
+Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the OS environment or
+`<AWESOME_HOME>/.env`, restart the local interactive runtime, open `awesome`
+from the project directory, then send a plain user message:
 
 ```text
 Build a single-file HTML timer in this folder.

@@ -19,6 +19,7 @@ from awesome_agent.modeling.execution import (
 from awesome_agent.modeling.execution_jsonl import decode_model_stream_event
 from awesome_agent.modeling.stream import ModelStreamEvent
 from awesome_agent.modeling.turns import ModelRequest
+from awesome_agent.paths import awesome_paths
 
 _STDERR_LIMIT = 8192
 
@@ -158,6 +159,7 @@ class ProcessModelExecutionBackend:
             src_root if not existing else f"{src_root}{os.pathsep}{existing}"
         )
         env.update(self.extra_env)
+        env.setdefault("AWESOME_HOME", str(awesome_paths().home))
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         return env

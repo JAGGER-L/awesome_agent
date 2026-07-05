@@ -78,6 +78,16 @@ function Test-ConfiguredDeepSeekKey {
     return $false
 }
 
+function Get-AwesomeHome {
+    if ($env:AWESOME_HOME) {
+        return $env:AWESOME_HOME
+    }
+    if ($env:LOCALAPPDATA) {
+        return (Join-Path $env:LOCALAPPDATA "awesome-agent")
+    }
+    return (Join-Path $HOME ".awesome-agent")
+}
+
 function Get-PostgresContainerId {
     $containerId = docker compose ps -q postgres 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
@@ -106,7 +116,9 @@ if ($PlanOnly) {
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Agent = Join-Path $Root ".venv\Scripts\awesome-agent.exe"
-$QuickstartRoot = Join-Path $HOME ".awesome-agent\runs\quickstart"
+$AwesomeHome = Get-AwesomeHome
+$env:AWESOME_HOME = $AwesomeHome
+$QuickstartRoot = Join-Path $AwesomeHome "runs\quickstart"
 if (-not $SampleRepoPath) {
     $SampleRepoPath = Join-Path $QuickstartRoot "sample-repo"
 }
@@ -119,13 +131,25 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Step "config"
-$EnvPath = Join-Path $Root ".env"
-if (-not (Test-Path -LiteralPath $EnvPath)) {
-    Copy-Item -LiteralPath (Join-Path $Root ".env.example") -Destination $EnvPath
-    Write-Output "quickstart.config=created .env"
+$EnvPath = Join-Path $AwesomeHome ".env"
+$EnvExisted = Test-Path -LiteralPath $EnvPath
+Push-Location $Root
+try {
+    Invoke-Checked -Command "uv" -Arguments @(
+        "run",
+        "python",
+        "-c",
+        "from awesome_agent.cli.config_flow import initialize_user_config; from awesome_agent.paths import awesome_paths; initialize_user_config(awesome_paths())"
+    )
+}
+finally {
+    Pop-Location
+}
+if ($EnvExisted) {
+    Write-Output "quickstart.config=exists awesome_env $EnvPath"
 }
 else {
-    Write-Output "quickstart.config=exists .env"
+    Write-Output "quickstart.config=created awesome_env $EnvPath"
 }
 
 $ProjectConfig = Join-Path $Root "awesome-agent.yaml"

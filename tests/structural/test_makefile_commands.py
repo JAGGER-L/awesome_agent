@@ -49,3 +49,14 @@ def test_docker_scripts_include_sandbox_service() -> None:
     assert '"sandbox"' in docker_start
     assert '"alembic", "upgrade", "head"' in docker_start
     assert "awesome-agent-sandbox:aio" in setup_sandbox
+
+
+def test_startup_scripts_do_not_create_repository_provider_env() -> None:
+    for script in [
+        Path("scripts/make/dev.py"),
+        Path("scripts/make/docker_start.py"),
+    ]:
+        text = script.read_text(encoding="utf-8")
+        assert 'ROOT / ".env"' not in text
+        assert "copyfile(ROOT / \".env.example\"" not in text
+        assert "awesome_env" in text

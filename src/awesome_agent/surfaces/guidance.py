@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from awesome_agent.cli.config_flow import ConfigFlowSummary
 
@@ -62,9 +63,11 @@ def missing_api_key_guidance(
 ) -> Guidance:
     return Guidance(
         title="API key is missing",
-        detail=f"{env_name} is not set in the current environment.",
+        detail=(
+            f"{env_name} is not set in the OS environment or Awesome user env file."
+        ),
         next_steps=(
-            f"Set {env_name} in your environment.",
+            f"Set {env_name} in your OS environment or the Awesome env file.",
             "Restart awesome after changing environment variables.",
             "Run: awesome doctor",
         ),
@@ -158,9 +161,9 @@ def build_cli_doctor_report(
 ) -> DoctorReport:
     api_key_detail = f"{summary.model_api_key_env} is missing"
     if summary.model_api_key_configured:
-        if summary.model_api_key_source == "settings":
+        if summary.model_api_key_source in {"settings", "awesome_env"}:
             api_key_detail = (
-                f"{summary.model_api_key_env} is configured through Settings"
+                f"{summary.model_api_key_env} is configured through Awesome env"
             )
         elif summary.model_api_key_source == "environment":
             api_key_detail = f"{summary.model_api_key_env} is set"
@@ -194,11 +197,11 @@ def build_cli_doctor_report(
         ),
         DoctorLine(
             DoctorStatus.INFO,
-            "Project env",
+            "Awesome env",
             (
-                str(summary.project_env)
-                if summary.project_env_exists
-                else f"{summary.project_env} not found"
+                str(_summary_awesome_env(summary))
+                if summary.awesome_env_exists
+                else f"{_summary_awesome_env(summary)} not found"
             ),
         ),
         DoctorLine(
@@ -233,3 +236,7 @@ def build_cli_doctor_report(
     if not next_steps:
         next_steps.append("Start: awesome")
     return DoctorReport(lines=tuple(lines), next_steps=tuple(dict.fromkeys(next_steps)))
+
+
+def _summary_awesome_env(summary: ConfigFlowSummary) -> Path:
+    return summary.awesome_env or summary.home / ".env"

@@ -20,12 +20,16 @@ class StartupExtensionRuntime:
     error: str | None = None
 
 
-def build_startup_extension_runtime(project_root: Path) -> StartupExtensionRuntime:
+def build_startup_extension_runtime(
+    project_root: Path,
+    *,
+    home: Path | None = None,
+) -> StartupExtensionRuntime:
     root = project_root.resolve()
     try:
-        config = load_project_extension_config(root)
+        config = load_project_extension_config(root, home=home)
         catalog = (
-            build_project_extension_catalog_sync(root)
+            build_project_extension_catalog_sync(root, home=home)
             if config.sources
             else empty_extension_catalog()
         )

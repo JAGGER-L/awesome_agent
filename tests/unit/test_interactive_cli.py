@@ -41,19 +41,34 @@ def test_awesome_init_creates_user_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    awesome_home = tmp_path / "awesome-home"
+    monkeypatch.setenv("AWESOME_HOME", str(awesome_home))
 
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
-    assert (tmp_path / ".awesome-agent" / "config.yaml").exists()
+    assert (awesome_home / "config.yaml").exists()
+    assert (awesome_home / ".env").exists()
+    assert (awesome_home / "awesome-agent.yaml").exists()
+    for directory in ["skills", "state", "runs", "logs"]:
+        assert (awesome_home / directory).is_dir()
     assert "Awesome Agent initialized" in result.output
+    assert f"OK    Awesome home: {awesome_home}" in result.output
     assert (
-        f"OK    User config: {tmp_path / '.awesome-agent' / 'config.yaml'}"
+        f"OK    User config: {awesome_home / 'config.yaml'}"
+        in result.output
+    )
+    assert f"OK    Awesome env: {awesome_home / '.env'}" in result.output
+    assert (
+        f"OK    Extension config: {awesome_home / 'awesome-agent.yaml'}"
         in result.output
     )
     assert "Next:" in result.output
-    assert "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your environment." in result.output
+    assert (
+        "Set AWESOME_AGENT_DEEPSEEK_API_KEY in your OS environment or "
+        "the Awesome env file."
+        in result.output
+    )
     assert "Run: awesome doctor" in result.output
     assert "Start: cd <project>; awesome" in result.output
 
@@ -66,7 +81,7 @@ def test_awesome_doctor_reports_missing_key_and_exits_one(
         deepseek_base_url = "https://api.deepseek.com"
         deepseek_api_key = None
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("AWESOME_HOME", str(tmp_path / "awesome-home"))
     monkeypatch.delenv("AWESOME_AGENT_DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr("awesome_agent.cli.interactive.Settings", FakeSettings)
 
@@ -77,7 +92,7 @@ def test_awesome_doctor_reports_missing_key_and_exits_one(
     assert "WARN  User config:" in result.output
     assert "ERROR API key: AWESOME_AGENT_DEEPSEEK_API_KEY is missing" in result.output
     assert "INFO  Project config:" in result.output
-    assert "INFO  Project env:" in result.output
+    assert "INFO  Awesome env:" in result.output
     assert "Runtime:" not in result.output
     assert "Worker:" not in result.output
     assert "Docker" not in result.output
@@ -88,11 +103,12 @@ def test_awesome_doctor_exits_zero_with_key_and_official_base_url(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    awesome_home = tmp_path / "awesome-home"
+    monkeypatch.setenv("AWESOME_HOME", str(awesome_home))
     monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_API_KEY", "test-key")
     monkeypatch.delenv("AWESOME_AGENT_DEEPSEEK_BASE_URL", raising=False)
-    (tmp_path / ".awesome-agent").mkdir()
-    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+    awesome_home.mkdir()
+    (awesome_home / "config.yaml").write_text(
         "version: 1\n",
         encoding="utf-8",
     )
@@ -114,11 +130,12 @@ def test_awesome_doctor_accepts_settings_loaded_api_key(
         deepseek_base_url = "https://api.deepseek.com"
         deepseek_api_key = object()
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    awesome_home = tmp_path / "awesome-home"
+    monkeypatch.setenv("AWESOME_HOME", str(awesome_home))
     monkeypatch.delenv("AWESOME_AGENT_DEEPSEEK_API_KEY", raising=False)
     monkeypatch.setattr("awesome_agent.cli.interactive.Settings", FakeSettings)
-    (tmp_path / ".awesome-agent").mkdir()
-    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+    awesome_home.mkdir()
+    (awesome_home / "config.yaml").write_text(
         "version: 1\n",
         encoding="utf-8",
     )
@@ -127,7 +144,8 @@ def test_awesome_doctor_accepts_settings_loaded_api_key(
 
     assert result.exit_code == 0
     assert (
-        "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is configured through Settings"
+        "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is configured through "
+        "Awesome env"
         in result.output
     )
     assert "ERROR API key" not in result.output
@@ -143,14 +161,15 @@ def test_awesome_doctor_reconciles_local_runtime_state(
         called.append(settings)
         return 0
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    awesome_home = tmp_path / "awesome-home"
+    monkeypatch.setenv("AWESOME_HOME", str(awesome_home))
     monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(
         "awesome_agent.cli.interactive.reconcile_local_runtime_state",
         record_reconcile,
     )
-    (tmp_path / ".awesome-agent").mkdir()
-    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+    awesome_home.mkdir()
+    (awesome_home / "config.yaml").write_text(
         "version: 1\n",
         encoding="utf-8",
     )
@@ -167,11 +186,12 @@ def test_awesome_doctor_rejects_custom_deepseek_base_url(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    awesome_home = tmp_path / "awesome-home"
+    monkeypatch.setenv("AWESOME_HOME", str(awesome_home))
     monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setenv("AWESOME_AGENT_DEEPSEEK_BASE_URL", "https://example.test")
-    (tmp_path / ".awesome-agent").mkdir()
-    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+    awesome_home.mkdir()
+    (awesome_home / "config.yaml").write_text(
         "version: 1\n",
         encoding="utf-8",
     )

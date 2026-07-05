@@ -52,9 +52,11 @@ def test_config_tab_uses_first_run_summary_and_memory_split(tmp_path: Path) -> N
         user_config=tmp_path / ".awesome-agent" / "config.yaml",
         project_config=tmp_path / "project" / "awesome-agent.yaml",
         project_env=tmp_path / "project" / ".env",
+        awesome_env=tmp_path / ".awesome-agent" / ".env",
         user_config_exists=True,
         project_config_exists=False,
         project_env_exists=False,
+        awesome_env_exists=False,
         model_name="deepseek-v4-pro",
         model_api_key_env="AWESOME_AGENT_DEEPSEEK_API_KEY",
         model_api_key_configured=False,
@@ -80,7 +82,7 @@ def test_config_tab_uses_first_run_summary_and_memory_split(tmp_path: Path) -> N
 
     assert "[Config]" in rendered
     assert f"Project config:     {summary.project_config} (missing)" in rendered
-    assert f"Project env:        {summary.project_env} (missing)" in rendered
+    assert f"Awesome env:        {summary.awesome_env} (missing)" in rendered
     assert "Provider:           deepseek" in rendered
     assert "API key:            AWESOME_AGENT_DEEPSEEK_API_KEY (missing)" in rendered
     assert "Base URL:           https://api.deepseek.com" in rendered

@@ -6,6 +6,7 @@ answer.
 ## New Users
 
 - [Quickstart](getting-started/quickstart.md)
+- [快速开始](getting-started/quickstart.zh-CN.md)
 - [Project README](../README.md)
 
 ## Runtime Users

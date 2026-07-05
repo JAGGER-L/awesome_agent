@@ -44,13 +44,15 @@ process memory.
 - Durable observability through query-table spans, model-call summaries,
   metrics, diagnostics, recovery metrics, trace IDs, and redacted API/CLI
   inspection.
-- Extension catalog foundations for project `skills/`, `awesome-agent.yaml`,
-  MCP sources, and community tool packages, all gated by capability resolution.
+- Extension catalog foundations for project and user-level `skills/`,
+  user-level MCP sources, and community tool packages, all gated by capability
+  resolution.
 
 ## Quick Start
 
 For the full guide, see
-[docs/getting-started/quickstart.md](docs/getting-started/quickstart.md).
+[docs/getting-started/quickstart.md](docs/getting-started/quickstart.md)
+or [docs/getting-started/quickstart.zh-CN.md](docs/getting-started/quickstart.zh-CN.md).
 The target startup profile contract is defined in
 [docs/design-docs/runtime-profiles-and-startup.md](docs/design-docs/runtime-profiles-and-startup.md).
 
@@ -62,19 +64,42 @@ The target startup profile contract is defined in
 - Docker Desktop or a compatible Docker engine
 - Windows PowerShell for the current helper scripts
 
-### Configure
+### Clone And Prepare
+
+Start from a source checkout:
 
 ```powershell
-Copy-Item .env.example .env
+git clone https://github.com/JAGGER-L/awesome_agent.git
+cd awesome_agent
+make check
+make install
 ```
 
-Put provider secrets in `.env`. The current product build supports only the
-official DeepSeek provider for conversation turns. Configure
-`AWESOME_AGENT_DEEPSEEK_API_KEY`; custom DeepSeek-compatible base URLs are not
-supported by the product runtime.
+`make check` verifies host prerequisites. `make install` syncs the Python
+environment and installs the local `awesome` and `awesome-agent` commands.
+
+### Configure Awesome Home
+
+```powershell
+awesome init
+```
+
+`awesome init` creates the user-level Awesome home. By default that is
+`%LOCALAPPDATA%\awesome-agent` on Windows and `~/.awesome-agent` on other
+platforms; set `AWESOME_HOME` to override it. Put provider secrets in the OS
+environment or `<AWESOME_HOME>/.env`, not in the project checkout. The current
+product build supports only the official DeepSeek provider for conversation
+turns. Configure `AWESOME_AGENT_DEEPSEEK_API_KEY`; custom DeepSeek-compatible
+base URLs are not supported by the product runtime.
 
 Keep extension source configuration in `awesome-agent.yaml`. Project skills
 are discovered from `skills/`. Do not put secrets in `awesome-agent.yaml`.
+
+Run a local CLI setup check after adding a provider key:
+
+```powershell
+awesome doctor
+```
 
 ### Choose A Run Mode
 
@@ -123,6 +148,7 @@ service, API, and Worker.
 
 ```powershell
 .\scripts\bootstrap.ps1
+awesome init
 docker compose up -d postgres
 .\scripts\migrate.ps1
 .\.venv\Scripts\awesome-agent.exe doctor --profile api
@@ -135,6 +161,10 @@ The PowerShell quickstart remains available:
 .\scripts\quickstart.ps1
 .\scripts\docker-quickstart.ps1
 ```
+
+Use the read-only validation option only when a provider key is configured and
+you explicitly want the optional model-backed validation path, for example
+`awesome-agent.exe probe --read-only`.
 
 `docker-quickstart.ps1` is a developer/operator compatibility path for the
 containerized API lane. It is not the normal local CLI first-run path.
@@ -154,10 +184,11 @@ cd E:\my-project
 awesome
 ```
 
-`awesome init` creates `~/.awesome-agent/config.yaml`. The file stores model
-names and environment-variable names only. Set `AWESOME_AGENT_DEEPSEEK_API_KEY`
-in your shell, operating-system environment, password manager, or local `.env`
-file before model-backed use.
+`awesome init` creates `<AWESOME_HOME>/config.yaml`, `<AWESOME_HOME>/.env`,
+`<AWESOME_HOME>/awesome-agent.yaml`, and the runtime `skills`, `state`, `runs`,
+and `logs` directories without overwriting existing secrets. Set
+`AWESOME_AGENT_DEEPSEEK_API_KEY` in your shell, operating-system environment,
+password manager, or `<AWESOME_HOME>/.env` before model-backed use.
 
 `awesome doctor` is for local CLI first-run checks. It does not replace
 `awesome-agent doctor --profile api/runtime`, which remains the developer and
@@ -227,9 +258,9 @@ Verify the durable runtime without a model key:
 
 ### First Model-Backed User Message
 
-Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in `.env`, restart the local interactive
-runtime, open `awesome` from the project directory, then send a plain user
-message:
+Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the OS environment or
+`<AWESOME_HOME>/.env`, restart the local interactive runtime, open `awesome`
+from the project directory, then send a plain user message:
 
 ```text
 Build a single-file HTML timer in this folder.
@@ -258,14 +289,17 @@ optional model-backed validation path.
 ## Extensions
 
 Project extension configuration lives in `awesome-agent.yaml`. It is for
-extension sources such as project skill roots and MCP sources, not for secrets.
-Keep provider keys and runtime settings in `.env` or environment variables.
+project-local extension sources such as project skill roots, not for secrets.
+Keep provider keys and runtime settings in `<AWESOME_HOME>/.env` or
+environment variables.
 
-Project skills live under `skills/`; each skill package contains a `SKILL.md`.
-Skills can request instructions, context, and tool capabilities, but they do
-not grant execution authority by themselves. MCP and community tools enter
-through the extension catalog and still pass through exposure, capability,
-approval, budget, execution, and observability boundaries.
+Project skills live under `skills/`, and user-level skills live under
+`<AWESOME_HOME>/skills/`; each skill package contains a `SKILL.md`. Skills
+can request instructions, context, and tool capabilities, but they do not grant
+execution authority by themselves. MCP sources are loaded from the user-level
+Awesome configuration path, not from project configuration. MCP and community
+tools enter through the extension catalog and still pass through exposure,
+capability, approval, budget, execution, and observability boundaries.
 
 ## Operations
 
@@ -332,6 +366,7 @@ hosted product workflows remain future work tracked in the roadmap.
 
 - [Documentation map](docs/README.md)
 - [Quickstart](docs/getting-started/quickstart.md)
+- [快速开始](docs/getting-started/quickstart.zh-CN.md)
 - [User guide](docs/user-guide/README.md)
 - [Operations guide](docs/operations/README.md)
 - [Architecture](ARCHITECTURE.md)
@@ -343,13 +378,14 @@ hosted product workflows remain future work tracked in the roadmap.
 
 ## Security Note
 
-Keep secrets out of committed files. Use `.env` for local provider keys and
-machine-specific runtime settings. Run untrusted code through Docker-backed
-`aio-docker` sandboxing for API-created Runs. LocalSandbox is reserved for the
-local CLI/TUI profile or explicit trusted local operation.
+Keep secrets out of committed files. Use the OS environment or
+`<AWESOME_HOME>/.env` for local provider keys and machine-specific runtime
+settings. Run untrusted code through Docker-backed `aio-docker` sandboxing for
+API-created Runs. LocalSandbox is reserved for the local CLI/TUI profile or
+explicit trusted local operation.
 
 Thread workspaces persist under
-`~/.awesome-agent/threads/<thread_id>/workspace/`. Generated files are presented
+`<AWESOME_HOME>/threads/<thread_id>/workspace/`. Generated files are presented
 as workspace changes in the TUI. Internal run evidence can persist under
-`~/.awesome-agent/runs/<run_id>/artifacts/`, but users normally interact with
-the files in their launch workspace/project.
+`<AWESOME_HOME>/runs/<run_id>/artifacts/`, but users normally interact with the
+files in their launch workspace/project.

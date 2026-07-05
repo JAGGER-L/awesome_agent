@@ -54,6 +54,16 @@ function Wait-JsonEndpoint {
     throw "Endpoint did not become ready: $Url last_error=$lastError"
 }
 
+function Get-AwesomeHome {
+    if ($env:AWESOME_HOME) {
+        return $env:AWESOME_HOME
+    }
+    if ($env:LOCALAPPDATA) {
+        return (Join-Path $env:LOCALAPPDATA "awesome-agent")
+    }
+    return (Join-Path $HOME ".awesome-agent")
+}
+
 if ($PlanOnly) {
     foreach ($Step in @(
         "config",
@@ -68,15 +78,29 @@ if ($PlanOnly) {
 }
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$AwesomeHome = Get-AwesomeHome
+$env:AWESOME_HOME = $AwesomeHome
 
 Write-Step "config"
-$EnvPath = Join-Path $Root ".env"
-if (-not (Test-Path -LiteralPath $EnvPath)) {
-    Copy-Item -LiteralPath (Join-Path $Root ".env.example") -Destination $EnvPath
-    Write-Output "docker-quickstart.config=created .env"
+$EnvPath = Join-Path $AwesomeHome ".env"
+$EnvExisted = Test-Path -LiteralPath $EnvPath
+Push-Location $Root
+try {
+    Invoke-Checked -Command "uv" -Arguments @(
+        "run",
+        "python",
+        "-c",
+        "from awesome_agent.cli.config_flow import initialize_user_config; from awesome_agent.paths import awesome_paths; initialize_user_config(awesome_paths())"
+    )
+}
+finally {
+    Pop-Location
+}
+if ($EnvExisted) {
+    Write-Output "docker-quickstart.config=exists awesome_env $EnvPath"
 }
 else {
-    Write-Output "docker-quickstart.config=exists .env"
+    Write-Output "docker-quickstart.config=created awesome_env $EnvPath"
 }
 
 Write-Step "compose_up"
