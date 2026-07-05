@@ -11,7 +11,6 @@ from awesome_agent.runtime.graphs import (
     MODIFYING_CODING_ROUTE,
     READ_ONLY_CODING_ROUTE,
     RUNTIME_PROBE_ROUTE,
-    SCOPED_TEAM_CODING_ROUTE,
     TEAM_CODING_ROUTE,
     TEAM_ROLE_ROUTE,
     TEAM_VERIFIER_ROUTE,
@@ -32,7 +31,6 @@ class GraphRouteMap:
     conversation_graph: Any | None = None
     coding_graph: Any | None = None
     modifying_graph: Any | None = None
-    team_graph: Any | None = None
     team_leader_graph: Any | None = None
     team_role_graph: Any | None = None
     team_verifier_graph: Any | None = None
@@ -56,8 +54,6 @@ class GraphRouteMap:
                 return self._configured("readonly", route, run, self.coding_graph)
             if route == MODIFYING_CODING_ROUTE:
                 return self._configured("modifying", route, run, self.modifying_graph)
-            if route == SCOPED_TEAM_CODING_ROUTE:
-                return self._configured("team-scoped", route, run, self.team_graph)
             if route == TEAM_CODING_ROUTE:
                 return self._configured(
                     "team-leader",

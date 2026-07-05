@@ -242,8 +242,6 @@ Before ending, confirm that:
   sandbox factory adapters.
 - `src/awesome_agent/observability/`: observability facade, repository, OTel,
   and setup helpers.
-- `src/awesome_agent/orchestration/`: older planning/team orchestration models;
-  prefer current runtime/team modules for product execution behavior.
 - `src/awesome_agent/agents/`: agent profile definitions.
 - `migrations/`: Alembic database migrations for PostgreSQL-backed modes.
 - `sandbox/`: sandbox service implementation and related files.

@@ -32,9 +32,7 @@ The kernel owns:
 - cancellation, retry, and recovery semantics
 
 The kernel does not own user-interface rendering, product copy, local execution
-plans under `.codex/`, or long-term roadmap sequencing.
-
-Legacy orchestration modules are compatibility paths only; new durable runtime
+plans under `.codex/`, or long-term roadmap sequencing. New durable runtime
 work follows [Legacy Runtime Paths](legacy-runtime-paths.md).
 
 ## Approval Resume Contract

@@ -12,7 +12,6 @@ from awesome_agent.runtime.graphs import (
     CONVERSATION_TURN_ROUTE,
     MODIFYING_CODING_ROUTE,
     READ_ONLY_CODING_ROUTE,
-    SCOPED_TEAM_CODING_ROUTE,
     TEAM_CODING_ROUTE,
     TEAM_ROLE_ROUTE,
     TEAM_VERIFIER_ROUTE,
@@ -58,7 +57,6 @@ def test_graph_route_map_rejects_wrong_conversation_route() -> None:
     [
         (READ_ONLY_CODING_ROUTE, "coding_graph"),
         (MODIFYING_CODING_ROUTE, "modifying_graph"),
-        (SCOPED_TEAM_CODING_ROUTE, "team_graph"),
         (TEAM_CODING_ROUTE, "team_leader_graph"),
         (TEAM_ROLE_ROUTE, "team_role_graph"),
         (TEAM_VERIFIER_ROUTE, "team_verifier_graph"),
@@ -78,3 +76,17 @@ def test_graph_route_map_rejects_unconfigured_route() -> None:
 
     with pytest.raises(IncompatibleGraphError):
         routes.select(_run(kind=ExecutionKind.CODING, route=MODIFYING_CODING_ROUTE))
+
+
+def test_retired_scoped_team_route_is_not_selectable() -> None:
+    routes = GraphRouteMap(
+        probe_graph=object(),
+        team_leader_graph=object(),
+        team_role_graph=object(),
+        team_verifier_graph=object(),
+    )
+
+    with pytest.raises(IncompatibleGraphError):
+        routes.select(
+            _run(kind=ExecutionKind.CODING, route="team-coding" + "-scoped")
+        )

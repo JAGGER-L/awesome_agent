@@ -206,14 +206,12 @@ awesome-agent start
 
 Each Worker process executes at most one Run. Workers always claim the
 diagnostic `runtime-probe` route and, when model providers are configured, also
-claim `solo-readonly`, `solo-modifying`, and the distributed `team-coding`,
-`team-role`, and `team-verifier` routes. `team-coding-scoped` may still be
-injected explicitly as a compatibility route, but runtime readiness does not
-require it. Workers also publish process heartbeat rows for readiness; Run
-lease heartbeat remains a separate fencing mechanism. A crashed Worker leaves
-its checkpoint and lease; after lease expiry, a replacement Worker claims with
-a new fencing token and resumes from the checkpoint. Unsupported runtime routes
-enter `recovery_required`.
+claim `solo-readonly`, `solo-modifying`, `conversation-turn`, `team-coding`,
+`team-role`, and `team-verifier` routes. Workers also publish process heartbeat
+rows for readiness; Run lease heartbeat remains a separate fencing mechanism.
+A crashed Worker leaves its checkpoint and lease; after lease expiry, a
+replacement Worker claims with a new fencing token and resumes from the
+checkpoint. Unsupported runtime routes enter `recovery_required`.
 
 ## Agent Orchestration Topology
 
@@ -268,13 +266,7 @@ The Verifier is a specialized Teammate created whenever team mode starts.
 Teammate output reaches the Leader only after verification passes or after
 rejected work is revised and re-verified.
 
-Scoped `team-coding-scoped` uses one Run, one Worker claim, and one LangGraph
-checkpoint thread. The graph creates durable internal agent sessions for two
-Teammates, one Verifier, and bounded Subagents, and it records model calls,
-tool invocations, Todo transitions, validation reports, events, and
-observability spans.
-
-Distributed `team-coding` is the forward architecture. The root Leader Run
+Distributed `team-coding` is the product architecture. The root Leader Run
 creates child Runs with durable lineage. The Leader calls the model through
 `TeamAgentLoop` middleware for a validated structured `TeamPlan` and creates
 Teammate child Runs from that plan; it does not create or direct Subagents.
@@ -356,7 +348,6 @@ src/
 `-- awesome_agent/
     |-- agents/
     |-- modeling/
-    |-- orchestration/
     |-- domain/
     |-- providers/
     |-- tools/
@@ -379,18 +370,18 @@ loading repository files.
 
 ```text
 api / cli
-    -> orchestration
+    -> runtime
         -> modeling
         -> domain
 
 providers / tools / sandbox / memory / persistence / observability / artifacts
-    implement ports owned by domain or orchestration
+    implement ports owned by domain, modeling, or runtime
 ```
 
 Rules:
 
 - `domain` does not import infrastructure or framework modules.
-- `orchestration` owns workflows but not concrete storage or provider details.
+- `runtime` owns durable workflows but not concrete storage or provider details.
 - provider-specific message types do not cross provider boundaries.
 - `modeling` owns provider-neutral messages, tools, turns, reasoning,
   continuation, usage, streaming events, and failure categories.
@@ -405,7 +396,7 @@ These rules must be enforced with structural tests once source modules exist.
 ## Structured Model Boundary
 
 ```text
-orchestration / memory
+runtime / memory
         |
         | ModelRequest(messages, tools, continuation)
         v
@@ -422,9 +413,10 @@ reasoning/text/tool deltas -> completed ModelTurn
 Visible reasoning is a frontend-capable trace. Private continuation is a
 separate opaque JSON value used only by the matching adapter and LangGraph
 checkpoint. SDK objects, encrypted continuation data, and provider-specific
-message types never enter orchestration, events, logs, memory, or public APIs.
+message types never enter runtime events, logs, memory, or public APIs.
 The Worker connects provider-neutral model turns to solo read-only, solo
-modifying, and explicit team Coding graphs when a model provider is configured.
+modifying, and distributed team coding graphs when a model provider is
+configured.
 
 Provider routing sits between AgentLoop model-call policy and concrete provider
 clients. A router returns ordered provider/model candidates for a runtime
@@ -471,12 +463,10 @@ distributed team routes `team-coding`, `team-role`, and `team-verifier`. The
 caller must request team mode; default modifying Runs stay on the solo
 modifying graph.
 
-`team-coding-scoped` is a real but bounded team runtime path. Intake creates only
-the Leader. The graph then creates role assignments with `allowed_tools` and
-`allowed_skills`, a backend Teammate, a repository-explorer Teammate, one
-Verifier, and a backend-owned read-only Subagent. Repository tools still execute
-through the central `ToolExecutor`; tools not granted by the Leader assignment
-are rejected before execution.
+The legacy scoped team route `team-coding-scoped` has been retired. Historical
+stored rows may still exist, but current Workers do not claim or execute that
+route; non-terminal historical scoped rows should be cancelled and recreated
+through the distributed team runtime.
 
 Distributed `team-role` uses the same runtime tool registry and executor as the
 API/local/worker tool assembly. Team-native control tools stay in-process, but
