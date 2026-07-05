@@ -63,10 +63,12 @@ def launch(
         return
     resolved_project_root = project_root or Path.cwd()
     launch_context = discover_launch_context(resolved_project_root)
+    settings = Settings()
     config_summary = inspect_config_flow(
         home=Path.home(),
         project_root=launch_context.project_root,
         environ=environ,
+        settings_api_key_configured=settings.deepseek_api_key is not None,
     )
     _load_tui()(
         api_url=api_url,
@@ -105,14 +107,16 @@ def doctor(
 ) -> None:
     """Check local CLI first-run setup."""
     resolved_project_root = project_root or Path.cwd()
+    settings = Settings()
     summary = inspect_config_flow(
         home=Path.home(),
         project_root=resolved_project_root,
         environ=environ,
+        settings_api_key_configured=settings.deepseek_api_key is not None,
     )
     report = build_cli_doctor_report(
         summary,
-        deepseek_base_url=Settings().deepseek_base_url,
+        deepseek_base_url=settings.deepseek_base_url,
     )
     typer.echo(report.render())
     raise typer.Exit(report.exit_code)

@@ -32,3 +32,32 @@ def test_inspect_config_flow_reports_missing_api_key(tmp_path: Path) -> None:
     assert summary.user_config_exists is True
     assert summary.model_api_key_env == "AWESOME_AGENT_DEEPSEEK_API_KEY"
     assert summary.model_api_key_configured is False
+    assert summary.model_api_key_source is None
+
+
+def test_inspect_config_flow_reports_settings_api_key_source(tmp_path: Path) -> None:
+    create_default_user_config(tmp_path)
+
+    summary = inspect_config_flow(
+        home=tmp_path,
+        project_root=tmp_path / "project",
+        environ={},
+        settings_api_key_configured=True,
+    )
+
+    assert summary.model_api_key_configured is True
+    assert summary.model_api_key_source == "settings"
+
+
+def test_inspect_config_flow_prefers_process_env_source(tmp_path: Path) -> None:
+    create_default_user_config(tmp_path)
+
+    summary = inspect_config_flow(
+        home=tmp_path,
+        project_root=tmp_path / "project",
+        environ={"AWESOME_AGENT_DEEPSEEK_API_KEY": "test-key"},
+        settings_api_key_configured=True,
+    )
+
+    assert summary.model_api_key_configured is True
+    assert summary.model_api_key_source == "environment"

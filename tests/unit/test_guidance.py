@@ -18,6 +18,7 @@ def _summary(
     project_config_exists: bool = False,
     project_env_exists: bool = False,
     api_key_configured: bool = False,
+    api_key_source: str | None = None,
 ) -> ConfigFlowSummary:
     return ConfigFlowSummary(
         home=tmp_path,
@@ -31,6 +32,7 @@ def _summary(
         model_name="deepseek-v4-pro",
         model_api_key_env="AWESOME_AGENT_DEEPSEEK_API_KEY",
         model_api_key_configured=api_key_configured,
+        model_api_key_source=api_key_source,
     )
 
 
@@ -93,3 +95,25 @@ def test_cli_doctor_report_rejects_custom_base_url(tmp_path: Path) -> None:
     assert "ERROR Base URL:" in rendered
     assert "https://api.deepseek.com" in rendered
     assert report.exit_code == 1
+
+
+def test_cli_doctor_report_accepts_settings_configured_api_key(
+    tmp_path: Path,
+) -> None:
+    report = build_cli_doctor_report(
+        _summary(
+            tmp_path,
+            user_config_exists=True,
+            api_key_configured=True,
+            api_key_source="settings",
+        ),
+        deepseek_base_url=OFFICIAL_DEEPSEEK_BASE_URL,
+    )
+
+    rendered = report.render()
+    assert (
+        "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is configured through Settings"
+        in rendered
+    )
+    assert "ERROR API key" not in rendered
+    assert report.exit_code == 0
