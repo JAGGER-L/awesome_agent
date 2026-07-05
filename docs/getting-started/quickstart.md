@@ -2,316 +2,321 @@
 
 [English](quickstart.md) | [简体中文](quickstart.zh-CN.md)
 
-This guide shows how to configure, start, verify, and run `awesome_agent`
-through local CLI, local API, and Docker API/Web lanes.
+This guide gets you from a fresh checkout to one working Awesome Agent setup.
+Choose one of three modes:
 
-The current "Web" surface is the local FastAPI inspection surface and generated
-API docs. It is not yet a hosted multi-user web application.
+| Mode | Best for |
+| --- | --- |
+| Local CLI | Daily coding work inside a local project. |
+| Local API | Running Awesome as a local API service. Currently Windows only. |
+| Docker API | Running the API service through Docker. Currently Windows only. |
 
-The Makefile commands are the primary startup contract. Docker API mode uses
-`make docker-init` and `make docker-start`; local API development uses
-`make check`, `make install`, `make setup-sandbox`, and `make dev`; local
-interactive CLI uses `awesome`. The existing PowerShell scripts
-remain Windows fallback entrypoints.
+## Before You Start
 
-The durable profile and storage contract is defined in
-[runtime profiles and startup](../design-docs/runtime-profiles-and-startup.md).
-
-## Prerequisites
+Install the prerequisites:
 
 - Python 3.12
 - `uv`
-- GNU Make for the primary Makefile commands
-- Docker Desktop or a compatible Docker engine
 - Git
-- Windows PowerShell for the helper scripts
+- Docker Desktop on Windows, if you plan to use Local API or Docker API
+- GNU Make, or an equivalent way to run the Makefile commands
 
-## Source Checkout
+Clone and install Awesome:
 
-Start from the repository source:
+Windows PowerShell:
 
 ```powershell
 git clone https://github.com/JAGGER-L/awesome_agent.git
 cd awesome_agent
-make check
 make install
 ```
 
-`make check` validates host prerequisites. `make install` syncs the Python
-environment and installs the local `awesome` and `awesome-agent` commands.
-All startup lanes below assume this source checkout and installed environment.
+macOS/Linux:
 
-## Configuration
+```bash
+git clone https://github.com/JAGGER-L/awesome_agent.git
+cd awesome_agent
+make install
+```
 
-| File | Purpose |
-| --- | --- |
-| `<AWESOME_HOME>/.env` | User-level Awesome secrets and runtime settings loaded by `Settings`; do not commit real values. |
-| `awesome-agent.yaml` | Project extension sources such as skills. Do not store secrets here. |
-| `skills/` | Project skill packages containing `SKILL.md`. |
-| `<AWESOME_HOME>/awesome-agent.yaml` | User-level extension sources, including MCP sources. |
-| `<AWESOME_HOME>/skills/` | User-level skill packages containing `SKILL.md`. |
-| `<AWESOME_HOME>/config.toml` | Local allowed-root state managed by `awesome-agent config root add/list/remove`. |
-| `<AWESOME_HOME>/threads/<thread_id>/workspace/` | Durable model-visible workspace for a Thread/Conversation. AIO Docker sees this as `/mnt/user-data/workspace/`. |
-| `<AWESOME_HOME>/runs/<run_id>/artifacts/` | Default local artifact storage. `AWESOME_AGENT_ARTIFACT_ROOT` overrides the runs root, not the per-run suffix. |
+Create Awesome's user directory:
 
-`AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent` on Windows and
-`~/.awesome-agent` on other platforms. Set `AWESOME_HOME` to override it.
-
-Create the user-level Awesome home and env file:
+Windows PowerShell:
 
 ```powershell
 awesome init
 ```
 
-Awesome Agent currently supports the official DeepSeek provider for product
-conversation turns. Configure `AWESOME_AGENT_DEEPSEEK_API_KEY` in your local
-Awesome env file or shell environment. Project `.env` files are not used for
-Awesome provider credentials. Custom DeepSeek-compatible base URLs are not
-supported by the product runtime. The default role models are
-`deepseek-v4-pro` for Leader and `deepseek-v4-flash` for Teammate, Verifier,
-and Subagent.
+macOS/Linux:
 
-## Quickstart Matrix
-
-| Mode | Best for | Command | Success signal |
-| --- | --- | --- | --- |
-| Local CLI | Interactive local coding-agent entrypoint | `awesome`, `awesome commands` | Slash commands print without a running API. |
-| Local API | API + Worker inspection from host Python | `make check`, `make install`, `make setup-sandbox`, `make dev` | `/health` and `/ready?profile=api` return healthy JSON. |
-| Docker API/Web | Browser/API inspection against containerized API | `make docker-init`, `make docker-start` | `http://127.0.0.1:8000/docs` opens the FastAPI docs. |
-| Local CLI fallback | First local run and development | `.\scripts\quickstart.ps1` | Probe Run completes and diagnostics are printable. |
-
-## Local API
-
-Run the Makefile-first local API path:
-
-```powershell
-make check
-make install
-make setup-sandbox
-make dev
+```bash
+awesome init
 ```
 
-`make setup-sandbox` builds the AIO Docker sandbox service image
-`awesome-agent-sandbox:aio`.
-`make dev` starts PostgreSQL, runs migrations, starts API + Worker, and prints
-the local API and docs URLs. It does not start the CLI/TUI.
+Add your model key. You can use an operating-system environment variable:
 
-## Local CLI
+Windows PowerShell:
 
-For a first local CLI launch:
+```powershell
+setx AWESOME_AGENT_DEEPSEEK_API_KEY "your-key"
+```
+
+macOS/Linux:
+
+```bash
+export AWESOME_AGENT_DEEPSEEK_API_KEY="your-key"
+```
+
+Or add it to `<AWESOME_HOME>/.env`.
+
+Windows PowerShell:
+
+```powershell
+$AwesomeHome = if ($env:AWESOME_HOME) { $env:AWESOME_HOME } else { Join-Path $env:LOCALAPPDATA "awesome-agent" }
+New-Item -ItemType Directory -Force $AwesomeHome | Out-Null
+Set-Content -Path (Join-Path $AwesomeHome ".env") -Value "AWESOME_AGENT_DEEPSEEK_API_KEY=your-key"
+```
+
+macOS/Linux:
+
+```bash
+mkdir -p "${AWESOME_HOME:-$HOME/.awesome-agent}"
+printf 'AWESOME_AGENT_DEEPSEEK_API_KEY=your-key\n' > "${AWESOME_HOME:-$HOME/.awesome-agent}/.env"
+```
+
+Do not put this key in your project `.env`. Awesome reads provider keys from
+the OS environment or from `<AWESOME_HOME>/.env`.
+
+On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent`. On other
+platforms, it defaults to `~/.awesome-agent`.
+
+## Choose A Mode
+
+Use this table to choose the path to follow:
+
+| Mode | Choose this if | Main command |
+| --- | --- | --- |
+| Local CLI | You want to chat with Awesome in a project folder. | `awesome` |
+| Local API | You want a local API endpoint and browser API docs. Currently Windows only. | `make dev` |
+| Docker API | You want the API service to run through Docker. Currently Windows only. | `make docker-start` |
+
+## Option 1: Local CLI
+
+### When To Use
+
+Use Local CLI when you want Awesome to work directly inside a local project.
+This is the simplest path and the recommended starting point.
+
+### Configure
+
+From the Awesome checkout:
+
+Windows PowerShell:
 
 ```powershell
 awesome init
 awesome doctor
-cd E:\my-project
-awesome
 ```
 
-`awesome init` creates `<AWESOME_HOME>/config.yaml`, `<AWESOME_HOME>/.env`,
-`<AWESOME_HOME>/awesome-agent.yaml`, and the runtime `skills`, `state`, `runs`,
-and `logs` directories without overwriting existing secrets. Set
-`AWESOME_AGENT_DEEPSEEK_API_KEY` in your shell, operating-system environment,
-password manager, or `<AWESOME_HOME>/.env` before model-backed use.
+macOS/Linux:
 
-`awesome doctor` checks only the local CLI first-run path: user config,
-the effective `AWESOME_AGENT_DEEPSEEK_API_KEY` from Settings, official DeepSeek
-base URL, current project config presence, and Awesome user env presence. It
-does not check API server, Docker, PostgreSQL, Worker, or sandbox health. Use
-`awesome-agent doctor --profile api` or
-`awesome-agent doctor --profile runtime` for developer/operator diagnostics.
-
-Open the local interactive entrypoint:
-
-```powershell
-cd E:\my-project
-awesome
-awesome commands
-```
-
-Run `awesome` from the project directory you want the agent to work on. The
-launch directory becomes the default thread context. If it is a Git checkout,
-Runs inherit that repository. If it is not a Git checkout, the CLI uses
-workspace-only mode and still accepts user message turns.
-
-`awesome` does not require an API before launch. It defaults to the local CLI
-profile and LocalSandbox, then opens the chat-first local CLI/TUI. This is a
-trusted-local convenience mode; API profiles use AIO Docker by default. Use
-`awesome-agent` subcommands for direct operations, diagnostics, and scripting.
-
-## Local CLI Fallback
-
-Run the automated local path:
-
-```powershell
-.\scripts\quickstart.ps1
-```
-
-Preview the steps without side effects:
-
-```powershell
-.\scripts\quickstart.ps1 -PlanOnly
-```
-
-Keep the runtime running after the script exits:
-
-```powershell
-.\scripts\quickstart.ps1 -KeepRuntime
-```
-
-Use an already running API + Worker:
-
-```powershell
-.\scripts\quickstart.ps1 -UseExistingRuntime
-```
-
-The script installs local dependencies, ensures the Awesome user env exists, starts
-PostgreSQL, runs migrations, starts API + Worker, creates an ignored sample
-repository, verifies a diagnostic probe, and prints the first read-only run
-inspection steps. It does not require a model key unless you pass
-`-RunReadOnly`.
-
-## Manual Local API Fallback
-
-Start local dependencies and the supervised runtime manually:
-
-```powershell
-.\scripts\bootstrap.ps1
+```bash
 awesome init
-docker compose up -d postgres
-.\scripts\migrate.ps1
-.\.venv\Scripts\awesome-agent.exe doctor --profile api
-.\.venv\Scripts\awesome-agent.exe start
+awesome doctor
 ```
 
-`awesome-agent start` is a fallback/debug supervisor for API + Worker in one
-local process group. Prefer `make dev` for normal local API development.
+If `awesome doctor` reports a missing API key, add
+`AWESOME_AGENT_DEEPSEEK_API_KEY` to the OS environment or `<AWESOME_HOME>/.env`,
+then restart your terminal.
 
-The API address is `http://127.0.0.1:8000`.
+### Start
 
-Check readiness:
+Open the project you want Awesome to work on:
+
+Windows PowerShell:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-RestMethod "http://127.0.0.1:8000/ready?profile=api"
+cd E:\my-project
+awesome
 ```
 
-## Docker API/Web
+macOS/Linux:
 
-Prepare and start the Docker API stack:
+```bash
+cd ~/my-project
+awesome
+```
+
+### Verify
+
+Send a normal message:
+
+```text
+Read this project and explain how it is organized.
+```
+
+Success means the welcome screen does not show a missing-key error and Awesome
+starts responding in the terminal.
+
+### Stop
+
+Use `/quit` inside Awesome, or press `Ctrl+C`.
+
+## Option 2: Local API
+
+### When To Use
+
+Use Local API when you want Awesome available through a local API endpoint or
+you want to inspect the generated API docs in a browser.
+
+Local API is currently documented and supported for Windows only.
+
+### Configure
+
+From the Awesome checkout:
+
+```powershell
+awesome init
+```
+
+Make sure your API key is set in the OS environment or `<AWESOME_HOME>/.env`.
+
+### Deploy
+
+Prepare Local API support:
+
+```powershell
+make setup-sandbox
+```
+
+### Start
+
+Start the local API mode:
+
+```powershell
+make dev
+```
+
+### Verify
+
+Open:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Success means the API docs page loads in your browser.
+
+### Stop
+
+Return to the terminal running `make dev` and press `Ctrl+C`.
+
+## Option 3: Docker API
+
+### When To Use
+
+Use Docker API when you want the API service to run through Docker instead of
+directly from your host Python environment.
+
+Docker API is currently documented and supported for Windows only.
+
+Docker API does not start Local CLI. Use `awesome` separately if you also want
+the terminal chat interface.
+
+### Configure
+
+From the Awesome checkout:
+
+```powershell
+awesome init
+```
+
+Make sure Docker Desktop is running and your API key is set in the OS
+environment or `<AWESOME_HOME>/.env`.
+
+### Deploy
+
+Prepare the Docker API mode:
 
 ```powershell
 make docker-init
+```
+
+### Start
+
+Start the Docker API mode:
+
+```powershell
 make docker-start
 ```
 
-Docker mode does not start the CLI. Use `awesome` locally for CLI/TUI. Docker
-Compose starts PostgreSQL, the AIO sandbox service, API, and Worker. Open
-`http://127.0.0.1:8000/docs` after startup.
+### Verify
 
-## Docker API Compatibility Script
-
-Run the containerized API + Worker lane:
-
-```powershell
-.\scripts\docker-quickstart.ps1
-```
-
-Preview the Docker steps:
-
-```powershell
-.\scripts\docker-quickstart.ps1 -PlanOnly
-```
-
-The script ensures the Awesome user env exists, runs
-`docker compose up -d --build postgres sandbox api worker`, waits for API
-readiness, and prints CLI next steps that target the containerized API with
-`--api-url`. This is a developer/operator compatibility path, not the main
-local CLI product first-run path.
-
-## Manual Docker API Fallback
-
-Start the Docker services directly:
-
-```powershell
-docker compose up -d --build postgres sandbox api worker
-```
-
-Inspect the API:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-RestMethod "http://127.0.0.1:8000/ready?profile=api"
-```
-
-Open `http://127.0.0.1:8000/docs` for generated FastAPI documentation.
-
-Docker runtime data lives in the `awesome_agent_runtime` volume. Per-run
-artifacts are stored under `/var/lib/awesome-agent/runs/<run_id>/artifacts/`
-inside the container. Model-visible workspace files live in the
-`awesome_agent_user_data` volume and are mounted as `/mnt/user-data/workspace/`.
-
-## Verify Without A Model Key
-
-Authorize a parent directory and register a clean Git checkout:
-
-```powershell
-.\.venv\Scripts\awesome-agent.exe config root add <parent-directory>
-.\.venv\Scripts\awesome-agent.exe repo add <repository-path>
-```
-
-Verify the durable runtime without a model key:
-
-```powershell
-.\.venv\Scripts\awesome-agent.exe probe --repo <repository-path>
-.\.venv\Scripts\awesome-agent.exe diagnostics <run-id>
-```
-
-For Docker API mode, add `--api-url http://127.0.0.1:8000` to the CLI commands.
-
-`/health` is process liveness. `/ready?profile=api` checks API dependencies.
-`/ready?profile=runtime` also checks runtime dependencies such as provider
-configuration and Worker heartbeat.
-
-## First Model-Backed User Message
-
-Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the OS environment or
-`<AWESOME_HOME>/.env`, restart the local interactive runtime, open `awesome`
-from the project directory, then send a plain user message:
+Open:
 
 ```text
-Build a single-file HTML timer in this folder.
+http://127.0.0.1:8000/docs
 ```
 
-The message creates an internal conversation Run with a Leader Agent and
-executes through the embedded local runtime path.
+Success means the API docs page loads in your browser.
 
-## Shutdown And Cleanup
+### Stop
 
-Stop local supervised runtime with `Ctrl+C`.
-
-Stop Docker services:
+From the Awesome checkout:
 
 ```powershell
 docker compose down
 ```
 
-Inspect or clean managed workspaces:
+## Common Problems
+
+### API key is missing
+
+Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in your OS environment or
+`<AWESOME_HOME>/.env`, then restart your terminal.
+
+### `awesome` command not found
+
+Go back to the Awesome checkout and run:
 
 ```powershell
-.\.venv\Scripts\awesome-agent.exe workspace list
-.\.venv\Scripts\awesome-agent.exe workspace cleanup --run-id <run-id>
+make install
 ```
 
-## Troubleshooting
+Then open a new terminal and try `awesome --help`.
 
-- If `/health` fails, the API process is not reachable.
-- If `/ready?profile=api` fails, inspect PostgreSQL, migrations, or settings.
-- If Docker API logs are needed, run `docker compose logs api`.
-- If Docker Worker logs are needed, run `docker compose logs worker`.
-- If a Run is stuck, run `awesome-agent diagnostics <run-id>`.
+### API fallback command
 
-## Local Resource Guidance
+Use `awesome-agent start` only as a fallback/debug supervisor for local API
+development. Daily project work should use `awesome`; API modes should usually
+use `make dev` or `make docker-start`.
 
-For external API models, start with 4 vCPU, 8 GB memory, and 20 GB free disk for
-a single local development session. Use more memory and disk for multiple
-concurrent Runs, team mode, Docker image builds, or large repository workspaces.
+### Awesome opened in the wrong project
+
+Exit Awesome, change to the project directory you want to work in, and start it
+again:
+
+Windows PowerShell:
+
+```powershell
+cd E:\my-project
+awesome
+```
+
+macOS/Linux:
+
+```bash
+cd ~/my-project
+awesome
+```
+
+### Docker is not running
+
+Start Docker Desktop, wait until it is ready, then run the Docker command again.
+
+## Next Steps
+
+- Use `/help` inside Awesome to see available commands.
+- Use `/config` to confirm which Awesome paths are active.
+- Add project skills under `<your-project>/skills/`.
+- Add personal skills under `<AWESOME_HOME>/skills/`.

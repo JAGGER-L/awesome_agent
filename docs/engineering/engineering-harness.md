@@ -78,4 +78,4 @@ read repository rules and local state
 Recurring review findings should become executable checks rather than longer
 instructions. Remove duplicate, obsolete, unmeasured, or conflicting rules.
 Track unresolved repository-level gaps in
-`docs/project-governance/tech-debt-tracker.md`.
+`docs/governance/technical-debt.md`.

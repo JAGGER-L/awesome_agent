@@ -1,121 +1,17 @@
 # Operations Guide
 
-This guide indexes local runtime operation and diagnosis.
+This guide covers local startup, readiness, diagnostics, runtime data, and
+troubleshooting. Use the [quickstart](../getting-started/quickstart.md) for the
+first local setup path.
 
-- Startup: `make check`, `make install`, `make setup-sandbox`, `make dev`,
-  `make docker-init`, and `make docker-start`.
-- Split process mode: `awesome-agent serve` for API and `awesome-agent worker`
-  for background execution.
-- Readiness: `/health`, `/ready?profile=api`, `/ready?profile=runtime`, and
-  `doctor`.
-- Workspaces: `workspace list` and dry-run-first `workspace cleanup`.
-- Diagnostics: Run diagnostics, recovery metrics, extension diagnostics, and
-  budget/context projections.
-- Security: local-only API bind by default, AIO Docker target sandbox for API
-  Runs, LocalSandbox only for trusted local CLI/TUI, explicit approvals, and no
-  committed secrets.
+- [Startup modes](startup-modes.md)
+- [Diagnostics](diagnostics.md)
+- [Runtime data](runtime-data.md)
+- [Troubleshooting](troubleshooting.md)
 
-Use the [quickstart](../getting-started/quickstart.md) for the first local
-startup path.
+`awesome-agent start` is a fallback/debug supervisor for local API development,
+not the normal Local CLI path.
 
-The Makefile commands are the primary startup contract. The existing
-PowerShell scripts remain Windows fallback entrypoints. Docker API mode uses
-`make docker-init` and `make docker-start`; local API development uses
-`make check`, `make install`, `make setup-sandbox`, and `make dev`; local
-interactive CLI uses `awesome`.
-
-See [runtime profiles and startup](../design-docs/runtime-profiles-and-startup.md)
-for the durable startup, sandbox, and workspace contract.
-
-## Local Run Modes
-
-| Mode | Command | Use |
-| --- | --- | --- |
-| Local API development | `make check`, `make install`, `make setup-sandbox`, `make dev` | Host API + Worker development stack. |
-| Docker API | `make docker-init`, `make docker-start` | Containerized API + Worker stack. |
-| Quick Start fallback | `.\scripts\quickstart.ps1` | Windows first-run setup and verification. |
-| Supervised local runtime fallback | `awesome-agent start` | API + Worker in one local command. |
-| Split runtime | `awesome-agent serve` and `awesome-agent worker` | Process-manager or debugging setups. |
-| PostgreSQL dependency | `docker compose up -d postgres` | Local durable storage. |
-| Docker runtime fallback | `docker compose up -d --build postgres sandbox api worker` | Containerized API + Worker + AIO sandbox without Makefile helpers. |
-
-## Ports And Runtime Data
-
-`AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent` on Windows and
-`~/.awesome-agent` on other platforms.
-
-| Resource | Default | Purpose |
-| --- | --- | --- |
-| API port | `127.0.0.1:8000` local, `0.0.0.0:8000` inside Docker | Local inspection API. |
-| PostgreSQL port | `54329` host, `5432` container | Durable runtime state. |
-| AIO sandbox port | `127.0.0.1:8765` host, `8765` container | Sandbox service health and command execution. |
-| Runtime data | `<AWESOME_HOME>/runs/` local, `/var/lib/awesome-agent/runs/` Docker | Per-run artifacts and runtime evidence. |
-| Attachment data | `settings.local_state_dir / "attachments"` | Copied user input files bound to a specific next turn. |
-| Thread workspace | `<AWESOME_HOME>/threads/<thread_id>/workspace/` local, `/mnt/user-data/workspace/` in AIO Docker | Model-visible generated files and per-thread `.venv`. |
-| Compose volume | `awesome_agent_runtime` | Container runtime state. |
-| Compose user-data volume | `awesome_agent_user_data` | Model-visible workspace mounted into API, Worker, and sandbox. |
-
-## Readiness And Logs
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-RestMethod "http://127.0.0.1:8000/ready?profile=api"
-awesome-agent doctor --profile api
-docker compose logs api
-docker compose logs worker
-docker compose logs sandbox
-docker compose down
-```
-
-`doctor` checks local config path writability, thread workspace writability,
-model configuration, PostgreSQL, migrations, checkpoint storage, sandbox
-health, MCP catalog health, and Worker heartbeat when the runtime profile is
-selected. Readiness checks validate the DeepSeek provider profile, API-key
-presence, official provider endpoint, and role model membership in the model
-catalog. They do not call the remote DeepSeek API.
-
-For gated product-path verification against a live stack, use:
-
-```powershell
-.\scripts\verify_product_surface.ps1 -ApiUrl http://127.0.0.1:8000
-```
-
-The script creates a thread, sends a conversation prompt, starts a thread-scoped
-Coding Run, and waits for a generated HTML artifact to appear in the thread
-artifact surface.
-
-The Docker API service binds to `0.0.0.0` inside the container so the host can
-reach `http://127.0.0.1:8000`. Keep it local unless an external authentication
-and network boundary is added.
-
-API-created Runs default to the `aio-docker` sandbox provider. That provider
-calls the long-lived AIO HTTP sandbox service and never falls back to host
-execution or a one-shot Docker container. LocalSandbox is reserved for the
-local CLI/TUI profile or explicit trusted local operation. LocalSandbox
-currently executes arbitrary local commands by design and is tracked as
-technical debt.
-
-## Attachment Storage
-
-Thread attachments are user input, not Run artifacts. Attachment metadata is
-stored in the local or PostgreSQL repository, while copied file content lives
-under `settings.local_state_dir / "attachments" / <thread_id> /
-<attachment_id>/content`. Default limits are five pending attachments per
-thread, five attachments per turn, 5 MB per file, 16 KB injected per text file,
-and 48 KB injected per turn. Deleting an attachment physically removes content
-and keeps a metadata tombstone.
-
-## TUI
-
-`awesome` is the default chat-first local CLI/TUI. It can launch before the API
-is running, and slash commands guide thread, status, model, and memory
-inspection:
-
-```powershell
-awesome
-awesome commands
-```
-
-Use `awesome-agent` subcommands for direct operations, diagnostics, scripting,
-and API-backed approval workflows. The TUI uses API endpoints rather than
-direct database access.
+For durable runtime boundaries, see the
+[architecture guide](../architecture/README.md). For thread and diagnostics API
+resources, see the [API guide](../api/README.md).

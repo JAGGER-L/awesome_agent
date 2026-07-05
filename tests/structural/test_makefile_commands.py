@@ -37,7 +37,7 @@ def test_docker_start_docs_do_not_start_cli() -> None:
 
     assert "make docker-init" in quickstart
     assert "make docker-start" in quickstart
-    assert "Docker mode does not start the CLI" in quickstart
+    assert "Docker API does not start Local CLI" in quickstart
 
 
 def test_docker_scripts_include_sandbox_service() -> None:

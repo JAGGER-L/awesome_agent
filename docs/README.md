@@ -1,38 +1,57 @@
 # Documentation
 
-Start here when you know what you are trying to do but not which file owns the
+Start here when you know what you want to do but not which document owns the
 answer.
 
 ## New Users
 
+- [Project README](../README.md)
 - [Quickstart](getting-started/quickstart.md)
 - [快速开始](getting-started/quickstart.zh-CN.md)
-- [Project README](../README.md)
 
-## Runtime Users
+## Product Users
 
 - [User guide](user-guide/README.md)
+- [CLI and commands](user-guide/cli.md)
+- [Conversations](user-guide/conversations.md)
+- [Attachments](user-guide/attachments.md)
+- [Memory, skills, and MCP](user-guide/memory-skills-mcp.md)
+
+## Operators
+
 - [Operations guide](operations/README.md)
-- [Security](SECURITY.md)
-- [Reliability](RELIABILITY.md)
+- [Startup modes](operations/startup-modes.md)
+- [Diagnostics](operations/diagnostics.md)
+- [Runtime data](operations/runtime-data.md)
+- [Troubleshooting](operations/troubleshooting.md)
 
-## Architecture Reviewers
+## API Integrators
 
-- [Design documents](design-docs/index.md)
-- [Architecture overview](../ARCHITECTURE.md)
+- [API overview](api/README.md)
+- [Thread API](api/thread-api.md)
+- [Diagnostics API](api/diagnostics-api.md)
 
 ## Contributors
 
-- [Engineering harness](engineering/engineering-harness.md)
-- [Development-agent execution plans](engineering/execution-plans.md)
+- [Development guide](development/README.md)
+- [Repository harness](development/repository-harness.md)
+- [Execution plans](development/execution-plans.md)
+- [Testing](development/testing.md)
+
+## Architecture Reviewers
+
+- [Architecture guide](architecture/README.md)
+- [Architecture overview](../ARCHITECTURE.md)
 
 ## Maintainers
 
-- [Project governance](project-governance/README.md)
-- [Runtime roadmap](project-governance/runtime-roadmap.md)
-- [Technical debt tracker](project-governance/tech-debt-tracker.md)
+- [Governance](governance/README.md)
+- [Roadmap](governance/roadmap.md)
+- [Technical debt](governance/technical-debt.md)
+- [Documentation governance](governance/documentation.md)
+- [Quality](governance/quality.md)
 
-## Generated References
+## References
 
-- [Generated documentation](generated/README.md)
-- [Database schema](generated/db-schema.md)
+- [Reference index](reference/README.md)
+- [Generated database schema](reference/generated/db-schema.md)

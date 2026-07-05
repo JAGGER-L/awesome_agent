@@ -29,7 +29,8 @@ def generate_schema_markdown() -> str:
 
 
 def main() -> None:
-    target = Path("docs/generated/db-schema.md")
+    target = Path("docs/reference/generated/db-schema.md")
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(generate_schema_markdown(), encoding="utf-8")
 
 

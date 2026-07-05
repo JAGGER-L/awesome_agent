@@ -25,10 +25,10 @@ Only one milestone may be in progress. Completed plans move from `active/` to
 `completed/` locally and remain uncommitted.
 
 Durable conclusions must be extracted from local plans into tracked project
-documents such as `ARCHITECTURE.md`, `DECISIONS.md`, product specifications,
-design documents, reliability/security rules, or the technical-debt tracker.
+documents such as `ARCHITECTURE.md`, `docs/architecture/`,
+`docs/governance/`, `docs/operations/`, or the technical-debt tracker.
 
 Do not create new long-term roadmaps under `.codex/`. Historical local roadmap
 drafts may be archived under `.codex/archive/`, but they are not a source of
 truth. The durable product roadmap lives in
-`docs/project-governance/runtime-roadmap.md`.
+`docs/governance/roadmap.md`.

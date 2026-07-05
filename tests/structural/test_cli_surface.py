@@ -13,6 +13,7 @@ RETAINED_COMMANDS = [
     "/help",
     "/new",
     "/threads",
+    "/attach",
     "/model",
     "/thinking",
     "/memory",
@@ -44,7 +45,7 @@ def test_awesome_script_is_declared() -> None:
 
 
 def test_interactive_cli_documents_required_slash_commands() -> None:
-    text = Path("docs/user-guide/README.md").read_text(encoding="utf-8")
+    text = Path("docs/user-guide/cli.md").read_text(encoding="utf-8")
 
     for command in RETAINED_COMMANDS:
         assert command in text
@@ -52,11 +53,10 @@ def test_interactive_cli_documents_required_slash_commands() -> None:
         assert command not in text
 
 
-def test_readmes_document_final_cli_command_inventory() -> None:
+def test_readmes_link_to_cli_command_inventory() -> None:
     for path in ["README.md", "README.zh-CN.md"]:
         text = Path(path).read_text(encoding="utf-8")
-        for command in RETAINED_COMMANDS:
-            assert command in text
+        assert "docs/user-guide/README.md" in text
         for command in DELETED_COMMANDS:
             assert f"| `{command}` |" not in text
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_runtime_profiles_design_doc_exists_and_names_defaults() -> None:
-    doc = Path("docs/design-docs/runtime-profiles-and-startup.md")
+    doc = Path("docs/architecture/product-surfaces.md")
     text = doc.read_text(encoding="utf-8")
 
     assert "Docker API profile" in text
@@ -19,19 +19,20 @@ def test_runtime_profiles_design_doc_exists_and_names_defaults() -> None:
     assert "`awesome`" in text
 
 
-def test_roadmap_contains_tasks_57_to_64() -> None:
-    text = Path("docs/project-governance/runtime-roadmap.md").read_text(
-        encoding="utf-8"
-    )
+def test_roadmap_is_product_direction_not_task_journal() -> None:
+    text = Path("docs/governance/roadmap.md").read_text(encoding="utf-8")
 
-    for task_number in range(57, 65):
-        assert f"Task {task_number}" in text
+    assert "## Product Thesis" in text
+    assert "## Strategic Pillars" in text
+    assert "## Now" in text
+    assert "## Next" in text
+    assert "## Later" in text
+    assert "## Completed Milestones" in text
+    assert "Task 57" not in text
 
 
 def test_token_only_budget_language_is_preserved() -> None:
-    text = Path("docs/project-governance/runtime-roadmap.md").read_text(
-        encoding="utf-8"
-    )
+    text = Path("docs/governance/roadmap.md").read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
     assert (
