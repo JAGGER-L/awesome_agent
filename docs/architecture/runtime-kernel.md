@@ -44,6 +44,16 @@ after approval must not consume a retry attempt, must not request the same
 approval again, and must revalidate the original tool binding before side
 effects continue.
 
+Team role approval follows the same kernel boundary. The team route records
+the original tool invocation and typed continuation payload so approval resume
+can continue from the approved call rather than asking the model to recreate it.
+
+## Team Runtime Contract
+
+Distributed team execution uses `team-coding`, `team-role`, and
+`team-verifier`. Subagent creation, writing worktree isolation, tool audit, and
+the team status tree are described in [Team runtime](team-runtime.md).
+
 ## Runtime Budgets
 
 Runtime limits are token, reasoning-token, active-time, model-call, retry, and

@@ -520,7 +520,6 @@ def _graph_identities() -> list[str]:
         RUNTIME_PROBE_ROUTE,
         READ_ONLY_CODING_ROUTE,
         MODIFYING_CODING_ROUTE,
-        SCOPED_TEAM_CODING_ROUTE,
         TEAM_CODING_ROUTE,
         TEAM_ROLE_ROUTE,
         TEAM_VERIFIER_ROUTE,

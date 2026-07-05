@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, cast
 
 from awesome_agent.artifacts.repository import ArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
 from awesome_agent.domain.models import Agent, Run
+from awesome_agent.extensions.catalog import empty_extension_catalog
+from awesome_agent.extensions.models import ExtensionCatalog
 from awesome_agent.observability.facade import ObservabilityFacade
 from awesome_agent.persistence.budget import BudgetRepository
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.persistence.tool_invocations import ToolInvocationRepository
 from awesome_agent.persistence.validation import (
     ValidationReportWithGates,
     ValidationRepository,
@@ -44,7 +47,7 @@ from awesome_agent.runtime.team_assignments import (
     TeamChildResult,
     validate_assignment_graph,
 )
-from awesome_agent.runtime.team_budget import build_team_attribution, ensure_team_budget
+from awesome_agent.runtime.team_budget import ensure_team_budget
 from awesome_agent.runtime.team_context import compact_team_payload
 from awesome_agent.runtime.token_accounting import (
     TokenAccountant,
@@ -86,14 +89,23 @@ class TeamRoleGraph:
         observability: ObservabilityFacade | None = None,
         capability_resolver: CapabilityResolver | None = None,
         token_accountant: TokenAccountant | None = None,
+        tool_repository: ToolInvocationRepository | None = None,
+        extension_catalog_resolver: Callable[
+            [str | None], ExtensionCatalog
+        ] | None = None,
     ) -> None:
         self.team_repository = team_repository
         self.capability_resolver = capability_resolver or CapabilityResolver()
         self.token_accountant = token_accountant or default_token_accountant()
+        self.extension_catalog_resolver = extension_catalog_resolver
         self.provider_resolver = provider_resolver
         self.team_loop = team_loop or TeamAgentLoop(observability=observability)
         self.role_loop = (
-            RoleLoop(provider_resolver=provider_resolver, team_loop=self.team_loop)
+            RoleLoop(
+                provider_resolver=provider_resolver,
+                team_loop=self.team_loop,
+                tool_repository=tool_repository,
+            )
             if provider_resolver is not None
             else None
         )
@@ -133,9 +145,11 @@ class TeamRoleGraph:
             assignment=assignment,
             agent_id=agent.id,
         )
+        catalog = self._extension_catalog(run.extension_catalog_version)
         tool_policy = self.capability_resolver.resolve_team_assignment(
             assignment,
             purpose=CapabilityPurpose.ROLE_EXECUTION,
+            catalog=catalog,
         )
         allowed_tools = list(tool_policy.tool_names)
         existing_subagents = [
@@ -150,23 +164,6 @@ class TeamRoleGraph:
             item.status is TeamAssignmentStatus.ACTIVE for item in existing_subagents
         ):
             raise ChildRunWait("waiting_subagents")
-        subagent_goals = _subagent_goals(assignment)
-        if (
-            assignment.kind is TeamAssignmentKind.TEAMMATE
-            and assignment.can_delegate
-            and subagent_goals
-            and not existing_subagents
-        ):
-            await self._create_subagents(
-                run,
-                agent,
-                assignment=assignment,
-                goals=subagent_goals,
-                parent_tool_policy=tool_policy,
-                repository=repository,
-                event_sink=event_sink,
-            )
-            raise ChildRunWait("waiting_subagents")
         subagent_results = await self.team_repository.list_child_results(run.id)
         workspace = run.workspace_path
         result, validation_outcome = await self._execute_role_with_validation_rework(
@@ -175,6 +172,7 @@ class TeamRoleGraph:
             assignment,
             tool_policy=tool_policy,
             allowed_tools=allowed_tools,
+            catalog=catalog,
             workspace=workspace,
             repository=repository,
             subagent_results=subagent_results,
@@ -219,6 +217,7 @@ class TeamRoleGraph:
         *,
         tool_policy: EffectiveToolPolicy,
         allowed_tools: list[str],
+        catalog: ExtensionCatalog,
         workspace: Path | None,
         repository: RuntimeRepository,
         subagent_results: list[TeamChildResult],
@@ -233,6 +232,7 @@ class TeamRoleGraph:
                 assignment,
                 tool_policy=tool_policy,
                 allowed_tools=allowed_tools,
+                catalog=catalog,
                 workspace=workspace,
                 repository=repository,
                 subagent_results=subagent_results,
@@ -267,6 +267,7 @@ class TeamRoleGraph:
         *,
         tool_policy: EffectiveToolPolicy,
         allowed_tools: list[str],
+        catalog: ExtensionCatalog,
         workspace: Path | None,
         repository: RuntimeRepository,
         subagent_results: list[TeamChildResult],
@@ -294,6 +295,7 @@ class TeamRoleGraph:
                 team_repository=self.team_repository,
                 subagent_results=subagent_results,
                 validation_feedback=validation_feedback,
+                catalog=catalog,
                 event_sink=event_sink,  # type: ignore[arg-type]
             )
 
@@ -311,6 +313,11 @@ class TeamRoleGraph:
             },
             handler=execute_role_operation,
         )
+
+    def _extension_catalog(self, version: str | None) -> ExtensionCatalog:
+        if self.extension_catalog_resolver is None:
+            return empty_extension_catalog()
+        return self.extension_catalog_resolver(version)
 
     async def _validate_write_result_if_needed(
         self,
@@ -450,98 +457,6 @@ class TeamRoleGraph:
             workspace=cast(Path, run.workspace_path),
             repository=None,
         )
-
-    async def _create_subagents(
-        self,
-        run: Run,
-        agent: Agent,
-        *,
-        assignment: TeamAssignment,
-        goals: list[str],
-        parent_tool_policy: EffectiveToolPolicy,
-        repository: RuntimeRepository,
-        event_sink: object | None,
-    ) -> None:
-        if assignment.kind is not TeamAssignmentKind.TEAMMATE:
-            raise ValueError("only teammate assignments can create subagents")
-        if not assignment.can_delegate:
-            raise ValueError("assignment cannot delegate")
-        if len(goals) > assignment.max_subagents:
-            raise ValueError("subagent request exceeds assignment limit")
-        subagent_policy = self.capability_resolver.resolve_team_assignment(
-            assignment,
-            purpose=CapabilityPurpose.SUBAGENT_GRANT,
-            requested_tools=list(parent_tool_policy.tool_names),
-        )
-        subagent_tools = list(subagent_policy.tool_names)
-        for index, goal in enumerate(goals, start=1):
-            child = Run(
-                goal=goal,
-                mode=RunMode.TEAM,
-                repository_id=run.repository_id,
-                base_commit=run.base_commit,
-                intent=run.intent,
-                execution_kind=run.execution_kind,
-                parent_run_id=run.id,
-                root_run_id=run.root_run_id or assignment.root_run_id,
-                depth=2,
-                child_role=TeamAssignmentKind.SUBAGENT.value,
-                runtime_route=TEAM_ROLE_ROUTE,
-                extension_catalog_version=run.extension_catalog_version,
-                dispatch_status=DispatchStatus.QUEUED,
-                workspace_path=run.workspace_path,
-                integration_branch=run.integration_branch,
-                workspace_state=run.workspace_state,
-                graph_thread_id=f"run:{run.id}:subagent:{index}",
-            )
-            subagent = Agent(
-                run_id=child.id,
-                parent_agent_id=agent.id,
-                kind=AgentKind.SUBAGENT,
-                profile="subagent",
-                model=agent.model,
-            )
-            child_assignment = TeamAssignment(
-                root_run_id=assignment.root_run_id,
-                parent_run_id=run.id,
-                child_run_id=child.id,
-                kind=TeamAssignmentKind.SUBAGENT,
-                role_profile="subagent",
-                runtime_route=TEAM_ROLE_ROUTE,
-                goal=goal,
-                allowed_tools=subagent_tools,
-                allowed_skills=assignment.allowed_skills,
-                can_write=False,
-                can_delegate=False,
-                max_subagents=0,
-                acceptance_criteria=["Return focused evidence to the teammate."],
-            )
-            validate_assignment_graph(child_assignment)
-            await repository.create_run(child, subagent)
-            await self.team_repository.create_assignment(child_assignment)
-            if callable(event_sink):
-                await event_sink(
-                    EventType.TEAM_CHILD_RUN_CREATED,
-                    {
-                        **build_team_attribution(
-                            run=child,
-                            assignment=child_assignment,
-                            agent_id=subagent.id,
-                        ),
-                        "child_run_id": str(child.id),
-                        "assignment_id": str(child_assignment.id),
-                        "kind": child_assignment.kind.value,
-                    },
-                    f"team-child-created:{child.id}",
-                )
-
-
-def _subagent_goals(assignment: TeamAssignment) -> list[str]:
-    value = assignment.handoff_context.get("subagent_goals")
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, str) and item.strip()]
-
 
 def _result_patch(
     assignment: TeamAssignment,

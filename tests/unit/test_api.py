@@ -1446,6 +1446,7 @@ def test_team_inspection_endpoints_return_lineage_assignments_and_mailbox(
     children = client.get(f"/runs/{root.id}/children").json()
     descendants = client.get(f"/runs/{root.id}/descendants").json()
     assignments = client.get(f"/runs/{root.id}/team/assignments").json()
+    tree = client.get(f"/runs/{root.id}/team/tree").json()
     mailbox = client.get(f"/runs/{child.id}/team/mailbox").json()
     retired = client.post(
         f"/runs/{root.id}/team/assignments/{assignment.id}/retire",
@@ -1460,6 +1461,9 @@ def test_team_inspection_endpoints_return_lineage_assignments_and_mailbox(
     assert children[0]["id"] == str(child.id)
     assert descendants[0]["id"] == str(child.id)
     assert assignments[0]["id"] == str(assignment.id)
+    assert tree["root"]["role"] == "leader"
+    assert tree["root"]["children"][0]["role"] == "teammate"
+    assert tree["nodes_total"] == 2
     assert assignments[0]["allowed_tools"] == ["repo.read", "repo.apply_patch"]
     assert assignments[0]["effective_tools"] == ["repo.read"]
     assert "repository:read" in assignments[0]["effective_capabilities"]

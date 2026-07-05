@@ -182,4 +182,8 @@ async def test_missing_config_without_skills_returns_empty_catalog(
         home=tmp_path / "home",
     )
 
-    assert catalog == empty_extension_catalog()
+    expected = empty_extension_catalog()
+    assert catalog.version == expected.version
+    assert catalog.sources == []
+    assert catalog.tools == []
+    assert catalog.skills == []

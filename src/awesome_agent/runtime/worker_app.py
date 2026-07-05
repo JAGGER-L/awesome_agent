@@ -44,6 +44,8 @@ from awesome_agent.persistence.worker_heartbeats import (
     PostgresWorkerHeartbeatRepository,
 )
 from awesome_agent.providers.factory import ModelProviderFactory
+from awesome_agent.repositories.config import LocalRepositoryConfigStore
+from awesome_agent.repositories.worktrees import ManagedRunWorktreeManager
 from awesome_agent.runtime.budget import BudgetPolicy
 from awesome_agent.runtime.context import ContextManager, DeterministicSummaryProvider
 from awesome_agent.runtime.conversation_graph import ConversationGraph
@@ -51,11 +53,11 @@ from awesome_agent.runtime.cwd_context import CwdContextService
 from awesome_agent.runtime.modifying_graph import ModifyingCodingGraph
 from awesome_agent.runtime.probe_graph import RuntimeProbeGraph
 from awesome_agent.runtime.readonly_graph import ReadOnlyCodingGraph
-from awesome_agent.runtime.team_graph import TeamCodingGraph
 from awesome_agent.runtime.team_leader_graph import TeamLeaderGraph
 from awesome_agent.runtime.team_recovery_policy import TeamRecoveryPolicy
 from awesome_agent.runtime.team_role_graph import TeamRoleGraph
 from awesome_agent.runtime.team_verifier_graph import TeamVerifierGraph
+from awesome_agent.runtime.team_workspaces import TeamWorkspaceAllocator
 from awesome_agent.runtime.token_accounting import default_token_accountant
 from awesome_agent.runtime.worker import DurableWorker, WorkerConfig
 from awesome_agent.sandbox.factory import create_sandbox
@@ -73,10 +75,6 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
     )
     modifying_provider_resolver = providers.create_routed_resolver(
         runtime_route="solo-modifying",
-        agent_role="leader",
-    )
-    team_provider_resolver = providers.create_routed_resolver(
-        runtime_route="team-coding-scoped",
         agent_role="leader",
     )
     team_leader_provider_resolver = providers.create_routed_resolver(
@@ -141,6 +139,11 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
         default_rework_budget=configured.team_default_rework_budget,
     )
     token_accountant = default_token_accountant()
+    local_config = LocalRepositoryConfigStore(configured.local_config_path).load()
+    worktree_manager = ManagedRunWorktreeManager(
+        configured.workspace_root or local_config.workspace_root
+    )
+    team_workspace_allocator = TeamWorkspaceAllocator(worktree_manager)
     sandbox = create_sandbox(origin=ExecutionOrigin.API, settings=configured)
     memory_service = MemoryService(
         builtin=BuiltinMemoryStore(
@@ -254,20 +257,6 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 if providers.coding_available
                 else None
             ),
-            team_graph=(
-                TeamCodingGraph(
-                    saver,
-                    model_resolver=RoleModelResolver.from_settings(configured),
-                    provider_resolver=team_provider_resolver,
-                    validation_repository=PostgresValidationRepository(sessions),
-                    tool_repository=PostgresToolInvocationRepository(sessions),
-                    budget_repository=budget_repository,
-                    budget_policy=budget_policy,
-                    token_accountant=token_accountant,
-                )
-                if providers.coding_available
-                else None
-            ),
             team_leader_graph=(
                 TeamLeaderGraph(
                     team_repository=team_repository,
@@ -280,6 +269,7 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                     observability=observability,
                     team_recovery_policy=team_recovery_policy,
                     token_accountant=token_accountant,
+                    workspace_allocator=team_workspace_allocator,
                 )
                 if providers.coding_available
                 else None
@@ -296,6 +286,8 @@ async def run_worker(*, once: bool = False, settings: Settings | None = None) ->
                 validation_repository=PostgresValidationRepository(sessions),
                 observability=observability,
                 token_accountant=token_accountant,
+                tool_repository=PostgresToolInvocationRepository(sessions),
+                extension_catalog_resolver=lambda _version: tool_assembly.catalog,
             ),
             team_verifier_graph=TeamVerifierGraph(
                 team_repository=team_repository,

@@ -51,6 +51,10 @@ from awesome_agent.runtime.team_verification import (
     TeamReworkRequest,
     TeamVerificationDecision,
 )
+from awesome_agent.runtime.team_workspaces import (
+    TeamWorkspaceAllocator,
+    TeamWorkspaceAssignment,
+)
 
 
 @pytest.mark.asyncio
@@ -104,6 +108,34 @@ async def test_leader_creates_teammate_child_run_and_assignment() -> None:
     assert events[1][1]["child_run_id"] == str(children[0].id)
     assert events[1][1]["assignment_id"] == str(assignments[0].id)
     assert events[1][1]["agent_id"]
+
+
+@pytest.mark.asyncio
+async def test_leader_assigns_isolated_workspace_for_writing_teammate(
+    tmp_path: Path,
+) -> None:
+    runtime = InMemoryRuntimeRepository()
+    teams = InMemoryTeamRepository()
+    allocator = RecordingWorkspaceAllocator(tmp_path / "isolated")
+    graph, _ = _graph(teams, workspace_allocator=allocator)
+    run, leader = _leader_run()
+    run = run.model_copy(
+        update={
+            "repository_id": uuid4(),
+            "base_commit": "abc123",
+            "workspace_path": tmp_path / "root",
+            "integration_branch": "awesome-agent/run/root",
+        }
+    )
+    await runtime.create_run(run, leader)
+
+    with pytest.raises(ChildRunWait, match="waiting_children"):
+        await graph.execute(run, leader, repository=runtime)
+
+    child = (await runtime.list_child_runs(run.id))[0]
+    assert child.workspace_path == tmp_path / "isolated"
+    assert child.integration_branch == f"isolated/{child.id}"
+    assert allocator.calls == [(run.id, child.id)]
 
 
 @pytest.mark.asyncio
@@ -364,6 +396,7 @@ async def test_leader_aggregates_child_patch_artifact(tmp_path: Path) -> None:
         team_repository=teams,
         artifact_repository=artifacts,
         model_resolver=_models(),
+        workspace_allocator=RecordingWorkspaceAllocator(tmp_path / "isolated-rework"),
     )
     run, leader = _leader_run()
     run = run.model_copy(update={"workspace_path": tmp_path})
@@ -458,6 +491,7 @@ async def test_leader_creates_patch_conflict_rework_child(tmp_path: Path) -> Non
         team_repository=teams,
         artifact_repository=artifacts,
         model_resolver=_models(),
+        workspace_allocator=RecordingWorkspaceAllocator(tmp_path / "isolated-rework"),
     )
     run, leader = _leader_run()
     run = run.model_copy(update={"workspace_path": tmp_path})
@@ -557,6 +591,7 @@ async def test_leader_creates_patch_conflict_rework_child(tmp_path: Path) -> Non
     assert replacement.handoff_context["rework_attempt"] == 1
     assert "Patch conflict detected" in replacement.goal
     assert replacement_run.dispatch_status is DispatchStatus.QUEUED
+    assert replacement_run.workspace_path == tmp_path / "isolated-rework"
     assert result.status == "recovery_required"
     assert result.failure_kind == "patch_conflict"
     assert result.patch_aggregated is False
@@ -1429,6 +1464,7 @@ def _graph(
     responses: list[str] | None = None,
     team_loop: TeamAgentLoop | None = None,
     team_recovery_policy: TeamRecoveryPolicy | None = None,
+    workspace_allocator: TeamWorkspaceAllocator | None = None,
 ) -> tuple[TeamLeaderGraph, FakeModelProvider]:
     provider = FakeModelProvider(responses or [_team_plan_json()])
     return (
@@ -1438,6 +1474,7 @@ def _graph(
             model_resolver=_models(),
             team_loop=team_loop,
             team_recovery_policy=team_recovery_policy,
+            workspace_allocator=workspace_allocator,
         ),
         provider,
     )
@@ -1636,3 +1673,24 @@ class RecordingTeamMiddleware:
             )
             self.model_call_metadata.append(dict(context.metadata))
         return await call_next(context)
+
+
+class RecordingWorkspaceAllocator(TeamWorkspaceAllocator):
+    def __init__(self, target: Path) -> None:
+        super().__init__(None)
+        self.target = target
+        self.calls: list[tuple[object, object]] = []
+
+    async def assign_for_child(
+        self,
+        *,
+        parent: Run,
+        child: Run,
+        can_write: bool,
+    ) -> TeamWorkspaceAssignment:
+        self.calls.append((parent.id, child.id))
+        return TeamWorkspaceAssignment(
+            workspace_path=self.target,
+            integration_branch=f"isolated/{child.id}",
+            isolated=can_write,
+        )

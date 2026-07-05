@@ -15,6 +15,7 @@ from awesome_agent.tui.chat_state import (
 from awesome_agent.tui.events import (
     ApprovalPromptState,
     TeamDisplayEvent,
+    TeamStatusDisplay,
     ToolDisplayEvent,
 )
 
@@ -190,6 +191,16 @@ def render_team_event(event: TeamDisplayEvent, *, details_enabled: bool) -> Text
     if details_enabled:
         for key, value in event.details.items():
             rendered.append(f"\n  {key}: {_bounded(str(value))}", style="dim")
+    return rendered
+
+
+def render_team_status(event: TeamStatusDisplay) -> Text:
+    rendered = Text.assemble(
+        ("Team", "blue"),
+        (f" {event.phase}", "dim"),
+    )
+    for line in event.lines:
+        rendered.append(f"\n  {line}")
     return rendered
 
 

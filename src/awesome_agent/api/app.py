@@ -149,6 +149,7 @@ from awesome_agent.runtime.probe_graph import RUNTIME_PROBE_ROUTE
 from awesome_agent.runtime.recovery_metrics import RecoveryMetricsService
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.runtime.service import RuntimeService
+from awesome_agent.runtime.team_status import build_team_status_tree
 from awesome_agent.runtime.workspaces import (
     WorkspaceCandidate,
     WorkspaceRetentionService,
@@ -1594,6 +1595,15 @@ def create_app(
             payload.update(policy.as_inspection_payload())
             payloads.append(_redacted_dict(payload))
         return payloads
+
+    @app.get("/runs/{run_id}/team/tree")
+    async def get_team_tree(run_id: UUID) -> dict[str, object]:
+        tree = await build_team_status_tree(
+            runtime=runtime().repository,
+            teams=team_repository_state(),
+            run_id=run_id,
+        )
+        return _redacted_dict(tree.model_dump(mode="json"))
 
     @app.get("/runs/{run_id}/team/mailbox")
     async def list_team_mailbox(run_id: UUID) -> list[dict[str, object]]:

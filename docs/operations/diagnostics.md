@@ -37,3 +37,10 @@ docker compose logs sandbox
 
 Keep the local API on loopback unless an external authentication and network
 boundary is added.
+
+## Team Tree Diagnostics
+
+Use `GET /runs/{run_id}/team/tree` or `awesome team-tree <run_id>` to inspect
+Leader, Teammate, Subagent, and Verifier state. Prefer the tree over raw event
+order when diagnosing child waits, verifier rework, patch aggregation, and why
+a team run is paused or still active.

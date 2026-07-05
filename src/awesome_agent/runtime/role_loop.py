@@ -9,9 +9,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
 
-from awesome_agent.domain.enums import AgentKind, DispatchStatus, EventType, RunMode
+from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.extensions.catalog import empty_extension_catalog
+from awesome_agent.extensions.models import ExtensionCatalog
+from awesome_agent.extensions.skills import SkillRuntimeView
 from awesome_agent.modeling import (
     ModelMessage,
     ModelProvider,
@@ -26,6 +28,7 @@ from awesome_agent.modeling import (
     UserMessage,
 )
 from awesome_agent.persistence.team import TeamRepository
+from awesome_agent.persistence.tool_invocations import ToolInvocationRepository
 from awesome_agent.runtime.agent_loop import TeamAgentLoop
 from awesome_agent.runtime.capabilities import (
     READ_ONLY_TEAM_TOOLS,
@@ -45,6 +48,7 @@ from awesome_agent.runtime.team_assignments import (
     validate_assignment_graph,
 )
 from awesome_agent.runtime.team_budget import build_team_attribution
+from awesome_agent.runtime.team_child_runs import create_subagent_child
 from awesome_agent.runtime.team_mailbox import (
     MailboxMessage,
     MailboxMessageStatus,
@@ -61,11 +65,17 @@ from awesome_agent.runtime.team_role_artifacts import (
     role_changed_files,
     role_git_diff,
 )
+from awesome_agent.runtime.team_role_tools import (
+    complete_team_role_tool_invocation,
+    fail_team_role_tool_invocation,
+    start_team_role_tool_invocation,
+)
 from awesome_agent.runtime.tool_exposure import (
     ToolExposureSet,
     before_tool_call,
     resolve_tool_exposure,
 )
+from awesome_agent.tools.models import ApprovalRequired
 from awesome_agent.tools.repository import (
     build_modifying_executor,
     build_modifying_registry,
@@ -144,11 +154,13 @@ class RoleLoop:
         team_loop: TeamAgentLoop | None = None,
         max_model_turns: int = 20,
         max_tool_calls: int = 60,
+        tool_repository: ToolInvocationRepository | None = None,
     ) -> None:
         self.provider_resolver = provider_resolver
         self.team_loop = team_loop or TeamAgentLoop()
         self.max_model_turns = max_model_turns
         self.max_tool_calls = max_tool_calls
+        self.tool_repository = tool_repository
 
     async def execute(
         self,
@@ -163,7 +175,9 @@ class RoleLoop:
         subagent_results: list[TeamChildResult] | None = None,
         validation_feedback: str | None = None,
         event_sink: RoleEventSink | None = None,
+        catalog: ExtensionCatalog | None = None,
     ) -> RoleLoopResult:
+        active_catalog = catalog or empty_extension_catalog()
         registry = build_modifying_registry()
         executor = build_modifying_executor(registry)
         candidate_tool_definitions = [
@@ -177,12 +191,13 @@ class RoleLoop:
             base_policy = CapabilityResolver().resolve_team_assignment(
                 assignment,
                 purpose=CapabilityPurpose.ROLE_EXECUTION,
+                catalog=active_catalog,
             )
 
         async def compute_exposure(_: object) -> ToolExposureSet:
             return resolve_tool_exposure(
                 policy=base_policy,
-                catalog=empty_extension_catalog(),
+                catalog=active_catalog,
                 tool_definitions=candidate_tool_definitions,
             )
 
@@ -198,6 +213,13 @@ class RoleLoop:
             handler=compute_exposure,
         )
         policy = _with_effective_tools(policy, exposure)
+        skill_view = SkillRuntimeView.from_allowed_skills(
+            allowed_skill_ids=assignment.allowed_skills,
+            catalog=active_catalog,
+            assignment=assignment,
+            actor_kind=agent.kind.value,
+            route=run.runtime_route or TEAM_ROLE_ROUTE,
+        )
         tool_definitions = list(exposure.tool_definitions)
         provider = self.provider_resolver(agent.model)
         mailbox_directory = await _mailbox_directory(
@@ -212,6 +234,7 @@ class RoleLoop:
             subagent_results=subagent_results or [],
             validation_feedback=validation_feedback,
             mailbox_directory=mailbox_directory,
+            skill_view=skill_view,
         )
         model_turn_count = 0
         tool_call_count = 0
@@ -298,6 +321,7 @@ class RoleLoop:
                             team_repository=team_repository,
                             call=current_call,
                             executor=executor,
+                            tool_repository=self.tool_repository,
                             event_sink=event_sink,
                         )
 
@@ -384,6 +408,7 @@ async def _execute_call(
     team_repository: TeamRepository,
     call: ToolCall,
     executor: object,
+    tool_repository: ToolInvocationRepository | None,
     event_sink: RoleEventSink | None,
 ) -> ToolResultMessage:
     started = monotonic()
@@ -396,69 +421,133 @@ async def _execute_call(
             content=f"Tool {call.name} is not exposed for this assignment.",
             is_error=True,
         )
-    if call.name == _TEAM_CREATE_SUBAGENT:
-        await _create_dynamic_subagent(
-            run=run,
-            agent=agent,
-            assignment=assignment,
-            policy=policy,
-            repository=repository,
-            team_repository=team_repository,
-            call=call,
-            event_sink=event_sink,
-        )
-        raise ChildRunWait("waiting_subagents")
-    allowed = _policy_allows(policy, call.name)
-    if not allowed and policy.can_write and call.name in _WRITE_TOOLS:
-        raise PermanentExecutionError(f"team_role_tool_not_allowed: {call.name}")
-    if not allowed:
+    invocation = await start_team_role_tool_invocation(
+        repository=tool_repository,
+        run=run,
+        agent=agent,
+        call=call,
+        workspace=workspace,
+    )
+    if (
+        invocation is not None
+        and invocation.status in {"completed", "failed"}
+        and invocation.result_content is not None
+    ):
         result = ToolResultMessage(
             call_id=call.call_id,
-            content=f"Tool {call.name} is not allowed for this assignment.",
-            is_error=True,
+            content=invocation.result_content,
+            is_error=invocation.result_is_error,
         )
-    elif call.name == TEAM_MAILBOX_LIST_TOOL:
-        result = await _execute_mailbox_list(
-            run=run,
-            agent=agent,
-            assignment=assignment,
-            team_repository=team_repository,
-            call=call,
-            event_sink=event_sink,
+        await _emit(
+            event_sink,
+            run,
+            assignment,
+            agent,
+            EventType.TOOL_CALL_CREATED,
+            {
+                "call_id": call.call_id,
+                "tool": call.name,
+                "status": "failed" if result.is_error else "completed",
+                "result_summary": result.content[:500],
+                "latency_ms": _elapsed_ms(started),
+                "replayed": True,
+            },
+            f"tool:{agent.id}:{call.call_id}",
         )
-    elif call.name == TEAM_MAILBOX_SEND_TOOL:
-        result = await _execute_mailbox_send(
-            run=run,
-            agent=agent,
-            assignment=assignment,
-            repository=repository,
-            team_repository=team_repository,
-            call=call,
-            event_sink=event_sink,
+        return result
+    try:
+        if call.name == _TEAM_CREATE_SUBAGENT:
+            await _create_dynamic_subagent(
+                run=run,
+                agent=agent,
+                assignment=assignment,
+                policy=policy,
+                repository=repository,
+                team_repository=team_repository,
+                call=call,
+                event_sink=event_sink,
+            )
+            raise ChildRunWait("waiting_subagents")
+        allowed = _policy_allows(policy, call.name)
+        if not allowed and policy.can_write and call.name in _WRITE_TOOLS:
+            raise PermanentExecutionError(f"team_role_tool_not_allowed: {call.name}")
+        if not allowed:
+            result = ToolResultMessage(
+                call_id=call.call_id,
+                content=f"Tool {call.name} is not allowed for this assignment.",
+                is_error=True,
+            )
+        elif call.name == TEAM_MAILBOX_LIST_TOOL:
+            result = await _execute_mailbox_list(
+                run=run,
+                agent=agent,
+                assignment=assignment,
+                team_repository=team_repository,
+                call=call,
+                event_sink=event_sink,
+            )
+        elif call.name == TEAM_MAILBOX_SEND_TOOL:
+            result = await _execute_mailbox_send(
+                run=run,
+                agent=agent,
+                assignment=assignment,
+                repository=repository,
+                team_repository=team_repository,
+                call=call,
+                event_sink=event_sink,
+            )
+        elif call.name in _WRITE_TOOLS and not policy.can_write:
+            result = ToolResultMessage(
+                call_id=call.call_id,
+                content=(
+                    f"Tool {call.name} is write-capable and this assignment is "
+                    "read-only."
+                ),
+                is_error=True,
+            )
+        else:
+            capabilities = (
+                set(policy.effective_tools.capabilities_for(call.name))
+                if policy.effective_tools is not None
+                else _legacy_capabilities(policy, call.name)
+            )
+            result = await execute_repository_call(
+                executor,  # type: ignore[arg-type]
+                call,
+                workspace=workspace,
+                agent_id=agent.id,
+                profile=agent.profile,
+                capabilities=capabilities,
+                effective_tools=policy.effective_tools,
+            )
+    except ChildRunWait as error:
+        await complete_team_role_tool_invocation(
+            repository=tool_repository,
+            invocation=invocation,
+            result=ToolResultMessage(call_id=call.call_id, content=str(error)),
         )
-    elif call.name in _WRITE_TOOLS and not policy.can_write:
-        result = ToolResultMessage(
-            call_id=call.call_id,
-            content=(
-                f"Tool {call.name} is write-capable and this assignment is read-only."
-            ),
-            is_error=True,
+        raise
+    except ApprovalRequired as error:
+        await fail_team_role_tool_invocation(
+            repository=tool_repository,
+            invocation=invocation,
+            status="approval_pending",
+            error=str(error),
         )
-    else:
-        capabilities = (
-            set(policy.effective_tools.capabilities_for(call.name))
-            if policy.effective_tools is not None
-            else _legacy_capabilities(policy, call.name)
+        raise
+    except Exception as error:
+        await fail_team_role_tool_invocation(
+            repository=tool_repository,
+            invocation=invocation,
+            status="failed",
+            error=str(error),
         )
-        result = await execute_repository_call(
-            executor,  # type: ignore[arg-type]
-            call,
-            workspace=workspace,
-            agent_id=agent.id,
-            profile=agent.profile,
-            capabilities=capabilities,
-            effective_tools=policy.effective_tools,
-        )
+        raise
+    await complete_team_role_tool_invocation(
+        repository=tool_repository,
+        invocation=invocation,
+        result=result,
+    )
     await _emit(
         event_sink,
         run,
@@ -695,8 +784,11 @@ def _initial_messages(
     subagent_results: list[TeamChildResult],
     validation_feedback: str | None,
     mailbox_directory: str | None,
+    skill_view: SkillRuntimeView,
 ) -> list[ModelMessage]:
     criteria = "\n".join(f"- {item}" for item in policy.acceptance_criteria)
+    skill_instructions = _format_skill_instructions(skill_view)
+    skill_denials = _format_skill_denials(skill_view)
     messages: list[ModelMessage] = [
         SystemMessage(
             content=(
@@ -711,6 +803,8 @@ def _initial_messages(
                 f"Root/child goal: {run.goal}\n"
                 f"Assignment goal: {assignment.goal}\n"
                 f"Allowed skills: {', '.join(policy.allowed_skills) or 'none'}\n"
+                f"Resolved skill instructions:\n{skill_instructions or '- none'}\n"
+                f"Denied skill/tool reasons:\n{skill_denials or '- none'}\n"
                 f"Can write: {policy.can_write}\n"
                 f"Acceptance criteria:\n{criteria or '- Return bounded evidence.'}"
             )
@@ -741,6 +835,26 @@ def _initial_messages(
     if mailbox_directory:
         messages.append(UserMessage(content=mailbox_directory))
     return messages
+
+
+def _format_skill_instructions(skill_view: SkillRuntimeView) -> str:
+    return "\n".join(
+        f"- {skill.id}@{skill.version}: {skill.instructions}"
+        for skill in skill_view.skills
+        if skill.instructions.strip()
+    )
+
+
+def _format_skill_denials(skill_view: SkillRuntimeView) -> str:
+    lines = [
+        f"- skill {skill_id}: {reason}"
+        for skill_id, reason in sorted(skill_view.denied_skill_reasons.items())
+    ]
+    lines.extend(
+        f"- tool {tool_name}: {reason}"
+        for tool_name, reason in sorted(skill_view.denied_tool_reasons.items())
+    )
+    return "\n".join(lines)
 
 
 async def _mailbox_directory(
@@ -803,59 +917,31 @@ async def _create_dynamic_subagent(
         if existing.status is TeamAssignmentStatus.ACTIVE:
             raise ChildRunWait("waiting_subagents")
         return
-    active = [
+    created = [
         item
         for item in await team_repository.list_assignments(
             assignment.root_run_id,
             include_inactive=True,
         )
-        if item.parent_run_id == run.id
-        and item.kind is TeamAssignmentKind.SUBAGENT
-        and item.status is TeamAssignmentStatus.ACTIVE
+        if item.parent_run_id == run.id and item.kind is TeamAssignmentKind.SUBAGENT
     ]
-    if len(active) >= min(3, assignment.max_subagents):
-        raise PermanentExecutionError("active subagent limit reached")
-    child = Run(
+    if len(created) >= min(3, assignment.max_subagents):
+        raise PermanentExecutionError("subagent lifetime quota reached")
+    bundle = create_subagent_child(
+        parent=run,
+        parent_agent=agent,
+        tool_call_id=call.call_id,
         goal=arguments.goal,
-        mode=RunMode.TEAM,
-        repository_id=run.repository_id,
-        base_commit=run.base_commit,
-        intent=run.intent,
-        execution_kind=run.execution_kind,
-        parent_run_id=run.id,
-        root_run_id=run.root_run_id or assignment.root_run_id,
-        depth=2,
-        child_role=TeamAssignmentKind.SUBAGENT.value,
-        runtime_route=TEAM_ROLE_ROUTE,
-        extension_catalog_version=run.extension_catalog_version,
-        dispatch_status=DispatchStatus.QUEUED,
-        workspace_path=run.workspace_path,
-        integration_branch=run.integration_branch,
-        workspace_state=run.workspace_state,
-        graph_thread_id=f"run:{run.id}:subagent:{call.call_id}",
-    )
-    subagent = Agent(
-        run_id=child.id,
-        parent_agent_id=agent.id,
-        kind=AgentKind.SUBAGENT,
-        profile="subagent",
         model=agent.model,
-    )
-    child_assignment = TeamAssignment(
-        root_run_id=assignment.root_run_id,
-        parent_run_id=run.id,
-        child_run_id=child.id,
-        kind=TeamAssignmentKind.SUBAGENT,
-        role_profile="subagent",
-        runtime_route=TEAM_ROLE_ROUTE,
-        goal=arguments.goal,
         allowed_tools=arguments.allowed_tools,
         allowed_skills=arguments.allowed_skills,
-        can_write=False,
-        can_delegate=False,
-        max_subagents=0,
         acceptance_criteria=arguments.acceptance_criteria,
         handoff_context={"created_by_tool_call_id": call.call_id},
+    )
+    child = bundle.run
+    subagent = bundle.agent
+    child_assignment = bundle.assignment.model_copy(
+        update={"root_run_id": assignment.root_run_id}
     )
     validate_assignment_graph(child_assignment)
     await repository.create_run(child, subagent)

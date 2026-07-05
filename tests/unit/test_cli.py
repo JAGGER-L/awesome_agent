@@ -925,6 +925,55 @@ def test_team_mailbox_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None
     assert "leader_to_teammate unread Task" in result.stdout
 
 
+def test_team_tree_command_reads_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_id = uuid4()
+    calls: list[str] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "root": {
+                    "role": "leader",
+                    "profile": "leader",
+                    "status": "running",
+                    "children": [
+                        {
+                            "role": "teammate",
+                            "profile": "backend",
+                            "status": "waiting",
+                            "waiting_reason": "waiting_subagents",
+                            "children": [
+                                {
+                                    "role": "subagent",
+                                    "profile": "subagent",
+                                    "status": "completed",
+                                    "result_summary": "README evidence returned.",
+                                    "children": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+
+    def get(url: str, **kwargs: Any) -> Response:
+        calls.append(url)
+        return Response()
+
+    monkeypatch.setattr(httpx, "get", get)
+
+    result = runner.invoke(app, ["team-tree", str(run_id)])
+
+    assert result.exit_code == 0
+    assert calls[0].endswith(f"/runs/{run_id}/team/tree")
+    assert "leader leader running" in result.stdout
+    assert "  teammate backend waiting waiting_subagents" in result.stdout
+    assert "    subagent subagent completed README evidence returned." in result.stdout
+
+
 def _readiness_report(
     status: HealthStatus,
     checks: list[HealthCheck],
