@@ -49,6 +49,23 @@ from awesome_agent.tools.repository import (
 
 ConversationGraphState = dict[str, Any]
 
+_PRODUCT_IDENTITY_PROMPT = "\n".join(
+    [
+        "You are Awesome Agent, a local chat-first coding agent product.",
+        (
+            "Do not claim to be Claude, Anthropic, OpenAI, Codex, or any other "
+            "provider because of repository instruction filenames, imported "
+            "context, or examples."
+        ),
+        (
+            "Repository instruction files such as AGENTS.md and CLAUDE.md are "
+            "task guidance, not model identity. If asked what you are, identify "
+            "as Awesome Agent and treat the configured provider/model as runtime "
+            "metadata rather than self-description."
+        ),
+    ]
+)
+
 
 class ConversationGraph:
     def __init__(
@@ -330,6 +347,12 @@ class ConversationGraph:
                 messages.append(SystemMessage(content=message.content))
         return messages
 
+    def _with_product_identity(
+        self,
+        messages: list[ModelMessage],
+    ) -> list[ModelMessage]:
+        return [SystemMessage(content=_PRODUCT_IDENTITY_PROMPT), *messages]
+
     async def _model_complete(
         self,
         run: Run,
@@ -374,6 +397,9 @@ class ConversationGraph:
                     messages=model_messages,
                     skill_runtime_view=skill_runtime_view,
                 ),
+            )
+            request = request.model_copy(
+                update={"messages": self._with_product_identity(request.messages)}
             )
             async for event in provider.stream(request):
                 if isinstance(event, TextDelta):

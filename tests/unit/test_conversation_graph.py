@@ -123,6 +123,22 @@ class CapturingProvider:
         )
 
 
+class PrependingSystemMiddleware:
+    async def before_model_call(
+        self,
+        request: ModelRequest,
+        context: object,
+    ) -> ModelRequest:
+        return request.model_copy(
+            update={
+                "messages": [
+                    SystemMessage(content="Middleware context"),
+                    *request.messages,
+                ]
+            }
+        )
+
+
 class MemoryToolProvider:
     def __init__(self) -> None:
         self.requests: list[ModelRequest] = []
@@ -553,6 +569,46 @@ async def test_graph_injects_cwd_context_for_all_model_calls(tmp_path: Path) -> 
         and "Always mention constraints." not in str(event.payload)
         for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_graph_injects_product_identity_before_cwd_context(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "CLAUDE.md").write_text(
+        "# Claude Repository Instructions\n",
+        encoding="utf-8",
+    )
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "what model are you")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    provider = CapturingProvider("done")
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        skill_context_middleware=PrependingSystemMiddleware(),
+        cwd_context_service=CwdContextService(
+            repository=InMemoryCwdContextSnapshotRepository()
+        ),
+    )
+
+    await graph.execute(run, leader)
+
+    system_messages = [
+        message
+        for message in provider.requests[0].messages
+        if isinstance(message, SystemMessage)
+    ]
+    assert "You are Awesome Agent" in system_messages[0].content
+    assert "Do not claim to be Claude" in system_messages[0].content
+    assert system_messages[1].content == "Middleware context"
+    assert "awesome_agent_cwd_context" in system_messages[2].content
+    assert "Claude Repository Instructions" in system_messages[2].content
 
 
 @pytest.mark.asyncio
