@@ -85,6 +85,10 @@ forbidden.
   propagation, and uses a cancellable subprocess runner. Docker shell execution
   uses managed container names and attempts `docker rm -f` on timeout or
   cancellation.
+- Conversation-turn model provider I/O runs outside the Worker event loop in a
+  killable subprocess backend. The parent runtime owns first-event, idle, total,
+  and cancellation deadlines, records model-call timeout evidence, and marks the
+  Run terminal or recoverable without waiting for provider SDK cooperation.
 - SSE consumers poll ordered PostgreSQL events, so API restarts and separate
   Worker processes do not lose durable history.
 - Read-only model/tool execution uses synchronous checkpoints and explicit

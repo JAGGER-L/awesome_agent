@@ -1,4 +1,3 @@
-import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 from uuid import UUID
@@ -26,6 +25,11 @@ from awesome_agent.memory.models import MemoryTarget
 from awesome_agent.memory.policy import MemoryPolicy
 from awesome_agent.memory.service import MemoryService
 from awesome_agent.modeling.errors import ModelErrorCode, ModelErrorInfo
+from awesome_agent.modeling.execution import (
+    ModelExecutionContext,
+    ModelExecutionService,
+    ModelExecutionTimeout,
+)
 from awesome_agent.modeling.messages import AssistantMessage, SystemMessage
 from awesome_agent.modeling.stream import (
     ModelStreamEvent,
@@ -44,6 +48,7 @@ from awesome_agent.runtime.cwd_context import (
     CwdContextService,
     InMemoryCwdContextSnapshotRepository,
 )
+from awesome_agent.runtime.dispatch import PermanentExecutionError
 from awesome_agent.runtime.graphs import CONVERSATION_TURN_ROUTE
 from awesome_agent.runtime.repository import InMemoryRuntimeRepository
 from awesome_agent.tools.approval import ApprovalPolicy
@@ -98,18 +103,6 @@ class FailingProvider:
         raise RuntimeError("model failed")
 
 
-class HangingBeforeFirstEventProvider:
-    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
-        async def events() -> AsyncIterator[ModelStreamEvent]:
-            await asyncio.Event().wait()
-            yield TextDelta(text="unreachable")
-
-        return events()
-
-    async def complete(self, request: ModelRequest) -> ModelTurn:
-        raise RuntimeError("unreachable")
-
-
 class CapturingProvider:
     def __init__(self, content: str = "hello") -> None:
         self.content = content
@@ -153,6 +146,20 @@ class PrependingSystemMiddleware(SkillContextMiddleware):
                 ]
             }
         )
+
+
+class TimeoutBackend:
+    def stream(
+        self,
+        request: ModelRequest,
+        *,
+        context: ModelExecutionContext,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            raise ModelExecutionTimeout("first_event", 0.1)
+            yield TextDelta(text="unreachable")
+
+        return events()
 
 
 class MemoryToolProvider:
@@ -402,12 +409,12 @@ async def test_conversation_graph_bounds_provider_stream_before_first_event() ->
     graph = ConversationGraph(
         conversations=conversations,
         runtime=runtime,
-        provider_factory=lambda _model: HangingBeforeFirstEventProvider(),
+        provider_factory=lambda _model: FakeProvider(),
         default_model="fake-model",
-        model_first_event_timeout_seconds=0.01,
+        model_execution_service=ModelExecutionService(TimeoutBackend()),
     )
 
-    with pytest.raises(TimeoutError, match="Model stream did not emit"):
+    with pytest.raises(PermanentExecutionError, match="first_event_timeout"):
         await graph.execute(run, leader)
 
     events = await runtime.list_events(run.id)
@@ -420,7 +427,7 @@ async def test_conversation_graph_bounds_provider_stream_before_first_event() ->
     ]
     assert model_events[0].payload["phase"] == "stream_started"
     assert model_events[1].payload["phase"] == "first_event_timeout"
-    assert "0.01" in str(model_events[1].payload["error"])
+    assert "0.1" in str(model_events[1].payload["error"])
     messages = await conversations.list_messages(thread.id)
     assert [message.role for message in messages] == [ThreadMessageRole.USER]
 

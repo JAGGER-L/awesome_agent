@@ -31,6 +31,24 @@ def test_settings_use_confirmed_concurrency_defaults() -> None:
     assert settings.team_patch_conflict_rework_budget == 2
     assert settings.team_model_output_rework_budget == 10
     assert settings.team_default_rework_budget == 1
+    assert settings.model_first_event_timeout_seconds == 60.0
+    assert settings.model_idle_timeout_seconds == 120.0
+    assert settings.model_total_timeout_seconds == 600.0
+    assert settings.model_process_shutdown_grace_seconds == 2.0
+
+
+def test_model_execution_deadline_settings_read_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWESOME_AGENT_MODEL_IDLE_TIMEOUT_SECONDS", "9.5")
+    monkeypatch.setenv("AWESOME_AGENT_MODEL_TOTAL_TIMEOUT_SECONDS", "21")
+    monkeypatch.setenv("AWESOME_AGENT_MODEL_PROCESS_SHUTDOWN_GRACE_SECONDS", "0.5")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.model_idle_timeout_seconds == 9.5
+    assert settings.model_total_timeout_seconds == 21
+    assert settings.model_process_shutdown_grace_seconds == 0.5
 
 
 def test_team_recovery_budget_settings_reject_invalid_values() -> None:

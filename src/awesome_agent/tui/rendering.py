@@ -43,7 +43,11 @@ def render_message(
     if message.kind is ChatEventKind.RUN:
         return _labeled("run", message.content, label_style="blue")
     if message.kind is ChatEventKind.TOOL:
-        return _labeled("tool", message.content, label_style="magenta")
+        return _labeled(
+            "tool",
+            message.content,
+            label_style=_tool_label_style(message.content),
+        )
     if message.kind is ChatEventKind.ARTIFACT:
         return _labeled("artifact", message.content, label_style="green")
     if message.kind is ChatEventKind.APPROVAL:
@@ -128,10 +132,12 @@ def render_tool_event(event: ToolDisplayEvent, *, details_enabled: bool) -> Text
 
 def _tool_label_style(summary: str) -> str:
     normalized = summary.strip().lower()
-    if normalized in {"completed", "success", "succeeded", "done"}:
-        return "green"
-    if normalized in {"failed", "error", "cancelled"}:
+    if any(value in normalized for value in ("failed", "error", "cancelled")):
         return "red"
+    if any(
+        value in normalized for value in ("completed", "success", "succeeded", "done")
+    ):
+        return "green"
     return "magenta"
 
 

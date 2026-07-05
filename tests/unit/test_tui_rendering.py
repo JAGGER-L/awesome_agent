@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from rich.text import Text
+
 from awesome_agent.surfaces.client import ChangedFileSummary
 from awesome_agent.tui.chat_state import ChatEventKind, ChatMessage, ThoughtBlock
 from awesome_agent.tui.events import (
@@ -247,6 +249,31 @@ def test_failed_tool_call_uses_red_label() -> None:
     assert rendered.spans[0].style == "red"
 
 
+def test_tool_message_success_label_is_green() -> None:
+    message = ChatMessage.system(
+        "Tool - repo.status\ncompleted",
+        kind=ChatEventKind.TOOL,
+    )
+
+    rendered = render_message(message)
+
+    styles = _styles_for_text(rendered, "tool")
+    assert "green" in styles
+    assert "red" not in styles
+    assert "magenta" not in styles
+
+
+def test_tool_message_failure_label_is_red() -> None:
+    message = ChatMessage.system(
+        "Tool - repo.status\nfailed: boom",
+        kind=ChatEventKind.TOOL,
+    )
+
+    rendered = render_message(message)
+
+    assert "red" in _styles_for_text(rendered, "tool")
+
+
 def test_tool_call_details_are_bounded_and_redacted() -> None:
     event = ToolDisplayEvent(
         name="run_command",
@@ -320,3 +347,14 @@ def test_changed_files_empty_state_is_explicit() -> None:
     rendered = render_changed_files([]).plain
 
     assert rendered == "Changed files\n  none"
+
+
+def _styles_for_text(text: Text, needle: str) -> set[str]:
+    plain = text.plain
+    styles: set[str] = set()
+    start = plain.lower().index(needle.lower())
+    end = start + len(needle)
+    for span in text.spans:
+        if span.start <= start and span.end >= end:
+            styles.add(str(span.style))
+    return styles

@@ -71,13 +71,13 @@ def test_product_surface_thread_turn_run_and_artifact_flow(tmp_path: Path) -> No
         stream_text = response.read().decode()
     assert "event: message.delta" in stream_text
     assert "event: message.completed" in stream_text
-    messages = client.get(f"/threads/{thread['id']}/messages").json()
+    messages = client.get(f"/threads/{thread['id']}/messages").json()["items"]
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[-1]["content"] == "Here is your tiny HTML snake game."
 
     runs_response = client.get(f"/threads/{thread['id']}/runs")
     assert runs_response.status_code == 200
-    [run] = runs_response.json()
+    [run] = runs_response.json()["items"]
     assert run["goal"] == "Say hello"
     run_id = UUID(str(run["run_id"]))
     runtime.artifacts[run_id] = [
@@ -148,7 +148,7 @@ def test_product_surface_continue_does_not_create_user_message(
         assert response.status_code == 200
         stream_text = response.read().decode()
 
-    messages = client.get(f"/threads/{thread['id']}/messages").json()
+    messages = client.get(f"/threads/{thread['id']}/messages").json()["items"]
     user_messages = [
         message["content"] for message in messages if message["role"] == "user"
     ]

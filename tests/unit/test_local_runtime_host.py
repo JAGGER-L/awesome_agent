@@ -77,6 +77,26 @@ class FailingProvider(StructuredModelProvider):
         )
 
 
+class SequenceProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        self.calls += 1
+        if self.calls <= 3:
+            raise RuntimeError("model failed")
+            yield TextDelta(text="unreachable")  # pragma: no cover
+        yield TextDelta(text="recovered")
+        yield TurnCompleted(
+            turn=ModelTurn(
+                assistant=AssistantMessage(content="recovered"),
+                stop_reason=StopReason.COMPLETED,
+                model="fake-model",
+                provider="fake",
+            )
+        )
+
+
 class SlowProvider(StructuredModelProvider):
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         yield TextDelta(text="first")
@@ -202,6 +222,33 @@ def test_local_runtime_host_stream_turn_creates_durable_conversation_run(
     assert runs[0]["status"] == "completed"
 
 
+def test_local_runtime_host_default_path_uses_process_model_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "test")
+    monkeypatch.setenv("AWESOME_AGENT_MODEL_WORKER_FAKE", "echo")
+    host = LocalRuntimeHost(
+        settings=test_settings(
+            local_state_dir=tmp_path / "state",
+            deepseek_api_key="test-key",
+        ),
+        default_model="deepseek-v4-pro",
+    )
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
+
+    events = list(host.stream_turn(thread.id, "hi"))
+    [run] = host.list_thread_runs(thread.id)
+    host.close()
+
+    assert any(
+        event.event is ConversationStreamEventKind.MESSAGE_DELTA
+        and event.payload == {"text": "hello"}
+        for event in events
+    )
+    assert run["status"] == "completed"
+
+
 def test_local_runtime_host_yields_delta_before_worker_finishes(
     tmp_path: Path,
 ) -> None:
@@ -274,6 +321,29 @@ def test_local_runtime_host_stream_turn_returns_error_after_retry_exhaustion(
     runtime_event_types = [event.event_type for event in runtime_events]
     assert EventType.RUN_STATUS_CHANGED in runtime_event_types
     assert EventType.DISPATCH_RECOVERY_REQUIRED in runtime_event_types
+
+
+def test_local_runtime_host_accepts_next_message_after_failed_turn(
+    tmp_path: Path,
+) -> None:
+    provider = SequenceProvider()
+    host = LocalRuntimeHost(
+        settings=test_settings(local_state_dir=tmp_path / "state"),
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+    )
+    thread = host.create_thread(title="Chat", context_path=str(tmp_path))
+
+    failed_events = list(host.stream_turn(thread.id, "first"))
+    recovered_events = list(host.stream_turn(thread.id, "second"))
+
+    assert failed_events[-1].event is ConversationStreamEventKind.ERROR
+    assert recovered_events[-1].event is ConversationStreamEventKind.TURN_COMPLETED
+    assert any(
+        event.event is ConversationStreamEventKind.MESSAGE_DELTA
+        and event.payload == {"text": "recovered"}
+        for event in recovered_events
+    )
 
 
 def test_local_runtime_host_cancel_terminalizes_when_provider_blocks_loop(

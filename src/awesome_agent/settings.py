@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     otel_service_name: str = "awesome-agent"
     otel_console_exporter_enabled: bool = True
     otel_otlp_endpoint: str | None = None
+    model_idle_timeout_seconds: float = Field(default=120.0, gt=0.0, le=1800.0)
+    model_total_timeout_seconds: float = Field(default=600.0, gt=0.0, le=7200.0)
+    model_process_shutdown_grace_seconds: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=30.0,
+    )
 
     @model_validator(mode="after")
     def validate_heartbeat_interval(self) -> "Settings":
