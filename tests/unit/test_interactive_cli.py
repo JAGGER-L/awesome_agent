@@ -62,8 +62,13 @@ def test_awesome_doctor_reports_missing_key_and_exits_one(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class FakeSettings:
+        deepseek_base_url = "https://api.deepseek.com"
+        deepseek_api_key = None
+
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("AWESOME_AGENT_DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr("awesome_agent.cli.interactive.Settings", FakeSettings)
 
     result = runner.invoke(app, ["doctor", "--project-root", str(tmp_path)])
 
@@ -99,6 +104,33 @@ def test_awesome_doctor_exits_zero_with_key_and_official_base_url(
     assert "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is set" in result.output
     assert "OK    Base URL: https://api.deepseek.com" in result.output
     assert "Start: awesome" in result.output
+
+
+def test_awesome_doctor_accepts_settings_loaded_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSettings:
+        deepseek_base_url = "https://api.deepseek.com"
+        deepseek_api_key = object()
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("AWESOME_AGENT_DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr("awesome_agent.cli.interactive.Settings", FakeSettings)
+    (tmp_path / ".awesome-agent").mkdir()
+    (tmp_path / ".awesome-agent" / "config.yaml").write_text(
+        "version: 1\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["doctor", "--project-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert (
+        "OK    API key: AWESOME_AGENT_DEEPSEEK_API_KEY is configured through Settings"
+        in result.output
+    )
+    assert "ERROR API key" not in result.output
 
 
 def test_awesome_doctor_rejects_custom_deepseek_base_url(

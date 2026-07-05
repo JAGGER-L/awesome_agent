@@ -156,6 +156,17 @@ def build_cli_doctor_report(
     *,
     deepseek_base_url: str,
 ) -> DoctorReport:
+    api_key_detail = f"{summary.model_api_key_env} is missing"
+    if summary.model_api_key_configured:
+        if summary.model_api_key_source == "settings":
+            api_key_detail = (
+                f"{summary.model_api_key_env} is configured through Settings"
+            )
+        elif summary.model_api_key_source == "environment":
+            api_key_detail = f"{summary.model_api_key_env} is set"
+        else:
+            api_key_detail = f"{summary.model_api_key_env} is configured"
+
     lines = [
         DoctorLine(
             DoctorStatus.OK if summary.user_config_exists else DoctorStatus.WARN,
@@ -169,11 +180,7 @@ def build_cli_doctor_report(
         DoctorLine(
             DoctorStatus.OK if summary.model_api_key_configured else DoctorStatus.ERROR,
             "API key",
-            (
-                f"{summary.model_api_key_env} is set"
-                if summary.model_api_key_configured
-                else f"{summary.model_api_key_env} is missing"
-            ),
+            api_key_detail,
         ),
         DoctorLine(DoctorStatus.INFO, "cwd", str(summary.project_root)),
         DoctorLine(

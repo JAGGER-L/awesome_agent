@@ -21,6 +21,7 @@ class ConfigFlowSummary:
     model_name: str
     model_api_key_env: str
     model_api_key_configured: bool
+    model_api_key_source: str | None = None
 
     @property
     def needs_model_setup(self) -> bool:
@@ -44,10 +45,19 @@ def inspect_config_flow(
     home: Path,
     project_root: Path,
     environ: Mapping[str, str],
+    settings_api_key_configured: bool = False,
 ) -> ConfigFlowSummary:
     user_config = user_config_path(home)
     project_config = project_root / "awesome-agent.yaml"
     project_env = project_root / ".env"
+    env_api_key_configured = bool(environ.get(DEFAULT_MODEL_API_KEY_ENV))
+    model_api_key_source = (
+        "environment"
+        if env_api_key_configured
+        else "settings"
+        if settings_api_key_configured
+        else None
+    )
     return ConfigFlowSummary(
         home=home,
         project_root=project_root,
@@ -59,7 +69,8 @@ def inspect_config_flow(
         project_env_exists=project_env.exists(),
         model_name=DEFAULT_MODEL_NAME,
         model_api_key_env=DEFAULT_MODEL_API_KEY_ENV,
-        model_api_key_configured=bool(environ.get(DEFAULT_MODEL_API_KEY_ENV)),
+        model_api_key_configured=env_api_key_configured or settings_api_key_configured,
+        model_api_key_source=model_api_key_source,
     )
 
 

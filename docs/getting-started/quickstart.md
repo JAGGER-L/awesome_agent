@@ -90,10 +90,10 @@ in your shell, operating-system environment, password manager, or local `.env`
 file before model-backed use.
 
 `awesome doctor` checks only the local CLI first-run path: user config,
-`AWESOME_AGENT_DEEPSEEK_API_KEY` in the current process environment, official
-DeepSeek base URL, current project config presence, and current project `.env`
-presence. It does not check API server, Docker, PostgreSQL, Worker, or sandbox
-health. Use `awesome-agent doctor --profile api` or
+the effective `AWESOME_AGENT_DEEPSEEK_API_KEY` from Settings, official DeepSeek
+base URL, current project config presence, and current project `.env` presence.
+It does not check API server, Docker, PostgreSQL, Worker, or sandbox health. Use
+`awesome-agent doctor --profile api` or
 `awesome-agent doctor --profile runtime` for developer/operator diagnostics.
 
 Open the local interactive entrypoint:
