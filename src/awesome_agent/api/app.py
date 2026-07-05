@@ -65,8 +65,9 @@ from awesome_agent.conversation.events import ConversationStreamEvent
 from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.repository import ConversationRepository
 from awesome_agent.conversation.service import ConversationService
-from awesome_agent.domain.enums import ExecutionKind, RunIntent
+from awesome_agent.domain.enums import ExecutionKind, ExecutionOrigin, RunIntent
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.extensions.assembly import assemble_runtime_tools
 from awesome_agent.extensions.config import build_project_extension_catalog_sync
 from awesome_agent.extensions.diagnostics import (
     ExtensionDiagnosticsService,
@@ -164,7 +165,6 @@ from awesome_agent.safety.redaction import (
 from awesome_agent.settings import Settings, default_settings_env_file
 from awesome_agent.surfaces.capabilities import CapabilitySurfaceService
 from awesome_agent.surfaces.client import changed_file_summaries_from_payload
-from awesome_agent.tools.repository import build_modifying_registry
 
 logger = logging.getLogger(__name__)
 _NIL_RUN_ID = UUID(int=0)
@@ -220,6 +220,13 @@ def create_app(
     active_extension_catalog = extension_catalog
     if active_extension_catalog is None:
         active_extension_catalog = build_project_extension_catalog_sync(project_root)
+    default_tool_assembly = assemble_runtime_tools(
+        project_root=project_root or Path.cwd(),
+        settings=settings,
+        origin=ExecutionOrigin.CLI,
+        catalog=active_extension_catalog,
+        source_configs=(),
+    )
     extension_catalogs_by_version = {
         catalog.version: catalog
         for catalog in [*(extension_catalog_history or []), active_extension_catalog]
@@ -252,6 +259,7 @@ def create_app(
             app.state.intake = intake
             app.state.registry = registry
             app.state.extension_catalog = active_extension_catalog
+            app.state.capability_surface = default_tool_assembly.capability_surface
             app.state.threads = threads_repository
             app.state.conversations = default_conversation_service
             app.state.memory_service = configured_memory_service
@@ -321,6 +329,7 @@ def create_app(
             event_poll_interval=settings.event_poll_interval_seconds,
         )
         app.state.extension_catalog = active_extension_catalog
+        app.state.capability_surface = default_tool_assembly.capability_surface
         app.state.threads = PostgresConversationRepository(sessions)
         configured_attachment_service = attachment_service or AttachmentService(
             repository=PostgresAttachmentRepository(sessions),
@@ -449,6 +458,7 @@ def create_app(
     if registry is not None:
         app.state.registry = registry
     app.state.extension_catalog = active_extension_catalog
+    app.state.capability_surface = default_tool_assembly.capability_surface
     app.state.threads = threads_repository
     app.state.conversations = default_conversation_service
     app.state.memory_service = configured_memory_service
@@ -552,6 +562,9 @@ def create_app(
 
     def extensions_catalog() -> ExtensionCatalog:
         return cast(ExtensionCatalog, app.state.extension_catalog)
+
+    def capability_surface() -> CapabilitySurfaceService:
+        return cast(CapabilitySurfaceService, app.state.capability_surface)
 
     def extension_catalog_history_state() -> dict[str, ExtensionCatalog]:
         return cast(
@@ -699,12 +712,7 @@ def create_app(
         ),
     )
     async def get_surface_tools() -> SurfaceToolsResponse:
-        return SurfaceToolsResponse.model_validate(
-            CapabilitySurfaceService(
-                catalog=extensions_catalog(),
-                tool_registry=build_modifying_registry(),
-            ).tools()
-        )
+        return SurfaceToolsResponse.model_validate(capability_surface().tools())
 
     @app.get(
         "/extensions/skills",
@@ -714,10 +722,7 @@ def create_app(
         ),
     )
     async def get_extension_skills() -> ExtensionSkillsResponse:
-        skills = CapabilitySurfaceService(
-            catalog=extensions_catalog(),
-            tool_registry=build_modifying_registry(),
-        ).skills()
+        skills = capability_surface().skills()
         return ExtensionSkillsResponse(configured=bool(skills), items=skills)
 
     @app.get(
@@ -728,10 +733,7 @@ def create_app(
         ),
     )
     async def get_mcp_status() -> McpServersResponse:
-        sources = CapabilitySurfaceService(
-            catalog=extensions_catalog(),
-            tool_registry=build_modifying_registry(),
-        ).mcp_servers()
+        sources = capability_surface().mcp_servers()
         return McpServersResponse(configured=bool(sources), items=sources)
 
     @app.get("/memory")
