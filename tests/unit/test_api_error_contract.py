@@ -23,7 +23,7 @@ def test_api_errors_include_request_id_and_structured_fields() -> None:
     assert response.headers["x-request-id"] == "request-test"
     body = response.json()
     assert body == {
-        "code": "not_found",
+        "code": "thread_not_found",
         "message": "Thread not found.",
         "detail": "Thread not found.",
         "hint": "Verify the requested resource id still exists.",
@@ -87,6 +87,33 @@ def test_api_conflict_errors_are_classified_by_domain() -> None:
     assert secret_body["code"] == "model_error"
     assert "sk-proj-" not in secret_body["message"]
     assert "OPENAI_API_KEY=[REDACTED:api_key]" in secret_body["message"]
+
+
+def test_api_resource_not_found_codes_get_default_hint() -> None:
+    app = create_app(
+        service=cast(Any, object()),
+        intake=cast(Any, object()),
+        registry=cast(Any, object()),
+        settings=test_settings(),
+    )
+
+    @app.get("/test/run-not-found")
+    async def run_not_found() -> None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "run_not_found",
+                "message": "Run not found.",
+            },
+        )
+
+    client = TestClient(app)
+
+    body = client.get("/test/run-not-found").json()
+
+    assert body["code"] == "run_not_found"
+    assert body["hint"] == "Verify the requested resource id still exists."
+    assert body["recoverable"] is False
 
 
 def _client() -> TestClient:

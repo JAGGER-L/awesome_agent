@@ -2104,7 +2104,7 @@ def _error_hint(code: str, status_code: int) -> str | None:
         return "Check request path, query parameters, and JSON body shape."
     if code == "repository_error":
         return "Register or bind a valid repository context before starting a Run."
-    if code == "not_found":
+    if code == "not_found" or code.endswith("_not_found"):
         return "Verify the requested resource id still exists."
     if status_code >= 500:
         return "Check API logs with the returned request_id."

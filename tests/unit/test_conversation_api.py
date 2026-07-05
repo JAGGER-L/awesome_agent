@@ -31,7 +31,7 @@ def test_conversation_turn_streams_deltas_before_completion() -> None:
     assert "event: message.delta" in body
     assert "event: message.completed" in body
     assert body.index("event: message.delta") < body.index("event: message.completed")
-    messages = client.get(f"/threads/{thread['id']}/messages").json()
+    messages = client.get(f"/threads/{thread['id']}/messages").json()["items"]
     assert [message["content"] for message in messages] == ["hello?", "hello world"]
 
 
@@ -49,7 +49,7 @@ def test_conversation_turn_error_does_not_persist_assistant_message() -> None:
 
     assert response.status_code == 200
     assert "event: error" in response.text
-    messages = client.get(f"/threads/{thread['id']}/messages").json()
+    messages = client.get(f"/threads/{thread['id']}/messages").json()["items"]
     assert [message["role"] for message in messages] == ["user"]
 
 
@@ -73,7 +73,7 @@ def test_conversation_turn_accepts_runtime_options() -> None:
     )
 
     assert response.status_code == 200
-    messages = client.get(f"/threads/{thread['id']}/messages").json()
+    messages = client.get(f"/threads/{thread['id']}/messages").json()["items"]
     user_options = messages[0]["metadata"]["turn_options"]
     assert user_options == {
         "model": "deepseek-v4-flash",
@@ -119,7 +119,7 @@ def test_conversation_turn_rejects_unknown_model_before_run_creation() -> None:
 
     assert response.status_code == 422
     assert response.json()["code"] == "unsupported_model"
-    assert client.get(f"/threads/{thread['id']}/messages").json() == []
+    assert client.get(f"/threads/{thread['id']}/messages").json()["items"] == []
     assert len(asyncio.run(runtime.list_runs())) == 0
 
 

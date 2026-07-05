@@ -125,6 +125,8 @@ class ConversationService:
             expected_run_id=expected_run_id,
         )
         if run is None:
+            if expected_run_id is not None:
+                raise ValueError("resumable_run_changed")
             raise ValueError("no_resumable_turn")
 
         stream_id = uuid4()
@@ -162,10 +164,17 @@ class ConversationService:
         *,
         expected_run_id: UUID | None = None,
     ) -> Run | None:
-        await self._repository.get_thread(thread_id)
-        if expected_run_id is not None:
-            return await self._thread_run_by_id(thread_id, expected_run_id)
-        return await self.latest_resumable_thread_run(thread_id)
+        latest = await self.latest_resumable_thread_run(thread_id)
+        if expected_run_id is None:
+            return latest
+        if latest is not None:
+            if latest.id != expected_run_id:
+                return None
+            return latest
+        latest_thread_run = await self._latest_thread_run(thread_id)
+        if latest_thread_run is None or latest_thread_run.id != expected_run_id:
+            return None
+        return latest_thread_run
 
     async def latest_resumable_thread_run(self, thread_id: UUID) -> Run | None:
         await self._repository.get_thread(thread_id)
@@ -173,6 +182,28 @@ class ConversationService:
         for run in await self._runtime_repository.list_runs():
             if not _is_resumable_run(run):
                 continue
+            created_event = await self._run_created_event(run.id)
+            if created_event is None:
+                continue
+            if created_event.payload.get("thread_id") != str(thread_id):
+                continue
+            candidates.append((created_event, run))
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda item: (
+                item[0].created_at,
+                item[1].created_at,
+                item[1].id.hex,
+            ),
+            reverse=True,
+        )
+        return candidates[0][1]
+
+    async def _latest_thread_run(self, thread_id: UUID) -> Run | None:
+        await self._repository.get_thread(thread_id)
+        candidates: list[tuple[RuntimeEvent, Run]] = []
+        for run in await self._runtime_repository.list_runs():
             created_event = await self._run_created_event(run.id)
             if created_event is None:
                 continue
