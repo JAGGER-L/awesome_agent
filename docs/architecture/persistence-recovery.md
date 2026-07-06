@@ -36,6 +36,17 @@ A waiting approval stores the approval record, runtime event, dispatch state,
 and enough continuation data to resume the original tool call. Recovery must
 distinguish approval wait from retry after execution failure.
 
+When approval is decided, resume reconstructs the assistant tool-call message,
+executes or rejects the tool result, appends the tool result, and then re-enters
+the model loop so the model can produce the user-facing answer from the actual
+tool observation. The runtime must not replace this with a synthetic final
+answer.
+
+Approved or denied decisions can also be reused as bounded grants for later
+matching tool calls in the same run. Grant reuse does not create a new approval
+row; it records an `approval.reused` event that points back to the source
+approval and the bounded resource scope.
+
 ## Related Documents
 
 - [Operations guide](../operations/README.md)

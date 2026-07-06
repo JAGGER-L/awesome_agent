@@ -22,13 +22,22 @@ values.
 
 ## Approval
 
-Approval is scoped to the exact canonical tool invocation. A resumed operation
-must revalidate arguments, tool version, workspace fingerprint, and requested
-capabilities before side effects continue.
+Approval resume for the original interrupted tool call is exact-bound. The
+runtime must revalidate arguments, tool version, workspace fingerprint, and
+requested capabilities before that side effect continues.
 
-Approval is not a blanket session grant. It is scoped to tool name, tool
-version, canonical arguments, workspace path, workspace fingerprint, requested
-capabilities, and run context.
+Approval is not a blanket session grant. A prior decision may be reused only as
+a bounded grant inside the same run when the tool name, tool version, workspace
+path, requested capabilities, and risk level still match. The supported grant
+resources are:
+
+- `shell.execute`: the exact normalized `argv`
+- `repo.apply_patch`: the exact set of patch target paths
+
+Different commands, different patch paths, expired decisions, changed
+capabilities, or changed tool risk must request a new approval. Reuse is
+recorded as `approval.reused` so product surfaces can distinguish a new approval
+prompt from an already-decided scope.
 
 ## Related Documents
 

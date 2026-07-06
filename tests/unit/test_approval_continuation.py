@@ -55,6 +55,8 @@ def test_approval_continuation_payload_round_trips() -> None:
     assert restored.to_tool_call().call_id == "call-1"
     assert restored.to_tool_call().name == "shell.execute"
     assert restored.to_tool_call().arguments_json == ('{"argv":["python","square.py"]}')
+    assistant = restored.to_assistant_message()
+    assert assistant.tool_calls == [restored.to_tool_call()]
 
 
 def test_latest_open_approval_continuation_skips_completed_tool_result() -> None:

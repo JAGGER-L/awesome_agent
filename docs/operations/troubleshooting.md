@@ -31,9 +31,10 @@ If migrations fail on a fresh database, check
 
 ## Approval Required Repeats
 
-A repeated approval prompt means the runtime believes the resumed operation is
-not the same canonical tool invocation. Check approval id, tool call id,
-arguments hash, workspace fingerprint, and capability list in runtime events.
+A repeated approval prompt means the runtime could not resume the original
+approval or could not match a bounded grant. Check approval id, tool call id,
+arguments hash, workspace fingerprint, capability list, and any
+`approval.reused` events in runtime events.
 
 ## No Resumable Turn
 

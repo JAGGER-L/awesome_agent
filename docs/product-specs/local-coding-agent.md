@@ -24,7 +24,8 @@ inspect, edit, test, and explain code without losing control of the workspace.
 - User messages create conversation turns; users do not select graph nodes.
 - Runtime owns model calls, tools, approvals, cancellation, retry, and recovery.
 - Tool side effects are visible through timeline and changed-file summaries.
-- Approval is scoped to the exact canonical tool invocation.
+- Approval resume is exact-bound; repeated matching actions may reuse only
+  bounded command/path grants.
 - `continue` resumes interrupted work and is not sent as a model message.
 
 ## Non-Goals

@@ -23,9 +23,14 @@ before execution. Side-effecting tools produce durable evidence.
 
 ## Approval Scope
 
-Approval belongs to one canonical invocation. A later tool request with a
-different schema version, argument hash, workspace path, workspace fingerprint,
-or capability set must request a new approval instead of reusing an old one.
+Approval resume belongs to one canonical invocation. A resumed original call
+must validate the schema version, argument hash, workspace path, workspace
+fingerprint, and capability set before execution.
+
+Repeated requests may reuse a prior decision only through bounded grant scopes:
+exact `shell.execute` argv or exact `repo.apply_patch` target path set. Different
+schema versions, workspaces, capabilities, risk levels, commands, patch paths,
+or expired decisions must request a new approval.
 
 ## Extension Tools
 

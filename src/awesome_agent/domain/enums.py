@@ -106,6 +106,7 @@ class EventType(StrEnum):
     TOOL_PROGRESS = "tool.progress"
     APPROVAL_REQUESTED = "approval.requested"
     APPROVAL_DECIDED = "approval.decided"
+    APPROVAL_REUSED = "approval.reused"
     CANCELLATION_REQUESTED = "cancellation.requested"
     ARTIFACT_CREATED = "artifact.created"
     VERIFICATION_CREATED = "verification.created"
