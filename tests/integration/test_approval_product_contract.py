@@ -9,7 +9,7 @@ from uuid import UUID
 import pytest
 from tests.type_helpers import test_settings
 
-import awesome_agent.surfaces.local_runtime_container as local_container_module
+import awesome_agent.extensions.assembly as assembly_module
 from awesome_agent.conversation.events import ConversationStreamEventKind
 from awesome_agent.conversation.intake import ConversationRunIntakeService
 from awesome_agent.conversation.service import ConversationService
@@ -33,6 +33,7 @@ from awesome_agent.modeling import (
     StopReason,
     StructuredModelProvider,
     ToolCall,
+    ToolResultMessage,
     TurnCompleted,
 )
 from awesome_agent.persistence.approvals import PostgresApprovalRepository
@@ -63,16 +64,21 @@ class ApprovalContractProvider(StructuredModelProvider):
     def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         async def events() -> AsyncIterator[ModelStreamEvent]:
             self.requests.append(request)
-            if len(self.requests) == 1:
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if not tool_results:
                 yield TurnCompleted(
                     turn=ModelTurn(
                         assistant=AssistantMessage(
                             content="",
                             tool_calls=[
                                 ToolCall(
-                                    call_id="call-shell",
-                                    name="shell.execute",
-                                    arguments_json='{"argv":["python","task.py"]}',
+                                    call_id="call-bash",
+                                    name="Bash",
+                                    arguments_json='{"command":"pip install requests"}',
                                 )
                             ],
                         ),
@@ -82,7 +88,16 @@ class ApprovalContractProvider(StructuredModelProvider):
                     )
                 )
                 return
-            raise AssertionError("approval resume must not call the model again")
+            assert len(tool_results) == 1
+            assert tool_results[0].call_id == "call-bash"
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content="approved command completed"),
+                    stop_reason=StopReason.COMPLETED,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
 
         return events()
 
@@ -121,7 +136,7 @@ async def test_local_conversation_approval_contract(
     provider = ApprovalContractProvider()
     sandbox = RecordingSandbox()
     monkeypatch.setattr(
-        local_container_module,
+        assembly_module,
         "create_sandbox",
         lambda **_: sandbox,
     )
@@ -188,7 +203,14 @@ async def test_local_conversation_approval_contract(
         assert restored.dispatch_status is DispatchStatus.TERMINAL
         assert len(approval_events) == 1
         assert len(tool_events) == 1
-        assert len(provider.requests) == 1
+        assert len(provider.requests) == 2
+        assert any(
+            isinstance(message, ToolResultMessage)
+            and message.call_id == "call-bash"
+            for message in provider.requests[1].messages
+        )
+        messages = await container.conversations.list_messages(thread.id)
+        assert messages[-1].content == "approved command completed"
         assert len(sandbox.requests) == 1
         assert remaining[-1].event is ConversationStreamEventKind.TURN_COMPLETED
     finally:
@@ -321,7 +343,14 @@ async def test_postgres_conversation_approval_contract(tmp_path: Path) -> None:
             )
             == 1
         )
-        assert len(provider.requests) == 1
+        assert len(provider.requests) == 2
+        assert any(
+            isinstance(message, ToolResultMessage)
+            and message.call_id == "call-bash"
+            for message in provider.requests[1].messages
+        )
+        messages = await conversations.list_messages(thread.id)
+        assert messages[-1].content == "approved command completed"
         assert len(sandbox.requests) == 1
         assert remaining[-1].event is ConversationStreamEventKind.TURN_COMPLETED
     finally:

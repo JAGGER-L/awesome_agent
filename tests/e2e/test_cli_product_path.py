@@ -120,10 +120,37 @@ class HtmlGameSurfaceClient:
         )
         turn_id = uuid4()
         yield ConversationStreamEvent(
-            event=ConversationStreamEventKind.MESSAGE_DELTA,
+            event=ConversationStreamEventKind.TOOL_COMPLETED,
             thread_id=uuid4(),
             turn_id=turn_id,
             sequence=1,
+            trace_id="trace-html-game",
+            payload={
+                "tool": "WriteFile",
+                "status": "completed",
+                "summary": "created snake-game.html",
+                "invocation_id": "inv-write-snake",
+                "duration_ms": 35,
+                "change_stats": {
+                    "files": 1,
+                    "additions": 1,
+                    "deletions": 0,
+                    "items": [
+                        {
+                            "path": "snake-game.html",
+                            "status": "created",
+                            "additions": 1,
+                            "deletions": 0,
+                        }
+                    ],
+                },
+            },
+        )
+        yield ConversationStreamEvent(
+            event=ConversationStreamEventKind.MESSAGE_DELTA,
+            thread_id=uuid4(),
+            turn_id=turn_id,
+            sequence=2,
             trace_id="trace-html-game",
             payload={"text": "Created snake-game.html."},
         )
@@ -131,7 +158,7 @@ class HtmlGameSurfaceClient:
             event=ConversationStreamEventKind.MESSAGE_COMPLETED,
             thread_id=uuid4(),
             turn_id=turn_id,
-            sequence=2,
+            sequence=3,
             trace_id="trace-html-game",
             payload={
                 "content": "Created snake-game.html.",
@@ -202,7 +229,17 @@ class HtmlGameSurfaceClient:
         return []
 
     def list_tools(self) -> dict[str, list[dict[str, object]]]:
-        return {"Files": [{"name": "write_file"}], "Terminal": [], "MCP": []}
+        return {
+            "Files": [
+                {"name": "ReadFile"},
+                {"name": "WriteFile"},
+                {"name": "EditFile"},
+                {"name": "Glob"},
+                {"name": "Grep"},
+            ],
+            "Terminal": [{"name": "Bash"}],
+            "MCP": [],
+        }
 
     def mcp_status(self) -> list[dict[str, object]]:
         return []
@@ -267,11 +304,18 @@ async def test_ordinary_input_creates_html_game_in_launch_workspace(
             "enter",
         )
         await pilot.pause()
-        transcript = app.query_one("#transcript").render()
+        collapsed = str(app.query_one("#transcript").render())
+        await pilot.press("ctrl+t")
+        expanded = str(app.query_one("#transcript").render())
 
     assert client.turns == ["create snake"]
     assert (tmp_path / "snake-game.html").is_file()
-    rendered = str(transcript)
+    rendered = collapsed
     assert "Created snake-game.html." in rendered
     assert "Changed files" in rendered
     assert "created snake-game.html" in rendered
+    assert "tools: called 1, 1 completed" in rendered
+    assert "WriteFile" not in rendered
+    assert "WriteFile - completed" in expanded
+    assert "snake-game.html" in expanded
+    assert "ctrl+i" not in expanded.lower()
