@@ -17,6 +17,7 @@ from awesome_agent.tui.events import (
     TeamDisplayEvent,
     TeamStatusDisplay,
     ToolDisplayEvent,
+    ToolTimelineEntry,
 )
 
 
@@ -150,14 +151,16 @@ def _render_tool_group(message: ChatMessage, *, expanded: bool) -> Text:
     summary = message.content or _tool_group_summary(message.tool_group)
     rendered = _labeled(
         "tools",
-        f"{summary} (ctrl+i to {action})",
+        f"{summary} (ctrl+t to {action})",
         label_style="cyan",
     )
     if not expanded:
         return rendered
     for entry in message.tool_group.entries:
         style = "red" if entry.failed else "green" if entry.completed else "dim"
-        rendered.append(f"\n  {entry.name} - {entry.summary}", style=style)
+        rendered.append(f"\n  {_tool_entry_header(entry)}", style=style)
+        for line in _tool_change_lines(entry):
+            rendered.append(f"\n    {line}", style="dim")
         for key, value in entry.details.items():
             rendered.append(f"\n    {key}: {_bounded(str(value))}", style="dim")
     return rendered
@@ -165,14 +168,97 @@ def _render_tool_group(message: ChatMessage, *, expanded: bool) -> Text:
 
 def _tool_group_summary(group: ToolGroup) -> str:
     total = group.total
+    running = group.running
     completed = group.completed
     failed = group.failed
     pieces = [f"called {total}"]
+    if running:
+        pieces.append(f"{running} running")
     if completed:
         pieces.append(f"{completed} completed")
     if failed:
         pieces.append(f"{failed} failed")
+    additions, deletions, files = _aggregate_change_stats(group)
+    if files:
+        suffix = "file" if files == 1 else "files"
+        pieces.append(f"+{additions} -{deletions}")
+        pieces.append(f"{files} {suffix}")
     return ", ".join(pieces)
+
+
+def _tool_entry_header(entry: ToolTimelineEntry) -> str:
+    status = entry.status or entry.summary
+    header = f"{entry.name} - {status}"
+    duration = _duration_label(entry.duration_ms)
+    changes = _change_stats_label(entry.change_stats)
+    if duration:
+        header = f"{header} in {duration}"
+    if changes:
+        header = f"{header}, {changes}"
+    return header
+
+
+def _duration_label(duration_ms: int | None) -> str:
+    if duration_ms is None:
+        return ""
+    if duration_ms < 1000:
+        return f"{duration_ms}ms"
+    seconds = duration_ms / 1000
+    return f"{seconds:.1f}s"
+
+
+def _change_stats_label(stats: dict[str, object] | None) -> str:
+    if not isinstance(stats, dict):
+        return ""
+    additions = _int_value(stats.get("additions"))
+    deletions = _int_value(stats.get("deletions"))
+    if additions == 0 and deletions == 0:
+        return ""
+    return f"+{additions} -{deletions}"
+
+
+def _tool_change_lines(entry: ToolTimelineEntry) -> list[str]:
+    stats = entry.change_stats
+    if not isinstance(stats, dict):
+        return []
+    raw_items = stats.get("items")
+    if not isinstance(raw_items, list):
+        return []
+    lines: list[str] = []
+    for raw in raw_items[:8]:
+        if not isinstance(raw, dict):
+            continue
+        path = raw.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        status = str(raw.get("status") or "changed")
+        additions = _int_value(raw.get("additions"))
+        deletions = _int_value(raw.get("deletions"))
+        change = f" +{additions} -{deletions}" if additions or deletions else ""
+        lines.append(f"{status} {_single_line_path(path)}{change}")
+    remaining = len(raw_items) - len(lines)
+    if remaining > 0:
+        suffix = "file" if remaining == 1 else "files"
+        lines.append(f"{remaining} more {suffix}")
+    return lines
+
+
+def _aggregate_change_stats(group: ToolGroup) -> tuple[int, int, int]:
+    additions = 0
+    deletions = 0
+    files = 0
+    for entry in group.entries:
+        stats = entry.change_stats
+        if not isinstance(stats, dict):
+            continue
+        additions += _int_value(stats.get("additions"))
+        deletions += _int_value(stats.get("deletions"))
+        files += _int_value(stats.get("files"))
+    return additions, deletions, files
+
+
+def _int_value(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def _tool_label_style(summary: str) -> str:

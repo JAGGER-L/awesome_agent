@@ -15,15 +15,30 @@ class ToolTimelineEntry:
     name: str
     summary: str
     details: dict[str, object] = field(default_factory=dict)
+    status: str = ""
+    invocation_id: str | None = None
+    call_id: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_ms: int | None = None
+    change_stats: dict[str, object] | None = None
+    changed_files: tuple[dict[str, object], ...] = ()
+
+    @property
+    def running(self) -> bool:
+        normalized = (self.status or self.summary).casefold()
+        return normalized in {"started", "running", "progress", "approval_pending"} or (
+            "running" in normalized
+        )
 
     @property
     def failed(self) -> bool:
-        normalized = self.summary.casefold()
+        normalized = (self.status or self.summary).casefold()
         return any(value in normalized for value in ("failed", "error", "cancelled"))
 
     @property
     def completed(self) -> bool:
-        normalized = self.summary.casefold()
+        normalized = (self.status or self.summary).casefold()
         return any(
             value in normalized
             for value in ("completed", "success", "succeeded", "done")
@@ -71,9 +86,32 @@ class ApprovalPromptState:
             active_index=(self.active_index + delta) % len(self.choices),
         )
 
+    def subject_preview(self, *, limit: int = 240) -> str:
+        return _bounded_single_line(self.subject, limit=limit)
+
+    def subject_detail(self, *, limit: int = 4000) -> str:
+        return _bounded_multiline(self.subject, limit=limit)
+
     def render(self) -> str:
-        lines = [self.title, f"  {self.subject}", "", "Do you want to allow this?"]
+        lines = [
+            f"approval: {self.title}",
+            "choices:",
+        ]
         for index, choice in enumerate(self.choices):
             marker = ">" if index == self.active_index else " "
-            lines.append(f"{marker} {index + 1}. {choice}")
+            lines.append(f"{marker} {index + 1}. {choice.capitalize()}")
+        lines.extend(["request:", self.subject_detail()])
         return "\n".join(lines)
+
+
+def _bounded_single_line(value: str, *, limit: int) -> str:
+    single = " ".join(value.split())
+    if len(single) <= limit:
+        return single
+    return f"{single[: max(0, limit - 24)]} ... [truncated]"
+
+
+def _bounded_multiline(value: str, *, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return f"{value[: max(0, limit - 24)]}\n...[truncated]"

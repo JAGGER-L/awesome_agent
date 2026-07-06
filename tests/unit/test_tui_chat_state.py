@@ -151,6 +151,79 @@ def test_chat_state_toggles_tool_group_expansion() -> None:
     assert updated.toggle_tool_groups().tool_groups_expanded is False
 
 
+def test_chat_state_tracks_approval_decision_in_flight() -> None:
+    state = ChatSessionState.new()
+
+    updated = state.with_approval_decision_in_flight(
+        run_id="run-1",
+        in_flight=True,
+    )
+    cleared = updated.with_approval_decision_in_flight(
+        run_id=None,
+        in_flight=False,
+    )
+
+    assert updated.approval_decision_in_flight is True
+    assert updated.approval_decision_run_id == "run-1"
+    assert cleared.approval_decision_in_flight is False
+    assert cleared.approval_decision_run_id is None
+
+
+def test_chat_state_upserts_tool_timeline_by_invocation_id() -> None:
+    state = ChatSessionState.new()
+
+    state = state.upsert_tool_event(
+        ToolTimelineEntry(
+            invocation_id="invocation-1",
+            name="Bash",
+            status="started",
+            summary="running",
+            started_at="2026-07-06T10:00:00+00:00",
+        )
+    )
+    state = state.upsert_tool_event(
+        ToolTimelineEntry(
+            invocation_id="invocation-1",
+            name="Bash",
+            status="completed",
+            summary="completed",
+            started_at="2026-07-06T10:00:00+00:00",
+            completed_at="2026-07-06T10:00:01+00:00",
+            duration_ms=1000,
+        )
+    )
+
+    tool_messages = [
+        message for message in state.messages if message.kind is ChatEventKind.TOOL
+    ]
+    assert len(tool_messages) == 1
+    assert tool_messages[0].tool_group is not None
+    assert len(tool_messages[0].tool_group.entries) == 1
+    assert tool_messages[0].tool_group.entries[0].status == "completed"
+
+
+def test_chat_state_detects_running_tools() -> None:
+    running = ChatSessionState.new().upsert_tool_event(
+        ToolTimelineEntry(
+            invocation_id="invocation-1",
+            name="Bash",
+            status="started",
+            summary="running",
+        )
+    )
+    completed = running.upsert_tool_event(
+        ToolTimelineEntry(
+            invocation_id="invocation-1",
+            name="Bash",
+            status="completed",
+            summary="completed",
+        )
+    )
+
+    assert running.has_running_tools is True
+    assert completed.has_running_tools is False
+
+
 def test_thread_record_restore_reads_assistant_changed_files_metadata() -> None:
     messages = chat_messages_from_thread_records(
         [

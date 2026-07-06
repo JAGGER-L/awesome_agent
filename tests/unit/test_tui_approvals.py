@@ -16,6 +16,8 @@ def test_approval_prompt_cycles_choices() -> None:
     assert prompt.choices == prompt.options
     assert prompt.move(1).active_index == 1
     assert prompt.move(-1).active_index == 2
+    assert prompt.move(1).move(1).move(1).active_index == 0
+    assert prompt.move(-1).move(-1).move(-1).active_index == 0
 
 
 def test_switch_thread_clears_pending_approval() -> None:
