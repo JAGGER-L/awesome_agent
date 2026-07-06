@@ -37,6 +37,10 @@ class ToolGroup:
         return len(self.entries)
 
     @property
+    def running(self) -> int:
+        return sum(1 for entry in self.entries if entry.running)
+
+    @property
     def completed(self) -> int:
         return sum(1 for entry in self.entries if entry.completed and not entry.failed)
 
@@ -149,6 +153,8 @@ class ChatSessionState:
     active_picker: PickerState | None = None
     active_status_tab: StatusPanelTab | None = None
     pending_approval: ApprovalPromptState | None = None
+    approval_decision_in_flight: bool = False
+    approval_decision_run_id: str | None = None
     last_requested_model: str | None = None
     last_response_model: str | None = None
     last_model_provider: str | None = None
@@ -196,17 +202,21 @@ class ChatSessionState:
         summary: str | None = None,
         details: dict[str, object] | None = None,
     ) -> ChatSessionState:
-        entry = ToolTimelineEntry(
-            name=name,
-            summary=summary or content,
-            details=details or {},
+        return self.upsert_tool_event(
+            ToolTimelineEntry(
+                name=name,
+                summary=summary or content,
+                details=details or {},
+            )
         )
+
+    def upsert_tool_event(self, entry: ToolTimelineEntry) -> ChatSessionState:
         if self.messages and self.messages[-1].kind is ChatEventKind.TOOL:
             existing = self.messages[-1]
             entries = (
                 existing.tool_group.entries if existing.tool_group is not None else ()
             )
-            group = ToolGroup(entries=(*entries, entry))
+            group = ToolGroup(entries=_upsert_tool_entry(entries, entry))
             messages = [
                 *self.messages[:-1],
                 ChatMessage.system(
@@ -275,6 +285,8 @@ class ChatSessionState:
             active_picker=None,
             active_status_tab=None,
             pending_approval=None,
+            approval_decision_in_flight=False,
+            approval_decision_run_id=None,
             status_label="ready",
             last_failed_user_message=None,
             changed_files_expanded=False,
@@ -382,6 +394,18 @@ class ChatSessionState:
         prompt: ApprovalPromptState | None,
     ) -> ChatSessionState:
         return replace(self, pending_approval=prompt)
+
+    def with_approval_decision_in_flight(
+        self,
+        *,
+        run_id: str | None,
+        in_flight: bool,
+    ) -> ChatSessionState:
+        return replace(
+            self,
+            approval_decision_in_flight=in_flight,
+            approval_decision_run_id=run_id if in_flight else None,
+        )
 
     def with_last_failed_user_message(
         self,
@@ -629,6 +653,15 @@ class ChatSessionState:
     def toggle_tool_groups(self) -> ChatSessionState:
         return replace(self, tool_groups_expanded=not self.tool_groups_expanded)
 
+    @property
+    def has_running_tools(self) -> bool:
+        return any(
+            message.tool_group is not None
+            and any(entry.running for entry in message.tool_group.entries)
+            for message in self.messages
+            if message.kind is ChatEventKind.TOOL
+        )
+
     def with_run(
         self,
         run_id: str,
@@ -680,11 +713,73 @@ def _optional_payload_str(payload: dict[str, object], key: str) -> str | None:
 
 def _tool_group_summary(group: ToolGroup) -> str:
     pieces = [f"called {group.total}"]
+    if group.running:
+        pieces.append(f"{group.running} running")
     if group.completed:
         pieces.append(f"{group.completed} completed")
     if group.failed:
         pieces.append(f"{group.failed} failed")
+    additions, deletions, files = _aggregate_change_stats(group)
+    if files:
+        suffix = "file" if files == 1 else "files"
+        pieces.append(f"+{additions} -{deletions}")
+        pieces.append(f"{files} {suffix}")
     return ", ".join(pieces)
+
+
+def _upsert_tool_entry(
+    entries: tuple[ToolTimelineEntry, ...],
+    entry: ToolTimelineEntry,
+) -> tuple[ToolTimelineEntry, ...]:
+    identity = _tool_entry_identity(entry)
+    if identity is None:
+        return (*entries, entry)
+    updated = list(entries)
+    for index, existing in enumerate(updated):
+        if _tool_entry_identity(existing) == identity:
+            updated[index] = _merge_tool_entry(existing, entry)
+            return tuple(updated)
+    return (*entries, entry)
+
+
+def _tool_entry_identity(entry: ToolTimelineEntry) -> tuple[str, str] | None:
+    if entry.invocation_id:
+        return ("invocation", entry.invocation_id)
+    if entry.call_id:
+        return ("call", entry.call_id)
+    return None
+
+
+def _merge_tool_entry(
+    existing: ToolTimelineEntry,
+    incoming: ToolTimelineEntry,
+) -> ToolTimelineEntry:
+    details = {**existing.details, **incoming.details}
+    return replace(
+        incoming,
+        details=details,
+        started_at=incoming.started_at or existing.started_at,
+        change_stats=incoming.change_stats or existing.change_stats,
+        changed_files=incoming.changed_files or existing.changed_files,
+    )
+
+
+def _aggregate_change_stats(group: ToolGroup) -> tuple[int, int, int]:
+    additions = 0
+    deletions = 0
+    files = 0
+    for entry in group.entries:
+        stats = entry.change_stats
+        if not isinstance(stats, dict):
+            continue
+        additions += _int_value(stats.get("additions"))
+        deletions += _int_value(stats.get("deletions"))
+        files += _int_value(stats.get("files"))
+    return additions, deletions, files
+
+
+def _int_value(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def _record_attachments(record: dict[str, Any]) -> tuple[dict[str, object], ...]:

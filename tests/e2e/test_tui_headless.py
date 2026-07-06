@@ -1400,7 +1400,7 @@ async def test_tui_details_on_expands_tool_event_details() -> None:
         await pilot.press("/", "d", "e", "t", "a", "i", "l", "s", "enter")
         await pilot.press("r", "u", "n", "enter")
         collapsed = app.query_one("#transcript").render()
-        await pilot.press("ctrl+i")
+        await pilot.press("ctrl+t")
         transcript = app.query_one("#transcript").render()
 
     assert "tools: called 1, 1 completed" in str(collapsed)
@@ -1592,13 +1592,18 @@ async def test_tui_renders_approval_required_stream_event_as_prompt() -> None:
     async with app.run_test() as pilot:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
+        panel = app.query_one("#approval-panel").render()
         palette = app.query_one("#command-palette").render()
         transcript = app.query_one("#transcript").render()
 
-    prompt = str(palette)
+    prompt = str(panel)
     rendered = str(transcript)
     assert "Leader wants to run:" in prompt
     assert "python square.py" in prompt
+    assert "Approve once" in prompt
+    assert "Deny" in prompt
+    assert "Cancel run" in prompt
+    assert "Leader wants to run:" not in str(palette)
     assert "Action required" not in rendered
     assert "Tool approval is required" not in rendered
 
@@ -1644,12 +1649,13 @@ async def test_tui_approval_prompt_choice_calls_client() -> None:
         await pilot.click("#prompt")
         await pilot.press("h", "i", "enter")
         await pilot.pause()
-        palette = str(app.query_one("#command-palette").render())
+        panel = str(app.query_one("#approval-panel").render())
         await pilot.press("enter")
+        await pilot.pause()
         transcript = app.query_one("#transcript").render()
 
-    assert "Leader wants to create:" in palette
-    assert "snake-game.html" in palette
+    assert "Leader wants to create:" in panel
+    assert "snake-game.html" in panel
     assert client.approval_decisions == [
         {
             "run_id": "run-1",
@@ -1783,15 +1789,14 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
         await pilot.click("#prompt")
         await pilot.press("b", "u", "i", "l", "d", "enter")
         collapsed = app.query_one("#transcript").render()
-        await pilot.press("ctrl+i")
+        await pilot.press("ctrl+t")
         transcript = app.query_one("#transcript").render()
 
     collapsed_text = str(collapsed)
     assert "tools: called 1" in collapsed_text
     assert "write_file - created snake-game.html" not in collapsed_text
     rendered = str(transcript)
-    assert "write_file - created snake-game.html" in rendered
-    assert "created snake-game.html" in rendered
+    assert "write_file - completed" in rendered
     assert "path:" not in rendered
     assert "Team" in rendered
     assert "leader: created 2 teammates" in rendered

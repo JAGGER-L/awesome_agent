@@ -44,14 +44,13 @@ from awesome_agent.tui.command_palette import CommandPaletteState, is_command_pr
 from awesome_agent.tui.events import (
     ApprovalPromptState,
     TeamDisplayEvent,
-    ToolDisplayEvent,
+    ToolTimelineEntry,
 )
 from awesome_agent.tui.pickers import PickerItem, PickerState
 from awesome_agent.tui.rendering import (
     render_approval_prompt,
     render_pending_attachments,
     render_team_event,
-    render_tool_event,
     render_transcript,
 )
 from awesome_agent.tui.slash_router import SlashRouter
@@ -88,6 +87,12 @@ class AwesomeAgentTui(App[None]):
         max-height: 8;
     }
 
+    #approval-panel {
+        max-height: 10;
+        border: solid yellow;
+        padding: 0 1;
+    }
+
     #status-panel {
         height: auto;
     }
@@ -105,9 +110,16 @@ class AwesomeAgentTui(App[None]):
             priority=True,
         ),
         Binding(
+            "ctrl+t",
+            "toggle_tool_groups",
+            "Toggle tool timeline",
+            priority=True,
+        ),
+        Binding(
             "ctrl+i",
             "toggle_tool_groups",
             "Toggle tool timeline",
+            show=False,
             priority=True,
         ),
         ("ctrl+o", "toggle_thought", "Toggle thought"),
@@ -156,11 +168,13 @@ class AwesomeAgentTui(App[None]):
             with VerticalScroll(id="transcript-scroll"):
                 yield Static("", id="transcript")
             yield Static("", id="status-panel")
+            yield Static("", id="approval-panel")
             yield Static("", id="command-palette")
             yield Input(placeholder="Ask Awesome Agent, or type /help", id="prompt")
             yield Static("? for shortcuts - /help for commands", id="shortcuts")
 
     def on_mount(self) -> None:
+        self.set_interval(1.0, self._refresh_running_tool_timeline)
         self._render()
         self._focus_prompt()
 
@@ -171,6 +185,9 @@ class AwesomeAgentTui(App[None]):
         if not raw:
             if self.state.pending_approval is not None:
                 self._apply_approval_choice(self.state.pending_approval.active_index)
+            return
+        if self.state.approval_decision_in_flight:
+            self._show_approval_decision_in_progress()
             return
         if self.state.pending_approval is not None:
             if raw in {"1", "2", "3"}:
@@ -229,6 +246,14 @@ class AwesomeAgentTui(App[None]):
         self._render_palette()
 
     def on_key(self, event: events.Key) -> None:
+        if (
+            self.state.approval_decision_in_flight
+            and event.key in {"enter", "1", "2", "3"}
+        ):
+            self._show_approval_decision_in_progress()
+            event.prevent_default()
+            event.stop()
+            return
         pending_approval = self.state.pending_approval
         if pending_approval is not None:
             if event.key in {"down", "ctrl+n"}:
@@ -332,6 +357,30 @@ class AwesomeAgentTui(App[None]):
                 event.stop()
 
     def action_cancel(self) -> None:
+        if self.state.pending_approval is not None:
+            self._start_approval_cancel(self.state.pending_approval)
+            return
+        if (
+            self.state.approval_decision_in_flight
+            and self.state.approval_decision_run_id is not None
+        ):
+            with suppress(Exception):
+                self.client.cancel(
+                    self.state.approval_decision_run_id,
+                    thread_id=self.state.backend_thread_id,
+                )
+            self.state = self.state.with_approval_decision_in_flight(
+                run_id=None,
+                in_flight=False,
+            ).append(
+                ChatMessage.system(
+                    "Cancellation requested.",
+                    kind=ChatEventKind.RUN,
+                )
+            )
+            self._render()
+            self._focus_prompt()
+            return
         if self.state.active_operation_id is not None:
             if (
                 self.state.current_run_id is not None
@@ -424,6 +473,7 @@ class AwesomeAgentTui(App[None]):
         except NoMatches:
             return
         self._render_status_panel()
+        self._render_approval_panel()
         self._render_palette()
         if follow:
             self.call_after_refresh(self._scroll_transcript_end)
@@ -476,11 +526,6 @@ class AwesomeAgentTui(App[None]):
 
     def _render_palette(self) -> None:
         try:
-            if self.state.pending_approval is not None:
-                self.query_one("#command-palette", Static).update(
-                    render_approval_prompt(self.state.pending_approval)
-                )
-                return
             if self.state.active_picker is not None:
                 self.query_one("#command-palette", Static).update(
                     self.state.active_picker.render()
@@ -496,6 +541,16 @@ class AwesomeAgentTui(App[None]):
             )
         except NoMatches:
             return
+
+    def _render_approval_panel(self) -> None:
+        try:
+            panel = self.query_one("#approval-panel", Static)
+        except NoMatches:
+            return
+        if self.state.pending_approval is None:
+            panel.update("")
+            return
+        panel.update(render_approval_prompt(self.state.pending_approval))
 
     def _active_command_value(self, raw: str) -> str:
         if not is_command_prefix(raw):
@@ -658,19 +713,8 @@ class AwesomeAgentTui(App[None]):
             ConversationStreamEventKind.TOOL_PROGRESS,
             ConversationStreamEventKind.TOOL_COMPLETED,
         }:
-            tool_event = _tool_display_event(stream_event.payload)
-            self.state = self.state.append_tool_event(
-                render_tool_event(
-                    tool_event,
-                    details_enabled=self.state.details_enabled,
-                ).plain,
-                name=tool_event.name,
-                summary=tool_event.summary,
-                details=(
-                    tool_event.details
-                    if self.state.details_enabled or _tool_event_failed(tool_event)
-                    else {}
-                ),
+            self.state = self.state.upsert_tool_event(
+                _tool_timeline_entry(stream_event)
             )
         elif stream_event.event is ConversationStreamEventKind.APPROVAL_REQUIRED:
             prompt = _approval_prompt_from_payload(stream_event.payload)
@@ -757,43 +801,142 @@ class AwesomeAgentTui(App[None]):
 
     def _apply_approval_choice(self, index: int) -> None:
         prompt = self.state.pending_approval
-        if prompt is None:
+        if prompt is None or self.state.approval_decision_in_flight:
             return
         if index == 0:
-            self.client.decide_approval(
-                prompt.run_id,
-                prompt.approval_id,
-                approved=True,
-                thread_id=self.state.backend_thread_id,
-            )
-            self.state = self.state.with_approval_prompt(None).append(
-                ChatMessage.system(
-                    "Approved once. Continuing response.",
-                    kind=ChatEventKind.APPROVAL,
-                )
-            )
-            self._start_continue_turn(expected_run_id=prompt.run_id)
+            self._start_approval_decision(prompt, approved=True)
         elif index == 1:
-            self.client.decide_approval(
-                prompt.run_id,
-                prompt.approval_id,
-                approved=False,
-                thread_id=self.state.backend_thread_id,
-            )
-            self.state = self.state.with_approval_prompt(None).append(
-                ChatMessage.system(
-                    "Denied. Continuing response with the denied tool result.",
-                    kind=ChatEventKind.APPROVAL,
-                )
-            )
-            self._start_continue_turn(expected_run_id=prompt.run_id)
+            self._start_approval_decision(prompt, approved=False)
         elif index == 2:
-            self.client.cancel(prompt.run_id, thread_id=self.state.backend_thread_id)
-            self.state = self.state.with_approval_prompt(None).append(
-                ChatMessage.system("Cancelling Run...", kind=ChatEventKind.RUN)
+            self._start_approval_cancel(prompt)
+
+    def _start_approval_decision(
+        self,
+        prompt: ApprovalPromptState,
+        *,
+        approved: bool,
+    ) -> None:
+        label = (
+            "Approved once. Continuing response."
+            if approved
+            else "Denied. Continuing response."
+        )
+        self.state = (
+            self.state.with_approval_prompt(None)
+            .with_approval_decision_in_flight(
+                run_id=prompt.run_id,
+                in_flight=True,
             )
+            .append(ChatMessage.system(label, kind=ChatEventKind.APPROVAL))
+        )
         self._render()
         self._focus_prompt()
+        self.run_worker(
+            lambda: self._decide_approval_worker(prompt, approved=approved),
+            thread=True,
+            name="approval-decision",
+            exclusive=False,
+        )
+
+    def _decide_approval_worker(
+        self,
+        prompt: ApprovalPromptState,
+        *,
+        approved: bool,
+    ) -> None:
+        try:
+            self.client.decide_approval(
+                prompt.run_id,
+                prompt.approval_id,
+                approved=approved,
+                thread_id=self.state.backend_thread_id,
+            )
+            self.call_from_thread(self._finish_approval_decision, prompt.run_id)
+        except Exception as error:
+            self.call_from_thread(
+                self._approval_decision_failed,
+                prompt.run_id,
+                error,
+            )
+
+    def _finish_approval_decision(self, run_id: str) -> None:
+        self.state = self.state.with_approval_decision_in_flight(
+            run_id=None,
+            in_flight=False,
+        )
+        self._start_continue_turn(expected_run_id=run_id)
+        self._render()
+        self._focus_prompt()
+
+    def _approval_decision_failed(self, _run_id: str, error: Exception) -> None:
+        self.state = self.state.with_approval_decision_in_flight(
+            run_id=None,
+            in_flight=False,
+        ).append(
+            ChatMessage.system(
+                f"Approval decision failed: {error}",
+                kind=ChatEventKind.ERROR,
+            )
+        )
+        self._render()
+        self._focus_prompt()
+
+    def _start_approval_cancel(self, prompt: ApprovalPromptState) -> None:
+        self.state = (
+            self.state.with_approval_prompt(None)
+            .with_approval_decision_in_flight(
+                run_id=prompt.run_id,
+                in_flight=True,
+            )
+            .append(
+                ChatMessage.system(
+                    "Approval cancelled. Cancelling run.",
+                    kind=ChatEventKind.RUN,
+                )
+            )
+        )
+        self._render()
+        self._focus_prompt()
+        self.run_worker(
+            lambda: self._cancel_approval_worker(prompt),
+            thread=True,
+            name="approval-cancel",
+            exclusive=False,
+        )
+
+    def _cancel_approval_worker(self, prompt: ApprovalPromptState) -> None:
+        try:
+            self.client.cancel(prompt.run_id, thread_id=self.state.backend_thread_id)
+            self.call_from_thread(self._finish_approval_cancel, prompt.run_id)
+        except Exception as error:
+            self.call_from_thread(
+                self._approval_decision_failed,
+                prompt.run_id,
+                error,
+            )
+
+    def _finish_approval_cancel(self, _run_id: str) -> None:
+        self.state = self.state.with_approval_decision_in_flight(
+            run_id=None,
+            in_flight=False,
+        )
+        self._render()
+        self._focus_prompt()
+
+    def _show_approval_decision_in_progress(self) -> None:
+        self.state = self.state.append(
+            ChatMessage.system(
+                "Approval decision is still in progress. "
+                "Wait or press Ctrl+C to cancel.",
+                kind=ChatEventKind.ERROR,
+            )
+        )
+        self._render()
+        self._focus_prompt()
+
+    def _refresh_running_tool_timeline(self) -> None:
+        if self.state.has_running_tools:
+            self._render(follow=False)
 
     def _record_stream_exception(self, content: str, error: Exception) -> None:
         self.state = self.state.with_last_failed_user_message(content)
@@ -1509,25 +1652,78 @@ def _apply_thread_settings(
     return state
 
 
-def _tool_display_event(payload: dict[str, object]) -> ToolDisplayEvent:
+def _tool_timeline_entry(event: ConversationStreamEvent) -> ToolTimelineEntry:
+    payload = event.payload
     name = str(payload.get("name") or payload.get("tool") or "tool")
-    summary = str(
-        payload.get("summary")
-        or payload.get("result")
-        or payload.get("status")
-        or "started"
-    )
+    status = str(payload.get("status") or _status_from_stream_kind(event.event))
+    summary = str(payload.get("summary") or payload.get("result") or status)
     details = {
         str(key): value
         for key, value in payload.items()
-        if key not in {"name", "tool", "summary", "result", "status"}
+        if key
+        not in {
+            "name",
+            "tool",
+            "summary",
+            "result",
+            "status",
+            "invocation_id",
+            "call_id",
+            "tool_call_id",
+            "started_at",
+            "completed_at",
+            "duration_ms",
+            "change_stats",
+            "changed_files",
+            "path",
+            "paths",
+        }
     }
-    return ToolDisplayEvent(name=name, summary=summary, details=details)
+    return ToolTimelineEntry(
+        name=name,
+        summary=summary,
+        details=details,
+        status=status,
+        invocation_id=_optional_str(payload.get("invocation_id")),
+        call_id=_optional_str(payload.get("call_id") or payload.get("tool_call_id")),
+        started_at=_optional_str(payload.get("started_at")),
+        completed_at=_optional_str(payload.get("completed_at")),
+        duration_ms=_optional_int(payload.get("duration_ms")),
+        change_stats=_optional_dict(payload.get("change_stats")),
+        changed_files=_dict_tuple(payload.get("changed_files")),
+    )
 
 
-def _tool_event_failed(event: ToolDisplayEvent) -> bool:
-    normalized = event.summary.casefold()
-    return any(value in normalized for value in ("failed", "error", "cancelled"))
+def _status_from_stream_kind(event: ConversationStreamEventKind) -> str:
+    if event is ConversationStreamEventKind.TOOL_STARTED:
+        return "started"
+    if event is ConversationStreamEventKind.TOOL_COMPLETED:
+        return "completed"
+    return "progress"
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def _optional_dict(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    return None
+
+
+def _dict_tuple(value: object) -> tuple[dict[str, object], ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(
+        {str(key): item for key, item in raw.items()}
+        for raw in value
+        if isinstance(raw, dict)
+    )
 
 
 def _team_display_event(payload: dict[str, object]) -> TeamDisplayEvent:

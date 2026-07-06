@@ -21,11 +21,14 @@ class FakeSurfaceClient:
         self.continued: list[tuple[str, str | None, int]] = []
         self.cancelled: list[tuple[str, str | None]] = []
         self.approvals: list[tuple[str, str, bool, str | None]] = []
+        self.started_turns: list[str] = []
 
     def close(self) -> None:
         pass
 
     def stream_turn(self, *_args: object, **_kwargs: object) -> Iterable[object]:
+        if len(_args) > 1:
+            self.started_turns.append(str(_args[1]))
         return []
 
     def continue_turn(
@@ -98,10 +101,11 @@ def test_tui_non_status_command_closes_status_panel() -> None:
     assert app.state.active_status_tab is None
 
 
-def test_tui_approval_approve_once_decides_and_continues() -> None:
+def test_tui_approval_approve_once_decides_and_continues(monkeypatch) -> None:
     client = FakeSurfaceClient()
     app = _app(client)
     continued: list[str | None] = []
+    workers: list[object] = []
     app.state = app.state.with_backend_thread("thread-1").with_approval_prompt(
         ApprovalPromptState(
             run_id="run-1",
@@ -114,19 +118,38 @@ def test_tui_approval_approve_once_decides_and_continues() -> None:
     app._start_continue_turn = lambda *, expected_run_id=None: continued.append(  # type: ignore[method-assign]
         expected_run_id
     )
+    app.call_from_thread = lambda callback, *args, **kwargs: callback(  # type: ignore[method-assign]
+        *args,
+        **kwargs,
+    )
+
+    def fake_run_worker(fn, *, thread=False, name=None, exclusive=False):
+        workers.append(fn)
+        return None
+
+    monkeypatch.setattr(app, "run_worker", fake_run_worker)
 
     app._apply_approval_choice(0)
 
+    assert client.approvals == []
+    assert continued == []
+    assert app.state.pending_approval is None
+    assert app.state.approval_decision_in_flight is True
+    assert workers
+
+    cast(Any, workers[0])()
+
     assert client.approvals == [("run-1", "approval-1", True, "thread-1")]
     assert continued == ["run-1"]
-    assert app.state.pending_approval is None
+    assert app.state.approval_decision_in_flight is False
     assert app.state.messages[-1].content == "Approved once. Continuing response."
 
 
-def test_tui_approval_deny_decides_and_continues() -> None:
+def test_tui_approval_deny_decides_and_continues(monkeypatch) -> None:
     client = FakeSurfaceClient()
     app = _app(client)
     continued: list[str | None] = []
+    workers: list[object] = []
     app.state = app.state.with_backend_thread("thread-1").with_approval_prompt(
         ApprovalPromptState(
             run_id="run-1",
@@ -138,19 +161,33 @@ def test_tui_approval_deny_decides_and_continues() -> None:
     app._start_continue_turn = lambda *, expected_run_id=None: continued.append(  # type: ignore[method-assign]
         expected_run_id
     )
+    app.call_from_thread = lambda callback, *args, **kwargs: callback(  # type: ignore[method-assign]
+        *args,
+        **kwargs,
+    )
+    monkeypatch.setattr(
+        app,
+        "run_worker",
+        lambda fn, *, thread=False, name=None, exclusive=False: workers.append(fn),
+    )
 
     app._apply_approval_choice(1)
 
+    assert client.approvals == []
+    assert continued == []
+    assert workers
+
+    cast(Any, workers[0])()
+
     assert client.approvals == [("run-1", "approval-1", False, "thread-1")]
     assert continued == ["run-1"]
-    assert app.state.messages[-1].content == (
-        "Denied. Continuing response with the denied tool result."
-    )
+    assert app.state.messages[-1].content == "Denied. Continuing response."
 
 
-def test_tui_approval_cancel_requests_run_cancel() -> None:
+def test_tui_approval_cancel_requests_run_cancel(monkeypatch) -> None:
     client = FakeSurfaceClient()
     app = _app(client)
+    workers: list[object] = []
     app.state = app.state.with_backend_thread("thread-1").with_approval_prompt(
         ApprovalPromptState(
             run_id="run-1",
@@ -159,13 +196,133 @@ def test_tui_approval_cancel_requests_run_cancel() -> None:
             subject="npm install",
         )
     )
+    app.call_from_thread = lambda callback, *args, **kwargs: callback(  # type: ignore[method-assign]
+        *args,
+        **kwargs,
+    )
+    monkeypatch.setattr(
+        app,
+        "run_worker",
+        lambda fn, *, thread=False, name=None, exclusive=False: workers.append(fn),
+    )
 
     app._apply_approval_choice(2)
+
+    assert client.cancelled == []
+    assert app.state.approval_decision_in_flight is True
+    assert workers
+
+    cast(Any, workers[0])()
 
     assert client.cancelled == [("run-1", "thread-1")]
     assert client.approvals == []
     assert app.state.pending_approval is None
-    assert app.state.messages[-1].content == "Cancelling Run..."
+    assert app.state.approval_decision_in_flight is False
+    assert app.state.messages[-1].content == "Approval cancelled. Cancelling run."
+
+
+def test_tui_approval_choice_starts_background_decision_worker(monkeypatch) -> None:
+    client = FakeSurfaceClient()
+    app = _app(client)
+    app.state = app.state.with_backend_thread("thread-1").with_approval_prompt(
+        ApprovalPromptState(
+            run_id="run-1",
+            approval_id="approval-1",
+            title="Run command",
+            subject="python cube.py",
+            approval_type="command",
+        )
+    )
+    workers = []
+
+    def fake_run_worker(fn, *, thread=False, name=None, exclusive=False):
+        workers.append((fn, thread, name, exclusive))
+        return None
+
+    monkeypatch.setattr(app, "run_worker", fake_run_worker)
+
+    app._apply_approval_choice(0)
+
+    assert client.approvals == []
+    assert app.state.pending_approval is None
+    assert app.state.approval_decision_in_flight is True
+    assert workers
+    assert workers[0][1] is True
+
+
+def test_tui_duplicate_approval_choice_is_ignored(monkeypatch) -> None:
+    client = FakeSurfaceClient()
+    app = _app(client)
+    app.state = app.state.with_backend_thread(
+        "thread-1"
+    ).with_approval_prompt(
+        ApprovalPromptState(
+            run_id="run-1",
+            approval_id="approval-1",
+            title="Run command",
+            subject="python cube.py",
+            approval_type="command",
+        )
+    ).with_approval_decision_in_flight(run_id="run-1", in_flight=True)
+    workers = []
+    monkeypatch.setattr(
+        app,
+        "run_worker",
+        lambda fn, *, thread=False, name=None, exclusive=False: workers.append(fn),
+    )
+
+    app._apply_approval_choice(0)
+
+    assert client.approvals == []
+    assert workers == []
+
+
+def test_tui_cancel_pending_approval_cancels_prompt_run(monkeypatch) -> None:
+    client = FakeSurfaceClient()
+    app = _app(client)
+    workers: list[object] = []
+    app.state = app.state.with_backend_thread("thread-1").with_approval_prompt(
+        ApprovalPromptState(
+            run_id="run-1",
+            approval_id="approval-1",
+            title="Run command",
+            subject="python cube.py",
+            approval_type="command",
+        )
+    )
+    app.call_from_thread = lambda callback, *args, **kwargs: callback(  # type: ignore[method-assign]
+        *args,
+        **kwargs,
+    )
+    monkeypatch.setattr(
+        app,
+        "run_worker",
+        lambda fn, *, thread=False, name=None, exclusive=False: workers.append(fn),
+    )
+
+    app.action_cancel()
+    cast(Any, workers[0])()
+
+    assert client.cancelled == [("run-1", "thread-1")]
+    assert app.state.pending_approval is None
+    assert all("No active Run" not in message.content for message in app.state.messages)
+
+
+def test_tui_submit_is_blocked_while_approval_decision_is_in_flight() -> None:
+    client = FakeSurfaceClient()
+    app = _app(client)
+    app.state = app.state.with_approval_decision_in_flight(
+        run_id="run-1",
+        in_flight=True,
+    )
+
+    app.on_input_submitted(cast(Any, _submitted("?")))
+
+    assert client.started_turns == []
+    assert (
+        "approval decision is still in progress"
+        in app.state.messages[-1].content.lower()
+    )
 
 
 def test_tui_cancel_active_run_keeps_stream_worker_for_terminal_event() -> None:
@@ -255,11 +412,12 @@ def test_tui_renders_explicit_tool_stream_event_without_message_delta() -> None:
     )
 
     assert app.state.messages[-1].kind is ChatEventKind.TOOL
-    assert app.state.messages[-1].content == "called 1"
+    assert app.state.messages[-1].content == "called 1, 1 running"
     assert app.state.messages[-1].tool_group is not None
     entry = app.state.messages[-1].tool_group.entries[0]
     assert entry.name == "repo.apply_patch"
     assert entry.summary == "started"
+    assert entry.status == "started"
 
 
 def test_tui_tool_timeline_keeps_failure_details_without_details_mode() -> None:
@@ -302,6 +460,56 @@ def test_tui_tool_timeline_keeps_failure_details_without_details_mode() -> None:
     success, failure = app.state.messages[-1].tool_group.entries
     assert success.details == {}
     assert failure.details == {"error": "approval denied"}
+
+
+def test_tui_tool_stream_event_stores_optional_metadata() -> None:
+    app = _app(FakeSurfaceClient())
+
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.TOOL_COMPLETED,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=3,
+            trace_id="trace",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=10,
+            payload={
+                "tool": "WriteFile",
+                "status": "completed",
+                "invocation_id": "invocation-1",
+                "call_id": "call-1",
+                "started_at": "2026-07-06T10:00:00+00:00",
+                "completed_at": "2026-07-06T10:00:01.250000+00:00",
+                "duration_ms": 1250,
+                "change_stats": {
+                    "files": 1,
+                    "additions": 6,
+                    "deletions": 0,
+                    "items": [
+                        {
+                            "path": "cube.py",
+                            "status": "created",
+                            "additions": 6,
+                            "deletions": 0,
+                        }
+                    ],
+                },
+            },
+        )
+    )
+
+    assert app.state.messages[-1].tool_group is not None
+    entry = app.state.messages[-1].tool_group.entries[0]
+    assert entry.name == "WriteFile"
+    assert entry.status == "completed"
+    assert entry.invocation_id == "invocation-1"
+    assert entry.call_id == "call-1"
+    assert entry.started_at == "2026-07-06T10:00:00+00:00"
+    assert entry.completed_at == "2026-07-06T10:00:01.250000+00:00"
+    assert entry.duration_ms == 1250
+    assert entry.change_stats is not None
+    assert entry.change_stats["additions"] == 6
 
 
 def test_tui_renders_approval_required_without_error_message() -> None:

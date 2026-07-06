@@ -299,7 +299,8 @@ def test_tool_call_renders_neutral_collapsed_timeline_summary() -> None:
     assert "tools: called 2" in rendered
     assert "1 completed" in rendered
     assert "1 failed" in rendered
-    assert "ctrl+i to expand" in rendered
+    assert "ctrl+t to expand" in rendered
+    assert "ctrl+i" not in rendered
     assert "tool:" not in rendered
 
 
@@ -325,7 +326,45 @@ def test_tool_call_expanded_timeline_shows_failure_details() -> None:
     assert "repo.read - completed" in rendered
     assert "shell.execute - failed" in rendered
     assert "error: approval denied" in rendered
-    assert "ctrl+i to collapse" in rendered
+    assert "ctrl+t to collapse" in rendered
+    assert "ctrl+i" not in rendered
+
+
+def test_tool_call_timeline_renders_duration_and_change_stats() -> None:
+    message = ChatMessage.system(
+        "",
+        kind=ChatEventKind.TOOL,
+        tool_group=ToolGroup(
+            entries=(
+                ToolTimelineEntry(
+                    name="WriteFile",
+                    summary="created cube.py",
+                    status="completed",
+                    duration_ms=1250,
+                    change_stats={
+                        "files": 1,
+                        "additions": 6,
+                        "deletions": 0,
+                        "items": [
+                            {
+                                "path": "cube.py",
+                                "status": "created",
+                                "additions": 6,
+                                "deletions": 0,
+                            }
+                        ],
+                    },
+                ),
+            )
+        ),
+    )
+
+    collapsed = render_message(message, tool_groups_expanded=False).plain
+    expanded = render_message(message, tool_groups_expanded=True).plain
+
+    assert "tools: called 1, 1 completed, +6 -0, 1 file" in collapsed
+    assert "WriteFile - completed in 1.2s, +6 -0" in expanded
+    assert "created cube.py +6 -0" in expanded
 
 
 def test_tool_call_details_are_bounded_and_redacted() -> None:
@@ -392,9 +431,27 @@ def test_approval_prompt_renders_choices() -> None:
 
     assert "Leader wants to create:" in rendered
     assert "snake-game.html" in rendered
-    assert "> 1. approve once" in rendered
-    assert "2. deny" in rendered
-    assert "3. cancel run" in rendered
+    assert "> 1. Approve once" in rendered
+    assert "2. Deny" in rendered
+    assert "3. Cancel run" in rendered
+
+
+def test_approval_prompt_keeps_choices_visible_for_long_subject() -> None:
+    prompt = ApprovalPromptState(
+        run_id="run-1",
+        approval_id="approval-1",
+        title="File edit needs approval",
+        subject="Write file cube.py with content:\n" + "x" * 4000,
+        approval_type="edit",
+    )
+
+    rendered = render_approval_prompt(prompt).plain
+
+    assert "1. Approve once" in rendered
+    assert "2. Deny" in rendered
+    assert "3. Cancel run" in rendered
+    assert rendered.index("1. Approve once") < rendered.index("Write file")
+    assert "truncated" in rendered.lower()
 
 
 def test_changed_files_render_workspace_relative_paths() -> None:
