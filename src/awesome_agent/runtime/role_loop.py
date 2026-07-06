@@ -234,7 +234,7 @@ class RoleLoop:
     ) -> RoleLoopResult:
         active_catalog = catalog or empty_extension_catalog()
         candidate_tool_definitions = [
-            *model_tool_definitions(self.tool_registry),
+            *model_tool_definitions(self.tool_registry, include_internal=True),
             _create_subagent_tool_definition(),
             _mailbox_list_tool_definition(),
             _mailbox_send_tool_definition(),

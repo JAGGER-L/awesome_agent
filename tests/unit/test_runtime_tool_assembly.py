@@ -18,7 +18,7 @@ from awesome_agent.extensions.models import (
 )
 
 
-def test_assembly_exposes_builtin_registry_to_capability_surface(
+def test_assembly_exposes_public_builtin_tools_to_capability_surface(
     tmp_path: Path,
 ) -> None:
     assembly = assemble_runtime_tools(
@@ -33,10 +33,13 @@ def test_assembly_exposes_builtin_registry_to_capability_surface(
         for item in group
     }
 
-    assert "repo.read" in tool_names
-    assert "shell.execute" in tool_names
-    assert "repo.read" in surface_names
-    assert "shell.execute" in surface_names
+    public_tools = {"ReadFile", "WriteFile", "EditFile", "Bash", "Glob", "Grep"}
+    assert {"repo.read", "repo.apply_patch", "shell.execute"}.issubset(tool_names)
+    assert public_tools.issubset(tool_names)
+    assert public_tools.issubset(surface_names)
+    assert "repo.read" not in surface_names
+    assert "repo.apply_patch" not in surface_names
+    assert "shell.execute" not in surface_names
 
 
 def test_assembly_marks_catalog_tool_enabled_when_registered(tmp_path: Path) -> None:

@@ -59,7 +59,7 @@ Important fields:
 The CLI renders compact lines such as:
 
 ```text
-teammate backend waiting waiting_approval tools=1 denied=1 tool=repo.apply_patch workspace=isolated:ready
+teammate backend waiting waiting_approval tools=1 denied=1 tool=WriteFile workspace=isolated:ready
 ```
 
 Use this surface before inspecting raw runtime events; it is the product view of

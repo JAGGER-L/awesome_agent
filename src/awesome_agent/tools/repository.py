@@ -34,6 +34,17 @@ from awesome_agent.tools.memory import MemoryManageArguments
 from awesome_agent.tools.models import ToolInvocation, ToolResult, ToolSpec
 from awesome_agent.tools.registry import ToolRegistry
 from awesome_agent.tools.shell import ShellExecuteArguments, register_shell_tools
+from awesome_agent.tools.workspace import (
+    BashArguments,
+    EditFileArguments,
+    GlobArguments,
+    GrepArguments,
+    ReadFileArguments,
+    WorkspaceToolError,
+    WriteFileArguments,
+    register_public_modifying_workspace_tools,
+    register_public_read_workspace_tools,
+)
 
 TOOL_RESULT_MAX_CHARS = 30_000
 
@@ -98,6 +109,12 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "repo.diff": DiffArguments,
     "repo.apply_patch": ApplyPatchArguments,
     "shell.execute": ShellExecuteArguments,
+    "ReadFile": ReadFileArguments,
+    "WriteFile": WriteFileArguments,
+    "EditFile": EditFileArguments,
+    "Bash": BashArguments,
+    "Glob": GlobArguments,
+    "Grep": GrepArguments,
     "artifact.read": ArtifactReadArguments,
     "memory.manage": MemoryManageArguments,
     "attachment.list": AttachmentListArguments,
@@ -144,9 +161,11 @@ def build_read_only_registry() -> ToolRegistry:
                 sandbox_required=False,
                 required_capabilities={"repository:read"},
                 input_schema=arguments.model_json_schema(),
+                model_facing=False,
             ),
             handler,
         )
+    register_public_read_workspace_tools(registry)
     return registry
 
 
@@ -156,6 +175,7 @@ def build_modifying_registry(
     sandbox: SandboxBackend | None = None,
 ) -> ToolRegistry:
     registry = build_read_only_registry()
+    execution_sandbox = sandbox or _default_api_sandbox()
     registry.register(
         ToolSpec(
             name="repo.diff",
@@ -164,6 +184,7 @@ def build_modifying_registry(
             sandbox_required=False,
             required_capabilities={"repository:read"},
             input_schema=DiffArguments.model_json_schema(),
+            model_facing=False,
         ),
         _diff,
     )
@@ -175,10 +196,15 @@ def build_modifying_registry(
             sandbox_required=False,
             required_capabilities={"repository:write"},
             input_schema=ApplyPatchArguments.model_json_schema(),
+            model_facing=False,
         ),
         _apply_patch,
     )
-    register_shell_tools(registry, sandbox=sandbox or _default_api_sandbox())
+    register_shell_tools(registry, sandbox=execution_sandbox)
+    register_public_modifying_workspace_tools(
+        registry,
+        sandbox=execution_sandbox,
+    )
     if artifact_repository is not None:
         register_artifact_tools(registry, artifact_repository)
     return registry
@@ -188,6 +214,7 @@ def model_tool_definitions(
     registry: ToolRegistry,
     *,
     names: set[str] | None = None,
+    include_internal: bool = False,
 ) -> list[ToolDefinition]:
     return [
         ToolDefinition(
@@ -196,7 +223,8 @@ def model_tool_definitions(
             input_schema=spec.input_schema,
         )
         for spec in registry.list_specs()
-        if names is None or spec.name in names
+        if (names is None or spec.name in names)
+        and (include_internal or spec.model_facing)
     ]
 
 
@@ -242,6 +270,7 @@ async def execute_repository_call(
         )
     except (
         RepositoryToolError,
+        WorkspaceToolError,
         ValidationError,
         ValueError,
         KeyError,
@@ -709,6 +738,14 @@ def repository_tool_effect_metadata(
     *,
     workspace: Path,
 ) -> tuple[list[str], dict[str, str]]:
+    if tool_name in {"WriteFile", "EditFile"}:
+        path = arguments.get("path")
+        if not isinstance(path, str):
+            return [], {}
+        relative = Path(path)
+        if relative.is_absolute() or ".." in relative.parts or ".git" in relative.parts:
+            return [], {}
+        return [relative.as_posix()], _file_hashes(workspace, {relative})
     if tool_name != "repo.apply_patch":
         return [], {}
     parsed = ApplyPatchArguments.model_validate(arguments)

@@ -42,6 +42,7 @@ def register_shell_tools(registry: ToolRegistry, *, sandbox: SandboxBackend) -> 
             sandbox_required=True,
             required_capabilities={"shell:execute"},
             input_schema=ShellExecuteArguments.model_json_schema(),
+            model_facing=False,
         ),
         execute,
     )

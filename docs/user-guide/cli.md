@@ -46,5 +46,8 @@ setup and reports actionable `OK`, `WARN`, `ERROR`, and `INFO` lines.
 Approvals appear in a fixed approval panel above the prompt so long commands or
 file details do not hide the decision options.
 
+The built-in coding tools shown in tool timelines use product names:
+`ReadFile`, `WriteFile`, `EditFile`, `Bash`, `Glob`, and `Grep`.
+
 Slash commands are a local interaction syntax. API routes use semantic
 resources rather than slash-command names.

@@ -451,8 +451,12 @@ class ConversationGraph:
             if self.tool_registry is not None
             else []
         )
+        exposed_tool_names = {tool.name for tool in tools}
         effective_tools = (
-            _RegistryToolPolicy.from_registry(self.tool_registry, names=tool_names)
+            _RegistryToolPolicy.from_registry(
+                self.tool_registry,
+                names=exposed_tool_names,
+            )
             if self.tool_registry is not None
             else None
         )

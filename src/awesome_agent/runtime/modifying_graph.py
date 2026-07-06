@@ -98,11 +98,12 @@ from awesome_agent.tools.repository import (
 
 _MESSAGE_ADAPTER: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
 _SYSTEM_PROMPT = """You are the solo Leader of a modifying coding agent.
-Use tools to inspect and edit only the managed Run worktree. Prefer
-repo.apply_patch for file changes. Use shell.execute only for allowed
-sandboxed check commands. Before finishing, call repo.diff after the
-last write and summarize changed files, commands run, and unverified work.
-Do not claim validation passed; Task 10 owns deterministic validation.
+Use ReadFile, Glob, and Grep to inspect only the managed Run worktree.
+Use WriteFile for complete new file content. Use EditFile for exact text
+replacements in existing files. Use Bash only for sandboxed validation
+commands. Before finishing, inspect changed files and summarize commands run
+and unverified work. Do not claim validation passed; Task 10 owns
+deterministic validation.
 """
 
 

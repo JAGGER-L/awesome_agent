@@ -163,7 +163,9 @@ def _node_state(
 
 
 @pytest.mark.asyncio
-async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> None:
+async def test_modifying_graph_uses_public_workspace_tools_for_change(
+    tmp_path: Path,
+) -> None:
     _git(tmp_path, "init")
     _git(tmp_path, "config", "user.email", "test@example.com")
     _git(tmp_path, "config", "user.name", "Test")
@@ -171,13 +173,6 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
     (tmp_path / "large.txt").write_text("x" * 20_000, encoding="utf-8")
     _git(tmp_path, "add", "README.md")
     _git(tmp_path, "commit", "-m", "Initial")
-    patch = """diff --git a/README.md b/README.md
---- a/README.md
-+++ b/README.md
-@@ -1 +1 @@
--old
-+new
-"""
     provider = SequenceProvider(
         [
             ModelTurn(
@@ -185,7 +180,7 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
                     tool_calls=[
                         ToolCall(
                             call_id="large-read",
-                            name="repo.read",
+                            name="ReadFile",
                             arguments_json=json.dumps({"path": "large.txt"}),
                         )
                     ]
@@ -198,23 +193,15 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
                 assistant=AssistantMessage(
                     tool_calls=[
                         ToolCall(
-                            call_id="patch",
-                            name="repo.apply_patch",
-                            arguments_json=json.dumps({"patch": patch}),
-                        )
-                    ]
-                ),
-                stop_reason=StopReason.TOOL_CALLS,
-                model="fake-model",
-                provider="fake",
-            ),
-            ModelTurn(
-                assistant=AssistantMessage(
-                    tool_calls=[
-                        ToolCall(
-                            call_id="diff",
-                            name="repo.diff",
-                            arguments_json="{}",
+                            call_id="write",
+                            name="WriteFile",
+                            arguments_json=json.dumps(
+                                {
+                                    "path": "README.md",
+                                    "content": "new\n",
+                                    "overwrite": True,
+                                }
+                            ),
                         )
                     ]
                 ),
@@ -252,6 +239,16 @@ async def test_modifying_graph_requires_patch_and_final_diff(tmp_path: Path) -> 
     assert state["final_diff_after_write"]
     assert state["phase"] == "completed"
     assert "new" in (tmp_path / "README.md").read_text(encoding="utf-8")
+    tool_names = {tool.name for tool in provider.requests[0].tools}
+    assert {
+        "ReadFile",
+        "WriteFile",
+        "EditFile",
+        "Bash",
+        "Glob",
+        "Grep",
+    }.issubset(tool_names)
+    assert not {"repo.apply_patch", "repo.diff", "shell.execute"} & tool_names
     tool_messages = [
         message
         for message in state["messages"]
@@ -732,7 +729,7 @@ async def test_modifying_graph_fails_when_rework_attempts_are_exhausted(
 
 
 @pytest.mark.asyncio
-async def test_modifying_graph_interrupts_and_resumes_approved_shell(
+async def test_modifying_graph_interrupts_and_resumes_approved_bash(
     tmp_path: Path,
 ) -> None:
     _git(tmp_path, "init")
@@ -741,14 +738,6 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
     (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
     _git(tmp_path, "add", "README.md")
     _git(tmp_path, "commit", "-m", "Initial")
-    patch = """diff --git a/README.md b/README.md
---- a/README.md
-+++ b/README.md
-@@ -1 +1 @@
--old
-+new
-"""
-
     class RecordingSandbox:
         name = "recording"
 
@@ -772,10 +761,10 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
                 assistant=AssistantMessage(
                     tool_calls=[
                         ToolCall(
-                            call_id="shell",
-                            name="shell.execute",
+                            call_id="bash",
+                            name="Bash",
                             arguments_json=json.dumps(
-                                {"argv": ["python", "script.py"]}
+                                {"command": "python script.py"}
                             ),
                         )
                     ]
@@ -788,23 +777,15 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
                 assistant=AssistantMessage(
                     tool_calls=[
                         ToolCall(
-                            call_id="patch",
-                            name="repo.apply_patch",
-                            arguments_json=json.dumps({"patch": patch}),
-                        )
-                    ]
-                ),
-                stop_reason=StopReason.TOOL_CALLS,
-                model="fake-model",
-                provider="fake",
-            ),
-            ModelTurn(
-                assistant=AssistantMessage(
-                    tool_calls=[
-                        ToolCall(
-                            call_id="diff",
-                            name="repo.diff",
-                            arguments_json="{}",
+                            call_id="write",
+                            name="WriteFile",
+                            arguments_json=json.dumps(
+                                {
+                                    "path": "README.md",
+                                    "content": "new\n",
+                                    "overwrite": True,
+                                }
+                            ),
                         )
                     ]
                 ),
@@ -848,7 +829,7 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
     invocations = await tools.list_for_run(run.id)
     assert approval.status is ApprovalStatus.PENDING
     assert invocations[0].status == "approval_pending"
-    assert events[-1][2] == "approval:shell"
+    assert events[-1][2] == "approval:bash"
 
     await approvals.decide(
         approval.id,
@@ -861,6 +842,7 @@ async def test_modifying_graph_interrupts_and_resumes_approved_shell(
 
     assert recovered
     assert len(sandbox.requests) == 1
+    assert sandbox.requests[0].argv == ["python", "script.py"]
     assert state["phase"] == "completed"
     assert (tmp_path / "README.md").read_text(encoding="utf-8") == "new\n"
 
@@ -965,7 +947,7 @@ async def test_modifying_graph_reuses_completed_durable_tool_result(
 
 
 @pytest.mark.asyncio
-async def test_modifying_graph_marks_started_shell_as_recovery_required(
+async def test_modifying_graph_marks_started_command_as_recovery_required(
     tmp_path: Path,
 ) -> None:
     tool_repository = InMemoryToolInvocationRepository()
@@ -1003,7 +985,7 @@ async def test_modifying_graph_marks_started_shell_as_recovery_required(
         )
     )
 
-    with pytest.raises(CorruptRuntimeStateError, match="Shell execution"):
+    with pytest.raises(CorruptRuntimeStateError, match="Command execution"):
         await graph._execute_durable_tool_call(
             ToolCall(
                 call_id="shell",

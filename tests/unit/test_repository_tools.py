@@ -235,16 +235,44 @@ async def test_repository_calls_preserve_approval_required_signal(
         )
 
 
-def test_registry_exposes_model_json_schemas() -> None:
+def test_registry_exposes_only_public_workspace_tools_to_model_by_default() -> None:
     definitions = model_tool_definitions(build_read_only_registry())
 
     assert {definition.name for definition in definitions} == {
+        "ReadFile",
+        "Glob",
+        "Grep",
+    }
+
+
+def test_registry_can_expose_internal_tools_for_compatibility() -> None:
+    definitions = model_tool_definitions(
+        build_read_only_registry(),
+        include_internal=True,
+    )
+
+    assert {definition.name for definition in definitions} == {
+        "ReadFile",
+        "Glob",
+        "Grep",
         "repo.status",
         "repo.list",
         "repo.search",
         "repo.read",
         "repo.instructions",
     }
+
+
+def test_internal_tools_are_registered_but_not_model_facing() -> None:
+    registry = build_modifying_registry()
+
+    repo_read, _ = registry.resolve("repo.read")
+    repo_patch, _ = registry.resolve("repo.apply_patch")
+    shell_execute, _ = registry.resolve("shell.execute")
+
+    assert repo_read.model_facing is False
+    assert repo_patch.model_facing is False
+    assert shell_execute.model_facing is False
 
 
 @pytest.mark.asyncio
