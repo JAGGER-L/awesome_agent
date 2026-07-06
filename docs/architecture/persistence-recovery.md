@@ -47,6 +47,16 @@ matching tool calls in the same run. Grant reuse does not create a new approval
 row; it records an `approval.reused` event that points back to the source
 approval and the bounded resource scope.
 
+## Local Coding Product Contract
+
+The local coding path is considered healthy only when a turn can create
+non-empty workspace files through the public `WriteFile` tool, validate them
+through `Bash`, persist changed-file metadata, and finish with a provider
+generated assistant message after tool results re-enter the model context.
+Safe workspace writes and allowlisted validation commands must not request
+approval. Sensitive writes must pause once, replay deterministically after
+approval, and reuse a bounded same-run grant for the same approved resource.
+
 ## Related Documents
 
 - [Operations guide](../operations/README.md)

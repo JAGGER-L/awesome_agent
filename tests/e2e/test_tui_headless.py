@@ -1411,6 +1411,115 @@ async def test_tui_details_on_expands_tool_event_details() -> None:
     assert "exit_code: 0" in rendered
 
 
+class PublicWorkspaceTimelineClient(FakeClient):
+    def stream_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
+    ) -> list[ConversationStreamEvent]:
+        self.turns.append((thread_id, content))
+        turn_id = uuid4()
+        return [
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.TOOL_STARTED,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=1,
+                trace_id="trace-product-tools",
+                payload={
+                    "tool": "WriteFile",
+                    "status": "started",
+                    "invocation_id": "inv-write-cube",
+                    "summary": "writing cube.py",
+                },
+            ),
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.TOOL_COMPLETED,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=2,
+                trace_id="trace-product-tools",
+                payload={
+                    "tool": "WriteFile",
+                    "status": "completed",
+                    "invocation_id": "inv-write-cube",
+                    "summary": "created cube.py",
+                    "duration_ms": 42,
+                    "change_stats": {
+                        "files": 1,
+                        "additions": 6,
+                        "deletions": 0,
+                        "items": [
+                            {
+                                "path": "cube.py",
+                                "status": "created",
+                                "additions": 6,
+                                "deletions": 0,
+                            }
+                        ],
+                    },
+                },
+            ),
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.TOOL_COMPLETED,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=3,
+                trace_id="trace-product-tools",
+                payload={
+                    "tool": "Bash",
+                    "status": "completed",
+                    "invocation_id": "inv-pytest",
+                    "summary": "pytest passed",
+                    "command": "pytest -q",
+                    "exit_code": 0,
+                    "duration_ms": 980,
+                },
+            ),
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.MESSAGE_COMPLETED,
+                thread_id=uuid4(),
+                turn_id=turn_id,
+                sequence=4,
+                trace_id="trace-product-tools",
+                payload={
+                    "content": "Created cube.py and verified it with pytest.",
+                    "changed_files": [{"path": "cube.py", "status": "created"}],
+                },
+            ),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_tui_product_timeline_renders_public_workspace_tools() -> None:
+    app = AwesomeAgentTui(client=PublicWorkspaceTimelineClient())
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("c", "u", "b", "e", "enter")
+        collapsed = str(app.query_one("#transcript").render())
+        await pilot.press("ctrl+t")
+        expanded = str(app.query_one("#transcript").render())
+
+    assert "tools: called 2, 2 completed" in collapsed
+    assert "ctrl+t to expand" in collapsed
+    assert "ctrl+i" not in collapsed.lower()
+    assert "WriteFile - completed" in expanded
+    assert "Bash - completed" in expanded
+    assert "cube.py" in expanded
+    assert "+6 -0" in expanded
+    assert "pytest -q" in expanded
+    assert "Created cube.py and verified it with pytest." in expanded
+    assert "Changed files" in expanded
+    assert "created cube.py" in expanded
+
+
 @pytest.mark.asyncio
 async def test_tui_retry_resends_last_failed_message() -> None:
     class FailingOnceClient(FakeClient):
@@ -1608,6 +1717,75 @@ async def test_tui_renders_approval_required_stream_event_as_prompt() -> None:
     assert "Tool approval is required" not in rendered
 
 
+class LongWriteApprovalClient(FakeClient):
+    def stream_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        model: str | None = None,
+        thinking: str | None = None,
+        memory: dict[str, object] | None = None,
+        skill_ids: tuple[str, ...] = (),
+        attachment_ids: tuple[str, ...] = (),
+    ) -> list[ConversationStreamEvent]:
+        self.turns.append((thread_id, content))
+        return [
+            ConversationStreamEvent(
+                event=ConversationStreamEventKind.APPROVAL_REQUIRED,
+                thread_id=uuid4(),
+                turn_id=uuid4(),
+                sequence=1,
+                trace_id="trace-long-write-approval",
+                payload={
+                    "run_id": "run-1",
+                    "approval_id": "approval-1",
+                    "code": "approval_required",
+                    "message": "Approval required for WriteFile.",
+                    "approval_required": True,
+                    "approval_type": "edit",
+                    "tool": "WriteFile",
+                    "path": "cube.py\n" + ("x" * 4000),
+                },
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_tui_product_approval_panel_keeps_choices_visible_for_long_write(
+) -> None:
+    client = LongWriteApprovalClient()
+    app = AwesomeAgentTui(client=client)
+
+    async with app.run_test() as pilot:
+        await pilot.click("#prompt")
+        await pilot.press("c", "u", "b", "e", "enter")
+        await pilot.pause()
+        panel = str(app.query_one("#approval-panel").render())
+        palette = str(app.query_one("#command-palette").render())
+        transcript = str(app.query_one("#transcript").render())
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert "Approve once" in panel
+    assert "Deny" in panel
+    assert "Cancel run" in panel
+    assert "WriteFile" in panel or "Leader wants to create:" in panel
+    assert "cube.py" in panel
+    assert "cube.py" not in palette
+    assert "Action required" not in transcript
+    assert "approval_required" not in transcript
+    assert client.approval_decisions == [
+        {
+            "run_id": "run-1",
+            "approval_id": "approval-1",
+            "approved": True,
+            "thread_id": client.thread_id,
+            "status": "decided",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_tui_approval_prompt_choice_calls_client() -> None:
     class ApprovalClient(FakeClient):
@@ -1756,7 +1934,7 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
                     sequence=1,
                     trace_id="trace-events",
                     payload={
-                        "name": "write_file",
+                        "tool": "WriteFile",
                         "summary": "created snake-game.html",
                         "path": "snake-game.html",
                     },
@@ -1794,9 +1972,9 @@ async def test_tui_renders_tool_and_team_stream_events() -> None:
 
     collapsed_text = str(collapsed)
     assert "tools: called 1" in collapsed_text
-    assert "write_file - created snake-game.html" not in collapsed_text
+    assert "WriteFile - created snake-game.html" not in collapsed_text
     rendered = str(transcript)
-    assert "write_file - completed" in rendered
+    assert "WriteFile - completed" in rendered
     assert "path:" not in rendered
     assert "Team" in rendered
     assert "leader: created 2 teammates" in rendered

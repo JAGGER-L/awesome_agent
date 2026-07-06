@@ -8,7 +8,7 @@ Quality increases only with executable evidence.
 | Environment | Python 3.12, locked `uv`, doctor/readiness checks, Docker and PostgreSQL paths are documented. | Makefile/script tests and operations docs |
 | State and scope | Local execution plans are ignored; durable direction lives in governance docs. | `.codex/exec-plans/`, `docs/governance/` |
 | Static validation | Ruff, mypy, and structural tests are available. | Repository test suite |
-| Behavioral tests | Unit, structural, integration, and E2E gates cover runtime paths. | `tests/` |
+| Behavioral tests | Unit, structural, integration, and E2E gates cover runtime paths. | `tests/`; product-contract E2E covers safe `WriteFile` + `Bash` completion, sensitive `WriteFile` approval reuse, public tool timeline rendering, and long approval-panel usability. |
 | Observability | Durable query tables, model-call records, runtime events, and OTel export paths exist. | `docs/architecture/observability.md`, diagnostics APIs |
 | Security | Trusted local mode is documented as local trust, not a security boundary. | `docs/architecture/security-model.md`, operations docs |
 
