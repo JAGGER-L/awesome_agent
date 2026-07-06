@@ -1,3 +1,4 @@
+import json
 import subprocess
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -14,6 +15,7 @@ from awesome_agent.conversation.models import ThreadMessageRole
 from awesome_agent.domain.enums import (
     AgentKind,
     AgentStatus,
+    ApprovalStatus,
     DispatchStatus,
     EventType,
     ExecutionKind,
@@ -45,7 +47,10 @@ from awesome_agent.modeling.stream import (
 )
 from awesome_agent.modeling.tools import ToolCall
 from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
-from awesome_agent.persistence.approval_contracts import InMemoryApprovalRepository
+from awesome_agent.persistence.approval_contracts import (
+    DurableApproval,
+    InMemoryApprovalRepository,
+)
 from awesome_agent.persistence.conversations import InMemoryConversationRepository
 from awesome_agent.runtime.agent_loop.skill_context_middleware import (
     SkillContextMiddleware,
@@ -67,7 +72,11 @@ from awesome_agent.tools.approval import ApprovalPolicy
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.memory import register_memory_tools
 from awesome_agent.tools.registry import ToolRegistry
-from awesome_agent.tools.repository import build_modifying_registry
+from awesome_agent.tools.repository import (
+    build_modifying_registry,
+    canonical_arguments_hash_from_arguments,
+    tool_invocation_uuid,
+)
 
 
 class FakeProvider:
@@ -276,6 +285,69 @@ class ToolCallProvider:
         )
 
 
+class SequentialToolProvider:
+    def __init__(self, calls: list[ToolCall], *, final_after_tools: str) -> None:
+        self.calls = calls
+        self.final_after_tools = final_after_tools
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if len(tool_results) < len(self.calls):
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[self.calls[len(tool_results)]],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content=self.final_after_tools),
+                    stop_reason=StopReason.COMPLETED,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        self.requests.append(request)
+        tool_results = [
+            message
+            for message in request.messages
+            if isinstance(message, ToolResultMessage)
+        ]
+        if len(tool_results) < len(self.calls):
+            return ModelTurn(
+                assistant=AssistantMessage(
+                    content="",
+                    tool_calls=[self.calls[len(tool_results)]],
+                ),
+                stop_reason=StopReason.TOOL_CALLS,
+                model="fake-model",
+                provider="fake",
+            )
+        return ModelTurn(
+            assistant=AssistantMessage(content=self.final_after_tools),
+            stop_reason=StopReason.COMPLETED,
+            model="fake-model",
+            provider="fake",
+        )
+
+
 class ApprovalReplayFailingProvider:
     def __init__(self) -> None:
         self.requests: list[ModelRequest] = []
@@ -307,6 +379,79 @@ class RecordingSandbox:
             stdout="ok\n",
             stderr="",
         )
+
+
+def _assert_reconstructed_tool_context(
+    request: ModelRequest,
+    *,
+    call_id: str,
+    is_error: bool | None = None,
+) -> None:
+    assistant_index = next(
+        index
+        for index, message in enumerate(request.messages)
+        if isinstance(message, AssistantMessage)
+        and any(call.call_id == call_id for call in message.tool_calls)
+    )
+    tool_index = next(
+        index
+        for index, message in enumerate(request.messages)
+        if isinstance(message, ToolResultMessage) and message.call_id == call_id
+    )
+    assert assistant_index < tool_index
+    tool_message = request.messages[tool_index]
+    assert isinstance(tool_message, ToolResultMessage)
+    if is_error is not None:
+        assert tool_message.is_error is is_error
+
+
+async def _store_shell_approval(
+    approvals: InMemoryApprovalRepository,
+    *,
+    run_id: UUID,
+    agent_id: UUID,
+    tool_call_id: str,
+    argv: list[str],
+    workspace: Path,
+    status: ApprovalStatus = ApprovalStatus.APPROVED,
+) -> DurableApproval:
+    arguments = {
+        "argv": argv,
+        "timeout_seconds": 60,
+        "max_output_chars": 30_000,
+    }
+    now = datetime.now(UTC)
+    approval = DurableApproval(
+        id=tool_invocation_uuid(f"{run_id}:{tool_call_id}"),
+        run_id=run_id,
+        agent_id=agent_id,
+        tool_invocation_id=tool_invocation_uuid(f"{run_id}:{tool_call_id}"),
+        tool_call_id=tool_call_id,
+        tool_name="shell.execute",
+        tool_version="1",
+        canonical_arguments=arguments,
+        arguments_hash=canonical_arguments_hash_from_arguments(arguments),
+        workspace_path=str(workspace.resolve()),
+        workspace_fingerprint="fingerprint",
+        capabilities=["shell:execute"],
+        risk_level="medium",
+        expires_at=now + timedelta(minutes=30),
+        status=status,
+        decided_at=now,
+        decided_by="tester",
+        decision_reason=status.value,
+        created_at=now,
+        updated_at=now,
+    )
+    return await approvals.upsert(approval)
+
+
+def _patch_call(call_id: str, patch: str) -> ToolCall:
+    return ToolCall(
+        call_id=call_id,
+        name="repo.apply_patch",
+        arguments_json=json.dumps({"patch": patch}),
+    )
 
 
 def _git(workspace: Path, *args: str) -> None:
@@ -722,31 +867,13 @@ async def test_conversation_graph_reuses_approved_shell_call_by_arguments(
     await runtime.update_run(run)
     sandbox = RecordingSandbox()
     registry = build_modifying_registry(sandbox=sandbox)
-    first_provider = ToolCallProvider(
-        ToolCall(
-            call_id="call-shell-1",
-            name="shell.execute",
-            arguments_json='{"argv":["python","square.py"]}',
-        )
-    )
-    first_graph = ConversationGraph(
-        conversations=conversations,
-        runtime=runtime,
-        provider_factory=lambda _model: first_provider,
-        default_model="fake-model",
-        tool_registry=registry,
-        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
-        approval_repository=approvals,
-    )
-
-    with pytest.raises(ApprovalInterrupt) as interrupted:
-        await first_graph.execute(run, leader)
-    await approvals.decide(
-        interrupted.value.approval_id,
-        approved=True,
-        decided_by="tester",
-        reason="approved",
-        now=datetime.now(UTC),
+    approval = await _store_shell_approval(
+        approvals,
+        run_id=run.id,
+        agent_id=leader.id,
+        tool_call_id="call-shell-1",
+        argv=["python", "square.py"],
+        workspace=tmp_path,
     )
 
     second_provider = ToolCallProvider(
@@ -768,18 +895,322 @@ async def test_conversation_graph_reuses_approved_shell_call_by_arguments(
 
     state = await second_graph.execute(run, leader)
 
-    assert state["final_answer"] == "Tool execution completed after approval."
+    assert state["final_answer"] == "done"
     assert len(sandbox.requests) == 1
-    assert second_provider.requests == []
+    assert len(second_provider.requests) == 2
+    _assert_reconstructed_tool_context(
+        second_provider.requests[-1],
+        call_id="call-shell-2",
+        is_error=False,
+    )
     events = await runtime.list_events(run.id)
     approval_events = [
         event for event in events if event.event_type is EventType.APPROVAL_REQUESTED
     ]
-    assert len(approval_events) == 1
+    assert approval_events == []
+    approval_reused_events = [
+        event for event in events if event.event_type is EventType.APPROVAL_REUSED
+    ]
+    assert len(approval_reused_events) == 1
+    assert approval_reused_events[0].payload["status"] == "approved"
+    assert approval_reused_events[0].payload["approval_id"] == str(approval.id)
+    assert approval_reused_events[0].payload["tool_call_id"] == "call-shell-2"
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_replays_approved_shell_without_model_reentry(
+async def test_conversation_graph_does_not_reuse_shell_grant_for_different_argv(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "run script")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    approval = await _store_shell_approval(
+        approvals,
+        run_id=run.id,
+        agent_id=leader.id,
+        tool_call_id="call-shell-1",
+        argv=["python", "square.py"],
+        workspace=tmp_path,
+    )
+
+    second_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: ToolCallProvider(
+            ToolCall(
+                call_id="call-shell-2",
+                name="shell.execute",
+                arguments_json='{"argv":["python","cube.py"]}',
+            )
+        ),
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as second_interrupt:
+        await second_graph.execute(run, leader)
+
+    assert second_interrupt.value.approval_id != approval.id
+    assert sandbox.requests == []
+    events = await runtime.list_events(run.id)
+    requested = [
+        event for event in events if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    assert len(requested) == 1
+    assert not any(event.event_type is EventType.APPROVAL_REUSED for event in events)
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_reuses_approved_patch_scope_for_same_path(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "write env")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    registry = build_modifying_registry(sandbox=RecordingSandbox())
+    first_patch = (
+        "diff --git a/.env b/.env\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.env\n"
+        "@@ -0,0 +1 @@\n"
+        "+TOKEN=one\n"
+    )
+    second_patch = (
+        "diff --git a/.env b/.env\n"
+        "--- a/.env\n"
+        "+++ b/.env\n"
+        "@@ -1 +1 @@\n"
+        "-TOKEN=one\n"
+        "+TOKEN=two\n"
+    )
+    first_call = _patch_call("call-patch-1", first_patch)
+    second_call = _patch_call("call-patch-2", second_patch)
+    first_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: ToolCallProvider(first_call),
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as interrupted:
+        await first_graph.execute(run, leader)
+    await approvals.decide(
+        interrupted.value.approval_id,
+        approved=True,
+        decided_by="tester",
+        reason="approved",
+        now=datetime.now(UTC),
+    )
+
+    resume_provider = SequentialToolProvider(
+        [first_call, second_call],
+        final_after_tools="all writes done",
+    )
+    state = await ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: resume_provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    ).execute(run, leader)
+
+    assert state["final_answer"] == "all writes done"
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "TOKEN=two\n"
+    events = await runtime.list_events(run.id)
+    approval_requested = [
+        event for event in events if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    approval_reused = [
+        event for event in events if event.event_type is EventType.APPROVAL_REUSED
+    ]
+    assert len(approval_requested) == 1
+    assert len(approval_reused) == 1
+    assert approval_reused[0].payload["approval_id"] == str(
+        interrupted.value.approval_id
+    )
+    assert approval_reused[0].payload["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_does_not_reuse_patch_grant_for_different_path(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "write env")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    registry = build_modifying_registry(sandbox=RecordingSandbox())
+    first_call = _patch_call(
+        "call-patch-1",
+        "diff --git a/.env b/.env\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.env\n"
+        "@@ -0,0 +1 @@\n"
+        "+TOKEN=one\n",
+    )
+    second_call = _patch_call(
+        "call-patch-2",
+        "diff --git a/.npmrc b/.npmrc\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.npmrc\n"
+        "@@ -0,0 +1 @@\n"
+        "+token=two\n",
+    )
+    first_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: ToolCallProvider(first_call),
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as first:
+        await first_graph.execute(run, leader)
+    await approvals.decide(
+        first.value.approval_id,
+        approved=True,
+        decided_by="tester",
+        reason="approved",
+        now=datetime.now(UTC),
+    )
+
+    second_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: SequentialToolProvider(
+            [first_call, second_call],
+            final_after_tools="unreachable",
+        ),
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as second:
+        await second_graph.execute(run, leader)
+
+    assert second.value.approval_id != first.value.approval_id
+    assert not (tmp_path / ".npmrc").exists()
+    events = await runtime.list_events(run.id)
+    approval_requested = [
+        event for event in events if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    assert len(approval_requested) == 2
+    assert not any(event.event_type is EventType.APPROVAL_REUSED for event in events)
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_reuses_denied_patch_scope_for_same_path(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "write env")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    registry = build_modifying_registry(sandbox=RecordingSandbox())
+    first_call = _patch_call(
+        "call-patch-1",
+        "diff --git a/.env b/.env\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.env\n"
+        "@@ -0,0 +1 @@\n"
+        "+TOKEN=one\n",
+    )
+    second_call = _patch_call(
+        "call-patch-2",
+        "diff --git a/.env b/.env\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.env\n"
+        "@@ -0,0 +1 @@\n"
+        "+TOKEN=two\n",
+    )
+    first_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: ToolCallProvider(first_call),
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as interrupted:
+        await first_graph.execute(run, leader)
+    await approvals.decide(
+        interrupted.value.approval_id,
+        approved=False,
+        decided_by="tester",
+        reason="denied",
+        now=datetime.now(UTC),
+    )
+
+    resume_provider = SequentialToolProvider(
+        [first_call, second_call],
+        final_after_tools="denials handled",
+    )
+    state = await ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: resume_provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    ).execute(run, leader)
+
+    assert state["final_answer"] == "denials handled"
+    assert not (tmp_path / ".env").exists()
+    events = await runtime.list_events(run.id)
+    approval_requested = [
+        event for event in events if event.event_type is EventType.APPROVAL_REQUESTED
+    ]
+    approval_reused = [
+        event for event in events if event.event_type is EventType.APPROVAL_REUSED
+    ]
+    assert len(approval_requested) == 1
+    assert len(approval_reused) == 1
+    assert approval_reused[0].payload["status"] == "denied"
+    tool_messages = [
+        message
+        for message in await conversations.list_messages(thread.id)
+        if message.metadata.get("kind") == "tool_result"
+    ]
+    assert any("denied" in message.content for message in tool_messages)
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_replays_approved_shell_and_continues_model_loop(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -818,7 +1249,14 @@ async def test_conversation_graph_replays_approved_shell_without_model_reentry(
         now=datetime.now(UTC),
     )
 
-    second_provider = ApprovalReplayFailingProvider()
+    second_provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-shell",
+            name="shell.execute",
+            arguments_json='{"argv":["python","square.py"]}',
+        ),
+        final_after_tool="approved tool completed",
+    )
     second_graph = ConversationGraph(
         conversations=conversations,
         runtime=runtime,
@@ -831,9 +1269,14 @@ async def test_conversation_graph_replays_approved_shell_without_model_reentry(
 
     state = await second_graph.execute(run, leader)
 
-    assert state["final_answer"] == "Tool execution completed after approval."
+    assert state["final_answer"] == "approved tool completed"
     assert len(sandbox.requests) == 1
-    assert second_provider.requests == []
+    assert len(second_provider.requests) == 1
+    _assert_reconstructed_tool_context(
+        second_provider.requests[0],
+        call_id="call-shell",
+        is_error=False,
+    )
     messages = await conversations.list_messages(thread.id)
     tool_messages = [
         message for message in messages if message.metadata.get("kind") == "tool_result"
@@ -881,18 +1324,33 @@ async def test_conversation_graph_replays_denied_approval_as_tool_result(
         now=datetime.now(UTC),
     )
 
+    second_provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-shell",
+            name="shell.execute",
+            arguments_json='{"argv":["python","square.py"]}',
+        ),
+        final_after_tool="approval denied handled",
+    )
+
     state = await ConversationGraph(
         conversations=conversations,
         runtime=runtime,
-        provider_factory=lambda _model: ApprovalReplayFailingProvider(),
+        provider_factory=lambda _model: second_provider,
         default_model="fake-model",
         tool_registry=registry,
         tool_executor=ToolExecutor(registry, ApprovalPolicy()),
         approval_repository=approvals,
     ).execute(run, leader)
 
-    assert state["final_answer"] == "Tool execution completed after approval."
+    assert state["final_answer"] == "approval denied handled"
     assert sandbox.requests == []
+    assert len(second_provider.requests) == 1
+    _assert_reconstructed_tool_context(
+        second_provider.requests[0],
+        call_id="call-shell",
+        is_error=True,
+    )
     messages = await conversations.list_messages(thread.id)
     tool_messages = [
         message for message in messages if message.metadata.get("kind") == "tool_result"
@@ -935,18 +1393,33 @@ async def test_conversation_graph_replays_expired_approval_as_tool_result(
     expired = await approvals.expire_expired(datetime.now(UTC) + timedelta(hours=2))
     assert len(expired) == 1
 
+    second_provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-shell",
+            name="shell.execute",
+            arguments_json='{"argv":["python","square.py"]}',
+        ),
+        final_after_tool="approval expired handled",
+    )
+
     state = await ConversationGraph(
         conversations=conversations,
         runtime=runtime,
-        provider_factory=lambda _model: ApprovalReplayFailingProvider(),
+        provider_factory=lambda _model: second_provider,
         default_model="fake-model",
         tool_registry=registry,
         tool_executor=ToolExecutor(registry, ApprovalPolicy()),
         approval_repository=approvals,
     ).execute(run, leader)
 
-    assert state["final_answer"] == "Tool execution completed after approval."
+    assert state["final_answer"] == "approval expired handled"
     assert sandbox.requests == []
+    assert len(second_provider.requests) == 1
+    _assert_reconstructed_tool_context(
+        second_provider.requests[0],
+        call_id="call-shell",
+        is_error=True,
+    )
     messages = await conversations.list_messages(thread.id)
     tool_messages = [
         message for message in messages if message.metadata.get("kind") == "tool_result"

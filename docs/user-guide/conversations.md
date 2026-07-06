@@ -25,6 +25,12 @@ When a tool needs approval, the response pauses and the TUI shows a fixed
 approval control. Approving once resumes the same run. Denying continues with a
 denied tool result. Cancelling requests run cancellation.
 
+After a decision, Awesome continues from the tool observation and lets the model
+finish the answer. It does not treat `continue` as a new user message. Repeated
+matching actions in the same run can reuse the prior decision when the scope is
+unchanged: the exact shell command argv or the exact patch target file set.
+Different commands or different files ask again.
+
 ## Tool Timeline
 
 Tool calls are grouped into a timeline so users can scan what happened during a

@@ -60,6 +60,11 @@ from awesome_agent.runtime.approval_continuation import (
     ApprovalContinuation,
     latest_open_approval_continuation,
 )
+from awesome_agent.runtime.approval_grants import (
+    ApprovalGrantMatch,
+    approval_grant_scope_from_arguments,
+    find_matching_approval_grant,
+)
 from awesome_agent.runtime.cwd_context import CwdContextService
 from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
@@ -81,6 +86,17 @@ from awesome_agent.tools.repository import (
 )
 
 ConversationGraphState = dict[str, Any]
+
+
+class _ApprovalLookup:
+    def __init__(
+        self,
+        approval: DurableApproval,
+        *,
+        grant_match: ApprovalGrantMatch | None = None,
+    ) -> None:
+        self.approval = approval
+        self.grant_match = grant_match
 
 
 class ConversationGraph:
@@ -257,19 +273,11 @@ class ConversationGraph:
             model_messages=messages,
             effective_tools=effective_tools,
         )
-        if resumed_tool_result is not None:
-            changed_files = _dedupe_changed_files(
-                _changed_files_from_tool_result(resumed_tool_result)
-            )
-            return {
-                "final_answer": "Tool execution completed after approval.",
-                "result_summary": "Conversation approval resumed.",
-                "usage": ModelUsage().model_dump(mode="json"),
-                "response_model": None,
-                "provider": None,
-                "response_id": None,
-                "changed_files": changed_files,
-            }
+        resumed_changed_files = (
+            _changed_files_from_tool_result(resumed_tool_result)
+            if resumed_tool_result is not None
+            else []
+        )
         model_state = await self._run_model(
             run=run,
             leader=leader,
@@ -282,7 +290,9 @@ class ConversationGraph:
         )
         final_answer = str(model_state["final_answer"])
         usage = model_state["usage"]
-        changed_files = model_state["changed_files"]
+        changed_files = _dedupe_changed_files(
+            [*resumed_changed_files, *model_state["changed_files"]]
+        )
         assistant_metadata: dict[str, object] = {
             "run_id": str(run.id),
             "usage": usage.model_dump(mode="json"),
@@ -678,6 +688,8 @@ class ConversationGraph:
                 effective_tools=effective_tools,
                 approval_granted=True,
             )
+        if not _has_assistant_tool_call(model_messages, continuation.tool_call_id):
+            model_messages.append(continuation.to_assistant_message())
         model_messages.append(result)
         await self._append_tool_call_event(
             run=run,
@@ -793,14 +805,24 @@ class ConversationGraph:
         arguments = parse_tool_call_arguments(call)
         spec, _handler = self.tool_registry.resolve(call.name)
         arguments_hash = canonical_arguments_hash_from_arguments(arguments)
+        capabilities = sorted(
+            effective_tools.capabilities_for(call.name)
+            if effective_tools is not None
+            else spec.required_capabilities
+        )
+        risk_level = spec.risk_level.value
+        now = datetime.now(UTC)
         existing = await self._find_existing_approval(
             run=run,
             call=call,
             tool_version=spec.version,
             arguments_hash=arguments_hash,
+            arguments=arguments,
             workspace=workspace,
+            capabilities=capabilities,
+            risk_level=risk_level,
+            now=now,
         )
-        now = datetime.now(UTC)
         if existing is None:
             approval = DurableApproval(
                 id=tool_invocation_uuid(f"{run.id}:{call.call_id}"),
@@ -814,19 +836,40 @@ class ConversationGraph:
                 arguments_hash=arguments_hash,
                 workspace_path=str(workspace.resolve()),
                 workspace_fingerprint=await workspace_fingerprint(workspace),
-                capabilities=sorted(
-                    effective_tools.capabilities_for(call.name)
-                    if effective_tools is not None
-                    else spec.required_capabilities
-                ),
-                risk_level=spec.risk_level.value,
+                capabilities=capabilities,
+                risk_level=risk_level,
                 expires_at=now + self.approval_default_expiry,
                 status=ApprovalStatus.PENDING,
                 created_at=now,
                 updated_at=now,
             )
         else:
-            approval = existing
+            approval = existing.approval
+
+        grant_match = existing.grant_match if existing is not None else None
+        if grant_match is not None:
+            await self._append_approval_reused_event(
+                run=run,
+                leader=leader,
+                call=call,
+                match=grant_match,
+            )
+            if approval.status is ApprovalStatus.DENIED:
+                return tool_error_result(
+                    call,
+                    approval.status.value,
+                    "Tool execution was denied by a reused approval decision.",
+                )
+            if approval.status is ApprovalStatus.APPROVED:
+                return await execute_repository_call(
+                    self._require_tool_executor(),
+                    call,
+                    workspace=workspace,
+                    agent_id=leader.id,
+                    run_id=run.id,
+                    effective_tools=effective_tools,
+                    approval_granted=True,
+                )
 
         if approval.status in {ApprovalStatus.DENIED, ApprovalStatus.EXPIRED}:
             return tool_error_result(
@@ -880,6 +923,32 @@ class ConversationGraph:
         )
         raise ApprovalInterrupt(approval.id)
 
+    async def _append_approval_reused_event(
+        self,
+        *,
+        run: Run,
+        leader: Agent,
+        call: Any,
+        match: ApprovalGrantMatch,
+    ) -> None:
+        payload: dict[str, object] = {
+            "approval_id": str(match.approval.id),
+            "source_tool_call_id": match.approval.tool_call_id,
+            "tool_call_id": call.call_id,
+            "tool": call.name,
+            "status": match.approval.status.value,
+            "scope": match.scope.payload(),
+        }
+        redacted_payload, _report = redact_value(payload)
+        if isinstance(redacted_payload, dict):
+            payload = {str(key): value for key, value in redacted_payload.items()}
+        await self.runtime.append_event(
+            run_id=run.id,
+            event_type=EventType.APPROVAL_REUSED,
+            payload=payload,
+            agent_id=leader.id,
+        )
+
     async def _append_tool_call_event(
         self,
         *,
@@ -912,25 +981,48 @@ class ConversationGraph:
         call: Any,
         tool_version: str,
         arguments_hash: str,
+        arguments: dict[str, object],
         workspace: Path,
-    ) -> DurableApproval | None:
+        capabilities: list[str],
+        risk_level: str,
+        now: datetime,
+    ) -> _ApprovalLookup | None:
         if self.approval_repository is None:
             return None
         exact = await self.approval_repository.get_by_call(run.id, call.call_id)
         if exact is not None:
-            return exact
+            return _ApprovalLookup(exact)
         workspace_path = workspace.resolve()
+        approvals = await self.approval_repository.list_for_run(run.id)
+        requested_scope = approval_grant_scope_from_arguments(
+            tool_name=call.name,
+            tool_version=tool_version,
+            arguments=arguments,
+            workspace=workspace,
+            capabilities=capabilities,
+            risk_level=risk_level,
+        )
+        if requested_scope is not None:
+            grant_match = find_matching_approval_grant(
+                approvals,
+                requested_scope=requested_scope,
+                now=now,
+            )
+            if grant_match is not None:
+                return _ApprovalLookup(grant_match.approval, grant_match=grant_match)
         matches = [
             approval
-            for approval in await self.approval_repository.list_for_run(run.id)
+            for approval in approvals
             if approval.tool_name == call.name
             and approval.tool_version == tool_version
             and approval.arguments_hash == arguments_hash
             and Path(approval.workspace_path).resolve() == workspace_path
+            and approval.status in {ApprovalStatus.APPROVED, ApprovalStatus.DENIED}
+            and approval.expires_at > now
         ]
         if not matches:
             return None
-        return matches[-1]
+        return _ApprovalLookup(matches[-1])
 
     def _require_tool_executor(self) -> ToolExecutor:
         if self.tool_executor is None:
@@ -1322,6 +1414,17 @@ def _state_from_assistant_message(message: ThreadMessage) -> ConversationGraphSt
         "response_id": message.metadata.get("response_id"),
         "changed_files": changed_files,
     }
+
+
+def _has_assistant_tool_call(
+    messages: list[ModelMessage],
+    tool_call_id: str,
+) -> bool:
+    return any(
+        isinstance(message, AssistantMessage)
+        and any(call.call_id == tool_call_id for call in message.tool_calls)
+        for message in messages
+    )
 
 
 def _has_usage(usage: ModelUsage) -> bool:

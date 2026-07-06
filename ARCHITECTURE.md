@@ -664,7 +664,7 @@ guardrails; it is not a security boundary. FastAPI runs cannot use
 trusted-local mode. Writing Teammates use isolated Git worktrees with explicit
 workspace state persisted on the child Run.
 
-Approval is scoped to one exact canonical tool invocation. Repository
+Approval resume is scoped to one exact canonical tool invocation. Repository
 validation configuration and inferred project commands are untrusted input;
 only strongly evidenced check-only commands may run automatically.
 In `solo-modifying`, ambiguous shell execution creates a durable
@@ -672,6 +672,10 @@ In `solo-modifying`, ambiguous shell execution creates a durable
 worker lease as `paused + waiting`, and resumes with `Command(resume=...)`
 after API/CLI decision. Resume revalidates the canonical arguments hash, tool
 version, workspace fingerprint, and requested capabilities before execution.
+Conversation turns continue the model loop after the resumed tool result instead
+of producing a runtime placeholder answer. Later matching calls may reuse an
+approved or denied bounded grant only for exact shell argv or exact patch target
+paths with matching tool version, workspace, capabilities, and risk level.
 Unsafe shell commands are denied without approval.
 Distributed `team-role` uses the same approval binding checks, but stores its
 resume snapshot in runtime events because team role execution is not a

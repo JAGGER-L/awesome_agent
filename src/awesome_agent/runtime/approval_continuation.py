@@ -6,6 +6,7 @@ from uuid import UUID
 from awesome_agent.conversation.models import ThreadMessage
 from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import RuntimeEvent
+from awesome_agent.modeling.messages import AssistantMessage
 from awesome_agent.modeling.tools import ToolCall
 
 CONTINUATION_PAYLOAD_VERSION = 1
@@ -43,6 +44,9 @@ class ApprovalContinuation:
             name=self.tool_name,
             arguments_json=self.arguments_json,
         )
+
+    def to_assistant_message(self) -> AssistantMessage:
+        return AssistantMessage(tool_calls=[self.to_tool_call()])
 
 
 def continuation_from_payload(

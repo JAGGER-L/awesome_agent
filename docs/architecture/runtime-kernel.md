@@ -42,6 +42,16 @@ after approval must not consume a retry attempt, must not request the same
 approval again, and must revalidate the original tool binding before side
 effects continue.
 
+For conversation turns, resume reconstructs the original assistant tool call,
+adds the approved, denied, or expired tool result to the model context, and
+continues the model loop. The final answer must come from model re-entry over
+the tool observation, not from a runtime placeholder.
+
+The kernel may reuse a prior approval decision only through explicit bounded
+grants. Current grant scopes are exact `shell.execute` argv and exact
+`repo.apply_patch` path sets, with matching tool version, workspace,
+capabilities, risk level, and run context. Reuse emits `approval.reused`.
+
 Team role approval follows the same kernel boundary. The team route records
 the original tool invocation and typed continuation payload so approval resume
 can continue from the approved call rather than asking the model to recreate it.
