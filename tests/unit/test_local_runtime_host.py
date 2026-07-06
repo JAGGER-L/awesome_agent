@@ -119,7 +119,7 @@ class PatchToolProvider(StructuredModelProvider):
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         self.requests.append(request)
         if len(self.requests) == 1:
-            assert any(tool.name == "repo.apply_patch" for tool in request.tools)
+            assert any(tool.name == "WriteFile" for tool in request.tools)
             yield TurnCompleted(
                 turn=ModelTurn(
                     assistant=AssistantMessage(
@@ -127,13 +127,10 @@ class PatchToolProvider(StructuredModelProvider):
                         tool_calls=[
                             ToolCall(
                                 call_id="call-write",
-                                name="repo.apply_patch",
+                                name="WriteFile",
                                 arguments_json=(
-                                    '{"patch":"--- /dev/null\\n'
-                                    "+++ b/calculate_1_plus_1.py\\n"
-                                    "@@ -0,0 +1,2 @@\\n"
-                                    "+result = 1 + 1\\n"
-                                    '+print(result)\\n"}'
+                                    '{"path":"calculate_1_plus_1.py",'
+                                    '"content":"result = 1 + 1\\nprint(result)\\n"}'
                                 ),
                             )
                         ],
@@ -660,7 +657,7 @@ def test_local_runtime_host_executes_leader_tools_in_thread_workspace(
         for event in events
         if event.event is ConversationStreamEventKind.TOOL_COMPLETED
     ]
-    assert any(event.payload.get("tool") == "repo.apply_patch" for event in tool_events)
+    assert any(event.payload.get("tool") == "WriteFile" for event in tool_events)
     assert any(
         event.payload.get("changed_files")
         == [{"path": "calculate_1_plus_1.py", "status": "created"}]

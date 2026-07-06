@@ -20,6 +20,7 @@ class ToolSpec(BaseModel):
     sandbox_required: bool = True
     timeout_seconds: float = Field(default=60, gt=0)
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    model_facing: bool = True
 
 
 class ToolProgress(BaseModel):

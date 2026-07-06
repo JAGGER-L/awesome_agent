@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from awesome_agent.domain.enums import ApprovalDecision, RiskLevel
-from awesome_agent.tools.guardrails import evaluate_command, evaluate_patch_write
+from awesome_agent.tools.guardrails import (
+    evaluate_command,
+    evaluate_file_write,
+    evaluate_patch_write,
+)
 from awesome_agent.tools.models import ApprovalOutcome, ToolInvocation, ToolSpec
+from awesome_agent.tools.workspace import WorkspaceToolError, parse_bash_command
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +57,36 @@ class ApprovalPolicy:
                 reason=decision.reason,
             )
 
+        if spec.name == "Bash":
+            command = invocation.arguments.get("command")
+            if not isinstance(command, str):
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason="Bash command must be a string.",
+                )
+            try:
+                argv = parse_bash_command(command)
+            except WorkspaceToolError as error:
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason=str(error),
+                )
+            decision = evaluate_command(argv)
+            if decision.action == "deny":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason=decision.reason,
+                )
+            if decision.action == "ask":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.ASK,
+                    reason=decision.reason,
+                )
+            return ApprovalOutcome(
+                decision=ApprovalDecision.ALLOW,
+                reason=decision.reason,
+            )
+
         if spec.name == "repo.apply_patch":
             patch = invocation.arguments.get("patch")
             if not isinstance(patch, str):
@@ -61,6 +97,33 @@ class ApprovalPolicy:
             decision = evaluate_patch_write(
                 workspace=invocation.workspace,
                 patch=patch,
+            )
+            if decision.action == "deny":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason=decision.reason,
+                )
+            if decision.action == "ask":
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.ASK,
+                    reason=decision.reason,
+                )
+            return ApprovalOutcome(
+                decision=ApprovalDecision.ALLOW,
+                reason=decision.reason,
+            )
+
+        if spec.name in {"WriteFile", "EditFile"}:
+            path = invocation.arguments.get("path")
+            if not isinstance(path, str):
+                return ApprovalOutcome(
+                    decision=ApprovalDecision.DENY,
+                    reason="File path must be a string.",
+                )
+            relative = Path(path)
+            decision = evaluate_file_write(
+                workspace=invocation.workspace,
+                paths={relative},
             )
             if decision.action == "deny":
                 return ApprovalOutcome(

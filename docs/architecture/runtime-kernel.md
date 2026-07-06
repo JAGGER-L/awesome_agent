@@ -48,9 +48,11 @@ continues the model loop. The final answer must come from model re-entry over
 the tool observation, not from a runtime placeholder.
 
 The kernel may reuse a prior approval decision only through explicit bounded
-grants. Current grant scopes are exact `shell.execute` argv and exact
-`repo.apply_patch` path sets, with matching tool version, workspace,
-capabilities, risk level, and run context. Reuse emits `approval.reused`.
+grants. Product-facing grant scopes are exact `Bash` argv and exact
+`WriteFile` / `EditFile` target paths. Internal compatibility scopes still
+support exact `shell.execute` argv and exact `repo.apply_patch` path sets. All
+grant reuse must match tool version, workspace, capabilities, risk level, and
+run context. Reuse emits `approval.reused`.
 
 Team role approval follows the same kernel boundary. The team route records
 the original tool invocation and typed continuation payload so approval resume

@@ -405,18 +405,18 @@ def _assert_reconstructed_tool_context(
         assert tool_message.is_error is is_error
 
 
-async def _store_shell_approval(
+async def _store_bash_approval(
     approvals: InMemoryApprovalRepository,
     *,
     run_id: UUID,
     agent_id: UUID,
     tool_call_id: str,
-    argv: list[str],
+    command: str,
     workspace: Path,
     status: ApprovalStatus = ApprovalStatus.APPROVED,
 ) -> DurableApproval:
     arguments = {
-        "argv": argv,
+        "command": command,
         "timeout_seconds": 60,
         "max_output_chars": 30_000,
     }
@@ -427,7 +427,7 @@ async def _store_shell_approval(
         agent_id=agent_id,
         tool_invocation_id=tool_invocation_uuid(f"{run_id}:{tool_call_id}"),
         tool_call_id=tool_call_id,
-        tool_name="shell.execute",
+        tool_name="Bash",
         tool_version="1",
         canonical_arguments=arguments,
         arguments_hash=canonical_arguments_hash_from_arguments(arguments),
@@ -446,11 +446,23 @@ async def _store_shell_approval(
     return await approvals.upsert(approval)
 
 
-def _patch_call(call_id: str, patch: str) -> ToolCall:
+def _write_file_call(
+    call_id: str,
+    *,
+    path: str,
+    content: str,
+    overwrite: bool = False,
+) -> ToolCall:
     return ToolCall(
         call_id=call_id,
-        name="repo.apply_patch",
-        arguments_json=json.dumps({"patch": patch}),
+        name="WriteFile",
+        arguments_json=json.dumps(
+            {
+                "path": path,
+                "content": content,
+                "overwrite": overwrite,
+            }
+        ),
     )
 
 
@@ -799,7 +811,7 @@ async def test_graph_executes_memory_manage_tool(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_interrupts_for_shell_approval(
+async def test_conversation_graph_interrupts_for_bash_approval(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -813,9 +825,9 @@ async def test_conversation_graph_interrupts_for_shell_approval(
     registry = build_modifying_registry(sandbox=sandbox)
     provider = ToolCallProvider(
         ToolCall(
-            call_id="call-shell",
-            name="shell.execute",
-            arguments_json='{"argv":["python","add.py"]}',
+            call_id="call-bash",
+            name="Bash",
+            arguments_json='{"command":"python add.py"}',
         )
     )
     graph = ConversationGraph(
@@ -832,9 +844,9 @@ async def test_conversation_graph_interrupts_for_shell_approval(
         await graph.execute(run, leader)
 
     approval = await approvals.get(interrupted.value.approval_id)
-    assert approval.tool_name == "shell.execute"
-    assert approval.tool_call_id == "call-shell"
-    assert approval.canonical_arguments["argv"] == ["python", "add.py"]
+    assert approval.tool_name == "Bash"
+    assert approval.tool_call_id == "call-bash"
+    assert approval.canonical_arguments["command"] == "python add.py"
     assert sandbox.requests == []
     events = await runtime.list_events(run.id)
     approval_events = [
@@ -845,9 +857,9 @@ async def test_conversation_graph_interrupts_for_shell_approval(
     continuation = approval_events[0].payload["approval_continuation"]
     assert isinstance(continuation, dict)
     assert continuation["approval_id"] == str(approval.id)
-    assert continuation["tool_call_id"] == "call-shell"
-    assert continuation["tool_name"] == "shell.execute"
-    assert continuation["arguments_json"] == '{"argv":["python","add.py"]}'
+    assert continuation["tool_call_id"] == "call-bash"
+    assert continuation["tool_name"] == "Bash"
+    assert continuation["arguments_json"] == '{"command":"python add.py"}'
     assert continuation["arguments_hash"] == approval.arguments_hash
     assert continuation["workspace_path"] == approval.workspace_path
     assert continuation["workspace_fingerprint"] == approval.workspace_fingerprint
@@ -855,7 +867,7 @@ async def test_conversation_graph_interrupts_for_shell_approval(
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_reuses_approved_shell_call_by_arguments(
+async def test_conversation_graph_reuses_approved_bash_call_by_command(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -867,20 +879,20 @@ async def test_conversation_graph_reuses_approved_shell_call_by_arguments(
     await runtime.update_run(run)
     sandbox = RecordingSandbox()
     registry = build_modifying_registry(sandbox=sandbox)
-    approval = await _store_shell_approval(
+    approval = await _store_bash_approval(
         approvals,
         run_id=run.id,
         agent_id=leader.id,
-        tool_call_id="call-shell-1",
-        argv=["python", "square.py"],
+        tool_call_id="call-bash-1",
+        command="python square.py",
         workspace=tmp_path,
     )
 
     second_provider = ToolCallProvider(
         ToolCall(
-            call_id="call-shell-2",
-            name="shell.execute",
-            arguments_json='{"argv":["python","square.py"]}',
+            call_id="call-bash-2",
+            name="Bash",
+            arguments_json='{"command":"python square.py"}',
         )
     )
     second_graph = ConversationGraph(
@@ -900,7 +912,7 @@ async def test_conversation_graph_reuses_approved_shell_call_by_arguments(
     assert len(second_provider.requests) == 2
     _assert_reconstructed_tool_context(
         second_provider.requests[-1],
-        call_id="call-shell-2",
+        call_id="call-bash-2",
         is_error=False,
     )
     events = await runtime.list_events(run.id)
@@ -914,11 +926,11 @@ async def test_conversation_graph_reuses_approved_shell_call_by_arguments(
     assert len(approval_reused_events) == 1
     assert approval_reused_events[0].payload["status"] == "approved"
     assert approval_reused_events[0].payload["approval_id"] == str(approval.id)
-    assert approval_reused_events[0].payload["tool_call_id"] == "call-shell-2"
+    assert approval_reused_events[0].payload["tool_call_id"] == "call-bash-2"
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_does_not_reuse_shell_grant_for_different_argv(
+async def test_conversation_graph_does_not_reuse_bash_grant_for_different_command(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -930,12 +942,12 @@ async def test_conversation_graph_does_not_reuse_shell_grant_for_different_argv(
     await runtime.update_run(run)
     sandbox = RecordingSandbox()
     registry = build_modifying_registry(sandbox=sandbox)
-    approval = await _store_shell_approval(
+    approval = await _store_bash_approval(
         approvals,
         run_id=run.id,
         agent_id=leader.id,
-        tool_call_id="call-shell-1",
-        argv=["python", "square.py"],
+        tool_call_id="call-bash-1",
+        command="python square.py",
         workspace=tmp_path,
     )
 
@@ -944,9 +956,9 @@ async def test_conversation_graph_does_not_reuse_shell_grant_for_different_argv(
         runtime=runtime,
         provider_factory=lambda _model: ToolCallProvider(
             ToolCall(
-                call_id="call-shell-2",
-                name="shell.execute",
-                arguments_json='{"argv":["python","cube.py"]}',
+                call_id="call-bash-2",
+                name="Bash",
+                arguments_json='{"command":"python cube.py"}',
             )
         ),
         default_model="fake-model",
@@ -969,7 +981,7 @@ async def test_conversation_graph_does_not_reuse_shell_grant_for_different_argv(
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_reuses_approved_patch_scope_for_same_path(
+async def test_conversation_graph_reuses_approved_write_file_scope_for_same_path(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -980,24 +992,17 @@ async def test_conversation_graph_reuses_approved_patch_scope_for_same_path(
     run = run.model_copy(update={"working_directory": tmp_path})
     await runtime.update_run(run)
     registry = build_modifying_registry(sandbox=RecordingSandbox())
-    first_patch = (
-        "diff --git a/.env b/.env\n"
-        "new file mode 100644\n"
-        "--- /dev/null\n"
-        "+++ b/.env\n"
-        "@@ -0,0 +1 @@\n"
-        "+TOKEN=one\n"
+    first_call = _write_file_call(
+        "call-write-1",
+        path=".env",
+        content="TOKEN=one\n",
     )
-    second_patch = (
-        "diff --git a/.env b/.env\n"
-        "--- a/.env\n"
-        "+++ b/.env\n"
-        "@@ -1 +1 @@\n"
-        "-TOKEN=one\n"
-        "+TOKEN=two\n"
+    second_call = _write_file_call(
+        "call-write-2",
+        path=".env",
+        content="TOKEN=two\n",
+        overwrite=True,
     )
-    first_call = _patch_call("call-patch-1", first_patch)
-    second_call = _patch_call("call-patch-2", second_patch)
     first_graph = ConversationGraph(
         conversations=conversations,
         runtime=runtime,
@@ -1050,7 +1055,7 @@ async def test_conversation_graph_reuses_approved_patch_scope_for_same_path(
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_does_not_reuse_patch_grant_for_different_path(
+async def test_conversation_graph_does_not_reuse_write_file_grant_for_different_path(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -1061,23 +1066,15 @@ async def test_conversation_graph_does_not_reuse_patch_grant_for_different_path(
     run = run.model_copy(update={"working_directory": tmp_path})
     await runtime.update_run(run)
     registry = build_modifying_registry(sandbox=RecordingSandbox())
-    first_call = _patch_call(
-        "call-patch-1",
-        "diff --git a/.env b/.env\n"
-        "new file mode 100644\n"
-        "--- /dev/null\n"
-        "+++ b/.env\n"
-        "@@ -0,0 +1 @@\n"
-        "+TOKEN=one\n",
+    first_call = _write_file_call(
+        "call-write-1",
+        path=".env",
+        content="TOKEN=one\n",
     )
-    second_call = _patch_call(
-        "call-patch-2",
-        "diff --git a/.npmrc b/.npmrc\n"
-        "new file mode 100644\n"
-        "--- /dev/null\n"
-        "+++ b/.npmrc\n"
-        "@@ -0,0 +1 @@\n"
-        "+token=two\n",
+    second_call = _write_file_call(
+        "call-write-2",
+        path=".npmrc",
+        content="token=two\n",
     )
     first_graph = ConversationGraph(
         conversations=conversations,
@@ -1126,7 +1123,7 @@ async def test_conversation_graph_does_not_reuse_patch_grant_for_different_path(
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_reuses_denied_patch_scope_for_same_path(
+async def test_conversation_graph_reuses_denied_write_file_scope_for_same_path(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -1137,23 +1134,15 @@ async def test_conversation_graph_reuses_denied_patch_scope_for_same_path(
     run = run.model_copy(update={"working_directory": tmp_path})
     await runtime.update_run(run)
     registry = build_modifying_registry(sandbox=RecordingSandbox())
-    first_call = _patch_call(
-        "call-patch-1",
-        "diff --git a/.env b/.env\n"
-        "new file mode 100644\n"
-        "--- /dev/null\n"
-        "+++ b/.env\n"
-        "@@ -0,0 +1 @@\n"
-        "+TOKEN=one\n",
+    first_call = _write_file_call(
+        "call-write-1",
+        path=".env",
+        content="TOKEN=one\n",
     )
-    second_call = _patch_call(
-        "call-patch-2",
-        "diff --git a/.env b/.env\n"
-        "new file mode 100644\n"
-        "--- /dev/null\n"
-        "+++ b/.env\n"
-        "@@ -0,0 +1 @@\n"
-        "+TOKEN=two\n",
+    second_call = _write_file_call(
+        "call-write-2",
+        path=".env",
+        content="TOKEN=two\n",
     )
     first_graph = ConversationGraph(
         conversations=conversations,
@@ -1210,7 +1199,7 @@ async def test_conversation_graph_reuses_denied_patch_scope_for_same_path(
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_replays_approved_shell_and_continues_model_loop(
+async def test_conversation_graph_replays_approved_bash_and_continues_model_loop(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -1224,9 +1213,9 @@ async def test_conversation_graph_replays_approved_shell_and_continues_model_loo
     registry = build_modifying_registry(sandbox=sandbox)
     first_provider = ToolCallProvider(
         ToolCall(
-            call_id="call-shell",
-            name="shell.execute",
-            arguments_json='{"argv":["python","square.py"]}',
+            call_id="call-bash",
+            name="Bash",
+            arguments_json='{"command":"python square.py"}',
         )
     )
     first_graph = ConversationGraph(
@@ -1251,9 +1240,9 @@ async def test_conversation_graph_replays_approved_shell_and_continues_model_loo
 
     second_provider = ToolCallProvider(
         ToolCall(
-            call_id="call-shell",
-            name="shell.execute",
-            arguments_json='{"argv":["python","square.py"]}',
+            call_id="call-bash",
+            name="Bash",
+            arguments_json='{"command":"python square.py"}',
         ),
         final_after_tool="approved tool completed",
     )
@@ -1274,7 +1263,7 @@ async def test_conversation_graph_replays_approved_shell_and_continues_model_loo
     assert len(second_provider.requests) == 1
     _assert_reconstructed_tool_context(
         second_provider.requests[0],
-        call_id="call-shell",
+        call_id="call-bash",
         is_error=False,
     )
     messages = await conversations.list_messages(thread.id)
@@ -1282,7 +1271,7 @@ async def test_conversation_graph_replays_approved_shell_and_continues_model_loo
         message for message in messages if message.metadata.get("kind") == "tool_result"
     ]
     assert len(tool_messages) == 1
-    assert tool_messages[0].metadata["tool_call_id"] == "call-shell"
+    assert tool_messages[0].metadata["tool_call_id"] == "call-bash"
 
 
 @pytest.mark.asyncio
@@ -1303,9 +1292,9 @@ async def test_conversation_graph_replays_denied_approval_as_tool_result(
         runtime=runtime,
         provider_factory=lambda _model: ToolCallProvider(
             ToolCall(
-                call_id="call-shell",
-                name="shell.execute",
-                arguments_json='{"argv":["python","square.py"]}',
+                call_id="call-bash",
+                name="Bash",
+                arguments_json='{"command":"python square.py"}',
             )
         ),
         default_model="fake-model",
@@ -1326,9 +1315,9 @@ async def test_conversation_graph_replays_denied_approval_as_tool_result(
 
     second_provider = ToolCallProvider(
         ToolCall(
-            call_id="call-shell",
-            name="shell.execute",
-            arguments_json='{"argv":["python","square.py"]}',
+            call_id="call-bash",
+            name="Bash",
+            arguments_json='{"command":"python square.py"}',
         ),
         final_after_tool="approval denied handled",
     )
@@ -1348,7 +1337,7 @@ async def test_conversation_graph_replays_denied_approval_as_tool_result(
     assert len(second_provider.requests) == 1
     _assert_reconstructed_tool_context(
         second_provider.requests[0],
-        call_id="call-shell",
+        call_id="call-bash",
         is_error=True,
     )
     messages = await conversations.list_messages(thread.id)
@@ -1377,9 +1366,9 @@ async def test_conversation_graph_replays_expired_approval_as_tool_result(
         runtime=runtime,
         provider_factory=lambda _model: ToolCallProvider(
             ToolCall(
-                call_id="call-shell",
-                name="shell.execute",
-                arguments_json='{"argv":["python","square.py"]}',
+                call_id="call-bash",
+                name="Bash",
+                arguments_json='{"command":"python square.py"}',
             )
         ),
         default_model="fake-model",
@@ -1395,9 +1384,9 @@ async def test_conversation_graph_replays_expired_approval_as_tool_result(
 
     second_provider = ToolCallProvider(
         ToolCall(
-            call_id="call-shell",
-            name="shell.execute",
-            arguments_json='{"argv":["python","square.py"]}',
+            call_id="call-bash",
+            name="Bash",
+            arguments_json='{"command":"python square.py"}',
         ),
         final_after_tool="approval expired handled",
     )
@@ -1417,7 +1406,7 @@ async def test_conversation_graph_replays_expired_approval_as_tool_result(
     assert len(second_provider.requests) == 1
     _assert_reconstructed_tool_context(
         second_provider.requests[0],
-        call_id="call-shell",
+        call_id="call-bash",
         is_error=True,
     )
     messages = await conversations.list_messages(thread.id)
@@ -1447,9 +1436,9 @@ async def test_conversation_graph_rejects_approval_resume_workspace_drift(
         runtime=runtime,
         provider_factory=lambda _model: ToolCallProvider(
             ToolCall(
-                call_id="call-shell",
-                name="shell.execute",
-                arguments_json='{"argv":["python","square.py"]}',
+                call_id="call-bash",
+                name="Bash",
+                arguments_json='{"command":"python square.py"}',
             )
         ),
         default_model="fake-model",
@@ -1482,7 +1471,7 @@ async def test_conversation_graph_rejects_approval_resume_workspace_drift(
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_converts_denied_shell_to_tool_result(
+async def test_conversation_graph_converts_denied_bash_to_tool_result(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -1495,9 +1484,9 @@ async def test_conversation_graph_converts_denied_shell_to_tool_result(
     registry = build_modifying_registry(sandbox=sandbox)
     provider = ToolCallProvider(
         ToolCall(
-            call_id="call-shell",
-            name="shell.execute",
-            arguments_json='{"argv":["cmd.exe","/c","python","add.py"]}',
+            call_id="call-bash",
+            name="Bash",
+            arguments_json='{"command":"cmd.exe /c python add.py"}',
         )
     )
     graph = ConversationGraph(
@@ -1521,11 +1510,45 @@ async def test_conversation_graph_converts_denied_shell_to_tool_result(
     ]
     assert tool_events == [
         {
-            "tool": "shell.execute",
+            "tool": "Bash",
             "status": "failed",
             "changed_files": [],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_exposes_six_public_workspace_tools(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "inspect workspace")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    provider = CapturingProvider("done")
+    registry = build_modifying_registry()
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    await graph.execute(run, leader)
+
+    assert len(provider.requests) == 1
+    assert {tool.name for tool in provider.requests[0].tools} == {
+        "ReadFile",
+        "WriteFile",
+        "EditFile",
+        "Bash",
+        "Glob",
+        "Grep",
+    }
 
 
 @pytest.mark.asyncio

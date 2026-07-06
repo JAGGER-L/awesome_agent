@@ -7,6 +7,7 @@ from uuid import uuid4
 from awesome_agent.domain.enums import ApprovalStatus
 from awesome_agent.persistence.approval_contracts import DurableApproval
 from awesome_agent.runtime.approval_grants import (
+    approval_matches_grant_scope,
     approval_grant_scope_from_arguments,
     find_matching_approval_grant,
 )
@@ -200,3 +201,73 @@ def test_denied_grant_is_reusable_until_expiry(tmp_path: Path) -> None:
 
     assert match is not None
     assert match.approval.status is ApprovalStatus.DENIED
+
+
+def test_writefile_grant_matches_same_path_with_different_content(
+    tmp_path: Path,
+) -> None:
+    approval = _approval(
+        tool_name="WriteFile",
+        arguments={"path": ".env", "content": "TOKEN=one\n"},
+        workspace=tmp_path,
+    )
+    scope = approval_grant_scope_from_arguments(
+        tool_name="WriteFile",
+        tool_version="1",
+        arguments={"path": ".env", "content": "TOKEN=two\n", "overwrite": True},
+        workspace=tmp_path,
+        capabilities=("repository:write",),
+        risk_level="medium",
+    )
+
+    assert scope is not None
+    assert approval_matches_grant_scope(approval, scope, now=datetime.now(UTC))
+
+
+def test_editfile_grant_does_not_match_different_path(tmp_path: Path) -> None:
+    approval = _approval(
+        tool_name="EditFile",
+        arguments={"path": ".env", "old_text": "one", "new_text": "two"},
+        workspace=tmp_path,
+    )
+    scope = approval_grant_scope_from_arguments(
+        tool_name="EditFile",
+        tool_version="1",
+        arguments={"path": ".npmrc", "old_text": "one", "new_text": "two"},
+        workspace=tmp_path,
+        capabilities=("repository:write",),
+        risk_level="medium",
+    )
+
+    assert scope is not None
+    assert not approval_matches_grant_scope(approval, scope, now=datetime.now(UTC))
+
+
+def test_bash_grant_matches_exact_command_only(tmp_path: Path) -> None:
+    approval = _approval(
+        tool_name="Bash",
+        arguments={"command": "pytest -q"},
+        workspace=tmp_path,
+        capabilities=["shell:execute"],
+    )
+    same = approval_grant_scope_from_arguments(
+        tool_name="Bash",
+        tool_version="1",
+        arguments={"command": "pytest -q"},
+        workspace=tmp_path,
+        capabilities=("shell:execute",),
+        risk_level="medium",
+    )
+    different = approval_grant_scope_from_arguments(
+        tool_name="Bash",
+        tool_version="1",
+        arguments={"command": "pytest tests/unit -q"},
+        workspace=tmp_path,
+        capabilities=("shell:execute",),
+        risk_level="medium",
+    )
+
+    assert same is not None
+    assert different is not None
+    assert approval_matches_grant_scope(approval, same, now=datetime.now(UTC))
+    assert not approval_matches_grant_scope(approval, different, now=datetime.now(UTC))

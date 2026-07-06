@@ -70,6 +70,10 @@ from awesome_agent.tools.repository import (
 _TOOL_RESULT_OFFLOAD_CHARS = 12_000
 _TOOL_RESULT_HEAD_CHARS = 8_000
 _TOOL_RESULT_TAIL_CHARS = 3_000
+_WRITE_TOOL_NAMES = frozenset({"WriteFile", "EditFile", "repo.apply_patch"})
+_INLINE_EVIDENCE_WRITE_TOOL_NAMES = frozenset({"WriteFile", "EditFile"})
+_DIFF_TOOL_NAMES = frozenset({"repo.diff"})
+_COMMAND_TOOL_NAMES = frozenset({"Bash", "shell.execute"})
 
 
 class ModifyingContextMiddleware:
@@ -557,10 +561,10 @@ class ModifyingToolMiddleware:
                 run=run,
                 agent=agent,
             )
-            if call.name == "repo.apply_patch" and not result.is_error:
+            if _is_write_tool(call.name) and not result.is_error:
                 successful_writes += 1
-                final_diff_after_write = False
-            if call.name == "repo.diff" and not result.is_error and successful_writes:
+                final_diff_after_write = _write_tool_has_inline_evidence(call.name)
+            if _is_diff_tool(call.name) and not result.is_error and successful_writes:
                 final_diff_after_write = True
             fingerprint = hashlib.sha256(
                 f"{call.name}\0{call.arguments_json}\0{result.content}".encode()
@@ -574,7 +578,7 @@ class ModifyingToolMiddleware:
                     "tool": call.name,
                     "status": "failed" if result.is_error else "completed",
                     "result_summary": result.content[:500],
-                    "sandbox": "docker" if call.name == "shell.execute" else "",
+                    "sandbox": "docker" if _is_command_tool(call.name) else "",
                     "latency_ms": latency_ms,
                 },
                 f"tool:{state['model_turn_count']}:{call.call_id}",
@@ -657,9 +661,9 @@ class ModifyingToolMiddleware:
                 )
             if existing.status == "approval_pending":
                 invocation = _copy_invocation(existing, updated_at=datetime.now(UTC))
-            elif call.name == "shell.execute":
+            elif _is_command_tool(call.name):
                 raise CorruptRuntimeStateError(
-                    "Shell execution completion is unknown after restart."
+                    "Command execution completion is unknown after restart."
                 )
             elif call.name != "repo.apply_patch":
                 raise CorruptRuntimeStateError(
@@ -817,9 +821,9 @@ class ModifyingEvidenceMiddleware:
             )
         missing = []
         if state["successful_writes"] == 0:
-            missing.append("make an actual patch or explain a no-change block")
+            missing.append("make an actual file change or explain a no-change block")
         if not state["final_diff_after_write"]:
-            missing.append("call repo.diff after the last write")
+            missing.append("inspect changed files after the last write")
         return {
             **state,
             "messages": [
@@ -922,7 +926,7 @@ class ModifyingValidationMiddleware:
                 SystemMessage(
                     content=(
                         "Validation failed. Rework the implementation using this "
-                        f"bounded evidence, then call repo.diff again: {latest}"
+                        f"bounded evidence, then inspect changed files again: {latest}"
                     )
                 ).model_dump(mode="json"),
             ],
@@ -1035,6 +1039,22 @@ def _uuid_artifact_refs(artifact_refs: list[str]) -> list[UUID]:
         except ValueError:
             continue
     return refs
+
+
+def _is_write_tool(tool_name: str) -> bool:
+    return tool_name in _WRITE_TOOL_NAMES
+
+
+def _write_tool_has_inline_evidence(tool_name: str) -> bool:
+    return tool_name in _INLINE_EVIDENCE_WRITE_TOOL_NAMES
+
+
+def _is_diff_tool(tool_name: str) -> bool:
+    return tool_name in _DIFF_TOOL_NAMES
+
+
+def _is_command_tool(tool_name: str) -> bool:
+    return tool_name in _COMMAND_TOOL_NAMES
 
 
 def idempotency_key_for_tool_invocation(

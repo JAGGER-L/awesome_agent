@@ -21,16 +21,27 @@ The model requests a tool call. The runtime validates canonical arguments,
 capability grants, approval state, workspace fingerprint, and tool version
 before execution. Side-effecting tools produce durable evidence.
 
+## Built-In Tool Facade
+
+The runtime keeps internal adapter tools for compatibility (`repo.*`,
+`shell.execute`) but exposes a smaller model-facing facade for built-in
+workspace work: `ReadFile`, `WriteFile`, `EditFile`, `Bash`, `Glob`, and
+`Grep`. Runtime approval, capability resolution, and changed-file projection
+must treat the facade tools as first-class tools.
+
 ## Approval Scope
 
 Approval resume belongs to one canonical invocation. A resumed original call
 must validate the schema version, argument hash, workspace path, workspace
 fingerprint, and capability set before execution.
 
-Repeated requests may reuse a prior decision only through bounded grant scopes:
-exact `shell.execute` argv or exact `repo.apply_patch` target path set. Different
-schema versions, workspaces, capabilities, risk levels, commands, patch paths,
-or expired decisions must request a new approval.
+Repeated requests may reuse a prior decision only through bounded grant scopes.
+For the public facade, `Bash` grants match the parsed argv exactly, while
+`WriteFile` and `EditFile` grants match only the approved target file path.
+Internal compatibility grants still support exact `shell.execute` argv and exact
+`repo.apply_patch` target path sets. Different schema versions, workspaces,
+capabilities, risk levels, commands, file paths, or expired decisions must
+request a new approval.
 
 ## Extension Tools
 

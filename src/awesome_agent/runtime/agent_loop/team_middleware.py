@@ -776,7 +776,7 @@ def _verifier_tool_definitions(
     registry = build_modifying_registry()
     return [
         definition
-        for definition in model_tool_definitions(registry)
+        for definition in model_tool_definitions(registry, include_internal=True)
         if definition.name in allowed
     ]
 

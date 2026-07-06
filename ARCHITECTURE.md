@@ -442,16 +442,19 @@ complete node, loop, budget, tool, failure, and recovery contract.
 
 Workers with a configured model provider also advertise the
 `coding + modifying + solo-modifying` route. The graph loops through model
-turns and sequential tool execution. It exposes read tools, `repo.apply_patch`,
-`repo.diff`, `artifact.read`, and Docker-backed `shell.execute`.
+turns and sequential tool execution. It exposes the public workspace facade:
+`ReadFile`, `WriteFile`, `EditFile`, `Bash`, `Glob`, `Grep`, and optional
+artifact read tools. Internal `repo.*` and `shell.execute` adapters remain
+registered for compatibility paths, but they are hidden from default model
+tool definitions.
 
 Side-effecting modifying tools are recorded in PostgreSQL with stable
 idempotency keys before execution. Completed tool results are reused after
-checkpoint replay; ambiguous patch state and unknown shell completion enter
+checkpoint replay; ambiguous write state and unknown command completion enter
 `recovery_required` rather than replaying an unsafe side effect.
 
-Successful completion requires at least one applied patch, a `repo.diff` after
-the last write, and passing required validation gates from configuration or
+Successful completion requires at least one write with durable changed-file
+evidence and passing required validation gates from configuration or
 conservative project detection. Failed required check commands feed bounded
 evidence back to the model for rework; exhausted or non-reworkable validation
 failure marks the Run failed.
@@ -675,7 +678,12 @@ version, workspace fingerprint, and requested capabilities before execution.
 Conversation turns continue the model loop after the resumed tool result instead
 of producing a runtime placeholder answer. Later matching calls may reuse an
 approved or denied bounded grant only for exact shell argv or exact patch target
-paths with matching tool version, workspace, capabilities, and risk level.
+paths with matching tool version, workspace, capabilities, and risk level. The
+public built-in workspace facade exposes `ReadFile`, `WriteFile`, `EditFile`,
+`Bash`, `Glob`, and `Grep`; `Bash` grants match exact parsed argv, and
+`WriteFile` / `EditFile` grants match exact target file paths. Internal
+`repo.*` and `shell.execute` adapters remain registered for compatibility but
+are hidden from default model-facing tool exposure.
 Unsafe shell commands are denied without approval.
 Distributed `team-role` uses the same approval binding checks, but stores its
 resume snapshot in runtime events because team role execution is not a

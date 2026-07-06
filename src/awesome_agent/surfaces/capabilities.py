@@ -29,6 +29,8 @@ class CapabilitySurfaceService:
         for spec in self.tool_registry.list_specs():
             if spec.name in catalog_tool_names:
                 continue
+            if not spec.model_facing:
+                continue
             item: dict[str, object] = {
                 "name": spec.name,
                 "source": "builtin",
@@ -105,6 +107,10 @@ class CapabilitySurfaceService:
 
 
 def _tool_category(tool_name: str) -> str:
+    if tool_name in {"ReadFile", "WriteFile", "EditFile", "Glob", "Grep"}:
+        return "repository"
+    if tool_name == "Bash":
+        return "sandbox"
     if tool_name.startswith("repo."):
         return "repository"
     if tool_name.startswith("shell."):

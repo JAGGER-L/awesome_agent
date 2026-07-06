@@ -202,6 +202,57 @@ def evaluate_patch_write(
     )
 
 
+def evaluate_file_write(
+    *,
+    workspace: Path | None,
+    paths: set[Path],
+) -> GuardrailDecision:
+    if workspace is None:
+        return GuardrailDecision(
+            action="deny",
+            reason="File write has no workspace.",
+            guardrail="path.workspace_required",
+        )
+    if not paths:
+        return GuardrailDecision(
+            action="deny",
+            reason="File write has no target path.",
+            guardrail="path.write_target_required",
+        )
+    for relative in paths:
+        if relative.is_absolute() or ".." in relative.parts or ".git" in relative.parts:
+            return GuardrailDecision(
+                action="deny",
+                reason="File write target must stay inside the workspace.",
+                guardrail="path.workspace_escape",
+            )
+    safe_root = write_safe_root()
+    if safe_root is not None:
+        root = safe_root.resolve()
+        for relative in paths:
+            target = (workspace.resolve() / relative).resolve()
+            if target != root and not target.is_relative_to(root):
+                return GuardrailDecision(
+                    action="deny",
+                    reason=(
+                        "File write target is outside "
+                        "AWESOME_AGENT_WRITE_SAFE_ROOT."
+                    ),
+                    guardrail="path.write_safe_root",
+                )
+    if any(is_sensitive_path(path) for path in paths):
+        return GuardrailDecision(
+            action="ask",
+            reason="File write targets a sensitive local file path.",
+            guardrail="path.sensitive_write",
+        )
+    return GuardrailDecision(
+        action="allow",
+        reason="File path passed trusted-local write guardrails.",
+        guardrail="path.file_write",
+    )
+
+
 def parse_patch_paths(patch: str) -> set[Path]:
     paths: set[Path] = set()
     for line in patch.splitlines():

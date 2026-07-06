@@ -10,8 +10,13 @@ from typing import Literal
 from awesome_agent.domain.enums import ApprovalStatus
 from awesome_agent.persistence.approval_contracts import DurableApproval
 from awesome_agent.tools.guardrails import parse_patch_paths
+from awesome_agent.tools.workspace import WorkspaceToolError, parse_bash_command
 
-ApprovalGrantResourceKind = Literal["shell.argv", "repo.patch_paths"]
+ApprovalGrantResourceKind = Literal[
+    "shell.argv",
+    "repo.patch_paths",
+    "repository.file_paths",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +67,15 @@ def approval_grant_scope_from_arguments(
             return None
         resource_kind = "shell.argv"
         resources = tuple(argv)
+    elif tool_name == "Bash":
+        command = arguments.get("command")
+        if not isinstance(command, str):
+            return None
+        try:
+            resources = tuple(parse_bash_command(command))
+        except WorkspaceToolError:
+            return None
+        resource_kind = "shell.argv"
     elif tool_name == "repo.apply_patch":
         patch = arguments.get("patch")
         if not isinstance(patch, str):
@@ -71,6 +85,15 @@ def approval_grant_scope_from_arguments(
             return None
         resource_kind = "repo.patch_paths"
         resources = tuple(sorted(path.as_posix() for path in paths))
+    elif tool_name in {"WriteFile", "EditFile"}:
+        path = arguments.get("path")
+        if not isinstance(path, str):
+            return None
+        relative = Path(path)
+        if relative.is_absolute() or ".." in relative.parts or ".git" in relative.parts:
+            return None
+        resource_kind = "repository.file_paths"
+        resources = (relative.as_posix(),)
     else:
         return None
 
@@ -105,6 +128,22 @@ def find_matching_approval_grant(
         matches,
         key=lambda match: (match.approval.decided_at or match.approval.updated_at),
     )[-1]
+
+
+def approval_matches_grant_scope(
+    approval: DurableApproval,
+    requested_scope: ApprovalGrantScope,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    return (
+        find_matching_approval_grant(
+            [approval],
+            requested_scope=requested_scope,
+            now=now,
+        )
+        is not None
+    )
 
 
 def _scope_from_approval(approval: DurableApproval) -> ApprovalGrantScope | None:
