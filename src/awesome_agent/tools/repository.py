@@ -37,6 +37,7 @@ from awesome_agent.tools.shell import ShellExecuteArguments, register_shell_tool
 from awesome_agent.tools.workspace import (
     BashArguments,
     EditFileArguments,
+    FindFileArguments,
     GlobArguments,
     GrepArguments,
     ReadFileArguments,
@@ -110,6 +111,7 @@ _ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "repo.apply_patch": ApplyPatchArguments,
     "shell.execute": ShellExecuteArguments,
     "ReadFile": ReadFileArguments,
+    "FindFile": FindFileArguments,
     "WriteFile": WriteFileArguments,
     "EditFile": EditFileArguments,
     "Bash": BashArguments,

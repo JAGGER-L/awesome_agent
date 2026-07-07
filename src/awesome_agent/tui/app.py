@@ -246,10 +246,12 @@ class AwesomeAgentTui(App[None]):
         self._render_palette()
 
     def on_key(self, event: events.Key) -> None:
-        if (
-            self.state.approval_decision_in_flight
-            and event.key in {"enter", "1", "2", "3"}
-        ):
+        if self.state.approval_decision_in_flight and event.key in {
+            "enter",
+            "1",
+            "2",
+            "3",
+        }:
             self._show_approval_decision_in_progress()
             event.prevent_default()
             event.stop()
@@ -1675,8 +1677,6 @@ def _tool_timeline_entry(event: ConversationStreamEvent) -> ToolTimelineEntry:
             "duration_ms",
             "change_stats",
             "changed_files",
-            "path",
-            "paths",
         }
     }
     return ToolTimelineEntry(

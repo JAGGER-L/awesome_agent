@@ -367,6 +367,68 @@ def test_tool_call_timeline_renders_duration_and_change_stats() -> None:
     assert "created cube.py +6 -0" in expanded
 
 
+def test_tool_timeline_renders_error_hint_and_workspace_details() -> None:
+    message = ChatMessage.system(
+        "",
+        kind=ChatEventKind.TOOL,
+        tool_group=ToolGroup(
+            entries=(
+                ToolTimelineEntry(
+                    name="ReadFile",
+                    summary="failed",
+                    status="failed",
+                    details={
+                        "error": "Path does not exist: snake.html",
+                        "hint": "Use workspace-relative path: snake.html",
+                        "workspace": "E:/project",
+                        "requested_path": "snake.html",
+                        "resolved_path": "E:/project/snake.html",
+                    },
+                ),
+            )
+        ),
+    )
+
+    expanded = render_message(message, tool_groups_expanded=True).plain
+
+    assert "ReadFile - failed" in expanded
+    assert "error: Path does not exist: snake.html" in expanded
+    assert "hint: Use workspace-relative path: snake.html" in expanded
+    assert "workspace: E:/project" in expanded
+    assert "requested_path: snake.html" in expanded
+    assert "resolved_path: E:/project/snake.html" in expanded
+
+
+def test_tool_timeline_renders_bash_command_failure_details() -> None:
+    message = ChatMessage.system(
+        "",
+        kind=ChatEventKind.TOOL,
+        tool_group=ToolGroup(
+            entries=(
+                ToolTimelineEntry(
+                    name="Bash",
+                    summary="failed",
+                    status="failed",
+                    details={
+                        "command": "pytest -q",
+                        "operation_status": "failed",
+                        "exit_code": 1,
+                        "stderr": "1 failed",
+                    },
+                ),
+            )
+        ),
+    )
+
+    expanded = render_message(message, tool_groups_expanded=True).plain
+
+    assert "Bash - failed" in expanded
+    assert "command: pytest -q" in expanded
+    assert "operation_status: failed" in expanded
+    assert "exit_code: 1" in expanded
+    assert "stderr: 1 failed" in expanded
+
+
 def test_tool_call_details_are_bounded_and_redacted() -> None:
     event = ToolDisplayEvent(
         name="run_command",

@@ -232,6 +232,7 @@ class HtmlGameSurfaceClient:
         return {
             "Files": [
                 {"name": "ReadFile"},
+                {"name": "FindFile"},
                 {"name": "WriteFile"},
                 {"name": "EditFile"},
                 {"name": "Glob"},

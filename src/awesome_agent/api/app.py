@@ -2142,9 +2142,30 @@ def _format_sse(event: RuntimeEvent) -> str:
     return f"id: {event.sequence}\nevent: {event.event_type.value}\ndata: {data}\n\n"
 
 
+_PUBLIC_RUNTIME_PRIVATE_KEYS = {
+    "approval_continuation",
+    "team_role_approval_continuation",
+    "provider_continuation",
+}
+
+
 def _redacted_payload(value: object) -> object:
     redacted, _report = redact_value(value)
-    return redacted
+    return _strip_public_private_fields(redacted)
+
+
+def _strip_public_private_fields(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _strip_public_private_fields(item)
+            for key, item in value.items()
+            if str(key) not in _PUBLIC_RUNTIME_PRIVATE_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_public_private_fields(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_public_private_fields(item) for item in value)
+    return value
 
 
 def _redacted_dict(value: Mapping[str, object]) -> dict[str, object]:

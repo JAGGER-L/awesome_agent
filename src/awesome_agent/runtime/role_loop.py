@@ -96,6 +96,7 @@ from awesome_agent.runtime.team_role_tools import (
     start_team_role_tool_invocation,
     team_role_tool_idempotency_key,
 )
+from awesome_agent.runtime.tool_events import tool_event_payload
 from awesome_agent.runtime.tool_exposure import (
     ToolExposureSet,
     before_tool_call,
@@ -539,20 +540,23 @@ async def _execute_call(
             content=invocation.result_content,
             is_error=invocation.result_is_error,
         )
+        latency_ms = _elapsed_ms(started)
+        payload = tool_event_payload(
+            tool_name=call.name,
+            call=call,
+            result=result,
+            workspace=workspace,
+            duration_ms=latency_ms,
+        )
+        payload["latency_ms"] = latency_ms
+        payload["replayed"] = True
         await _emit(
             event_sink,
             run,
             assignment,
             agent,
             EventType.TOOL_CALL_CREATED,
-            {
-                "call_id": call.call_id,
-                "tool": call.name,
-                "status": "failed" if result.is_error else "completed",
-                "result_summary": result.content[:500],
-                "latency_ms": _elapsed_ms(started),
-                "replayed": True,
-            },
+            payload,
             f"tool:{agent.id}:{call.call_id}",
         )
         return result
@@ -658,19 +662,22 @@ async def _execute_call(
         invocation=invocation,
         result=result,
     )
+    latency_ms = _elapsed_ms(started)
+    payload = tool_event_payload(
+        tool_name=call.name,
+        call=call,
+        result=result,
+        workspace=workspace,
+        duration_ms=latency_ms,
+    )
+    payload["latency_ms"] = latency_ms
     await _emit(
         event_sink,
         run,
         assignment,
         agent,
         EventType.TOOL_CALL_CREATED,
-        {
-            "call_id": call.call_id,
-            "tool": call.name,
-            "status": "failed" if result.is_error else "completed",
-            "result_summary": result.content[:500],
-            "latency_ms": _elapsed_ms(started),
-        },
+        payload,
         f"tool:{agent.id}:{call.call_id}",
     )
     return result
@@ -701,9 +708,9 @@ async def _execute_runtime_tool(
     )
     result = await tool_executor.execute(
         ToolInvocation(
-            id=invocation.id if invocation is not None else tool_invocation_uuid(
-                idempotency_key
-            ),
+            id=invocation.id
+            if invocation is not None
+            else tool_invocation_uuid(idempotency_key),
             run_id=run.id,
             tool_name=call.name,
             agent_id=agent.id,

@@ -53,6 +53,7 @@ from awesome_agent.runtime.token_accounting import (
     TokenAccountant,
     default_token_accountant,
 )
+from awesome_agent.runtime.tool_events import tool_event_payload
 from awesome_agent.runtime.validation.models import ValidationPlan
 from awesome_agent.safety.redaction import redact_text
 from awesome_agent.tools.executor import ToolExecutor
@@ -570,17 +571,22 @@ class ModifyingToolMiddleware:
                 f"{call.name}\0{call.arguments_json}\0{result.content}".encode()
             ).hexdigest()
             fingerprints.append(fingerprint)
+            payload = tool_event_payload(
+                tool_name=call.name,
+                call=call,
+                result=result,
+                workspace=run.workspace_path,
+                duration_ms=latency_ms,
+            )
+            payload["turn"] = state["model_turn_count"]
+            payload["latency_ms"] = latency_ms
+            payload.setdefault(
+                "sandbox",
+                "docker" if _is_command_tool(call.name) else "",
+            )
             await self.emit(
                 EventType.TOOL_CALL_CREATED,
-                {
-                    "turn": state["model_turn_count"],
-                    "call_id": call.call_id,
-                    "tool": call.name,
-                    "status": "failed" if result.is_error else "completed",
-                    "result_summary": result.content[:500],
-                    "sandbox": "docker" if _is_command_tool(call.name) else "",
-                    "latency_ms": latency_ms,
-                },
+                payload,
                 f"tool:{state['model_turn_count']}:{call.call_id}",
             )
             ordered_results.append(result)
