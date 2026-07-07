@@ -1,4 +1,5 @@
 import asyncio
+import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -15,7 +16,7 @@ from opentelemetry.sdk.trace.export import (
 from tests.type_helpers import test_settings
 
 from awesome_agent.agents.profiles import RoleModelResolver
-from awesome_agent.api.app import create_app
+from awesome_agent.api.app import _redacted_dict, create_app
 from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
@@ -89,6 +90,42 @@ def _models() -> RoleModelResolver:
         verifier_model="deepseek-v4-flash",
         subagent_model="deepseek-v4-flash",
     )
+
+
+def test_api_redaction_removes_internal_approval_continuation() -> None:
+    payload = {
+        "event_type": "approval.requested",
+        "payload": {
+            "approval_id": "approval-1",
+            "tool": "Bash",
+            "approval_continuation": {
+                "provider_continuation": {
+                    "provider": "deepseek",
+                    "kind": "chat.reasoning_content",
+                    "data": {"reasoning_content": "private chain"},
+                },
+                "message_payloads": [
+                    {"role": "tool", "content": "private tool output"}
+                ],
+            },
+            "team_role_approval_continuation": {
+                "message_payloads": [{"content": "private team output"}]
+            },
+        },
+    }
+
+    redacted = _redacted_dict(payload)
+
+    public_payload = redacted["payload"]
+    assert isinstance(public_payload, dict)
+    assert public_payload["approval_id"] == "approval-1"
+    assert public_payload["tool"] == "Bash"
+    assert "approval_continuation" not in public_payload
+    assert "team_role_approval_continuation" not in public_payload
+    encoded = json.dumps(redacted)
+    assert "private chain" not in encoded
+    assert "private tool output" not in encoded
+    assert "private team output" not in encoded
 
 
 def _git(path: Path, *arguments: str) -> str:

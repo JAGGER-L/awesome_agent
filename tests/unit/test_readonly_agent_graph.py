@@ -11,7 +11,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from awesome_agent.artifacts.repository import InMemoryArtifactMetadataRepository
 from awesome_agent.artifacts.store import LocalArtifactStore
-from awesome_agent.domain.enums import AgentKind, RunIntent
+from awesome_agent.domain.enums import AgentKind, EventType, RunIntent
 from awesome_agent.domain.models import Agent, Run
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -155,8 +155,16 @@ async def test_graph_loops_from_tools_back_to_model_turn(
         provider_resolver=lambda _: provider,
     )
     run, agent = _run(tmp_path)
+    events: list[tuple[object, dict[str, object], str]] = []
 
-    state, recovered = await graph.execute(run, agent)
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    state, recovered = await graph.execute(run, agent, event_sink=emit)
 
     assert not recovered
     assert state["model_turn_count"] == 2
@@ -164,6 +172,16 @@ async def test_graph_loops_from_tools_back_to_model_turn(
     assert state["final_answer"].startswith("README.md")
     assert len(provider.requests) == 2
     assert provider.requests[1].messages[-1].role == "tool"
+    tool_payload = next(
+        payload
+        for event_type, payload, _ in events
+        if event_type is EventType.TOOL_CALL_CREATED
+    )
+    assert tool_payload["call_id"] == "read-1"
+    assert tool_payload["invocation_status"] == "completed"
+    assert tool_payload["operation_status"] == "completed"
+    assert "duration_ms" in tool_payload
+    assert "latency_ms" in tool_payload
 
 
 @pytest.mark.asyncio

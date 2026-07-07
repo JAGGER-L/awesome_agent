@@ -7,15 +7,36 @@ Set `AWESOME_AGENT_DEEPSEEK_API_KEY` in the OS environment or
 
 ## `awesome` command not found
 
-Return to the Awesome checkout and run:
+First confirm `uv` is available:
+
+```powershell
+uv --version
+```
+
+Return to the Awesome checkout, then install the user-level CLI:
 
 ```powershell
 make install
 ```
 
-Open a new terminal and try:
+If the command is still missing, update the uv tool PATH entry:
 
 ```powershell
+uv tool update-shell
+```
+
+Open a new terminal and verify command discovery:
+
+```powershell
+Get-Command awesome
+awesome --help
+```
+
+On macOS, Linux, or WSL, use:
+
+```bash
+uv --version
+command -v awesome
 awesome --help
 ```
 

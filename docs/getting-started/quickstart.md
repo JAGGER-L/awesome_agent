@@ -39,6 +39,26 @@ cd awesome_agent
 make install
 ```
 
+`make install` also installs the user-level `awesome` command with `uv tool`.
+Open a new terminal after it finishes, then verify the command is on PATH:
+
+Windows PowerShell:
+
+```powershell
+Get-Command awesome
+awesome --help
+```
+
+macOS/Linux:
+
+```bash
+command -v awesome
+awesome --help
+```
+
+If the command is still missing, run `uv tool update-shell`, open a new
+terminal, and check again.
+
 Create Awesome's user directory:
 
 Windows PowerShell:

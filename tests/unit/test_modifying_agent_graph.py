@@ -16,6 +16,7 @@ from awesome_agent.artifacts.store import LocalArtifactStore
 from awesome_agent.domain.enums import (
     AgentKind,
     ApprovalStatus,
+    EventType,
     ExecutionKind,
     RunIntent,
 )
@@ -231,8 +232,16 @@ async def test_modifying_graph_uses_public_workspace_tools_for_change(
         validation_runner=_passing_validation_runner,
     )
     run, agent = _run(tmp_path)
+    events: list[tuple[object, dict[str, object], str]] = []
 
-    state, recovered = await graph.execute(run, agent)
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    state, recovered = await graph.execute(run, agent, event_sink=emit)
 
     assert not recovered
     assert state["successful_writes"] == 1
@@ -242,6 +251,7 @@ async def test_modifying_graph_uses_public_workspace_tools_for_change(
     tool_names = {tool.name for tool in provider.requests[0].tools}
     assert {
         "ReadFile",
+        "FindFile",
         "WriteFile",
         "EditFile",
         "Bash",
@@ -255,6 +265,16 @@ async def test_modifying_graph_uses_public_workspace_tools_for_change(
         if message.get("role") == "tool" and message.get("artifact_refs")
     ]
     assert tool_messages
+    tool_payloads = [
+        payload
+        for event_type, payload, _ in events
+        if event_type is EventType.TOOL_CALL_CREATED
+    ]
+    assert tool_payloads
+    assert all(payload["invocation_status"] == "completed" for payload in tool_payloads)
+    assert all("operation_status" in payload for payload in tool_payloads)
+    assert all("duration_ms" in payload for payload in tool_payloads)
+    assert all("latency_ms" in payload for payload in tool_payloads)
 
 
 @pytest.mark.asyncio
@@ -738,6 +758,7 @@ async def test_modifying_graph_interrupts_and_resumes_approved_bash(
     (tmp_path / "README.md").write_text("old\n", encoding="utf-8")
     _git(tmp_path, "add", "README.md")
     _git(tmp_path, "commit", "-m", "Initial")
+
     class RecordingSandbox:
         name = "recording"
 
@@ -763,9 +784,7 @@ async def test_modifying_graph_interrupts_and_resumes_approved_bash(
                         ToolCall(
                             call_id="bash",
                             name="Bash",
-                            arguments_json=json.dumps(
-                                {"command": "python script.py"}
-                            ),
+                            arguments_json=json.dumps({"command": "python script.py"}),
                         )
                     ]
                 ),

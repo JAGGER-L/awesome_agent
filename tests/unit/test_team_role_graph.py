@@ -215,8 +215,16 @@ async def test_team_role_tool_execution_persists_invocation_record(
             can_write=False,
         )
     )
+    events: list[tuple[object, dict[str, object], str]] = []
 
-    await graph.execute(run, agent, repository=runtime)
+    async def emit(
+        event_type: object,
+        payload: dict[str, object],
+        transition_id: str,
+    ) -> None:
+        events.append((event_type, payload, transition_id))
+
+    await graph.execute(run, agent, repository=runtime, event_sink=emit)
 
     invocations = await tools.list_for_run(run.id)
     assert len(invocations) == 1
@@ -226,6 +234,16 @@ async def test_team_role_tool_execution_persists_invocation_record(
         f"team-role:{run.id}:{agent.id}:read-readme"
     )
     assert invocations[0].result_content is not None
+    tool_payload = next(
+        payload
+        for event_type, payload, _ in events
+        if event_type is EventType.TOOL_CALL_CREATED
+    )
+    assert tool_payload["call_id"] == "read-readme"
+    assert tool_payload["invocation_status"] == "completed"
+    assert tool_payload["operation_status"] == "completed"
+    assert "duration_ms" in tool_payload
+    assert "latency_ms" in tool_payload
 
 
 @pytest.mark.asyncio
@@ -2588,9 +2606,7 @@ def _catalog_with_extension_tool(
                 source_id="mcp-test",
                 description="Read from fixture MCP.",
                 risk_level=risk_level,
-                required_capabilities=set(
-                    required_capabilities or ["repository:read"]
-                ),
+                required_capabilities=set(required_capabilities or ["repository:read"]),
                 input_schema={"type": "object", "properties": {}},
             )
         ],

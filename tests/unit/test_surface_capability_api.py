@@ -97,9 +97,14 @@ def test_surface_endpoints_return_structured_redacted_state(tmp_path: Path) -> N
     tools = responses["/surface/tools"].json()
     builtin_tool_names = {item["name"] for item in tools["builtin"]}
     sandbox_tool_names = {item["name"] for item in tools["sandbox"]}
-    assert {"ReadFile", "WriteFile", "EditFile", "Glob", "Grep"}.issubset(
-        builtin_tool_names
-    )
+    assert {
+        "ReadFile",
+        "FindFile",
+        "WriteFile",
+        "EditFile",
+        "Glob",
+        "Grep",
+    }.issubset(builtin_tool_names)
     assert "Bash" in sandbox_tool_names
     assert "repo.read" not in builtin_tool_names
     assert "shell.execute" not in sandbox_tool_names

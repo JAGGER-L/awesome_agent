@@ -11,7 +11,7 @@ from awesome_agent.attachments.models import AttachmentSource
 from awesome_agent.attachments.repository import InMemoryAttachmentRepository
 from awesome_agent.attachments.service import AttachmentService
 from awesome_agent.attachments.store import AttachmentContentStore
-from awesome_agent.conversation.models import ThreadMessageRole
+from awesome_agent.conversation.models import ThreadMessageKind, ThreadMessageRole
 from awesome_agent.domain.enums import (
     AgentKind,
     AgentStatus,
@@ -38,6 +38,7 @@ from awesome_agent.modeling.messages import (
     AssistantMessage,
     SystemMessage,
     ToolResultMessage,
+    UserMessage,
 )
 from awesome_agent.modeling.stream import (
     ModelStreamEvent,
@@ -46,7 +47,12 @@ from awesome_agent.modeling.stream import (
     TurnFailed,
 )
 from awesome_agent.modeling.tools import ToolCall
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
+from awesome_agent.modeling.turns import (
+    ContinuationState,
+    ModelRequest,
+    ModelTurn,
+    StopReason,
+)
 from awesome_agent.persistence.approval_contracts import (
     DurableApproval,
     InMemoryApprovalRepository,
@@ -55,7 +61,10 @@ from awesome_agent.persistence.conversations import InMemoryConversationReposito
 from awesome_agent.runtime.agent_loop.skill_context_middleware import (
     SkillContextMiddleware,
 )
-from awesome_agent.runtime.conversation_graph import ConversationGraph
+from awesome_agent.runtime.conversation_graph import (
+    ConversationGraph,
+    _turn_requests_shell_execution,
+)
 from awesome_agent.runtime.cwd_context import (
     CwdContextService,
     InMemoryCwdContextSnapshotRepository,
@@ -77,6 +86,24 @@ from awesome_agent.tools.repository import (
     canonical_arguments_hash_from_arguments,
     tool_invocation_uuid,
 )
+
+
+def test_turn_requests_shell_execution_for_test_prompt() -> None:
+    messages = [UserMessage(content="write cube.py and test it with pytest")]
+
+    assert _turn_requests_shell_execution(messages)
+
+
+def test_turn_does_not_request_shell_execution_for_file_edit_prompt() -> None:
+    messages = [UserMessage(content="介绍 cube 文件并改成计算四次方函数")]
+
+    assert not _turn_requests_shell_execution(messages)
+
+
+def test_turn_requests_shell_execution_for_chinese_validation_prompt() -> None:
+    messages = [UserMessage(content="修改 cube.py 后运行测试验证")]
+
+    assert _turn_requests_shell_execution(messages)
 
 
 class FakeProvider:
@@ -285,6 +312,164 @@ class ToolCallProvider:
         )
 
 
+class ContinuationToolProvider:
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if not tool_results:
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="call-read",
+                                    name="ReadFile",
+                                    arguments_json='{"path":"fixture.txt"}',
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="deepseek-test",
+                        provider="deepseek",
+                        continuation=ContinuationState(
+                            provider="deepseek",
+                            kind="chat.reasoning_content",
+                            data={"reasoning_content": "private chain"},
+                        ),
+                    )
+                )
+                return
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content="done"),
+                    stop_reason=StopReason.COMPLETED,
+                    model="deepseek-test",
+                    provider="deepseek",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        raise AssertionError("conversation graph should stream model turns")
+
+
+class ApprovalContinuationToolProvider:
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if not tool_results:
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="call-bash",
+                                    name="Bash",
+                                    arguments_json='{"command":"python square.py"}',
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="deepseek-test",
+                        provider="deepseek",
+                        continuation=ContinuationState(
+                            provider="deepseek",
+                            kind="chat.reasoning_content",
+                            data={"reasoning_content": "private chain"},
+                        ),
+                    )
+                )
+                return
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content="approved tool completed"),
+                    stop_reason=StopReason.COMPLETED,
+                    model="deepseek-test",
+                    provider="deepseek",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        raise AssertionError("conversation graph should stream model turns")
+
+
+class MultiToolApprovalProvider:
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if not tool_results:
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="call-read",
+                                    name="ReadFile",
+                                    arguments_json='{"path":"fixture.txt"}',
+                                ),
+                                ToolCall(
+                                    call_id="call-bash",
+                                    name="Bash",
+                                    arguments_json='{"command":"python square.py"}',
+                                ),
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="deepseek-test",
+                        provider="deepseek",
+                        continuation=ContinuationState(
+                            provider="deepseek",
+                            kind="chat.reasoning_content",
+                            data={"reasoning_content": "private chain"},
+                        ),
+                    )
+                )
+                return
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content="all tool context preserved"),
+                    stop_reason=StopReason.COMPLETED,
+                    model="deepseek-test",
+                    provider="deepseek",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        raise AssertionError("conversation graph should stream model turns")
+
+
 class SequentialToolProvider:
     def __init__(self, calls: list[ToolCall], *, final_after_tools: str) -> None:
         self.calls = calls
@@ -348,6 +533,61 @@ class SequentialToolProvider:
         )
 
 
+def _has_retry_guard_message(request: ModelRequest) -> bool:
+    return any(
+        isinstance(message, SystemMessage)
+        and "Do not retry the identical failing tool call again" in message.content
+        for message in request.messages
+    )
+
+
+class RepeatedFailureProvider:
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if len(tool_results) < 2:
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id=f"read-missing-{len(tool_results) + 1}",
+                                    name="ReadFile",
+                                    arguments_json='{"path":"missing.py"}',
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            assert _has_retry_guard_message(request)
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content="blocked after retry guard"),
+                    stop_reason=StopReason.COMPLETED,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+
+        return events()
+
+    async def complete(self, request: ModelRequest) -> ModelTurn:
+        raise AssertionError("conversation graph should stream model turns")
+
+
 class ApprovalReplayFailingProvider:
     def __init__(self) -> None:
         self.requests: list[ModelRequest] = []
@@ -378,6 +618,19 @@ class RecordingSandbox:
             exit_code=0,
             stdout="ok\n",
             stderr="",
+        )
+
+
+class FailingSandbox:
+    name = "failing"
+
+    async def execute(self, request: CommandRequest) -> CommandResult:
+        return CommandResult(
+            command=request.command_label,
+            exit_code=1,
+            stdout="",
+            stderr="command failed\n",
+            sandbox=self.name,
         )
 
 
@@ -654,7 +907,7 @@ async def test_conversation_graph_does_not_write_assistant_message_on_failure() 
         default_model="fake-model",
     )
 
-    with pytest.raises(RuntimeError, match="model failed"):
+    with pytest.raises(PermanentExecutionError, match="model failed"):
         await graph.execute(run, leader)
 
     messages = await conversations.list_messages(thread.id)
@@ -808,6 +1061,201 @@ async def test_graph_executes_memory_manage_tool(tmp_path: Path) -> None:
         and "content" not in event.payload
         for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_replays_provider_continuation_after_tool_call(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "read fixture")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    provider = ContinuationToolProvider()
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="deepseek-test",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    state = await graph.execute(run, leader)
+
+    assert state["final_answer"] == "done"
+    assert len(provider.requests) == 2
+    assert provider.requests[0].continuation is None
+    continuation = provider.requests[1].continuation
+    assert continuation is not None
+    assert continuation.provider == "deepseek"
+    assert continuation.kind == "chat.reasoning_content"
+    assert isinstance(continuation.data, dict)
+    reasoning_content = continuation.data["reasoning_content"]
+    assert reasoning_content == "private chain"
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_tool_failure_event_includes_diagnostics(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "read missing")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-read",
+            name="ReadFile",
+            arguments_json='{"path":"missing.txt"}',
+        )
+    )
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    await graph.execute(run, leader)
+
+    events = await runtime.list_events(run.id)
+    tool_events = [
+        event for event in events if event.event_type is EventType.TOOL_CALL_CREATED
+    ]
+    assert len(tool_events) == 1
+    payload = tool_events[0].payload
+    assert payload["tool"] == "ReadFile"
+    assert payload["call_id"] == "call-read"
+    assert payload["status"] == "failed"
+    assert payload["requested_path"] == "missing.txt"
+    assert "Path does not exist" in str(payload["error"])
+    assert "Use workspace-relative path: missing.txt" in str(payload["hint"])
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_persists_ordinary_tool_result_diagnostics(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "read missing")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-read",
+            name="ReadFile",
+            arguments_json='{"path":"missing.txt"}',
+        )
+    )
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    await graph.execute(run, leader)
+
+    messages = await conversations.list_messages(thread.id)
+    tool_messages = [
+        message for message in messages if message.kind is ThreadMessageKind.TOOL
+    ]
+    assert len(tool_messages) == 1
+    tool_message = tool_messages[0]
+    assert "Path does not exist" in tool_message.content
+    assert tool_message.metadata["kind"] == "tool_result"
+    assert tool_message.metadata["tool_call_id"] == "call-read"
+    assert tool_message.metadata["tool_name"] == "ReadFile"
+    assert tool_message.metadata["is_error"] is True
+    assert tool_message.metadata["diagnostic"] is True
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_adds_retry_guard_after_repeated_tool_failure(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "read missing")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    registry = build_modifying_registry(sandbox=RecordingSandbox())
+    provider = RepeatedFailureProvider()
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    state = await graph.execute(run, leader)
+
+    assert state["final_answer"] == "blocked after retry guard"
+    assert len(provider.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_bash_exit_failure_event_is_failed(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "run failing command")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    registry = build_modifying_registry(sandbox=FailingSandbox())
+    provider = ToolCallProvider(
+        ToolCall(
+            call_id="call-bash",
+            name="Bash",
+            arguments_json='{"command":"pytest -q"}',
+        )
+    )
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    await graph.execute(run, leader)
+
+    events = await runtime.list_events(run.id)
+    tool_event = next(
+        event for event in events if event.event_type is EventType.TOOL_CALL_CREATED
+    )
+    payload = tool_event.payload
+    assert payload["tool"] == "Bash"
+    assert payload["call_id"] == "call-bash"
+    assert payload["status"] == "failed"
+    assert payload["invocation_status"] == "completed"
+    assert payload["operation_status"] == "failed"
+    assert payload["exit_code"] == 1
+    assert "command failed" in str(payload["stderr"])
 
 
 @pytest.mark.asyncio
@@ -1275,6 +1723,137 @@ async def test_conversation_graph_replays_approved_bash_and_continues_model_loop
 
 
 @pytest.mark.asyncio
+async def test_conversation_graph_replays_provider_continuation_after_approval_resume(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "run script")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    sandbox = RecordingSandbox()
+    registry = build_modifying_registry(sandbox=sandbox)
+    provider = ApprovalContinuationToolProvider()
+    first_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="deepseek-test",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as interrupted:
+        await first_graph.execute(run, leader)
+    await approvals.decide(
+        interrupted.value.approval_id,
+        approved=True,
+        decided_by="tester",
+        reason="approved",
+        now=datetime.now(UTC),
+    )
+
+    second_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="deepseek-test",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    state = await second_graph.execute(run, leader)
+
+    assert state["final_answer"] == "approved tool completed"
+    assert len(provider.requests) == 2
+    resumed_continuation = provider.requests[1].continuation
+    assert resumed_continuation is not None
+    assert resumed_continuation.provider == "deepseek"
+    assert resumed_continuation.kind == "chat.reasoning_content"
+    assert isinstance(resumed_continuation.data, dict)
+    assert resumed_continuation.data["reasoning_content"] == "private chain"
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_replays_prior_tool_results_after_approval_resume(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    approvals = InMemoryApprovalRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "read and run")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    registry = build_modifying_registry(sandbox=RecordingSandbox())
+    provider = MultiToolApprovalProvider()
+    first_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="deepseek-test",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    with pytest.raises(ApprovalInterrupt) as interrupted:
+        await first_graph.execute(run, leader)
+    await approvals.decide(
+        interrupted.value.approval_id,
+        approved=True,
+        decided_by="tester",
+        reason="approved",
+        now=datetime.now(UTC),
+    )
+
+    second_graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="deepseek-test",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+        approval_repository=approvals,
+    )
+
+    state = await second_graph.execute(run, leader)
+
+    assert state["final_answer"] == "all tool context preserved"
+    assert len(provider.requests) == 2
+    resumed = provider.requests[1]
+    assistant_messages = [
+        message
+        for message in resumed.messages
+        if isinstance(message, AssistantMessage) and message.tool_calls
+    ]
+    assert assistant_messages
+    assert [call.call_id for call in assistant_messages[-1].tool_calls] == [
+        "call-read",
+        "call-bash",
+    ]
+    tool_results = [
+        message
+        for message in resumed.messages
+        if isinstance(message, ToolResultMessage)
+    ]
+    assert [message.call_id for message in tool_results[-2:]] == [
+        "call-read",
+        "call-bash",
+    ]
+    assert "fixture" in tool_results[-2].content
+    resumed_continuation = resumed.continuation
+    assert resumed_continuation is not None
+    assert resumed_continuation.provider == "deepseek"
+    assert resumed_continuation.kind == "chat.reasoning_content"
+
+
+@pytest.mark.asyncio
 async def test_conversation_graph_replays_denied_approval_as_tool_result(
     tmp_path: Path,
 ) -> None:
@@ -1508,17 +2087,18 @@ async def test_conversation_graph_converts_denied_bash_to_tool_result(
         for event in events
         if event.event_type is EventType.TOOL_CALL_CREATED
     ]
-    assert tool_events == [
-        {
-            "tool": "Bash",
-            "status": "failed",
-            "changed_files": [],
-        }
-    ]
+    assert len(tool_events) == 1
+    payload = tool_events[0]
+    assert payload["tool"] == "Bash"
+    assert payload["call_id"] == "call-bash"
+    assert payload["status"] == "failed"
+    assert payload["invocation_status"] == "completed"
+    assert payload["operation_status"] == "denied"
+    assert payload["changed_files"] == []
 
 
 @pytest.mark.asyncio
-async def test_conversation_graph_exposes_six_public_workspace_tools(
+async def test_conversation_graph_hides_bash_for_file_only_workspace_turns(
     tmp_path: Path,
 ) -> None:
     conversations = InMemoryConversationRepository()
@@ -1543,6 +2123,41 @@ async def test_conversation_graph_exposes_six_public_workspace_tools(
     assert len(provider.requests) == 1
     assert {tool.name for tool in provider.requests[0].tools} == {
         "ReadFile",
+        "FindFile",
+        "WriteFile",
+        "EditFile",
+        "Glob",
+        "Grep",
+    }
+
+
+@pytest.mark.asyncio
+async def test_conversation_graph_exposes_bash_for_shell_execution_turns(
+    tmp_path: Path,
+) -> None:
+    conversations = InMemoryConversationRepository()
+    runtime = InMemoryRuntimeRepository()
+    thread = await conversations.create_thread(title="Chat", context_path=str(tmp_path))
+    run, leader = await _conversation_run(runtime, thread.id, "run tests in workspace")
+    run = run.model_copy(update={"working_directory": tmp_path})
+    await runtime.update_run(run)
+    provider = CapturingProvider("done")
+    registry = build_modifying_registry()
+    graph = ConversationGraph(
+        conversations=conversations,
+        runtime=runtime,
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        tool_registry=registry,
+        tool_executor=ToolExecutor(registry, ApprovalPolicy()),
+    )
+
+    await graph.execute(run, leader)
+
+    assert len(provider.requests) == 1
+    assert {tool.name for tool in provider.requests[0].tools} == {
+        "ReadFile",
+        "FindFile",
         "WriteFile",
         "EditFile",
         "Bash",

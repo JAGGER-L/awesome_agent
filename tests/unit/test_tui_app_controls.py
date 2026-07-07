@@ -253,17 +253,19 @@ def test_tui_approval_choice_starts_background_decision_worker(monkeypatch) -> N
 def test_tui_duplicate_approval_choice_is_ignored(monkeypatch) -> None:
     client = FakeSurfaceClient()
     app = _app(client)
-    app.state = app.state.with_backend_thread(
-        "thread-1"
-    ).with_approval_prompt(
-        ApprovalPromptState(
-            run_id="run-1",
-            approval_id="approval-1",
-            title="Run command",
-            subject="python cube.py",
-            approval_type="command",
+    app.state = (
+        app.state.with_backend_thread("thread-1")
+        .with_approval_prompt(
+            ApprovalPromptState(
+                run_id="run-1",
+                approval_id="approval-1",
+                title="Run command",
+                subject="python cube.py",
+                approval_type="command",
+            )
         )
-    ).with_approval_decision_in_flight(run_id="run-1", in_flight=True)
+        .with_approval_decision_in_flight(run_id="run-1", in_flight=True)
+    )
     workers = []
     monkeypatch.setattr(
         app,
@@ -458,7 +460,7 @@ def test_tui_tool_timeline_keeps_failure_details_without_details_mode() -> None:
 
     assert app.state.messages[-1].tool_group is not None
     success, failure = app.state.messages[-1].tool_group.entries
-    assert success.details == {}
+    assert success.details == {"path": "square.py"}
     assert failure.details == {"error": "approval denied"}
 
 
@@ -510,6 +512,42 @@ def test_tui_tool_stream_event_stores_optional_metadata() -> None:
     assert entry.duration_ms == 1250
     assert entry.change_stats is not None
     assert entry.change_stats["additions"] == 6
+
+
+def test_tui_tool_stream_event_preserves_diagnostic_details() -> None:
+    app = _app(FakeSurfaceClient())
+
+    app._apply_stream_event(
+        ConversationStreamEvent(
+            event=ConversationStreamEventKind.TOOL_COMPLETED,
+            thread_id=UUID("00000000-0000-0000-0000-000000000001"),
+            turn_id=UUID("00000000-0000-0000-0000-000000000002"),
+            sequence=3,
+            trace_id="trace",
+            run_id=UUID("00000000-0000-0000-0000-000000000003"),
+            runtime_sequence=10,
+            payload={
+                "tool": "ReadFile",
+                "status": "failed",
+                "call_id": "call-read",
+                "path": "missing.txt",
+                "requested_path": "missing.txt",
+                "resolved_path": "E:/project/missing.txt",
+                "workspace": "E:/project",
+                "error": "Path does not exist: missing.txt",
+                "hint": "Use workspace-relative path: missing.txt",
+                "operation_status": "failed",
+                "exit_code": 1,
+            },
+        )
+    )
+
+    assert app.state.messages[-1].tool_group is not None
+    entry = app.state.messages[-1].tool_group.entries[0]
+    assert entry.details["path"] == "missing.txt"
+    assert entry.details["workspace"] == "E:/project"
+    assert entry.details["hint"] == "Use workspace-relative path: missing.txt"
+    assert entry.details["exit_code"] == 1
 
 
 def test_tui_renders_approval_required_without_error_message() -> None:

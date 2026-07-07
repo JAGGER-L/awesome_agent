@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -41,7 +42,12 @@ from awesome_agent.modeling.stream import (
     TurnCompleted,
     TurnFailed,
 )
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, ModelUsage
+from awesome_agent.modeling.turns import (
+    ContinuationState,
+    ModelRequest,
+    ModelTurn,
+    ModelUsage,
+)
 from awesome_agent.persistence.approval_contracts import (
     ApprovalRepository,
     DurableApproval,
@@ -70,9 +76,11 @@ from awesome_agent.runtime.dispatch import (
     ApprovalInterrupt,
     CorruptRuntimeStateError,
     PermanentExecutionError,
+    TransientExecutionError,
 )
 from awesome_agent.runtime.repository import RuntimeRepository
 from awesome_agent.runtime.team_assignments import TeamAssignment, TeamAssignmentKind
+from awesome_agent.runtime.tool_events import tool_event_payload
 from awesome_agent.safety.redaction import redact_model_messages, redact_value
 from awesome_agent.tools.executor import ToolExecutor
 from awesome_agent.tools.models import ApprovalRequired, ToolDenied, ToolSpec
@@ -86,6 +94,35 @@ from awesome_agent.tools.repository import (
 )
 
 ConversationGraphState = dict[str, Any]
+
+_SHELL_INTENT_MARKERS = (
+    "run",
+    "execute",
+    "test",
+    "pytest",
+    "unittest",
+    "validate",
+    "verify",
+    "command",
+    "terminal",
+    "shell",
+    "bash",
+    "运行",
+    "执行",
+    "测试",
+    "验证",
+    "命令",
+    "终端",
+    "跑一下",
+)
+
+
+def _turn_requests_shell_execution(messages: list[ModelMessage]) -> bool:
+    for message in reversed(messages):
+        if isinstance(message, UserMessage):
+            content = message.content.lower()
+            return any(marker in content for marker in _SHELL_INTENT_MARKERS)
+    return False
 
 
 class _ApprovalLookup:
@@ -259,13 +296,20 @@ class ConversationGraph:
             thread_id=thread_id,
             messages=messages,
         )
-        tool_names = await self._tool_names_for_turn(run, turn_options)
+        tool_names = await self._tool_names_for_turn(
+            run,
+            turn_options,
+            messages=messages,
+        )
         effective_tools = (
             _RegistryToolPolicy.from_registry(self.tool_registry, names=tool_names)
             if self.tool_registry is not None
             else None
         )
-        resumed_tool_result = await self._resume_approval_continuation_if_present(
+        (
+            resumed_tool_result,
+            resumed_provider_continuation,
+        ) = await self._resume_approval_continuation_if_present(
             run=run,
             leader=leader,
             thread_id=thread_id,
@@ -281,12 +325,14 @@ class ConversationGraph:
         model_state = await self._run_model(
             run=run,
             leader=leader,
+            thread_id=thread_id,
             messages=messages,
             selected_model=selected_model,
             selected_provider=selected_provider,
             thinking=thinking,
             skill_runtime_view=skill_runtime_view,
             turn_options=turn_options,
+            initial_provider_continuation=resumed_provider_continuation,
         )
         final_answer = str(model_state["final_answer"])
         usage = model_state["usage"]
@@ -341,12 +387,14 @@ class ConversationGraph:
         *,
         run: Run,
         leader: Agent,
+        thread_id: UUID,
         messages: list[ModelMessage],
         selected_model: str,
         selected_provider: str,
         thinking: str | None,
         skill_runtime_view: SkillRuntimeView | None,
         turn_options: dict[str, object],
+        initial_provider_continuation: ContinuationState | None = None,
     ) -> ConversationGraphState:
         initial_state: ConversationGraphState = {}
 
@@ -361,12 +409,14 @@ class ConversationGraph:
                 handler=lambda _state: self._model_complete(
                     run,
                     leader,
+                    thread_id,
                     selected_model,
                     selected_provider,
                     messages,
                     thinking,
                     skill_runtime_view,
                     turn_options,
+                    initial_provider_continuation,
                 ),
             )
 
@@ -437,15 +487,21 @@ class ConversationGraph:
         self,
         run: Run,
         leader: Agent,
+        thread_id: UUID,
         selected_model: str,
         selected_provider: str,
         messages: list[ModelMessage],
         thinking: str | None,
         skill_runtime_view: SkillRuntimeView | None,
         turn_options: dict[str, object],
+        initial_provider_continuation: ContinuationState | None = None,
     ) -> ConversationGraphState:
         model_messages = redact_model_messages(list(messages))
-        tool_names = await self._tool_names_for_turn(run, turn_options)
+        tool_names = await self._tool_names_for_turn(
+            run,
+            turn_options,
+            messages=messages,
+        )
         tools = (
             model_tool_definitions(self.tool_registry, names=tool_names)
             if self.tool_registry is not None
@@ -463,7 +519,9 @@ class ConversationGraph:
         usage = ModelUsage()
         changed_files: list[dict[str, object]] = []
         completed: ModelTurn | None = None
+        provider_continuation: ContinuationState | None = initial_provider_continuation
         final_answer = ""
+        failure_counts: dict[tuple[str, str, str], int] = {}
         for _round in range(8):
             final_text = ""
             completed = None
@@ -471,6 +529,7 @@ class ConversationGraph:
                 messages=model_messages,
                 tools=tools,
                 thinking=thinking,
+                continuation=provider_continuation,
             )
             request = await self.skill_context_middleware.before_model_call(
                 request,
@@ -520,7 +579,9 @@ class ConversationGraph:
                             agent_id=leader.id,
                         )
                     elif isinstance(event, TurnFailed):
-                        raise RuntimeError(event.error.message)
+                        if event.error.retryable:
+                            raise TransientExecutionError(event.error.message)
+                        raise PermanentExecutionError(event.error.message)
                     elif isinstance(event, TurnCompleted):
                         completed = event.turn
             except ModelExecutionTimeout as error:
@@ -579,20 +640,27 @@ class ConversationGraph:
                     agent_id=leader.id,
                 )
             assistant = completed.assistant
+            assistant_context_start = len(model_messages)
             model_messages.append(assistant)
             if not assistant.tool_calls:
+                provider_continuation = None
                 final_answer = assistant.content or final_text
                 break
+            provider_continuation = completed.continuation
             if self.tool_executor is None or run.working_directory is None:
                 final_answer = "I cannot access workspace tools in this conversation."
                 break
             for call in assistant.tool_calls:
+                started = monotonic()
                 result = await self._execute_tool_call(
                     call,
                     run=run,
                     leader=leader,
                     effective_tools=effective_tools,
+                    provider_continuation=provider_continuation,
+                    approval_context_messages=model_messages[assistant_context_start:],
                 )
+                duration_ms = _elapsed_ms(started)
                 model_messages.append(result)
                 if call.name == "memory.manage":
                     await self._append_memory_tool_event(
@@ -604,10 +672,38 @@ class ConversationGraph:
                 effects = await self._append_tool_call_event(
                     run=run,
                     leader=leader,
-                    tool_name=call.name,
+                    call=call,
                     result=result,
+                    duration_ms=duration_ms,
                 )
                 changed_files.extend(effects)
+                await self._append_conversation_tool_result(
+                    run=run,
+                    leader=leader,
+                    thread_id=thread_id,
+                    result=result,
+                    tool_name=call.name,
+                )
+                if result.is_error:
+                    signature = (
+                        call.name,
+                        call.arguments_json,
+                        result.content[:500],
+                    )
+                    failure_counts[signature] = failure_counts.get(signature, 0) + 1
+                    if failure_counts[signature] == 2:
+                        model_messages.append(
+                            SystemMessage(
+                                content=(
+                                    "Do not retry the identical failing tool call "
+                                    "again. "
+                                    f"The repeated failure was {call.name} with "
+                                    "the same arguments and error. Use a "
+                                    "different available tool, continue from "
+                                    "verified evidence, or explain the blocker."
+                                )
+                            )
+                        )
         if completed is None:
             raise RuntimeError("Provider stream ended without a completed turn.")
         return {
@@ -626,6 +722,8 @@ class ConversationGraph:
         run: Run,
         leader: Agent,
         effective_tools: _RegistryToolPolicy | None,
+        provider_continuation: ContinuationState | None,
+        approval_context_messages: list[ModelMessage],
     ) -> ToolResultMessage:
         workspace = Path(str(run.working_directory))
         try:
@@ -646,6 +744,8 @@ class ConversationGraph:
                 leader=leader,
                 workspace=workspace,
                 effective_tools=effective_tools,
+                provider_continuation=provider_continuation,
+                approval_context_messages=approval_context_messages,
             )
 
     async def _resume_approval_continuation_if_present(
@@ -657,13 +757,13 @@ class ConversationGraph:
         thread_messages: list[ThreadMessage],
         model_messages: list[ModelMessage],
         effective_tools: _RegistryToolPolicy | None,
-    ) -> ToolResultMessage | None:
+    ) -> tuple[ToolResultMessage | None, ContinuationState | None]:
         if self.approval_repository is None:
-            return None
+            return None, None
         events = await self.runtime.list_events(run.id)
         continuation = latest_open_approval_continuation(events, thread_messages)
         if continuation is None:
-            return None
+            return None, None
         approval = await self.approval_repository.get(continuation.approval_id)
         call = continuation.to_tool_call()
         if approval.status is ApprovalStatus.PENDING:
@@ -693,12 +793,12 @@ class ConversationGraph:
                 approval_granted=True,
             )
         if not _has_assistant_tool_call(model_messages, continuation.tool_call_id):
-            model_messages.append(continuation.to_assistant_message())
+            model_messages.extend(continuation.to_messages())
         model_messages.append(result)
         await self._append_tool_call_event(
             run=run,
             leader=leader,
-            tool_name=continuation.tool_name,
+            call=call,
             result=result,
         )
         await self._append_conversation_tool_result(
@@ -708,7 +808,7 @@ class ConversationGraph:
             result=result,
             tool_name=continuation.tool_name,
         )
-        return result
+        return result, continuation.provider_continuation
 
     async def _append_conversation_tool_result(
         self,
@@ -730,6 +830,7 @@ class ConversationGraph:
                 "tool_call_id": result.call_id,
                 "tool_name": tool_name,
                 "is_error": result.is_error,
+                "diagnostic": True,
             },
         )
         await self.runtime.append_event(
@@ -799,6 +900,8 @@ class ConversationGraph:
         leader: Agent,
         workspace: Path,
         effective_tools: _RegistryToolPolicy | None,
+        provider_continuation: ContinuationState | None,
+        approval_context_messages: list[ModelMessage],
     ) -> ToolResultMessage:
         if self.approval_repository is None or self.tool_registry is None:
             return tool_error_result(
@@ -913,6 +1016,10 @@ class ConversationGraph:
             workspace_path=str(workspace.resolve()),
             workspace_fingerprint=approval.workspace_fingerprint,
             capabilities=tuple(approval.capabilities),
+            provider_continuation=provider_continuation,
+            message_payloads=tuple(
+                message.model_dump(mode="json") for message in approval_context_messages
+            ),
         )
         await self.runtime.append_event(
             run_id=run.id,
@@ -958,15 +1065,24 @@ class ConversationGraph:
         *,
         run: Run,
         leader: Agent,
-        tool_name: str,
+        call: Any,
         result: ToolResultMessage,
+        duration_ms: int | None = None,
     ) -> list[dict[str, object]]:
-        effects = _changed_files_from_tool_result(result)
-        payload: dict[str, object] = {
-            "tool": tool_name,
-            "status": "failed" if result.is_error else "completed",
-            "changed_files": effects,
-        }
+        workspace = Path(str(run.working_directory)) if run.working_directory else None
+        payload = tool_event_payload(
+            tool_name=str(call.name),
+            call=call,
+            result=result,
+            workspace=workspace,
+            duration_ms=duration_ms,
+        )
+        raw_effects = payload.get("changed_files")
+        effects = (
+            [item for item in raw_effects if isinstance(item, dict)]
+            if isinstance(raw_effects, list)
+            else []
+        )
         redacted_payload, _report = redact_value(payload)
         if isinstance(redacted_payload, dict):
             payload = {str(key): value for key, value in redacted_payload.items()}
@@ -1179,6 +1295,8 @@ class ConversationGraph:
         self,
         run: Run,
         turn_options: dict[str, object],
+        *,
+        messages: list[ModelMessage],
     ) -> set[str]:
         if self.tool_registry is None:
             return set()
@@ -1194,6 +1312,8 @@ class ConversationGraph:
             and await self.attachment_service.list_for_tool(run_id=run.id)
         ):
             tool_names.update({"attachment.list", "attachment.read"})
+        if "Bash" in tool_names and not _turn_requests_shell_execution(messages):
+            tool_names.remove("Bash")
         return tool_names
 
     def _memory_enabled_for_turn(self, turn_options: dict[str, object]) -> bool:
@@ -1466,6 +1586,10 @@ def _sum_optional(left: int | None, right: int | None) -> int | None:
     if right is None:
         return left
     return left + right
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((monotonic() - started) * 1000))
 
 
 def _changed_files_from_tool_result(

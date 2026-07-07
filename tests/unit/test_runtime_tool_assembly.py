@@ -33,7 +33,15 @@ def test_assembly_exposes_public_builtin_tools_to_capability_surface(
         for item in group
     }
 
-    public_tools = {"ReadFile", "WriteFile", "EditFile", "Bash", "Glob", "Grep"}
+    public_tools = {
+        "ReadFile",
+        "FindFile",
+        "WriteFile",
+        "EditFile",
+        "Bash",
+        "Glob",
+        "Grep",
+    }
     assert {"repo.read", "repo.apply_patch", "shell.execute"}.issubset(tool_names)
     assert public_tools.issubset(tool_names)
     assert public_tools.issubset(surface_names)

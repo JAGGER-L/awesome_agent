@@ -58,5 +58,24 @@ def test_startup_scripts_do_not_create_repository_provider_env() -> None:
     ]:
         text = script.read_text(encoding="utf-8")
         assert 'ROOT / ".env"' not in text
-        assert "copyfile(ROOT / \".env.example\"" not in text
+        assert 'copyfile(ROOT / ".env.example"' not in text
         assert "awesome_env" in text
+
+
+def test_install_script_syncs_dev_env_and_installs_cli_tool() -> None:
+    install = Path("scripts/make/install.py").read_text(encoding="utf-8")
+
+    assert '"sync"' in install
+    assert '"--dev"' in install
+    assert '"tool"' in install
+    assert '"install"' in install
+    assert '"--editable"' in install
+    assert '"--force"' in install
+    assert '"update-shell"' in install
+    assert "awesome --help" in install
+
+
+def test_install_script_checks_uv_before_installing() -> None:
+    install = Path("scripts/make/install.py").read_text(encoding="utf-8")
+
+    assert 'shutil.which("uv")' in install

@@ -5,6 +5,7 @@ import openai
 
 from awesome_agent.modeling import (
     ContextLengthModelError,
+    ModelErrorCode,
     RateLimitModelError,
 )
 from awesome_agent.providers.errors import classify_openai_error
@@ -43,4 +44,23 @@ def test_context_length_bad_request_is_not_retryable() -> None:
     )
 
     assert isinstance(classified, ContextLengthModelError)
+    assert not classified.info.retryable
+
+
+def test_deepseek_reasoning_bad_request_is_not_retryable() -> None:
+    response = httpx.Response(
+        400,
+        request=httpx.Request("POST", "https://example.test"),
+    )
+    classified = classify_openai_error(
+        openai.BadRequestError(
+            "The `Reasoning_content` in the thinking mode must be passed back "
+            "to the API.",
+            response=response,
+            body=None,
+        ),
+        provider="deepseek",
+    )
+
+    assert classified.info.code is ModelErrorCode.INVALID_REQUEST
     assert not classified.info.retryable

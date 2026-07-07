@@ -240,6 +240,7 @@ def test_registry_exposes_only_public_workspace_tools_to_model_by_default() -> N
 
     assert {definition.name for definition in definitions} == {
         "ReadFile",
+        "FindFile",
         "Glob",
         "Grep",
     }
@@ -253,6 +254,7 @@ def test_registry_can_expose_internal_tools_for_compatibility() -> None:
 
     assert {definition.name for definition in definitions} == {
         "ReadFile",
+        "FindFile",
         "Glob",
         "Grep",
         "repo.status",

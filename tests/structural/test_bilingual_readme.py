@@ -116,9 +116,7 @@ def test_user_readmes_do_not_contain_engineering_or_operations_detail() -> None:
 
 
 def test_quickstarts_document_platform_specific_cli_and_windows_api_scope() -> None:
-    english = (ROOT / "docs/getting-started/quickstart.md").read_text(
-        encoding="utf-8"
-    )
+    english = (ROOT / "docs/getting-started/quickstart.md").read_text(encoding="utf-8")
     chinese = (ROOT / "docs/getting-started/quickstart.zh-CN.md").read_text(
         encoding="utf-8"
     )

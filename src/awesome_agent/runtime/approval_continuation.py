@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
+
+from pydantic import TypeAdapter
 
 from awesome_agent.conversation.models import ThreadMessage
 from awesome_agent.domain.enums import EventType
 from awesome_agent.domain.models import RuntimeEvent
-from awesome_agent.modeling.messages import AssistantMessage
+from awesome_agent.modeling.messages import AssistantMessage, ModelMessage
 from awesome_agent.modeling.tools import ToolCall
+from awesome_agent.modeling.turns import ContinuationState
 
 CONTINUATION_PAYLOAD_VERSION = 1
+_MODEL_MESSAGE_LIST_ADAPTER: TypeAdapter[list[ModelMessage]] = TypeAdapter(
+    list[ModelMessage]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +30,11 @@ class ApprovalContinuation:
     workspace_path: str
     workspace_fingerprint: str
     capabilities: tuple[str, ...]
+    provider_continuation: ContinuationState | None = None
+    message_payloads: tuple[dict[str, Any], ...] = ()
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "version": CONTINUATION_PAYLOAD_VERSION,
             "approval_id": str(self.approval_id),
             "tool_call_id": self.tool_call_id,
@@ -37,6 +46,13 @@ class ApprovalContinuation:
             "workspace_fingerprint": self.workspace_fingerprint,
             "capabilities": list(self.capabilities),
         }
+        if self.provider_continuation is not None:
+            payload["provider_continuation"] = self.provider_continuation.model_dump(
+                mode="json"
+            )
+        if self.message_payloads:
+            payload["message_payloads"] = list(self.message_payloads)
+        return payload
 
     def to_tool_call(self) -> ToolCall:
         return ToolCall(
@@ -47,6 +63,11 @@ class ApprovalContinuation:
 
     def to_assistant_message(self) -> AssistantMessage:
         return AssistantMessage(tool_calls=[self.to_tool_call()])
+
+    def to_messages(self) -> list[ModelMessage]:
+        if not self.message_payloads:
+            return [self.to_assistant_message()]
+        return _MODEL_MESSAGE_LIST_ADAPTER.validate_python(list(self.message_payloads))
 
 
 def continuation_from_payload(
@@ -62,6 +83,16 @@ def continuation_from_payload(
         isinstance(item, str) for item in capabilities
     ):
         return None
+    provider_continuation = raw.get("provider_continuation")
+    raw_message_payloads = raw.get("message_payloads")
+    message_payloads: list[dict[str, Any]] = []
+    if raw_message_payloads is not None:
+        if not isinstance(raw_message_payloads, list):
+            return None
+        for item in raw_message_payloads:
+            if not isinstance(item, dict):
+                return None
+            message_payloads.append(dict(item))
     return ApprovalContinuation(
         approval_id=UUID(str(raw["approval_id"])),
         tool_call_id=str(raw["tool_call_id"]),
@@ -72,6 +103,12 @@ def continuation_from_payload(
         workspace_path=str(raw["workspace_path"]),
         workspace_fingerprint=str(raw["workspace_fingerprint"]),
         capabilities=tuple(capabilities),
+        provider_continuation=(
+            ContinuationState.model_validate(provider_continuation)
+            if isinstance(provider_continuation, dict)
+            else None
+        ),
+        message_payloads=tuple(message_payloads),
     )
 
 

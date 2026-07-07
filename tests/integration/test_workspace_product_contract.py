@@ -44,6 +44,11 @@ if __name__ == "__main__":
     print(cube(3))
 """
 
+FOURTH_POWER_SOURCE = '''def fourth_power(value: int | float) -> int | float:
+    """Return value raised to the fourth power."""
+    return value ** 4
+'''
+
 TEST_SOURCE = """from cube import cube
 
 
@@ -51,7 +56,15 @@ def test_cube() -> None:
     assert cube(3) == 27
 """
 
-PUBLIC_WORKSPACE_TOOLS = {"ReadFile", "WriteFile", "EditFile", "Bash", "Glob", "Grep"}
+PUBLIC_WORKSPACE_TOOLS = {
+    "ReadFile",
+    "FindFile",
+    "WriteFile",
+    "EditFile",
+    "Bash",
+    "Glob",
+    "Grep",
+}
 INTERNAL_COMPATIBILITY_TOOLS = {
     "repo.read",
     "repo.diff",
@@ -86,6 +99,7 @@ class CubeProductProvider(StructuredModelProvider):
             self.requests.append(request)
             tool_names = {tool.name for tool in request.tools}
             assert tool_names & PUBLIC_WORKSPACE_TOOLS == PUBLIC_WORKSPACE_TOOLS
+            assert "Bash" in tool_names
             assert not tool_names & INTERNAL_COMPATIBILITY_TOOLS
             tool_results = [
                 message
@@ -260,6 +274,200 @@ class SensitiveWriteRetryProvider(StructuredModelProvider):
         return events()
 
 
+class LocateReadWriteProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            tool_names = {tool.name for tool in request.tools}
+            assert "FindFile" in tool_names
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if len(tool_results) == 0:
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="find-cube",
+                                    name="FindFile",
+                                    arguments_json=json.dumps({"query": "cube"}),
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            if len(tool_results) == 1:
+                assert '"path": "cube.py"' in tool_results[-1].content
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="read-cube",
+                                    name="ReadFile",
+                                    arguments_json=json.dumps({"path": "cube.py"}),
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            if len(tool_results) == 2:
+                assert "old cube placeholder" in tool_results[-1].content
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="write-cube",
+                                    name="WriteFile",
+                                    arguments_json=json.dumps(
+                                        {
+                                            "path": "cube.py",
+                                            "content": CUBE_SOURCE,
+                                            "overwrite": True,
+                                        }
+                                    ),
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            assert len(tool_results) == 3
+            final = "Located cube.py, read it, and rewrote it as a cube function."
+            yield TextDelta(text=final)
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content=final),
+                    stop_reason=StopReason.COMPLETED,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+
+        return events()
+
+
+class EmptyCubeFourthPowerProvider(StructuredModelProvider):
+    def __init__(self) -> None:
+        self.requests: list[ModelRequest] = []
+
+    def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
+        async def events() -> AsyncIterator[ModelStreamEvent]:
+            self.requests.append(request)
+            tool_names = {tool.name for tool in request.tools}
+            assert "FindFile" in tool_names
+            assert "ReadFile" in tool_names
+            assert "WriteFile" in tool_names
+            assert "Bash" not in tool_names
+            tool_results = [
+                message
+                for message in request.messages
+                if isinstance(message, ToolResultMessage)
+            ]
+            if len(tool_results) == 0:
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="find-cube",
+                                    name="FindFile",
+                                    arguments_json=json.dumps({"query": "cube"}),
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            if len(tool_results) == 1:
+                assert '"path": "cube.py"' in tool_results[-1].content
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="read-cube",
+                                    name="ReadFile",
+                                    arguments_json=json.dumps({"path": "cube.py"}),
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            if len(tool_results) == 2:
+                payload = json.loads(tool_results[-1].content)
+                assert payload["path"] == "cube.py"
+                assert payload["empty"] is True
+                assert payload["line_count"] == 0
+                yield TurnCompleted(
+                    turn=ModelTurn(
+                        assistant=AssistantMessage(
+                            content="",
+                            tool_calls=[
+                                ToolCall(
+                                    call_id="write-fourth-power",
+                                    name="WriteFile",
+                                    arguments_json=json.dumps(
+                                        {
+                                            "path": "cube.py",
+                                            "content": FOURTH_POWER_SOURCE,
+                                            "overwrite": True,
+                                        }
+                                    ),
+                                )
+                            ],
+                        ),
+                        stop_reason=StopReason.TOOL_CALLS,
+                        model="fake-model",
+                        provider="fake",
+                    )
+                )
+                return
+            assert len(tool_results) == 3
+            final = "cube.py was empty, so I replaced it with a fourth-power function."
+            yield TextDelta(text=final)
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    assistant=AssistantMessage(content=final),
+                    stop_reason=StopReason.COMPLETED,
+                    model="fake-model",
+                    provider="fake",
+                )
+            )
+
+        return events()
+
+
 @pytest.mark.asyncio
 async def test_local_runtime_creates_non_empty_python_file_and_runs_validation(
     tmp_path: Path,
@@ -319,6 +527,23 @@ async def test_local_runtime_creates_non_empty_python_file_and_runs_validation(
             "Bash",
         ]
         assert all(event.payload["status"] == "completed" for event in tool_events)
+        assert [event.payload["call_id"] for event in tool_events] == [
+            "write-cube",
+            "write-test",
+            "run-pytest",
+        ]
+        assert [event.payload["invocation_status"] for event in tool_events] == [
+            "completed",
+            "completed",
+            "completed",
+        ]
+        assert [event.payload["operation_status"] for event in tool_events] == [
+            "created",
+            "created",
+            "completed",
+        ]
+        assert all("result_summary" in event.payload for event in tool_events)
+        assert all("duration_ms" in event.payload for event in tool_events)
         assert any(
             event.event is ConversationStreamEventKind.TOOL_COMPLETED
             and event.payload.get("tool") == "WriteFile"
@@ -339,6 +564,129 @@ async def test_local_runtime_creates_non_empty_python_file_and_runs_validation(
         assert changed_files == [
             {"path": "cube.py", "status": "created"},
             {"path": "test_cube.py", "status": "created"},
+        ]
+        assert streamed[-1].event is ConversationStreamEventKind.TURN_COMPLETED
+    finally:
+        container.close()
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_finds_reads_and_modifies_named_workspace_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "cube.py").write_text("# old cube placeholder\n", encoding="utf-8")
+    provider = LocateReadWriteProvider()
+    sandbox = RecordingLocalSandbox()
+    monkeypatch.setattr(
+        assembly_module,
+        "create_sandbox",
+        lambda **_: sandbox,
+    )
+    container = LocalRuntimeContainer(
+        settings=_settings(tmp_path),
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        project_root=tmp_path,
+    )
+    try:
+        thread = await container.conversations.create_thread(
+            title="Cube update",
+            context_path=str(tmp_path),
+        )
+        stream = container.conversation_service.start_turn(
+            thread_id=thread.id,
+            content="介绍下cube文件的内容,并将其修改为计算立方的函数文件",
+        )
+        first = await anext(stream)
+        run_id = UUID(str(first.payload["run_id"]))
+        await container.worker_pump.drain_until_run_terminal_or_waiting(str(run_id))
+        streamed = [first, *[event async for event in stream]]
+
+        run = await container.runtime.get_run(run_id)
+        runtime_events = await container.runtime.list_events(run_id)
+        messages = await container.conversations.list_messages(thread.id)
+
+        assert run.status is RunStatus.COMPLETED
+        assert (tmp_path / "cube.py").read_text(encoding="utf-8") == CUBE_SOURCE
+        assert len(provider.requests) == 4
+        tool_events = [
+            event
+            for event in runtime_events
+            if event.event_type is EventType.TOOL_CALL_CREATED
+        ]
+        assert [event.payload["tool"] for event in tool_events] == [
+            "FindFile",
+            "ReadFile",
+            "WriteFile",
+        ]
+        assert messages[-1].content == (
+            "Located cube.py, read it, and rewrote it as a cube function."
+        )
+        assert streamed[-1].event is ConversationStreamEventKind.TURN_COMPLETED
+    finally:
+        container.close()
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_updates_empty_cube_file_without_shell_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "cube.py").write_bytes(b"\xff\xfe")
+    (tmp_path / "snake.html").write_text("<html></html>", encoding="utf-8")
+    provider = EmptyCubeFourthPowerProvider()
+    sandbox = RecordingLocalSandbox()
+    monkeypatch.setattr(
+        assembly_module,
+        "create_sandbox",
+        lambda **_: sandbox,
+    )
+    container = LocalRuntimeContainer(
+        settings=_settings(tmp_path),
+        provider_factory=lambda _model: provider,
+        default_model="fake-model",
+        project_root=tmp_path,
+    )
+    try:
+        thread = await container.conversations.create_thread(
+            title="Fourth power",
+            context_path=str(tmp_path),
+        )
+        stream = container.conversation_service.start_turn(
+            thread_id=thread.id,
+            content="介绍 cube 文件并改成计算四次方函数",
+        )
+        first = await anext(stream)
+        run_id = UUID(str(first.payload["run_id"]))
+        await container.worker_pump.drain_until_run_terminal_or_waiting(str(run_id))
+        streamed = [first, *[event async for event in stream]]
+
+        run = await container.runtime.get_run(run_id)
+        approvals = await container.approvals.list_for_run(run_id)
+        runtime_events = await container.runtime.list_events(run_id)
+        messages = await container.conversations.list_messages(thread.id)
+
+        assert run.status is RunStatus.COMPLETED
+        assert approvals == []
+        assert sandbox.requests == []
+        assert (tmp_path / "cube.py").read_text(encoding="utf-8") == FOURTH_POWER_SOURCE
+        assert len(provider.requests) == 4
+        tool_events = [
+            event
+            for event in runtime_events
+            if event.event_type is EventType.TOOL_CALL_CREATED
+        ]
+        assert [event.payload["tool"] for event in tool_events] == [
+            "FindFile",
+            "ReadFile",
+            "WriteFile",
+        ]
+        assert messages[-1].content == (
+            "cube.py was empty, so I replaced it with a fourth-power function."
+        )
+        assert messages[-1].metadata.get("changed_files") == [
+            {"path": "cube.py", "status": "updated"}
         ]
         assert streamed[-1].event is ConversationStreamEventKind.TURN_COMPLETED
     finally:
