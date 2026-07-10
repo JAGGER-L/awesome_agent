@@ -1,1 +1,55 @@
-"""Conversation domain contracts."""
+"""Framework-free local conversation domain contracts."""
+
+from awesome_agent.conversation.models import (
+    Thread,
+    ThreadEntry,
+    ThreadEntryKind,
+    ThreadSummary,
+    ThreadView,
+    ToolActivity,
+    ToolActivityOrigin,
+    ToolActivityOutcome,
+    Turn,
+    TurnStatus,
+    UsageSummary,
+)
+from awesome_agent.conversation.repository import (
+    ConversationConflict,
+    ConversationError,
+    InvalidTurnTransition,
+    ThreadEntryRepository,
+    ThreadNotFound,
+    ThreadRepository,
+    ThreadSummaryRepository,
+    ToolActivityRepository,
+    TurnBusy,
+    TurnNotFound,
+    TurnRepository,
+    require_turn_transition,
+)
+
+__all__ = [
+    "ConversationConflict",
+    "ConversationError",
+    "InvalidTurnTransition",
+    "Thread",
+    "ThreadEntry",
+    "ThreadEntryKind",
+    "ThreadEntryRepository",
+    "ThreadNotFound",
+    "ThreadRepository",
+    "ThreadSummary",
+    "ThreadSummaryRepository",
+    "ThreadView",
+    "ToolActivity",
+    "ToolActivityOrigin",
+    "ToolActivityOutcome",
+    "ToolActivityRepository",
+    "Turn",
+    "TurnBusy",
+    "TurnNotFound",
+    "TurnRepository",
+    "TurnStatus",
+    "UsageSummary",
+    "require_turn_transition",
+]
