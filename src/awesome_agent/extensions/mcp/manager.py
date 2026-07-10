@@ -43,6 +43,7 @@ class McpConnectionState(StrEnum):
     DISABLED = "disabled"
     UNTRUSTED = "untrusted"
     ENABLEMENT_REQUIRED = "enablement_required"
+    CONFIGURED = "configured"
     CONNECTED = "connected"
     ERROR = "error"
 
@@ -90,6 +91,9 @@ class McpManager:
     def configs(self) -> tuple[McpServerConfig, ...]:
         return tuple(self._configs.values())
 
+    def config(self, server_id: str) -> McpServerConfig:
+        return self._config(server_id)
+
     def status(self, server_id: str) -> McpServerStatus:
         config = self._config(server_id)
         return self._statuses.get(server_id, self._inactive_status(config))
@@ -121,6 +125,12 @@ class McpManager:
             return status
         await self._connect_one(config)
         return self.status(server_id)
+
+    async def refresh_enablement(self, server_id: str) -> McpServerStatus:
+        config = self._config(server_id)
+        await self._drop_client(server_id)
+        self._statuses.pop(server_id, None)
+        return self._inactive_status(config)
 
     async def call_tool(
         self,
@@ -198,9 +208,19 @@ class McpManager:
 
     def _inactive_status(self, config: McpServerConfig) -> McpServerStatus:
         if config.source is McpSource.USER:
-            state = McpConnectionState.DISABLED
+            state = (
+                McpConnectionState.CONFIGURED
+                if config.enabled
+                else McpConnectionState.DISABLED
+            )
         elif not self._workspace_trusted:
             state = McpConnectionState.UNTRUSTED
+        elif self._enablements.is_enabled(
+            self._workspace_key,
+            config.id,
+            mcp_config_hash(config),
+        ):
+            state = McpConnectionState.CONFIGURED
         else:
             state = McpConnectionState.ENABLEMENT_REQUIRED
         return McpServerStatus(config.id, state)

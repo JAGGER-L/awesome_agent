@@ -48,6 +48,9 @@ class SQLiteConversationRepositories:
     def create_thread(self, thread: Thread) -> Thread:
         return self.threads.create(thread)
 
+    def update_thread(self, thread: Thread) -> Thread:
+        return self.threads.update(thread)
+
     def list_threads(self, workspace_key: str) -> Sequence[Thread]:
         return self.threads.list(workspace_key)
 

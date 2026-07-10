@@ -35,6 +35,7 @@ from awesome_agent.conversation import (
     TurnStatus,
 )
 from awesome_agent.core.workspace import WorkspaceIdentity
+from awesome_agent.extensions.skills import SkillLoader
 from awesome_agent.modeling import ModelMessage, ProviderId
 
 _MODEL_MESSAGE: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
@@ -68,6 +69,7 @@ class ApplicationContextService:
         model_context_limit: int,
         product_instructions: str,
         workspace_instructions: str = "",
+        skill_loader: SkillLoader | None = None,
     ) -> None:
         self._conversation = conversation
         self._workspace = workspace
@@ -77,6 +79,7 @@ class ApplicationContextService:
         self._model_context_limit = model_context_limit
         self._product_instructions = product_instructions
         self._workspace_instructions = workspace_instructions
+        self._skill_loader = skill_loader
         self._captures: dict[str, TurnContextCapture] = {}
 
     def prepare_turn(self, turn: Turn, content: str) -> None:
@@ -116,6 +119,17 @@ class ApplicationContextService:
                     kind=ContextSourceKind.WORKSPACE_INSTRUCTIONS,
                     source_id=self._workspace.key,
                     content=self._workspace_instructions,
+                    role="system",
+                    mandatory=True,
+                )
+            )
+        if self._skill_loader is not None and turn.skill_mode not in {"auto", "off"}:
+            skill = self._skill_loader.load(turn.skill_mode)
+            sources.append(
+                ContextSource(
+                    kind=ContextSourceKind.SKILL,
+                    source_id=skill.descriptor.name,
+                    content=skill.body,
                     role="system",
                     mandatory=True,
                 )
