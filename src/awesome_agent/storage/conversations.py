@@ -11,6 +11,7 @@ from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
     ThreadSummary,
+    ThreadView,
     ToolActivity,
     Turn,
     TurnStatus,
@@ -21,6 +22,7 @@ from awesome_agent.conversation.repository import (
     ThreadNotFound,
     TurnBusy,
     TurnNotFound,
+    require_turn_transition,
 )
 from awesome_agent.storage.database import application_connection
 
@@ -38,6 +40,112 @@ class SQLiteConversationRepositories:
     def transaction(self) -> Iterator[sqlite3.Connection]:
         with application_connection(self.path) as connection, connection:
             yield connection
+
+    def create_thread(self, thread: Thread) -> Thread:
+        return self.threads.create(thread)
+
+    def list_threads(self, workspace_key: str) -> Sequence[Thread]:
+        return self.threads.list(workspace_key)
+
+    def read_thread(self, thread_id: str) -> ThreadView:
+        with self.transaction() as connection:
+            thread = self.threads.get(thread_id, connection=connection)
+            if thread is None:
+                raise ThreadNotFound(thread_id)
+            return ThreadView(
+                thread=thread,
+                entries=tuple(self.entries.list(thread_id, connection=connection)),
+                turns=tuple(self.turns.list(thread_id, connection=connection)),
+                summary=self.summaries.get(thread_id, connection=connection),
+                tool_activities=tuple(
+                    self.tool_activities.list(thread_id, connection=connection)
+                ),
+            )
+
+    def thread_id_for_turn(self, turn_id: str) -> str | None:
+        turn = self.turns.get(turn_id)
+        return None if turn is None else turn.thread_id
+
+    def begin_turn(self, user_entry: ThreadEntry, turn: Turn) -> Turn:
+        with self.transaction() as connection:
+            thread = self.threads.get(turn.thread_id, connection=connection)
+            if thread is None:
+                raise ThreadNotFound(turn.thread_id)
+            if self.turns.in_progress(turn.thread_id, connection=connection):
+                raise TurnBusy(turn.thread_id)
+            self._require_next_sequence(user_entry, connection)
+            self.entries.append(user_entry, connection=connection)
+            self.turns.create(turn, connection=connection)
+            self.threads.update(
+                thread.model_copy(update={"updated_at": user_entry.created_at}),
+                connection=connection,
+            )
+        return turn
+
+    def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn:
+        with self.transaction() as connection:
+            current = self.turns.get(turn.id, connection=connection)
+            if current is None:
+                raise TurnNotFound(turn.id)
+            require_turn_transition(current.status, TurnStatus.COMPLETED)
+            if current.thread_id != assistant_entry.thread_id:
+                raise ConversationConflict("Assistant Entry belongs to another Thread.")
+            self._require_next_sequence(assistant_entry, connection)
+            self.entries.append(assistant_entry, connection=connection)
+            self.turns.update(turn, connection=connection)
+            thread = self.threads.get(turn.thread_id, connection=connection)
+            if thread is None:
+                raise ThreadNotFound(turn.thread_id)
+            self.threads.update(
+                thread.model_copy(update={"updated_at": turn.updated_at}),
+                connection=connection,
+            )
+        return turn
+
+    def update_terminal_turn(self, turn: Turn) -> Turn:
+        with self.transaction() as connection:
+            current = self.turns.get(turn.id, connection=connection)
+            if current is None:
+                raise TurnNotFound(turn.id)
+            require_turn_transition(current.status, turn.status)
+            self.turns.update(turn, connection=connection)
+            thread = self.threads.get(turn.thread_id, connection=connection)
+            if thread is None:
+                raise ThreadNotFound(turn.thread_id)
+            self.threads.update(
+                thread.model_copy(update={"updated_at": turn.updated_at}),
+                connection=connection,
+            )
+        return turn
+
+    def append_direct_command(self, entry: ThreadEntry) -> ThreadEntry:
+        with self.transaction() as connection:
+            thread = self.threads.get(entry.thread_id, connection=connection)
+            if thread is None:
+                raise ThreadNotFound(entry.thread_id)
+            self._require_next_sequence(entry, connection)
+            self.entries.append(entry, connection=connection)
+            self.threads.update(
+                thread.model_copy(update={"updated_at": entry.created_at}),
+                connection=connection,
+            )
+        return entry
+
+    def _require_next_sequence(
+        self,
+        entry: ThreadEntry,
+        connection: sqlite3.Connection,
+    ) -> None:
+        row = connection.execute(
+            """
+            SELECT COALESCE(MAX(sequence), 0) + 1
+            FROM thread_entries WHERE thread_id = ?
+            """,
+            (entry.thread_id,),
+        ).fetchone()
+        expected = int(row[0])
+        if entry.sequence != expected:
+            raise ConversationConflict("Thread Entry sequence changed concurrently.")
 
 
 class _SQLiteRepository:

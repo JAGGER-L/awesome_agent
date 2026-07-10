@@ -16,6 +16,7 @@ from awesome_agent.conversation.models import (
 from awesome_agent.conversation.repository import (
     ConversationConflict,
     ConversationError,
+    ConversationStore,
     InvalidTurnTransition,
     ThreadEntryRepository,
     ThreadNotFound,
@@ -27,10 +28,13 @@ from awesome_agent.conversation.repository import (
     TurnRepository,
     require_turn_transition,
 )
+from awesome_agent.conversation.service import ConversationService
 
 __all__ = [
     "ConversationConflict",
     "ConversationError",
+    "ConversationService",
+    "ConversationStore",
     "InvalidTurnTransition",
     "Thread",
     "ThreadEntry",
