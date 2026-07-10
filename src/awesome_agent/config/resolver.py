@@ -130,12 +130,15 @@ def _select_model(
     cli: StartupOverrides,
     environ: Mapping[str, str],
 ) -> str:
-    candidate = (
-        cli.model
-        or environ.get("AWESOME_MODEL")
-        or thread.model
-        or application.providers.default_model
-    )
+    candidate: str | None
+    if cli.model is not None:
+        candidate = cli.model
+    elif "AWESOME_MODEL" in environ:
+        candidate = environ["AWESOME_MODEL"]
+    elif thread.model is not None:
+        candidate = thread.model
+    else:
+        candidate = application.providers.default_model
     if candidate is not None:
         if candidate not in SUPPORTED_MODEL_IDS:
             raise ConfigurationResolutionError(
@@ -200,7 +203,13 @@ def _select_skill_mode(
     cli: StartupOverrides,
     environ: Mapping[str, str],
 ) -> str:
-    candidate = cli.skill_mode or environ.get("AWESOME_SKILL") or thread.skill_mode
+    candidate: str | None
+    if cli.skill_mode is not None:
+        candidate = cli.skill_mode
+    elif "AWESOME_SKILL" in environ:
+        candidate = environ["AWESOME_SKILL"]
+    else:
+        candidate = thread.skill_mode
     if candidate is None:
         return "auto"
     if _SKILL_MODE_PATTERN.fullmatch(candidate) is None:

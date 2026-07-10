@@ -4,7 +4,7 @@ import json
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from awesome_agent.conversation.models import (
@@ -316,11 +316,12 @@ class SQLiteTurnRepository(_SQLiteRepository):
                     """
                     INSERT INTO turns (
                         turn_id, thread_id, checkpoint_key, status, provider,
-                        model, thinking_enabled, skill_mode, user_entry_id,
-                        assistant_entry_id, usage_json, termination_reason,
+                        model, thinking_enabled, skill_mode, budgets_json,
+                        user_entry_id, assistant_entry_id, usage_json,
+                        termination_reason,
                         error_code, context_manifest_json, created_at,
                         updated_at, completed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _turn_values(turn),
                 )
@@ -581,6 +582,7 @@ def _turn_values(turn: Turn) -> tuple[object, ...]:
         turn.model,
         int(turn.thinking_enabled),
         turn.skill_mode,
+        _json(turn.budgets.model_dump(mode="json")),
         turn.user_entry_id,
         turn.assistant_entry_id,
         _json(turn.usage.model_dump(mode="json")),
@@ -603,6 +605,7 @@ def _turn_from_row(row: sqlite3.Row) -> Turn:
         model=row["model"],
         thinking_enabled=bool(row["thinking_enabled"]),
         skill_mode=row["skill_mode"],
+        budgets=json.loads(row["budgets_json"]),
         user_entry_id=row["user_entry_id"],
         assistant_entry_id=row["assistant_entry_id"],
         usage=UsageSummary.model_validate(json.loads(row["usage_json"])),
@@ -659,7 +662,7 @@ def _json(value: object) -> str:
 
 
 def _time(value: datetime) -> str:
-    return value.isoformat()
+    return value.astimezone(UTC).isoformat()
 
 
 def _optional_time(value: datetime | None) -> str | None:

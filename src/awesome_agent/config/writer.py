@@ -26,9 +26,12 @@ class UserConfigWriter:
     ) -> UserConfigDocument:
         with self._lock:
             current = read_user_config_document(self._path)
-            updated = transform(current)
-            if not isinstance(updated, UserConfigDocument):
+            candidate = transform(current)
+            if not isinstance(candidate, UserConfigDocument):
                 raise TypeError("Config transform must return UserConfigDocument.")
+            updated = UserConfigDocument.model_validate(
+                candidate.model_dump(mode="python")
+            )
             self._write(updated)
             return updated
 

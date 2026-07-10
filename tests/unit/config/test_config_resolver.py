@@ -180,6 +180,27 @@ def test_documented_selection_environment_rejects_invalid_values(
     assert raised.value.code == "configuration_invalid"
 
 
+def test_explicit_empty_selection_overrides_fail_closed() -> None:
+    application = _application(deepseek=True)
+
+    with pytest.raises(ConfigurationResolutionError) as cli_error:
+        resolve_turn_config(
+            application,
+            thread=ThreadConfigState(),
+            cli=StartupOverrides(model=""),
+            environ={},
+        )
+    with pytest.raises(ConfigurationResolutionError) as env_error:
+        resolve_turn_config(
+            application,
+            thread=ThreadConfigState(),
+            environ={"AWESOME_SKILL": ""},
+        )
+
+    assert cli_error.value.code == "configuration_invalid"
+    assert env_error.value.code == "configuration_invalid"
+
+
 def test_workspace_limits_can_only_reduce_user_limits() -> None:
     application = _application(
         deepseek=True,
@@ -296,5 +317,22 @@ def test_user_config_writer_keeps_original_when_transform_fails(tmp_path: Path) 
 
     with pytest.raises(RuntimeError, match="stop"):
         UserConfigWriter(path).update(fail)
+
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_user_config_writer_revalidates_transform_output(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    original = "budgets:\n  model_calls: 12\n"
+    path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        UserConfigWriter(path).update(
+            lambda current: current.model_copy(
+                update={
+                    "budgets": current.budgets.model_copy(update={"model_calls": 257})
+                }
+            )
+        )
 
     assert path.read_text(encoding="utf-8") == original

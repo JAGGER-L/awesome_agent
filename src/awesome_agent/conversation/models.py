@@ -13,6 +13,8 @@ from pydantic import (
     model_validator,
 )
 
+from awesome_agent.config.models import BudgetConfig
+
 
 class ThreadEntryKind(StrEnum):
     USER_MESSAGE = "user_message"
@@ -118,6 +120,7 @@ class Turn(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     thinking_enabled: bool = False
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
+    budgets: BudgetConfig
     user_entry_id: str = Field(min_length=1, max_length=128)
     assistant_entry_id: str | None = Field(default=None, max_length=128)
     usage: UsageSummary = Field(default_factory=UsageSummary)

@@ -74,8 +74,9 @@ def test_create_list_and_read_threads_by_workspace(tmp_path: Path) -> None:
 def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -> None:
     service = _service(tmp_path / "application.db")
     thread = service.create_thread("workspace_1", "Thread")
+    config = _turn_config()
 
-    turn = service.begin_turn(thread.id, "Inspect repository", _turn_config())
+    turn = service.begin_turn(thread.id, "Inspect repository", config)
     view = service.read_thread(thread.id)
 
     assert turn.checkpoint_key == turn.id
@@ -84,6 +85,8 @@ def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -
     assert turn.model == "deepseek/deepseek-v4-flash"
     assert turn.thinking_enabled is True
     assert turn.skill_mode == "debug"
+    assert turn.budgets == config.budgets
+    assert view.turns[0].budgets == config.budgets
     assert view.entries[0].kind is ThreadEntryKind.USER_MESSAGE
     assert view.entries[0].content == "Inspect repository"
     assert view.turns == (turn,)

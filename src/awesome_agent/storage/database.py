@@ -86,6 +86,7 @@ CREATE TABLE turns (
     model TEXT NOT NULL,
     thinking_enabled INTEGER NOT NULL CHECK (thinking_enabled IN (0, 1)),
     skill_mode TEXT NOT NULL,
+    budgets_json TEXT NOT NULL,
     user_entry_id TEXT NOT NULL,
     assistant_entry_id TEXT,
     usage_json TEXT NOT NULL,
@@ -184,10 +185,19 @@ def initialize_application_database(path: Path) -> None:
                 supported=APPLICATION_SCHEMA_VERSION,
             )
         for target_version in range(version + 1, APPLICATION_SCHEMA_VERSION + 1):
-            migration = _MIGRATIONS[target_version]
-            with connection:
-                connection.executescript(migration)
-                connection.execute(f"PRAGMA user_version = {target_version}")
+            migration = _MIGRATIONS[target_version].rstrip().rstrip(";")
+            script = (
+                "BEGIN IMMEDIATE;\n"
+                f"{migration};\n"
+                f"PRAGMA user_version = {target_version};\n"
+                "COMMIT;"
+            )
+            try:
+                connection.executescript(script)
+            except sqlite3.Error:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
     finally:
         connection.close()
 

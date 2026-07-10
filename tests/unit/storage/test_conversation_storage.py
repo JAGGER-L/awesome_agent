@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import awesome_agent.storage.database as database
+from awesome_agent.config import BudgetConfig
 from awesome_agent.conversation import (
     ConversationConflict,
     Thread,
@@ -76,6 +78,7 @@ def _turn(
         status=TurnStatus.IN_PROGRESS,
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
+        budgets=BudgetConfig(model_calls=12, tool_calls=24),
         user_entry_id=user_entry_id,
         usage=UsageSummary(model_calls=1),
         context_manifest=({"kind": "current_input", "order": 1},),
@@ -123,6 +126,33 @@ def test_migration_three_creates_only_product_conversation_tables(
         "idx_tool_activities_operation_call",
     } <= indexes
     assert not {"runs", "jobs", "leases", "attempts", "event_store"} & tables
+
+
+def test_migration_three_rolls_back_the_entire_script_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "application.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA user_version = 2")
+    monkeypatch.setitem(
+        database._MIGRATIONS,
+        3,
+        "CREATE TABLE partial_migration (id TEXT); INVALID SQL;",
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        initialize_application_database(path)
+
+    with sqlite3.connect(path) as connection:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        partial = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("partial_migration",),
+        ).fetchone()
+
+    assert version == 2
+    assert partial is None
 
 
 def test_repositories_persist_and_reopen_ordered_thread_state(tmp_path: Path) -> None:
@@ -263,10 +293,39 @@ def test_json_columns_use_canonical_compact_encoding(tmp_path: Path) -> None:
             "SELECT usage_json FROM turns WHERE turn_id = ?",
             ("turn_1",),
         ).fetchone()[0]
+        budgets = connection.execute(
+            "SELECT budgets_json FROM turns WHERE turn_id = ?",
+            ("turn_1",),
+        ).fetchone()[0]
 
     assert metadata == '{"a":true,"z":1}'
     assert json.loads(usage)["model_calls"] == 1
+    assert json.loads(budgets)["model_calls"] == 12
     assert ": " not in usage
+    assert ": " not in budgets
+
+
+def test_timestamps_are_normalized_to_utc_iso_8601(tmp_path: Path) -> None:
+    path = tmp_path / "application.db"
+    repositories = SQLiteConversationRepositories(path)
+    offset_time = datetime(2026, 7, 10, 16, 0, tzinfo=timezone(timedelta(hours=8)))
+    repositories.threads.create(
+        Thread(
+            id="thread_utc",
+            workspace_key="workspace_1",
+            title="UTC",
+            created_at=offset_time,
+            updated_at=offset_time,
+        )
+    )
+
+    with application_connection(path) as connection:
+        stored = connection.execute(
+            "SELECT created_at FROM threads WHERE thread_id = ?",
+            ("thread_utc",),
+        ).fetchone()[0]
+
+    assert stored == "2026-07-10T08:00:00+00:00"
 
 
 def test_repositories_translate_sqlite_integrity_errors(tmp_path: Path) -> None:

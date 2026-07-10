@@ -89,6 +89,7 @@ class ConversationService:
             model=config.model,
             thinking_enabled=config.thinking_enabled,
             skill_mode=config.skill_mode,
+            budgets=config.budgets,
             user_entry_id=entry.id,
             created_at=now,
             updated_at=now,

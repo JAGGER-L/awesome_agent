@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from awesome_agent.config import BudgetConfig
 from awesome_agent.conversation import (
     InvalidTurnTransition,
     Thread,
@@ -48,6 +49,7 @@ def _turn(status: TurnStatus = TurnStatus.IN_PROGRESS) -> Turn:
         model="deepseek/deepseek-v4-flash",
         thinking_enabled=False,
         skill_mode="auto",
+        budgets=BudgetConfig(),
         user_entry_id="entry_user",
         assistant_entry_id=(
             "entry_assistant" if status is TurnStatus.COMPLETED else None
