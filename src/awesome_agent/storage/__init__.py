@@ -1,5 +1,6 @@
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import sqlite_checkpoint_saver
+from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
     ApplicationSchemaTooNew,
@@ -13,6 +14,7 @@ __all__ = [
     "ApplicationSchemaTooNew",
     "FileChangeBlobStore",
     "SQLiteChangeSetStore",
+    "SQLiteConversationRepositories",
     "SQLiteWorkspaceTrustStore",
     "application_connection",
     "initialize_application_database",

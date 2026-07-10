@@ -79,6 +79,11 @@ class AwesomePaths:
             worktrees_dir=resolved_home / "worktrees",
         )
 
+    def workspace_config_file(self, workspace: Path) -> Path:
+        """Return the only supported project configuration file."""
+
+        return Path(workspace).expanduser() / ".awesome" / "config.yaml"
+
 
 def awesome_paths() -> AwesomePaths:
     return AwesomePaths.resolve()

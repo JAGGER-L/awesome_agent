@@ -23,7 +23,7 @@ def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None:
         table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'trusted_workspaces'"
         ).fetchone()
-    assert version == APPLICATION_SCHEMA_VERSION == 2
+    assert version == APPLICATION_SCHEMA_VERSION == 3
     assert str(journal_mode).lower() == "wal"
     assert foreign_keys == 1
     assert table is not None

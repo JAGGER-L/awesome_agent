@@ -30,9 +30,9 @@ FORBIDDEN_STORAGE_IMPORTS = {
 FORBIDDEN_APPLICATION_IMPORTS = {
     "awesome_agent.api",
     "awesome_agent.client",
-    "awesome_agent.conversation",
     "awesome_agent.persistence",
     "awesome_agent.runtime",
+    "awesome_agent.settings",
     "awesome_agent.surfaces",
     "awesome_agent.tools",
     "awesome_agent.tui",

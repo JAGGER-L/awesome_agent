@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 
 class CommandOwner(StrEnum):
@@ -14,11 +15,10 @@ class CommandOwner(StrEnum):
 class CommandName(StrEnum):
     NEW = "new"
     RESUME = "resume"
-    HISTORY = "history"
     CONTEXT = "context"
     COMPACT = "compact"
     MODEL = "model"
-    MODE = "mode"
+    THINKING = "thinking"
     WORKSPACE = "workspace"
     DIFF = "diff"
     UNDO = "undo"
@@ -29,6 +29,7 @@ class CommandName(StrEnum):
     MCP = "mcp"
     MEMORY = "memory"
     STATUS = "status"
+    USAGE = "usage"
     DOCTOR = "doctor"
     CONFIG = "config"
     INIT = "init"
@@ -50,11 +51,10 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
         for name in (
             CommandName.NEW,
             CommandName.RESUME,
-            CommandName.HISTORY,
             CommandName.CONTEXT,
             CommandName.COMPACT,
             CommandName.MODEL,
-            CommandName.MODE,
+            CommandName.THINKING,
             CommandName.WORKSPACE,
             CommandName.DIFF,
             CommandName.UNDO,
@@ -65,6 +65,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.MCP,
             CommandName.MEMORY,
             CommandName.STATUS,
+            CommandName.USAGE,
             CommandName.DOCTOR,
             CommandName.CONFIG,
         )
@@ -100,15 +101,41 @@ class CommandStatus(StrEnum):
 
 
 class CommandIntent(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: CommandName
     arguments: tuple[str, ...] = ()
 
 
+class CommandOption(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    value: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1_000)
+    selected: bool = False
+
+
+class CommandSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prompt: str = Field(min_length=1, max_length=1_000)
+    options: tuple[CommandOption, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_options(self) -> Self:
+        values = [option.value for option in self.options]
+        if len(values) != len(set(values)):
+            raise ValueError("Command option values must be unique.")
+        if sum(option.selected for option in self.options) > 1:
+            raise ValueError("At most one Command option may be selected.")
+        return self
+
+
 class CommandResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     status: CommandStatus
     content: str = Field(default="", max_length=30_000)
     data: dict[str, JsonValue] = Field(default_factory=dict)
+    selection: CommandSelection | None = None

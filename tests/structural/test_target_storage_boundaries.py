@@ -6,10 +6,16 @@ from pathlib import Path
 FORBIDDEN_IMPORT_ROOTS = {
     "awesome_agent.api",
     "awesome_agent.persistence",
+    "awesome_agent.providers",
     "awesome_agent.runtime",
+    "awesome_agent.settings",
     "awesome_agent.surfaces",
+    "awesome_agent.tui",
+    "fastapi",
+    "openai",
     "psycopg",
     "sqlalchemy",
+    "textual",
     "langgraph.checkpoint.postgres",
 }
 

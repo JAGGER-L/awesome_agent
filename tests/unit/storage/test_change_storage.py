@@ -21,7 +21,7 @@ from awesome_agent.storage.database import (
 )
 
 
-def test_schema_two_contains_change_and_pending_tables(tmp_path: Path) -> None:
+def test_current_schema_contains_change_and_pending_tables(tmp_path: Path) -> None:
     database = tmp_path / "application.db"
     initialize_application_database(database)
     with application_connection(database) as connection:
@@ -32,7 +32,7 @@ def test_schema_two_contains_change_and_pending_tables(tmp_path: Path) -> None:
             )
         }
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert APPLICATION_SCHEMA_VERSION == version == 2
+    assert APPLICATION_SCHEMA_VERSION == version == 3
     assert {"change_sets", "pending_mutations"} <= names
 
 
@@ -58,7 +58,7 @@ def test_schema_one_trust_data_upgrades_without_loss(tmp_path: Path) -> None:
         ).fetchone()
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert tuple(row) == ("ws_1", "C:/workspace")
-    assert version == 2
+    assert version == APPLICATION_SCHEMA_VERSION
 
 
 def test_blob_store_is_content_addressed_and_detects_corruption(
