@@ -138,3 +138,123 @@ async def test_read_file_rejects_binary_and_sensitive_files(
         ToolErrorCode.EXECUTION_FAILED,
         ToolErrorCode.PERMISSION_DENIED,
     }
+
+
+def create_search_workspace(workspace: Path) -> bool:
+    source = workspace / "src"
+    source.mkdir(parents=True)
+    (source / "a.py").write_text("Needle one\nother", encoding="utf-8")
+    (source / "b.txt").write_text("Needle two", encoding="utf-8")
+    (source / "c.py").write_text("Needle three", encoding="utf-8")
+    (source / "credentials.py").write_text("Needle secret", encoding="utf-8")
+    (source / "binary.bin").write_bytes(b"Needle\x00binary")
+    hidden = workspace / ".git"
+    hidden.mkdir()
+    (hidden / "hidden.py").write_text("Needle hidden", encoding="utf-8")
+    outside = workspace.parent / "outside"
+    outside.mkdir()
+    (outside / "leak.py").write_text("Needle leak", encoding="utf-8")
+    try:
+        (source / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        return False
+    return True
+
+
+@pytest.mark.asyncio
+async def test_glob_returns_only_sorted_safe_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    create_search_workspace(workspace)
+    executor, context = read_executor(workspace)
+
+    result = await execute(
+        executor,
+        context,
+        "glob",
+        {"pattern": "**/*", "path": "."},
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    matches = result.metadata["matches"]
+    assert isinstance(matches, list)
+    assert matches == ["src/a.py", "src/b.txt", "src/c.py"]
+    assert result.metadata["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_grep_is_deterministic_bounded_and_filters_unsafe_content(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    create_search_workspace(workspace)
+    executor, context = read_executor(workspace)
+
+    result = await execute(
+        executor,
+        context,
+        "grep",
+        {
+            "pattern": "Needle",
+            "path": ".",
+            "include": "*.py",
+            "max_results": 1,
+        },
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    matches = result.metadata["matches"]
+    assert isinstance(matches, list)
+    assert matches == [{"path": "src/a.py", "line": 1, "text": "Needle one"}]
+    assert result.metadata["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_grep_invalid_regex_is_invalid_arguments(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "file.txt").write_text("text", encoding="utf-8")
+    executor, context = read_executor(workspace)
+
+    result = await execute(
+        executor,
+        context,
+        "grep",
+        {"pattern": "(", "path": ".", "regex": True},
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.INVALID_ARGUMENTS
+
+
+@pytest.mark.asyncio
+async def test_search_does_not_follow_directory_symlinks(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "leak.py").write_text("Needle leak", encoding="utf-8")
+    link = workspace / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlinks are not available on this platform.")
+    executor, context = read_executor(workspace)
+
+    glob_result = await execute(
+        executor,
+        context,
+        "glob",
+        {"pattern": "**/*", "path": "."},
+    )
+    grep_result = await execute(
+        executor,
+        context,
+        "grep",
+        {"pattern": "Needle", "path": "."},
+    )
+
+    assert glob_result.metadata["matches"] == []
+    assert grep_result.metadata["matches"] == []
