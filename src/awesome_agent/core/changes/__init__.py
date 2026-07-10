@@ -9,6 +9,7 @@ from awesome_agent.core.changes.models import (
 )
 
 __all__ = [
+    "ChangeJournal",
     "ChangeLifecycle",
     "ChangeReversibility",
     "ChangeSet",
@@ -16,4 +17,6 @@ __all__ = [
     "FileChange",
     "FileChangeKind",
     "FileNodeType",
+    "NodeSnapshot",
 ]
+from awesome_agent.core.changes.journal import ChangeJournal, NodeSnapshot
