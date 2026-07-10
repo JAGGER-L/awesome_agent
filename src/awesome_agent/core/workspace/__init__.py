@@ -5,7 +5,11 @@ from awesome_agent.core.workspace.models import (
     WorkspaceResolutionError,
     WorkspaceTrust,
 )
-from awesome_agent.core.workspace.service import resolve_workspace
+from awesome_agent.core.workspace.service import (
+    WorkspaceTrustService,
+    WorkspaceTrustStore,
+    resolve_workspace,
+)
 
 __all__ = [
     "TrustStatus",
@@ -13,5 +17,7 @@ __all__ = [
     "WorkspaceIdentity",
     "WorkspaceResolutionError",
     "WorkspaceTrust",
+    "WorkspaceTrustService",
+    "WorkspaceTrustStore",
     "resolve_workspace",
 ]

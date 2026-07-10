@@ -5,10 +5,12 @@ from awesome_agent.storage.database import (
     application_connection,
     initialize_application_database,
 )
+from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 __all__ = [
     "APPLICATION_SCHEMA_VERSION",
     "ApplicationSchemaTooNew",
+    "SQLiteWorkspaceTrustStore",
     "application_connection",
     "initialize_application_database",
     "sqlite_checkpoint_saver",
