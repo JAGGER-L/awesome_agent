@@ -4,7 +4,7 @@
 >
 > Decision date: 2026-07-10
 >
-> Implementation status: PR1 through PR3 are complete. PR4 through PR6 remain pending.
+> Implementation status: PR1 through PR4 are complete. PR5 and PR6 remain pending.
 
 ## Purpose
 

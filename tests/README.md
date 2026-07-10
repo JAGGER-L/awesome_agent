@@ -7,12 +7,14 @@ architecture being removed.
 ## Current Baseline
 
 - `unit/`: provider-neutral model contracts, OpenAI and DeepSeek adapters,
-  built-in memory policy and storage, local path safety, redaction, and process
-  lifecycle behavior;
+  built-in memory policy and storage, workspace identity and trust contracts,
+  tool registry/executor/path policy, slash-command contracts, local path
+  safety, redaction, and process lifecycle behavior;
 - `structural/`: framework-free domain direction, repository harness
   separation, Markdown links, source package layout, and target storage
-  boundaries;
-- `integration/`: local SQLite/LangGraph checkpoint persistence;
+  and tool boundaries;
+- `integration/`: local SQLite/LangGraph checkpoint persistence, workspace
+  trust, and bounded `ls`, `read_file`, `glob`, and `grep` execution;
 - `e2e/`: intentionally empty until the target CLI and Ink/React TUI flows
   exist.
 
@@ -34,9 +36,9 @@ replacement test when the owning target module is introduced.
 | Target capability | Coverage to add with implementation |
 | --- | --- |
 | Agent loop | iteration budget, tool-call cycle, malformed message repair, model fallback, cancellation, context compression |
-| Built-in tools | exact contracts for `ls`, `read_file`, `write_file`, `edit_file`, `delete`, `glob`, `grep`, and `execute` |
-| Workspace safety | current-directory workspace resolution, first-use trust, path containment, sensitive action escalation |
-| Tool extensions | registry identity, MCP discovery/execution, user tool isolation, deterministic result and error envelopes |
+| Built-in tools | exact contracts for `write_file`, `edit_file`, `delete`, and `execute` |
+| Workspace safety | sensitive action escalation |
+| Tool extensions | MCP discovery/execution and user tool isolation |
 | Skills | discovery precedence, lazy loading, explicit slash selection, prompt-size limits, untrusted content handling |
 | Configuration | defaults, user/workspace/environment precedence, validation, secret handling, restart semantics |
 | Memory | `MEMORY.md`, `USER.md`, Mem0 Cloud adapter, fail-open behavior, opt-out, untrusted recall injection |
