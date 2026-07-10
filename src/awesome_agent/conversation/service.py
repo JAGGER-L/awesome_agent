@@ -103,6 +103,7 @@ class ConversationService:
         assistant_content: str,
         usage: UsageSummary,
         termination_reason: str,
+        context_manifest: tuple[dict[str, JsonValue], ...] = (),
     ) -> Turn:
         view, current = self._turn_view(turn_id)
         if current.status is TurnStatus.COMPLETED:
@@ -112,6 +113,7 @@ class ConversationService:
                 and entry.content == assistant_content
                 and current.usage == usage
                 and current.termination_reason == termination_reason
+                and current.context_manifest == context_manifest
             ):
                 return current
             raise ConversationConflict("Completed Turn finalization differs.")
@@ -131,6 +133,7 @@ class ConversationService:
                 "assistant_entry_id": assistant.id,
                 "usage": usage,
                 "termination_reason": termination_reason,
+                "context_manifest": context_manifest,
                 "updated_at": now,
                 "completed_at": now,
             }
