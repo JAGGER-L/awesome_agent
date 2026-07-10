@@ -61,3 +61,20 @@ class MemoryPolicyResult(BaseModel):
     content: str | None = Field(default=None, max_length=2_000)
     error_code: str | None = Field(default=None, max_length=128)
     message: str | None = Field(default=None, max_length=500)
+
+
+class LocalMemoryScopeStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scope: MemoryScope
+    label: str = Field(min_length=1, max_length=300)
+    exists: bool
+    entry_count: int = Field(ge=0)
+    error_code: str | None = Field(default=None, max_length=128)
+
+
+class LocalMemoryStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = False
+    scopes: tuple[LocalMemoryScopeStatus, ...] = ()
