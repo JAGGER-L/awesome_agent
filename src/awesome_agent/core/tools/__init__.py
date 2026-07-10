@@ -14,6 +14,7 @@ from awesome_agent.core.tools.errors import (
     ToolControlFlow,
     ToolInvariantError,
 )
+from awesome_agent.core.tools.executor import ToolExecutor
 from awesome_agent.core.tools.policy import SafeWorkspacePath, resolve_workspace_path
 from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
 
@@ -26,6 +27,7 @@ __all__ = [
     "ToolError",
     "ToolErrorCode",
     "ToolExecutionContext",
+    "ToolExecutor",
     "ToolHandler",
     "ToolInvariantError",
     "ToolOutput",
