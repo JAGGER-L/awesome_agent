@@ -58,6 +58,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/awesome_agent"]
 
+[tool.hatch.build]
+artifacts = ["src/awesome_agent/extensions/skills/bundled/**"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 88
