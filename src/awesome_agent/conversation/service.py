@@ -11,6 +11,7 @@ from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadSummary,
     ThreadView,
     Turn,
     TurnStatus,
@@ -102,6 +103,7 @@ class ConversationService:
         assistant_content: str,
         usage: UsageSummary,
         termination_reason: str,
+        context_manifest: tuple[dict[str, JsonValue], ...] = (),
     ) -> Turn:
         view, current = self._turn_view(turn_id)
         if current.status is TurnStatus.COMPLETED:
@@ -111,6 +113,7 @@ class ConversationService:
                 and entry.content == assistant_content
                 and current.usage == usage
                 and current.termination_reason == termination_reason
+                and current.context_manifest == context_manifest
             ):
                 return current
             raise ConversationConflict("Completed Turn finalization differs.")
@@ -130,6 +133,7 @@ class ConversationService:
                 "assistant_entry_id": assistant.id,
                 "usage": usage,
                 "termination_reason": termination_reason,
+                "context_manifest": context_manifest,
                 "updated_at": now,
                 "completed_at": now,
             }
@@ -192,6 +196,14 @@ class ConversationService:
             created_at=self._clock(),
         )
         return self._store.append_direct_command(entry)
+
+    def store_summary(
+        self,
+        summary: ThreadSummary,
+        *,
+        expected: ThreadSummary | None,
+    ) -> ThreadSummary:
+        return self._store.compare_and_swap_summary(summary, expected=expected)
 
     def _turn_view(self, turn_id: str) -> tuple[ThreadView, Turn]:
         thread_id = self._thread_id_for_turn(turn_id)

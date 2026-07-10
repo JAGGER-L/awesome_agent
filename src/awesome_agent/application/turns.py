@@ -16,6 +16,7 @@ from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.operations import OperationBusy, OperationController
 from awesome_agent.config import TurnConfig
+from awesome_agent.context import ExplicitPathError
 from awesome_agent.conversation import (
     ConversationService,
     Thread,
@@ -46,6 +47,10 @@ type PostAnswerMemory = Callable[[AgentState], Awaitable[AgentState]]
 
 
 class TurnExecutionFailed(RuntimeError):
+    pass
+
+
+class TurnInputInvalid(TurnExecutionFailed):
     pass
 
 
@@ -85,6 +90,7 @@ class TurnCoordinator:
         seal_changes: Callable[[str], None],
         post_answer_memory: PostAnswerMemory = disabled_post_answer_memory,
         reconcile_changes: Callable[[], None] = lambda: None,
+        turn_input_preparer: Callable[[Turn, str], None] = lambda turn, content: None,
     ) -> None:
         self._workspace_key = workspace_key
         self._conversation = conversation
@@ -97,6 +103,7 @@ class TurnCoordinator:
         self._seal_changes = seal_changes
         self._post_answer_memory = post_answer_memory
         self._reconcile_changes = reconcile_changes
+        self._turn_input_preparer = turn_input_preparer
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
@@ -118,6 +125,13 @@ class TurnCoordinator:
                 operation_id=operation_id,
             )
             await projector.turn_started()
+            try:
+                self._turn_input_preparer(turn, content)
+            except ExplicitPathError as error:
+                self._conversation.fail_turn(turn.id, "invalid_explicit_path")
+                await projector.turn_failed("invalid_explicit_path")
+                await self._checkpoints.delete(turn.id)
+                raise TurnInputInvalid(str(error)) from error
             await self._execute_turn(turn, operation_id, projector)
 
         try:
@@ -245,6 +259,7 @@ class TurnCoordinator:
                         state["final_answer"],
                         _usage_summary(state),
                         state["termination_reason"] or "completed",
+                        tuple(state["context_manifest"]),
                     )
                     await projector.turn_completed()
                     self._seal_changes(turn.id)
@@ -364,6 +379,7 @@ class TurnCoordinator:
             answer,
             _usage_summary(result),
             reason,
+            tuple(result["context_manifest"]),
         )
         await projector.turn_completed()
         self._seal_changes(turn.id)

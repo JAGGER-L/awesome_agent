@@ -93,6 +93,18 @@ class FakeProjector:
     async def project_tool(self, result: ToolResult) -> None:
         self.tool_results.append(result)
 
+    async def project_context(
+        self,
+        *,
+        source_count: int,
+        estimated_tokens: int,
+        compressed: bool,
+    ) -> None:
+        del source_count, estimated_tokens, compressed
+
+    async def project_warning(self, *, code: str, message: str) -> None:
+        del code, message
+
 
 def _completed(
     content: str,
@@ -270,7 +282,11 @@ async def test_provider_failure_finalizes_with_best_visible_answer(
     result = await _invoke(_runtime(gateway))
 
     assert result["final_answer"] is None
-    assert result["termination_reason"] == f"model_{code.value}"
+    assert result["termination_reason"] == (
+        "context_unrecoverable"
+        if code is ModelErrorCode.CONTEXT_LENGTH
+        else f"model_{code.value}"
+    )
     assert result["model_calls"] == 1
 
 

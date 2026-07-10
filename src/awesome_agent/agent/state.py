@@ -15,6 +15,10 @@ class AgentState(TypedDict):
     model: str
     thinking_enabled: bool
     context_manifest: list[dict[str, JsonValue]]
+    context_estimated_tokens: int
+    context_effective_limit: int
+    compression_requested: bool
+    compression_reason: str | None
     messages: list[dict[str, JsonValue]]
     continuation: dict[str, JsonValue] | None
     pending_tool_calls: list[dict[str, JsonValue]]
@@ -51,6 +55,10 @@ def new_agent_state(
         model=model,
         thinking_enabled=thinking_enabled,
         context_manifest=[],
+        context_estimated_tokens=0,
+        context_effective_limit=0,
+        compression_requested=False,
+        compression_reason=None,
         messages=[],
         continuation=None,
         pending_tool_calls=[],

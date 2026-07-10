@@ -9,6 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 from awesome_agent.agent.budgets import (
     BudgetDecision,
     add_active_segment,
+    charge_compression,
     charge_model_attempt,
     charge_provider_retry,
     charge_tool_call,
@@ -57,6 +58,82 @@ async def prepare_context(
     updated = _copy(state)
     updated["messages"] = [_message_dict(message) for message in prepared.messages]
     updated["context_manifest"] = list(prepared.manifest)
+    updated["context_estimated_tokens"] = prepared.estimated_input_tokens
+    updated["context_effective_limit"] = prepared.effective_input_limit
+    updated["compression_requested"] = prepared.compression_recommended
+    updated["compression_reason"] = (
+        "automatic" if prepared.compression_recommended else None
+    )
+    await context.event_projector.project_context(
+        source_count=len(prepared.manifest),
+        estimated_tokens=prepared.estimated_input_tokens,
+        compressed=False,
+    )
+    return updated
+
+
+async def compress_context(
+    state: AgentState,
+    runtime: Runtime[AgentRuntimeContext],
+) -> AgentState:
+    context = _context(runtime)
+    updated = _copy(state)
+    reason = updated["compression_reason"] or "automatic"
+    if updated["model_calls"] >= context.budget.model_calls - 1:
+        updated["compression_requested"] = False
+        updated["compression_reason"] = None
+        if reason == "context_length":
+            updated["termination_reason"] = "context_unrecoverable"
+        else:
+            await context.event_projector.project_warning(
+                code="model_budget_reserved",
+                message="The final model call is reserved; compression was skipped.",
+            )
+        return updated
+    if updated["compressions"] >= context.budget.compressions:
+        updated["compression_requested"] = False
+        updated["compression_reason"] = None
+        if reason == "context_length":
+            updated["termination_reason"] = "context_unrecoverable"
+        else:
+            await context.event_projector.project_warning(
+                code="compression_budget_exhausted",
+                message="Context compression budget is exhausted.",
+            )
+        return updated
+    result = await context.compressor.compress(updated)
+    if result.attempted:
+        updated = charge_compression(updated)
+        updated = charge_model_attempt(
+            updated,
+            provider_retries=result.usage.provider_retries,
+        )
+        updated["usage"] = _merge_usage(updated["usage"], result.usage)
+    updated["compression_requested"] = False
+    updated["compression_reason"] = None
+    if result.completed and result.prepared is not None:
+        prepared = result.prepared
+        updated["messages"] = [_message_dict(message) for message in prepared.messages]
+        updated["context_manifest"] = list(prepared.manifest)
+        updated["context_estimated_tokens"] = prepared.estimated_input_tokens
+        updated["context_effective_limit"] = prepared.effective_input_limit
+        await context.event_projector.project_context(
+            source_count=len(prepared.manifest),
+            estimated_tokens=prepared.estimated_input_tokens,
+            compressed=True,
+        )
+        return updated
+    error_code = result.error_code or "compression_unavailable"
+    if reason == "context_length" or (
+        updated["context_effective_limit"] > 0
+        and updated["context_estimated_tokens"] > updated["context_effective_limit"]
+    ):
+        updated["termination_reason"] = "context_unrecoverable"
+        return updated
+    await context.event_projector.project_warning(
+        code=error_code,
+        message="Context compression failed; existing context still fits.",
+    )
     return updated
 
 
@@ -150,6 +227,11 @@ async def call_model(
         updated["termination_reason"] = retry_blocked
         return updated
     if failure is not None:
+        if failure.error.code.value == "context_length":
+            updated["compression_requested"] = True
+            updated["compression_reason"] = "context_length"
+            updated["termination_reason"] = None
+            return updated
         updated["final_answer"] = "".join(visible_text) or updated["final_answer"]
         updated["termination_reason"] = f"model_{failure.error.code.value}"
         return updated
@@ -260,11 +342,21 @@ async def finalize(
 
 
 def route_after_model(state: AgentState) -> str:
+    if state["compression_requested"]:
+        return "compress_context"
     if state["termination_reason"] is not None and not state["pending_tool_calls"]:
         return "finalize"
     if state["pending_tool_calls"]:
         return "execute_one_tool"
     return "finalize"
+
+
+def route_after_prepare(state: AgentState) -> str:
+    return "compress_context" if state["compression_requested"] else "call_model"
+
+
+def route_after_compression(state: AgentState) -> str:
+    return "finalize" if state["termination_reason"] is not None else "call_model"
 
 
 def route_after_tool(state: AgentState) -> str:

@@ -135,6 +135,14 @@ class SQLiteConversationRepositories:
             )
         return entry
 
+    def compare_and_swap_summary(
+        self,
+        summary: ThreadSummary,
+        *,
+        expected: ThreadSummary | None,
+    ) -> ThreadSummary:
+        return self.summaries.compare_and_swap(summary, expected=expected)
+
     def _require_next_sequence(
         self,
         entry: ThreadEntry,
@@ -413,6 +421,18 @@ class SQLiteTurnRepository(_SQLiteRepository):
 
 
 class SQLiteThreadSummaryRepository(_SQLiteRepository):
+    def compare_and_swap(
+        self,
+        summary: ThreadSummary,
+        *,
+        expected: ThreadSummary | None,
+    ) -> ThreadSummary:
+        with self._connection(None) as active:
+            current = self.get(summary.thread_id, connection=active)
+            if current != expected:
+                raise ConversationConflict("Thread Summary changed concurrently.")
+            return self.upsert(summary, connection=active)
+
     def get(
         self,
         thread_id: str,

@@ -5,6 +5,7 @@ from typing import Literal
 from awesome_agent.core.events import (
     AssistantReasoningDeltaPayload,
     AssistantTextDeltaPayload,
+    ContextPayload,
     EventEmitter,
     EventPayload,
     EventType,
@@ -131,6 +132,28 @@ class ApplicationEventProjector:
                 error_code=result.error.code.value,
             )
         )
+
+    async def project_context(
+        self,
+        *,
+        source_count: int,
+        estimated_tokens: int,
+        compressed: bool,
+    ) -> None:
+        await self._emit(
+            ContextPayload(
+                kind=(
+                    EventType.CONTEXT_COMPRESSED
+                    if compressed
+                    else EventType.CONTEXT_PREPARED
+                ),
+                source_count=source_count,
+                estimated_tokens=estimated_tokens,
+            )
+        )
+
+    async def project_warning(self, *, code: str, message: str) -> None:
+        await self._emit(WarningPayload(code=code, message=message))
 
     async def _emit_delta(self, text: str, *, reasoning: bool) -> None:
         for start in range(0, len(text), _MAX_DELTA_CHARS):
