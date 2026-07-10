@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from awesome_agent.modeling.turns import ProviderId
 
 
 class ModelErrorCode(StrEnum):
+    CONNECTION = "connection"
+    TIMEOUT = "timeout"
     AUTHENTICATION = "authentication"
     RATE_LIMIT = "rate_limit"
     TRANSIENT = "transient"
@@ -14,12 +19,28 @@ class ModelErrorCode(StrEnum):
     PROVIDER_PROTOCOL = "provider_protocol"
 
 
+_RETRYABLE_CODES = {
+    ModelErrorCode.CONNECTION,
+    ModelErrorCode.TIMEOUT,
+    ModelErrorCode.RATE_LIMIT,
+    ModelErrorCode.TRANSIENT,
+}
+
+
 class ModelErrorInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     code: ModelErrorCode
-    message: str
+    message: str = Field(min_length=1, max_length=2_000)
     retryable: bool
-    provider: str
-    status_code: int | None = None
+    provider: ProviderId
+    status_code: int | None = Field(default=None, ge=100, le=599)
+
+    @model_validator(mode="after")
+    def validate_retryability(self) -> Self:
+        if self.retryable is not (self.code in _RETRYABLE_CODES):
+            raise ValueError("Model error retryability does not match its code.")
+        return self
 
 
 class ModelProviderError(Exception):
@@ -30,7 +51,7 @@ class ModelProviderError(Exception):
         self,
         message: str,
         *,
-        provider: str,
+        provider: ProviderId,
         status_code: int | None = None,
     ) -> None:
         super().__init__(message)
@@ -41,6 +62,16 @@ class ModelProviderError(Exception):
             provider=provider,
             status_code=status_code,
         )
+
+
+class ConnectionModelError(ModelProviderError):
+    code = ModelErrorCode.CONNECTION
+    retryable = True
+
+
+class TimeoutModelError(ModelProviderError):
+    code = ModelErrorCode.TIMEOUT
+    retryable = True
 
 
 class AuthenticationModelError(ModelProviderError):
@@ -70,6 +101,8 @@ class ProviderProtocolError(ModelProviderError):
 
 
 _ERROR_TYPES: dict[ModelErrorCode, type[ModelProviderError]] = {
+    ModelErrorCode.CONNECTION: ConnectionModelError,
+    ModelErrorCode.TIMEOUT: TimeoutModelError,
     ModelErrorCode.AUTHENTICATION: AuthenticationModelError,
     ModelErrorCode.RATE_LIMIT: RateLimitModelError,
     ModelErrorCode.TRANSIENT: TransientModelError,

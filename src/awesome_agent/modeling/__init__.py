@@ -1,5 +1,6 @@
 from awesome_agent.modeling.errors import (
     AuthenticationModelError,
+    ConnectionModelError,
     ContextLengthModelError,
     InvalidRequestModelError,
     ModelErrorCode,
@@ -7,17 +8,9 @@ from awesome_agent.modeling.errors import (
     ModelProviderError,
     ProviderProtocolError,
     RateLimitModelError,
+    TimeoutModelError,
     TransientModelError,
-)
-from awesome_agent.modeling.execution import (
-    InProcessModelExecutionBackend,
-    ModelExecutionBackend,
-    ModelExecutionCancelled,
-    ModelExecutionContext,
-    ModelExecutionError,
-    ModelExecutionProtocolError,
-    ModelExecutionService,
-    ModelExecutionTimeout,
+    error_from_info,
 )
 from awesome_agent.modeling.messages import (
     AssistantMessage,
@@ -26,7 +19,7 @@ from awesome_agent.modeling.messages import (
     ToolResultMessage,
     UserMessage,
 )
-from awesome_agent.modeling.provider import ModelProvider, StructuredModelProvider
+from awesome_agent.modeling.provider import ModelProvider
 from awesome_agent.modeling.stream import (
     ModelStreamEvent,
     ReasoningDelta,
@@ -48,28 +41,19 @@ from awesome_agent.modeling.turns import (
     ModelRequest,
     ModelTurn,
     ModelUsage,
-    ReasoningSegment,
-    ReasoningStatus,
-    ReasoningTrace,
+    ProviderId,
     StopReason,
 )
 
 __all__ = [
     "AssistantMessage",
     "AuthenticationModelError",
+    "ConnectionModelError",
     "ContextLengthModelError",
     "ContinuationState",
-    "InProcessModelExecutionBackend",
     "InvalidRequestModelError",
     "ModelErrorCode",
     "ModelErrorInfo",
-    "ModelExecutionBackend",
-    "ModelExecutionCancelled",
-    "ModelExecutionContext",
-    "ModelExecutionError",
-    "ModelExecutionProtocolError",
-    "ModelExecutionService",
-    "ModelExecutionTimeout",
     "ModelMessage",
     "ModelProvider",
     "ModelProviderError",
@@ -77,17 +61,15 @@ __all__ = [
     "ModelStreamEvent",
     "ModelTurn",
     "ModelUsage",
+    "ProviderId",
     "ProviderProtocolError",
     "RateLimitModelError",
     "ReasoningDelta",
-    "ReasoningSegment",
     "ReasoningStarted",
-    "ReasoningStatus",
-    "ReasoningTrace",
     "StopReason",
-    "StructuredModelProvider",
     "SystemMessage",
     "TextDelta",
+    "TimeoutModelError",
     "ToolArgumentsDelta",
     "ToolCall",
     "ToolCallStarted",
@@ -99,4 +81,5 @@ __all__ = [
     "TurnCompleted",
     "TurnFailed",
     "UserMessage",
+    "error_from_info",
 ]
