@@ -28,6 +28,7 @@ foreach ($Tool in @($Ruff, $Mypy, $Pytest)) {
 
 $TargetPaths = @(
     (Join-Path $Root "src\awesome_agent\paths.py"),
+    (Join-Path $Root "src\awesome_agent\core"),
     (Join-Path $Root "src\awesome_agent\storage"),
     (Join-Path $Root "src\awesome_agent\modeling"),
     (Join-Path $Root "src\awesome_agent\providers"),
