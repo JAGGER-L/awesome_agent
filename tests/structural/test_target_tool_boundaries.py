@@ -3,11 +3,20 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from awesome_agent.core.tools.builtins import register_read_tools
+from awesome_agent.core.changes import ChangeJournal
+from awesome_agent.core.tools.builtins import (
+    register_modifying_tools,
+    register_read_tools,
+)
+from awesome_agent.core.tools.process import ProcessRunner
 from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 
 FORBIDDEN_TOOL_IMPORTS = {
     "awesome_agent.api",
+    "awesome_agent.approval",
+    "awesome_agent.approvals",
     "awesome_agent.artifacts",
     "awesome_agent.persistence",
     "awesome_agent.runtime",
@@ -28,15 +37,28 @@ def _imports(path: Path) -> set[str]:
     return result
 
 
-def test_read_tool_names_and_descriptions_are_exact() -> None:
+def test_eight_tool_names_and_descriptions_are_exact(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    identity = resolve_workspace(workspace)
+    journal = ChangeJournal(
+        SQLiteChangeSetStore(tmp_path / "application.db"),
+        FileChangeBlobStore(tmp_path / "change-journal"),
+        identity,
+    )
     registry = ToolRegistry()
     register_read_tools(registry)
+    register_modifying_tools(registry, journal, ProcessRunner())
 
     assert [(spec.name, spec.description) for spec in registry.specifications()] == [
+        ("delete", "Delete a file, or a directory and its contents recursively"),
+        ("edit_file", "Perform exact string replacements in files"),
+        ("execute", "Run shell commands"),
         ("glob", "Find files matching a glob pattern"),
         ("grep", "Search file contents"),
         ("ls", "List files in a directory"),
         ("read_file", "Read file contents"),
+        ("write_file", "Create a new file, or overwrite an existing one"),
     ]
 
 
