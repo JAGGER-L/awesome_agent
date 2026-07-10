@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from typing import Protocol
+
+from pydantic import BaseModel, ConfigDict
 
 from awesome_agent.context.models import (
     ContextManifestItem,
@@ -14,7 +17,9 @@ from awesome_agent.context.tokens import (
     calculate_context_budget,
     estimate_messages,
 )
-from awesome_agent.memory.models import MemoryDocument
+from awesome_agent.memory.identity import Mem0Identity
+from awesome_agent.memory.mem0_cloud import MEM0_MAX_RESULTS, Mem0CloudError
+from awesome_agent.memory.models import CloudMemory, Mem0Diagnostic, MemoryDocument
 from awesome_agent.modeling import (
     AssistantMessage,
     ModelMessage,
@@ -53,6 +58,24 @@ _UNTRUSTED_MEMORY_WARNING = (
 
 class ContextOverflow(RuntimeError):
     pass
+
+
+class Mem0Search(Protocol):
+    async def search(
+        self,
+        query: str,
+        *,
+        user_id: str,
+        workspace_key: str,
+        limit: int = MEM0_MAX_RESULTS,
+    ) -> tuple[CloudMemory, ...]: ...
+
+
+class Mem0ContextResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: ContextSource | None = None
+    diagnostic: Mem0Diagnostic | None = None
 
 
 class ContextBuilder:
@@ -157,6 +180,60 @@ def local_memory_context_sources(
     return tuple(sources)
 
 
+async def mem0_context_source(
+    *,
+    enabled: bool,
+    adapter: Mem0Search | None,
+    identity: Mem0Identity,
+    query: str,
+    higher_priority_contents: tuple[str, ...] = (),
+    initialization_diagnostic: Mem0Diagnostic | None = None,
+) -> Mem0ContextResult:
+    if not enabled or not query.strip():
+        return Mem0ContextResult()
+    if adapter is None:
+        return Mem0ContextResult(
+            diagnostic=initialization_diagnostic
+            or Mem0Diagnostic(code="mem0_unavailable", operation="initialize")
+        )
+    try:
+        memories = await adapter.search(
+            query,
+            user_id=identity.user_id,
+            workspace_key=identity.workspace_key,
+            limit=MEM0_MAX_RESULTS,
+        )
+    except Mem0CloudError as error:
+        return Mem0ContextResult(diagnostic=error.diagnostic)
+    except Exception:
+        return Mem0ContextResult(
+            diagnostic=Mem0Diagnostic(code="mem0_unavailable", operation="search")
+        )
+
+    seen = {_normalized_digest(content) for content in higher_priority_contents}
+    retained: list[CloudMemory] = []
+    for memory in memories[:MEM0_MAX_RESULTS]:
+        digest = _normalized_digest(memory.content)
+        if digest in seen:
+            continue
+        seen.add(digest)
+        retained.append(memory)
+    if not retained:
+        return Mem0ContextResult()
+    first = retained[0]
+    rendered = "\n".join(
+        f"[mem0:{memory.id}:{memory.fact_hash}] {memory.content}"
+        for memory in retained
+    )
+    return Mem0ContextResult(
+        source=ContextSource(
+            kind=ContextSourceKind.MEM0,
+            source_id=f"mem0:{first.id}:{first.fact_hash}"[:512],
+            content=f"{_UNTRUSTED_MEMORY_WARNING}\n\n{rendered}",
+        )
+    )
+
+
 def _apply_memory_budgets(
     sources: tuple[ContextSource, ...],
     effective_input_limit: int,
@@ -194,6 +271,11 @@ def _remove_managed_entry(markdown: str, entry_id: str) -> str:
         r"^<!-- awesome-agent:managed-memory:end -->)"
     )
     return pattern.sub("", markdown, count=1)
+
+
+def _normalized_digest(content: str) -> str:
+    normalized = " ".join(content.split())
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def _ordered_unique(sources: tuple[ContextSource, ...]) -> tuple[ContextSource, ...]:

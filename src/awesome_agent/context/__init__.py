@@ -1,7 +1,9 @@
 from awesome_agent.context.builder import (
     ContextBuilder,
     ContextOverflow,
+    Mem0ContextResult,
     local_memory_context_sources,
+    mem0_context_source,
 )
 from awesome_agent.context.compression import (
     CompressionPlan,
@@ -52,6 +54,7 @@ __all__ = [
     "ContextSourceKind",
     "ExplicitPathError",
     "ExplicitPathSnapshot",
+    "Mem0ContextResult",
     "ParsedExplicitPaths",
     "PreparedContext",
     "ThreadCompressor",
@@ -59,6 +62,7 @@ __all__ = [
     "estimate_messages",
     "estimate_text",
     "local_memory_context_sources",
+    "mem0_context_source",
     "parse_explicit_paths",
     "plan_compression",
     "snapshot_explicit_paths",
