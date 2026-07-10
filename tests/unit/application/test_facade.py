@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from typing import get_type_hints
 
 import pytest
@@ -22,7 +23,10 @@ from awesome_agent.application.facade import (
     OperationAccepted,
     ThreadListResult,
 )
+from awesome_agent.application.headless import ConversationCommandService
 from awesome_agent.config import SecretStatus
+from awesome_agent.conversation import ConversationService
+from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 METHODS = {
     "initialize",
@@ -148,3 +152,88 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     assert (await facade.execute_command(intent)).status is CommandStatus.SUCCESS
     assert (await facade.respond_interaction("interaction_1", "trust")).accepted is True
     assert (await facade.cancel_operation("operation_1")).cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_conversation_commands_select_future_thread_configuration(
+    tmp_path: Path,
+) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    conversation = ConversationService(store=repositories)
+    delegated: list[tuple[CommandName, str]] = []
+
+    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
+        delegated.append((intent.name, thread_id))
+        return CommandResult(status=CommandStatus.SUCCESS)
+
+    commands = ConversationCommandService(
+        conversation=conversation,
+        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        delegate=delegate,
+    )
+
+    created = await commands.handle(
+        CommandIntent(name=CommandName.NEW, arguments=("Feature", "work"))
+    )
+    thread_id = created.data["thread_id"]
+    assert created.data["title"] == "Feature work"
+
+    model_query = await commands.handle(CommandIntent(name=CommandName.MODEL))
+    thinking_query = await commands.handle(CommandIntent(name=CommandName.THINKING))
+    assert model_query.selection is not None
+    assert thinking_query.data["thinking_enabled"] is False
+    assert thinking_query.selection is not None
+
+    model = await commands.handle(
+        CommandIntent(
+            name=CommandName.MODEL,
+            arguments=("kimi/kimi-k2.6",),
+        )
+    )
+    thinking = await commands.handle(
+        CommandIntent(name=CommandName.THINKING, arguments=("on",))
+    )
+    selected = conversation.read_thread(str(thread_id)).thread
+    assert model.data["model"] == "kimi/kimi-k2.6"
+    assert thinking.data["thinking_enabled"] is True
+    assert selected.current_model == "kimi/kimi-k2.6"
+    assert selected.thinking_enabled is True
+
+    delegated_result = await commands.handle(CommandIntent(name=CommandName.STATUS))
+    assert delegated_result.status is CommandStatus.SUCCESS
+    assert delegated == [(CommandName.STATUS, thread_id)]
+
+
+@pytest.mark.asyncio
+async def test_resume_is_workspace_scoped_and_ink_commands_are_surface_owned(
+    tmp_path: Path,
+) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    conversation = ConversationService(store=repositories)
+    own = conversation.create_thread("ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    conversation.create_thread("ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
+        del intent, thread_id
+        return CommandResult(status=CommandStatus.SUCCESS)
+
+    commands = ConversationCommandService(
+        conversation=conversation,
+        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        delegate=delegate,
+    )
+
+    picker = await commands.handle(CommandIntent(name=CommandName.RESUME))
+    selected = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=(own.id,))
+    )
+    surface = await commands.handle(CommandIntent(name=CommandName.HELP))
+    invalid = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=("foreign",))
+    )
+
+    assert picker.selection is not None
+    assert [option.value for option in picker.selection.options] == [own.id]
+    assert selected.data["thread_id"] == own.id
+    assert surface.data["error_code"] == "surface_command"
+    assert invalid.data["error_code"] == "thread_not_found"
