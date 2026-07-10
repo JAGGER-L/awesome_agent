@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -36,3 +37,41 @@ class ToolRegistry:
 
     def specifications(self) -> tuple[ToolSpec, ...]:
         return tuple(self._items[name].spec for name in sorted(self._items))
+
+    def replace_namespace(
+        self,
+        namespace: str,
+        tools: tuple[RegisteredTool, ...],
+    ) -> None:
+        if (
+            re.fullmatch(
+                r"(?:mcp|user)\.[a-z][a-z0-9_-]*",
+                namespace,
+            )
+            is None
+        ):
+            raise ValueError(f"Invalid tool namespace: {namespace}")
+        prefix = f"{namespace}."
+        replacements = {tool.spec.name: tool for tool in tools}
+        if len(replacements) != len(tools):
+            raise DuplicateToolName(namespace)
+        if any(not name.startswith(prefix) for name in replacements):
+            raise ValueError(f"Tool does not belong to namespace: {namespace}")
+        updated = {
+            name: tool
+            for name, tool in self._items.items()
+            if not name.startswith(prefix)
+        }
+        collisions = replacements.keys() & updated.keys()
+        if collisions:
+            raise DuplicateToolName(sorted(collisions)[0])
+        updated.update(replacements)
+        self._items = updated
+
+    def remove_namespace(self, namespace: str) -> None:
+        prefix = f"{namespace}."
+        self._items = {
+            name: tool
+            for name, tool in self._items.items()
+            if not name.startswith(prefix)
+        }

@@ -3,7 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
@@ -21,7 +21,11 @@ from awesome_agent.core.tools import (
 )
 from awesome_agent.core.tools.errors import ToolInvariantError
 from awesome_agent.core.tools.executor import ToolExecutor
-from awesome_agent.core.tools.registry import DuplicateToolName, ToolRegistry
+from awesome_agent.core.tools.registry import (
+    DuplicateToolName,
+    RegisteredTool,
+    ToolRegistry,
+)
 from awesome_agent.core.workspace import resolve_workspace
 
 
@@ -118,6 +122,73 @@ def test_registry_rejects_duplicates_and_lists_sorted_specs() -> None:
             input_model=EmptyArguments,
             handler=handler,
         )
+
+
+def test_tool_names_allow_only_baseline_and_reserved_namespaces() -> None:
+    for name in (
+        "read_file",
+        "mcp.fixture.search-code",
+        "user.package.tool-name",
+    ):
+        assert (
+            ToolSpec(
+                name=name,
+                description=name,
+                input_schema={},
+                read_only=True,
+            ).name
+            == name
+        )
+
+    for name in (
+        "MCP.fixture.tool",
+        "mcp.fixture",
+        "mcp.fixture.bad.tool",
+        "other.package.tool",
+        "bad-name",
+    ):
+        with pytest.raises(ValidationError):
+            ToolSpec(
+                name=name,
+                description=name,
+                input_schema={},
+                read_only=True,
+            )
+
+
+def test_registry_replaces_one_namespace_atomically() -> None:
+    registry = echo_registry()
+
+    def registered(name: str) -> RegisteredTool:
+        return RegisteredTool(
+            ToolSpec(
+                name=name,
+                description=name,
+                input_schema={},
+                read_only=False,
+            ),
+            EmptyArguments,
+            handler,
+        )
+
+    registry.replace_namespace("mcp.one", (registered("mcp.one.first"),))
+    registry.replace_namespace("mcp.two", (registered("mcp.two.second"),))
+    registry.replace_namespace("mcp.one", (registered("mcp.one.replaced"),))
+
+    assert [spec.name for spec in registry.specifications()] == [
+        "echo",
+        "mcp.one.replaced",
+        "mcp.two.second",
+    ]
+
+    with pytest.raises(ValueError):
+        registry.replace_namespace("mcp.one", (registered("mcp.two.invalid"),))
+    assert registry.resolve("mcp.one.replaced") is not None
+
+    registry.remove_namespace("mcp.one")
+    assert registry.resolve("echo") is not None
+    assert registry.resolve("mcp.two.second") is not None
+    assert registry.resolve("mcp.one.replaced") is None
 
 
 @pytest.mark.asyncio
