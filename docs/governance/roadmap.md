@@ -49,7 +49,7 @@ model/tool calls, retries, and rework.
 | Initiative | Outcome | Exit evidence |
 | --- | --- | --- |
 | Target contract freeze | Product boundaries, fixed tools, commands, trust, storage, memory, events, and surface protocol have one accepted source of truth. | Architecture decision records and structural contract tests agree. |
-| Phase 2 exit verification | Validate the implemented Python Agent Core, Application Facade, stdio protocol, fake DeepSeek/Kimi flows, storage recovery, extensions, and memory boundaries. | Focused unit, integration, E2E, structural, manual protocol smoke, lint, type, and lock gates pass. |
+| Phase 2 complete | Python Agent Core, the ten-method Application Facade, and the protocol-only `awesome-core` stdio Host are implemented. | Focused unit, integration, fake DeepSeek/Kimi E2E, structural, manual protocol smoke, lint, type, and lock gates pass. |
 
 ## Next
 
