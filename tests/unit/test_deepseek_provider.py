@@ -62,7 +62,7 @@ async def test_deepseek_streams_reasoning_and_native_tool_call() -> None:
     first_call = SimpleNamespace(
         index=0,
         id="call-1",
-        function=SimpleNamespace(name="repo_read", arguments='{"path":'),
+        function=SimpleNamespace(name="read_file", arguments='{"path":'),
     )
     second_call = SimpleNamespace(
         index=0,
@@ -109,7 +109,7 @@ async def test_deepseek_streams_reasoning_and_native_tool_call() -> None:
                 messages=[UserMessage(content="inspect")],
                 tools=[
                     ToolDefinition(
-                        name="repo.read",
+                        name="read_file",
                         input_schema={
                             "type": "object",
                             "properties": {"path": {"type": "string"}},
@@ -123,11 +123,11 @@ async def test_deepseek_streams_reasoning_and_native_tool_call() -> None:
     completed = next(event for event in events if isinstance(event, TurnCompleted)).turn
     call = create.await_args
     assert call is not None
-    assert call.kwargs["tools"][0]["function"]["name"] == "repo_read"
+    assert call.kwargs["tools"][0]["function"]["name"] == "read_file"
     assert completed.stop_reason is StopReason.TOOL_CALLS
     assert completed.reasoning is not None
     assert completed.reasoning.text == "Inspect repository. "
-    assert completed.assistant.tool_calls[0].name == "repo.read"
+    assert completed.assistant.tool_calls[0].name == "read_file"
     assert completed.assistant.tool_calls[0].arguments_json == ('{"path":"README.md"}')
     assert completed.usage.reasoning_tokens == 4
     assert completed.continuation is not None
@@ -157,7 +157,7 @@ async def test_deepseek_normalizes_tool_choice_and_assistant_tool_history() -> N
                     tool_calls=[
                         ToolCall(
                             call_id="call-1",
-                            name="repo.apply_patch",
+                            name="mcp.server.apply_patch",
                             arguments_json="{}",
                         )
                     ]
@@ -166,23 +166,23 @@ async def test_deepseek_normalizes_tool_choice_and_assistant_tool_history() -> N
             ],
             tools=[
                 ToolDefinition(
-                    name="repo.apply_patch",
+                    name="mcp.server.apply_patch",
                     input_schema={"type": "object", "properties": {}},
                 )
             ],
             tool_choice=ToolChoice(
                 mode=ToolChoiceMode.TOOL,
-                name="repo.apply_patch",
+                name="mcp.server.apply_patch",
             ),
         )
     )
 
     call = create.await_args
     assert call is not None
-    assert call.kwargs["tools"][0]["function"]["name"] == "repo_apply_patch"
-    assert call.kwargs["tool_choice"]["function"]["name"] == "repo_apply_patch"
+    assert call.kwargs["tools"][0]["function"]["name"] == "mcp_server_apply_patch"
+    assert call.kwargs["tool_choice"]["function"]["name"] == ("mcp_server_apply_patch")
     assert call.kwargs["messages"][1]["tool_calls"][0]["function"]["name"] == (
-        "repo_apply_patch"
+        "mcp_server_apply_patch"
     )
 
 
@@ -208,7 +208,7 @@ async def test_deepseek_replays_private_reasoning_continuation() -> None:
                 tool_calls=[
                     ToolCall(
                         call_id="call-1",
-                        name="repo.read",
+                        name="read_file",
                         arguments_json="{}",
                     )
                 ]

@@ -69,7 +69,7 @@ async def test_openai_maps_reasoning_summary_and_function_call() -> None:
                     item=SimpleNamespace(
                         type="function_call",
                         call_id="call-1",
-                        name="repo.read",
+                        name="read_file",
                     ),
                 ),
                 SimpleNamespace(
@@ -142,7 +142,7 @@ async def test_openai_inserts_reasoning_items_before_assistant_tool_call() -> No
                 tool_calls=[
                     ToolCall(
                         call_id="call-1",
-                        name="repo.read",
+                        name="read_file",
                         arguments_json="{}",
                     )
                 ]

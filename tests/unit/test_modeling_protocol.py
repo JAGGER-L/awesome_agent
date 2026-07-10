@@ -36,8 +36,8 @@ def test_message_union_round_trips_multiple_tool_calls() -> None:
         message=AssistantMessage(
             content="",
             tool_calls=[
-                ToolCall(call_id="call-1", name="repo.read", arguments_json='{"a":'),
-                ToolCall(call_id="call-2", name="repo.list", arguments_json="{}"),
+                ToolCall(call_id="call-1", name="read_file", arguments_json='{"a":'),
+                ToolCall(call_id="call-2", name="ls", arguments_json="{}"),
             ],
         )
     )

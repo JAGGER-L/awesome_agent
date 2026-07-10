@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 
 
@@ -16,20 +15,13 @@ def require(name: str) -> str:
 def main() -> None:
     require("uv")
     require("git")
-    docker = require("docker")
     if sys.version_info[:2] != (3, 12):
         raise SystemExit(
             f"Python 3.12 is required, found "
             f"{sys.version_info.major}.{sys.version_info.minor}."
         )
     print("check.python_version=3.12")
-    subprocess.run(
-        [docker, "version"],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    print("check.docker_daemon=ok")
+    print("check.external_services=not_required")
     print("check.status=completed")
 
 

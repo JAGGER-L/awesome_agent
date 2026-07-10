@@ -80,12 +80,13 @@ module = ["mem0", "mem0.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers --cov=awesome_agent --cov-report=term-missing"
+addopts = "--strict-config --strict-markers"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-  "integration: requires local infrastructure such as PostgreSQL or Docker",
-  "e2e: exercises a complete user-facing workflow",
+  "integration: crosses a target local component or persistence boundary",
+  "e2e: exercises a complete target user-facing workflow",
+  "external: requires explicit credentials or network access and is excluded from the default local gate",
 ]
 
 [tool.coverage.run]

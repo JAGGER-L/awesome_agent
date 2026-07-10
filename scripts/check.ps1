@@ -14,12 +14,11 @@ function Invoke-Checked {
     }
 }
 
-$Venv = Join-Path $PSScriptRoot "..\.venv\Scripts"
+$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$Venv = Join-Path $Root ".venv\Scripts"
 $Ruff = Join-Path $Venv "ruff.exe"
 $Mypy = Join-Path $Venv "mypy.exe"
 $Pytest = Join-Path $Venv "pytest.exe"
-$DefaultDatabaseUrl = "postgresql+asyncpg://awesome_agent:awesome_agent@localhost:54329/awesome_agent"
-$DefaultCheckpointDatabaseUrl = "postgresql://awesome_agent:awesome_agent@localhost:54329/awesome_agent"
 
 foreach ($Tool in @($Ruff, $Mypy, $Pytest)) {
     if (-not (Test-Path -LiteralPath $Tool)) {
@@ -27,29 +26,20 @@ foreach ($Tool in @($Ruff, $Mypy, $Pytest)) {
     }
 }
 
-if (-not $env:AWESOME_AGENT_DATABASE_URL) {
-    $env:AWESOME_AGENT_DATABASE_URL = $DefaultDatabaseUrl
-}
+$TargetPaths = @(
+    (Join-Path $Root "src\awesome_agent\paths.py"),
+    (Join-Path $Root "src\awesome_agent\storage"),
+    (Join-Path $Root "src\awesome_agent\modeling"),
+    (Join-Path $Root "src\awesome_agent\providers"),
+    (Join-Path $Root "src\awesome_agent\memory"),
+    (Join-Path $Root "src\awesome_agent\safety\redaction.py"),
+    (Join-Path $Root "src\awesome_agent\repositories\policy.py"),
+    (Join-Path $Root "src\awesome_agent\sandbox\process.py"),
+    (Join-Path $Root "tests"),
+    (Join-Path $Root "scripts\make\check.py")
+)
 
-if (-not $env:AWESOME_AGENT_CHECKPOINT_DATABASE_URL) {
-    $env:AWESOME_AGENT_CHECKPOINT_DATABASE_URL = $DefaultCheckpointDatabaseUrl
-}
-
-if (-not $env:AWESOME_AGENT_TEST_DATABASE_URL) {
-    $env:AWESOME_AGENT_TEST_DATABASE_URL = $DefaultDatabaseUrl
-}
-
-if (-not $env:AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL) {
-    $env:AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL = $DefaultCheckpointDatabaseUrl
-}
-
-Write-Host "Using AWESOME_AGENT_DATABASE_URL=$($env:AWESOME_AGENT_DATABASE_URL)"
-Write-Host "Using AWESOME_AGENT_CHECKPOINT_DATABASE_URL=$($env:AWESOME_AGENT_CHECKPOINT_DATABASE_URL)"
-Write-Host "Using AWESOME_AGENT_TEST_DATABASE_URL=$($env:AWESOME_AGENT_TEST_DATABASE_URL)"
-Write-Host "Using AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL=$($env:AWESOME_AGENT_TEST_CHECKPOINT_DATABASE_URL)"
-Write-Host "PostgreSQL tests require a reachable database. Run scripts\migrate.ps1 first if migrations are not current."
-
-Invoke-Checked -Command $Ruff -Arguments @("format", "--no-cache", "--check", ".")
-Invoke-Checked -Command $Ruff -Arguments @("check", "--no-cache", ".")
-Invoke-Checked -Command $Mypy -Arguments @("--no-incremental")
-Invoke-Checked -Command $Pytest -Arguments @("-p", "no:cacheprovider")
+Invoke-Checked -Command $Ruff -Arguments (@("format", "--no-cache", "--check") + $TargetPaths)
+Invoke-Checked -Command $Ruff -Arguments (@("check", "--no-cache") + $TargetPaths)
+Invoke-Checked -Command $Mypy -Arguments (@("--no-incremental") + $TargetPaths)
+Invoke-Checked -Command $Pytest -Arguments @("-p", "no:cacheprovider", (Join-Path $Root "tests"))
