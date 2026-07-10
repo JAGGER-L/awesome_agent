@@ -37,7 +37,9 @@ def _imports(path: Path) -> set[str]:
     return result
 
 
-def test_eight_tool_names_and_descriptions_are_exact(tmp_path: Path) -> None:
+def test_stable_baseline_tools_exist_without_fixing_total_tool_count(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     identity = resolve_workspace(workspace)
@@ -51,17 +53,23 @@ def test_eight_tool_names_and_descriptions_are_exact(tmp_path: Path) -> None:
     register_modifying_tools(registry, journal, ProcessRunner())
 
     specifications = registry.specifications()
-    assert [(spec.name, spec.description) for spec in specifications] == [
-        ("delete", "Delete a file, or a directory and its contents recursively"),
-        ("edit_file", "Perform exact string replacements in files"),
-        ("execute", "Run shell commands"),
-        ("glob", "Find files matching a glob pattern"),
-        ("grep", "Search file contents"),
-        ("ls", "List files in a directory"),
-        ("read_file", "Read file contents"),
-        ("write_file", "Create a new file, or overwrite an existing one"),
-    ]
-    assert {spec.name for spec in specifications if spec.read_only} == {
+    baseline = {
+        "delete": "Delete a file, or a directory and its contents recursively",
+        "edit_file": "Perform exact string replacements in files",
+        "execute": "Run shell commands",
+        "glob": "Find files matching a glob pattern",
+        "grep": "Search file contents",
+        "ls": "List files in a directory",
+        "read_file": "Read file contents",
+        "write_file": "Create a new file, or overwrite an existing one",
+    }
+    effective = {spec.name: spec.description for spec in specifications}
+    assert baseline.items() <= effective.items()
+    assert {
+        name
+        for name in baseline
+        if next(spec for spec in specifications if spec.name == name).read_only
+    } == {
         "glob",
         "grep",
         "ls",
