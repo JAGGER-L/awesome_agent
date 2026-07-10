@@ -301,7 +301,7 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
         thread_id=thread.id,
     )
 
-    assert mem0.data["error_code"] == "command_not_available"
+    assert mem0.data["error_code"] == "mem0_unavailable"
     assert invalid.data["error_code"] == "invalid_arguments"
     assert replaced.data["status"] == "replaced"
     assert removed.data["status"] == "removed"

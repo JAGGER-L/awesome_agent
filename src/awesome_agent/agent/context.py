@@ -178,8 +178,8 @@ class CloudPostAnswerMemory:
                 model_calls=distilled.model_calls,
                 diagnostics=tuple(diagnostics),
             )
-        try:
-            for candidate in distilled.candidates:
+        for candidate in distilled.candidates:
+            try:
                 workspace = (
                     workspace_key if candidate.scope.value == "workspace" else None
                 )
@@ -193,12 +193,12 @@ class CloudPostAnswerMemory:
                 outcome = await self._adapter.add(candidate, self._identity)
                 if not outcome.accepted and outcome.diagnostic is not None:
                     diagnostics.append(outcome.diagnostic)
-        except Mem0CloudError as error:
-            diagnostics.append(error.diagnostic)
-        except Exception:
-            diagnostics.append(
-                Mem0Diagnostic(code="mem0_unavailable", operation="finalize")
-            )
+            except Mem0CloudError as error:
+                diagnostics.append(error.diagnostic)
+            except Exception:
+                diagnostics.append(
+                    Mem0Diagnostic(code="mem0_unavailable", operation="finalize")
+                )
         return MemoryFinalizationResult(
             enabled=True,
             status="warning" if diagnostics else "completed",

@@ -83,10 +83,16 @@ from awesome_agent.extensions.mcp.adapter import McpToolAdapter
 from awesome_agent.extensions.mcp.models import mcp_config_hash
 from awesome_agent.extensions.skills import SkillCatalog, SkillLoader, SkillNotFound
 from awesome_agent.memory import (
+    CloudDeleteStatus,
     LocalMemoryService,
+    Mem0CloudAdapter,
+    Mem0CloudError,
+    Mem0Diagnostic,
+    Mem0Identity,
     MemoryMutationResult,
     MemoryMutationStatus,
     MemoryScope,
+    ensure_mem0_user_id,
     refresh_local_memory_tools,
 )
 from awesome_agent.paths import AwesomePaths
@@ -122,6 +128,10 @@ class ApplicationExtensionService:
         submit_turn: TurnSubmitter,
         local_memory: LocalMemoryService | None = None,
         config_writer: UserConfigWriter | None = None,
+        mem0_cloud: Mem0CloudAdapter | None = None,
+        mem0_enabled: bool = False,
+        mem0_user_id: str | None = None,
+        mem0_initialization_diagnostic: Mem0Diagnostic | None = None,
         has_active_turn: Callable[[], bool] = lambda: False,
     ) -> None:
         self._conversation = conversation
@@ -134,6 +144,11 @@ class ApplicationExtensionService:
         self._submit_turn = submit_turn
         self._local_memory = local_memory
         self._config_writer = config_writer
+        self._mem0_cloud = mem0_cloud
+        self._mem0_enabled = mem0_enabled
+        self._mem0_user_id = mem0_user_id
+        self._mem0_initialization_diagnostic = mem0_initialization_diagnostic
+        self._mem0_identity: Mem0Identity | None = None
         self._has_active_turn = has_active_turn
 
     async def handle(
@@ -149,7 +164,7 @@ class ApplicationExtensionService:
         if intent.name is CommandName.MCP:
             return await self._mcp(intent)
         if intent.name is CommandName.MEMORY:
-            return self._memory(intent)
+            return await self._memory(intent)
         if intent.name in _SKILL_COMMANDS:
             return await self._skill_command(intent, thread_id)
         return self._error("command_not_available", "Command is not available.")
@@ -158,21 +173,18 @@ class ApplicationExtensionService:
         await self._manager.start_enabled()
         self._synchronize_registry()
 
-    def _memory(self, intent: CommandIntent) -> CommandResult:
+    async def _memory(self, intent: CommandIntent) -> CommandResult:
         service = self._local_memory
+        arguments = intent.arguments
+        if not arguments:
+            return self._memory_status()
+        action = arguments[0]
+        if action == "mem0":
+            return await self._mem0_command(arguments[1:])
         if service is None:
             return self._error(
                 "command_not_available",
                 "Local memory is not available in this Host.",
-            )
-        arguments = intent.arguments
-        if not arguments:
-            return self._memory_status(service)
-        action = arguments[0]
-        if action == "mem0":
-            return self._error(
-                "command_not_available",
-                "Mem0 Cloud commands are not available until PR7.",
             )
         if action == "local" and len(arguments) == 2 and arguments[1] in {"on", "off"}:
             if self._config_writer is None:
@@ -196,7 +208,7 @@ class ApplicationExtensionService:
             self._config_writer.update(update)
             service.set_enabled(enabled)
             refresh_local_memory_tools(self._registry, service)
-            return self._memory_status(service)
+            return self._memory_status()
         if action == "list" and len(arguments) == 2:
             scope = _memory_scope(arguments[1])
             if scope is None:
@@ -252,12 +264,148 @@ class ApplicationExtensionService:
             return _memory_mutation_result(result)
         return self._memory_usage_error()
 
-    def _memory_status(self, service: LocalMemoryService) -> CommandResult:
+    async def _mem0_command(self, arguments: tuple[str, ...]) -> CommandResult:
+        if arguments in {("on",), ("off",)}:
+            if self._config_writer is None:
+                return self._error(
+                    "command_not_available",
+                    "User configuration is not writable in this Host.",
+                )
+            if self._has_active_turn():
+                return self._error(
+                    "turn_busy",
+                    "Change Mem0 after the active Turn completes.",
+                )
+            enabled = arguments[0] == "on"
+            if enabled and self._mem0_cloud is None:
+                diagnostic = self._mem0_initialization_diagnostic or Mem0Diagnostic(
+                    code="mem0_unavailable",
+                    operation="initialize",
+                )
+                return self._error(
+                    diagnostic.code,
+                    "Mem0 Cloud is not available in this Host.",
+                )
+            if enabled:
+                user_id = ensure_mem0_user_id(self._config_writer)
+                self._mem0_identity = Mem0Identity(
+                    user_id=user_id,
+                    workspace_key=self._workspace_key,
+                )
+                self._mem0_user_id = user_id
+
+            def update(document: UserConfigDocument) -> UserConfigDocument:
+                memory = document.memory.model_copy(update={"mem0_cloud": enabled})
+                return document.model_copy(update={"memory": memory})
+
+            self._config_writer.update(update)
+            self._mem0_enabled = enabled
+            return self._memory_status()
+
+        if not self._mem0_enabled:
+            return self._error(
+                "memory_disabled",
+                "Mem0 Cloud memory is disabled.",
+            )
+        adapter = self._mem0_cloud
+        if adapter is None:
+            diagnostic = self._mem0_initialization_diagnostic or Mem0Diagnostic(
+                code="mem0_unavailable",
+                operation="initialize",
+            )
+            return self._error(
+                diagnostic.code,
+                "Mem0 Cloud is not available in this Host.",
+            )
+        identity = self._current_mem0_identity()
+        if identity is None:
+            return self._error(
+                "mem0_identity_missing",
+                "Mem0 Cloud identity is unavailable.",
+            )
+        if len(arguments) >= 2 and arguments[0] == "search":
+            query = " ".join(arguments[1:]).strip()
+            if not query:
+                return self._memory_usage_error()
+            try:
+                memories = await adapter.search(
+                    query,
+                    user_id=identity.user_id,
+                    workspace_key=identity.workspace_key,
+                )
+            except Mem0CloudError as error:
+                return self._error(
+                    error.diagnostic.code,
+                    "Mem0 Cloud search did not complete.",
+                )
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                data={
+                    "memories": [
+                        cast(
+                            JsonValue,
+                            {
+                                "id": memory.id,
+                                "content": memory.content,
+                                "scope": memory.scope.value,
+                                "fact_hash": memory.fact_hash,
+                            },
+                        )
+                        for memory in memories
+                    ]
+                },
+            )
+        if len(arguments) == 2 and arguments[0] == "remove":
+            result = await adapter.remove_scoped(arguments[1], identity)
+            successful = result.status is CloudDeleteStatus.REMOVED
+            return CommandResult(
+                status=CommandStatus.SUCCESS if successful else CommandStatus.ERROR,
+                content=(
+                    "Cloud memory removed."
+                    if successful
+                    else "Cloud memory was not removed."
+                ),
+                data={
+                    "status": result.status.value,
+                    "memory_id": result.memory_id,
+                    "error_code": (
+                        result.diagnostic.code
+                        if result.diagnostic is not None
+                        else None
+                    ),
+                },
+            )
+        return self._memory_usage_error()
+
+    def _current_mem0_identity(self) -> Mem0Identity | None:
+        if self._mem0_identity is not None:
+            return self._mem0_identity
+        if self._mem0_user_id is None:
+            return None
+        self._mem0_identity = Mem0Identity(
+            user_id=self._mem0_user_id,
+            workspace_key=self._workspace_key,
+        )
+        return self._mem0_identity
+
+    def _memory_status(self) -> CommandResult:
+        service = self._local_memory
+        local: JsonValue = (
+            cast(JsonValue, service.status().model_dump(mode="json"))
+            if service is not None
+            else {"available": False, "enabled": False}
+        )
+        mem0: dict[str, JsonValue] = {
+            "available": self._mem0_cloud is not None,
+            "enabled": self._mem0_enabled,
+        }
+        if self._mem0_initialization_diagnostic is not None:
+            mem0["error_code"] = self._mem0_initialization_diagnostic.code
         return CommandResult(
             status=CommandStatus.SUCCESS,
             data={
-                "local": cast(JsonValue, service.status().model_dump(mode="json")),
-                "mem0": {"available": False, "enabled": False},
+                "local": local,
+                "mem0": mem0,
             },
         )
 
@@ -265,7 +413,8 @@ class ApplicationExtensionService:
         return self._error(
             "invalid_arguments",
             "Usage: /memory [local on|off|list <scope>|add <scope> <content>|"
-            "replace <scope> <id> <content>|remove <scope> <id>]",
+            "replace <scope> <id> <content>|remove <scope> <id>|mem0 on|off|"
+            "search <query>|remove <id>]",
         )
 
     def _skills(self, intent: CommandIntent) -> CommandResult:
