@@ -9,9 +9,10 @@ from pydantic import JsonValue, TypeAdapter
 from awesome_agent.agent.budgets import (
     BudgetDecision,
     add_active_segment,
-    budget_exhaustion,
     charge_model_attempt,
+    charge_provider_retry,
     charge_tool_call,
+    loop_exhaustion,
     model_call_decision,
 )
 from awesome_agent.agent.context import AgentRuntimeContext
@@ -31,6 +32,7 @@ from awesome_agent.modeling import (
     ModelTurn,
     ModelUsage,
     ProviderId,
+    ProviderRetrying,
     SelectedModel,
     TextDelta,
     ToolChoice,
@@ -64,7 +66,7 @@ async def call_model(
 ) -> AgentState:
     context = _context(runtime)
     updated = _copy(state)
-    exhaustion = budget_exhaustion(updated, context.budget)
+    exhaustion = loop_exhaustion(updated, context.budget)
     decision = model_call_decision(
         updated,
         context.budget,
@@ -109,9 +111,12 @@ async def call_model(
         ),
     )
     started = context.monotonic()
+    updated = charge_model_attempt(updated, provider_retries=0)
     completed: list[ModelTurn] = []
     failure: TurnFailed | None = None
     visible_text: list[str] = []
+    observed_retries = 0
+    retry_blocked: str | None = None
     try:
         async for event in context.gateway.stream(
             SelectedModel(
@@ -120,6 +125,15 @@ async def call_model(
             ),
             request,
         ):
+            if isinstance(event, ProviderRetrying):
+                if updated["model_calls"] >= context.budget.model_calls:
+                    retry_blocked = "model_budget_exhausted"
+                    break
+                if updated["provider_retries"] >= context.budget.provider_retries:
+                    retry_blocked = "provider_retry_budget_exhausted"
+                    break
+                updated = charge_provider_retry(updated)
+                observed_retries += 1
             await context.event_projector.project_gateway(event)
             if isinstance(event, TextDelta):
                 visible_text.append(event.text)
@@ -131,6 +145,10 @@ async def call_model(
         failure = TurnFailed(error=error.info)
     ended = context.monotonic()
     updated = add_active_segment(updated, started_at=started, ended_at=ended)
+    if retry_blocked is not None:
+        updated["final_answer"] = "".join(visible_text) or updated["final_answer"]
+        updated["termination_reason"] = retry_blocked
+        return updated
     if failure is not None:
         updated["final_answer"] = "".join(visible_text) or updated["final_answer"]
         updated["termination_reason"] = f"model_{failure.error.code.value}"
@@ -140,10 +158,10 @@ async def call_model(
         updated["termination_reason"] = "model_provider_protocol"
         return updated
     turn = completed[0]
-    updated = charge_model_attempt(
-        updated,
-        provider_retries=turn.usage.provider_retries,
-    )
+    if turn.usage.provider_retries != observed_retries:
+        updated["final_answer"] = "".join(visible_text) or updated["final_answer"]
+        updated["termination_reason"] = "model_provider_protocol"
+        return updated
     updated["usage"] = _merge_usage(updated["usage"], turn.usage)
     updated["continuation"] = (
         cast(dict[str, JsonValue], turn.continuation.model_dump(mode="json"))
@@ -176,7 +194,7 @@ async def execute_one_tool(
     index = updated["next_tool_index"]
     if index >= len(updated["pending_tool_calls"]):
         return updated
-    exhaustion = budget_exhaustion(updated, context.budget)
+    exhaustion = loop_exhaustion(updated, context.budget)
     if exhaustion is not None:
         updated["pending_tool_calls"] = []
         updated["next_tool_index"] = 0
@@ -262,7 +280,13 @@ def _context(runtime: Runtime[AgentRuntimeContext]) -> AgentRuntimeContext:
 
 
 def _copy(state: AgentState) -> AgentState:
-    return cast(AgentState, dict(state))
+    updated = cast(AgentState, dict(state))
+    updated["context_manifest"] = list(state["context_manifest"])
+    updated["messages"] = list(state["messages"])
+    updated["pending_tool_calls"] = list(state["pending_tool_calls"])
+    updated["tool_results"] = list(state["tool_results"])
+    updated["usage"] = dict(state["usage"])
+    return updated
 
 
 def _message_dict(message: ModelMessage) -> dict[str, JsonValue]:

@@ -5,7 +5,9 @@ from awesome_agent.agent.budgets import (
     budget_exhaustion,
     charge_compression,
     charge_model_attempt,
+    charge_provider_retry,
     charge_tool_call,
+    loop_exhaustion,
     model_call_decision,
 )
 from awesome_agent.agent.context import (
@@ -33,8 +35,10 @@ __all__ = [
     "budget_exhaustion",
     "charge_compression",
     "charge_model_attempt",
+    "charge_provider_retry",
     "charge_tool_call",
     "compile_agent_graph",
+    "loop_exhaustion",
     "model_call_decision",
     "new_agent_state",
     "validate_agent_state",

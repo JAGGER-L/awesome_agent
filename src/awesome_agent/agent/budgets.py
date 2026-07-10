@@ -63,6 +63,17 @@ def budget_exhaustion(state: AgentState, budget: TurnBudget) -> str | None:
     return None
 
 
+def loop_exhaustion(state: AgentState, budget: TurnBudget) -> str | None:
+    """Return limits that terminate ordinary model/tool loop progress."""
+    if state["model_calls"] >= budget.model_calls:
+        return "model_budget_exhausted"
+    if state["tool_calls"] >= budget.tool_calls:
+        return "tool_budget_exhausted"
+    if state["active_execution_seconds"] >= budget.active_execution_seconds:
+        return "active_time_budget_exhausted"
+    return None
+
+
 def charge_model_attempt(
     state: AgentState,
     *,
@@ -79,6 +90,13 @@ def charge_model_attempt(
 def charge_tool_call(state: AgentState) -> AgentState:
     updated = _copy(state)
     updated["tool_calls"] += 1
+    return updated
+
+
+def charge_provider_retry(state: AgentState) -> AgentState:
+    updated = _copy(state)
+    updated["model_calls"] += 1
+    updated["provider_retries"] += 1
     return updated
 
 

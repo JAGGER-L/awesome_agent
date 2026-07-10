@@ -31,6 +31,7 @@ from awesome_agent.modeling import (
     ModelRequest,
     ModelTurn,
     ModelUsage,
+    ProviderRetrying,
     StopReason,
     ToolCall,
     TurnCompleted,
@@ -270,6 +271,80 @@ async def test_provider_failure_finalizes_with_best_visible_answer(
 
     assert result["final_answer"] is None
     assert result["termination_reason"] == f"model_{code.value}"
+    assert result["model_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_retry_attempts_are_charged() -> None:
+    failure = TurnFailed(
+        error=ModelErrorInfo(
+            code=ModelErrorCode.AUTHENTICATION,
+            message="safe failure",
+            retryable=False,
+            provider="deepseek",
+        )
+    )
+    gateway = FakeGateway(
+        (
+            (
+                ProviderRetrying(
+                    attempt=2,
+                    maximum=3,
+                    delay_seconds=0.1,
+                    error_code=ModelErrorCode.TRANSIENT,
+                ),
+                failure,
+            ),
+        )
+    )
+
+    result = await _invoke(_runtime(gateway))
+
+    assert result["model_calls"] == 2
+    assert result["provider_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_is_stopped_before_exceeding_turn_budget() -> None:
+    retrying = ProviderRetrying(
+        attempt=2,
+        maximum=3,
+        delay_seconds=0.1,
+        error_code=ModelErrorCode.TRANSIENT,
+    )
+    gateway = FakeGateway(((retrying, retrying),))
+
+    result = await _invoke(_runtime(gateway, budget=TurnBudget(provider_retries=1)))
+
+    assert result["model_calls"] == 2
+    assert result["provider_retries"] == 1
+    assert result["termination_reason"] == "provider_retry_budget_exhausted"
+
+
+@pytest.mark.asyncio
+async def test_zero_retry_and_compression_budgets_still_allow_normal_calls() -> None:
+    gateway = FakeGateway(((_completed("done"),),))
+
+    result = await _invoke(
+        _runtime(
+            gateway,
+            budget=TurnBudget(provider_retries=0, compressions=0),
+        )
+    )
+
+    assert result["final_answer"] == "done"
+    assert result["termination_reason"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_graph_does_not_mutate_caller_owned_state_lists() -> None:
+    initial = cast(dict[str, object], _state())
+    original_messages = list(cast(list[object], initial["messages"]))
+
+    await _invoke(_runtime(FakeGateway(((_completed("done"),),))), state=initial)
+
+    assert initial["messages"] == original_messages
+    assert initial["tool_results"] == []
 
 
 @pytest.mark.asyncio
