@@ -1,78 +1,96 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Mapping
+from typing import Any
 
-from awesome_agent.modeling import ModelProvider
-from awesome_agent.modeling.catalog import (
-    DEEPSEEK_OFFICIAL_BASE_URL,
-    DEEPSEEK_PROVIDER_ID,
+from pydantic import SecretStr
+
+from awesome_agent.config.loader import SecretValues
+from awesome_agent.config.models import ApplicationConfig
+from awesome_agent.modeling import (
     ModelCatalog,
+    ModelCatalogError,
+    ModelProvider,
+    ProviderId,
 )
 from awesome_agent.providers.deepseek import DeepSeekProvider
-from awesome_agent.providers.routing import (
-    ModelRouteCandidate,
-    ModelRouteRequest,
-    RoutedModelProvider,
-    StaticModelRouter,
-)
-from awesome_agent.settings import Settings
+from awesome_agent.providers.kimi import KimiProvider
 
 
-class ModelProviderFactory:
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-        self.catalog = ModelCatalog.from_settings(settings)
-
-    @property
-    def coding_available(self) -> bool:
-        try:
-            self.catalog.require_supported_configuration()
-            self.catalog.require_configured_provider(DEEPSEEK_PROVIDER_ID)
-            self.catalog.validate_role_models()
-        except Exception:
-            return False
-        return True
-
-    def create(self, model: str) -> ModelProvider:
-        self.catalog.require_supported_configuration()
-        self.catalog.require_model(model)
-        self.catalog.require_configured_provider(DEEPSEEK_PROVIDER_ID)
-        key = self.settings.deepseek_api_key
-        assert key is not None
-        return DeepSeekProvider(
-            api_key=key.get_secret_value(),
+def create_provider_mapping(
+    application: ApplicationConfig,
+    secrets: SecretValues,
+    *,
+    models: Mapping[ProviderId, str] | None = None,
+    timeout_seconds: float = 60.0,
+    deepseek_client: Any | None = None,
+    kimi_client: Any | None = None,
+) -> dict[ProviderId, ModelProvider]:
+    catalog = ModelCatalog.from_application(application)
+    selections = dict(models or {})
+    unknown = set(selections) - set(catalog.provider_ids())
+    if unknown:
+        raise ModelCatalogError(
+            "unsupported_provider",
+            "Provider mapping contains an unsupported Provider.",
+        )
+    _require_secret_status_consistency(application, secrets)
+    providers: dict[ProviderId, ModelProvider] = {}
+    deepseek_key = _secret_value(secrets.deepseek_api_key)
+    if deepseek_key is not None:
+        model = selections.get("deepseek", catalog.default_for("deepseek"))
+        profile = catalog.profile(model)
+        if profile.provider != "deepseek":
+            raise ModelCatalogError(
+                "unsupported_model",
+                "DeepSeek composition requires a DeepSeek model.",
+            )
+        providers["deepseek"] = DeepSeekProvider(
+            api_key=deepseek_key,
             model=model,
-            base_url=DEEPSEEK_OFFICIAL_BASE_URL,
-            thinking_enabled=self.settings.deepseek_thinking_enabled,
-            reasoning_effort=self.settings.deepseek_reasoning_effort,
-            timeout_seconds=self.settings.model_first_event_timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            client=deepseek_client,
+        )
+    kimi_key = _secret_value(secrets.moonshot_api_key)
+    if kimi_key is not None:
+        model = selections.get("kimi", catalog.default_for("kimi"))
+        profile = catalog.profile(model)
+        if profile.provider != "kimi":
+            raise ModelCatalogError(
+                "unsupported_model",
+                "Kimi composition requires a Kimi model.",
+            )
+        providers["kimi"] = KimiProvider(
+            api_key=kimi_key,
+            model=model,
+            region=application.providers.kimi_region,
+            timeout_seconds=timeout_seconds,
+            client=kimi_client,
+        )
+    return providers
+
+
+def _require_secret_status_consistency(
+    application: ApplicationConfig,
+    secrets: SecretValues,
+) -> None:
+    expected = (
+        application.secret_status.deepseek_api_key,
+        application.secret_status.moonshot_api_key,
+    )
+    actual = (
+        _secret_value(secrets.deepseek_api_key) is not None,
+        _secret_value(secrets.moonshot_api_key) is not None,
+    )
+    if actual != expected:
+        raise ModelCatalogError(
+            "configuration_invalid",
+            "Provider secret status does not match loaded secret values.",
         )
 
-    def create_candidate(self, candidate: ModelRouteCandidate) -> ModelProvider:
-        self.catalog.require_provider(candidate.provider)
-        return self.create(candidate.model)
 
-    def create_routed_resolver(
-        self,
-        *,
-        runtime_route: str,
-        agent_role: str | None = None,
-        task_kind: str | None = None,
-    ) -> Callable[[str], ModelProvider]:
-        def resolve(model: str) -> ModelProvider:
-            default_candidate = ModelRouteCandidate(
-                provider="deepseek",
-                model=model,
-                reason="default",
-            )
-            return RoutedModelProvider(
-                router=StaticModelRouter(default_candidate=default_candidate),
-                route_request=ModelRouteRequest(
-                    runtime_route=runtime_route,
-                    agent_role=agent_role,
-                    task_kind=task_kind,
-                ),
-                provider_factory=self.create_candidate,
-            )
-
-        return resolve
+def _secret_value(secret: SecretStr | None) -> str | None:
+    if secret is None:
+        return None
+    value = secret.get_secret_value()
+    return value if value.strip() else None

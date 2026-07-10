@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 
@@ -20,9 +20,12 @@ from awesome_agent.modeling.stream import (
     TurnCompleted,
     TurnFailed,
 )
-from awesome_agent.modeling.turns import ModelRequest, ModelTurn, StopReason
-from awesome_agent.providers.factory import ModelProviderFactory
-from awesome_agent.settings import Settings
+from awesome_agent.modeling.turns import (
+    ModelRequest,
+    ModelTurn,
+    ProviderId,
+    StopReason,
+)
 
 
 async def main() -> int:
@@ -36,10 +39,12 @@ async def main() -> int:
         if _test_fake_enabled():
             await _run_fake_worker(provider_id=provider_id, model=model)
             return 0
-        provider = ModelProviderFactory(Settings()).create(model)
-        async for event in provider.stream(request):
-            _emit(event)
-        return 0
+        del request, model
+        print(
+            "legacy process model worker is not part of the target Host",
+            file=sys.stderr,
+        )
+        return 2
     except (json.JSONDecodeError, ValidationError, ValueError) as error:
         print(f"invalid request: {error}", file=sys.stderr)
         return 2
@@ -57,7 +62,7 @@ async def main() -> int:
         return 0
 
 
-def _decode_request(payload: Any) -> tuple[str, str, ModelRequest]:
+def _decode_request(payload: Any) -> tuple[ProviderId, str, ModelRequest]:
     if not isinstance(payload, dict):
         raise ValueError("request payload must be an object")
     provider = payload.get("provider")
@@ -71,7 +76,11 @@ def _decode_request(payload: Any) -> tuple[str, str, ModelRequest]:
         raise ValueError("model is required")
     if not isinstance(request_payload, dict):
         raise ValueError("request is required")
-    return provider, model, ModelRequest.model_validate(request_payload)
+    return (
+        cast(ProviderId, provider),
+        model,
+        ModelRequest.model_validate(request_payload),
+    )
 
 
 def _test_fake_enabled() -> bool:
@@ -81,7 +90,7 @@ def _test_fake_enabled() -> bool:
     )
 
 
-async def _run_fake_worker(*, provider_id: str, model: str) -> None:
+async def _run_fake_worker(*, provider_id: ProviderId, model: str) -> None:
     _emit(TextDelta(text="hello"))
     _emit(
         TurnCompleted(

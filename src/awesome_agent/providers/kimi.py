@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 from openai import AsyncOpenAI
 
+from awesome_agent.config.models import KimiRegion
 from awesome_agent.modeling import (
     AssistantMessage,
     ContinuationState,
@@ -34,39 +35,45 @@ from awesome_agent.modeling import (
 from awesome_agent.modeling.errors import ModelProviderError
 from awesome_agent.providers.errors import classify_openai_error
 
-DEEPSEEK_OFFICIAL_BASE_URL = "https://api.deepseek.com"
-_CURATED_MODELS = {
-    "deepseek/deepseek-v4-flash",
-    "deepseek/deepseek-v4-pro",
+KIMI_OFFICIAL_BASE_URLS = {
+    KimiRegion.CN: "https://api.moonshot.cn/v1",
+    KimiRegion.GLOBAL: "https://api.moonshot.ai/v1",
 }
+_CURATED_MODELS = {"kimi/kimi-k2.6", "kimi/kimi-k2.5"}
 _WIRE_UNSAFE = re.compile(r"[^A-Za-z0-9_]")
 
 
-class DeepSeekProvider:
+class KimiProvider:
     @property
-    def provider_id(self) -> Literal["deepseek"]:
-        return "deepseek"
+    def provider_id(self) -> Literal["kimi"]:
+        return "kimi"
 
     def __init__(
         self,
         *,
         api_key: str,
         model: str,
+        region: KimiRegion | str = KimiRegion.CN,
         timeout_seconds: float = 60.0,
         client: AsyncOpenAI | None = None,
     ) -> None:
         if model not in _CURATED_MODELS:
-            raise ValueError("Model must be a curated DeepSeek model.")
+            raise ValueError("Model must be a curated Kimi model.")
+        try:
+            resolved_region = KimiRegion(region)
+        except ValueError as error:
+            raise ValueError("Kimi region must be cn or global.") from error
         if not api_key.strip():
-            raise ValueError("DeepSeek API key cannot be empty.")
+            raise ValueError("Kimi API key cannot be empty.")
         if timeout_seconds <= 0:
-            raise ValueError("DeepSeek timeout must be positive.")
+            raise ValueError("Kimi timeout must be positive.")
         self._model = model
         self._wire_model = model.split("/", maxsplit=1)[1]
+        self._region = resolved_region
         self._timeout_seconds = timeout_seconds
         self._client = client or AsyncOpenAI(
             api_key=api_key,
-            base_url=DEEPSEEK_OFFICIAL_BASE_URL,
+            base_url=KIMI_OFFICIAL_BASE_URLS[resolved_region],
             timeout=timeout_seconds,
         )
 
@@ -149,13 +156,13 @@ class DeepSeekProvider:
             if finish_reason is None:
                 raise ProviderProtocolError(
                     "Provider stream ended without a finish reason.",
-                    provider="deepseek",
+                    provider="kimi",
                 )
             calls = _completed_calls(tool_calls)
             reasoning_text = "".join(reasoning_parts)
             yield TurnCompleted(
                 turn=ModelTurn(
-                    provider="deepseek",
+                    provider="kimi",
                     model=self._model,
                     assistant=AssistantMessage(
                         content="".join(text_parts),
@@ -166,7 +173,7 @@ class DeepSeekProvider:
                     usage=usage,
                     continuation=(
                         ContinuationState(
-                            provider="deepseek",
+                            provider="kimi",
                             kind="chat.reasoning_content",
                             data={"reasoning_content": reasoning_text},
                         )
@@ -178,9 +185,7 @@ class DeepSeekProvider:
         except ModelProviderError as error:
             yield TurnFailed(error=error.info)
         except Exception as error:
-            yield TurnFailed(
-                error=classify_openai_error(error, provider="deepseek").info
-            )
+            yield TurnFailed(error=classify_openai_error(error, provider="kimi").info)
 
 
 @dataclass(slots=True)
@@ -272,7 +277,7 @@ def _continuation_reasoning(request: ModelRequest) -> str | None:
     continuation = request.continuation
     if (
         continuation is None
-        or continuation.provider != "deepseek"
+        or continuation.provider != "kimi"
         or continuation.kind != "chat.reasoning_content"
         or not isinstance(continuation.data, dict)
     ):
@@ -329,19 +334,19 @@ def _completed_calls(states: dict[int, _ToolAssembly]) -> tuple[ToolCall, ...]:
         if not state.call_id or not state.name or not state.started:
             raise ProviderProtocolError(
                 "Provider returned an incomplete tool call.",
-                provider="deepseek",
+                provider="kimi",
             )
         try:
             arguments = json.loads(state.arguments)
         except json.JSONDecodeError as error:
             raise ProviderProtocolError(
                 "Provider returned malformed tool arguments.",
-                provider="deepseek",
+                provider="kimi",
             ) from error
         if not isinstance(arguments, dict):
             raise ProviderProtocolError(
                 "Provider tool arguments must be a JSON object.",
-                provider="deepseek",
+                provider="kimi",
             )
         result.append(
             ToolCall(
