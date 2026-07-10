@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from enum import StrEnum
 from typing import Protocol
 
@@ -14,11 +15,15 @@ from awesome_agent.memory.models import (
 )
 from awesome_agent.memory.policy import CloudMemoryPolicy
 from awesome_agent.modeling import (
+    GatewayEvent,
     ModelRequest,
     ModelTurn,
     ModelUsage,
+    ProviderRetrying,
     SelectedModel,
     SystemMessage,
+    TurnCompleted,
+    TurnFailed,
     UserMessage,
 )
 from awesome_agent.safety import redact_text
@@ -41,11 +46,11 @@ class DistillationResult(BaseModel):
 
 
 class DistillerGateway(Protocol):
-    async def complete(
+    def stream(
         self,
         selected: SelectedModel,
         request: ModelRequest,
-    ) -> ModelTurn: ...
+    ) -> AsyncIterator[GatewayEvent]: ...
 
 
 class _RawCandidate(BaseModel):
@@ -79,10 +84,16 @@ class MemoryDistiller:
         selected_model: SelectedModel,
         remaining_model_calls: int,
         workspace_key: str,
+        remaining_provider_retries: int = 6,
     ) -> DistillationResult:
         normalized_user = user_text.strip()
         normalized_answer = final_answer.strip()
-        if remaining_model_calls < 1 or not normalized_user or not normalized_answer:
+        if (
+            remaining_model_calls < 1
+            or remaining_provider_retries < 0
+            or not normalized_user
+            or not normalized_answer
+        ):
             return DistillationResult(status=DistillationStatus.SKIPPED)
 
         safe_user = redact_text(normalized_user[:4_000]).text
@@ -112,7 +123,22 @@ class MemoryDistiller:
             thinking_enabled=False,
         )
         try:
-            turn = await self._gateway.complete(selected_model, request)
+            turn = await self._complete_bounded(
+                selected_model,
+                request,
+                remaining_model_calls=remaining_model_calls,
+                remaining_provider_retries=remaining_provider_retries,
+            )
+        except _DistillationBudgetExceeded as error:
+            return DistillationResult(
+                status=DistillationStatus.WARNING,
+                usage=ModelUsage(provider_retries=error.provider_retries),
+                model_calls=1,
+                diagnostic=Mem0Diagnostic(
+                    code="memory_distillation_budget_exceeded",
+                    operation="distill",
+                ),
+            )
         except Exception:
             return DistillationResult(
                 status=DistillationStatus.WARNING,
@@ -154,3 +180,35 @@ class MemoryDistiller:
             usage=turn.usage,
             model_calls=1,
         )
+
+    async def _complete_bounded(
+        self,
+        selected_model: SelectedModel,
+        request: ModelRequest,
+        *,
+        remaining_model_calls: int,
+        remaining_provider_retries: int,
+    ) -> ModelTurn:
+        completed: list[ModelTurn] = []
+        retries = 0
+        async for event in self._gateway.stream(selected_model, request):
+            if isinstance(event, ProviderRetrying):
+                if (
+                    retries >= remaining_provider_retries
+                    or 1 + retries >= remaining_model_calls
+                ):
+                    raise _DistillationBudgetExceeded(retries)
+                retries += 1
+            elif isinstance(event, TurnCompleted):
+                completed.append(event.turn)
+            elif isinstance(event, TurnFailed):
+                raise RuntimeError("memory distillation provider failure")
+        if len(completed) != 1:
+            raise RuntimeError("memory distillation provider protocol")
+        return completed[0]
+
+
+class _DistillationBudgetExceeded(RuntimeError):
+    def __init__(self, provider_retries: int) -> None:
+        self.provider_retries = provider_retries
+        super().__init__("memory distillation budget exceeded")

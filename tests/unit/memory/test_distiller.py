@@ -1,4 +1,5 @@
 import json
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -6,10 +7,12 @@ from awesome_agent.memory.distiller import DistillationStatus, MemoryDistiller
 from awesome_agent.memory.models import MemoryScope
 from awesome_agent.modeling import (
     AssistantMessage,
+    GatewayEvent,
     ModelTurn,
     ModelUsage,
     SelectedModel,
     StopReason,
+    TurnCompleted,
 )
 
 SELECTED = SelectedModel(
@@ -24,20 +27,26 @@ class FakeGateway:
         self.fail = fail
         self.calls: list[tuple[SelectedModel, object]] = []
 
-    async def complete(self, selected: SelectedModel, request: object) -> ModelTurn:
+    async def stream(
+        self,
+        selected: SelectedModel,
+        request: object,
+    ) -> AsyncIterator[GatewayEvent]:
         self.calls.append((selected, request))
         if self.fail:
             raise RuntimeError("provider request secret")
-        return ModelTurn(
-            provider=selected.provider,
-            model=selected.model,
-            assistant=AssistantMessage(content=self.content),
-            stop_reason=StopReason.COMPLETED,
-            usage=ModelUsage(
-                input_tokens=100,
-                output_tokens=20,
-                provider_retries=2,
-            ),
+        yield TurnCompleted(
+            turn=ModelTurn(
+                provider=selected.provider,
+                model=selected.model,
+                assistant=AssistantMessage(content=self.content),
+                stop_reason=StopReason.COMPLETED,
+                usage=ModelUsage(
+                    input_tokens=100,
+                    output_tokens=20,
+                    provider_retries=2,
+                ),
+            )
         )
 
 

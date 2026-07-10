@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import cast
 
@@ -334,11 +335,61 @@ async def finalize(
     state: AgentState,
     runtime: Runtime[AgentRuntimeContext],
 ) -> AgentState:
-    del runtime
+    context = _context(runtime)
     updated = _copy(state)
+    if updated["final_answer"] and not _failed_termination(updated):
+        remaining_calls = context.budget.model_calls - updated["model_calls"]
+        remaining_retries = (
+            context.budget.provider_retries - updated["provider_retries"]
+        )
+        if remaining_calls >= 1:
+            try:
+                result = await context.post_answer_memory.finalize(
+                    user_text=context.current_user_text,
+                    final_answer=updated["final_answer"],
+                    selected_model=SelectedModel(
+                        provider=cast(ProviderId, updated["provider"]),
+                        model=updated["model"],
+                    ),
+                    remaining_model_calls=remaining_calls,
+                    remaining_provider_retries=max(0, remaining_retries),
+                    workspace_key=updated["workspace_key"],
+                )
+            except asyncio.CancelledError:
+                await context.event_projector.project_warning(
+                    code="memory_finalization_cancelled",
+                    message="Optional memory finalization was cancelled.",
+                )
+            except Exception:
+                await context.event_projector.project_warning(
+                    code="memory_finalization_failed",
+                    message="Optional memory finalization failed.",
+                )
+            else:
+                if result.model_calls:
+                    updated = charge_model_attempt(
+                        updated,
+                        provider_retries=result.usage.provider_retries,
+                    )
+                    updated["usage"] = _merge_usage(updated["usage"], result.usage)
+                for diagnostic in result.diagnostics:
+                    await context.event_projector.project_warning(
+                        code=diagnostic.code,
+                        message="Optional memory operation did not complete.",
+                    )
+                if result.enabled:
+                    await context.event_projector.project_memory_status(
+                        enabled=True,
+                        status=result.status,
+                    )
     if updated["termination_reason"] is None:
         updated["termination_reason"] = "completed"
     return updated
+
+
+def _failed_termination(state: AgentState) -> bool:
+    reason = state["termination_reason"] or ""
+    return reason.startswith("model_") or reason == "context_unrecoverable"
 
 
 def route_after_model(state: AgentState) -> str:

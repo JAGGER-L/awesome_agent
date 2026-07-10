@@ -9,6 +9,7 @@ from awesome_agent.core.events import (
     EventEmitter,
     EventPayload,
     EventType,
+    MemoryStatusPayload,
     ProviderRetryingPayload,
     ToolResultPayload,
     TurnLifecyclePayload,
@@ -154,6 +155,11 @@ class ApplicationEventProjector:
 
     async def project_warning(self, *, code: str, message: str) -> None:
         await self._emit(WarningPayload(code=code, message=message))
+
+    async def project_memory_status(self, *, enabled: bool, status: str) -> None:
+        await self._emit(
+            MemoryStatusPayload(layer="external", enabled=enabled, status=status)
+        )
 
     async def _emit_delta(self, text: str, *, reasoning: bool) -> None:
         for start in range(0, len(text), _MAX_DELTA_CHARS):
