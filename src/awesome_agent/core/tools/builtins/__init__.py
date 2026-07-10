@@ -38,13 +38,14 @@ def _register(
     description: str,
     input_model: type[BaseModel],
     handler: ToolHandler,
+    read_only: bool = True,
 ) -> None:
     registry.register(
         spec=ToolSpec(
             name=name,
             description=description,
             input_schema=input_model.model_json_schema(),
-            read_only=True,
+            read_only=read_only,
         ),
         input_model=input_model,
         handler=handler,
@@ -93,6 +94,7 @@ def register_modifying_tools(
         description="Delete a file, or a directory and its contents recursively",
         input_model=DeleteArguments,
         handler=create_delete_handler(journal),
+        read_only=False,
     )
     _register(
         registry,
@@ -100,6 +102,7 @@ def register_modifying_tools(
         description="Perform exact string replacements in files",
         input_model=EditFileArguments,
         handler=create_edit_file_handler(journal),
+        read_only=False,
     )
     if process_runner is not None:
         _register(
@@ -108,6 +111,7 @@ def register_modifying_tools(
             description="Run shell commands",
             input_model=ExecuteArguments,
             handler=create_execute_handler(journal, process_runner),
+            read_only=False,
         )
     _register(
         registry,
@@ -115,6 +119,7 @@ def register_modifying_tools(
         description="Create a new file, or overwrite an existing one",
         input_model=WriteFileArguments,
         handler=create_write_file_handler(journal),
+        read_only=False,
     )
 
 
