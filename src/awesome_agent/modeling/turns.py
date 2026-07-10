@@ -43,6 +43,7 @@ class ModelUsage(BaseModel):
     reasoning_tokens: int = Field(default=0, ge=0)
     cache_read_tokens: int = Field(default=0, ge=0)
     cache_write_tokens: int = Field(default=0, ge=0)
+    provider_retries: int = Field(default=0, ge=0, le=6)
 
     def __add__(self, other: ModelUsage) -> ModelUsage:
         return ModelUsage(
@@ -51,6 +52,7 @@ class ModelUsage(BaseModel):
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
             cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
             cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
+            provider_retries=self.provider_retries + other.provider_retries,
         )
 
 

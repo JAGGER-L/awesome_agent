@@ -18,6 +18,13 @@ from awesome_agent.modeling.errors import (
     TransientModelError,
     error_from_info,
 )
+from awesome_agent.modeling.gateway import (
+    AsyncSleeper,
+    GatewayEvent,
+    ModelGateway,
+    ProviderRetrying,
+    RetryPolicy,
+)
 from awesome_agent.modeling.messages import (
     AssistantMessage,
     ModelMessage,
@@ -53,15 +60,18 @@ from awesome_agent.modeling.turns import (
 
 __all__ = [
     "AssistantMessage",
+    "AsyncSleeper",
     "AuthenticationModelError",
     "ConnectionModelError",
     "ContextLengthModelError",
     "ContinuationState",
+    "GatewayEvent",
     "InvalidRequestModelError",
     "ModelCatalog",
     "ModelCatalogError",
     "ModelErrorCode",
     "ModelErrorInfo",
+    "ModelGateway",
     "ModelMessage",
     "ModelProfile",
     "ModelProvider",
@@ -72,9 +82,11 @@ __all__ = [
     "ModelUsage",
     "ProviderId",
     "ProviderProtocolError",
+    "ProviderRetrying",
     "RateLimitModelError",
     "ReasoningDelta",
     "ReasoningStarted",
+    "RetryPolicy",
     "SelectedModel",
     "StopReason",
     "SystemMessage",
