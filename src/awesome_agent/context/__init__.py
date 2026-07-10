@@ -27,7 +27,9 @@ __all__ = [
     "OUTPUT_RESERVE_TOKENS",
     "SAFETY_RESERVE_FRACTION",
     "ContextBudget",
+    "ContextBuilder",
     "ContextManifestItem",
+    "ContextOverflow",
     "ContextRequest",
     "ContextSource",
     "ContextSourceKind",
@@ -41,3 +43,4 @@ __all__ = [
     "parse_explicit_paths",
     "snapshot_explicit_paths",
 ]
+from awesome_agent.context.builder import ContextBuilder, ContextOverflow
