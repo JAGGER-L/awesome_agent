@@ -41,8 +41,7 @@ def resolve_application_config(sources: LoadedConfigSources) -> ApplicationConfi
         budgets=budgets,
         memory=user.memory,
         user_skills=tuple(
-            SkillSourceConfig(name=name, enabled=False)
-            for name in user.skills.disabled
+            SkillSourceConfig(name=name, enabled=False) for name in user.skills.disabled
         ),
         workspace_skills=tuple(
             SkillSourceConfig(name=name, enabled=False)

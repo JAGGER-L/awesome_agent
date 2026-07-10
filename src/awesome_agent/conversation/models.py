@@ -102,10 +102,7 @@ class ThreadEntry(BaseModel):
 
     @model_validator(mode="after")
     def validate_direct_command_bound(self) -> Self:
-        if (
-            self.kind is ThreadEntryKind.DIRECT_COMMAND
-            and len(self.content) > 30_000
-        ):
+        if self.kind is ThreadEntryKind.DIRECT_COMMAND and len(self.content) > 30_000:
             raise ValueError("direct_command content exceeds 30000 characters")
         return self
 

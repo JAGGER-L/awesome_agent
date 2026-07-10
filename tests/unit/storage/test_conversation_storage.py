@@ -166,14 +166,10 @@ def test_only_one_in_progress_turn_exists_per_thread(tmp_path: Path) -> None:
     repositories.turns.create(_turn())
 
     with pytest.raises(TurnBusy):
-        repositories.turns.create(
-            _turn("turn_2", user_entry_id="entry_2")
-        )
+        repositories.turns.create(_turn("turn_2", user_entry_id="entry_2"))
 
     repositories.threads.create(_thread("thread_2"))
-    repositories.entries.append(
-        _entry("entry_other", thread_id="thread_2", sequence=1)
-    )
+    repositories.entries.append(_entry("entry_other", thread_id="thread_2", sequence=1))
     other = repositories.turns.create(
         _turn(
             "turn_other",
@@ -188,9 +184,7 @@ def test_foreign_keys_reject_cross_thread_turn_entry(tmp_path: Path) -> None:
     repositories = SQLiteConversationRepositories(tmp_path / "application.db")
     repositories.threads.create(_thread())
     repositories.threads.create(_thread("thread_2"))
-    repositories.entries.append(
-        _entry("entry_other", thread_id="thread_2", sequence=1)
-    )
+    repositories.entries.append(_entry("entry_other", thread_id="thread_2", sequence=1))
 
     with pytest.raises(ConversationConflict):
         repositories.turns.create(_turn(user_entry_id="entry_other"))
