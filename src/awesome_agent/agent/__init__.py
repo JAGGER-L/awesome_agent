@@ -15,6 +15,10 @@ from awesome_agent.agent.context import (
     AgentContextBuilder,
     AgentEventProjector,
     AgentRuntimeContext,
+    CloudPostAnswerMemory,
+    DisabledPostAnswerMemory,
+    MemoryFinalizationResult,
+    PostAnswerMemory,
     PreparedAgentContext,
 )
 from awesome_agent.agent.graph import compile_agent_graph
@@ -31,6 +35,10 @@ __all__ = [
     "AgentRuntimeContext",
     "AgentState",
     "BudgetDecision",
+    "CloudPostAnswerMemory",
+    "DisabledPostAnswerMemory",
+    "MemoryFinalizationResult",
+    "PostAnswerMemory",
     "PreparedAgentContext",
     "TurnBudget",
     "add_active_segment",
