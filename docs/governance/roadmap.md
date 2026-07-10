@@ -2,14 +2,13 @@
 
 ## Product Thesis
 
-Awesome Agent is a local coding-agent product for trusted project work. It
-should feel like a reliable terminal-first assistant that can read a project,
-edit files, run commands, ask for approval when risk increases, and leave
-reviewable evidence.
+Awesome Agent is a single-user, local-first coding agent for one trusted
+workspace. It helps a developer understand, modify, and validate local code
+through a terminal-first workflow.
 
-The product optimizes for recoverability, auditability, and user control before
-broader autonomy. User message input is the only product execution creation
-entry for ordinary local work.
+It is not a general agent platform, hosted multi-user service, distributed job
+scheduler, or workflow engine. The accepted destination is the
+[Local-first target architecture](../architecture/local-first-target.md).
 
 ## Current Product State
 
@@ -18,88 +17,98 @@ current project directory and can run user message turns through the embedded
 local runtime. Local API and Docker API modes exist for clients, inspection,
 and operator workflows.
 
-The runtime already has durable conversation turns, trusted-local guardrails,
-redaction, streaming projections, model I/O isolation, thread resources,
-attachments, skills/MCP inspection, memory lifecycle work, and diagnostic
-surfaces. Remaining work should make those surfaces simpler, more coherent, and
-more explainable rather than add unrelated product modes.
+The repository also contains PostgreSQL adapters, Worker and dispatch
+machinery, custom durable run/recovery behavior, generalized approvals,
+artifacts, team runtime, multiple sandbox modes, FastAPI surfaces, and a
+Textual TUI. These are current implementation facts, not target requirements.
+
+Existing development and test data is disposable. The architecture rewrite
+does not preserve or migrate it.
+
+For the current implementation, user message input is the only product
+execution creation entry for ordinary local work. Target application commands
+remain explicit user input and do not create an independent execution plane.
 
 ## Strategic Pillars
 
 | Pillar | Direction |
 | --- | --- |
-| Local-first product | Make `awesome` the simplest and most reliable way to work in a local project. |
-| Runtime authority | Keep model calls, tool execution, approvals, evidence, cancellation, and recovery behind shared runtime boundaries. |
-| Capability safety | Treat tool visibility and execution as effective policy decisions, not prompt conventions. |
-| Operational clarity | Make failures, runtime state, diagnostics, and recovery paths understandable without reading raw logs. |
-| Extension discipline | Add skills, MCP, memory, and future providers through shared catalog, policy, and observability contracts. |
+| Local-first simplicity | Make installation, first trust, conversation, changes, validation, undo, and recovery work without external infrastructure. |
+| Python core authority | Keep Agent Core, LangGraph, tools, memory, storage, configuration, and providers in Python. |
+| Thin runtime | Let LangGraph own graph execution and checkpoints; retain only local lifecycle, cancellation, commands, and event forwarding. |
+| Workspace safety | Use explicit workspace trust and executor-enforced path and command policy without a generalized approval platform. |
+| Stable surface contract | Keep Ink + React, future API, and future IDE clients behind the same Python application and event boundary. |
+| Disciplined extension | Keep skills, MCP, Mem0 Cloud, and future backends subordinate to the core tool, context, policy, and event contracts. |
 
 Monetary amount limits are intentionally outside the runtime kernel. Runtime
-budgets are token, reasoning-token, active-time, call-count, retry, and rework
-limits.
+budgets remain technical limits such as tokens, reasoning tokens, active time,
+model/tool calls, retries, and rework.
 
 ## Now
 
-| Initiative | Outcome | Evidence |
+| Initiative | Outcome | Exit evidence |
 | --- | --- | --- |
-| Reader-oriented documentation | Users, operators, contributors, architecture reviewers, and maintainers have separate entry points. | Documentation structural tests and markdown link checks cover the new map. |
-| Local CLI polish | README, quickstart, user guide, and operations guide present Local CLI as the default path. | First-run docs avoid internal runtime terms and provide executable checks. |
-| Runtime state clarity | Operations and API docs explain diagnostics, runtime data, and thread resources without mixing them into user docs. | API and operations pages own their respective contracts. |
+| Target contract freeze | Product boundaries, fixed tools, commands, trust, storage, memory, events, and surface protocol have one accepted source of truth. | Architecture decision records and structural contract tests agree. |
+| Local foundation | SQLite, LangGraph checkpoints, workspace trust, fixed tool execution, typed events, and per-turn change sets form a usable local vertical slice. | A fresh workspace can complete, inspect, undo, and redo a modifying turn without PostgreSQL, Worker, API, or Docker. |
+| Python Agent Core | LangGraph reasoning, context management, model gateway, skills, MCP boundary, built-in memory, and opt-in Mem0 Cloud work through one headless application path. | Multi-turn headless product tests cover completion, tool errors, cancellation, checkpoint resume, memory failure, and context compression. |
 
 ## Next
 
 | Initiative | Entry criteria | Exit shape |
 | --- | --- | --- |
-| Provider profile expansion | DeepSeek profile behavior is documented, tested, and stable across local/API surfaces. | Additional providers enter through the same profile, readiness, streaming, usage, and error contracts. |
-| Docker and sandbox normalization | Local product closure remains stable and operator docs clearly distinguish trusted local from Docker API execution. | User-facing sandbox names and settings are consistent across docs, readiness, and tests. |
-| Operations evidence | Current diagnostics endpoints and CLI commands are documented under one operations/API model. | Operators can diagnose provider, extension, runtime, and recovery issues from bounded pages. |
+| Ink + React TUI | Python application, command, JSON-RPC, and event contracts pass headless acceptance tests. | `awesome` provides the complete local chat workflow through an Ink TUI with no business logic in TypeScript. |
+| Product cutover | The new TUI closes first-run trust, chat, tools, changes, memory, diagnostics, and recovery workflows. | Default entry points no longer depend on PostgreSQL, Worker, FastAPI, Textual, generalized approvals, artifacts, team runtime, or Docker services. |
+| Legacy removal | All current callers have moved to target boundaries and required product tests pass. | Superseded runtime, persistence, API, team, artifact, approval, sandbox-service, migrations, and documentation are deleted rather than retained behind compatibility layers. |
 
 ## Later
 
 | Theme | Direction |
 | --- | --- |
-| Web and multi-surface clients | Add richer clients only after thread, command, attachment, memory, and stream contracts remain stable. |
-| Team intelligence | Improve planning, verifier calibration, and recovery through observable policy changes rather than hidden prompt growth. |
-| Extension ecosystem | Broaden skills, MCP, and community tools through catalog and capability policy, not ad hoc adapters. |
+| Optional Docker backend | Add Docker only as a tool execution backend after local host execution policy and contracts are stable. |
+| API and IDE surfaces | Adapt stable Python application, command, and event contracts; do not create a second runtime authority. |
+| Additional memory services | Revisit only when a second real service is required; Mem0 Cloud is the only supported external memory in the accepted target. |
+| Advanced workflows | Background work, parallel agents, worktree orchestration, schedules, and remote execution require separate product evidence and decisions. |
+| Extension distribution | Consider catalogs or marketplaces only after local skills and MCP configuration are stable and understandable. |
 
 ## Active Initiatives
 
-### Documentation System
+### Local-first Core Rewrite
 
-- Problem: `docs/` mixed user docs, runtime contracts, task history, and agent
-  execution rules.
-- Intended outcome: a reader-oriented tree with clear source-of-truth
-  boundaries.
-- Non-goals: no runtime behavior change, no new product feature, no broad
-  rewrite of implementation code.
-- Success evidence: structural tests and markdown link checks pass.
-
-### Local Product Entry
-
-- Problem: older docs overexposed internal runtime language to new users.
-- Intended outcome: README and quickstart explain the product path without
-  requiring runtime architecture knowledge.
-- Non-goals: no removal of API or Docker operator paths.
-- Success evidence: README/quickstart boundary tests pass.
+- Problem: the current platform-oriented architecture creates infrastructure,
+  state, operations, and maintenance work that a local coding agent does not
+  need.
+- Intended outcome: Python Agent Core + LangGraph + thin runtime + SQLite +
+  fixed tools + dual-layer memory, exposed first through a headless path and
+  then through Ink + React.
+- Migration stance: progressive in the current repository, with no legacy data
+  migration and no permanent compatibility architecture.
+- Non-goals: no all-TypeScript rewrite, new HTTP API, Docker sandbox backend,
+  hosted mode, team runtime, or generalized Agent Platform.
+- Success evidence: each phase has an independently usable vertical slice and
+  explicit deletion gate.
 
 ## Explicit Non-Goals
 
 - Hosted multi-user deployment.
-- Production authentication or authorization model.
-- A web frontend before the local CLI/API contracts settle.
-- Arbitrary unbounded team chat.
-- Prompt-only tool permission.
-- Amount-derived runtime budget gates.
+- A distributed Worker, lease, heartbeat, dispatch, or recovery platform.
+- PostgreSQL as a local product dependency.
+- Preservation or migration of current development data.
+- A generalized approval, artifact, event-store, or memory-provider framework.
+- A web or HTTP API before the local application contract settles.
+- Docker as a first-phase requirement.
+- Prompt-only tool permission or trust.
 
 ## Dependencies And Sequencing
 
-1. Keep the local CLI understandable before expanding surfaces.
-2. Keep runtime authority in shared services and graph/AgentLoop boundaries.
-3. Keep capability policy and executor checks shared by built-in and extension
-   tools.
-4. Keep operations evidence bounded and queryable.
-5. Convert future themes into committed tasks only when entry criteria and
-   verifiable exit evidence are clear.
+1. Freeze contracts before moving implementations.
+2. Build and verify the headless Python product path before the Ink TUI.
+3. Keep every phase independently testable; do not switch all entry points at
+   once.
+4. Delete old paths only after replacement acceptance gates pass.
+5. Do not add data migration, dual-write, or compatibility work for disposable
+   development state.
+6. Update current-state architecture and user documentation as each product
+   path actually changes.
 
 ## Completed Milestones
 
@@ -112,6 +121,9 @@ Detailed historical task notes live in
 | Team runtime foundation | Leader, Teammates, Subagents, Verifier, assignment-scoped tools, mailbox, patch aggregation, rework, and stress coverage. |
 | Extension foundation | Versioned catalogs, skills, MCP, community tools, diagnostics, and project/user extension configuration. |
 | Product surface foundation | Local CLI/TUI, conversation state, streaming, slash commands, status/config/model/memory/skill surfaces, attachments, and error handling. |
+
+These milestones describe repository history. They do not require the accepted
+target to retain each subsystem.
 
 ## Change Policy
 

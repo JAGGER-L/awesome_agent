@@ -1,5 +1,11 @@
 ﻿# Architecture
 
+> This document describes the current implementation. The repository has
+> accepted a simpler
+> [Local-first target architecture](docs/architecture/local-first-target.md)
+> that is not yet fully implemented. Current and target contracts must remain
+> explicitly distinguished during the migration.
+
 ## System Intent
 
 The system is a local-first coding agent runtime. It separates orchestration,
