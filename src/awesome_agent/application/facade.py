@@ -97,7 +97,10 @@ class LocalApplication:
         self._closed = False
 
     async def initialize(self) -> InitializeResult:
-        if self._initialize_result is None:
+        if (
+            self._initialize_result is None
+            or self._initialize_result.status is not InitializeStatus.READY
+        ):
             self._initialize_result = await self._backend.initialize_application()
         return self._initialize_result
 

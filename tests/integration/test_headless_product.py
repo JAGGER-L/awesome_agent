@@ -112,6 +112,7 @@ async def test_fresh_home_trust_turn_direct_and_restart(
     assert pending.interaction_id is not None
     trusted = await application.respond_interaction(pending.interaction_id, "trust")
     assert trusted.accepted
+    assert (await application.initialize()).status is InitializeStatus.READY
     state = await application.get_state()
     assert state.initialized and state.workspace_trusted
     assert state.current_thread_id is not None
