@@ -33,6 +33,35 @@ class ProductError(BaseModel):
     data: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class InitializeStatus(StrEnum):
+    READY = "ready"
+    TRUST_REQUIRED = "trust_required"
+
+
+class InitializeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: InitializeStatus
+    session_id: str = Field(min_length=1, max_length=128)
+    interaction_id: str | None = Field(default=None, max_length=128)
+    capabilities: tuple[str, ...] = ()
+
+
+class InteractionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: bool
+    status: str = Field(min_length=1, max_length=128)
+    error: ProductError | None = None
+
+
+class CancelResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation_id: str = Field(min_length=1, max_length=128)
+    cancelled: bool
+
+
 class ApplicationState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -48,6 +77,10 @@ class ApplicationState(BaseModel):
     pending_interaction_id: str | None = Field(default=None, max_length=128)
     configuration_valid: bool
     secret_status: SecretStatus
+    memory_status: dict[str, JsonValue] = Field(default_factory=dict)
+    mcp_status: tuple[dict[str, JsonValue], ...] = ()
+    usage: dict[str, int] = Field(default_factory=dict)
+    configuration_diagnostics: tuple[str, ...] = ()
 
 
 class ThreadListResult(BaseModel):
