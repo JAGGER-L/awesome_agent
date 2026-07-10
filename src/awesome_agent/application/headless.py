@@ -109,6 +109,7 @@ from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 type TurnSubmitter = Callable[[str, str], Awaitable[object]]
 type CommandDelegate = Callable[[CommandIntent, str], Awaitable[CommandResult]]
+type Mem0StateChanged = Callable[[bool, Mem0Identity | None], None]
 
 _SKILL_COMMANDS = {
     CommandName.INIT: ("init", "Initialize durable workspace guidance."),
@@ -320,6 +321,7 @@ class ApplicationExtensionService:
         mem0_enabled: bool = False,
         mem0_user_id: str | None = None,
         mem0_initialization_diagnostic: Mem0Diagnostic | None = None,
+        mem0_state_changed: Mem0StateChanged = lambda enabled, identity: None,
         has_active_turn: Callable[[], bool] = lambda: False,
     ) -> None:
         self._conversation = conversation
@@ -337,6 +339,7 @@ class ApplicationExtensionService:
         self._mem0_user_id = mem0_user_id
         self._mem0_initialization_diagnostic = mem0_initialization_diagnostic
         self._mem0_identity: Mem0Identity | None = None
+        self._mem0_state_changed = mem0_state_changed
         self._has_active_turn = has_active_turn
 
     async def handle(
@@ -488,6 +491,7 @@ class ApplicationExtensionService:
 
             self._config_writer.update(update)
             self._mem0_enabled = enabled
+            self._mem0_state_changed(enabled, self._mem0_identity)
             return self._memory_status()
 
         if not self._mem0_enabled:

@@ -12,6 +12,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from awesome_agent.agent import (
     AgentRuntimeContext,
     CloudPostAnswerMemory,
+    DisabledPostAnswerMemory,
+    PostAnswerMemory,
     TurnBudget,
     compile_agent_graph,
 )
@@ -56,7 +58,12 @@ from awesome_agent.config import (
     resolve_application_config,
     resolve_turn_config,
 )
-from awesome_agent.context import ContextBuilder, ThreadCompressor
+from awesome_agent.context import (
+    ContextBuilder,
+    Mem0ContextResult,
+    ThreadCompressor,
+    mem0_context_source,
+)
 from awesome_agent.conversation import ConversationService, Thread, Turn, UsageSummary
 from awesome_agent.core.changes import (
     ChangeJournal,
@@ -240,6 +247,46 @@ class _ChangeScope:
         self._journal.reconcile_pending()
 
 
+class _Mem0Session:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        adapter: Mem0CloudAdapter | None,
+        identity: Mem0Identity | None,
+        diagnostic: Mem0Diagnostic | None,
+    ) -> None:
+        self.enabled = enabled
+        self.adapter = adapter
+        self.identity = identity
+        self.diagnostic = diagnostic
+
+    def update(self, enabled: bool, identity: Mem0Identity | None) -> None:
+        self.enabled = enabled
+        if identity is not None:
+            self.identity = identity
+
+    async def recall(
+        self,
+        query: str,
+        higher_priority_contents: tuple[str, ...],
+    ) -> Mem0ContextResult:
+        if self.identity is None:
+            return (
+                Mem0ContextResult(diagnostic=self.diagnostic)
+                if self.enabled
+                else Mem0ContextResult()
+            )
+        return await mem0_context_source(
+            enabled=self.enabled,
+            adapter=self.adapter,
+            identity=self.identity,
+            query=query,
+            higher_priority_contents=higher_priority_contents,
+            initialization_diagnostic=self.diagnostic,
+        )
+
+
 class _LocalApplicationBackend:
     def __init__(
         self,
@@ -289,6 +336,7 @@ class _LocalApplicationBackend:
         self._local_memory: LocalMemoryService | None = None
         self._mem0_adapter: Mem0CloudAdapter | None = None
         self._mem0_diagnostic: Mem0Diagnostic | None = None
+        self._mem0_session: _Mem0Session | None = None
         self._mcp: McpManager | None = None
         self._change_scope: _ChangeScope | None = None
         self._change_operations: ChangeOperations | None = None
@@ -359,7 +407,11 @@ class _LocalApplicationBackend:
             memory_status={
                 "local": {"enabled": local_enabled},
                 "mem0": {
-                    "enabled": self._application_config.memory.mem0_cloud,
+                    "enabled": (
+                        self._mem0_session.enabled
+                        if self._mem0_session is not None
+                        else self._application_config.memory.mem0_cloud
+                    ),
                     "available": self._mem0_adapter is not None,
                 },
             },
@@ -505,6 +557,12 @@ class _LocalApplicationBackend:
         refresh_local_memory_tools(registry, self._local_memory)
         mem0_identity = self._mem0_identity()
         self._mem0_adapter = self._create_mem0_adapter()
+        self._mem0_session = _Mem0Session(
+            enabled=self._application_config.memory.mem0_cloud,
+            adapter=self._mem0_adapter,
+            identity=mem0_identity,
+            diagnostic=self._mem0_diagnostic,
+        )
 
         context_service = ApplicationContextService(
             conversation=self._conversation,
@@ -518,20 +576,9 @@ class _LocalApplicationBackend:
             ),
             skill_loader=skill_loader,
             local_memory=self._local_memory,
+            mem0_recall=self._mem0_session.recall,
         )
         self._context = context_service
-
-        post_memory = None
-        if (
-            self._application_config.memory.mem0_cloud
-            and self._mem0_adapter is not None
-            and mem0_identity is not None
-        ):
-            post_memory = CloudPostAnswerMemory(
-                distiller=MemoryDistiller(gateway_router),
-                adapter=self._mem0_adapter,
-                identity=mem0_identity,
-            )
 
         graph = compile_agent_graph(self._saver)
 
@@ -560,6 +607,18 @@ class _LocalApplicationBackend:
                     ),
                 )
 
+            post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
+            if (
+                self._mem0_session is not None
+                and self._mem0_session.enabled
+                and self._mem0_session.adapter is not None
+                and self._mem0_session.identity is not None
+            ):
+                post_answer_memory = CloudPostAnswerMemory(
+                    distiller=MemoryDistiller(gateway_router),
+                    adapter=self._mem0_session.adapter,
+                    identity=self._mem0_session.identity,
+                )
             return AgentRuntimeContext(
                 gateway=gateway_factory(
                     cast(ProviderId, turn.provider),
@@ -580,7 +639,7 @@ class _LocalApplicationBackend:
                 monotonic=monotonic,
                 compressor=context_service,
                 current_user_text=context_service.current_input(turn_id),
-                **({"post_answer_memory": post_memory} if post_memory else {}),
+                post_answer_memory=post_answer_memory,
             )
 
         self._turns = TurnCoordinator(
@@ -621,6 +680,7 @@ class _LocalApplicationBackend:
             context_factory=direct_context,
             finalize_operation=self._seal_direct,
         )
+        assert self._mem0_session is not None
         self._extensions = ApplicationExtensionService(
             conversation=self._conversation,
             catalog=catalog,
@@ -636,6 +696,7 @@ class _LocalApplicationBackend:
             mem0_enabled=self._application_config.memory.mem0_cloud,
             mem0_user_id=self._application_config.memory.mem0_user_id,
             mem0_initialization_diagnostic=self._mem0_diagnostic,
+            mem0_state_changed=self._mem0_session.update,
             has_active_turn=lambda: self._operations.active_operation_id is not None,
         )
         await self._extensions.prepare_turn_extensions()

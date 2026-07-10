@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from math import floor
 from typing import Literal, cast
@@ -21,6 +22,7 @@ from awesome_agent.context import (
     ContextSource,
     ContextSourceKind,
     ExplicitPathSnapshot,
+    Mem0ContextResult,
     ThreadCompressor,
     calculate_context_budget,
     local_memory_context_sources,
@@ -41,6 +43,10 @@ from awesome_agent.memory import LocalMemoryService, MemoryScope
 from awesome_agent.modeling import ModelMessage, ProviderId
 
 _MODEL_MESSAGE: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
+type Mem0Recall = Callable[
+    [str, tuple[str, ...]],
+    Awaitable[Mem0ContextResult],
+]
 _FROZEN_KINDS = frozenset(
     {
         ContextSourceKind.PRODUCT_INSTRUCTIONS,
@@ -74,6 +80,7 @@ class ApplicationContextService:
         workspace_instructions: str = "",
         skill_loader: SkillLoader | None = None,
         local_memory: LocalMemoryService | None = None,
+        mem0_recall: Mem0Recall | None = None,
     ) -> None:
         self._conversation = conversation
         self._workspace = workspace
@@ -85,6 +92,7 @@ class ApplicationContextService:
         self._workspace_instructions = workspace_instructions
         self._skill_loader = skill_loader
         self._local_memory = local_memory
+        self._mem0_recall = mem0_recall
         self._captures: dict[str, TurnContextCapture] = {}
 
     def prepare_turn(self, turn: Turn, content: str) -> None:
@@ -151,6 +159,19 @@ class ApplicationContextService:
                 )
             )
         sources.extend(capture.memory_sources)
+        if self._mem0_recall is not None:
+            local_contents = (
+                tuple(
+                    entry.content
+                    for scope in (MemoryScope.USER, MemoryScope.WORKSPACE)
+                    for entry in self._local_memory.snapshot(scope).entries
+                )
+                if self._local_memory is not None and self._local_memory.enabled
+                else ()
+            )
+            recalled = await self._mem0_recall(capture.natural_input, local_contents)
+            if recalled.source is not None:
+                sources.append(recalled.source)
         sources.extend(_history_sources(view, turn))
         for snapshot in capture.snapshots:
             sources.append(
