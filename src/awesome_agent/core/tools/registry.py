@@ -38,6 +38,9 @@ class ToolRegistry:
     def specifications(self) -> tuple[ToolSpec, ...]:
         return tuple(self._items[name].spec for name in sorted(self._items))
 
+    def unregister(self, name: str) -> None:
+        self._items.pop(name, None)
+
     def replace_namespace(
         self,
         namespace: str,

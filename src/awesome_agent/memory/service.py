@@ -28,6 +28,7 @@ class LocalMemoryService:
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._enabled = enabled
+        self._workspace_key = workspace_key
         self._policy = policy or LocalMemoryPolicy()
         self._files = {
             MemoryScope.USER: LocalMemoryFile(
@@ -49,6 +50,10 @@ class LocalMemoryService:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def workspace_key(self) -> str:
+        return self._workspace_key
 
     def set_enabled(self, enabled: bool) -> None:
         self._enabled = enabled

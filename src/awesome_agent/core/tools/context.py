@@ -26,6 +26,7 @@ class ToolExecutionContext:
     monotonic: Callable[[], float]
     change_set_id: str | None = None
     allowed_interaction_scopes: frozenset[str] = frozenset()
+    turn_active: bool = True
 
     def __post_init__(self) -> None:
         if self.origin is ToolExecutionOrigin.AGENT and self.turn_id is None:
