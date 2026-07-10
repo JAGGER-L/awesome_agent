@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
-from openai import AsyncOpenAI
 from pydantic import SecretStr
 
 from awesome_agent.config.loader import SecretValues
@@ -23,8 +23,8 @@ def create_provider_mapping(
     *,
     models: Mapping[ProviderId, str] | None = None,
     timeout_seconds: float = 60.0,
-    deepseek_client: AsyncOpenAI | None = None,
-    kimi_client: AsyncOpenAI | None = None,
+    deepseek_client: Any | None = None,
+    kimi_client: Any | None = None,
 ) -> dict[ProviderId, ModelProvider]:
     catalog = ModelCatalog.from_application(application)
     selections = dict(models or {})
