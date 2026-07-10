@@ -5,6 +5,13 @@ from awesome_agent.context.models import (
     ContextSourceKind,
     PreparedContext,
 )
+from awesome_agent.context.path_refs import (
+    ExplicitPathError,
+    ExplicitPathSnapshot,
+    ParsedExplicitPaths,
+    parse_explicit_paths,
+    snapshot_explicit_paths,
+)
 from awesome_agent.context.tokens import (
     COMPRESSION_THRESHOLD_FRACTION,
     OUTPUT_RESERVE_TOKENS,
@@ -24,8 +31,13 @@ __all__ = [
     "ContextRequest",
     "ContextSource",
     "ContextSourceKind",
+    "ExplicitPathError",
+    "ExplicitPathSnapshot",
+    "ParsedExplicitPaths",
     "PreparedContext",
     "calculate_context_budget",
     "estimate_messages",
     "estimate_text",
+    "parse_explicit_paths",
+    "snapshot_explicit_paths",
 ]
