@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -249,3 +250,134 @@ async def test_execute_boundary_allow_once_is_not_reused(tmp_path: Path) -> None
     await application.respond(repeated_id, InteractionDecision.DENY)
     await repeated_task
     await application.close()
+
+
+@pytest.mark.asyncio
+async def test_complete_fresh_state_headless_vertical_slice(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "source.txt").write_text("source", encoding="utf-8")
+    (workspace / "remove.txt").write_text("restore", encoding="utf-8")
+    sink = CollectingEventSink()
+    application = LocalApplication.create(
+        home=home,
+        workspace=workspace,
+        event_sink=sink,
+    )
+    startup = await application.start()
+    assert startup.status is StartupStatus.TRUST_REQUIRED
+    assert startup.interaction_id is not None
+    ready = await application.respond(
+        startup.interaction_id,
+        InteractionDecision.TRUST,
+    )
+    assert ready is not None
+
+    listed = await application.execute_tool(
+        ToolRequest(call_id="call_ls", tool_name="ls", arguments={"path": "."})
+    )
+    read = await application.execute_tool(
+        ToolRequest(
+            call_id="call_read",
+            tool_name="read_file",
+            arguments={"path": "source.txt"},
+        )
+    )
+    turn_id = "turn_vertical"
+    for request in (
+        ToolRequest(
+            call_id="call_write",
+            tool_name="write_file",
+            arguments={"path": "notes.txt", "content": "first"},
+        ),
+        ToolRequest(
+            call_id="call_edit",
+            tool_name="edit_file",
+            arguments={
+                "path": "notes.txt",
+                "old_string": "first",
+                "new_string": "second",
+            },
+        ),
+        ToolRequest(
+            call_id="call_delete",
+            tool_name="delete",
+            arguments={"path": "remove.txt"},
+        ),
+        ToolRequest(
+            call_id="call_execute",
+            tool_name="execute",
+            arguments={"command": "echo mixed-turn"},
+        ),
+    ):
+        assert (
+            await application.execute_tool(request, turn_id=turn_id)
+        ).status is ToolStatus.SUCCESS
+
+    diff = await application.dispatch(CommandIntent(name=CommandName.DIFF))
+    change_set_id = diff.data["change_set_id"]
+    assert isinstance(change_set_id, str)
+    undo = await application.dispatch(
+        CommandIntent(name=CommandName.UNDO, arguments=(change_set_id,))
+    )
+    assert undo.data["warning"] is not None
+    redo = await application.dispatch(
+        CommandIntent(name=CommandName.REDO, arguments=(change_set_id,))
+    )
+    assert redo.status is CommandStatus.SUCCESS
+
+    long_command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+    long_task = asyncio.create_task(application.execute_direct(long_command))
+    operation_id = None
+    for _ in range(200):
+        status = await application.dispatch(CommandIntent(name=CommandName.STATUS))
+        candidate = status.data["active_operation_id"]
+        if isinstance(candidate, str):
+            operation_id = candidate
+            break
+        await asyncio.sleep(0)
+    assert operation_id is not None
+    assert await application.cancel(operation_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await long_task
+
+    (workspace / "notes.txt").write_text("later user edit", encoding="utf-8")
+    conflict = await application.dispatch(
+        CommandIntent(name=CommandName.UNDO, arguments=(change_set_id,))
+    )
+    assert conflict.status is CommandStatus.ERROR
+    assert conflict.data["error_code"] == "change_conflict"
+    assert (workspace / "notes.txt").read_text(encoding="utf-8") == "later user edit"
+
+    assert listed.status is ToolStatus.SUCCESS
+    assert read.status is ToolStatus.SUCCESS
+    assert "source" in read.content
+    assert diff.status is CommandStatus.SUCCESS
+    assert sink.events
+    sequences = [event.sequence for event in sink.events]
+    assert sequences == list(range(1, len(sequences) + 1))
+    assert (
+        sum(event.event_type is EventType.OPERATION_CANCELLED for event in sink.events)
+        == 1
+    )
+    first_session = startup.session_id
+    await application.close()
+
+    reopened_sink = CollectingEventSink()
+    reopened = LocalApplication.create(
+        home=home,
+        workspace=workspace,
+        event_sink=reopened_sink,
+    )
+    reopened_startup = await reopened.start()
+    reconstructed = await reopened.dispatch(
+        CommandIntent(name=CommandName.DIFF, arguments=(change_set_id,))
+    )
+
+    assert reopened_startup.status is StartupStatus.READY
+    assert reopened_startup.session_id != first_session
+    assert reopened_sink.events == []
+    assert reconstructed.status is CommandStatus.SUCCESS
+    assert "notes.txt" in reconstructed.content
+    await reopened.close()

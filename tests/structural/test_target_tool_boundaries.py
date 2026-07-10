@@ -50,7 +50,8 @@ def test_eight_tool_names_and_descriptions_are_exact(tmp_path: Path) -> None:
     register_read_tools(registry)
     register_modifying_tools(registry, journal, ProcessRunner())
 
-    assert [(spec.name, spec.description) for spec in registry.specifications()] == [
+    specifications = registry.specifications()
+    assert [(spec.name, spec.description) for spec in specifications] == [
         ("delete", "Delete a file, or a directory and its contents recursively"),
         ("edit_file", "Perform exact string replacements in files"),
         ("execute", "Run shell commands"),
@@ -60,6 +61,12 @@ def test_eight_tool_names_and_descriptions_are_exact(tmp_path: Path) -> None:
         ("read_file", "Read file contents"),
         ("write_file", "Create a new file, or overwrite an existing one"),
     ]
+    assert {spec.name for spec in specifications if spec.read_only} == {
+        "glob",
+        "grep",
+        "ls",
+        "read_file",
+    }
 
 
 def test_target_tools_do_not_import_legacy_execution_layers() -> None:

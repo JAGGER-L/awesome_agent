@@ -16,7 +16,8 @@ architecture being removed.
   and tool boundaries;
 - `integration/`: local SQLite/LangGraph checkpoint persistence, workspace
   trust, bounded read-tool execution, and restart-safe controlled change,
-  recursive delete, diff, undo, and redo behavior;
+  recursive delete, diff, undo, redo, plus the complete headless Phase 1
+  trust/tool/interaction/cancellation/reopen vertical slice;
 - `e2e/`: intentionally empty until the target CLI and Ink/React TUI flows
   exist.
 
@@ -38,12 +39,11 @@ replacement test when the owning target module is introduced.
 | Target capability | Coverage to add with implementation |
 | --- | --- |
 | Agent loop | iteration budget, tool-call cycle, malformed message repair, model fallback, cancellation, context compression |
-| Workspace safety | application interaction flow for detected execute boundary crossings |
 | Tool extensions | MCP discovery/execution and user tool isolation |
 | Skills | discovery precedence, lazy loading, explicit slash selection, prompt-size limits, untrusted content handling |
 | Configuration | defaults, user/workspace/environment precedence, validation, secret handling, restart semantics |
 | Memory | `MEMORY.md`, `USER.md`, Mem0 Cloud adapter, fail-open behavior, opt-out, untrusted recall injection |
-| CLI and TUI | slash-command contracts, event rendering, interaction prompts, cancellation, resume, Ink/React end-to-end flows |
+| CLI and TUI | Ink event rendering, interaction prompts, cancellation, resume, and end-to-end flows |
 | Sandbox | local process policy first; optional Docker execution backend only when implemented |
 | Product readiness | fresh install, first run, real repository edit/test flow, smoke, recovery, and performance regression tests |
 
