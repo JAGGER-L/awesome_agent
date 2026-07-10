@@ -26,6 +26,12 @@ Every modifying turn produces one change set. `/diff`, `/undo`, and `/redo`
 operate on change sets and are core product capabilities. Workspace files are
 the user artifact; the target has no separate general Artifact resource.
 
+Full reversibility covers mutations made through `write_file`, `edit_file`,
+and `delete`, with conflict checks that refuse to overwrite later user edits.
+Host `execute` effects are unmanaged: a mixed turn is partially reversible and
+an execute-only turn may be non-reversible. Phase 1 does not take a full
+workspace snapshot or claim that undo restores arbitrary shell side effects.
+
 Slash commands are typed application intents outside the reasoning loop. The
 accepted command families and direct `@path` and `!command` forms are listed in
 the target architecture. Skill-backed commands select skills; Ink-local

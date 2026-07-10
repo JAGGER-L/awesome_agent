@@ -11,6 +11,10 @@ The repository is migrating toward the
 document is an accepted destination, not a claim that the current source tree
 already implements the target.
 
+The accepted Phase 1 package boundaries, PR units, and headless exit criteria
+are specified in the
+[Local-first foundation detailed design](local-first-foundation.md).
+
 Key decisions are recorded under [`decisions/`](decisions/). During the
 migration, this index deliberately distinguishes current implementation
 documents from accepted target documents.

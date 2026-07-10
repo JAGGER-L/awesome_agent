@@ -17,14 +17,20 @@ The canonical startup directory is the workspace. The first visit requires an
 explicit trust decision stored in user-owned state. Declining trust exits before
 project instructions, skills, MCP declarations, or tools are loaded.
 
+Only acceptance is persisted. Declining ends the current launch and leaves the
+workspace unknown so the developer can make a different decision on a later
+launch. A symlink and its strictly resolved directory share one canonical
+identity; a moved directory is a new identity.
+
 Trust grants normal read, write, edit, delete, and development-command work
 inside that workspace. File tools still enforce canonical path containment and
 safe symlink handling. Tool policy is enforced at the executor boundary.
 
 The generalized durable approval subsystem is removed. Normal in-workspace
 operations do not prompt per tool. A small `interaction_required` protocol may
-ask allow-once or deny for workspace trust and exceptional boundary crossings;
-it is not an approval resource or configurable approval mode system.
+ask trust or deny for workspace trust, and `allow_once` or deny for exceptional
+boundary crossings. It is not an approval resource or configurable approval
+mode system.
 
 Local host execution is the first backend. Docker may later be added as an
 optional execution sandbox backend below the tool executor. Docker is not the

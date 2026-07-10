@@ -167,6 +167,13 @@ Every modifying turn has one `ChangeSet`. It records the files affected by that
 turn and provides the stable boundary for `/diff`, `/undo`, and `/redo`.
 Undo and redo are agent-core product capabilities, not TUI conveniences.
 
+The reversibility guarantee applies to controlled `write_file`, `edit_file`,
+and `delete` mutations. Local host `execute` may create unmanaged filesystem
+effects that cannot be reconstructed without a sandbox or full workspace
+snapshot. A turn containing `execute` is explicitly partial or non-reversible;
+undo never claims to restore unmanaged shell effects or overwrites later user
+edits.
+
 ## Workspace Trust and Permission Model
 
 The process working directory is the workspace unless explicitly overridden.
@@ -190,8 +197,9 @@ expand access beyond the workspace.
 The target does not retain the current generalized approval resource system.
 There are no per-tool approval modes for normal in-workspace work. A small
 `interaction_required` event remains available for workspace trust and truly
-exceptional boundary crossings. The only answers are allow once or deny; it is
-not a durable approval workflow.
+exceptional boundary crossings. Workspace trust uses trust or deny; accepted
+trust persists and denial ends only the current launch. Exceptional boundary
+crossings use `allow_once` or deny and are not durable approval workflows.
 
 File tools canonicalize paths, reject workspace escapes and unsafe symlink
 resolution, and record modifications. `execute` starts in the workspace and is
@@ -415,6 +423,10 @@ The strategic sequence is:
 
 Detailed local coordination belongs in `.codex/exec-plans/pending/`. Durable
 decisions are recorded in the linked architecture decision records.
+
+The accepted Phase 1 decomposition and permanent target package boundaries are
+defined in the
+[Local-first foundation detailed design](local-first-foundation.md).
 
 ## Decision Records
 
