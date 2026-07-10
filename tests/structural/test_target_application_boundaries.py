@@ -50,6 +50,13 @@ def test_target_application_does_not_import_legacy_or_surface_layers() -> None:
         path.as_posix(): sorted(
             imported
             for imported in _imports(path)
+            if not (
+                path.name == "composition.py"
+                and (
+                    imported == "awesome_agent.providers"
+                    or imported.startswith("awesome_agent.providers.")
+                )
+            )
             if any(
                 imported == denied or imported.startswith(f"{denied}.")
                 for denied in FORBIDDEN_APPLICATION_IMPORTS

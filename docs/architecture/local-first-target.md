@@ -4,9 +4,9 @@
 >
 > Decision date: 2026-07-10
 >
-> Implementation status: Not yet complete. This document describes the
-> architecture the repository is migrating toward; it does not describe every
-> behavior of the current implementation.
+> Implementation status: Phase 2 Python Agent Core and stdio reference Host are
+> implemented on the local-first architecture branch. Ink + React cutover and
+> physical legacy deletion remain Phase 3 and Phase 4 work.
 
 ## Product Definition
 
@@ -135,7 +135,8 @@ but their schemas and ownership remain separate.
 - Canonical workspace trust records.
 - Per-turn change-set metadata and the local data required by undo/redo.
 - Built-in `USER.md` and workspace-scoped `MEMORY.md`.
-- Mem0 Cloud synchronization metadata, never credentials.
+- Opaque Mem0 identity and opt-in configuration, never credentials or a local
+  synchronization table.
 
 ### Do not persist
 
@@ -341,12 +342,12 @@ intents. Adding a command must not require a new branch in the reasoning loop.
 
 ### Surface-neutral application commands
 
-- Session: `/new`, `/resume`, `/history`.
+- Session: `/new`, `/resume`.
 - Context: `/context`, `/compact`.
-- Model behavior: `/model`, `/mode`.
+- Model behavior: `/model`, `/thinking`.
 - Workspace and changes: `/workspace`, `/diff`, `/undo`, `/redo`.
 - Capabilities: `/tools`, `/skills`, `/skill`, `/mcp`, `/memory`.
-- Operations: `/status`, `/doctor`, `/config`.
+- Operations: `/status`, `/usage`, `/doctor`, `/config`.
 
 ### Skill-backed workflows
 

@@ -1,78 +1,70 @@
 # Runtime Kernel
 
-The runtime kernel owns execution authority. Product surfaces describe intent;
-they do not execute graphs, call providers directly, bypass approvals, or own
-durable state transitions.
+The target runtime is a thin, in-process Python application boundary around
+LangGraph. Product surfaces submit typed intent to `ApplicationFacade` and
+render typed events; they do not execute graphs, call providers, access SQLite,
+or run tools directly.
 
 ## Primary Turn Path
 
-The product route is:
-
 ```text
-user message turn -> conversation run -> initial leader agent
+surface intent
+  -> ApplicationFacade
+  -> single foreground Operation
+  -> ConversationService begins a Turn
+  -> LangGraph agent graph
+  -> provider-neutral ModelGateway
+  -> ToolExecutor when requested
+  -> LangGraph SQLite checkpoint
+  -> durable Turn result in application SQLite
+  -> live typed Event notifications
 ```
 
-Plain user messages create conversation turns. The runtime creates the
-conversation run, resolves context, starts the initial leader agent, and routes
-work through shared execution services.
+LangGraph owns graph execution, graph state, node recovery, and checkpoints.
+The application layer owns workspace trust, Thread/Turn lifecycle, one active
+foreground operation, configuration snapshots, cancellation, command dispatch,
+change capture, and projection of live Events. There is no second custom state
+machine, durable Run resource, Worker, dispatch queue, lease, heartbeat, or
+EventStore in the target Host.
 
-Surfaces do not execute graphs. They submit user intent, render projections,
-and expose controls such as cancellation, retry, model selection, and status.
+## Recovery
 
-## Authority Boundaries
+Application state is reconstructed from SQLite, the LangGraph SQLite
+checkpointer, workspace files, and the Change Journal. Events are live
+notifications and are never replayed as authoritative state. On restart, a
+completed checkpoint can finalize its Turn; an unfinished safe checkpoint can
+resume; uncertain shell/MCP side effects require an explicit interaction.
 
-The kernel owns:
+## Tool and Interaction Boundary
 
-- run intake and state transitions
-- graph route selection
-- AgentLoop handoff
-- tool execution and approval checks
-- model-call deadlines and usage accounting
-- checkpoint, event, and result persistence
-- cancellation, retry, and recovery semantics
+Every model and direct tool call enters the same `ToolExecutor`. Workspace
+trust enables ordinary in-workspace development operations. Exceptional shell
+boundaries use a short-lived interaction; they are not generalized approval
+resources. Direct `!command` execution creates a foreground Operation and a
+bounded `direct_command` Thread entry, but no model Turn or checkpoint.
 
-The kernel does not own user-interface rendering, product copy, local execution
-plans under `.codex/`, or long-term roadmap sequencing. New durable runtime
-work follows [Legacy Runtime Paths](legacy-runtime-paths.md).
+## Surface Boundary
 
-## Approval Resume Contract
+Protocol version 1 is JSON-RPC 2.0 over UTF-8 NDJSON stdio. One client owns one
+Host. Responses and live Event notifications share one serialized writer;
+stdout contains protocol frames only and stderr contains diagnostics. HTTP,
+WebSocket, LangGraph Server, authentication, and multi-client sessions are not
+part of this runtime.
 
-Approval wait is a user decision interrupt, not an execution failure. Resuming
-after approval must not consume a retry attempt, must not request the same
-approval again, and must revalidate the original tool binding before side
-effects continue.
-
-For conversation turns, resume reconstructs the original assistant tool call,
-adds the approved, denied, or expired tool result to the model context, and
-continues the model loop. The final answer must come from model re-entry over
-the tool observation, not from a runtime placeholder.
-
-The kernel may reuse a prior approval decision only through explicit bounded
-grants. Product-facing grant scopes are exact `Bash` argv and exact
-`WriteFile` / `EditFile` target paths. Internal compatibility scopes still
-support exact `shell.execute` argv and exact `repo.apply_patch` path sets. All
-grant reuse must match tool version, workspace, capabilities, risk level, and
-run context. Reuse emits `approval.reused`.
-
-Team role approval follows the same kernel boundary. The team route records
-the original tool invocation and typed continuation payload so approval resume
-can continue from the approved call rather than asking the model to recreate it.
-
-## Team Runtime Contract
-
-Distributed team execution uses `team-coding`, `team-role`, and
-`team-verifier`. Subagent creation, writing worktree isolation, tool audit, and
-the team status tree are described in [Team runtime](team-runtime.md).
+The existing Textual implementation remains physically present during Phase 2
+only. Phase 3 adds the Ink + React TUI and changes the default `awesome` entry;
+Phase 4 removes superseded platform code.
 
 ## Runtime Budgets
 
-Runtime limits are token, reasoning-token, active-time, model-call, retry, and
-rework boundaries. Monetary amount budgeting is intentionally outside the
-runtime kernel.
+The graph enforces model calls, tool calls, provider retries, compression
+attempts, active execution time, and context-token limits. Middleware may
+observe correlation, tracing, redacted logs, latency/counts, and Usage, but it
+cannot retry, short-circuit, change inputs, or alter results.
 
 ## Related Documents
 
+- [Local-first target architecture](local-first-target.md)
 - [Agent loop](agent-loop.md)
-- [Product surfaces](product-surfaces.md)
 - [Persistence and recovery](persistence-recovery.md)
 - [Security model](security-model.md)

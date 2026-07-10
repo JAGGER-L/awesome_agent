@@ -12,10 +12,10 @@ scheduler, or workflow engine. The accepted destination is the
 
 ## Current Product State
 
-Local CLI is the primary surface. `awesome` starts a chat-first TUI from the
-current project directory and can run user message turns through the embedded
-local runtime. Local API and Docker API modes exist for clients, inspection,
-and operator workflows.
+The Phase 2 Python Agent Core now has a complete in-process Application Facade
+and an `awesome-core` JSON-RPC/stdio reference Host. The existing `awesome`
+Textual entry remains unchanged until Phase 3 supplies Ink + React and owns the
+surface cutover.
 
 The repository also contains PostgreSQL adapters, Worker and dispatch
 machinery, custom durable run/recovery behavior, generalized approvals,
@@ -49,7 +49,7 @@ model/tool calls, retries, and rework.
 | Initiative | Outcome | Exit evidence |
 | --- | --- | --- |
 | Target contract freeze | Product boundaries, fixed tools, commands, trust, storage, memory, events, and surface protocol have one accepted source of truth. | Architecture decision records and structural contract tests agree. |
-| Python Agent Core | LangGraph reasoning, context management, model gateway, skills, MCP boundary, built-in memory, and opt-in Mem0 Cloud work through one headless application path. | Multi-turn headless product tests cover completion, tool errors, cancellation, checkpoint resume, memory failure, and context compression. |
+| Phase 2 exit verification | Validate the implemented Python Agent Core, Application Facade, stdio protocol, fake DeepSeek/Kimi flows, storage recovery, extensions, and memory boundaries. | Focused unit, integration, E2E, structural, manual protocol smoke, lint, type, and lock gates pass. |
 
 ## Next
 
@@ -117,6 +117,7 @@ Detailed historical task notes live in
 | Milestone | Summary |
 | --- | --- |
 | Local-first foundation | SQLite state and checkpoints, workspace trust, eight fixed tools, Change Journal, typed commands/events/interactions, cancellation, and a fresh-state headless acceptance slice without external infrastructure. |
+| Python Agent Core and stdio Host | Surface-neutral ten-method Facade, LangGraph Turn path, Provider/Tool/Context/Skill/MCP/memory composition, direct commands, JSON-RPC v1, and networkless DeepSeek/Kimi subprocess flows. |
 | Durable runtime foundation | Run intake, dispatch, Worker execution, model protocol, checkpoints, approvals, cancellation, validation, and observability. |
 | Team runtime foundation | Leader, Teammates, Subagents, Verifier, assignment-scoped tools, mailbox, patch aggregation, rework, and stress coverage. |
 | Extension foundation | Versioned catalogs, skills, MCP, community tools, diagnostics, and project/user extension configuration. |
