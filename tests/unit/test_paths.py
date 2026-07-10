@@ -43,3 +43,11 @@ def test_env_overrides_home_and_install_dir(tmp_path: Path) -> None:
 
     assert paths.home == tmp_path / "data"
     assert paths.install_dir == tmp_path / "code"
+
+
+def test_target_state_databases_have_separate_paths(tmp_path: Path) -> None:
+    paths = AwesomePaths.from_home(tmp_path / "awesome-home")
+
+    assert paths.application_db == paths.state_dir / "application.db"
+    assert paths.checkpoint_db == paths.state_dir / "checkpoints.db"
+    assert paths.application_db != paths.checkpoint_db

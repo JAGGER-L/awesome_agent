@@ -19,6 +19,8 @@ class AwesomePaths:
     user_extension_config: Path
     skills_dir: Path
     state_dir: Path
+    application_db: Path
+    checkpoint_db: Path
     runs_dir: Path
     logs_dir: Path
     threads_dir: Path
@@ -59,6 +61,7 @@ class AwesomePaths:
             if install_dir is not None
             else resolved_home / "app"
         )
+        state_dir = resolved_home / "state"
         return cls(
             home=resolved_home,
             install_dir=resolved_install_dir,
@@ -67,7 +70,9 @@ class AwesomePaths:
             local_config_path=resolved_home / "config.toml",
             user_extension_config=resolved_home / "awesome-agent.yaml",
             skills_dir=resolved_home / "skills",
-            state_dir=resolved_home / "state",
+            state_dir=state_dir,
+            application_db=state_dir / "application.db",
+            checkpoint_db=state_dir / "checkpoints.db",
             runs_dir=resolved_home / "runs",
             logs_dir=resolved_home / "logs",
             threads_dir=resolved_home / "threads",
