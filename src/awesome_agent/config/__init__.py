@@ -5,9 +5,11 @@ from awesome_agent.config.loader import (
     SecretValues,
     config_source_paths,
     load_config_sources,
+    read_user_config_document,
 )
 from awesome_agent.config.models import (
     SUPPORTED_MODEL_IDS,
+    ApplicationConfig,
     BudgetConfig,
     KimiRegion,
     McpServerDeclaration,
@@ -16,16 +18,28 @@ from awesome_agent.config.models import (
     ProviderConfig,
     SecretStatus,
     SkillConfig,
+    SkillSourceConfig,
+    StartupOverrides,
+    ThreadConfigState,
+    TurnConfig,
     UserConfigDocument,
     UserMcpServerConfig,
     WorkspaceConfigDocument,
 )
+from awesome_agent.config.resolver import (
+    ConfigurationResolutionError,
+    resolve_application_config,
+    resolve_turn_config,
+)
+from awesome_agent.config.writer import UserConfigWriter
 
 __all__ = [
     "SUPPORTED_MODEL_IDS",
+    "ApplicationConfig",
     "BudgetConfig",
     "ConfigSourcePaths",
     "ConfigurationInvalid",
+    "ConfigurationResolutionError",
     "KimiRegion",
     "LoadedConfigSources",
     "McpServerDeclaration",
@@ -35,9 +49,17 @@ __all__ = [
     "SecretStatus",
     "SecretValues",
     "SkillConfig",
+    "SkillSourceConfig",
+    "StartupOverrides",
+    "ThreadConfigState",
+    "TurnConfig",
     "UserConfigDocument",
+    "UserConfigWriter",
     "UserMcpServerConfig",
     "WorkspaceConfigDocument",
     "config_source_paths",
     "load_config_sources",
+    "read_user_config_document",
+    "resolve_application_config",
+    "resolve_turn_config",
 ]

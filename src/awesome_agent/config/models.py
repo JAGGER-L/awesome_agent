@@ -94,6 +94,20 @@ class SkillConfig(BaseModel):
         return value
 
 
+class SkillSourceConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if _NAME_PATTERN.fullmatch(value) is None:
+            raise ValueError("skill name is invalid")
+        return value
+
+
 class McpServerDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -171,3 +185,42 @@ class SecretStatus(BaseModel):
     deepseek_api_key: bool = False
     moonshot_api_key: bool = False
     mem0_api_key: bool = False
+
+
+class StartupOverrides(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str | None = None
+    thinking_enabled: bool | None = None
+    skill_mode: str | None = None
+
+
+class ThreadConfigState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str | None = None
+    thinking_enabled: bool | None = None
+    skill_mode: str | None = None
+
+
+class ApplicationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    providers: ProviderConfig
+    budgets: BudgetConfig
+    memory: MemoryConfig
+    user_skills: tuple[SkillSourceConfig, ...] = ()
+    workspace_skills: tuple[SkillSourceConfig, ...] = ()
+    user_mcp_servers: tuple[UserMcpServerConfig, ...] = ()
+    workspace_mcp_servers: tuple[McpServerDeclaration, ...] = ()
+    secret_status: SecretStatus
+
+
+class TurnConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Literal["deepseek", "kimi"]
+    model: str
+    thinking_enabled: bool = False
+    skill_mode: str = "auto"
+    budgets: BudgetConfig

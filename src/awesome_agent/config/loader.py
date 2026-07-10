@@ -170,6 +170,10 @@ def _read_yaml_document[DocumentT: BaseModel](
         ) from error
 
 
+def read_user_config_document(path: Path) -> UserConfigDocument:
+    return _read_yaml_document(path, UserConfigDocument, source_label="user config")
+
+
 def _load_secrets(path: Path, environ: Mapping[str, str]) -> SecretValues:
     from_file = dotenv_values(path) if path.is_file() else {}
 
