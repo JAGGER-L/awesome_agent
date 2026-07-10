@@ -11,6 +11,7 @@ from awesome_agent.agent.budgets import (
     model_call_decision,
 )
 from awesome_agent.agent.context import (
+    AgentCompressionResult,
     AgentContextBuilder,
     AgentEventProjector,
     AgentRuntimeContext,
@@ -24,6 +25,7 @@ from awesome_agent.agent.state import (
 )
 
 __all__ = [
+    "AgentCompressionResult",
     "AgentContextBuilder",
     "AgentEventProjector",
     "AgentRuntimeContext",
