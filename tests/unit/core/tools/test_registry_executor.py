@@ -39,12 +39,17 @@ def execution_context(
 ) -> tuple[ToolExecutionContext, CollectingEventSink]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    identity = resolve_workspace(workspace)
     sink = CollectingEventSink()
     context = ToolExecutionContext(
-        workspace=resolve_workspace(workspace),
+        workspace=identity,
         operation_id="operation_1",
         turn_id="turn_1",
-        emitter=EventEmitter(session_id="session_1", sink=sink),
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=identity.key,
+            sink=sink,
+        ),
     )
     return context, sink
 
@@ -110,7 +115,7 @@ async def test_executor_emits_success_events(tmp_path: Path) -> None:
     assert result.content == "ok"
     assert [event.event_type for event in sink.events] == [
         EventType.TOOL_STARTED,
-        EventType.TOOL_RESULT,
+        EventType.TOOL_COMPLETED,
     ]
 
 
@@ -129,7 +134,7 @@ async def test_executor_normalizes_invalid_arguments(tmp_path: Path) -> None:
     assert result.error.code is ToolErrorCode.INVALID_ARGUMENTS
     assert [event.event_type for event in sink.events] == [
         EventType.TOOL_STARTED,
-        EventType.TOOL_RESULT,
+        EventType.TOOL_FAILED,
     ]
 
 
@@ -159,7 +164,7 @@ async def test_executor_normalizes_expected_failure(tmp_path: Path) -> None:
     assert result.error.retryable is True
     assert [event.event_type for event in sink.events] == [
         EventType.TOOL_STARTED,
-        EventType.TOOL_RESULT,
+        EventType.TOOL_FAILED,
     ]
 
 
@@ -187,7 +192,7 @@ async def test_executor_normalizes_timeout(tmp_path: Path) -> None:
     assert result.error.code is ToolErrorCode.TIMEOUT
     assert [event.event_type for event in sink.events] == [
         EventType.TOOL_STARTED,
-        EventType.TOOL_RESULT,
+        EventType.TOOL_FAILED,
     ]
 
 

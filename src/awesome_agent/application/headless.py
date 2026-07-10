@@ -37,6 +37,7 @@ from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
     EventSink,
+    EventType,
     InteractionRequiredPayload,
     ToolResultPayload,
 )
@@ -93,7 +94,11 @@ class LocalApplication:
         self._paths = paths
         self._workspace = workspace
         self._session_id = new_identifier("session")
-        self._emitter = EventEmitter(session_id=self._session_id, sink=event_sink)
+        self._emitter = EventEmitter(
+            session_id=self._session_id,
+            workspace_key=workspace.key,
+            sink=event_sink,
+        )
         self._interactions = InteractionCoordinator()
         self._operations = OperationController(self._emitter)
         self._trust = WorkspaceTrustService(
@@ -313,10 +318,10 @@ class LocalApplication:
         )
         await self._emitter.emit(
             ToolResultPayload(
+                kind=EventType.TOOL_FAILED,
                 call_id=request.call_id,
                 tool_name=request.tool_name,
-                status="error",
-                content=message,
+                summary=message,
                 error_code=code.value,
             ),
             turn_id=turn_id,

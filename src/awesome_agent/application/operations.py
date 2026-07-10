@@ -9,7 +9,7 @@ from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
     EventType,
-    OperationTerminalPayload,
+    OperationLifecyclePayload,
 )
 
 T = TypeVar("T")
@@ -40,15 +40,25 @@ class OperationController:
         *,
         turn_id: str | None = None,
     ) -> T:
-        if self._active_task is not None:
+        if self._active_id is not None:
             raise OperationBusy("Another operation is active.")
         operation_id = new_identifier("operation")
+
+        self._active_id = operation_id
+        try:
+            await self._emitter.emit(
+                OperationLifecyclePayload(kind=EventType.OPERATION_STARTED),
+                turn_id=turn_id,
+                operation_id=operation_id,
+            )
+        except BaseException:
+            self._active_id = None
+            raise
 
         async def invoke() -> T:
             return await factory(operation_id)
 
         task: asyncio.Task[T] = asyncio.create_task(invoke())
-        self._active_id = operation_id
         self._active_task = cast(asyncio.Task[object], task)
         try:
             result = await task
@@ -84,11 +94,11 @@ class OperationController:
         turn_id: str | None,
     ) -> None:
         await self._emitter.emit(
-            OperationTerminalPayload(
+            OperationLifecyclePayload(
                 kind=event_type,
-                operation_id=operation_id,
             ),
             turn_id=turn_id,
+            operation_id=operation_id,
         )
 
     async def cancel(self, operation_id: str) -> bool:

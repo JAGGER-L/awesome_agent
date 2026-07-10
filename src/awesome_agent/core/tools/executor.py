@@ -4,7 +4,7 @@ import asyncio
 
 from pydantic import JsonValue, ValidationError
 
-from awesome_agent.core.events import ToolResultPayload, ToolStartedPayload
+from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedPayload
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
     ToolError,
@@ -46,6 +46,7 @@ class ToolExecutor:
                 tool_name=request.tool_name,
             ),
             turn_id=context.turn_id,
+            operation_id=context.operation_id,
         )
         if registered is None:
             return await self._error_result(
@@ -95,12 +96,13 @@ class ToolExecutor:
         )
         await context.emitter.emit(
             ToolResultPayload(
+                kind=EventType.TOOL_COMPLETED,
                 call_id=result.call_id,
                 tool_name=result.tool_name,
-                status="success",
-                content=result.content,
+                summary="Tool execution completed.",
             ),
             turn_id=context.turn_id,
+            operation_id=context.operation_id,
         )
         return result
 
@@ -126,12 +128,13 @@ class ToolExecutor:
         )
         await context.emitter.emit(
             ToolResultPayload(
+                kind=EventType.TOOL_FAILED,
                 call_id=result.call_id,
                 tool_name=result.tool_name,
-                status="error",
-                content=result.content,
+                summary=error.message,
                 error_code=code.value,
             ),
             turn_id=context.turn_id,
+            operation_id=context.operation_id,
         )
         return result

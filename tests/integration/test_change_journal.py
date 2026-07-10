@@ -45,7 +45,11 @@ def delete_fixture(
         workspace=identity,
         operation_id="operation_1",
         turn_id="turn_1",
-        emitter=EventEmitter(session_id="session_1", sink=CollectingEventSink()),
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=identity.key,
+            sink=CollectingEventSink(),
+        ),
         change_set_id=change_set.id,
     )
     return ToolExecutor(registry), context, journal, blobs, workspace

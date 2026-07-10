@@ -22,11 +22,16 @@ def read_executor(
 ) -> tuple[ToolExecutor, ToolExecutionContext]:
     registry = ToolRegistry()
     register_read_tools(registry)
+    identity = resolve_workspace(workspace)
     context = ToolExecutionContext(
-        workspace=resolve_workspace(workspace),
+        workspace=identity,
         operation_id="operation_1",
         turn_id="turn_1",
-        emitter=EventEmitter(session_id="session_1", sink=CollectingEventSink()),
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=identity.key,
+            sink=CollectingEventSink(),
+        ),
     )
     return ToolExecutor(registry), context
 
