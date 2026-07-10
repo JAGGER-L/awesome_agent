@@ -1,4 +1,8 @@
-from awesome_agent.context.builder import ContextBuilder, ContextOverflow
+from awesome_agent.context.builder import (
+    ContextBuilder,
+    ContextOverflow,
+    local_memory_context_sources,
+)
 from awesome_agent.context.compression import (
     CompressionPlan,
     CompressionRequest,
@@ -54,6 +58,7 @@ __all__ = [
     "calculate_context_budget",
     "estimate_messages",
     "estimate_text",
+    "local_memory_context_sources",
     "parse_explicit_paths",
     "plan_compression",
     "snapshot_explicit_paths",

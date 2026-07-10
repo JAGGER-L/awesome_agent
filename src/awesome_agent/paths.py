@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ class AwesomePaths:
     local_config_path: Path
     user_extension_config: Path
     skills_dir: Path
+    memory_dir: Path
+    user_memory_file: Path
+    workspaces_dir: Path
     state_dir: Path
     application_db: Path
     checkpoint_db: Path
@@ -70,6 +74,9 @@ class AwesomePaths:
             local_config_path=resolved_home / "config.toml",
             user_extension_config=resolved_home / "awesome-agent.yaml",
             skills_dir=resolved_home / "skills",
+            memory_dir=resolved_home / "memory",
+            user_memory_file=resolved_home / "memory" / "USER.md",
+            workspaces_dir=resolved_home / "workspaces",
             state_dir=state_dir,
             application_db=state_dir / "application.db",
             checkpoint_db=state_dir / "checkpoints.db",
@@ -83,6 +90,11 @@ class AwesomePaths:
         """Return the only supported project configuration file."""
 
         return Path(workspace).expanduser() / ".awesome" / "config.yaml"
+
+    def workspace_memory_file(self, workspace_key: str) -> Path:
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", workspace_key) is None:
+            raise ValueError("workspace_key is not a safe opaque identifier")
+        return self.workspaces_dir / workspace_key / "MEMORY.md"
 
 
 def awesome_paths() -> AwesomePaths:

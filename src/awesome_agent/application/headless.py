@@ -24,6 +24,7 @@ from awesome_agent.application.interactions import (
     InteractionKind,
 )
 from awesome_agent.application.operations import OperationController
+from awesome_agent.config import UserConfigDocument, UserConfigWriter
 from awesome_agent.conversation import ConversationService
 from awesome_agent.core.changes import (
     ChangeJournal,
@@ -81,6 +82,13 @@ from awesome_agent.extensions.mcp import (
 from awesome_agent.extensions.mcp.adapter import McpToolAdapter
 from awesome_agent.extensions.mcp.models import mcp_config_hash
 from awesome_agent.extensions.skills import SkillCatalog, SkillLoader, SkillNotFound
+from awesome_agent.memory import (
+    LocalMemoryService,
+    MemoryMutationResult,
+    MemoryMutationStatus,
+    MemoryScope,
+    refresh_local_memory_tools,
+)
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.conversations import SQLiteToolActivityRepository
@@ -112,6 +120,9 @@ class ApplicationExtensionService:
         workspace_key: str,
         registry: ToolRegistry,
         submit_turn: TurnSubmitter,
+        local_memory: LocalMemoryService | None = None,
+        config_writer: UserConfigWriter | None = None,
+        has_active_turn: Callable[[], bool] = lambda: False,
     ) -> None:
         self._conversation = conversation
         self._catalog = catalog
@@ -121,6 +132,9 @@ class ApplicationExtensionService:
         self._workspace_key = workspace_key
         self._registry = registry
         self._submit_turn = submit_turn
+        self._local_memory = local_memory
+        self._config_writer = config_writer
+        self._has_active_turn = has_active_turn
 
     async def handle(
         self,
@@ -134,6 +148,8 @@ class ApplicationExtensionService:
             return self._skill(intent, thread_id)
         if intent.name is CommandName.MCP:
             return await self._mcp(intent)
+        if intent.name is CommandName.MEMORY:
+            return self._memory(intent)
         if intent.name in _SKILL_COMMANDS:
             return await self._skill_command(intent, thread_id)
         return self._error("command_not_available", "Command is not available.")
@@ -141,6 +157,116 @@ class ApplicationExtensionService:
     async def prepare_turn_extensions(self) -> None:
         await self._manager.start_enabled()
         self._synchronize_registry()
+
+    def _memory(self, intent: CommandIntent) -> CommandResult:
+        service = self._local_memory
+        if service is None:
+            return self._error(
+                "command_not_available",
+                "Local memory is not available in this Host.",
+            )
+        arguments = intent.arguments
+        if not arguments:
+            return self._memory_status(service)
+        action = arguments[0]
+        if action == "mem0":
+            return self._error(
+                "command_not_available",
+                "Mem0 Cloud commands are not available until PR7.",
+            )
+        if action == "local" and len(arguments) == 2 and arguments[1] in {"on", "off"}:
+            if self._config_writer is None:
+                return self._error(
+                    "command_not_available",
+                    "User configuration is not writable in this Host.",
+                )
+            if self._has_active_turn():
+                return self._error(
+                    "turn_busy",
+                    "Change local memory after the active Turn completes.",
+                )
+            enabled = arguments[1] == "on"
+
+            def update(document: UserConfigDocument) -> UserConfigDocument:
+                memory = document.memory.model_copy(
+                    update={"local_file_memory": enabled}
+                )
+                return document.model_copy(update={"memory": memory})
+
+            self._config_writer.update(update)
+            service.set_enabled(enabled)
+            refresh_local_memory_tools(self._registry, service)
+            return self._memory_status(service)
+        if action == "list" and len(arguments) == 2:
+            scope = _memory_scope(arguments[1])
+            if scope is None:
+                return self._memory_usage_error()
+            document = service.snapshot(scope)
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                data=cast(
+                    dict[str, JsonValue],
+                    {
+                        "scope": scope.value,
+                        "content_hash": document.content_hash,
+                        "entries": [
+                            {"id": item.id, "content": item.content}
+                            for item in document.entries
+                        ],
+                    },
+                ),
+            )
+        if action == "add" and len(arguments) >= 3:
+            scope = _memory_scope(arguments[1])
+            if scope is None:
+                return self._memory_usage_error()
+            observed = service.snapshot(scope)
+            result = service.add(
+                scope,
+                " ".join(arguments[2:]),
+                expected_hash=observed.content_hash,
+            )
+            return _memory_mutation_result(result)
+        if action == "replace" and len(arguments) >= 4:
+            scope = _memory_scope(arguments[1])
+            if scope is None:
+                return self._memory_usage_error()
+            observed = service.snapshot(scope)
+            result = service.replace(
+                scope,
+                arguments[2],
+                " ".join(arguments[3:]),
+                expected_hash=observed.content_hash,
+            )
+            return _memory_mutation_result(result)
+        if action == "remove" and len(arguments) == 3:
+            scope = _memory_scope(arguments[1])
+            if scope is None:
+                return self._memory_usage_error()
+            observed = service.snapshot(scope)
+            result = service.remove(
+                scope,
+                arguments[2],
+                expected_hash=observed.content_hash,
+            )
+            return _memory_mutation_result(result)
+        return self._memory_usage_error()
+
+    def _memory_status(self, service: LocalMemoryService) -> CommandResult:
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data={
+                "local": cast(JsonValue, service.status().model_dump(mode="json")),
+                "mem0": {"available": False, "enabled": False},
+            },
+        )
+
+    def _memory_usage_error(self) -> CommandResult:
+        return self._error(
+            "invalid_arguments",
+            "Usage: /memory [local on|off|list <scope>|add <scope> <content>|"
+            "replace <scope> <id> <content>|remove <scope> <id>]",
+        )
 
     def _skills(self, intent: CommandIntent) -> CommandResult:
         if intent.arguments:
@@ -340,6 +466,34 @@ def _accepted_data(value: object, skill_name: str) -> dict[str, JsonValue]:
     else:
         data = {}
     return {"skill": skill_name, **data}
+
+
+def _memory_scope(value: str) -> MemoryScope | None:
+    try:
+        return MemoryScope(value)
+    except ValueError:
+        return None
+
+
+def _memory_mutation_result(result: MemoryMutationResult) -> CommandResult:
+    successful = result.status in {
+        MemoryMutationStatus.ADDED,
+        MemoryMutationStatus.REPLACED,
+        MemoryMutationStatus.REMOVED,
+    }
+    return CommandResult(
+        status=CommandStatus.SUCCESS if successful else CommandStatus.ERROR,
+        content=(
+            "Local memory updated." if successful else "Local memory was not updated."
+        ),
+        data={
+            "status": result.status.value,
+            "scope": result.scope.value,
+            "entry_id": result.entry_id,
+            "content_hash": result.content_hash,
+            "error_code": result.error_code,
+        },
+    )
 
 
 class StartupStatus(StrEnum):

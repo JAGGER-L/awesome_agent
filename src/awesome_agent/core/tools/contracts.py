@@ -32,6 +32,9 @@ class ToolErrorCode(StrEnum):
     TIMEOUT = "timeout"
     EXECUTION_FAILED = "execution_failed"
     UNCERTAIN_OUTCOME = "uncertain_outcome"
+    MEMORY_DISABLED = "memory_disabled"
+    MEMORY_CONFLICT = "memory_conflict"
+    MEMORY_REJECTED = "memory_rejected"
     CANCELLED = "cancelled"
 
 

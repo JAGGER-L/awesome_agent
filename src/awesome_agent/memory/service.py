@@ -1,156 +1,174 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from uuid import UUID
+from collections.abc import Callable
 
-from awesome_agent.memory.builtin import BuiltinMemoryStore
-from awesome_agent.memory.external import MemoryProvider, NoopMemoryProvider
+from awesome_agent.memory.local_file import LocalMemoryFile, MemoryDocumentInvalid
 from awesome_agent.memory.models import (
-    MemoryAddRequest,
-    MemoryContextSnapshot,
-    MemoryOperationResult,
-    MemoryStatus,
-    MemoryTarget,
+    LocalMemoryScopeStatus,
+    LocalMemoryStatus,
+    MemoryDocument,
+    MemoryEntry,
+    MemoryMutationResult,
+    MemoryMutationStatus,
+    MemoryPolicyStatus,
+    MemoryScope,
 )
+from awesome_agent.memory.policy import LocalMemoryPolicy
+from awesome_agent.paths import AwesomePaths
 
 
-@dataclass(frozen=True)
-class EffectiveMemory:
-    local_enabled: bool
-    provider: str | None = None
-
-
-class MemoryService:
+class LocalMemoryService:
     def __init__(
         self,
         *,
-        builtin: BuiltinMemoryStore,
-        provider: MemoryProvider | None = None,
-        builtin_enabled: bool,
-        provider_enabled: bool,
+        paths: AwesomePaths,
+        workspace_key: str,
+        enabled: bool = False,
+        policy: LocalMemoryPolicy | None = None,
+        id_factory: Callable[[], str] | None = None,
     ) -> None:
-        self.builtin = builtin
-        self._provider = provider or NoopMemoryProvider()
-        self._builtin_enabled = builtin_enabled
-        self._provider_enabled = provider_enabled
+        self._enabled = enabled
+        self._workspace_key = workspace_key
+        self._policy = policy or LocalMemoryPolicy()
+        self._files = {
+            MemoryScope.USER: LocalMemoryFile(
+                path=paths.user_memory_file,
+                scope=MemoryScope.USER,
+                id_factory=id_factory,
+            ),
+            MemoryScope.WORKSPACE: LocalMemoryFile(
+                path=paths.workspace_memory_file(workspace_key),
+                scope=MemoryScope.WORKSPACE,
+                id_factory=id_factory,
+            ),
+        }
+        self._labels = {
+            MemoryScope.USER: "memory/USER.md",
+            MemoryScope.WORKSPACE: f"workspaces/{workspace_key}/MEMORY.md",
+        }
 
     @property
-    def builtin_enabled(self) -> bool:
-        return self._builtin_enabled
+    def enabled(self) -> bool:
+        return self._enabled
 
     @property
-    def provider_enabled(self) -> bool:
-        return self._provider_enabled
+    def workspace_key(self) -> str:
+        return self._workspace_key
 
-    def effective_from_payload(self, payload: dict[str, object]) -> EffectiveMemory:
-        return EffectiveMemory(
-            local_enabled=self._builtin_enabled
-            and payload.get("local_enabled") is True,
-            provider=(
-                str(payload["provider"])
-                if self._provider_enabled and isinstance(payload.get("provider"), str)
-                else None
+    def set_enabled(self, enabled: bool) -> None:
+        self._enabled = enabled
+
+    def status(self) -> LocalMemoryStatus:
+        statuses: list[LocalMemoryScopeStatus] = []
+        for scope in MemoryScope:
+            file = self._files[scope]
+            try:
+                document = file.snapshot()
+                count = len(document.entries)
+                error_code = None
+            except MemoryDocumentInvalid as error:
+                count = 0
+                error_code = error.code
+            statuses.append(
+                LocalMemoryScopeStatus(
+                    scope=scope,
+                    label=self._labels[scope],
+                    exists=file.path.is_file(),
+                    entry_count=count,
+                    error_code=error_code,
+                )
+            )
+        return LocalMemoryStatus(enabled=self._enabled, scopes=tuple(statuses))
+
+    def snapshot(self, scope: MemoryScope) -> MemoryDocument:
+        return self._files[scope].snapshot()
+
+    def list(self, scope: MemoryScope) -> tuple[MemoryEntry, ...]:
+        return self.snapshot(scope).entries
+
+    def add(
+        self,
+        scope: MemoryScope,
+        content: str,
+        *,
+        expected_hash: str,
+    ) -> MemoryMutationResult:
+        disabled = self._disabled(scope)
+        if disabled is not None:
+            return disabled
+        eligible = self._policy.evaluate(content)
+        if eligible.status is MemoryPolicyStatus.REJECTED or eligible.content is None:
+            return self._rejected(scope, expected_hash, eligible.error_code)
+        return self._files[scope].add(
+            eligible.content,
+            expected_hash=expected_hash,
+        )
+
+    def replace(
+        self,
+        scope: MemoryScope,
+        entry_id: str,
+        content: str,
+        *,
+        expected_hash: str,
+    ) -> MemoryMutationResult:
+        disabled = self._disabled(scope)
+        if disabled is not None:
+            return disabled
+        eligible = self._policy.evaluate(content)
+        if eligible.status is MemoryPolicyStatus.REJECTED or eligible.content is None:
+            return self._rejected(scope, expected_hash, eligible.error_code)
+        return self._files[scope].replace(
+            entry_id,
+            eligible.content,
+            expected_hash=expected_hash,
+        )
+
+    def remove(
+        self,
+        scope: MemoryScope,
+        entry_id: str,
+        *,
+        expected_hash: str,
+    ) -> MemoryMutationResult:
+        disabled = self._disabled(scope)
+        if disabled is not None:
+            return disabled
+        return self._files[scope].remove(entry_id, expected_hash=expected_hash)
+
+    def _disabled(self, scope: MemoryScope) -> MemoryMutationResult | None:
+        if self._enabled:
+            return None
+        document = self.snapshot(scope)
+        return MemoryMutationResult(
+            status=MemoryMutationStatus.DISABLED,
+            scope=scope,
+            content_hash=document.content_hash,
+            document=document,
+            error_code=MemoryMutationStatus.DISABLED.value,
+        )
+
+    def _rejected(
+        self,
+        scope: MemoryScope,
+        expected_hash: str,
+        policy_code: str | None,
+    ) -> MemoryMutationResult:
+        current = self.snapshot(scope)
+        content_hash = current.content_hash
+        status = (
+            MemoryMutationStatus.CONFLICT
+            if content_hash != expected_hash
+            else MemoryMutationStatus.REJECTED
+        )
+        return MemoryMutationResult(
+            status=status,
+            scope=scope,
+            content_hash=content_hash,
+            document=current if status is MemoryMutationStatus.REJECTED else None,
+            error_code=(
+                MemoryMutationStatus.CONFLICT.value
+                if status is MemoryMutationStatus.CONFLICT
+                else policy_code or MemoryMutationStatus.REJECTED.value
             ),
         )
-
-    def add_request(
-        self,
-        *,
-        target: MemoryTarget,
-        content: str,
-        source: str,
-    ) -> MemoryAddRequest:
-        return MemoryAddRequest(target=target, content=content, source=source)
-
-    def status(self) -> MemoryStatus:
-        self.builtin.ensure_files()
-        counts, truncated = self.builtin.status()
-        return MemoryStatus(
-            enabled=self._builtin_enabled or self._provider_enabled,
-            builtin_enabled=self._builtin_enabled,
-            provider_enabled=self._provider_enabled,
-            provider_status="enabled" if self._provider_enabled else "disabled",
-            root=str(self.builtin.root),
-            files={
-                "user": str(self.builtin.path_for(MemoryTarget.USER)),
-                "memory": str(self.builtin.path_for(MemoryTarget.MEMORY)),
-            },
-            counts=counts,
-            truncated=truncated,
-            hint=(
-                None
-                if self._builtin_enabled or self._provider_enabled
-                else "Enable builtin_memory_enabled to use local file memory."
-            ),
-        )
-
-    async def add(
-        self,
-        *,
-        target: MemoryTarget,
-        content: str,
-        source: str,
-        run_id: UUID | None,
-        agent_id: UUID | None,
-    ) -> MemoryOperationResult:
-        request = self.add_request(target=target, content=content, source=source)
-        result = (
-            self.builtin.add(request)
-            if self._builtin_enabled
-            else MemoryOperationResult(
-                operation="add",
-                target=target,
-                status="rejected_by_policy",
-                source=source,
-                reason="builtin_memory_disabled",
-            )
-        )
-        if self._provider_enabled:
-            provider_ok = await self._provider.add(
-                request,
-                metadata={
-                    "run_id": str(run_id) if run_id is not None else "",
-                    "agent_id": str(agent_id) if agent_id is not None else "",
-                },
-            )
-            if not provider_ok and result.status == "added":
-                result.provider_status = "failed"
-        return result
-
-    async def list_entries(
-        self,
-        *,
-        target: MemoryTarget | None = None,
-    ) -> MemoryOperationResult:
-        return MemoryOperationResult(
-            operation="list",
-            target=target,
-            status="listed",
-            entries=self.builtin.list_entries(target),
-        )
-
-    async def delete(
-        self,
-        *,
-        target: MemoryTarget,
-        memory_id: str,
-        run_id: UUID | None,
-        agent_id: UUID | None,
-    ) -> MemoryOperationResult:
-        result = self.builtin.delete(target, memory_id)
-        if self._provider_enabled:
-            provider_ok = await self._provider.delete(memory_id)
-            if not provider_ok and result.status == "deleted":
-                result.provider_status = "failed"
-        return result
-
-    def context_snapshot(self, effective: EffectiveMemory) -> MemoryContextSnapshot:
-        if not effective.local_enabled:
-            return MemoryContextSnapshot(enabled=False)
-        return self.builtin.context_snapshot()
-
-    def render_context(self, snapshot: MemoryContextSnapshot) -> str:
-        rendered = snapshot.render()
-        if not rendered:
-            return ""
-        return f"<awesome_agent_memory>\n{rendered}\n</awesome_agent_memory>"

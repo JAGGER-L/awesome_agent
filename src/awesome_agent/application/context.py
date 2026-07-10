@@ -23,6 +23,7 @@ from awesome_agent.context import (
     ExplicitPathSnapshot,
     ThreadCompressor,
     calculate_context_budget,
+    local_memory_context_sources,
     parse_explicit_paths,
     snapshot_explicit_paths,
 )
@@ -36,6 +37,7 @@ from awesome_agent.conversation import (
 )
 from awesome_agent.core.workspace import WorkspaceIdentity
 from awesome_agent.extensions.skills import SkillLoader
+from awesome_agent.memory import LocalMemoryService, MemoryScope
 from awesome_agent.modeling import ModelMessage, ProviderId
 
 _MODEL_MESSAGE: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
@@ -55,6 +57,7 @@ _FROZEN_KINDS = frozenset(
 class TurnContextCapture:
     natural_input: str
     snapshots: tuple[ExplicitPathSnapshot, ...]
+    memory_sources: tuple[ContextSource, ...] = ()
 
 
 class ApplicationContextService:
@@ -70,6 +73,7 @@ class ApplicationContextService:
         product_instructions: str,
         workspace_instructions: str = "",
         skill_loader: SkillLoader | None = None,
+        local_memory: LocalMemoryService | None = None,
     ) -> None:
         self._conversation = conversation
         self._workspace = workspace
@@ -80,6 +84,7 @@ class ApplicationContextService:
         self._product_instructions = product_instructions
         self._workspace_instructions = workspace_instructions
         self._skill_loader = skill_loader
+        self._local_memory = local_memory
         self._captures: dict[str, TurnContextCapture] = {}
 
     def prepare_turn(self, turn: Turn, content: str) -> None:
@@ -93,9 +98,16 @@ class ApplicationContextService:
             parsed.references,
             token_budget=floor(budget.effective_input_limit * 0.25),
         )
+        memory_sources: tuple[ContextSource, ...] = ()
+        if self._local_memory is not None and self._local_memory.enabled:
+            memory_sources = local_memory_context_sources(
+                user=self._local_memory.snapshot(MemoryScope.USER),
+                workspace=self._local_memory.snapshot(MemoryScope.WORKSPACE),
+            )
         self._captures[turn.id] = TurnContextCapture(
             natural_input=parsed.text,
             snapshots=snapshots,
+            memory_sources=memory_sources,
         )
 
     async def build(self, state: AgentState) -> PreparedAgentContext:
@@ -134,6 +146,7 @@ class ApplicationContextService:
                     mandatory=True,
                 )
             )
+        sources.extend(capture.memory_sources)
         sources.extend(_history_sources(view, turn))
         for snapshot in capture.snapshots:
             sources.append(
