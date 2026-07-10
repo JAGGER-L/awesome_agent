@@ -6,7 +6,15 @@ class ChangeCapacityExceeded(RuntimeError):
     pass
 
 
+class ChangeConflict(RuntimeError):
+    pass
+
+
 class ChangeLifecycleError(RuntimeError):
+    pass
+
+
+class ChangeNotReversible(RuntimeError):
     pass
 
 

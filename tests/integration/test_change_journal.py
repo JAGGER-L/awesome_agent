@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.core.changes import ChangeJournal, FileNodeType
+from awesome_agent.core.changes import ChangeJournal, ChangeOperations, FileNodeType
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
     ToolExecutionContext,
@@ -89,6 +89,20 @@ async def test_recursive_delete_records_every_node_for_restore(tmp_path: Path) -
     assert blobs.get(binary.before_blob) == b"before\x00after"
     assert all(change.before_mode is not None for change in change_set.files)
 
+    reopened = ChangeOperations(
+        SQLiteChangeSetStore(tmp_path / "application.db"),
+        FileChangeBlobStore(tmp_path / "change-journal"),
+        resolve_workspace(workspace),
+    )
+    reopened.undo(change_set.id)
+
+    assert (target / "text.txt").read_text(encoding="utf-8") == "text"
+    assert (nested / "binary.bin").read_bytes() == b"before\x00after"
+    assert empty.is_dir()
+
+    reopened.redo(change_set.id)
+    assert not target.exists()
+
 
 @pytest.mark.asyncio
 async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -> None:
@@ -119,3 +133,15 @@ async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -
     assert change.node_type is FileNodeType.SYMLINK
     assert change.before_blob is not None
     assert blobs.get(change.before_blob) == bytes(outside)
+
+    reopened = ChangeOperations(
+        SQLiteChangeSetStore(tmp_path / "application.db"),
+        FileChangeBlobStore(tmp_path / "change-journal"),
+        resolve_workspace(workspace),
+    )
+    reopened.undo(change_set.id)
+    assert link.is_symlink()
+    assert link.read_text(encoding="utf-8") == "outside"
+    reopened.redo(change_set.id)
+    assert not link.exists()
+    assert outside.read_text(encoding="utf-8") == "outside"

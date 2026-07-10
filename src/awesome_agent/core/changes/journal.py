@@ -313,6 +313,18 @@ class ChangeJournal:
             change_set = self._open(pending.change_set_id)
             target = self._workspace.canonical_path / pending.relative_path
             current = _capture_node(target)
+            if pending.id.startswith(("undo_", "redo_")):
+                if _matches(
+                    current,
+                    digest=pending.before_hash,
+                    mode=pending.before_mode,
+                    node_type=pending.node_type,
+                ):
+                    self._store.delete_pending(pending.id)
+                    continue
+                raise PendingMutationConflict(
+                    f"Interrupted change operation for {pending.relative_path}."
+                )
             if _matches(
                 current,
                 digest=pending.before_hash,
