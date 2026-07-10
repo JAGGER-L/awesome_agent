@@ -74,7 +74,7 @@ Pure bug fixes, internal refactors, test additions, and non-behavioral cleanups 
 
 If user-facing entry documentation needs to be updated, keep `README.md` and `README.zh-CN.md` consistent in the same change.
 
-## Validation Rules
+<!-- ## Validation Rules
 
 Choose the lightest validation set that sufficiently covers the risk of the current change. Use the following priority order:
 
@@ -95,7 +95,19 @@ Validation requirements:
 * If a lower-level validation gate fails, do not continue to heavier validation unless the failure is unrelated to the current change and has been clearly recorded.
 * If a validation gate does not exist, record it as unavailable instead of silently skipping it.
 
-Record the commands actually run, their results, and any unverified risk areas in the execution plan, handoff notes, PR description, or final response.
+Record the commands actually run, their results, and any unverified risk areas in the execution plan, handoff notes, PR description, or final response. -->
+
+## Architecture Refactor Validation Rules
+
+These rules apply while the local-first architecture rewrite is in progress:
+
+* Tests protect target product behavior and public contracts, not compatibility with the architecture being removed.
+* Delete tests that only describe removed services, implementation details, persistence models, runtime paths, or UI flows. Do not quarantine them indefinitely, mark them as expected failures, or add compatibility layers solely to keep them passing.
+* Preserve or rewrite tests for target invariants before deleting their old implementation-coupled coverage. Git history is the archive for removed tests.
+* Validate each refactor task with the smallest sufficient target set: formatting and lint, affected type checking, targeted unit tests, target structural or contract tests, and only the local integration tests required by the changed boundary.
+* The legacy full suite, legacy end-to-end tests, and legacy smoke tests are not refactor completion gates unless the current task explicitly retains or changes the behavior they cover.
+* Add tests for each new target behavior as it is introduced. Rebuild product-level end-to-end, smoke, and performance coverage only after the corresponding target user flow exists.
+* Record the commands actually run, their results, intentionally removed or deferred coverage, and remaining risks in the execution plan or final handoff.
 
 ## Safety and Execution Boundaries
 
@@ -103,7 +115,7 @@ Record the commands actually run, their results, and any unverified risk areas i
 * Obtain explicit consent before deleting files, rewriting history, cleaning large directory areas, modifying production configuration, accessing external services, or executing unknown scripts.
 * Do not write secrets, credentials, private paths, full source files, or large raw tool outputs into long-term memory, plan files, or handoff notes. Record only necessary summaries and key error lines.
 
-## Commits, PRs, and Merges
+<!-- ## Commits, PRs, and Merges
 
 * Each commit should correspond to one completed, verified, and clearly scoped logical change.
 
@@ -126,7 +138,15 @@ Record the commands actually run, their results, and any unverified risk areas i
 
 * If automatic push, PR creation, or merge fails, do not repeatedly retry destructive operations. Record the failure reason, current branch state, and recommended next step.
 
-* PR or handoff notes should include: change summary, validation commands, results, unverified risks, and follow-up items.
+* PR or handoff notes should include: change summary, validation commands, results, unverified risks, and follow-up items. -->
+
+## Architecture Refactor Integration Rules
+
+* `codex/local-first-architecture` is the sole integration branch for the architecture rewrite.
+* Create each refactor task branch or worktree from `codex/local-first-architecture` and merge the completed, scoped, and verified task back into that branch.
+* Do not merge refactor task branches directly into `main`, and do not use `main` as their integration target.
+* Merge `codex/local-first-architecture` into `main` only after the entire rewrite is complete, the target validation system is established, and the user explicitly accepts the final integration.
+* After a task is merged back successfully, clean up its temporary worktree and local task branch unless they are still needed for review or recovery.
 
 ## Finish Work
 
@@ -137,7 +157,7 @@ Before ending, confirm that:
 3. Validation commands, results, and unverified risks have been recorded.
 4. Temporary files, debugging code, and unrelated changes have been removed.
 5. `git status` is explainable, and the worktree is reviewable and recoverable.
-6. If the task is complete, verified, and satisfies the commit, PR, and merge conditions, the commit, push, PR creation, and merge have been completed. If not, the reason and next step have been clearly recorded.
+6. If the task is complete and verified, the scoped commit has been completed. If not, the reason and next step have been clearly recorded.
 
 
 ## Project Architecture
