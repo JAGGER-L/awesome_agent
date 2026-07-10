@@ -19,6 +19,7 @@ from awesome_agent.memory.models import (
     CloudDeleteOutcome,
     CloudDeleteStatus,
     CloudMemory,
+    CloudPolicyResult,
     CloudWriteOutcome,
     LocalMemoryScopeStatus,
     LocalMemoryStatus,
@@ -32,7 +33,11 @@ from awesome_agent.memory.models import (
     MemoryPolicyStatus,
     MemoryScope,
 )
-from awesome_agent.memory.policy import LocalMemoryPolicy
+from awesome_agent.memory.policy import (
+    CloudMemoryPolicy,
+    LocalMemoryPolicy,
+    cloud_fact_hash,
+)
 from awesome_agent.memory.service import LocalMemoryService
 from awesome_agent.memory.tools import MEMORY_TOOL_NAMES, refresh_local_memory_tools
 
@@ -43,6 +48,8 @@ __all__ = [
     "CloudDeleteOutcome",
     "CloudDeleteStatus",
     "CloudMemory",
+    "CloudMemoryPolicy",
+    "CloudPolicyResult",
     "CloudWriteOutcome",
     "LocalMemoryFile",
     "LocalMemoryPolicy",
@@ -62,6 +69,7 @@ __all__ = [
     "MemoryPolicyResult",
     "MemoryPolicyStatus",
     "MemoryScope",
+    "cloud_fact_hash",
     "create_mem0_client",
     "ensure_mem0_user_id",
     "new_mem0_user_id",

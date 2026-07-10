@@ -135,3 +135,12 @@ class CloudDeleteOutcome(BaseModel):
     status: CloudDeleteStatus
     memory_id: str = Field(min_length=1, max_length=200)
     diagnostic: Mem0Diagnostic | None = None
+
+
+class CloudPolicyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: MemoryPolicyStatus
+    candidate: MemoryCandidate | None = None
+    error_code: str | None = Field(default=None, max_length=128)
+    message: str | None = Field(default=None, max_length=500)
