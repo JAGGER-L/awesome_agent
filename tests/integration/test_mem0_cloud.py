@@ -128,6 +128,7 @@ def _extensions(
     *,
     client: FakeMem0Client,
     mem0_enabled: bool = False,
+    state_changes: list[tuple[bool, object]] | None = None,
 ) -> tuple[ApplicationExtensionService, str, Path, str, Mem0CloudAdapter]:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir(exist_ok=True)
@@ -164,6 +165,13 @@ def _extensions(
             mem0_cloud=adapter,
             mem0_enabled=mem0_enabled,
             mem0_user_id=current_config.memory.mem0_user_id,
+            mem0_state_changed=(
+                lambda enabled, identity: (
+                    state_changes.append((enabled, identity))
+                    if state_changes is not None
+                    else None
+                )
+            ),
         ),
         thread.id,
         paths.config_file,
@@ -177,8 +185,11 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
     tmp_path: Path,
 ) -> None:
     client = FakeMem0Client()
+    state_changes: list[tuple[bool, object]] = []
     service, thread_id, config_path, workspace_key, adapter = _extensions(
-        tmp_path, client=client
+        tmp_path,
+        client=client,
+        state_changes=state_changes,
     )
 
     enabled = await service.handle(
@@ -190,6 +201,7 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
     assert enabled.data["mem0"]["enabled"] is True
     assert document.memory.mem0_cloud is True
     assert document.memory.mem0_user_id is not None
+    assert state_changes and state_changes[-1][0] is True
     identity = Mem0Identity(
         user_id=document.memory.mem0_user_id,
         workspace_key=workspace_key,
@@ -255,6 +267,7 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
         tmp_path,
         client=client,
         mem0_enabled=True,
+        state_changes=state_changes,
     )
     searched = await restarted.handle(
         CommandIntent(
@@ -307,6 +320,7 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
         thread_id=restarted_thread,
     )
     assert disabled.data["mem0"]["enabled"] is False
+    assert state_changes[-1][0] is False
     assert (
         read_user_config_document(config_path).memory.mem0_user_id == identity.user_id
     )

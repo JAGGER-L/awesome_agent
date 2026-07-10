@@ -70,7 +70,21 @@ def test_command_intent_round_trips() -> None:
     assert CommandIntent.model_validate_json(intent.model_dump_json()) == intent
 
 
-@pytest.mark.parametrize("removed", ["history", "mode"])
+@pytest.mark.parametrize(
+    "removed",
+    [
+        "mode",
+        "history",
+        "threads",
+        "attach",
+        "clear",
+        "permissions",
+        "sandbox",
+        "api",
+        "agent",
+        "team",
+    ],
+)
 def test_removed_commands_have_no_alias(removed: str) -> None:
     with pytest.raises(ValueError):
         CommandName(removed)

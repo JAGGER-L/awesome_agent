@@ -69,6 +69,20 @@ class ConversationService:
         )
         return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 
+    def set_model(self, thread_id: str, model: str) -> Thread:
+        current = self._store.read_thread(thread_id).thread
+        updated = current.model_copy(
+            update={"current_model": model, "updated_at": self._clock()}
+        )
+        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
+
+    def set_thinking(self, thread_id: str, enabled: bool) -> Thread:
+        current = self._store.read_thread(thread_id).thread
+        updated = current.model_copy(
+            update={"thinking_enabled": enabled, "updated_at": self._clock()}
+        )
+        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
+
     def read_thread(self, thread_id: str) -> ThreadView:
         return self._store.read_thread(thread_id)
 

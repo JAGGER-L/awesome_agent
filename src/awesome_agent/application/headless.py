@@ -10,9 +10,11 @@ from typing import cast
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from awesome_agent.application.commands import (
+    COMMAND_OWNERS,
     CommandIntent,
     CommandName,
     CommandOption,
+    CommandOwner,
     CommandResult,
     CommandSelection,
     CommandStatus,
@@ -24,8 +26,12 @@ from awesome_agent.application.interactions import (
     InteractionKind,
 )
 from awesome_agent.application.operations import OperationController
-from awesome_agent.config import UserConfigDocument, UserConfigWriter
-from awesome_agent.conversation import ConversationService
+from awesome_agent.config import (
+    SUPPORTED_MODEL_IDS,
+    UserConfigDocument,
+    UserConfigWriter,
+)
+from awesome_agent.conversation import ConversationService, Thread, ThreadNotFound
 from awesome_agent.core.changes import (
     ChangeJournal,
     ChangeLifecycle,
@@ -102,6 +108,8 @@ from awesome_agent.storage.mcp import SQLiteMcpEnablementStore
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 type TurnSubmitter = Callable[[str, str], Awaitable[object]]
+type CommandDelegate = Callable[[CommandIntent, str], Awaitable[CommandResult]]
+type Mem0StateChanged = Callable[[bool, Mem0Identity | None], None]
 
 _SKILL_COMMANDS = {
     CommandName.INIT: ("init", "Initialize durable workspace guidance."),
@@ -110,6 +118,187 @@ _SKILL_COMMANDS = {
     CommandName.TEST: ("test", "Design and run focused validation."),
     CommandName.COMMIT: ("git-workflow", "Prepare the current change for commit."),
 }
+
+
+class ConversationCommandService:
+    """Own Thread selection and future-Turn conversation controls."""
+
+    def __init__(
+        self,
+        *,
+        conversation: ConversationService,
+        workspace_key: str,
+        delegate: CommandDelegate,
+    ) -> None:
+        self._conversation = conversation
+        self._workspace_key = workspace_key
+        self._delegate = delegate
+        self._current_thread_id: str | None = None
+
+    @property
+    def current_thread_id(self) -> str | None:
+        return self._current_thread_id
+
+    async def handle(self, intent: CommandIntent) -> CommandResult:
+        owner = COMMAND_OWNERS[intent.name]
+        if owner is CommandOwner.INK:
+            return _command_error(
+                "surface_command",
+                "This command is owned by the interactive surface.",
+            )
+        if intent.name is CommandName.NEW:
+            return self._new(intent)
+        if intent.name is CommandName.RESUME:
+            return self._resume(intent)
+        if intent.name is CommandName.MODEL:
+            return self._model(intent)
+        if intent.name is CommandName.THINKING:
+            return self._thinking(intent)
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return _command_error(
+                "thread_not_found",
+                "Create or resume a Thread first.",
+            )
+        return await self._delegate(intent, thread_id)
+
+    def _new(self, intent: CommandIntent) -> CommandResult:
+        title = " ".join(intent.arguments).strip() or None
+        thread = self._conversation.create_thread(self._workspace_key, title)
+        self._current_thread_id = thread.id
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data={"thread_id": thread.id, "title": thread.title},
+        )
+
+    def _resume(self, intent: CommandIntent) -> CommandResult:
+        if len(intent.arguments) > 1:
+            return _command_error("invalid_arguments", "Usage: /resume [thread_id]")
+        threads = self._conversation.list_threads(self._workspace_key)
+        if not intent.arguments:
+            if not threads:
+                return CommandResult(
+                    status=CommandStatus.SUCCESS,
+                    data={"threads": []},
+                )
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                selection=CommandSelection(
+                    prompt="Select a Thread to resume.",
+                    options=tuple(
+                        CommandOption(
+                            value=thread.id,
+                            label=thread.title,
+                            selected=thread.id == self._current_thread_id,
+                        )
+                        for thread in threads
+                    ),
+                ),
+            )
+        thread_id = intent.arguments[0]
+        try:
+            view = self._conversation.read_thread(thread_id)
+        except ThreadNotFound:
+            return _command_error("thread_not_found", "Thread was not found.")
+        if view.thread.workspace_key != self._workspace_key:
+            return _command_error("thread_not_found", "Thread was not found.")
+        self._current_thread_id = thread_id
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data={"thread_id": thread_id, "title": view.thread.title},
+        )
+
+    def _model(self, intent: CommandIntent) -> CommandResult:
+        thread = self._selected_thread()
+        if thread is None:
+            return _command_error("thread_not_found", "Select a Thread first.")
+        if not intent.arguments:
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                data={"model": thread.current_model},
+                selection=CommandSelection(
+                    prompt="Select the model for future Turns.",
+                    options=tuple(
+                        CommandOption(
+                            value=model,
+                            label=model,
+                            selected=model == thread.current_model,
+                        )
+                        for model in sorted(SUPPORTED_MODEL_IDS)
+                    ),
+                ),
+            )
+        if len(intent.arguments) != 1 or intent.arguments[0] not in SUPPORTED_MODEL_IDS:
+            return _command_error(
+                "invalid_arguments",
+                "Usage: /model [provider/model]",
+            )
+        updated = self._conversation.set_model(thread.id, intent.arguments[0])
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data={"model": updated.current_model},
+        )
+
+    def _thinking(self, intent: CommandIntent) -> CommandResult:
+        thread = self._selected_thread()
+        if thread is None:
+            return _command_error("thread_not_found", "Select a Thread first.")
+        if not intent.arguments:
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                data={"thinking_enabled": thread.thinking_enabled},
+                selection=CommandSelection(
+                    prompt="Select thinking mode for future Turns.",
+                    options=(
+                        CommandOption(
+                            value="off",
+                            label="Off",
+                            selected=not thread.thinking_enabled,
+                        ),
+                        CommandOption(
+                            value="on",
+                            label="On",
+                            selected=thread.thinking_enabled,
+                        ),
+                    ),
+                ),
+            )
+        if len(intent.arguments) != 1 or intent.arguments[0] not in {"on", "off"}:
+            return _command_error(
+                "invalid_arguments",
+                "Usage: /thinking [on|off]",
+            )
+        updated = self._conversation.set_thinking(
+            thread.id,
+            intent.arguments[0] == "on",
+        )
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data={"thinking_enabled": updated.thinking_enabled},
+        )
+
+    def _selected_thread_id(self) -> str | None:
+        if self._current_thread_id is not None:
+            return self._current_thread_id
+        threads = self._conversation.list_threads(self._workspace_key)
+        if not threads:
+            return None
+        self._current_thread_id = threads[0].id
+        return self._current_thread_id
+
+    def _selected_thread(self) -> Thread | None:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return None
+        return self._conversation.read_thread(thread_id).thread
+
+
+def _command_error(code: str, content: str) -> CommandResult:
+    return CommandResult(
+        status=CommandStatus.ERROR,
+        content=content,
+        data={"error_code": code},
+    )
 
 
 class ApplicationExtensionService:
@@ -132,6 +321,7 @@ class ApplicationExtensionService:
         mem0_enabled: bool = False,
         mem0_user_id: str | None = None,
         mem0_initialization_diagnostic: Mem0Diagnostic | None = None,
+        mem0_state_changed: Mem0StateChanged = lambda enabled, identity: None,
         has_active_turn: Callable[[], bool] = lambda: False,
     ) -> None:
         self._conversation = conversation
@@ -149,6 +339,7 @@ class ApplicationExtensionService:
         self._mem0_user_id = mem0_user_id
         self._mem0_initialization_diagnostic = mem0_initialization_diagnostic
         self._mem0_identity: Mem0Identity | None = None
+        self._mem0_state_changed = mem0_state_changed
         self._has_active_turn = has_active_turn
 
     async def handle(
@@ -300,6 +491,7 @@ class ApplicationExtensionService:
 
             self._config_writer.update(update)
             self._mem0_enabled = enabled
+            self._mem0_state_changed(enabled, self._mem0_identity)
             return self._memory_status()
 
         if not self._mem0_enabled:

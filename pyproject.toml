@@ -45,6 +45,7 @@ memory = [
 [project.scripts]
 awesome = "awesome_agent.cli.interactive:main"
 awesome-agent = "awesome_agent.cli.app:app"
+awesome-core = "awesome_agent.protocol.stdio:main"
 
 [dependency-groups]
 dev = [
@@ -86,7 +87,7 @@ module = ["mem0", "mem0.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers"
+addopts = "--strict-config --strict-markers --import-mode=importlib"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
