@@ -19,6 +19,7 @@ class FakeClient:
         self.connect_count = 0
         self.closed = False
         self.fail_call = False
+        self.fail_close = False
 
     async def connect(self) -> None:
         self.connect_count += 1
@@ -41,6 +42,8 @@ class FakeClient:
 
     async def aclose(self) -> None:
         self.closed = True
+        if self.fail_close:
+            raise RuntimeError("close failed")
 
 
 @pytest.mark.asyncio
@@ -155,6 +158,7 @@ async def test_connection_loss_is_uncertain_and_current_call_is_not_replayed(
     )
     await manager.start_enabled()
     client.fail_call = True
+    client.fail_close = True
 
     with pytest.raises(McpCallUncertain):
         await manager.call_tool("user", "echo", {"text": "once"})

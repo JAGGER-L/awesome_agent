@@ -189,7 +189,8 @@ class McpManager:
         client = self._clients.pop(server_id, None)
         self._tools.pop(server_id, None)
         if client is not None:
-            await client.aclose()
+            with suppress(Exception):
+                await client.aclose()
 
     def _config(self, server_id: str) -> McpServerConfig:
         try:
