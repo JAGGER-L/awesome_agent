@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
@@ -11,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from awesome_agent.application.commands import (
     CommandIntent,
     CommandName,
+    CommandOption,
     CommandResult,
+    CommandSelection,
     CommandStatus,
 )
 from awesome_agent.application.dispatcher import CommandDispatcher
@@ -21,6 +24,7 @@ from awesome_agent.application.interactions import (
     InteractionKind,
 )
 from awesome_agent.application.operations import OperationController
+from awesome_agent.conversation import ConversationService
 from awesome_agent.core.changes import (
     ChangeJournal,
     ChangeLifecycle,
@@ -67,10 +71,275 @@ from awesome_agent.core.workspace import (
     WorkspaceTrustService,
     resolve_workspace,
 )
+from awesome_agent.extensions.mcp import (
+    McpConnectionState,
+    McpManager,
+    McpServerStatus,
+    McpSource,
+    McpUnavailable,
+)
+from awesome_agent.extensions.mcp.adapter import McpToolAdapter
+from awesome_agent.extensions.mcp.models import mcp_config_hash
+from awesome_agent.extensions.skills import SkillCatalog, SkillLoader, SkillNotFound
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.conversations import SQLiteToolActivityRepository
+from awesome_agent.storage.mcp import SQLiteMcpEnablementStore
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
+
+type TurnSubmitter = Callable[[str, str], Awaitable[object]]
+
+_SKILL_COMMANDS = {
+    CommandName.INIT: ("init", "Initialize durable workspace guidance."),
+    CommandName.REVIEW: ("review", "Review the current change."),
+    CommandName.DEBUG: ("debug", "Debug the current failure from evidence."),
+    CommandName.TEST: ("test", "Design and run focused validation."),
+    CommandName.COMMIT: ("git-workflow", "Prepare the current change for commit."),
+}
+
+
+class ApplicationExtensionService:
+    """Headless Skill/MCP commands shared by future product surfaces."""
+
+    def __init__(
+        self,
+        *,
+        conversation: ConversationService,
+        catalog: SkillCatalog,
+        loader: SkillLoader,
+        manager: McpManager,
+        enablements: SQLiteMcpEnablementStore,
+        workspace_key: str,
+        registry: ToolRegistry,
+        submit_turn: TurnSubmitter,
+    ) -> None:
+        self._conversation = conversation
+        self._catalog = catalog
+        self._loader = loader
+        self._manager = manager
+        self._enablements = enablements
+        self._workspace_key = workspace_key
+        self._registry = registry
+        self._submit_turn = submit_turn
+
+    async def handle(
+        self,
+        intent: CommandIntent,
+        *,
+        thread_id: str,
+    ) -> CommandResult:
+        if intent.name is CommandName.SKILLS:
+            return self._skills(intent)
+        if intent.name is CommandName.SKILL:
+            return self._skill(intent, thread_id)
+        if intent.name is CommandName.MCP:
+            return await self._mcp(intent)
+        if intent.name in _SKILL_COMMANDS:
+            return await self._skill_command(intent, thread_id)
+        return self._error("command_not_available", "Command is not available.")
+
+    async def prepare_turn_extensions(self) -> None:
+        await self._manager.start_enabled()
+        self._synchronize_registry()
+
+    def _skills(self, intent: CommandIntent) -> CommandResult:
+        if intent.arguments:
+            return self._error("invalid_arguments", "Usage: /skills")
+        effective = [
+            {
+                "name": item.name,
+                "description": item.description,
+                "source": item.source.value,
+            }
+            for item in self._catalog.descriptors()
+        ]
+        diagnostics = [
+            {
+                "code": item.code,
+                "name": item.name,
+                "source": item.source.value,
+                "message": item.message,
+            }
+            for item in self._catalog.diagnostics()
+        ]
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data=cast(
+                dict[str, JsonValue],
+                {"effective": effective, "diagnostics": diagnostics},
+            ),
+        )
+
+    def _skill(self, intent: CommandIntent, thread_id: str) -> CommandResult:
+        current = self._conversation.read_thread(thread_id).thread.skill_mode
+        if not intent.arguments:
+            options = (
+                CommandOption(
+                    value="auto",
+                    label="Auto",
+                    selected=current == "auto",
+                ),
+                CommandOption(
+                    value="off",
+                    label="Off",
+                    selected=current == "off",
+                ),
+                *tuple(
+                    CommandOption(
+                        value=item.name,
+                        label=item.name,
+                        description=item.description,
+                        selected=current == item.name,
+                    )
+                    for item in self._catalog.descriptors()
+                ),
+            )
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                data={"skill_mode": current},
+                selection=CommandSelection(
+                    prompt="Select the Skill mode for future Turns.",
+                    options=options,
+                ),
+            )
+        if len(intent.arguments) != 1:
+            return self._error(
+                "invalid_arguments",
+                "Usage: /skill [auto|off|name]",
+            )
+        selection = intent.arguments[0]
+        if selection not in {"auto", "off"}:
+            try:
+                self._catalog.resolve(selection)
+            except SkillNotFound:
+                return self._error("skill_not_found", "Skill was not found.")
+        updated = self._conversation.set_skill_mode(thread_id, selection)
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data={"skill_mode": updated.skill_mode},
+        )
+
+    async def _skill_command(
+        self,
+        intent: CommandIntent,
+        thread_id: str,
+    ) -> CommandResult:
+        skill_name, prompt = _SKILL_COMMANDS[intent.name]
+        try:
+            self._catalog.resolve(skill_name)
+        except SkillNotFound:
+            return self._error("skill_not_found", "Bundled Skill is unavailable.")
+        self._conversation.set_skill_mode(thread_id, skill_name)
+        content = " ".join((prompt, *intent.arguments)).strip()
+        accepted = await self._submit_turn(thread_id, content)
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            content="Agent Turn submitted.",
+            data=_accepted_data(accepted, skill_name),
+        )
+
+    async def _mcp(self, intent: CommandIntent) -> CommandResult:
+        arguments = intent.arguments
+        if not arguments:
+            return self._mcp_status(None)
+        action = arguments[0]
+        if action == "status" and len(arguments) in {1, 2}:
+            return self._mcp_status(arguments[1] if len(arguments) == 2 else None)
+        if action not in {"enable", "disable", "restart"} or len(arguments) != 2:
+            return self._error(
+                "invalid_arguments",
+                "Usage: /mcp [status [id]|enable <id>|disable <id>|restart <id>]",
+            )
+        server_id = arguments[1]
+        try:
+            config = self._manager.config(server_id)
+        except McpUnavailable:
+            return self._error("mcp_server_not_found", "MCP server was not found.")
+        if action in {"enable", "disable"} and config.source is McpSource.USER:
+            return self._error(
+                "user_config_required",
+                "User MCP enablement is controlled by user configuration.",
+            )
+        if action == "enable":
+            self._enablements.enable(
+                self._workspace_key,
+                config.id,
+                mcp_config_hash(config),
+            )
+            status = await self._manager.refresh_enablement(config.id)
+        elif action == "disable":
+            self._enablements.disable(self._workspace_key, config.id)
+            status = await self._manager.refresh_enablement(config.id)
+            McpToolAdapter(self._manager, config.id).remove_registry_tools(
+                self._registry
+            )
+        else:
+            status = await self._manager.restart(config.id)
+            self._synchronize_server(config.id)
+        return CommandResult(
+            status=(
+                CommandStatus.SUCCESS
+                if status.state is not McpConnectionState.ERROR
+                else CommandStatus.ERROR
+            ),
+            data=_mcp_status_payload(status),
+        )
+
+    def _mcp_status(self, server_id: str | None) -> CommandResult:
+        statuses: tuple[McpServerStatus, ...]
+        if server_id is not None:
+            try:
+                statuses = (self._manager.status(server_id),)
+            except McpUnavailable:
+                return self._error("mcp_server_not_found", "MCP server was not found.")
+        else:
+            statuses = self._manager.statuses()
+        return CommandResult(
+            status=CommandStatus.SUCCESS,
+            data=cast(
+                dict[str, JsonValue],
+                {"servers": [_mcp_status_payload(item) for item in statuses]},
+            ),
+        )
+
+    def _synchronize_registry(self) -> None:
+        for config in self._manager.configs():
+            self._synchronize_server(config.id)
+
+    def _synchronize_server(self, server_id: str) -> None:
+        adapter = McpToolAdapter(self._manager, server_id)
+        status = self._manager.status(server_id)
+        if status.connected:
+            adapter.replace_registry_tools(
+                self._registry, self._manager.tools(server_id)
+            )
+        else:
+            adapter.remove_registry_tools(self._registry)
+
+    def _error(self, code: str, content: str) -> CommandResult:
+        return CommandResult(
+            status=CommandStatus.ERROR,
+            content=content,
+            data={"error_code": code},
+        )
+
+
+def _mcp_status_payload(status: McpServerStatus) -> dict[str, JsonValue]:
+    return {
+        "server_id": status.server_id,
+        "state": status.state.value,
+        "detail": status.detail,
+    }
+
+
+def _accepted_data(value: object, skill_name: str) -> dict[str, JsonValue]:
+    if isinstance(value, BaseModel):
+        data = cast(dict[str, JsonValue], value.model_dump(mode="json"))
+    elif isinstance(value, dict):
+        data = cast(dict[str, JsonValue], value)
+    else:
+        data = {}
+    return {"skill": skill_name, **data}
 
 
 class StartupStatus(StrEnum):

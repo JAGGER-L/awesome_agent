@@ -7,6 +7,7 @@ from awesome_agent.storage.database import (
     application_connection,
     initialize_application_database,
 )
+from awesome_agent.storage.mcp import SQLiteMcpEnablementStore, mcp_config_hash
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 __all__ = [
@@ -15,8 +16,10 @@ __all__ = [
     "FileChangeBlobStore",
     "SQLiteChangeSetStore",
     "SQLiteConversationRepositories",
+    "SQLiteMcpEnablementStore",
     "SQLiteWorkspaceTrustStore",
     "application_connection",
     "initialize_application_database",
+    "mcp_config_hash",
     "sqlite_checkpoint_saver",
 ]

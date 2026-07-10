@@ -32,7 +32,7 @@ def test_current_schema_contains_change_and_pending_tables(tmp_path: Path) -> No
             )
         }
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert APPLICATION_SCHEMA_VERSION == version == 3
+    assert APPLICATION_SCHEMA_VERSION == version == 4
     assert {"change_sets", "pending_mutations"} <= names
 
 

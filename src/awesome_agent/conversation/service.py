@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -58,6 +59,15 @@ class ConversationService:
 
     def list_threads(self, workspace_key: str) -> tuple[Thread, ...]:
         return tuple(self._store.list_threads(workspace_key))
+
+    def set_skill_mode(self, thread_id: str, skill_mode: str) -> Thread:
+        if re.fullmatch(r"(?:auto|off|[a-z][a-z0-9-]{0,63})", skill_mode) is None:
+            raise ValueError("Skill mode is invalid.")
+        current = self._store.read_thread(thread_id).thread
+        updated = current.model_copy(
+            update={"skill_mode": skill_mode, "updated_at": self._clock()}
+        )
+        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 
     def read_thread(self, thread_id: str) -> ThreadView:
         return self._store.read_thread(thread_id)

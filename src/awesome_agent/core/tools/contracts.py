@@ -5,6 +5,12 @@ from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+TOOL_NAME_PATTERN = (
+    r"^(?:[a-z][a-z0-9_]*|"
+    r"mcp\.[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*|"
+    r"user\.[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*)$"
+)
+
 
 class ToolStatus(StrEnum):
     SUCCESS = "success"
@@ -25,6 +31,7 @@ class ToolErrorCode(StrEnum):
     CONFLICT = "conflict"
     TIMEOUT = "timeout"
     EXECUTION_FAILED = "execution_failed"
+    UNCERTAIN_OUTCOME = "uncertain_outcome"
     CANCELLED = "cancelled"
 
 
@@ -62,17 +69,18 @@ class ToolActivityWriter(Protocol):
 class ToolSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    name: str = Field(pattern=TOOL_NAME_PATTERN)
     description: str = Field(min_length=1, max_length=500)
     input_schema: dict[str, JsonValue]
     read_only: bool
+    display_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ToolRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     call_id: str = Field(min_length=1, max_length=128)
-    tool_name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    tool_name: str = Field(pattern=TOOL_NAME_PATTERN)
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
 
 
