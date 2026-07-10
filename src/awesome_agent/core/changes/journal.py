@@ -77,7 +77,7 @@ def _matches(
         snapshot is not None
         and snapshot.node_type is node_type
         and _snapshot_hash(snapshot) == digest
-        and snapshot.mode == mode
+        and (mode is None or snapshot.mode == mode)
     )
 
 
@@ -227,23 +227,32 @@ class ChangeJournal:
                 f"Mutation result for {relative} did not match its intended state."
             )
 
-        change = self._file_change(pending)
+        change = self._file_change(pending, actual_after)
         updated = change_set.model_copy(update={"files": [*change_set.files, change]})
         self._store.save(updated)
         self._store.delete_pending(pending.id)
         return change
 
-    def _file_change(self, pending: PendingMutation) -> FileChange:
+    def _file_change(
+        self,
+        pending: PendingMutation,
+        actual_after: NodeSnapshot | None,
+    ) -> FileChange:
+        after_blob = (
+            self._blobs.put(actual_after.content)
+            if actual_after is not None and actual_after.content is not None
+            else None
+        )
         return FileChange(
             path=pending.relative_path,
             kind=pending.kind,
             node_type=pending.node_type,
             before_hash=pending.before_hash,
-            after_hash=pending.intended_after_hash,
+            after_hash=_snapshot_hash(actual_after),
             before_blob=pending.before_blob,
-            after_blob=pending.intended_after_blob,
+            after_blob=after_blob,
             before_mode=pending.before_mode,
-            after_mode=pending.intended_after_mode,
+            after_mode=actual_after.mode if actual_after is not None else None,
         )
 
     def record_execute(
@@ -303,7 +312,7 @@ class ChangeJournal:
                 mode=pending.intended_after_mode,
                 node_type=pending.node_type,
             ):
-                change = self._file_change(pending)
+                change = self._file_change(pending, current)
                 if change not in change_set.files:
                     self._store.save(
                         change_set.model_copy(

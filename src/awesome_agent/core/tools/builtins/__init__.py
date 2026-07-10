@@ -1,5 +1,10 @@
 from pydantic import BaseModel
 
+from awesome_agent.core.changes import ChangeJournal
+from awesome_agent.core.tools.builtins.edit_file import (
+    EditFileArguments,
+    create_edit_file_handler,
+)
 from awesome_agent.core.tools.builtins.listing import LsArguments, list_directory
 from awesome_agent.core.tools.builtins.read_file import ReadFileArguments, read_file
 from awesome_agent.core.tools.builtins.search import (
@@ -7,6 +12,10 @@ from awesome_agent.core.tools.builtins.search import (
     GrepArguments,
     glob_files,
     grep_files,
+)
+from awesome_agent.core.tools.builtins.write_file import (
+    WriteFileArguments,
+    create_write_file_handler,
 )
 from awesome_agent.core.tools.context import ToolHandler
 from awesome_agent.core.tools.contracts import ToolSpec
@@ -64,4 +73,24 @@ def register_read_tools(registry: ToolRegistry) -> None:
     )
 
 
-__all__ = ["register_read_tools"]
+def register_modifying_tools(
+    registry: ToolRegistry,
+    journal: ChangeJournal,
+) -> None:
+    _register(
+        registry,
+        name="edit_file",
+        description="Perform exact string replacements in files",
+        input_model=EditFileArguments,
+        handler=create_edit_file_handler(journal),
+    )
+    _register(
+        registry,
+        name="write_file",
+        description="Create a new file, or overwrite an existing one",
+        input_model=WriteFileArguments,
+        handler=create_write_file_handler(journal),
+    )
+
+
+__all__ = ["register_modifying_tools", "register_read_tools"]
