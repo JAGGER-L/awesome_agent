@@ -36,6 +36,7 @@ class DirectToolExecutor(Protocol):
 
 
 type DirectContextFactory = Callable[[str, str], ToolExecutionContext]
+type DirectOperationFinalizer = Callable[[str], None]
 
 
 class DirectCommandService:
@@ -46,11 +47,13 @@ class DirectCommandService:
         executor: DirectToolExecutor,
         operations: OperationController,
         context_factory: DirectContextFactory,
+        finalize_operation: DirectOperationFinalizer = lambda operation_id: None,
     ) -> None:
         self._conversation = conversation
         self._executor = executor
         self._operations = operations
         self._context_factory = context_factory
+        self._finalize_operation = finalize_operation
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     async def start(self, thread_id: str, command: str) -> OperationAccepted:
@@ -73,26 +76,29 @@ class DirectCommandService:
                 arguments={"command": normalized},
             )
             try:
-                result = await self._executor.execute(request, context=context)
-            except asyncio.CancelledError:
-                self._persist(
-                    thread_id,
-                    command=normalized,
-                    output="Command was cancelled.",
-                    status="cancelled",
-                    exit_code=None,
-                )
-                raise
-            except Exception:
-                self._persist(
-                    thread_id,
-                    command=normalized,
-                    output="Command execution failed.",
-                    status="error",
-                    exit_code=None,
-                )
-                raise
-            self._persist_result(thread_id, normalized, result)
+                try:
+                    result = await self._executor.execute(request, context=context)
+                except asyncio.CancelledError:
+                    self._persist(
+                        thread_id,
+                        command=normalized,
+                        output="Command was cancelled.",
+                        status="cancelled",
+                        exit_code=None,
+                    )
+                    raise
+                except Exception:
+                    self._persist(
+                        thread_id,
+                        command=normalized,
+                        output="Command execution failed.",
+                        status="error",
+                        exit_code=None,
+                    )
+                    raise
+                self._persist_result(thread_id, normalized, result)
+            finally:
+                self._finalize_operation(operation_id)
 
         handle = await self._operations.start(execute, thread_id=thread_id)
         self._tasks[handle.operation_id] = handle.task

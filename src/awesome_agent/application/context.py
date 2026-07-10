@@ -110,6 +110,10 @@ class ApplicationContextService:
             memory_sources=memory_sources,
         )
 
+    def current_input(self, turn_id: str) -> str:
+        capture = self._captures.get(turn_id)
+        return "" if capture is None else capture.natural_input
+
     async def build(self, state: AgentState) -> PreparedAgentContext:
         capture = self._captures.get(state["turn_id"])
         if capture is None:
