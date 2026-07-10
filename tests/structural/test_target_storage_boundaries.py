@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 FORBIDDEN_IMPORT_ROOTS = {
     "awesome_agent.api",
     "awesome_agent.persistence",
