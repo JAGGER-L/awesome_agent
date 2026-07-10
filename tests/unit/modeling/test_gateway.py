@@ -242,6 +242,23 @@ async def test_complete_returns_turn_with_retry_count_in_usage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gateway_rejects_terminal_turn_for_a_different_frozen_model() -> None:
+    mismatched = _turn().model_copy(update={"model": "deepseek/deepseek-v4-pro"})
+    provider = ScriptedProvider(((TurnCompleted(turn=mismatched),),))
+    gateway = ModelGateway(
+        {"deepseek": provider},
+        retry_policy=RetryPolicy(max_retries=0),
+        sleeper=_no_sleep,
+    )
+
+    events = await _collect(gateway, _request())
+
+    assert len(events) == 1
+    assert isinstance(events[0], TurnFailed)
+    assert events[0].error.code is ModelErrorCode.PROVIDER_PROTOCOL
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "attempt",
     [(), (TurnCompleted(turn=_turn()), TurnCompleted(turn=_turn()))],

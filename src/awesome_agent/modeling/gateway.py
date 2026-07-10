@@ -101,6 +101,16 @@ class ModelGateway:
                     if isinstance(event, _VISIBLE_EVENTS):
                         visible = True
                     if isinstance(event, TurnCompleted):
+                        if (
+                            event.turn.provider != selected.provider
+                            or event.turn.model != selected.model
+                        ):
+                            protocol_error = ProviderProtocolError(
+                                "Provider completed a different frozen model.",
+                                provider=selected.provider,
+                            )
+                            yield TurnFailed(error=protocol_error.info)
+                            return
                         completed_seen = True
                         yield _with_retry_usage(event, retries)
                         continue

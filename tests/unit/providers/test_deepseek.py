@@ -283,6 +283,25 @@ async def test_timeout_is_explicit_and_custom_base_url_is_not_an_option() -> Non
     assert "base_url" not in inspect.signature(DeepSeekProvider).parameters
 
 
+@pytest.mark.asyncio
+async def test_request_without_tools_omits_tool_choice() -> None:
+    create = AsyncMock(
+        return_value=AsyncEvents((_chunk(content="done", finish_reason="stop"),))
+    )
+    provider = DeepSeekProvider(
+        api_key="test",
+        model="deepseek/deepseek-v4-flash",
+        client=_client(create),
+    )
+
+    await _events(provider, _request())
+
+    call = create.await_args
+    assert call is not None
+    assert call.kwargs["tools"] is None
+    assert call.kwargs["tool_choice"] is None
+
+
 @pytest.mark.parametrize(
     "model",
     ["kimi/kimi-k2.6", "deepseek/custom", "custom"],

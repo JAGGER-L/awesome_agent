@@ -122,6 +122,11 @@ def test_explicit_selection_returns_only_provider_and_model() -> None:
     assert catalog.kimi_region is KimiRegion.GLOBAL
 
 
+def test_selected_model_rejects_cross_provider_model_pair() -> None:
+    with pytest.raises(ValidationError, match="does not belong"):
+        SelectedModel(provider="deepseek", model="kimi/kimi-k2.6")
+
+
 def test_kimi_region_is_closed_to_cn_and_global() -> None:
     with pytest.raises(ValidationError):
         ProviderConfig(kimi_region="custom")

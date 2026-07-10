@@ -267,6 +267,29 @@ async def test_assistant_history_replays_kimi_continuation() -> None:
     assert call.kwargs["messages"][1]["reasoning_content"] == "private kimi state"
 
 
+@pytest.mark.asyncio
+async def test_request_without_tools_omits_tool_choice() -> None:
+    from awesome_agent.providers.kimi import KimiProvider
+
+    create = AsyncMock(
+        return_value=AsyncEvents((_chunk(content="done", finish_reason="stop"),))
+    )
+    provider = KimiProvider(
+        api_key="test",
+        model="kimi/kimi-k2.6",
+        region=KimiRegion.CN,
+        client=_client(create),
+    )
+
+    async for _ in provider.stream(_request()):
+        pass
+
+    call = create.await_args
+    assert call is not None
+    assert call.kwargs["tools"] is None
+    assert call.kwargs["tool_choice"] is None
+
+
 def _response(status: int) -> httpx.Response:
     return httpx.Response(
         status,

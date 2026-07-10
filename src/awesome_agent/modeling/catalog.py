@@ -36,6 +36,14 @@ class SelectedModel(BaseModel):
     provider: ProviderId
     model: str = Field(min_length=1, max_length=200)
 
+    @model_validator(mode="after")
+    def validate_provider_model_pair(self) -> Self:
+        if self.model not in _EXPECTED_MODELS or not self.model.startswith(
+            f"{self.provider}/"
+        ):
+            raise ValueError("Selected model does not belong to its Provider.")
+        return self
+
 
 class ModelProfile(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)

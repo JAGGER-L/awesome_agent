@@ -305,6 +305,8 @@ def _tools(
 
 
 def _tool_choice(request: ModelRequest, tool_names: _ToolNames) -> object:
+    if not request.tools:
+        return None
     choice = request.tool_choice
     if choice.mode is ToolChoiceMode.TOOL:
         name = cast(str, choice.name)
