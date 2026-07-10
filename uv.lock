@@ -161,7 +161,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-postgres", marker = "extra == 'postgres'", specifier = ">=2.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.0" },
     { name = "mcp", specifier = ">=1,<2" },
-    { name = "mem0ai", marker = "extra == 'memory'", specifier = ">=0.1" },
+    { name = "mem0ai", marker = "extra == 'memory'", specifier = ">=2.0.7,<3" },
     { name = "openai", specifier = ">=1.100" },
     { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.36" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'observability'", specifier = ">=1.36" },

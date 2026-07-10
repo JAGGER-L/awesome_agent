@@ -74,8 +74,8 @@ class MemoryConfig(BaseModel):
     @field_validator("mem0_user_id")
     @classmethod
     def validate_opaque_user_id(cls, value: str | None) -> str | None:
-        if value is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", value):
-            raise ValueError("mem0_user_id must be opaque ASCII")
+        if value is not None and not re.fullmatch(r"user_[a-f0-9]{32}", value):
+            raise ValueError("mem0_user_id must be an opaque user identifier")
         return value
 
 

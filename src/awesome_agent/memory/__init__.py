@@ -1,3 +1,8 @@
+from awesome_agent.memory.identity import (
+    Mem0Identity,
+    ensure_mem0_user_id,
+    new_mem0_user_id,
+)
 from awesome_agent.memory.local_file import (
     LocalMemoryFile,
     MemoryDocumentInvalid,
@@ -25,6 +30,7 @@ __all__ = [
     "LocalMemoryScopeStatus",
     "LocalMemoryService",
     "LocalMemoryStatus",
+    "Mem0Identity",
     "MemoryDocument",
     "MemoryDocumentInvalid",
     "MemoryEntry",
@@ -33,6 +39,8 @@ __all__ = [
     "MemoryPolicyResult",
     "MemoryPolicyStatus",
     "MemoryScope",
+    "ensure_mem0_user_id",
+    "new_mem0_user_id",
     "refresh_local_memory_tools",
     "render_memory_document",
 ]

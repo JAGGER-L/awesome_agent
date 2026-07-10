@@ -39,7 +39,7 @@ observability = [
   "structlog>=25.4",
 ]
 memory = [
-  "mem0ai>=0.1",
+  "mem0ai>=2.0.7,<3",
 ]
 
 [project.scripts]
