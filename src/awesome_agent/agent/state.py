@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from typing import Annotated
+
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, with_config
 from typing_extensions import TypedDict
 
 
@@ -25,7 +27,7 @@ class AgentState(TypedDict):
     active_execution_seconds: float
     usage: dict[str, int]
     recovery_issue: str | None
-    final_answer: str | None
+    final_answer: Annotated[str, Field(max_length=200_000)] | None
     termination_reason: str | None
 
 

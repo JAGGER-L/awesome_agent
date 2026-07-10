@@ -68,6 +68,14 @@ def test_state_contains_only_checkpoint_safe_json_values() -> None:
     assert_safe(state)
 
 
+def test_final_answer_is_bounded_in_checkpoint_state() -> None:
+    payload = dict(_state())
+    payload["final_answer"] = "x" * 200_001
+
+    with pytest.raises(ValidationError):
+        validate_agent_state(payload)
+
+
 @pytest.mark.parametrize(
     "forbidden",
     [
