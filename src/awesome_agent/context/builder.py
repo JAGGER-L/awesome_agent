@@ -222,8 +222,7 @@ async def mem0_context_source(
         return Mem0ContextResult()
     first = retained[0]
     rendered = "\n".join(
-        f"[mem0:{memory.id}:{memory.fact_hash}] {memory.content}"
-        for memory in retained
+        f"[mem0:{memory.id}:{memory.fact_hash}] {memory.content}" for memory in retained
     )
     return Mem0ContextResult(
         source=ContextSource(
