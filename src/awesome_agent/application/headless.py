@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
+from time import monotonic
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -45,6 +46,7 @@ from awesome_agent.core.tools import (
     ToolError,
     ToolErrorCode,
     ToolExecutionContext,
+    ToolExecutionOrigin,
     ToolExecutor,
     ToolRequest,
     ToolResult,
@@ -67,6 +69,7 @@ from awesome_agent.core.workspace import (
 )
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
+from awesome_agent.storage.conversations import SQLiteToolActivityRepository
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 
@@ -101,6 +104,7 @@ class LocalApplication:
         )
         self._interactions = InteractionCoordinator()
         self._operations = OperationController(self._emitter)
+        self._activity_writer = SQLiteToolActivityRepository(paths.application_db)
         self._trust = WorkspaceTrustService(
             SQLiteWorkspaceTrustStore(paths.application_db)
         )
@@ -250,9 +254,17 @@ class LocalApplication:
                 change_set_id = self._change_set_for_turn(turn_id)
             context = ToolExecutionContext(
                 workspace=self._workspace,
+                thread_id=turn_id or self._session_id,
                 operation_id=operation_id,
                 turn_id=turn_id,
+                origin=(
+                    ToolExecutionOrigin.AGENT
+                    if turn_id is not None
+                    else ToolExecutionOrigin.DIRECT
+                ),
                 emitter=self._emitter,
+                activity_writer=self._activity_writer,
+                monotonic=monotonic,
                 change_set_id=change_set_id,
             )
             try:

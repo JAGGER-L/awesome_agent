@@ -214,7 +214,6 @@ async def execute_one_tool(
         )
         ended = context.monotonic()
         updated = add_active_segment(updated, started_at=started, ended_at=ended)
-    await context.event_projector.project_tool(result)
     updated["tool_results"].append(
         cast(dict[str, JsonValue], result.model_dump(mode="json"))
     )

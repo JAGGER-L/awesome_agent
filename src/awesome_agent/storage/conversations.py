@@ -6,6 +6,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from awesome_agent.conversation.models import (
     Thread,
@@ -13,6 +14,8 @@ from awesome_agent.conversation.models import (
     ThreadSummary,
     ThreadView,
     ToolActivity,
+    ToolActivityOrigin,
+    ToolActivityOutcome,
     Turn,
     TurnStatus,
     UsageSummary,
@@ -24,6 +27,7 @@ from awesome_agent.conversation.repository import (
     TurnNotFound,
     require_turn_transition,
 )
+from awesome_agent.core.tools import ToolActivityDraft
 from awesome_agent.storage.database import application_connection
 
 
@@ -465,6 +469,43 @@ class SQLiteThreadSummaryRepository(_SQLiteRepository):
 
 
 class SQLiteToolActivityRepository(_SQLiteRepository):
+    def finalize(self, draft: ToolActivityDraft) -> None:
+        with self._connection(None) as active:
+            existing = self._by_operation_call(
+                draft.operation_id,
+                draft.call_id,
+                connection=active,
+            )
+            if existing is not None:
+                return
+            row = active.execute(
+                """
+                SELECT COALESCE(MAX(sequence), 0) + 1
+                FROM tool_activities WHERE thread_id = ?
+                """,
+                (draft.thread_id,),
+            ).fetchone()
+            self.append(
+                ToolActivity(
+                    id=f"activity_{uuid4().hex}",
+                    thread_id=draft.thread_id,
+                    turn_id=draft.turn_id,
+                    operation_id=draft.operation_id,
+                    call_id=draft.call_id,
+                    sequence=int(row[0]),
+                    origin=ToolActivityOrigin(draft.origin.value),
+                    tool_name=draft.tool_name,
+                    outcome=ToolActivityOutcome(draft.outcome),
+                    input_summary=draft.input_summary,
+                    result_summary=draft.result_summary,
+                    error_code=draft.error_code,
+                    duration_ms=draft.duration_ms,
+                    change_set_id=draft.change_set_id,
+                    created_at=datetime.now(UTC),
+                ),
+                connection=active,
+            )
+
     def append(
         self,
         activity: ToolActivity,

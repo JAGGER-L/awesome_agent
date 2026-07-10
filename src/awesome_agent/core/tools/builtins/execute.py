@@ -16,7 +16,7 @@ from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
 from awesome_agent.core.tools.policy import resolve_workspace_path
-from awesome_agent.core.tools.process import ProcessRunner
+from awesome_agent.core.tools.process import ShellExecutionBackend
 from awesome_agent.safety.redaction import redact_text
 
 
@@ -50,7 +50,7 @@ def _shell_argv(command: str) -> list[str]:
 
 def create_execute_handler(
     journal: ChangeJournal,
-    process_runner: ProcessRunner,
+    process_runner: ShellExecutionBackend,
 ) -> ToolHandler:
     async def execute(
         arguments: BaseModel,

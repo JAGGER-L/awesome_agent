@@ -1,4 +1,6 @@
 from pathlib import Path
+from time import monotonic
+from unittest.mock import Mock
 
 import pytest
 from pydantic import JsonValue
@@ -7,6 +9,7 @@ from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
     ToolErrorCode,
     ToolExecutionContext,
+    ToolExecutionOrigin,
     ToolExecutor,
     ToolRequest,
     ToolResult,
@@ -25,13 +28,17 @@ def read_executor(
     identity = resolve_workspace(workspace)
     context = ToolExecutionContext(
         workspace=identity,
+        thread_id="thread_1",
         operation_id="operation_1",
         turn_id="turn_1",
+        origin=ToolExecutionOrigin.AGENT,
         emitter=EventEmitter(
             session_id="session_1",
             workspace_key=identity.key,
             sink=CollectingEventSink(),
         ),
+        activity_writer=Mock(),
+        monotonic=monotonic,
     )
     return ToolExecutor(registry), context
 

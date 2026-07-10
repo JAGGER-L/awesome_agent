@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,14 +8,18 @@ from pydantic import BaseModel, ConfigDict
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
     ExpectedToolFailure,
+    ToolActivityDraft,
+    ToolActivityWriter,
     ToolErrorCode,
     ToolExecutionContext,
+    ToolExecutionOrigin,
     ToolHandler,
     ToolOutput,
     ToolRequest,
     ToolSpec,
     ToolStatus,
 )
+from awesome_agent.core.tools.errors import ToolInvariantError
 from awesome_agent.core.tools.executor import ToolExecutor
 from awesome_agent.core.tools.registry import DuplicateToolName, ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
@@ -36,22 +41,36 @@ class EchoArguments(BaseModel):
 
 def execution_context(
     tmp_path: Path,
-) -> tuple[ToolExecutionContext, CollectingEventSink]:
+) -> tuple[ToolExecutionContext, CollectingEventSink, "CollectingActivityWriter"]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     identity = resolve_workspace(workspace)
     sink = CollectingEventSink()
+    writer = CollectingActivityWriter()
+    ticks = iter((1.0, 1.125, 2.0, 2.5, 3.0, 3.25))
     context = ToolExecutionContext(
         workspace=identity,
+        thread_id="thread_1",
         operation_id="operation_1",
         turn_id="turn_1",
+        origin=ToolExecutionOrigin.AGENT,
         emitter=EventEmitter(
             session_id="session_1",
             workspace_key=identity.key,
             sink=sink,
         ),
+        activity_writer=writer,
+        monotonic=lambda: next(ticks),
     )
-    return context, sink
+    return context, sink, writer
+
+
+class CollectingActivityWriter(ToolActivityWriter):
+    def __init__(self) -> None:
+        self.activities: dict[tuple[str, str], ToolActivityDraft] = {}
+
+    def finalize(self, activity: ToolActivityDraft) -> None:
+        self.activities.setdefault((activity.operation_id, activity.call_id), activity)
 
 
 def echo_registry(handler_override: ToolHandler | None = None) -> ToolRegistry:
@@ -103,7 +122,7 @@ def test_registry_rejects_duplicates_and_lists_sorted_specs() -> None:
 
 @pytest.mark.asyncio
 async def test_executor_emits_success_events(tmp_path: Path) -> None:
-    context, sink = execution_context(tmp_path)
+    context, sink, writer = execution_context(tmp_path)
     executor = ToolExecutor(echo_registry())
 
     result = await executor.execute(
@@ -117,11 +136,19 @@ async def test_executor_emits_success_events(tmp_path: Path) -> None:
         EventType.TOOL_STARTED,
         EventType.TOOL_COMPLETED,
     ]
+    [activity] = writer.activities.values()
+    assert activity.thread_id == "thread_1"
+    assert activity.turn_id == "turn_1"
+    assert activity.origin is ToolExecutionOrigin.AGENT
+    assert activity.duration_ms == 125
+    assert activity.change_set_id is None
+    assert activity.input_summary == "arguments: text"
+    assert activity.result_summary == "Tool execution completed."
 
 
 @pytest.mark.asyncio
 async def test_executor_normalizes_invalid_arguments(tmp_path: Path) -> None:
-    context, sink = execution_context(tmp_path)
+    context, sink, writer = execution_context(tmp_path)
     executor = ToolExecutor(echo_registry())
 
     result = await executor.execute(
@@ -136,6 +163,7 @@ async def test_executor_normalizes_invalid_arguments(tmp_path: Path) -> None:
         EventType.TOOL_STARTED,
         EventType.TOOL_FAILED,
     ]
+    assert next(iter(writer.activities.values())).error_code == "invalid_arguments"
 
 
 @pytest.mark.asyncio
@@ -150,7 +178,7 @@ async def test_executor_normalizes_expected_failure(tmp_path: Path) -> None:
             retryable=True,
         )
 
-    context, sink = execution_context(tmp_path)
+    context, sink, writer = execution_context(tmp_path)
     executor = ToolExecutor(echo_registry(missing))
 
     result = await executor.execute(
@@ -166,6 +194,7 @@ async def test_executor_normalizes_expected_failure(tmp_path: Path) -> None:
         EventType.TOOL_STARTED,
         EventType.TOOL_FAILED,
     ]
+    assert next(iter(writer.activities.values())).result_summary == "not_found"
 
 
 @pytest.mark.asyncio
@@ -179,7 +208,7 @@ async def test_executor_normalizes_timeout(tmp_path: Path) -> None:
         await waiting.wait()
         return ToolOutput(content="unreachable")
 
-    context, sink = execution_context(tmp_path)
+    context, sink, writer = execution_context(tmp_path)
     executor = ToolExecutor(echo_registry(wait_forever), timeout_seconds=0.01)
 
     result = await executor.execute(
@@ -194,10 +223,11 @@ async def test_executor_normalizes_timeout(tmp_path: Path) -> None:
         EventType.TOOL_STARTED,
         EventType.TOOL_FAILED,
     ]
+    assert next(iter(writer.activities.values())).error_code == "timeout"
 
 
 @pytest.mark.asyncio
-async def test_executor_propagates_cancellation_without_result_event(
+async def test_executor_records_cancellation_then_reraises(
     tmp_path: Path,
 ) -> None:
     started = asyncio.Event()
@@ -214,7 +244,7 @@ async def test_executor_propagates_cancellation_without_result_event(
             finished.set()
         raise AssertionError("Cancellation did not stop the handler.")
 
-    context, sink = execution_context(tmp_path)
+    context, sink, writer = execution_context(tmp_path)
     executor = ToolExecutor(echo_registry(cancellable), timeout_seconds=30.0)
     task = asyncio.create_task(
         executor.execute(
@@ -230,4 +260,60 @@ async def test_executor_propagates_cancellation_without_result_event(
 
     assert task.done()
     assert finished.is_set()
-    assert [event.event_type for event in sink.events] == [EventType.TOOL_STARTED]
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_CANCELLED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "cancelled"
+    assert activity.error_code == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_executor_records_safe_invariant_failure_before_reraising(
+    tmp_path: Path,
+) -> None:
+    async def explode(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        raise RuntimeError("raw traceback secret")
+
+    context, sink, writer = execution_context(tmp_path)
+    executor = ToolExecutor(echo_registry(explode))
+
+    with pytest.raises(ToolInvariantError):
+        await executor.execute(
+            ToolRequest(
+                call_id="call_1",
+                tool_name="echo",
+                arguments={"text": "raw input secret"},
+            ),
+            context=context,
+        )
+
+    [activity] = writer.activities.values()
+    serialized = activity.model_dump_json()
+    assert activity.error_code == "execution_failed"
+    assert "raw input secret" not in serialized
+    assert "raw traceback secret" not in serialized
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+
+
+def test_execution_context_enforces_origin_turn_invariant(tmp_path: Path) -> None:
+    context, _, _ = execution_context(tmp_path)
+
+    with pytest.raises(ValueError, match="agent"):
+        replace(context, turn_id=None)
+    with pytest.raises(ValueError, match="direct"):
+        replace(context, origin=ToolExecutionOrigin.DIRECT)
+
+    direct = replace(
+        context,
+        origin=ToolExecutionOrigin.DIRECT,
+        turn_id=None,
+    )
+    assert direct.thread_id == "thread_1"

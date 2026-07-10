@@ -1,4 +1,6 @@
 from pathlib import Path
+from time import monotonic
+from unittest.mock import Mock
 
 import pytest
 
@@ -6,6 +8,7 @@ from awesome_agent.core.changes import ChangeJournal, ChangeOperations, FileNode
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
     ToolExecutionContext,
+    ToolExecutionOrigin,
     ToolExecutor,
     ToolRequest,
     ToolStatus,
@@ -43,13 +46,17 @@ def delete_fixture(
     register_modifying_tools(registry, journal)
     context = ToolExecutionContext(
         workspace=identity,
+        thread_id="thread_1",
         operation_id="operation_1",
         turn_id="turn_1",
+        origin=ToolExecutionOrigin.AGENT,
         emitter=EventEmitter(
             session_id="session_1",
             workspace_key=identity.key,
             sink=CollectingEventSink(),
         ),
+        activity_writer=Mock(),
+        monotonic=monotonic,
         change_set_id=change_set.id,
     )
     return ToolExecutor(registry), context, journal, blobs, workspace

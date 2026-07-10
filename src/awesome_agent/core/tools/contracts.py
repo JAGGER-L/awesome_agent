@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -8,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 class ToolStatus(StrEnum):
     SUCCESS = "success"
     ERROR = "error"
+
+
+class ToolExecutionOrigin(StrEnum):
+    AGENT = "agent"
+    DIRECT = "direct"
 
 
 class ToolErrorCode(StrEnum):
@@ -19,6 +25,38 @@ class ToolErrorCode(StrEnum):
     CONFLICT = "conflict"
     TIMEOUT = "timeout"
     EXECUTION_FAILED = "execution_failed"
+    CANCELLED = "cancelled"
+
+
+class ToolActivityDraft(BaseModel):
+    """Terminal audit data with no raw tool arguments or result bodies."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    thread_id: str = Field(min_length=1, max_length=128)
+    turn_id: str | None = Field(default=None, max_length=128)
+    operation_id: str = Field(min_length=1, max_length=128)
+    call_id: str = Field(min_length=1, max_length=128)
+    origin: ToolExecutionOrigin
+    tool_name: str = Field(min_length=1, max_length=200)
+    outcome: Literal["success", "error", "cancelled"]
+    input_summary: str = Field(default="", max_length=2_000)
+    result_summary: str = Field(default="", max_length=4_000)
+    error_code: str | None = Field(default=None, max_length=128)
+    duration_ms: int = Field(ge=0)
+    change_set_id: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_origin_turn(self) -> Self:
+        if self.origin is ToolExecutionOrigin.AGENT and self.turn_id is None:
+            raise ValueError("agent ToolActivity requires turn_id")
+        if self.origin is ToolExecutionOrigin.DIRECT and self.turn_id is not None:
+            raise ValueError("direct ToolActivity forbids turn_id")
+        return self
+
+
+class ToolActivityWriter(Protocol):
+    def finalize(self, activity: ToolActivityDraft) -> None: ...
 
 
 class ToolSpec(BaseModel):
