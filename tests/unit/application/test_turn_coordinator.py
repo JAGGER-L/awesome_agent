@@ -37,16 +37,34 @@ class FakeGraph:
         return self.result
 
 
+class ResumeGraph(FakeGraph):
+    def __init__(self, result: AgentState) -> None:
+        super().__init__(result)
+        self.resume_inputs: list[AgentState | None] = []
+
+    async def ainvoke(
+        self,
+        state: AgentState | None,
+        config: dict[str, Any],
+        *,
+        context: AgentRuntimeContext,
+    ) -> AgentState:
+        del config, context
+        self.resume_inputs.append(state)
+        return self.result
+
+
 class FakeCheckpoints:
     def __init__(self) -> None:
         self.deleted: list[str] = []
+        self.state: AgentState | None = None
 
     async def exists(self, turn_id: str) -> bool:
         return turn_id not in self.deleted
 
     async def latest_state(self, turn_id: str) -> AgentState | None:
         del turn_id
-        return None
+        return self.state
 
     async def delete(self, turn_id: str) -> None:
         self.deleted.append(turn_id)
@@ -218,3 +236,24 @@ async def test_cancel_persists_cancelled_turn_before_operation_terminal(
         EventType.TURN_CANCELLED,
         EventType.OPERATION_CANCELLED,
     ]
+
+
+@pytest.mark.asyncio
+async def test_resume_uses_official_checkpoint_position_without_new_user_entry(
+    tmp_path: Path,
+) -> None:
+    graph = ResumeGraph(_result(final_answer="resumed", reason="completed"))
+    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+        tmp_path, graph
+    )
+    turn = conversation.begin_turn(thread_id, "inspect", _config())
+    checkpoints.state = _result(final_answer=None, reason="waiting")
+
+    accepted = await coordinator.resume_unfinished(thread_id)
+    await coordinator.wait(accepted.operation_id)
+
+    assert accepted.turn_id == turn.id
+    assert graph.resume_inputs == [None]
+    view = conversation.read_thread(thread_id)
+    assert len(view.entries) == 2
+    assert view.entries[-1].content == "resumed"
