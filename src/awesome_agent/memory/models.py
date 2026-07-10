@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class MemoryScope(StrEnum):
@@ -78,3 +78,60 @@ class LocalMemoryStatus(BaseModel):
 
     enabled: bool = False
     scopes: tuple[LocalMemoryScopeStatus, ...] = ()
+
+
+class CloudMemory(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=500)
+    scope: MemoryScope
+    fact_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    workspace_key: str | None = Field(
+        default=None,
+        pattern=r"^ws_[a-f0-9]{32}$",
+    )
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> CloudMemory:
+        if (self.scope is MemoryScope.WORKSPACE) != (self.workspace_key is not None):
+            raise ValueError("workspace scope requires only an opaque workspace key")
+        return self
+
+
+class MemoryCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scope: MemoryScope
+    content: str = Field(min_length=1, max_length=500)
+    fact_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class Mem0Diagnostic(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str = Field(min_length=1, max_length=128)
+    operation: str = Field(min_length=1, max_length=64)
+
+
+class CloudWriteOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: bool
+    queued: bool = False
+    memory_id: str | None = Field(default=None, max_length=200)
+    diagnostic: Mem0Diagnostic | None = None
+
+
+class CloudDeleteStatus(StrEnum):
+    REMOVED = "removed"
+    NOT_FOUND = "memory_not_found"
+    FAILED = "failed"
+
+
+class CloudDeleteOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: CloudDeleteStatus
+    memory_id: str = Field(min_length=1, max_length=200)
+    diagnostic: Mem0Diagnostic | None = None
