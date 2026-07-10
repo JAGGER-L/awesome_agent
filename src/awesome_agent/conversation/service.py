@@ -11,6 +11,7 @@ from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadSummary,
     ThreadView,
     Turn,
     TurnStatus,
@@ -192,6 +193,14 @@ class ConversationService:
             created_at=self._clock(),
         )
         return self._store.append_direct_command(entry)
+
+    def store_summary(
+        self,
+        summary: ThreadSummary,
+        *,
+        expected: ThreadSummary | None,
+    ) -> ThreadSummary:
+        return self._store.compare_and_swap_summary(summary, expected=expected)
 
     def _turn_view(self, turn_id: str) -> tuple[ThreadView, Turn]:
         thread_id = self._thread_id_for_turn(turn_id)

@@ -305,6 +305,35 @@ def test_tool_activity_writer_finalizes_one_terminal_record(tmp_path: Path) -> N
     assert activities[0].duration_ms == 12
 
 
+def test_summary_compare_and_swap_rejects_stale_coverage(tmp_path: Path) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories.threads.create(_thread())
+    first = ThreadSummary(
+        thread_id="thread_1",
+        content="first",
+        content_hash="a" * 64,
+        covered_entry_sequence=2,
+        covered_turn_count=1,
+        estimated_tokens=10,
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+        updated_at=_now(),
+    )
+    second = first.model_copy(
+        update={
+            "content": "second",
+            "content_hash": "b" * 64,
+            "covered_entry_sequence": 4,
+            "covered_turn_count": 2,
+        }
+    )
+
+    assert repositories.compare_and_swap_summary(first, expected=None) == first
+    assert repositories.compare_and_swap_summary(second, expected=first) == second
+    with pytest.raises(ConversationConflict):
+        repositories.compare_and_swap_summary(first, expected=None)
+
+
 def test_json_columns_use_canonical_compact_encoding(tmp_path: Path) -> None:
     path = tmp_path / "application.db"
     repositories = SQLiteConversationRepositories(path)

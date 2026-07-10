@@ -1,3 +1,12 @@
+from awesome_agent.context.builder import ContextBuilder, ContextOverflow
+from awesome_agent.context.compression import (
+    CompressionPlan,
+    CompressionRequest,
+    CompressionResult,
+    CompressionStatus,
+    ThreadCompressor,
+    plan_compression,
+)
 from awesome_agent.context.models import (
     ContextManifestItem,
     ContextRequest,
@@ -26,6 +35,10 @@ __all__ = [
     "COMPRESSION_THRESHOLD_FRACTION",
     "OUTPUT_RESERVE_TOKENS",
     "SAFETY_RESERVE_FRACTION",
+    "CompressionPlan",
+    "CompressionRequest",
+    "CompressionResult",
+    "CompressionStatus",
     "ContextBudget",
     "ContextBuilder",
     "ContextManifestItem",
@@ -37,10 +50,11 @@ __all__ = [
     "ExplicitPathSnapshot",
     "ParsedExplicitPaths",
     "PreparedContext",
+    "ThreadCompressor",
     "calculate_context_budget",
     "estimate_messages",
     "estimate_text",
     "parse_explicit_paths",
+    "plan_compression",
     "snapshot_explicit_paths",
 ]
-from awesome_agent.context.builder import ContextBuilder, ContextOverflow
