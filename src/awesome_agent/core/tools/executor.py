@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 from pydantic import JsonValue, ValidationError
 
-from awesome_agent.core.events import ToolResultPayload, ToolStartedPayload
+from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedPayload
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
+    ToolActivityDraft,
     ToolError,
     ToolErrorCode,
     ToolRequest,
@@ -19,6 +21,13 @@ from awesome_agent.core.tools.errors import (
     ToolInvariantError,
 )
 from awesome_agent.core.tools.registry import ToolRegistry
+
+type ToolOutcome = Literal["success", "error", "cancelled"]
+type ToolTerminalEventType = Literal[
+    EventType.TOOL_COMPLETED,
+    EventType.TOOL_FAILED,
+    EventType.TOOL_CANCELLED,
+]
 
 
 class ToolExecutor:
@@ -39,18 +48,22 @@ class ToolExecutor:
         *,
         context: ToolExecutionContext,
     ) -> ToolResult:
+        started = context.monotonic()
         registered = self._registry.resolve(request.tool_name)
         await context.emitter.emit(
             ToolStartedPayload(
                 call_id=request.call_id,
                 tool_name=request.tool_name,
             ),
+            thread_id=context.thread_id,
             turn_id=context.turn_id,
+            operation_id=context.operation_id,
         )
         if registered is None:
             return await self._error_result(
                 request,
                 context,
+                started,
                 ToolErrorCode.NOT_FOUND,
                 "Unknown tool.",
             )
@@ -58,17 +71,30 @@ class ToolExecutor:
             arguments = registered.input_model.model_validate(request.arguments)
             async with asyncio.timeout(self._timeout_seconds):
                 output = await registered.handler(arguments, context)
-        except ValidationError as error:
+        except asyncio.CancelledError:
+            await self._finalize(
+                request,
+                context,
+                started,
+                outcome="cancelled",
+                result_summary="cancelled",
+                error_code=ToolErrorCode.CANCELLED.value,
+                event_type=EventType.TOOL_CANCELLED,
+            )
+            raise
+        except ValidationError:
             return await self._error_result(
                 request,
                 context,
+                started,
                 ToolErrorCode.INVALID_ARGUMENTS,
-                str(error),
+                "Tool arguments did not match the schema.",
             )
         except TimeoutError:
             return await self._error_result(
                 request,
                 context,
+                started,
                 ToolErrorCode.TIMEOUT,
                 "Tool execution timed out.",
             )
@@ -76,6 +102,7 @@ class ToolExecutor:
             return await self._error_result(
                 request,
                 context,
+                started,
                 error.code,
                 error.message,
                 retryable=error.retryable,
@@ -84,6 +111,15 @@ class ToolExecutor:
         except ToolControlFlow:
             raise
         except Exception as error:
+            await self._finalize(
+                request,
+                context,
+                started,
+                outcome="error",
+                result_summary=ToolErrorCode.EXECUTION_FAILED.value,
+                error_code=ToolErrorCode.EXECUTION_FAILED.value,
+                event_type=EventType.TOOL_FAILED,
+            )
             raise ToolInvariantError("Unexpected tool handler failure.") from error
 
         result = ToolResult(
@@ -93,14 +129,14 @@ class ToolExecutor:
             content=output.content[: self._max_content_chars],
             metadata=output.metadata,
         )
-        await context.emitter.emit(
-            ToolResultPayload(
-                call_id=result.call_id,
-                tool_name=result.tool_name,
-                status="success",
-                content=result.content,
-            ),
-            turn_id=context.turn_id,
+        await self._finalize(
+            request,
+            context,
+            started,
+            outcome="success",
+            result_summary="Tool execution completed.",
+            error_code=None,
+            event_type=EventType.TOOL_COMPLETED,
         )
         return result
 
@@ -108,6 +144,7 @@ class ToolExecutor:
         self,
         request: ToolRequest,
         context: ToolExecutionContext,
+        started: float,
         code: ToolErrorCode,
         message: str,
         *,
@@ -124,14 +161,63 @@ class ToolExecutor:
             metadata=metadata or {},
             error=error,
         )
-        await context.emitter.emit(
-            ToolResultPayload(
-                call_id=result.call_id,
-                tool_name=result.tool_name,
-                status="error",
-                content=result.content,
-                error_code=code.value,
-            ),
-            turn_id=context.turn_id,
+        await self._finalize(
+            request,
+            context,
+            started,
+            outcome="error",
+            result_summary=code.value,
+            error_code=code.value,
+            event_type=EventType.TOOL_FAILED,
         )
         return result
+
+    async def _finalize(
+        self,
+        request: ToolRequest,
+        context: ToolExecutionContext,
+        started: float,
+        *,
+        outcome: ToolOutcome,
+        result_summary: str,
+        error_code: str | None,
+        event_type: ToolTerminalEventType,
+    ) -> None:
+        duration_ms = max(0, round((context.monotonic() - started) * 1_000))
+        argument_names = ", ".join(
+            name[:100] for name in sorted(request.arguments)[:16]
+        )
+        input_summary = (
+            f"arguments: {argument_names}" if argument_names else "arguments: none"
+        )
+        try:
+            context.activity_writer.finalize(
+                ToolActivityDraft(
+                    thread_id=context.thread_id,
+                    turn_id=context.turn_id,
+                    operation_id=context.operation_id,
+                    call_id=request.call_id,
+                    origin=context.origin,
+                    tool_name=request.tool_name,
+                    outcome=outcome,
+                    input_summary=input_summary,
+                    result_summary=result_summary,
+                    error_code=error_code,
+                    duration_ms=duration_ms,
+                    change_set_id=context.change_set_id,
+                )
+            )
+        except Exception as error:
+            raise ToolInvariantError("Tool audit finalization failed.") from error
+        await context.emitter.emit(
+            ToolResultPayload(
+                kind=event_type,
+                call_id=request.call_id,
+                tool_name=request.tool_name,
+                summary=result_summary,
+                error_code=error_code,
+            ),
+            thread_id=context.thread_id,
+            turn_id=context.turn_id,
+            operation_id=context.operation_id,
+        )

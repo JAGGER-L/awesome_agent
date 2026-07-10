@@ -10,7 +10,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 _TERMINATION_GRACE_SECONDS = 2.0
 
@@ -24,6 +24,18 @@ class ProcessResult:
     stdout_truncated: bool
     stderr_truncated: bool
     duration_ms: float
+
+
+class ShellExecutionBackend(Protocol):
+    async def run(
+        self,
+        *,
+        argv: list[str],
+        cwd: Path,
+        environment: dict[str, str],
+        timeout_seconds: float,
+        max_output_chars: int,
+    ) -> ProcessResult: ...
 
 
 async def _drain(

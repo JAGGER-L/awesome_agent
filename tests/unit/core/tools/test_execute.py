@@ -1,6 +1,8 @@
 import sys
 from dataclasses import replace
 from pathlib import Path
+from time import monotonic
+from unittest.mock import Mock
 
 import pytest
 
@@ -9,6 +11,7 @@ from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
     ToolErrorCode,
     ToolExecutionContext,
+    ToolExecutionOrigin,
     ToolExecutor,
     ToolRequest,
     ToolStatus,
@@ -19,7 +22,11 @@ from awesome_agent.core.tools.command_policy import (
     InteractionRequired,
     evaluate_command,
 )
-from awesome_agent.core.tools.process import ProcessResult, ProcessRunner
+from awesome_agent.core.tools.process import (
+    ProcessResult,
+    ProcessRunner,
+    ShellExecutionBackend,
+)
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
@@ -52,7 +59,7 @@ class RecordingProcessRunner(ProcessRunner):
 
 def execute_fixture(
     tmp_path: Path,
-    runner: ProcessRunner,
+    runner: ShellExecutionBackend,
 ) -> tuple[ToolExecutor, ToolExecutionContext, ChangeJournal, Path]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -71,9 +78,17 @@ def execute_fixture(
     register_modifying_tools(registry, journal, runner)
     context = ToolExecutionContext(
         workspace=identity,
+        thread_id="thread_1",
         operation_id="operation_1",
         turn_id="turn_1",
-        emitter=EventEmitter(session_id="session_1", sink=CollectingEventSink()),
+        origin=ToolExecutionOrigin.AGENT,
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=identity.key,
+            sink=CollectingEventSink(),
+        ),
+        activity_writer=Mock(),
+        monotonic=monotonic,
         change_set_id=change_set.id,
     )
     return ToolExecutor(registry), context, journal, workspace

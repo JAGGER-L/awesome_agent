@@ -23,6 +23,7 @@ from awesome_agent.conversation import (
     TurnStatus,
     UsageSummary,
 )
+from awesome_agent.core.tools import ToolActivityDraft, ToolExecutionOrigin
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
@@ -275,6 +276,33 @@ def test_summary_upsert_and_tool_activity_idempotency(tmp_path: Path) -> None:
     changed = activity.model_copy(update={"result_summary": "different"})
     with pytest.raises(ConversationConflict):
         repositories.tool_activities.append(changed)
+
+
+def test_tool_activity_writer_finalizes_one_terminal_record(tmp_path: Path) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories.threads.create(_thread())
+    repositories.entries.append(_entry("entry_1", sequence=1))
+    repositories.turns.create(_turn())
+    draft = ToolActivityDraft(
+        thread_id="thread_1",
+        turn_id="turn_1",
+        operation_id="operation_1",
+        call_id="call_1",
+        origin=ToolExecutionOrigin.AGENT,
+        tool_name="read_file",
+        outcome="success",
+        input_summary="arguments: path",
+        result_summary="Tool execution completed.",
+        duration_ms=12,
+        change_set_id=None,
+    )
+
+    repositories.tool_activities.finalize(draft)
+    repositories.tool_activities.finalize(draft.model_copy(update={"duration_ms": 99}))
+
+    activities = repositories.tool_activities.list("thread_1")
+    assert len(activities) == 1
+    assert activities[0].duration_ms == 12
 
 
 def test_json_columns_use_canonical_compact_encoding(tmp_path: Path) -> None:

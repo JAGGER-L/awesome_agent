@@ -27,7 +27,7 @@ from awesome_agent.core.tools.builtins.write_file import (
 )
 from awesome_agent.core.tools.context import ToolHandler
 from awesome_agent.core.tools.contracts import ToolSpec
-from awesome_agent.core.tools.process import ProcessRunner
+from awesome_agent.core.tools.process import ShellExecutionBackend
 from awesome_agent.core.tools.registry import ToolRegistry
 
 
@@ -86,7 +86,7 @@ def register_read_tools(registry: ToolRegistry) -> None:
 def register_modifying_tools(
     registry: ToolRegistry,
     journal: ChangeJournal,
-    process_runner: ProcessRunner | None = None,
+    process_runner: ShellExecutionBackend | None = None,
 ) -> None:
     _register(
         registry,

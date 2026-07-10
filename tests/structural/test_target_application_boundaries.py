@@ -8,14 +8,18 @@ FORBIDDEN_APPLICATION_IMPORTS = {
     "awesome_agent.artifacts",
     "awesome_agent.client",
     "awesome_agent.persistence",
+    "awesome_agent.providers",
     "awesome_agent.runtime",
     "awesome_agent.sandbox",
     "awesome_agent.surfaces",
     "awesome_agent.tools",
     "awesome_agent.tui",
+    "awesome_agent.worker",
     "awesome_agent.settings",
     "fastapi",
+    "docker",
     "sqlalchemy",
+    "textual",
 }
 
 FORBIDDEN_HEADLESS_TEST_MARKERS = {

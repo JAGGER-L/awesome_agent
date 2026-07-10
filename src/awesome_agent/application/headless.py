@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
+from time import monotonic
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -37,6 +38,7 @@ from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
     EventSink,
+    EventType,
     InteractionRequiredPayload,
     ToolResultPayload,
 )
@@ -44,6 +46,7 @@ from awesome_agent.core.tools import (
     ToolError,
     ToolErrorCode,
     ToolExecutionContext,
+    ToolExecutionOrigin,
     ToolExecutor,
     ToolRequest,
     ToolResult,
@@ -66,6 +69,7 @@ from awesome_agent.core.workspace import (
 )
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
+from awesome_agent.storage.conversations import SQLiteToolActivityRepository
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 
@@ -93,9 +97,14 @@ class LocalApplication:
         self._paths = paths
         self._workspace = workspace
         self._session_id = new_identifier("session")
-        self._emitter = EventEmitter(session_id=self._session_id, sink=event_sink)
+        self._emitter = EventEmitter(
+            session_id=self._session_id,
+            workspace_key=workspace.key,
+            sink=event_sink,
+        )
         self._interactions = InteractionCoordinator()
         self._operations = OperationController(self._emitter)
+        self._activity_writer = SQLiteToolActivityRepository(paths.application_db)
         self._trust = WorkspaceTrustService(
             SQLiteWorkspaceTrustStore(paths.application_db)
         )
@@ -245,9 +254,17 @@ class LocalApplication:
                 change_set_id = self._change_set_for_turn(turn_id)
             context = ToolExecutionContext(
                 workspace=self._workspace,
+                thread_id=turn_id or self._session_id,
                 operation_id=operation_id,
                 turn_id=turn_id,
+                origin=(
+                    ToolExecutionOrigin.AGENT
+                    if turn_id is not None
+                    else ToolExecutionOrigin.DIRECT
+                ),
                 emitter=self._emitter,
+                activity_writer=self._activity_writer,
+                monotonic=monotonic,
                 change_set_id=change_set_id,
             )
             try:
@@ -313,10 +330,10 @@ class LocalApplication:
         )
         await self._emitter.emit(
             ToolResultPayload(
+                kind=EventType.TOOL_FAILED,
                 call_id=request.call_id,
                 tool_name=request.tool_name,
-                status="error",
-                content=message,
+                summary=message,
                 error_code=code.value,
             ),
             turn_id=turn_id,
