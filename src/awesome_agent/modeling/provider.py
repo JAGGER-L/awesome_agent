@@ -8,6 +8,7 @@ from awesome_agent.modeling.turns import ModelRequest, ProviderId
 
 
 class ModelProvider(Protocol):
-    provider_id: ProviderId
+    @property
+    def provider_id(self) -> ProviderId: ...
 
     def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]: ...

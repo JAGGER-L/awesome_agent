@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, cast
+from typing import Any, Literal, cast
 
 from openai import AsyncOpenAI
 
@@ -43,7 +43,9 @@ _WIRE_UNSAFE = re.compile(r"[^A-Za-z0-9_]")
 
 
 class DeepSeekProvider:
-    provider_id: ClassVar[str] = "deepseek"
+    @property
+    def provider_id(self) -> Literal["deepseek"]:
+        return "deepseek"
 
     def __init__(
         self,

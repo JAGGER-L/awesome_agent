@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal, cast
+from typing import Any, Literal, cast
 
 from openai import AsyncOpenAI
 
@@ -44,7 +44,9 @@ _WIRE_UNSAFE = re.compile(r"[^A-Za-z0-9_]")
 
 
 class KimiProvider:
-    provider_id: ClassVar[Literal["kimi"]] = "kimi"
+    @property
+    def provider_id(self) -> Literal["kimi"]:
+        return "kimi"
 
     def __init__(
         self,

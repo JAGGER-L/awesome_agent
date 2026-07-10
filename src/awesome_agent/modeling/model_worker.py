@@ -26,8 +26,6 @@ from awesome_agent.modeling.turns import (
     ProviderId,
     StopReason,
 )
-from awesome_agent.providers.factory import ModelProviderFactory
-from awesome_agent.settings import Settings
 
 
 async def main() -> int:
@@ -41,10 +39,12 @@ async def main() -> int:
         if _test_fake_enabled():
             await _run_fake_worker(provider_id=provider_id, model=model)
             return 0
-        provider = ModelProviderFactory(Settings()).create(model)
-        async for event in provider.stream(request):
-            _emit(event)
-        return 0
+        del request, model
+        print(
+            "legacy process model worker is not part of the target Host",
+            file=sys.stderr,
+        )
+        return 2
     except (json.JSONDecodeError, ValidationError, ValueError) as error:
         print(f"invalid request: {error}", file=sys.stderr)
         return 2
