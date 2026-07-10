@@ -210,3 +210,47 @@ async def test_compression_failure_is_warning_when_context_fits() -> None:
 
     assert result["final_answer"] == "done"
     assert projector.warnings == ["compression_failed"]
+
+
+@pytest.mark.asyncio
+async def test_automatic_compression_cannot_consume_reserved_final_model_call() -> None:
+    compressor = Compressor(
+        AgentCompressionResult(
+            completed=True,
+            attempted=True,
+            prepared=_prepared(recommended=False),
+        )
+    )
+    projector = Projector()
+
+    async def builder(state: object) -> PreparedAgentContext:
+        del state
+        return _prepared(recommended=True)
+
+    runtime = AgentRuntimeContext(
+        gateway=cast(Any, Gateway(((_completed("done"),),))),
+        executor=cast(Any, object()),
+        tool_catalog=lambda: (),
+        tool_context_factory=cast(Any, lambda state: None),
+        event_projector=cast(Any, projector),
+        context_builder=builder,
+        compressor=compressor,
+        budget=TurnBudget(model_calls=1),
+        monotonic=lambda: 1.0,
+    )
+    result = await compile_agent_graph(InMemorySaver()).ainvoke(
+        new_agent_state(
+            thread_id="thread_1",
+            turn_id="turn_1",
+            workspace_key="workspace_1",
+            provider="deepseek",
+            model="deepseek/deepseek-v4-flash",
+            thinking_enabled=False,
+        ),
+        config={"configurable": {"thread_id": "turn_1"}},
+        context=runtime,
+    )
+
+    assert compressor.calls == 0
+    assert result["final_answer"] == "done"
+    assert projector.warnings == ["model_budget_reserved"]

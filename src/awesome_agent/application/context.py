@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import floor
-from typing import cast
+from typing import Literal, cast
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from awesome_agent.agent import AgentCompressionResult, AgentState, PreparedAgentContext
 from awesome_agent.application.commands import (
@@ -30,9 +30,24 @@ from awesome_agent.conversation import (
     ConversationConflict,
     ConversationService,
     ThreadEntryKind,
+    ThreadView,
     Turn,
+    TurnStatus,
 )
 from awesome_agent.core.workspace import WorkspaceIdentity
+from awesome_agent.modeling import ModelMessage, ProviderId
+
+_MODEL_MESSAGE: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
+_FROZEN_KINDS = frozenset(
+    {
+        ContextSourceKind.PRODUCT_INSTRUCTIONS,
+        ContextSourceKind.WORKSPACE_INSTRUCTIONS,
+        ContextSourceKind.SKILL,
+        ContextSourceKind.EXPLICIT_PATH,
+        ContextSourceKind.CURRENT_INPUT,
+        ContextSourceKind.OPEN_TOOL_CHAIN,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +101,6 @@ class ApplicationContextService:
             raise RuntimeError("Turn context was not prepared.")
         view = self._conversation.read_thread(state["thread_id"])
         turn = next(item for item in view.turns if item.id == state["turn_id"])
-        summary_end = view.summary.covered_entry_sequence if view.summary else 0
         sources: list[ContextSource] = [
             ContextSource(
                 kind=ContextSourceKind.PRODUCT_INSTRUCTIONS,
@@ -106,33 +120,7 @@ class ApplicationContextService:
                     mandatory=True,
                 )
             )
-        if view.summary is not None:
-            sources.append(
-                ContextSource(
-                    kind=ContextSourceKind.THREAD_SUMMARY,
-                    source_id=f"summary:{view.summary.content_hash}",
-                    content=view.summary.content,
-                    covered_sequence_start=1,
-                    covered_sequence_end=view.summary.covered_entry_sequence,
-                )
-            )
-        for entry in view.entries:
-            if entry.id == turn.user_entry_id or entry.sequence <= summary_end:
-                continue
-            kind = (
-                ContextSourceKind.DIRECT_COMMAND
-                if entry.kind is ThreadEntryKind.DIRECT_COMMAND
-                else ContextSourceKind.RECENT_TURNS
-            )
-            sources.append(
-                ContextSource(
-                    kind=kind,
-                    source_id=entry.id,
-                    content=entry.content,
-                    covered_sequence_start=entry.sequence,
-                    covered_sequence_end=entry.sequence,
-                )
-            )
+        sources.extend(_history_sources(view, turn))
         for snapshot in capture.snapshots:
             sources.append(
                 ContextSource(
@@ -151,6 +139,12 @@ class ApplicationContextService:
                 mandatory=True,
             )
         )
+        return await self._prepare_sources(sources)
+
+    async def _prepare_sources(
+        self,
+        sources: list[ContextSource],
+    ) -> PreparedAgentContext:
         prepared = await self._builder.prepare(
             ContextRequest(
                 sources=tuple(sources),
@@ -171,7 +165,7 @@ class ApplicationContextService:
         result = await self._compressor.compact(
             CompressionRequest(
                 view=view,
-                provider=state["provider"],  # type: ignore[arg-type]
+                provider=cast(ProviderId, state["provider"]),
                 model=state["model"],
             )
         )
@@ -188,7 +182,11 @@ class ApplicationContextService:
                     usage=result.usage,
                     error_code="compression_conflict",
                 )
-            prepared = await self.build(state)
+            prepared = (
+                await self.build(state)
+                if state["turn_id"] in self._captures
+                else await self._build_from_frozen(state)
+            )
             return AgentCompressionResult(
                 completed=True,
                 attempted=True,
@@ -202,6 +200,41 @@ class ApplicationContextService:
             error_code=result.error_code,
         )
 
+    async def _build_from_frozen(self, state: AgentState) -> PreparedAgentContext:
+        view = self._conversation.read_thread(state["thread_id"])
+        turn = next(item for item in view.turns if item.id == state["turn_id"])
+        sources = _history_sources(view, turn)
+        for manifest, raw_message in zip(
+            state["context_manifest"],
+            state["messages"],
+            strict=False,
+        ):
+            try:
+                kind = ContextSourceKind(str(manifest["kind"]))
+            except (KeyError, ValueError):
+                continue
+            if kind not in _FROZEN_KINDS:
+                continue
+            message = _MODEL_MESSAGE.validate_python(raw_message)
+            content = message.content
+            if content.startswith("[") and "\n" in content:
+                content = content.split("\n", 1)[1]
+            role = (
+                message.role
+                if message.role in {"system", "user", "assistant"}
+                else "user"
+            )
+            sources.append(
+                ContextSource(
+                    kind=kind,
+                    source_id=str(manifest.get("source_id") or kind.value),
+                    content=content,
+                    role=cast(Literal["system", "user", "assistant"], role),
+                    mandatory=True,
+                )
+            )
+        return await self._prepare_sources(sources)
+
     async def compact_thread(
         self,
         thread_id: str,
@@ -213,7 +246,7 @@ class ApplicationContextService:
         result = await self._compressor.compact(
             CompressionRequest(
                 view=view,
-                provider=provider,  # type: ignore[arg-type]
+                provider=cast(ProviderId, provider),
                 model=model,
             )
         )
@@ -293,3 +326,48 @@ class ApplicationContextService:
                 ),
             },
         )
+
+
+def _history_sources(view: ThreadView, turn: Turn) -> list[ContextSource]:
+    summary_end = view.summary.covered_entry_sequence if view.summary else 0
+    sources: list[ContextSource] = []
+    if view.summary is not None:
+        sources.append(
+            ContextSource(
+                kind=ContextSourceKind.THREAD_SUMMARY,
+                source_id=f"summary:{view.summary.content_hash}",
+                content=view.summary.content,
+                covered_sequence_start=1,
+                covered_sequence_end=view.summary.covered_entry_sequence,
+            )
+        )
+    completed_ids = {
+        identifier
+        for item in view.turns
+        if item.status is TurnStatus.COMPLETED
+        for identifier in (item.user_entry_id, item.assistant_entry_id)
+        if identifier is not None
+    }
+    for entry in view.entries:
+        if entry.id == turn.user_entry_id or entry.sequence <= summary_end:
+            continue
+        if (
+            entry.kind is not ThreadEntryKind.DIRECT_COMMAND
+            and entry.id not in completed_ids
+        ):
+            continue
+        kind = (
+            ContextSourceKind.DIRECT_COMMAND
+            if entry.kind is ThreadEntryKind.DIRECT_COMMAND
+            else ContextSourceKind.RECENT_TURNS
+        )
+        sources.append(
+            ContextSource(
+                kind=kind,
+                source_id=entry.id,
+                content=entry.content,
+                covered_sequence_start=entry.sequence,
+                covered_sequence_end=entry.sequence,
+            )
+        )
+    return sources

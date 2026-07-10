@@ -131,7 +131,22 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         cast(dict[str, Any], message.model_dump(mode="json"))
         for message in prepared.messages
     ]
+    state["context_manifest"] = list(prepared.manifest)
     assert "after" not in "\n".join(str(message) for message in state["messages"])
+    restarted_context = ApplicationContextService(
+        conversation=conversation,
+        workspace=workspace,
+        builder=ContextBuilder(),
+        compressor=ThreadCompressor(cast(Any, SummaryGateway())),
+        configured_total_tokens=262_144,
+        model_context_limit=262_144,
+        product_instructions="changed process instructions",
+    )
+    rebuilt = await restarted_context._build_from_frozen(state)
+    rebuilt_json = "\n".join(message.model_dump_json() for message in rebuilt.messages)
+    assert "before" in rebuilt_json
+    assert "after" not in rebuilt_json
+    assert "changed process instructions" not in rebuilt_json
 
     conversation.complete_turn(
         turn.id,

@@ -79,6 +79,17 @@ async def compress_context(
     context = _context(runtime)
     updated = _copy(state)
     reason = updated["compression_reason"] or "automatic"
+    if updated["model_calls"] >= context.budget.model_calls - 1:
+        updated["compression_requested"] = False
+        updated["compression_reason"] = None
+        if reason == "context_length":
+            updated["termination_reason"] = "context_unrecoverable"
+        else:
+            await context.event_projector.project_warning(
+                code="model_budget_reserved",
+                message="The final model call is reserved; compression was skipped.",
+            )
+        return updated
     if updated["compressions"] >= context.budget.compressions:
         updated["compression_requested"] = False
         updated["compression_reason"] = None
