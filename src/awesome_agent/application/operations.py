@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Literal, TypeVar, cast
 
 from awesome_agent.core.contracts import new_identifier
@@ -24,6 +25,12 @@ class OperationBusy(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class OperationHandle[T]:
+    operation_id: str
+    task: asyncio.Task[T]
+
+
 class OperationController:
     def __init__(self, emitter: EventEmitter) -> None:
         self._emitter = emitter
@@ -38,8 +45,19 @@ class OperationController:
         self,
         factory: Callable[[str], Awaitable[T]],
         *,
+        thread_id: str | None = None,
         turn_id: str | None = None,
     ) -> T:
+        handle = await self.start(factory, thread_id=thread_id, turn_id=turn_id)
+        return await handle.task
+
+    async def start(
+        self,
+        factory: Callable[[str], Awaitable[T]],
+        *,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> OperationHandle[T]:
         if self._active_id is not None:
             raise OperationBusy("Another operation is active.")
         operation_id = new_identifier("operation")
@@ -48,6 +66,7 @@ class OperationController:
         try:
             await self._emitter.emit(
                 OperationLifecyclePayload(kind=EventType.OPERATION_STARTED),
+                thread_id=thread_id,
                 turn_id=turn_id,
                 operation_id=operation_id,
             )
@@ -55,48 +74,57 @@ class OperationController:
             self._active_id = None
             raise
 
+        ready = asyncio.Event()
+
         async def invoke() -> T:
-            return await factory(operation_id)
+            ready.set()
+            try:
+                result = await factory(operation_id)
+            except asyncio.CancelledError:
+                await self._terminal(
+                    EventType.OPERATION_CANCELLED,
+                    operation_id,
+                    thread_id,
+                    turn_id,
+                )
+                raise
+            except Exception:
+                await self._terminal(
+                    EventType.OPERATION_FAILED,
+                    operation_id,
+                    thread_id,
+                    turn_id,
+                )
+                raise
+            else:
+                await self._terminal(
+                    EventType.OPERATION_COMPLETED,
+                    operation_id,
+                    thread_id,
+                    turn_id,
+                )
+                return result
+            finally:
+                self._active_id = None
+                self._active_task = None
 
         task: asyncio.Task[T] = asyncio.create_task(invoke())
         self._active_task = cast(asyncio.Task[object], task)
-        try:
-            result = await task
-        except asyncio.CancelledError:
-            await self._terminal(
-                EventType.OPERATION_CANCELLED,
-                operation_id,
-                turn_id,
-            )
-            raise
-        except Exception:
-            await self._terminal(
-                EventType.OPERATION_FAILED,
-                operation_id,
-                turn_id,
-            )
-            raise
-        else:
-            await self._terminal(
-                EventType.OPERATION_COMPLETED,
-                operation_id,
-                turn_id,
-            )
-            return result
-        finally:
-            self._active_id = None
-            self._active_task = None
+        await ready.wait()
+        return OperationHandle(operation_id=operation_id, task=task)
 
     async def _terminal(
         self,
         event_type: TerminalEventType,
         operation_id: str,
+        thread_id: str | None,
         turn_id: str | None,
     ) -> None:
         await self._emitter.emit(
             OperationLifecyclePayload(
                 kind=event_type,
             ),
+            thread_id=thread_id,
             turn_id=turn_id,
             operation_id=operation_id,
         )
