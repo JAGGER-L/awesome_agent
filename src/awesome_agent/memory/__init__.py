@@ -1,3 +1,9 @@
+from awesome_agent.memory.distiller import (
+    DistillationResult,
+    DistillationStatus,
+    DistillerGateway,
+    MemoryDistiller,
+)
 from awesome_agent.memory.identity import (
     Mem0Identity,
     ensure_mem0_user_id,
@@ -51,6 +57,9 @@ __all__ = [
     "CloudMemoryPolicy",
     "CloudPolicyResult",
     "CloudWriteOutcome",
+    "DistillationResult",
+    "DistillationStatus",
+    "DistillerGateway",
     "LocalMemoryFile",
     "LocalMemoryPolicy",
     "LocalMemoryScopeStatus",
@@ -61,6 +70,7 @@ __all__ = [
     "Mem0Diagnostic",
     "Mem0Identity",
     "MemoryCandidate",
+    "MemoryDistiller",
     "MemoryDocument",
     "MemoryDocumentInvalid",
     "MemoryEntry",
