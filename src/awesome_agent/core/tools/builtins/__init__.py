@@ -1,6 +1,10 @@
 from pydantic import BaseModel
 
 from awesome_agent.core.changes import ChangeJournal
+from awesome_agent.core.tools.builtins.delete import (
+    DeleteArguments,
+    create_delete_handler,
+)
 from awesome_agent.core.tools.builtins.edit_file import (
     EditFileArguments,
     create_edit_file_handler,
@@ -77,6 +81,13 @@ def register_modifying_tools(
     registry: ToolRegistry,
     journal: ChangeJournal,
 ) -> None:
+    _register(
+        registry,
+        name="delete",
+        description="Delete a file, or a directory and its contents recursively",
+        input_model=DeleteArguments,
+        handler=create_delete_handler(journal),
+    )
     _register(
         registry,
         name="edit_file",

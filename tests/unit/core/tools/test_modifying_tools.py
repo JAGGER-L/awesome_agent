@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import awesome_agent.core.changes.journal as journal_module
 from awesome_agent.core.changes import ChangeJournal
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
@@ -148,3 +149,58 @@ async def test_missing_change_set_is_invariant_failure_before_write(
         )
 
     assert not (workspace / "notes.txt").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [".", ".git", ".env"])
+async def test_delete_rejects_root_git_and_sensitive_targets(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    executor, context, _, workspace = modifying_fixture(tmp_path)
+    (workspace / ".git").mkdir()
+    (workspace / ".env").write_text("SECRET=value", encoding="utf-8")
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_delete",
+            tool_name="delete",
+            arguments={"path": target},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.PERMISSION_DENIED
+    assert workspace.exists()
+    assert (workspace / ".git").exists()
+    assert (workspace / ".env").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_capacity_fails_before_removing_any_node(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor, context, _, workspace = modifying_fixture(tmp_path)
+    target = workspace / "target"
+    target.mkdir()
+    (target / "one.txt").write_text("one", encoding="utf-8")
+    (target / "two.txt").write_text("two", encoding="utf-8")
+    monkeypatch.setattr(journal_module, "MAX_CHANGESET_FILES", 1)
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_delete",
+            tool_name="delete",
+            arguments={"path": "target"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.EXECUTION_FAILED
+    assert (target / "one.txt").exists()
+    assert (target / "two.txt").exists()

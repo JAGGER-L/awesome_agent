@@ -166,6 +166,21 @@ class ChangeJournal:
         ):
             raise ChangeCapacityExceeded("ChangeSet byte limit exceeded.")
 
+    def preflight_batch(
+        self,
+        *,
+        change_set_id: str,
+        additional_nodes: int,
+        additional_bytes: int,
+    ) -> None:
+        change_set = self._open(change_set_id)
+        if additional_nodes < 0 or additional_bytes < 0:
+            raise ValueError("Capacity additions cannot be negative.")
+        if len(change_set.files) + additional_nodes > MAX_CHANGESET_FILES:
+            raise ChangeCapacityExceeded("ChangeSet file limit exceeded.")
+        if self._stored_bytes(change_set) + additional_bytes > MAX_CHANGESET_BYTES:
+            raise ChangeCapacityExceeded("ChangeSet byte limit exceeded.")
+
     def apply_file_mutation(
         self,
         *,

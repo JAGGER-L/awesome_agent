@@ -40,6 +40,10 @@ def _is_sensitive(relative: Path) -> bool:
     return False
 
 
+def is_sensitive_workspace_path(relative: Path) -> bool:
+    return _is_sensitive(relative)
+
+
 def resolve_workspace_path(
     identity: WorkspaceIdentity,
     requested: str,
