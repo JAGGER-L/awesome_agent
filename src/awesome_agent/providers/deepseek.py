@@ -1,96 +1,88 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, cast
 
 from openai import AsyncOpenAI
 
 from awesome_agent.modeling import (
     AssistantMessage,
     ContinuationState,
+    ModelRequest,
     ModelStreamEvent,
     ModelTurn,
+    ModelUsage,
+    ProviderProtocolError,
     ReasoningDelta,
-    ReasoningSegment,
     ReasoningStarted,
-    ReasoningStatus,
-    ReasoningTrace,
     StopReason,
-    StructuredModelProvider,
+    SystemMessage,
     TextDelta,
     ToolArgumentsDelta,
     ToolCall,
     ToolCallStarted,
     ToolChoiceMode,
+    ToolResultMessage,
     TurnCompleted,
     TurnFailed,
-)
-from awesome_agent.modeling import (
-    ModelRequest as StructuredModelRequest,
-)
-from awesome_agent.modeling import (
-    ModelUsage as StructuredModelUsage,
-)
-from awesome_agent.modeling.errors import ModelProviderError
-from awesome_agent.modeling.messages import (
-    AssistantMessage as RequestAssistantMessage,
-)
-from awesome_agent.modeling.messages import (
-    SystemMessage,
-    ToolResultMessage,
     UserMessage,
 )
+from awesome_agent.modeling.errors import ModelProviderError
 from awesome_agent.providers.errors import classify_openai_error
 
-_DEEPSEEK_TOOL_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_-]")
+DEEPSEEK_OFFICIAL_BASE_URL = "https://api.deepseek.com"
+_CURATED_MODELS = {
+    "deepseek/deepseek-v4-flash",
+    "deepseek/deepseek-v4-pro",
+}
+_WIRE_UNSAFE = re.compile(r"[^A-Za-z0-9_]")
 
 
-class DeepSeekProvider(StructuredModelProvider):
+class DeepSeekProvider:
+    provider_id: ClassVar[str] = "deepseek"
+
     def __init__(
         self,
         *,
         api_key: str,
         model: str,
-        base_url: str = "https://api.deepseek.com",
-        thinking_enabled: bool = True,
-        reasoning_effort: Literal["high", "max"] = "high",
         timeout_seconds: float = 60.0,
         client: AsyncOpenAI | None = None,
     ) -> None:
+        if model not in _CURATED_MODELS:
+            raise ValueError("Model must be a curated DeepSeek model.")
+        if not api_key.strip():
+            raise ValueError("DeepSeek API key cannot be empty.")
+        if timeout_seconds <= 0:
+            raise ValueError("DeepSeek timeout must be positive.")
         self._model = model
-        self._thinking_enabled = thinking_enabled
-        self._reasoning_effort = reasoning_effort
+        self._wire_model = model.split("/", maxsplit=1)[1]
         self._timeout_seconds = timeout_seconds
         self._client = client or AsyncOpenAI(
             api_key=api_key,
-            base_url=base_url,
+            base_url=DEEPSEEK_OFFICIAL_BASE_URL,
             timeout=timeout_seconds,
         )
 
     async def stream(
         self,
-        request: StructuredModelRequest,
+        request: ModelRequest,
     ) -> AsyncIterator[ModelStreamEvent]:
-        tool_names = _deepseek_tool_names(request)
-        thinking_enabled, reasoning_effort = _deepseek_thinking_options(
-            request.thinking,
-            default_enabled=self._thinking_enabled,
-            default_effort=self._reasoning_effort,
-        )
+        tool_names = _tool_names(request)
         try:
             response = await self._client.chat.completions.create(
-                model=self._model,
-                messages=cast(Any, _deepseek_messages(request, tool_names)),
-                tools=cast(Any, _deepseek_tools(request, tool_names)),
-                tool_choice=cast(Any, _deepseek_tool_choice(request, tool_names)),
+                model=self._wire_model,
+                messages=cast(Any, _messages(request, tool_names)),
+                tools=cast(Any, _tools(request, tool_names)),
+                tool_choice=cast(Any, _tool_choice(request, tool_names)),
                 max_tokens=request.max_output_tokens,
-                reasoning_effort=cast(Any, reasoning_effort),
                 extra_body={
                     "thinking": {
-                        "type": ("enabled" if thinking_enabled else "disabled")
+                        "type": ("enabled" if request.thinking_enabled else "disabled")
                     }
                 },
                 timeout=self._timeout_seconds,
@@ -99,21 +91,23 @@ class DeepSeekProvider(StructuredModelProvider):
             )
             text_parts: list[str] = []
             reasoning_parts: list[str] = []
-            tool_calls: dict[int, dict[str, str]] = {}
+            tool_calls: dict[int, _ToolAssembly] = {}
             response_id: str | None = None
             finish_reason: str | None = None
-            usage = StructuredModelUsage()
+            usage = ModelUsage()
             reasoning_started = False
             async for chunk in response:
                 response_id = getattr(chunk, "id", response_id)
                 raw_usage = getattr(chunk, "usage", None)
                 if raw_usage is not None:
-                    usage = _deepseek_usage(raw_usage)
-                choices = getattr(chunk, "choices", [])
+                    usage = _usage(raw_usage)
+                choices = getattr(chunk, "choices", ())
                 if not choices:
                     continue
                 choice = choices[0]
-                finish_reason = getattr(choice, "finish_reason", finish_reason)
+                current_finish = getattr(choice, "finish_reason", None)
+                if current_finish is not None:
+                    finish_reason = current_finish
                 delta = choice.delta
                 reasoning = getattr(delta, "reasoning_content", None)
                 if reasoning:
@@ -126,64 +120,48 @@ class DeepSeekProvider(StructuredModelProvider):
                 if content:
                     text_parts.append(content)
                     yield TextDelta(text=content)
-                for raw_call in getattr(delta, "tool_calls", None) or []:
+                for raw_call in getattr(delta, "tool_calls", None) or ():
                     index = raw_call.index
-                    state = tool_calls.setdefault(
-                        index,
-                        {"call_id": "", "name": "", "arguments": ""},
-                    )
+                    state = tool_calls.setdefault(index, _ToolAssembly())
                     call_id = getattr(raw_call, "id", None)
                     function = getattr(raw_call, "function", None)
-                    name = getattr(function, "name", None)
+                    wire_name = getattr(function, "name", None)
                     arguments = getattr(function, "arguments", None)
-                    if call_id or name:
-                        state["call_id"] = call_id or state["call_id"]
-                        state["name"] = (
-                            tool_names.wire_to_model.get(name, name)
-                            if name
-                            else state["name"]
+                    if call_id:
+                        state.call_id = call_id
+                    if wire_name:
+                        state.name = tool_names.wire_to_model.get(
+                            wire_name,
+                            wire_name,
                         )
+                    if not state.started and state.call_id and state.name:
+                        state.started = True
                         yield ToolCallStarted(
                             index=index,
-                            call_id=state["call_id"],
-                            name=state["name"],
+                            call_id=state.call_id,
+                            name=state.name,
                         )
                     if arguments:
-                        state["arguments"] += arguments
+                        state.arguments += arguments
                         yield ToolArgumentsDelta(index=index, text=arguments)
-            calls = [
-                ToolCall(
-                    call_id=value["call_id"],
-                    name=value["name"],
-                    arguments_json=value["arguments"],
+            if finish_reason is None:
+                raise ProviderProtocolError(
+                    "Provider stream ended without a finish reason.",
+                    provider="deepseek",
                 )
-                for _, value in sorted(tool_calls.items())
-            ]
+            calls = _completed_calls(tool_calls)
             reasoning_text = "".join(reasoning_parts)
             yield TurnCompleted(
                 turn=ModelTurn(
+                    provider="deepseek",
+                    model=self._model,
                     assistant=AssistantMessage(
                         content="".join(text_parts),
                         tool_calls=calls,
                     ),
-                    stop_reason=_deepseek_stop_reason(finish_reason),
-                    model=self._model,
-                    provider="deepseek",
+                    stop_reason=_stop_reason(finish_reason),
                     response_id=response_id,
                     usage=usage,
-                    reasoning=(
-                        ReasoningTrace(
-                            status=ReasoningStatus.COMPLETED,
-                            segments=[
-                                ReasoningSegment(
-                                    sequence=1,
-                                    text=reasoning_text,
-                                )
-                            ],
-                        )
-                        if reasoning_text
-                        else None
-                    ),
                     continuation=(
                         ContinuationState(
                             provider="deepseek",
@@ -203,58 +181,58 @@ class DeepSeekProvider(StructuredModelProvider):
             )
 
 
+@dataclass(slots=True)
+class _ToolAssembly:
+    call_id: str = ""
+    name: str = ""
+    arguments: str = ""
+    started: bool = False
+
+
 @dataclass(frozen=True, slots=True)
-class _DeepSeekToolNames:
+class _ToolNames:
     model_to_wire: dict[str, str]
     wire_to_model: dict[str, str]
 
 
-def _deepseek_tool_names(request: StructuredModelRequest) -> _DeepSeekToolNames:
+def _tool_names(request: ModelRequest) -> _ToolNames:
     model_to_wire: dict[str, str] = {}
     wire_to_model: dict[str, str] = {}
     for tool in request.tools:
-        wire = _unique_deepseek_tool_name(tool.name, wire_to_model)
+        wire = _unique_wire_name(tool.name, wire_to_model)
         model_to_wire[tool.name] = wire
         wire_to_model[wire] = tool.name
-    return _DeepSeekToolNames(model_to_wire=model_to_wire, wire_to_model=wire_to_model)
+    return _ToolNames(model_to_wire=model_to_wire, wire_to_model=wire_to_model)
 
 
-def _unique_deepseek_tool_name(
-    model_name: str,
-    wire_to_model: dict[str, str],
-) -> str:
-    candidate = _deepseek_wire_tool_name(model_name)
-    if candidate not in wire_to_model or wire_to_model[candidate] == model_name:
-        return candidate
-    suffix = hashlib.sha1(model_name.encode()).hexdigest()[:8]
-    candidate = f"{candidate}_{suffix}"
-    while candidate in wire_to_model and wire_to_model[candidate] != model_name:
-        suffix = hashlib.sha1(f"{model_name}:{suffix}".encode()).hexdigest()[:8]
-        candidate = f"{_deepseek_wire_tool_name(model_name)}_{suffix}"
+def _unique_wire_name(model_name: str, wire_to_model: dict[str, str]) -> str:
+    root = _wire_name(model_name)
+    if root not in wire_to_model or wire_to_model[root] == model_name:
+        return root
+    suffix = hashlib.sha256(model_name.encode()).hexdigest()[:8]
+    candidate = f"{root}_{suffix}"
+    if candidate in wire_to_model and wire_to_model[candidate] != model_name:
+        raise ValueError("Tool names collide after Provider encoding.")
     return candidate
 
 
-def _deepseek_wire_tool_name(model_name: str) -> str:
-    normalized = _DEEPSEEK_TOOL_NAME_PATTERN.sub("_", model_name)
-    return normalized or "tool"
+def _wire_name(model_name: str) -> str:
+    return _WIRE_UNSAFE.sub("_", model_name) or "tool"
 
 
-def _deepseek_messages(
-    request: StructuredModelRequest,
-    tool_names: _DeepSeekToolNames,
-) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    continuation_reasoning = _deepseek_continuation_reasoning(request)
+def _messages(request: ModelRequest, tool_names: _ToolNames) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    continuation_reasoning = _continuation_reasoning(request)
     assistant_indexes = [
         index
         for index, message in enumerate(request.messages)
-        if isinstance(message, RequestAssistantMessage)
+        if isinstance(message, AssistantMessage)
     ]
     last_assistant = assistant_indexes[-1] if assistant_indexes else None
     for index, message in enumerate(request.messages):
         if isinstance(message, SystemMessage | UserMessage):
-            messages.append({"role": message.role, "content": message.content})
-        elif isinstance(message, RequestAssistantMessage):
+            result.append({"role": message.role, "content": message.content})
+        elif isinstance(message, AssistantMessage):
             mapped: dict[str, Any] = {
                 "role": "assistant",
                 "content": message.content or None,
@@ -267,7 +245,7 @@ def _deepseek_messages(
                         "function": {
                             "name": tool_names.model_to_wire.get(
                                 call.name,
-                                _deepseek_wire_tool_name(call.name),
+                                _wire_name(call.name),
                             ),
                             "arguments": call.arguments_json,
                         },
@@ -276,21 +254,19 @@ def _deepseek_messages(
                 ]
             if index == last_assistant and continuation_reasoning is not None:
                 mapped["reasoning_content"] = continuation_reasoning
-            messages.append(mapped)
+            result.append(mapped)
         elif isinstance(message, ToolResultMessage):
-            messages.append(
+            result.append(
                 {
                     "role": "tool",
                     "tool_call_id": message.call_id,
                     "content": message.content,
                 }
             )
-    return messages
+    return result
 
 
-def _deepseek_continuation_reasoning(
-    request: StructuredModelRequest,
-) -> str | None:
+def _continuation_reasoning(request: ModelRequest) -> str | None:
     continuation = request.continuation
     if (
         continuation is None
@@ -303,9 +279,8 @@ def _deepseek_continuation_reasoning(
     return value if isinstance(value, str) else None
 
 
-def _deepseek_tools(
-    request: StructuredModelRequest,
-    tool_names: _DeepSeekToolNames,
+def _tools(
+    request: ModelRequest, tool_names: _ToolNames
 ) -> list[dict[str, Any]] | None:
     if not request.tools:
         return None
@@ -322,55 +297,62 @@ def _deepseek_tools(
     ]
 
 
-def _deepseek_tool_choice(
-    request: StructuredModelRequest,
-    tool_names: _DeepSeekToolNames,
-) -> object:
+def _tool_choice(request: ModelRequest, tool_names: _ToolNames) -> object:
     choice = request.tool_choice
     if choice.mode is ToolChoiceMode.TOOL:
-        name = choice.name or ""
+        name = cast(str, choice.name)
         return {
             "type": "function",
-            "function": {
-                "name": tool_names.model_to_wire.get(
-                    name,
-                    _deepseek_wire_tool_name(name),
-                )
-            },
+            "function": {"name": tool_names.model_to_wire[name]},
         }
     return choice.mode.value
 
 
-def _deepseek_usage(usage: object) -> StructuredModelUsage:
-    details = getattr(usage, "completion_tokens_details", None)
+def _usage(usage: object) -> ModelUsage:
+    completion_details = getattr(usage, "completion_tokens_details", None)
     prompt_details = getattr(usage, "prompt_tokens_details", None)
-    return StructuredModelUsage(
-        input_tokens=getattr(usage, "prompt_tokens", None),
-        output_tokens=getattr(usage, "completion_tokens", None),
-        reasoning_tokens=getattr(details, "reasoning_tokens", None),
-        cache_read_tokens=getattr(prompt_details, "cached_tokens", None),
+    return ModelUsage(
+        input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+        output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
+        cache_read_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
     )
 
 
-def _deepseek_stop_reason(value: str | None) -> StopReason:
+def _completed_calls(states: dict[int, _ToolAssembly]) -> tuple[ToolCall, ...]:
+    result: list[ToolCall] = []
+    for _, state in sorted(states.items()):
+        if not state.call_id or not state.name or not state.started:
+            raise ProviderProtocolError(
+                "Provider returned an incomplete tool call.",
+                provider="deepseek",
+            )
+        try:
+            arguments = json.loads(state.arguments)
+        except json.JSONDecodeError as error:
+            raise ProviderProtocolError(
+                "Provider returned malformed tool arguments.",
+                provider="deepseek",
+            ) from error
+        if not isinstance(arguments, dict):
+            raise ProviderProtocolError(
+                "Provider tool arguments must be a JSON object.",
+                provider="deepseek",
+            )
+        result.append(
+            ToolCall(
+                call_id=state.call_id,
+                name=state.name,
+                arguments_json=state.arguments,
+            )
+        )
+    return tuple(result)
+
+
+def _stop_reason(value: str) -> StopReason:
     return {
         "stop": StopReason.COMPLETED,
         "tool_calls": StopReason.TOOL_CALLS,
         "length": StopReason.MAX_TOKENS,
         "content_filter": StopReason.CONTENT_FILTER,
-    }.get(value or "", StopReason.UNKNOWN)
-
-
-def _deepseek_thinking_options(
-    thinking: str | None,
-    *,
-    default_enabled: bool,
-    default_effort: Literal["high", "max"],
-) -> tuple[bool, Literal["high", "max"]]:
-    if thinking == "off":
-        return False, default_effort
-    if thinking == "on_max":
-        return True, "max"
-    if thinking == "on_high":
-        return True, "high"
-    return default_enabled, default_effort
+    }.get(value, StopReason.UNKNOWN)
