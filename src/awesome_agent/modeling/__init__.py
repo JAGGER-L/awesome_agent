@@ -1,3 +1,9 @@
+from awesome_agent.modeling.catalog import (
+    ModelCatalog,
+    ModelCatalogError,
+    ModelProfile,
+    SelectedModel,
+)
 from awesome_agent.modeling.errors import (
     AuthenticationModelError,
     ConnectionModelError,
@@ -52,9 +58,12 @@ __all__ = [
     "ContextLengthModelError",
     "ContinuationState",
     "InvalidRequestModelError",
+    "ModelCatalog",
+    "ModelCatalogError",
     "ModelErrorCode",
     "ModelErrorInfo",
     "ModelMessage",
+    "ModelProfile",
     "ModelProvider",
     "ModelProviderError",
     "ModelRequest",
@@ -66,6 +75,7 @@ __all__ = [
     "RateLimitModelError",
     "ReasoningDelta",
     "ReasoningStarted",
+    "SelectedModel",
     "StopReason",
     "SystemMessage",
     "TextDelta",
