@@ -4,7 +4,8 @@
 >
 > Decision date: 2026-07-10
 >
-> Implementation status: PR1 through PR5 are complete. PR6 remains pending.
+> Implementation status: Phase 1 PR1 through PR6 are implemented and verified.
+> The default product entry point has not been cut over.
 
 ## Purpose
 

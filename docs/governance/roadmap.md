@@ -49,7 +49,6 @@ model/tool calls, retries, and rework.
 | Initiative | Outcome | Exit evidence |
 | --- | --- | --- |
 | Target contract freeze | Product boundaries, fixed tools, commands, trust, storage, memory, events, and surface protocol have one accepted source of truth. | Architecture decision records and structural contract tests agree. |
-| Local foundation | SQLite, LangGraph checkpoints, workspace trust, fixed tool execution, typed events, and per-turn change sets form a usable local vertical slice. | A fresh workspace can complete, inspect, undo, and redo a modifying turn without PostgreSQL, Worker, API, or Docker. |
 | Python Agent Core | LangGraph reasoning, context management, model gateway, skills, MCP boundary, built-in memory, and opt-in Mem0 Cloud work through one headless application path. | Multi-turn headless product tests cover completion, tool errors, cancellation, checkpoint resume, memory failure, and context compression. |
 
 ## Next
@@ -117,6 +116,7 @@ Detailed historical task notes live in
 
 | Milestone | Summary |
 | --- | --- |
+| Local-first foundation | SQLite state and checkpoints, workspace trust, eight fixed tools, Change Journal, typed commands/events/interactions, cancellation, and a fresh-state headless acceptance slice without external infrastructure. |
 | Durable runtime foundation | Run intake, dispatch, Worker execution, model protocol, checkpoints, approvals, cancellation, validation, and observability. |
 | Team runtime foundation | Leader, Teammates, Subagents, Verifier, assignment-scoped tools, mailbox, patch aggregation, rework, and stress coverage. |
 | Extension foundation | Versioned catalogs, skills, MCP, community tools, diagnostics, and project/user extension configuration. |

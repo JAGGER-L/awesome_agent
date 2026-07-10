@@ -13,6 +13,7 @@ class ToolStatus(StrEnum):
 class ToolErrorCode(StrEnum):
     INVALID_ARGUMENTS = "invalid_arguments"
     NOT_FOUND = "not_found"
+    WORKSPACE_NOT_TRUSTED = "workspace_not_trusted"
     WORKSPACE_ESCAPE = "workspace_escape"
     PERMISSION_DENIED = "permission_denied"
     CONFLICT = "conflict"
