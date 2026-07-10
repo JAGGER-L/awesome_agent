@@ -88,7 +88,7 @@ def _turn(
     )
 
 
-def test_migration_three_creates_only_product_conversation_tables(
+def test_application_migrations_create_only_product_state_tables(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "application.db"
@@ -110,7 +110,7 @@ def test_migration_three_creates_only_product_conversation_tables(
             ).fetchall()
         }
 
-    assert version == APPLICATION_SCHEMA_VERSION == 3
+    assert version == APPLICATION_SCHEMA_VERSION == 4
     assert {
         "trusted_workspaces",
         "change_sets",
@@ -120,6 +120,7 @@ def test_migration_three_creates_only_product_conversation_tables(
         "turns",
         "thread_summaries",
         "tool_activities",
+        "mcp_enablements",
     } <= tables
     assert {
         "idx_turns_one_in_progress",

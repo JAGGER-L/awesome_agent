@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -30,3 +32,19 @@ class McpServerConfig(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError("environment names must be unique")
         return value
+
+
+def mcp_config_hash(config: McpServerConfig) -> str:
+    payload = {
+        "id": config.id,
+        "command": config.command,
+        "args": list(config.args),
+        "env_names": sorted(config.env_names),
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
