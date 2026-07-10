@@ -47,3 +47,17 @@ class MemoryMutationResult(BaseModel):
     content_hash: str
     document: MemoryDocument | None = None
     error_code: str | None = None
+
+
+class MemoryPolicyStatus(StrEnum):
+    ELIGIBLE = "eligible"
+    REJECTED = "rejected"
+
+
+class MemoryPolicyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: MemoryPolicyStatus
+    content: str | None = Field(default=None, max_length=2_000)
+    error_code: str | None = Field(default=None, max_length=128)
+    message: str | None = Field(default=None, max_length=500)
