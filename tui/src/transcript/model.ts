@@ -43,6 +43,10 @@ export interface WarningBlock extends BlockBase {
   readonly code: string;
   readonly message: string;
 }
+export interface StatusBlock extends BlockBase {
+  readonly kind: "status";
+  readonly message: string;
+}
 export interface ErrorBlock extends BlockBase {
   readonly kind: "error";
   readonly code: string;
@@ -60,6 +64,7 @@ export type TranscriptBlock =
   | ToolGroupBlock
   | ChangeSummaryBlock
   | ReasoningMarkerBlock
+  | StatusBlock
   | WarningBlock
   | ErrorBlock
   | OmittedHistoryBlock;

@@ -184,6 +184,17 @@ const handleLine = (line) => {
         has_more: false,
       }),
     });
+  } else if (request.method === "command.execute") {
+    const threadId = request.params.arguments?.[0] ?? "thread_fake";
+    output({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: application({
+        status: "success",
+        content: "",
+        data: { thread_id: threadId, title: "Fake Thread" },
+      }),
+    });
   } else if (request.method === "operation.cancel") {
     if (process.env.AWESOME_FAKE_CORE_TERMINAL === "1") {
       const common = {

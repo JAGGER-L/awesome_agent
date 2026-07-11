@@ -17,12 +17,14 @@ export function Composer({
   width,
   initialValue = "",
   active = true,
+  clearRevision = 0,
   onSubmit,
   onValueChange,
 }: {
   readonly width: number;
   readonly initialValue?: string;
   readonly active?: boolean;
+  readonly clearRevision?: number;
   readonly onSubmit: (
     value: string,
   ) => Promise<ComposerSubmitResult> | ComposerSubmitResult;
@@ -38,6 +40,7 @@ export function Composer({
   const [message, setMessage] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const stateRef = useRef(state);
+  const clearRevisionRef = useRef(clearRevision);
   const theme = useTheme();
   const [beforeCursor, afterCursor] = splitVisibleAtCursor(
     state.viewport.rows,
@@ -56,6 +59,13 @@ export function Composer({
     stateRef.current = composerReducer(stateRef.current, action);
     dispatch(action);
   }, [width]);
+  useEffect(() => {
+    if (clearRevision === clearRevisionRef.current) return;
+    clearRevisionRef.current = clearRevision;
+    const action = { type: "replace" as const, value: "" };
+    stateRef.current = composerReducer(stateRef.current, action);
+    dispatch(action);
+  }, [clearRevision]);
   useEffect(() => onValueChange?.(state.value), [onValueChange, state.value]);
 
   useInput(

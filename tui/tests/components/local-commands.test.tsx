@@ -102,18 +102,27 @@ describe("App local command wiring", () => {
   });
 
   it("emits quit as a lifecycle intent", async () => {
-    const onShutdownIntent = vi.fn();
+    const requestExit = vi.fn(async () => ({
+      reason: "quit_command" as const,
+      exitCode: 0 as const,
+      forced: false,
+    }));
     const view = render(
       <App
         store={createSurfaceStore()}
         controller={controller()}
         localCommands={localService()}
-        onShutdownIntent={onShutdownIntent}
+        lifecycle={{
+          cancelActiveOperation: async () => undefined,
+          requestExit,
+        }}
         width={60}
       />,
     );
     view.stdin.write("/quit");
     view.stdin.write("\r");
-    await eventually(() => expect(onShutdownIntent).toHaveBeenCalledOnce());
+    await eventually(() =>
+      expect(requestExit).toHaveBeenCalledWith("quit_command"),
+    );
   });
 });
