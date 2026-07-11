@@ -33,95 +33,17 @@ mode，并且仍然接受用户消息 turn。普通用户消息是唯一的产�
 
 ## 快速开始
 
-克隆并安装 Awesome：
-
-Windows PowerShell：
+V1 一键安装器将在下一个 Phase 4 PR 中交付。当前请使用贡献者源码预览：
 
 ```powershell
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
+uv sync --extra memory --dev
+npm --prefix tui ci
+npm --prefix tui run build
+$env:PATH = "$(Resolve-Path .venv\Scripts);$env:PATH"
+node tui/dist/cli/index.js --help
 ```
 
-macOS/Linux：
-
-```bash
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
-```
-
-`make install` 也会通过 `uv tool` 安装用户级 `awesome` 命令。安装结束后
-打开一个新终端，再确认命令已经进入 PATH：
-
-Windows PowerShell：
-
-```powershell
-Get-Command awesome
-awesome --help
-```
-
-macOS/Linux：
-
-```bash
-command -v awesome
-awesome --help
-```
-
-如果仍然找不到命令，运行 `uv tool update-shell`，再打开新终端重新检查。
-
-创建 Awesome 用户目录：
-
-Windows PowerShell：
-
-```powershell
-awesome init
-```
-
-macOS/Linux：
-
-```bash
-awesome init
-```
-
-把模型 key 设置到操作系统环境变量，或写入 `<AWESOME_HOME>/.env`：
-
-Windows PowerShell：
-
-```powershell
-setx AWESOME_AGENT_DEEPSEEK_API_KEY "your-key"
-```
-
-macOS/Linux：
-
-```bash
-mkdir -p "${AWESOME_HOME:-$HOME/.awesome-agent}"
-printf 'AWESOME_AGENT_DEEPSEEK_API_KEY=your-key\n' >> "${AWESOME_HOME:-$HOME/.awesome-agent}/.env"
-```
-
-然后进入你的项目并启动 Awesome：
-
-Windows PowerShell：
-
-```powershell
-cd E:\my-project
-awesome
-```
-
-macOS/Linux：
-
-```bash
-cd ~/my-project
-awesome
-```
-
-发送一条普通消息，例如：
-
-```text
-Read this project and explain how it is organized.
-```
-
-完整步骤见 [Quickstart](docs/getting-started/quickstart.md) 或
+POSIX 等价命令和 workspace 启动方式见
 [快速开始](docs/getting-started/quickstart.zh-CN.md)。
 
 ## 配置基础
