@@ -19,6 +19,8 @@ import {
   type SurfaceStore,
   createSurfaceStore,
 } from "../state/index.js";
+import { projectLiveTurn } from "../transcript/live.js";
+import { reconcileCompletedTurn } from "../transcript/reconcile.js";
 
 export class SurfaceConnectionError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -62,6 +64,36 @@ export async function connectSurface(
   );
   let closed = false;
   let closePromise: Promise<void> | undefined;
+  const reconciledTerminals = new Set<string>();
+  const reconciliationTasks = new Set<Promise<void>>();
+
+  const reconcileTerminal = async (
+    threadId: string,
+    key: string,
+  ): Promise<void> => {
+    if (reconciledTerminals.has(key)) return;
+    reconciledTerminals.add(key);
+    const live = projectLiveTurn(store.getState());
+    const page = await session.rpc.request("thread.read", {
+      thread_id: threadId,
+      limit: 50,
+    });
+    const result = page.ok
+      ? reconcileCompletedTurn(live, page.value)
+      : {
+          persisted: false,
+          blocks: [
+            ...live.blocks,
+            {
+              key: `reconcile:error:${key}`,
+              kind: "error" as const,
+              code: "thread_read_failed",
+              message: page.error.message,
+            },
+          ],
+        };
+    store.dispatch({ type: "transcript.reconciled", result });
+  };
 
   const eventConsumer = (async () => {
     for await (const event of session.rpc.events()) {
@@ -74,6 +106,21 @@ export async function connectSurface(
         });
         await session.rpc.close(fault);
         break;
+      }
+      if (
+        event.event_type === "operation.completed" ||
+        event.event_type === "operation.failed" ||
+        event.event_type === "operation.cancelled"
+      ) {
+        const threadId =
+          event.thread_id ?? store.getState().application?.current_thread_id;
+        if (threadId && event.operation_id) {
+          const task = reconcileTerminal(
+            threadId,
+            `operation:${event.operation_id}`,
+          ).finally(() => reconciliationTasks.delete(task));
+          reconciliationTasks.add(task);
+        }
       }
     }
   })()
@@ -106,6 +153,7 @@ export async function connectSurface(
       }
       await session.rpc.close(new RpcClosedError("Surface controller closed"));
       await eventConsumer;
+      await Promise.all(reconciliationTasks);
       store.dispatch({ type: "surface.closed" });
     })();
     return closePromise;

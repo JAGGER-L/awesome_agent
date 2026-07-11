@@ -1,4 +1,5 @@
 import type { MethodValue } from "../protocol/index.js";
+import type { TranscriptBlock } from "../transcript/model.js";
 
 export type ConnectionState =
   | "idle"
@@ -25,8 +26,11 @@ export interface ToolProjection {
 export interface TurnProjection {
   readonly id: string;
   readonly status: "active" | "completed" | "failed" | "cancelled";
+  readonly started_at: string;
   readonly assistant_text: string;
   readonly reasoning_text: string;
+  readonly reasoning_seen: boolean;
+  readonly reasoning_marker?: string;
   readonly tools: Readonly<Record<string, ToolProjection>>;
   readonly tool_order: readonly string[];
 }
@@ -64,6 +68,8 @@ export interface SurfaceState {
     readonly choices: readonly string[];
   };
   readonly warnings: readonly SurfaceWarning[];
+  readonly committed_transcript?: readonly TranscriptBlock[];
+  readonly transcript_persisted?: boolean;
   readonly fatal?: FatalState;
   readonly core_exit?: {
     readonly code: number | null;
