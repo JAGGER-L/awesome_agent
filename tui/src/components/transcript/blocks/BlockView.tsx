@@ -52,6 +52,8 @@ export function BlockView({
       return <Text dimColor>{block.label}</Text>;
     case "warning":
       return <Text color={theme.warning}>Warning · {block.message}</Text>;
+    case "status":
+      return <Text color={theme.muted}>{block.message}</Text>;
     case "error":
       return <Text color={theme.error}>Error · {block.message}</Text>;
     case "omitted_history":

@@ -19,6 +19,7 @@ import {
   createSurfaceStore,
 } from "../state/index.js";
 import { projectLiveTurn } from "../transcript/live.js";
+import { mergeTranscriptBlocks } from "../transcript/merge.js";
 import { reconcileCompletedTurn } from "../transcript/reconcile.js";
 
 export interface SurfaceConnectOptions extends CoreLaunchOptions {
@@ -84,7 +85,16 @@ export async function connectSurface(
             },
           ],
         };
-    store.dispatch({ type: "transcript.reconciled", result });
+    store.dispatch({
+      type: "transcript.reconciled",
+      result: {
+        ...result,
+        blocks: mergeTranscriptBlocks(
+          store.getState().committed_transcript ?? [],
+          result.blocks,
+        ),
+      },
+    });
   };
 
   const eventConsumer = (async () => {
