@@ -59,10 +59,15 @@ UV="$UV_DIR/uv"
 [ -x "$UV" ] || fail "uv bootstrap did not produce an executable"
 
 UV_PYTHON_INSTALL_DIR="$STAGED_APP/runtimes/python" \
-    "$UV" python install 3.12
+    "$UV" python install 3.12 --no-bin
 PYTHON=$(UV_PYTHON_INSTALL_DIR="$STAGED_APP/runtimes/python" \
-    "$UV" python find 3.12)
+    "$UV" python find --managed-python 3.12)
 [ -x "$PYTHON" ] || fail "private Python 3.12 was not installed"
+PYTHON=$("$PYTHON" -c 'import os, sys; print(os.path.realpath(sys.executable))')
+case "$PYTHON" in
+    "$STAGED_APP/runtimes/python"/*) ;;
+    *) fail "private Python escaped the staged runtime" ;;
+esac
 
 BUNDLE="awesome-$VERSION.zip"
 curl -fsSL "$ASSET_BASE/$BUNDLE" -o "$DOWNLOADS/$BUNDLE"
@@ -92,17 +97,29 @@ NODE="$STAGED_APP/runtimes/node/bin/node"
 NPM_CLI="$STAGED_APP/runtimes/node/lib/node_modules/npm/bin/npm-cli.js"
 [ -x "$NODE" ] && [ -f "$NPM_CLI" ] || fail "private Node runtime is incomplete"
 
-mkdir -p "$STAGED_APP/core/.venv"
-"$UV" venv --python "$PYTHON" "$STAGED_APP/core/.venv"
-VENV_PYTHON="$STAGED_APP/core/.venv/bin/python"
+CORE_ENV="$STAGED_APP/core/.venv"
+SITE_PACKAGES="$CORE_ENV/site-packages"
+CORE_BIN="$CORE_ENV/bin"
+mkdir -p "$SITE_PACKAGES" "$CORE_BIN"
 WHEEL="$STAGED_APP/core/awesome_agent-$VERSION-py3-none-any.whl"
-"$UV" pip install --python "$VENV_PYTHON" "${WHEEL}[memory]"
+"$UV" pip install --python "$PYTHON" --target "$SITE_PACKAGES" "${WHEEL}[memory]"
+PYTHON_RELATIVE=${PYTHON#"$STAGED_APP/"}
+cat >"$CORE_BIN/awesome-core" <<EOF
+#!/bin/sh
+APP_ROOT=\$(CDPATH= cd "\$(dirname "\$0")/../../.." && pwd)
+PYTHONPATH="\$APP_ROOT/core/.venv/site-packages"
+export PYTHONPATH
+exec "\$APP_ROOT/$PYTHON_RELATIVE" -c \
+    'import site,sys; site.addsitedir(sys.argv.pop(1)); from awesome_agent.protocol.stdio import main; main()' \
+    "\$PYTHONPATH" "\$@"
+EOF
+chmod 755 "$CORE_BIN/awesome-core"
 "$NODE" "$NPM_CLI" ci --omit=dev --ignore-scripts --prefix "$STAGED_APP/tui"
 
-PYTHON_VERSION=$("$VENV_PYTHON" -c \
+PYTHON_VERSION=$(PYTHONPATH="$SITE_PACKAGES" "$PYTHON" -c \
     'from awesome_agent.version import PRODUCT_VERSION; print(PRODUCT_VERSION)')
 NODE_MAJOR=$("$NODE" -p 'process.versions.node.split(".")[0]')
-CLI_VERSION=$(PATH="$STAGED_APP/core/.venv/bin:$PATH" \
+CLI_VERSION=$(PATH="$CORE_BIN:$PATH" \
     "$NODE" "$STAGED_APP/tui/dist/cli/index.js" --version)
 [ "$PYTHON_VERSION" = "$VERSION" ] || fail "private Core version check failed"
 [ "$NODE_MAJOR" = "22" ] || fail "private Node version check failed"

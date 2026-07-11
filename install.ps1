@@ -43,19 +43,29 @@ try {
     $env:UV_UNMANAGED_INSTALL = $UvDir
     $env:UV_NO_MODIFY_PATH = "1"
     & $UvInstaller
-    Assert-NativeSuccess "uv bootstrap"
     $Uv = Join-Path $UvDir "uv.exe"
     if (-not (Test-Path -LiteralPath $Uv -PathType Leaf)) {
         throw "uv bootstrap did not produce uv.exe."
     }
 
     $env:UV_PYTHON_INSTALL_DIR = $PythonRuntime
-    & $Uv python install 3.12 --no-registry
+    & $Uv python install 3.12 --no-registry --no-bin
     Assert-NativeSuccess "private Python install"
-    $Python = (& $Uv python find 3.12 | Select-Object -Last 1).Trim()
+    $Python = (& $Uv python find --managed-python 3.12 | Select-Object -Last 1).Trim()
     Assert-NativeSuccess "private Python lookup"
     if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
         throw "Private Python 3.12 was not installed."
+    }
+    $Python = (& $Python -c `
+        "import os, sys; print(os.path.realpath(sys.executable))").Trim()
+    Assert-NativeSuccess "private Python path resolution"
+    $ResolvedPython = [IO.Path]::GetFullPath($Python)
+    $ResolvedPythonRoot = [IO.Path]::GetFullPath($PythonRuntime).TrimEnd("\") + "\"
+    if (-not $ResolvedPython.StartsWith(
+        $ResolvedPythonRoot,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Private Python escaped the staged runtime."
     }
 
     $BundleName = "awesome-$Version.zip"
@@ -104,25 +114,43 @@ try {
         throw "Private Node runtime is incomplete."
     }
 
-    $Venv = Join-Path $StagedApp "core\.venv"
-    & $Uv venv --python $Python $Venv
-    Assert-NativeSuccess "private Core environment creation"
-    $VenvPython = Join-Path $Venv "Scripts\python.exe"
+    $CoreEnvironment = Join-Path $StagedApp "core\.venv"
+    $SitePackages = Join-Path $CoreEnvironment "site-packages"
+    $CoreBin = Join-Path $CoreEnvironment "Scripts"
+    New-Item -ItemType Directory -Force -Path $SitePackages, $CoreBin | Out-Null
     $Wheel = Join-Path $StagedApp "core\awesome_agent-$Version-py3-none-any.whl"
-    & $Uv pip install --python $VenvPython "$Wheel[memory]"
+    & $Uv pip install --python $Python --target $SitePackages "$Wheel[memory]"
     Assert-NativeSuccess "private Core install"
+    $ResolvedApp = [IO.Path]::GetFullPath($StagedApp).TrimEnd("\") + "\"
+    $PythonRelative = $ResolvedPython.Substring($ResolvedApp.Length)
+    $CoreWrapper = Join-Path $CoreBin "awesome-core.cmd"
+    $CoreWrapperBody = @"
+@echo off
+set "APP_ROOT=%~dp0..\..\.."
+set "PYTHONPATH=%APP_ROOT%\core\.venv\site-packages"
+"%APP_ROOT%\$PythonRelative" -c "import site,sys; site.addsitedir(sys.argv.pop(1)); from awesome_agent.protocol.stdio import main; main()" "%PYTHONPATH%" %*
+"@
+    Set-Content -LiteralPath $CoreWrapper -Value $CoreWrapperBody -Encoding Ascii
     & $Node $NpmCli ci --omit=dev --ignore-scripts --prefix (Join-Path $StagedApp "tui")
     Assert-NativeSuccess "private TUI install"
 
-    $PythonVersion = (& $VenvPython -c (
-        "from awesome_agent.version import PRODUCT_VERSION; print(PRODUCT_VERSION)"
-    )).Trim()
-    Assert-NativeSuccess "private Core version check"
-    $NodeMajor = (& $Node -p 'process.versions.node.split(".")[0]').Trim()
+    $OldPythonPath = $env:PYTHONPATH
+    try {
+        $env:PYTHONPATH = $SitePackages
+        $PythonVersion = (& $Python -c (
+            "from awesome_agent.version import PRODUCT_VERSION; print(PRODUCT_VERSION)"
+        )).Trim()
+        Assert-NativeSuccess "private Core version check"
+    }
+    finally {
+        $env:PYTHONPATH = $OldPythonPath
+    }
+    $NodeMajor = (& $Node -p `
+        'process.versions.node.split(String.fromCharCode(46))[0]').Trim()
     Assert-NativeSuccess "private Node version check"
     $OldPath = $env:PATH
     try {
-        $env:PATH = "$(Join-Path $Venv 'Scripts');$OldPath"
+        $env:PATH = "$CoreBin;$OldPath"
         $CliVersion = (& $Node (Join-Path $StagedApp "tui\dist\cli\index.js") `
             --version).Trim()
         Assert-NativeSuccess "public CLI version check"
@@ -160,7 +188,7 @@ set "PATH=%APP_ROOT%\core\.venv\Scripts;%PATH%"
             $LauncherDir
         }
         else {
-            "$($UserPath.TrimEnd(';'));$LauncherDir"
+            "$LauncherDir;$($UserPath.TrimStart(';'))"
         }
         [Environment]::SetEnvironmentVariable("Path", $UpdatedPath, "User")
     }

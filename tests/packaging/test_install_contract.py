@@ -22,7 +22,13 @@ def test_shell_installer_has_safe_supported_host_contract() -> None:
         "SHA256SUMS",
         "UV_UNMANAGED_INSTALL",
         "UV_PYTHON_INSTALL_DIR",
+        "--managed-python",
+        "--no-bin",
+        "os.path.realpath",
         "npm-cli.js",
+        "--target",
+        "PYTHONPATH",
+        "site.addsitedir",
         "ci --omit=dev --ignore-scripts",
         "uname -s",
         "uname -m",
@@ -87,8 +93,14 @@ def test_windows_installer_has_safe_supported_host_contract() -> None:
         "UV_UNMANAGED_INSTALL",
         "UV_PYTHON_INSTALL_DIR",
         "--no-registry",
+        "--managed-python",
+        "--no-bin",
+        "os.path.realpath",
         "node-v$NodeVersion-win-x64.zip",
         "npm-cli.js",
+        "--target",
+        "PYTHONPATH",
+        "site.addsitedir",
         "--omit=dev",
         "--ignore-scripts",
         'Write-Output "validated"',
@@ -119,6 +131,7 @@ def test_windows_installer_has_safe_supported_host_contract() -> None:
     assert source.index('Write-Output "validated"') < source.index(
         "Remove-Item -LiteralPath $InstalledApp"
     )
+    assert "\"$LauncherDir;$($UserPath.TrimStart(';'))\"" in source
 
 
 def test_windows_installer_parses_in_powershell() -> None:
