@@ -167,6 +167,35 @@ def test_process_environment_overrides_user_dotenv_without_leaking_values(
     assert "mem0-file" not in rendered
     assert not hasattr(loaded.secrets, "model_dump")
 
+    assert loaded.provider_credentials.model_dump(mode="json") == {
+        "deepseek": {
+            "provider": "deepseek",
+            "environment_variable": "DEEPSEEK_API_KEY",
+            "source": "process_environment",
+            "mutable": False,
+        },
+        "kimi": {
+            "provider": "kimi",
+            "environment_variable": "MOONSHOT_API_KEY",
+            "source": "user_env_file",
+            "mutable": True,
+        },
+    }
+
+
+def test_missing_provider_credentials_report_missing_source(tmp_path: Path) -> None:
+    loaded = load_config_sources(
+        paths=AwesomePaths.from_home(tmp_path / "home"),
+        workspace=tmp_path / "workspace",
+        workspace_trusted=False,
+        environ={},
+    )
+
+    assert loaded.provider_credentials.deepseek.source == "missing"
+    assert loaded.provider_credentials.deepseek.mutable is True
+    assert loaded.provider_credentials.kimi.source == "missing"
+    assert loaded.provider_credentials.kimi.mutable is True
+
 
 def test_workspace_dotenv_is_never_loaded(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"

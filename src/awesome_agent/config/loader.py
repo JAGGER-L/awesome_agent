@@ -11,6 +11,10 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, SecretStr, ValidationError
 from yaml.nodes import MappingNode
 
+from awesome_agent.config.credentials import (
+    ProviderCredentialStatuses,
+    resolve_provider_credential_statuses,
+)
 from awesome_agent.config.models import (
     SecretStatus,
     UserConfigDocument,
@@ -52,6 +56,7 @@ class LoadedConfigSources:
     workspace: WorkspaceConfigDocument | None
     secrets: SecretValues
     secret_status: SecretStatus
+    provider_credentials: ProviderCredentialStatuses
 
 
 class _DuplicateConfigKey(ValueError):
@@ -115,9 +120,10 @@ def load_config_sources(
             WorkspaceConfigDocument,
             source_label="workspace config",
         )
+    environment = os.environ if environ is None else environ
     secrets = _load_secrets(
         sources.user_env,
-        os.environ if environ is None else environ,
+        environment,
     )
     status = SecretStatus(
         deepseek_api_key=secrets.deepseek_api_key is not None,
@@ -129,6 +135,10 @@ def load_config_sources(
         workspace=workspace_document,
         secrets=secrets,
         secret_status=status,
+        provider_credentials=resolve_provider_credential_statuses(
+            sources.user_env,
+            environment,
+        ),
     )
 
 
