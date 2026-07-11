@@ -54,6 +54,13 @@ TARGET_PACKAGES = {
     "safety",
     "storage",
 }
+SERVICE_ASSETS = (
+    Path("Dockerfile"),
+    Path("docker-compose.yml"),
+    Path(".dockerignore"),
+    Path("sandbox"),
+    Path("demo/index.html"),
+)
 
 
 def _imports(path: Path) -> set[str]:
@@ -139,6 +146,35 @@ def test_python_legacy_surfaces_are_physically_absent() -> None:
     assert not {"textual", "typer"} & dependencies
     assert (Path("tui") / "src" / "cli" / "index.ts").is_file()
     assert (ROOT / "protocol" / "stdio.py").is_file()
+
+
+def test_api_and_container_product_paths_are_absent() -> None:
+    assert not any((ROOT / "api").rglob("*.py"))
+    assert not {
+        path.as_posix()
+        for path in SERVICE_ASSETS
+        if path.is_file()
+        or (path.is_dir() and any(item.is_file() for item in path.rglob("*")))
+    }
+
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = {
+        value.split("[", 1)[0].split(">", 1)[0]
+        for value in project["project"]["dependencies"]
+    }
+    assert not {"fastapi", "uvicorn"} & dependencies
+    assert project["project"]["scripts"] == {
+        "awesome-core": "awesome_agent.protocol.stdio:main"
+    }
+
+    target_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for name in TARGET_PACKAGES
+        for path in (ROOT / name).rglob("*.py")
+    ).casefold()
+    assert "awesome_agent.api" not in target_source
+    assert "fastapi" not in target_source
+    assert "uvicorn" not in target_source
 
 
 def test_concrete_external_adapters_are_wired_only_at_composition_boundary() -> None:
