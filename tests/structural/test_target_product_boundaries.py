@@ -204,11 +204,18 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
         for path, imports in imports_by_path.items()
         if any(imported.startswith("node:") for imported in imports)
     }
-    assert node_importers == {"src/core/process.ts": {"node:child_process"}}
+    assert node_importers == {
+        "src/core/process.ts": {"node:child_process"},
+        "src/preferences/paths.ts": {"node:os", "node:path"},
+        "src/preferences/store.ts": {"node:fs/promises", "node:path"},
+    }
+    approved_node_imports = {
+        imported for imports in node_importers.values() for imported in imports
+    }
     assert all(
         imported == "zod"
         or imported.startswith(".")
-        or imported == "node:child_process"
+        or imported in approved_node_imports
         for imports in imports_by_path.values()
         for imported in imports
     )
@@ -218,9 +225,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
         "clipboardy",
         "docker",
         "fastapi",
-        "node:fs",
         "node:http",
-        "node:path",
         "react",
         "sqlalchemy",
         "textual",
