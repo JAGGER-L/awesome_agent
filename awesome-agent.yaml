@@ -1,8 +1,0 @@
-version: 1
-
-extensions:
-  skills:
-    auto_discover_project_skills: true
-    roots: []
-
-  sources: []

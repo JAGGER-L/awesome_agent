@@ -16,8 +16,6 @@ class AwesomePaths:
     install_dir: Path
     env_file: Path
     config_file: Path
-    local_config_path: Path
-    user_extension_config: Path
     skills_dir: Path
     memory_dir: Path
     user_memory_file: Path
@@ -27,10 +25,6 @@ class AwesomePaths:
     checkpoint_db: Path
     change_journal_dir: Path
     ui_file: Path
-    runs_dir: Path
-    logs_dir: Path
-    threads_dir: Path
-    worktrees_dir: Path
 
     @classmethod
     def resolve(
@@ -78,8 +72,6 @@ class AwesomePaths:
             install_dir=resolved_install_dir,
             env_file=resolved_home / ".env",
             config_file=resolved_home / "config.yaml",
-            local_config_path=resolved_home / "config.toml",
-            user_extension_config=resolved_home / "awesome-agent.yaml",
             skills_dir=resolved_home / "skills",
             memory_dir=resolved_home / "memory",
             user_memory_file=resolved_home / "memory" / "USER.md",
@@ -89,10 +81,6 @@ class AwesomePaths:
             checkpoint_db=state_dir / "checkpoints.db",
             change_journal_dir=state_dir / "change-journal",
             ui_file=resolved_home / "ui.json",
-            runs_dir=resolved_home / "runs",
-            logs_dir=resolved_home / "logs",
-            threads_dir=resolved_home / "threads",
-            worktrees_dir=resolved_home / "worktrees",
         )
 
     def workspace_config_file(self, workspace: Path) -> Path:

@@ -208,8 +208,8 @@ Before ending, confirm that:
 
 ### Repository Map
 
-- `src/awesome_agent/paths.py` and `src/awesome_agent/settings.py`: path and
-  configuration resolution, including `AWESOME_HOME`.
+- `src/awesome_agent/paths.py`: product data and installation path resolution,
+  including `AWESOME_HOME`.
 - `src/awesome_agent/conversation/`: thread, turn, message, stream, and
   conversation-run service contracts.
 - `src/awesome_agent/agent/`: LangGraph graph, state, nodes, routing, budgets,
@@ -229,8 +229,8 @@ Before ending, confirm that:
   provider-neutral model protocol, process model backend, execution service,
   provider adapters, model catalog, routing, and streaming.
 - `src/awesome_agent/safety/`: redaction and data-safety helpers.
-- `scripts/`: local developer and operations helper scripts.
-- `skills/`: project runtime skill packages discovered as extension inventory.
+- `scripts/generate_protocol_fixtures.py`: deterministic protocol fixture
+  generator and checker.
 - `tests/`: unit, integration, e2e, and structural tests.
 - `.agents/`: repository-level agent support material; it is not product
   runtime state.

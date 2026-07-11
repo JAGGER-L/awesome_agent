@@ -38,99 +38,19 @@ turns. Plain user messages are the only product execution creation path.
 
 ## Quick Start
 
-Clone and install Awesome:
-
-Windows PowerShell:
-
-```powershell
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
-```
-
-macOS/Linux:
-
-```bash
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
-```
-
-`make install` also installs the user-level `awesome` command with `uv tool`.
-Open a new terminal after it finishes, then verify the command is on PATH:
-
-Windows PowerShell:
+The V1 one-command installer is delivered in the next Phase 4 PR. Until then,
+use the contributor source preview:
 
 ```powershell
-Get-Command awesome
-awesome --help
+uv sync --extra memory --dev
+npm --prefix tui ci
+npm --prefix tui run build
+$env:PATH = "$(Resolve-Path .venv\Scripts);$env:PATH"
+node tui/dist/cli/index.js --help
 ```
 
-macOS/Linux:
-
-```bash
-command -v awesome
-awesome --help
-```
-
-If the command is still missing, run `uv tool update-shell`, open a new
-terminal, and check again.
-
-Create Awesome's user directory:
-
-Windows PowerShell:
-
-```powershell
-awesome init
-```
-
-macOS/Linux:
-
-```bash
-awesome init
-```
-
-Set your model key in your operating-system environment or in
-`<AWESOME_HOME>/.env`:
-
-Windows PowerShell:
-
-```powershell
-setx AWESOME_AGENT_DEEPSEEK_API_KEY "your-key"
-```
-
-macOS/Linux:
-
-```bash
-mkdir -p "${AWESOME_HOME:-$HOME/.awesome-agent}"
-printf 'AWESOME_AGENT_DEEPSEEK_API_KEY=your-key\n' >> "${AWESOME_HOME:-$HOME/.awesome-agent}/.env"
-```
-
-Then open a project and start Awesome:
-
-Windows PowerShell:
-
-```powershell
-cd E:\my-project
-awesome
-```
-
-macOS/Linux:
-
-```bash
-cd ~/my-project
-awesome
-```
-
-Send a normal message, for example:
-
-```text
-Read this project and explain how it is organized.
-```
-
-For the full step-by-step guide, see
-[Quickstart](docs/getting-started/quickstart.md) or
-[快速开始](docs/getting-started/quickstart.zh-CN.md).
+See the [Quickstart](docs/getting-started/quickstart.md) for the POSIX equivalent
+and workspace startup path.
 
 ## Configuration Basics
 
@@ -139,13 +59,13 @@ Awesome keeps its own user files outside your projects.
 | Path | Purpose |
 | --- | --- |
 | `<AWESOME_HOME>/.env` | User-level model keys and local settings. |
+| `<AWESOME_HOME>/config.yaml` | User-level Provider, budget, memory, skill, and MCP settings. |
 | `<AWESOME_HOME>/skills/` | Personal skills available across projects. |
-| `<AWESOME_HOME>/awesome-agent.yaml` | User-level extension settings, including MCP sources. |
 | `<your-project>/skills/` | Project skills for the current repository. |
-| `<your-project>/awesome-agent.yaml` | Project extension settings. |
+| `<your-project>/.awesome/config.yaml` | Trusted workspace budget, skill, and MCP settings. |
 
-On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent`. On other
-platforms, it defaults to `~/.awesome-agent`. You can override it with the
+On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\Awesome`. On other
+platforms, it defaults to `~/.awesome`. You can override it with the
 `AWESOME_HOME` environment variable.
 
 Provider keys are not read from your project `.env`.

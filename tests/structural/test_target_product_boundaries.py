@@ -65,6 +65,15 @@ SERVICE_ASSETS = (
     Path("sandbox"),
     Path("demo/index.html"),
 )
+EXPECTED_DIRECT_DEPENDENCIES = {
+    "langgraph",
+    "langgraph-checkpoint-sqlite",
+    "mcp",
+    "openai",
+    "pydantic",
+    "python-dotenv",
+    "pyyaml",
+}
 
 
 def _imports(path: Path) -> set[str]:
@@ -237,6 +246,18 @@ def test_api_and_container_product_paths_are_absent() -> None:
     assert "awesome_agent.api" not in target_source
     assert "fastapi" not in target_source
     assert "uvicorn" not in target_source
+
+
+def test_direct_dependencies_match_retained_production_imports() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = {
+        re.split(r"[<>=!~\[]", value, maxsplit=1)[0].casefold()
+        for value in project["project"]["dependencies"]
+    }
+
+    assert dependencies == EXPECTED_DIRECT_DEPENDENCIES
+    assert set(project["project"]["optional-dependencies"]) == {"memory"}
+    assert project["project"]["optional-dependencies"]["memory"] == ["mem0ai>=2.0.7,<3"]
 
 
 def test_concrete_external_adapters_are_wired_only_at_composition_boundary() -> None:

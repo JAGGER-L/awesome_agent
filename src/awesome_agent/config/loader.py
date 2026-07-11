@@ -103,7 +103,6 @@ def load_config_sources(
     environ: Mapping[str, str] | None = None,
 ) -> LoadedConfigSources:
     sources = config_source_paths(paths=paths, workspace=workspace)
-    _reject_legacy_user_sources(paths.home)
     user = _read_yaml_document(
         sources.user_config,
         UserConfigDocument,
@@ -111,7 +110,6 @@ def load_config_sources(
     )
     workspace_document: WorkspaceConfigDocument | None = None
     if workspace_trusted:
-        _reject_legacy_workspace_sources(workspace)
         workspace_document = _read_yaml_document(
             sources.workspace_config,
             WorkspaceConfigDocument,
@@ -191,19 +189,3 @@ def _load_secrets(path: Path, environ: Mapping[str, str]) -> SecretValues:
         moonshot_api_key=value(_SECRET_NAMES[1]),
         mem0_api_key=value(_SECRET_NAMES[2]),
     )
-
-
-def _reject_legacy_user_sources(home: Path) -> None:
-    if any((home / name).is_file() for name in ("config.toml", "awesome-agent.yaml")):
-        raise ConfigurationInvalid(
-            "legacy_config_source",
-            "A legacy user configuration file must be removed.",
-        )
-
-
-def _reject_legacy_workspace_sources(workspace: Path) -> None:
-    if (workspace / "awesome-agent.yaml").is_file():
-        raise ConfigurationInvalid(
-            "legacy_config_source",
-            "A legacy workspace configuration file must be removed.",
-        )
