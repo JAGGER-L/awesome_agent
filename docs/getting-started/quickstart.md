@@ -1,57 +1,94 @@
 # Quickstart
 
-Awesome is a local terminal coding agent. The only product surface is the Ink
-`awesome` interface backed by the local Python `awesome-core` process. It does
-not run an API server, PostgreSQL, Worker, or Docker service.
+This guide takes a fresh supported host to one trusted local coding session.
 
-## Phase 4 Source Preview
+## 1. Install and open a new terminal
 
-The one-command end-user installer is delivered later in Phase 4. Until then,
-this branch supports a contributor source preview only; it is not the final
-installation experience.
-
-Source-preview prerequisites are Git, Python 3.12 with uv, and Node.js 22 with
-npm. These are development prerequisites only. Released users will not install
-Python, Node, uv, or npm manually.
-
-```powershell
-uv sync --extra memory --dev
-npm --prefix tui ci
-npm --prefix tui run build
-$env:PATH = "$(Resolve-Path .venv\Scripts);$env:PATH"
-node tui/dist/cli/index.js --help
-```
+Apple Silicon macOS or WSL2 Ubuntu 24.04 x64:
 
 ```bash
-uv sync --extra memory --dev
-npm --prefix tui ci
-npm --prefix tui run build
-export PATH="$PWD/.venv/bin:$PATH"
-node tui/dist/cli/index.js --help
+curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-## Provider Credentials
-
-Create `<AWESOME_HOME>/.env` and configure at least one supported Provider:
-
-```dotenv
-DEEPSEEK_API_KEY=
-MOONSHOT_API_KEY=
-```
-
-The default user-data root is `%LOCALAPPDATA%\Awesome` on Windows and
-`~/.awesome` on macOS/WSL2. Mem0 Cloud is optional and uses `MEM0_API_KEY`.
-
-## Start In A Workspace
-
-Run the compiled Ink entry from the directory you want Awesome to use as the
-workspace. The first visit requires explicit trust. Trust denial exits without
-running model or tool work.
+Windows 11 x64 PowerShell:
 
 ```powershell
-cd E:\path\to\project
-node E:\path\to\awesome-agent\tui\dist\cli\index.js
+irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-The final V1 guide replaces this source-preview path with the one-command
-installer and global `awesome` launcher.
+Open a new terminal so its PATH includes `awesome`, then verify:
+
+```text
+awesome --version
+awesome --help
+```
+
+Git is optional. Awesome does not install it; use the
+[official installer](https://git-scm.com/downloads) if required.
+
+## 2. Configure a Provider
+
+`AWESOME_HOME` defaults to `%LOCALAPPDATA%\Awesome` on Windows and `~/.awesome`
+on macOS/WSL2. Create `<AWESOME_HOME>/.env` with one or both keys:
+
+```dotenv
+DEEPSEEK_API_KEY=...
+MOONSHOT_API_KEY=...
+```
+
+If both are present, select a model in `<AWESOME_HOME>/config.yaml` or later
+with `/model`. Only DeepSeek and Kimi are supported.
+
+## 3. Trust a workspace
+
+```text
+cd <workspace>
+awesome
+```
+
+Review the displayed path. Choose Yes only if you trust its files and project
+instructions. Choose No to exit without persisting trust.
+
+Start with a harmless read request such as: `List the top-level files and
+explain the project without changing anything.`
+
+## 4. Make and review one edit
+
+Ask for a small edit. Then use:
+
+```text
+/diff
+/undo
+/redo
+```
+
+Undo/redo covers journaled file-tool changes. Shell side effects from
+`execute` are not guaranteed reversible.
+
+## 5. Continue later
+
+Use `/status` to copy the resumable Thread ID, then exit with `/quit`.
+
+```text
+awesome --continue
+awesome --resume
+awesome --resume <thread_id>
+```
+
+`--continue` uses the latest thread in the current workspace. `/resume` inside
+the TUI provides the same thread-oriented workflow.
+
+## Defaults and diagnostics
+
+- `/thinking` shows the current mode and supports on/off selection;
+  `/thinking on` and `/thinking off` set it. Thinking is default off.
+- Local file memory and Mem0 Cloud are independent and both default off. Use
+  `/memory` to inspect or configure them.
+- `/status` shows product, workspace, thread, model, mode, memory, MCP,
+  operation, and configuration status.
+- `/context` and `/usage` show context and latest usage details separately.
+- `/doctor` checks local configuration, SQLite, checkpoints, and Provider
+  readiness.
+
+For failures, run `/doctor`. To upgrade, close every Awesome process and rerun
+the original install command. There is no separate update command.

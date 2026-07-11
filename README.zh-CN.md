@@ -1,91 +1,89 @@
-﻿# Awesome Agent
+# Awesome Agent
 
 [English](README.md) | [简体中文](README.zh-CN.md)
+
 ```text
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃  ███  █   █ █████ █████  ███  █   █ █████        ┃
-┃ █   █ █   █ █     █     █   █ ██ ██ █            ┃
-┃ █████ █ █ █ ████  █████ █   █ █ █ █ ████         ┃
-┃ █   █ ██ ██ █         █ █   █ █   █ █            ┃
-┃ █   █ █   █ █████ █████  ███  █   █ █████        ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  ███  █   █ █████ █████  ███  █   █ █████
+ █   █ █   █ █     █     █   █ ██ ██ █
+ █████ █ █ █ ████  █████ █   █ █ █ █ ████
+ █   █ ██ ██ █         █ █   █ █   █ █
+ █   █ █   █ █████ █████  ███  █   █ █████
 ```
-Awesome Agent 是一个面向本地项目的 AI coding agent，定位是运行在开发者
-电脑上的轻量级本地开发助手。它可以读取代码库上下文、修改文件、执行命令，并
-辅助调试、重构和功能实现。相比传统代码补全工具，Awesome 更偏向任务级开发：
-用户描述目标后，它会围绕当前仓库状态进行多轮推理、编辑和验证，适合终端优先、
-自动化程度较高的工程工作流。唯一产品入口是本地 Ink `awesome` 界面，其后运行
-私有的 Python Core 进程。
 
+Awesome 是一个在启动目录内工作的 Local-first AI Coding Agent；它不是托管
+服务，也不是通用 Agent Platform。
 
-## 产品界面
+V1.0.0 是面向少量用户的有限试用版本。支持 Apple Silicon macOS、Windows 11
+x64 和 WSL2 Ubuntu 24.04 x64。
 
-| 方式 | 适合场景 | 启动命令 |
-| --- | --- | --- |
-| Local CLI | 在本地项目目录中通过终端工作；不需要 API Server、PostgreSQL、Worker 或 Docker Service。 | `cd <your-project>` 然后运行 `awesome` |
+## 安装
 
-公开的 `awesome` 命令始终启动本地 Ink
-界面及其私有 Python Core 进程。
+Apple Silicon macOS 或 WSL2 Ubuntu 24.04 x64：
 
-从项目目录运行 `awesome`。启动目录会成为默认 thread context。如果它是一个
-Git checkout，runs 会继承该 repository；否则 Awesome 会使用 workspace-only
-mode，并且仍然接受用户消息 turn。普通用户消息是唯一的产品执行创建路径。
+```bash
+curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
+```
 
-## 快速开始
-
-V1 一键安装器将在下一个 Phase 4 PR 中交付。当前请使用贡献者源码预览：
+Windows 11 x64 PowerShell：
 
 ```powershell
-uv sync --extra memory --dev
-npm --prefix tui ci
-npm --prefix tui run build
-$env:PATH = "$(Resolve-Path .venv\Scripts);$env:PATH"
-node tui/dist/cli/index.js --help
+irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-POSIX 等价命令和 workspace 启动方式见
+安装后请打开新终端。用户无需预装 Python、Node.js、uv、npm、Docker 或 Make。
+Git 是可选能力，Awesome 不会安装 Git；如需 Git 工作流，请从
+[Git 官方网站](https://git-scm.com/downloads)安装。
+
+## 首次运行
+
+```text
+cd <workspace>
+awesome
+```
+
+启动目录就是 workspace。读取项目配置、指令、Skills、MCP 声明或运行工具前，
+Awesome 会请求 trust；拒绝后直接退出，也不会记录该目录为可信。
+
+至少在 `<AWESOME_HOME>/.env` 中配置一个模型密钥：
+
+```dotenv
+DEEPSEEK_API_KEY=...
+# 或
+MOONSHOT_API_KEY=...
+```
+
+V1 仅正式支持 DeepSeek 和 Kimi。模型选择与第一个安全任务见
 [快速开始](docs/getting-started/quickstart.zh-CN.md)。
 
-## 配置基础
+## 核心能力
 
-Awesome 会把自己的用户文件放在项目目录之外。
+最初的默认工具是 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、
+`glob`、`grep` 和 `execute`。MCP 与用户工具可以继续扩展，架构不限制为八个
+工具。文件修改进入 Change Journal，供 `/diff`、`/undo`、`/redo` 使用。
 
-| 路径 | 作用 |
-| --- | --- |
-| `<AWESOME_HOME>/.env` | 用户级模型 key 和本机配置。 |
-| `<AWESOME_HOME>/config.yaml` | 用户级 Provider、budget、memory、skill 和 MCP 配置。 |
-| `<AWESOME_HOME>/skills/` | 跨项目可用的个人 skills。 |
-| `<your-project>/skills/` | 当前仓库的项目级 skills。 |
-| `<your-project>/.awesome/config.yaml` | trusted workspace 的 budget、skill 和 MCP 配置。 |
+本地 `USER.md`/workspace `MEMORY.md` 与 Mem0 Cloud 是相互独立的两层记忆，
+二者默认关闭。Skills 提供任务指令，MCP 连接外部工具；它们都不能绕过
+workspace trust 或工具策略。
 
-Windows 上，`AWESOME_HOME` 默认是 `%LOCALAPPDATA%\Awesome`。其它平台
-默认是 `~/.awesome`。你可以用 `AWESOME_HOME` 环境变量覆盖默认路径。
+## 启动参数
 
-模型密钥不会从项目 `.env` 读取。
-
-## 常用命令
-
-在 `awesome` 中使用这些命令：
-
-| 命令 | 作用 |
-| --- | --- |
-| `/help` | 查看可用命令。 |
-| `/config` | 查看当前生效的 Awesome 路径和 key 状态。 |
-| `/status` | 查看当前会话状态。 |
-| `/skills` | 列出可用 skills。 |
-| `/mcp` | 查看已配置的 MCP servers。 |
-| `/quit` | 退出 TUI。 |
+```text
+awesome
+awesome --continue
+awesome --resume
+awesome --resume <thread_id>
+awesome --version
+awesome --help
+```
 
 ## 文档
 
-- [文档地图](docs/README.md)
-- [Quickstart](docs/getting-started/quickstart.md)
 - [快速开始](docs/getting-started/quickstart.zh-CN.md)
-- [用户指南](docs/user-guide/README.md)
 - [架构](ARCHITECTURE.md)
-- [安全模型](docs/architecture/security-model.md)
+- [开发](docs/development/README.md)
 
-## 安全提示
+## 安全
 
-只在你信任的项目中运行 Awesome。不要把 API key 提交到 Git；请把它们放在
-操作系统环境变量或 `<AWESOME_HOME>/.env` 中。
+Awesome 当前直接在本地主机运行工具，没有 Docker sandbox。只信任你了解的
+workspace，检查 diff，并把密钥放在操作系统环境或 `<AWESOME_HOME>/.env`，
+不要写入项目文件。

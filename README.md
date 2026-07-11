@@ -1,98 +1,93 @@
-﻿# Awesome Agent
+# Awesome Agent
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 ```text
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃  ███  █   █ █████ █████  ███  █   █ █████        ┃
-┃ █   █ █   █ █     █     █   █ ██ ██ █            ┃
-┃ █████ █ █ █ ████  █████ █   █ █ █ █ ████         ┃
-┃ █   █ ██ ██ █         █ █   █ █   █ █            ┃
-┃ █   █ █   █ █████ █████  ███  █   █ █████        ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  ███  █   █ █████ █████  ███  █   █ █████
+ █   █ █   █ █     █     █   █ ██ ██ █
+ █████ █ █ █ ████  █████ █   █ █ █ █ ████
+ █   █ ██ ██ █         █ █   █ █   █ █
+ █   █ █   █ █████ █████  ███  █   █ █████
 ```
 
-Awesome Agent is a local-project AI coding agent. It is a lightweight local
-development assistant that runs on your own machine. It can read repository
-context, edit files, run commands, and help with debugging, refactoring, and
-feature work. Unlike traditional code completion tools, Awesome works at the
-task level: you describe a goal, and it reasons across the current repository,
-edits, verifies, and prepares the work for review. The only product entry is
-the local Ink `awesome` interface backed by a private Python Core process.
+Awesome is a local-first AI coding agent that works inside the directory you
+launch it from; it is not a hosted service or a general Agent Platform.
 
+V1.0.0 is a limited pilot for a few users. Supported hosts are Apple Silicon
+macOS, Windows 11 x64, and WSL2 Ubuntu 24.04 x64.
 
+## Install
 
-## Product Surface
+On Apple Silicon macOS or WSL2 Ubuntu 24.04 x64:
 
-| Mode | Use it when | Start command |
-| --- | --- | --- |
-| Local CLI | Work inside a local project from the terminal. It requires no API server, PostgreSQL, Worker, or Docker service. | `cd <your-project>` then `awesome` |
+```bash
+curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
+```
 
-The public `awesome` command always
-starts the local Ink interface and its private Python Core process.
-
-Run `awesome` from the project directory. The launch directory becomes the
-default thread context. If it is a Git checkout, runs inherit that repository;
-otherwise Awesome uses workspace-only mode and still accepts user message
-turns. Plain user messages are the only product execution creation path.
-
-## Quick Start
-
-The V1 one-command installer is delivered in the next Phase 4 PR. Until then,
-use the contributor source preview:
+On Windows 11 x64 PowerShell:
 
 ```powershell
-uv sync --extra memory --dev
-npm --prefix tui ci
-npm --prefix tui run build
-$env:PATH = "$(Resolve-Path .venv\Scripts);$env:PATH"
-node tui/dist/cli/index.js --help
+irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-See the [Quickstart](docs/getting-started/quickstart.md) for the POSIX equivalent
-and workspace startup path.
+Open a new terminal after installation. Python, Node.js, uv, npm, Docker, and
+Make are not installation prerequisites. Git is optional and is never installed
+by Awesome; install it from the [official Git site](https://git-scm.com/downloads)
+if you want Git-aware workflows.
 
-## Configuration Basics
+## First run
 
-Awesome keeps its own user files outside your projects.
+```text
+cd <workspace>
+awesome
+```
 
-| Path | Purpose |
-| --- | --- |
-| `<AWESOME_HOME>/.env` | User-level model keys and local settings. |
-| `<AWESOME_HOME>/config.yaml` | User-level Provider, budget, memory, skill, and MCP settings. |
-| `<AWESOME_HOME>/skills/` | Personal skills available across projects. |
-| `<your-project>/skills/` | Project skills for the current repository. |
-| `<your-project>/.awesome/config.yaml` | Trusted workspace budget, skill, and MCP settings. |
+The launch directory is the workspace. Awesome asks for trust before reading
+project configuration, instructions, Skills, MCP declarations, or running
+tools. Declining exits without trusting the directory.
 
-On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\Awesome`. On other
-platforms, it defaults to `~/.awesome`. You can override it with the
-`AWESOME_HOME` environment variable.
+Configure at least one model key in `<AWESOME_HOME>/.env`:
 
-Provider keys are not read from your project `.env`.
+```dotenv
+DEEPSEEK_API_KEY=...
+# or
+MOONSHOT_API_KEY=...
+```
 
-## Common Commands
+DeepSeek and Kimi are the only supported Providers in V1. See the
+[quickstart](docs/getting-started/quickstart.md) for model selection and the
+first safe task.
 
-Run these inside `awesome`:
+## What it can do
 
-| Command | Purpose |
-| --- | --- |
-| `/help` | Show available commands. |
-| `/config` | Show the resolved Awesome paths and key status. |
-| `/status` | Show the current conversation status. |
-| `/skills` | List available skills. |
-| `/mcp` | Show configured MCP servers. |
-| `/quit` | Exit the TUI. |
+The initial default tools are `ls`, `read_file`, `write_file`, `edit_file`,
+`delete`, `glob`, `grep`, and `execute`. Extensions can add MCP and user tools;
+the architecture is not limited to eight tools. File changes are recorded in a
+Change Journal for `/diff`, `/undo`, and `/redo`.
+
+Local `USER.md`/workspace `MEMORY.md` memory and Mem0 Cloud memory are
+independent and default off. Skills provide task instructions; MCP connects
+external tools. Neither can bypass workspace trust or tool policy.
+
+## Launch options
+
+```text
+awesome
+awesome --continue
+awesome --resume
+awesome --resume <thread_id>
+awesome --version
+awesome --help
+```
 
 ## Documentation
 
-- [Documentation map](docs/README.md)
 - [Quickstart](docs/getting-started/quickstart.md)
-- [快速开始](docs/getting-started/quickstart.zh-CN.md)
-- [User guide](docs/user-guide/README.md)
 - [Architecture](ARCHITECTURE.md)
-- [Security model](docs/architecture/security-model.md)
+- [Development](docs/development/README.md)
 
-## Safety
+## Security
 
-Run Awesome only in projects you trust. Keep API keys out of Git and store them
-in your operating-system environment or `<AWESOME_HOME>/.env`.
+Awesome runs tools on the local host today; there is no Docker sandbox. Trust
+only workspaces you understand, review diffs, and keep credentials in the
+operating-system environment or `<AWESOME_HOME>/.env`, never in project files.
