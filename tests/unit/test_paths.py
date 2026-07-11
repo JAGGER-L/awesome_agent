@@ -53,7 +53,7 @@ def test_env_overrides_home(tmp_path: Path) -> None:
     assert paths.install_dir == tmp_path / "program"
 
 
-def test_target_state_databases_have_separate_paths(tmp_path: Path) -> None:
+def test_state_databases_have_separate_paths(tmp_path: Path) -> None:
     paths = AwesomePaths.from_home(tmp_path / "awesome-home")
 
     assert paths.application_db == paths.state_dir / "application.db"

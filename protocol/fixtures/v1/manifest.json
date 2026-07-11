@@ -58,7 +58,7 @@
     "commands.json": "84db02eca155dab486a7a67bb43f03b299bd6c4734aa6c9ffd9defa9d203306c",
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
     "events.valid.json": "520ec219ae2f12875af2ca9729116f48927b554b57e1ef5c3c70dad73c5f9133",
-    "methods.invalid.json": "b2df720bd4a2b644856d7b3cc43d61c1357fa4fa72b77f98ded50590196f542f",
+    "methods.invalid.json": "967aacbc8630e270fd752799094a68c1295101fe58153d2675aedf3c856a4134",
     "methods.valid.json": "308a5db2e089d47bc27acd1788592d2be2fe7f14dc758f009045361d50f32174",
     "results.failures.json": "8d88ff46fab61b689d029b8c735de82cac8e277464244b5c6b0a0baaaf584ef0"
   },

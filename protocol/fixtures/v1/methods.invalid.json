@@ -91,7 +91,7 @@
       "method": "command.execute",
       "name": "command.execute.unknown",
       "params": {
-        "name": "obsolete"
+        "name": "unknown"
       }
     },
     {
