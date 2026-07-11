@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 import json
 import re
+import tomllib
+from importlib.metadata import version as distribution_version
 from pathlib import Path
 
 from awesome_agent.application.commands import COMMAND_OWNERS, CommandName
@@ -10,6 +12,7 @@ from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path("src/awesome_agent")
 TUI_ROOT = Path("tui")
+REPOSITORY_ROOT = Path(".")
 ENTRYPOINTS = (
     ROOT / "application" / "composition.py",
     ROOT / "protocol" / "stdio.py",
@@ -154,6 +157,31 @@ def test_final_command_inventory_and_absent_commands_are_frozen() -> None:
         "details",
         "editor",
     } & {name.value for name in CommandName}
+
+
+def test_product_version_has_one_manual_source(monkeypatch) -> None:
+    monkeypatch.setenv("AWESOME_VERSION", "9.9.9")
+    expected = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8")
+
+    assert expected == "1.0.0\n"
+    assert distribution_version("awesome-agent") == "1.0.0"
+    assert PRODUCT_VERSION == "1.0.0"
+
+    project = tomllib.loads(
+        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert project["project"]["dynamic"] == ["version"]
+    assert "version" not in project["project"]
+    assert project["tool"]["hatch"]["version"]["path"] == "VERSION"
+
+    package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((TUI_ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    assert package["version"] == "1.0.0"
+    assert lock["version"] == "1.0.0"
+    assert lock["packages"][""]["version"] == "1.0.0"
+    assert (TUI_ROOT / "src" / "version.ts").read_text(encoding="utf-8") == (
+        'export const PRODUCT_VERSION = "1.0.0" as const;\n'
+    )
 
 
 def test_tui_is_one_minimal_node_22_package() -> None:

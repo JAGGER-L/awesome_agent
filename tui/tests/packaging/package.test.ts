@@ -67,7 +67,7 @@ describe("awesome-tui package", () => {
       license: string;
     };
     expect(installedPackage).toMatchObject({
-      version: "0.1.0",
+      version: "1.0.0",
       type: "module",
       bin: { "awesome-tui": "dist/cli/index.js" },
       license: "UNLICENSED",
@@ -95,7 +95,7 @@ describe("awesome-tui package", () => {
             env: { ...process.env },
           });
     expect(version.status, version.stderr).toBe(0);
-    expect(version.stdout).toBe("0.1.0\n");
+    expect(version.stdout).toBe("1.0.0\n");
   }, 60_000);
 });
 

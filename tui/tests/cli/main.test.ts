@@ -82,7 +82,7 @@ describe("runCli", () => {
   it("prints only the product version without starting Core", async () => {
     const value = harness({ argv: ["--version"] });
     await expect(runCli(value.dependencies)).resolves.toBe(0);
-    expect(value.stdout.join("")).toBe("0.1.0\n");
+    expect(value.stdout.join("")).toBe("1.0.0\n");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 

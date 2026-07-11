@@ -1,6 +1,6 @@
 {
   "name": "@awesome-agent/tui",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Ink candidate terminal interface for Awesome Agent",
   "license": "UNLICENSED",
   "private": true,
@@ -17,11 +17,13 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
+    "build": "npm run version:sync && node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
     "format:check": "biome format --no-errors-on-unmatched .",
     "lint": "biome lint --no-errors-on-unmatched .",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "version:sync": "node scripts/sync-version.mjs"
   },
   "dependencies": {
     "clipboardy": "^5.3.1",
