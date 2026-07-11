@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "awesome-agent"
 dynamic = ["version"]
-description = "Local-first terminal coding agent."
+description = "AI coding agent for the terminal."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = {text = "MIT"}

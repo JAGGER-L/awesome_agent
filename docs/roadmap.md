@@ -1,33 +1,64 @@
 # Roadmap
 
-## V1.0.0 now
+Awesome's roadmap focuses on making terminal coding workflows more useful while
+keeping one shared Python Core and one consistent tool-policy boundary.
 
-Awesome is one local `awesome` Ink interface backed by a private Python Core.
-It supports trusted workspaces, DeepSeek/Kimi, the initial file/process tool
-kernel, Change Journal, resumable local Threads, SQLite/LangGraph checkpoints,
-Skills, MCP, and two independently optional memory layers.
+## Current Foundation
 
-V1.0.0 is a limited pilot on Apple Silicon macOS, Windows 11 x64, and WSL2
-Ubuntu 24.04 x64. The immediate goal is to learn whether installation, first
-trust, real coding Turns, resume, and recovery are understandable and reliable
-for a few users.
+- terminal interaction through the Ink + React TUI;
+- workspace file and command tools with visible results;
+- DeepSeek and Kimi model providers;
+- resumable Threads and local checkpoints;
+- Skills and MCP extensions;
+- independently optional local file Memory and Mem0 Cloud;
+- Change Journal support for diff, undo, and redo.
 
-## Next: pilot feedback and quality
+## Documentation and Documentation Site
 
-- fix reproducible installation, startup, Provider, tool, and recovery defects;
-- improve actionable diagnostics and bounded transcript/tool rendering;
-- strengthen retained contract, install, and real-user-flow tests;
-- refine context/compression quality using observed coding tasks;
-- evaluate memory usefulness and privacy with opt-in pilot evidence.
+Improve task-oriented guides, examples, troubleshooting, and architecture
+references, then publish them through a searchable documentation site.
 
-## Later, only after demonstrated demand
+## One-command Skills Installation
 
-- an optional Docker tool-execution backend for isolation;
-- an API adapter reusing the Python Application facade;
-- an IDE adapter reusing the same protocol and event contracts;
-- additional Providers, tools, or memory services only when a concrete user
-  need justifies their maintenance cost.
+Let users discover and install Skills with one command while preserving the
+current manifest validation, source precedence, workspace trust, and tool
+policy.
 
-Awesome is not evolving by default into a general Agent Platform, hosted
-runtime, distributed scheduler, or multi-user data service. Those are separate
-products and require separate evidence and decisions.
+## Multi-Agent
+
+Add scoped delegation for tasks that benefit from parallel or specialized work.
+Sub-Agents will receive explicit context and tool boundaries while the current
+Agent Core remains responsible for the user-facing Turn.
+
+## More Model Providers
+
+Add providers that implement the shared model contract without moving
+provider-specific behavior into Agent nodes, tools, or the TUI.
+
+## Search Tools
+
+Add optional Web Search and Web Fetch tools through the same Registry, Policy,
+Executor, result, and event path as every other tool.
+
+## More Memory Providers
+
+Introduce additional external memory services after a second concrete adapter
+justifies a shared provider contract. Local Memory remains independent.
+
+## Cron Tasks
+
+Support scheduled tasks that reuse the same Agent Core, Tools, Skills, Memory,
+workspace trust, and execution budgets rather than creating a separate task
+engine.
+
+## Gateway Messaging
+
+Allow messaging platforms to submit work and receive progress or results through
+an adapter around Application contracts and events. Gateway integrations will
+not duplicate Agent behavior.
+
+## Optional Docker Tool Backend
+
+Add Docker as an optional Tool Executor backend for users who want stronger
+process isolation. Workspace trust and tool policy remain mandatory above the
+backend, and normal local execution stays available.

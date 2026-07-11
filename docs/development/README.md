@@ -12,25 +12,22 @@ uv sync --extra memory --dev
 npm --prefix tui ci
 ```
 
-No service, container, task runner, or external database is required.
+## Repository Loop
 
-## Repository loop
-
-1. Confirm repository root, branch/worktree, and `git status`.
-2. Read `AGENTS.md` and the relevant ignored plan under
-   `.codex/exec-plans/active/` when one exists.
-3. Inspect the affected contracts, callers, tests, and current docs.
+1. Confirm the repository root, branch or worktree, and `git status`.
+2. Read `AGENTS.md` and the active ignored plan when one exists.
+3. Inspect the affected contracts, callers, tests, and documentation.
 4. Make one scoped change and preserve unrelated work.
 5. Run the lightest relevant checks from [Testing](testing.md).
-6. Record commands, results, skipped checks, and remaining risk.
-7. Inspect diff/status before a focused commit.
+6. Record commands, results, deferred checks, and remaining risk.
+7. Inspect diff and status before a focused commit.
 
-`.codex/` contains local development coordination state and is ignored. Keep
-only the current plan in `active/`, accepted future plans in `pending/`, and
-closed plans in `completed/`. These files never define Awesome runtime
-behavior and are not committed by default.
+`.codex/` is ignored temporary development coordination state. Keep only an
+active plan and explicitly accepted pending work while they are useful, then
+remove task artifacts after handoff. These files never define Awesome product
+behavior.
 
-## Generated contracts and packages
+## Generated Contracts and Packages
 
 ```powershell
 uv run python scripts/generate_protocol_fixtures.py --check
@@ -41,5 +38,5 @@ npm pack ./tui --dry-run
 ```
 
 `VERSION` is the only manually maintained version source. Use
-`scripts/release/build_bundle.py` only for a release candidate; see the
-[manual release checklist](release.md).
+`scripts/release/build_bundle.py` for a release candidate; see the
+[release checklist](release.md).

@@ -1,23 +1,29 @@
 # Testing
 
-Tests protect observable Local-first product behavior and stable contracts, not
-removed implementation structure.
+Tests protect current user behavior, package boundaries, and public contracts.
+Choose the smallest validation set that covers the risk of each change.
 
-## While changing a module
+## Fast Development Gate
 
-Run the smallest sufficient sequence: format/lint, affected type checks,
-targeted unit tests, affected structural contracts, then only the integration
-or E2E path crossed by the change. Do not restore a deleted interface merely to
-make an obsolete test pass. When behavior remains but a test is coupled to old
-structure, rewrite the test around the retained boundary.
+Run formatting and lint first, followed by affected type checks and unit tests.
+Stop when a lower-level gate fails instead of hiding it behind heavier output.
 
-Documentation-only work normally runs Markdown link/inventory tests and scans
-examples for removed commands. Packaging or startup changes also require a
-local install/startup smoke.
+## Structural Contracts
 
-## Complete retained gate
+`tests/structural/` verifies package inventory, dependency direction, framework
+ownership, model and tool boundaries, commands, version authority,
+documentation links, packaging inputs, and repository shape.
 
-Run before final integration or a release candidate:
+## Affected Integration Tests
+
+Add the relevant integration path when work crosses workspace trust, SQLite or
+checkpoints, Agent Turns, tool execution, Memory, MCP, or the JSON-RPC stdio
+boundary. Documentation-only work normally runs Markdown link/inventory and
+product-copy checks.
+
+## Release Gate
+
+Before a release candidate, run:
 
 ```powershell
 uv sync --extra memory --dev
@@ -42,9 +48,8 @@ npm --prefix tui run build
 npm pack ./tui --dry-run
 ```
 
-Tests use deterministic fake DeepSeek, Kimi, Mem0, and MCP boundaries. Live
-credentials, cross-host installation, and external network checks are explicit
-release checks, not normal PR tests.
+Live DeepSeek, Kimi, Mem0 Cloud, network, and installation checks are explicit
+release evidence. Normal deterministic tests do not require credentials.
 
-Record the exact commands and outcomes. If an environmental gate is
-unavailable, state it and retain the risk; never report it as passing.
+Record exact commands and outcomes. When an environmental gate is unavailable,
+state the reason and remaining risk rather than reporting it as passing.
