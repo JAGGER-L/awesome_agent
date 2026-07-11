@@ -145,7 +145,7 @@ async def serve_stdio(
             response = await dispatcher.dispatch(value)
             if response is not None:
                 await protocol_writer.send(response)
-            if isinstance(value, dict) and value.get("method") == "shutdown":
+            if _shutdown_completed(value, response):
                 shutdown_requested = True
                 break
     finally:
@@ -166,6 +166,28 @@ def _duplicate_request_id(
         return identifier
     seen.add(identifier)
     return None
+
+
+def _shutdown_completed(
+    value: object,
+    response: Mapping[str, object] | None,
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value) - {"jsonrpc", "id", "method", "params"}
+        or value.get("jsonrpc") != "2.0"
+        or value.get("method") != "shutdown"
+    ):
+        return False
+    params = value.get("params", {})
+    if not isinstance(params, Mapping) or params:
+        return False
+    if "id" not in value:
+        return True
+    if response is None:
+        return False
+    result = response.get("result")
+    return isinstance(result, Mapping) and result.get("ok") is True
 
 
 class _StdinReader:

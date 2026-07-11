@@ -210,3 +210,23 @@ async def test_oversized_line_is_rejected_and_logging_never_reaches_protocol() -
     assert frames[0]["error"]["code"] == -32700
     assert frames[-1]["id"] == 2
     assert all(b"stderr-only diagnostic" not in frame for frame in output.frames)
+
+
+@pytest.mark.asyncio
+async def test_invalid_shutdown_does_not_terminate_before_valid_shutdown() -> None:
+    output = Output()
+    facade = Facade()
+    reader = Chunks(
+        _request(1, "shutdown", {"force": True})
+        + _request(2, "application.getState", {})
+        + _request(3, "shutdown", {})
+    )
+
+    await serve_stdio(facade, reader=reader, writer=JsonLineWriter(output))
+
+    frames = [json.loads(frame) for frame in output.frames]
+    assert [frame["id"] for frame in frames] == [1, 2, 3]
+    assert frames[0]["error"]["code"] == -32602
+    assert frames[1]["result"]["ok"] is True
+    assert frames[2]["result"]["value"] == {"stopped": True}
+    assert facade.shutdown_calls == 1
