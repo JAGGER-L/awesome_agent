@@ -18,7 +18,7 @@ export interface DirectCommandBlock extends BlockBase {
 export interface ToolItem {
   readonly call_id: string;
   readonly name: string;
-  readonly outcome: "success" | "error" | "cancelled";
+  readonly outcome: "running" | "success" | "error" | "cancelled";
   readonly summary: string;
   readonly duration_ms: number;
   readonly error_code?: string;
@@ -74,6 +74,8 @@ export interface LiveTranscriptProjection {
   readonly blocks: readonly TranscriptBlock[];
   readonly operation_id?: string;
   readonly turn_id?: string;
+  readonly reasoning_text: string;
+  readonly usage?: Readonly<Record<string, number>>;
   readonly terminal: boolean;
 }
 
