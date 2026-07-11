@@ -12,6 +12,8 @@ from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadListPage,
+    ThreadPage,
     ThreadSummary,
     ThreadView,
     Turn,
@@ -60,6 +62,19 @@ class ConversationService:
     def list_threads(self, workspace_key: str) -> tuple[Thread, ...]:
         return tuple(self._store.list_threads(workspace_key))
 
+    def list_thread_page(
+        self,
+        workspace_key: str,
+        *,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        return self._store.list_threads_page(
+            workspace_key,
+            cursor=cursor,
+            limit=limit,
+        )
+
     def set_skill_mode(self, thread_id: str, skill_mode: str) -> Thread:
         if re.fullmatch(r"(?:auto|off|[a-z][a-z0-9-]{0,63})", skill_mode) is None:
             raise ValueError("Skill mode is invalid.")
@@ -85,6 +100,19 @@ class ConversationService:
 
     def read_thread(self, thread_id: str) -> ThreadView:
         return self._store.read_thread(thread_id)
+
+    def read_thread_page(
+        self,
+        thread_id: str,
+        *,
+        before_sequence: int | None,
+        limit: int,
+    ) -> ThreadPage:
+        return self._store.read_thread_page(
+            thread_id,
+            before_sequence=before_sequence,
+            limit=limit,
+        )
 
     def begin_turn(
         self,

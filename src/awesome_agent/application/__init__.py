@@ -9,7 +9,9 @@ from awesome_agent.application.contracts import (
     ProductError,
     ProductErrorCode,
     ShutdownResult,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     ThreadReadResult,
     WorkspacePresentation,
 )
@@ -35,7 +37,9 @@ __all__ = [
     "ShutdownResult",
     "StartupResult",
     "StartupStatus",
+    "ThreadListQuery",
     "ThreadListResult",
+    "ThreadReadQuery",
     "ThreadReadResult",
     "WorkspacePresentation",
 ]

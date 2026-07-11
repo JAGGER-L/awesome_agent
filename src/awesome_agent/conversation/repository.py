@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Protocol
 
 from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
+    ThreadListPage,
+    ThreadPage,
     ThreadSummary,
     ThreadView,
     ToolActivity,
@@ -72,7 +75,21 @@ class ConversationStore(Protocol):
     def create_thread(self, thread: Thread) -> Thread: ...
     def update_thread(self, thread: Thread) -> Thread: ...
     def list_threads(self, workspace_key: str) -> Sequence[Thread]: ...
+    def list_threads_page(
+        self,
+        workspace_key: str,
+        *,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage: ...
     def read_thread(self, thread_id: str) -> ThreadView: ...
+    def read_thread_page(
+        self,
+        thread_id: str,
+        *,
+        before_sequence: int | None,
+        limit: int,
+    ) -> ThreadPage: ...
     def thread_id_for_turn(self, turn_id: str) -> str | None: ...
     def begin_turn(self, user_entry: ThreadEntry, turn: Turn) -> Turn: ...
     def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn: ...

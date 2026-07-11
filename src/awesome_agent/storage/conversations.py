@@ -11,6 +11,9 @@ from uuid import uuid4
 from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
+    ThreadEntryKind,
+    ThreadListPage,
+    ThreadPage,
     ThreadSummary,
     ThreadView,
     ToolActivity,
@@ -54,6 +57,20 @@ class SQLiteConversationRepositories:
     def list_threads(self, workspace_key: str) -> Sequence[Thread]:
         return self.threads.list(workspace_key)
 
+    def list_threads_page(
+        self,
+        workspace_key: str,
+        *,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        threads, has_more = self.threads.list_page(
+            workspace_key,
+            cursor=cursor,
+            limit=limit,
+        )
+        return ThreadListPage(threads=threads, has_more=has_more)
+
     def read_thread(self, thread_id: str) -> ThreadView:
         with self.transaction() as connection:
             thread = self.threads.get(thread_id, connection=connection)
@@ -68,6 +85,59 @@ class SQLiteConversationRepositories:
                     self.tool_activities.list(thread_id, connection=connection)
                 ),
             )
+
+    def read_thread_page(
+        self,
+        thread_id: str,
+        *,
+        before_sequence: int | None,
+        limit: int,
+    ) -> ThreadPage:
+        with self.transaction() as connection:
+            thread = self.threads.get(thread_id, connection=connection)
+            if thread is None:
+                raise ThreadNotFound(thread_id)
+            entries, has_more = self.entries.list_page(
+                thread_id,
+                before_sequence=before_sequence,
+                limit=limit,
+                connection=connection,
+            )
+            entry_ids = tuple(entry.id for entry in entries)
+            turns = self.turns.list_for_entries(
+                thread_id,
+                entry_ids=entry_ids,
+                connection=connection,
+            )
+            direct_operation_ids = tuple(
+                operation_id
+                for entry in entries
+                if entry.kind is ThreadEntryKind.DIRECT_COMMAND
+                and isinstance(
+                    operation_id := entry.metadata.get("operation_id"),
+                    str,
+                )
+            )
+            activities = self.tool_activities.list_associated(
+                thread_id,
+                turn_ids=tuple(turn.id for turn in turns),
+                operation_ids=direct_operation_ids,
+                connection=connection,
+            )
+            view = ThreadView(
+                thread=thread,
+                entries=entries,
+                turns=turns,
+                summary=self.summaries.get(thread_id, connection=connection),
+                tool_activities=activities,
+            )
+        return ThreadPage(
+            view=view,
+            has_more=has_more,
+            next_before_sequence=(
+                entries[0].sequence if has_more and entries else None
+            ),
+        )
 
     def thread_id_for_turn(self, turn_id: str) -> str | None:
         turn = self.turns.get(turn_id)
@@ -240,6 +310,49 @@ class SQLiteThreadRepository(_SQLiteRepository):
             ).fetchall()
         return tuple(_thread_from_row(row) for row in rows)
 
+    def list_page(
+        self,
+        workspace_key: str,
+        *,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[tuple[Thread, ...], bool]:
+        with self._connection(connection) as active:
+            if cursor is None:
+                rows = active.execute(
+                    """
+                    SELECT * FROM threads
+                    WHERE workspace_key = ?
+                    ORDER BY updated_at DESC, thread_id
+                    LIMIT ?
+                    """,
+                    (workspace_key, limit + 1),
+                ).fetchall()
+            else:
+                updated_at, thread_id = cursor
+                encoded_time = _time(updated_at)
+                rows = active.execute(
+                    """
+                    SELECT * FROM threads
+                    WHERE workspace_key = ?
+                      AND (updated_at < ? OR (updated_at = ? AND thread_id > ?))
+                    ORDER BY updated_at DESC, thread_id
+                    LIMIT ?
+                    """,
+                    (
+                        workspace_key,
+                        encoded_time,
+                        encoded_time,
+                        thread_id,
+                        limit + 1,
+                    ),
+                ).fetchall()
+        return (
+            tuple(_thread_from_row(row) for row in rows[:limit]),
+            len(rows) > limit,
+        )
+
     def update(
         self,
         thread: Thread,
@@ -317,6 +430,38 @@ class SQLiteThreadEntryRepository(_SQLiteRepository):
             ).fetchall()
         return tuple(_entry_from_row(row) for row in rows)
 
+    def list_page(
+        self,
+        thread_id: str,
+        *,
+        before_sequence: int | None,
+        limit: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[tuple[ThreadEntry, ...], bool]:
+        with self._connection(connection) as active:
+            if before_sequence is None:
+                rows = active.execute(
+                    """
+                    SELECT * FROM thread_entries
+                    WHERE thread_id = ?
+                    ORDER BY sequence DESC
+                    LIMIT ?
+                    """,
+                    (thread_id, limit + 1),
+                ).fetchall()
+            else:
+                rows = active.execute(
+                    """
+                    SELECT * FROM thread_entries
+                    WHERE thread_id = ? AND sequence < ?
+                    ORDER BY sequence DESC
+                    LIMIT ?
+                    """,
+                    (thread_id, before_sequence, limit + 1),
+                ).fetchall()
+        selected = tuple(_entry_from_row(row) for row in rows[:limit])
+        return tuple(reversed(selected)), len(rows) > limit
+
 
 class SQLiteTurnRepository(_SQLiteRepository):
     def create(
@@ -372,6 +517,29 @@ class SQLiteTurnRepository(_SQLiteRepository):
                 WHERE thread_id = ? ORDER BY created_at, turn_id
                 """,
                 (thread_id,),
+            ).fetchall()
+        return tuple(_turn_from_row(row) for row in rows)
+
+    def list_for_entries(
+        self,
+        thread_id: str,
+        *,
+        entry_ids: tuple[str, ...],
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[Turn, ...]:
+        if not entry_ids:
+            return ()
+        placeholders = ",".join("?" for _ in entry_ids)
+        with self._connection(connection) as active:
+            rows = active.execute(
+                f"""
+                SELECT * FROM turns
+                WHERE thread_id = ?
+                  AND (user_entry_id IN ({placeholders})
+                       OR assistant_entry_id IN ({placeholders}))
+                ORDER BY created_at, turn_id
+                """,
+                (thread_id, *entry_ids, *entry_ids),
             ).fetchall()
         return tuple(_turn_from_row(row) for row in rows)
 
@@ -590,6 +758,38 @@ class SQLiteToolActivityRepository(_SQLiteRepository):
                 WHERE thread_id = ? ORDER BY created_at, sequence, activity_id
                 """,
                 (thread_id,),
+            ).fetchall()
+        return tuple(_activity_from_row(row) for row in rows)
+
+    def list_associated(
+        self,
+        thread_id: str,
+        *,
+        turn_ids: tuple[str, ...],
+        operation_ids: tuple[str, ...],
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[ToolActivity, ...]:
+        clauses: list[str] = []
+        parameters: list[object] = [thread_id]
+        if turn_ids:
+            placeholders = ",".join("?" for _ in turn_ids)
+            clauses.append(f"turn_id IN ({placeholders})")
+            parameters.extend(turn_ids)
+        if operation_ids:
+            placeholders = ",".join("?" for _ in operation_ids)
+            clauses.append(f"operation_id IN ({placeholders})")
+            parameters.extend(operation_ids)
+        if not clauses:
+            return ()
+        predicate = " OR ".join(clauses)
+        with self._connection(connection) as active:
+            rows = active.execute(
+                f"""
+                SELECT * FROM tool_activities
+                WHERE thread_id = ? AND ({predicate})
+                ORDER BY created_at, sequence, activity_id
+                """,
+                parameters,
             ).fetchall()
         return tuple(_activity_from_row(row) for row in rows)
 

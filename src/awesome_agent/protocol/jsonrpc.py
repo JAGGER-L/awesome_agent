@@ -12,6 +12,8 @@ from awesome_agent.application.contracts import (
     InitializeResult,
     ProductError,
     ProductErrorCode,
+    ThreadListQuery,
+    ThreadReadQuery,
 )
 from awesome_agent.application.facade import ApplicationFacade
 from awesome_agent.core.events import EventEnvelope
@@ -147,12 +149,12 @@ class JsonRpcDispatcher:
         return await self._facade.get_state()
 
     async def _list_threads(self, params: Mapping[str, object]) -> object:
-        _EmptyParams.model_validate(params)
-        return await self._facade.list_threads()
+        query = ThreadListQuery.model_validate(params)
+        return await self._facade.list_threads(query)
 
     async def _read_thread(self, params: Mapping[str, object]) -> object:
-        parsed = _ThreadParams.model_validate(params)
-        return await self._facade.read_thread(parsed.thread_id)
+        query = ThreadReadQuery.model_validate(params)
+        return await self._facade.read_thread(query)
 
     async def _submit_turn(self, params: Mapping[str, object]) -> object:
         parsed = _TurnParams.model_validate(params)

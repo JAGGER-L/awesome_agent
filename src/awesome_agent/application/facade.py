@@ -15,7 +15,9 @@ from awesome_agent.application.contracts import (
     ProductError,
     ProductErrorCode,
     ShutdownResult,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     ThreadReadResult,
     WorkspacePresentation,
 )
@@ -27,10 +29,12 @@ class ApplicationFacade(Protocol):
 
     async def get_state(self) -> ApplicationResult[ApplicationState]: ...
 
-    async def list_threads(self) -> ApplicationResult[ThreadListResult]: ...
+    async def list_threads(
+        self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]: ...
 
     async def read_thread(
-        self, thread_id: str
+        self, query: ThreadReadQuery
     ) -> ApplicationResult[ThreadReadResult]: ...
 
     async def submit_turn(
@@ -67,9 +71,9 @@ class _ApplicationBackend(Protocol):
 
     async def application_state(self) -> ApplicationState: ...
 
-    async def workspace_threads(self) -> ThreadListResult: ...
+    async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult: ...
 
-    async def thread_state(self, thread_id: str) -> ThreadReadResult: ...
+    async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult: ...
 
     async def start_turn(
         self,
@@ -122,11 +126,15 @@ class LocalApplication:
     async def get_state(self) -> ApplicationResult[ApplicationState]:
         return await self._call(self._backend.application_state)
 
-    async def list_threads(self) -> ApplicationResult[ThreadListResult]:
-        return await self._call(self._backend.workspace_threads)
+    async def list_threads(
+        self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        return await self._call(lambda: self._backend.workspace_threads(query))
 
-    async def read_thread(self, thread_id: str) -> ApplicationResult[ThreadReadResult]:
-        return await self._call(lambda: self._backend.thread_state(thread_id))
+    async def read_thread(
+        self, query: ThreadReadQuery
+    ) -> ApplicationResult[ThreadReadResult]:
+        return await self._call(lambda: self._backend.thread_state(query))
 
     async def submit_turn(
         self,
@@ -196,7 +204,9 @@ __all__ = [
     "ProductError",
     "ProductErrorCode",
     "ShutdownResult",
+    "ThreadListQuery",
     "ThreadListResult",
+    "ThreadReadQuery",
     "ThreadReadResult",
     "WorkspacePresentation",
 ]

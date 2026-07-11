@@ -22,7 +22,9 @@ from awesome_agent.application.facade import (
     InteractionResult,
     LocalApplication,
     OperationAccepted,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     WorkspacePresentation,
 )
 from awesome_agent.application.headless import ConversationCommandService
@@ -71,13 +73,13 @@ class Backend:
             secret_status=SecretStatus(),
         )
 
-    async def workspace_threads(self) -> ThreadListResult:
-        self.calls.append(("threads", None))
+    async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
+        self.calls.append(("threads", query))
         return ThreadListResult()
 
-    async def thread_state(self, thread_id: str) -> object:
-        self.calls.append(("read", thread_id))
-        raise LookupError(thread_id)
+    async def thread_state(self, query: ThreadReadQuery) -> object:
+        self.calls.append(("read", query))
+        raise LookupError(query.thread_id)
 
     async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
         self.calls.append(("turn", (thread_id, content)))
@@ -155,7 +157,7 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     intent = CommandIntent(name=CommandName.STATUS)
 
     assert _unwrap(await facade.get_state()).workspace_trusted is True
-    assert _unwrap(await facade.list_threads()).threads == ()
+    assert _unwrap(await facade.list_threads(ThreadListQuery())).threads == ()
     assert _unwrap(await facade.submit_turn("thread_1", "inspect")).operation_id == (
         "operation_1"
     )

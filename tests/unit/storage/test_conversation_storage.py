@@ -110,7 +110,7 @@ def test_application_migrations_create_only_product_state_tables(
             ).fetchall()
         }
 
-    assert version == APPLICATION_SCHEMA_VERSION == 4
+    assert version == APPLICATION_SCHEMA_VERSION == 5
     assert {
         "trusted_workspaces",
         "change_sets",
@@ -126,8 +126,18 @@ def test_application_migrations_create_only_product_state_tables(
         "idx_turns_one_in_progress",
         "idx_thread_entries_sequence",
         "idx_tool_activities_operation_call",
+        "idx_tool_activities_thread_operation",
+        "idx_tool_activities_thread_turn",
     } <= indexes
     assert not {"runs", "jobs", "leases", "attempts", "event_store"} & tables
+    with application_connection(path) as connection:
+        thread_index_columns = [
+            row[2]
+            for row in connection.execute(
+                "PRAGMA index_info(idx_threads_workspace_updated)"
+            ).fetchall()
+        ]
+    assert thread_index_columns == ["workspace_key", "updated_at", "thread_id"]
 
 
 def test_migration_three_rolls_back_the_entire_script_on_failure(
@@ -393,3 +403,169 @@ def test_repositories_translate_sqlite_integrity_errors(tmp_path: Path) -> None:
         repositories.entries.append(_entry("missing_parent", sequence=1))
 
     assert not isinstance(raised.value.__cause__, sqlite3.IntegrityError)
+
+
+def test_thread_pages_are_bounded_stable_and_workspace_scoped(tmp_path: Path) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    timestamp = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
+    with repositories.transaction() as connection:
+        for index in range(205):
+            repositories.threads.create(
+                Thread(
+                    id=f"thread_{index:03d}",
+                    workspace_key="workspace_1",
+                    title=f"Thread {index}",
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                ),
+                connection=connection,
+            )
+        repositories.threads.create(
+            Thread(
+                id="thread_foreign",
+                workspace_key="workspace_2",
+                title="Foreign",
+                created_at=timestamp,
+                updated_at=timestamp,
+            ),
+            connection=connection,
+        )
+
+    first = repositories.list_threads_page("workspace_1", cursor=None, limit=200)
+    second = repositories.list_threads_page(
+        "workspace_1",
+        cursor=(first.threads[-1].updated_at, first.threads[-1].id),
+        limit=200,
+    )
+
+    assert len(first.threads) == 200
+    assert first.has_more is True
+    assert [thread.id for thread in first.threads[:3]] == [
+        "thread_000",
+        "thread_001",
+        "thread_002",
+    ]
+    assert [thread.id for thread in second.threads] == [
+        "thread_200",
+        "thread_201",
+        "thread_202",
+        "thread_203",
+        "thread_204",
+    ]
+    assert second.has_more is False
+    assert not {thread.id for thread in first.threads + second.threads} & {
+        "thread_foreign"
+    }
+
+
+def test_thread_entry_pages_read_tail_and_traverse_without_overlap(
+    tmp_path: Path,
+) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    with repositories.transaction() as connection:
+        repositories.threads.create(_thread(), connection=connection)
+        for sequence in range(1, 506):
+            repositories.entries.append(
+                _entry(f"entry_{sequence}", sequence=sequence),
+                connection=connection,
+            )
+
+    tail = repositories.read_thread_page("thread_1", before_sequence=None, limit=500)
+    older = repositories.read_thread_page(
+        "thread_1",
+        before_sequence=tail.next_before_sequence,
+        limit=500,
+    )
+
+    assert [entry.sequence for entry in tail.view.entries] == list(range(6, 506))
+    assert tail.has_more is True
+    assert tail.next_before_sequence == 6
+    assert [entry.sequence for entry in older.view.entries] == [1, 2, 3, 4, 5]
+    assert older.has_more is False
+    assert older.next_before_sequence is None
+
+
+def test_thread_entry_page_contains_only_associated_turns_and_tools(
+    tmp_path: Path,
+) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    now = _now()
+    direct_entry = _entry(
+        "entry_2",
+        sequence=2,
+        kind=ThreadEntryKind.DIRECT_COMMAND,
+    ).model_copy(update={"metadata": {"operation_id": "operation_direct"}})
+    with repositories.transaction() as connection:
+        repositories.threads.create(_thread(), connection=connection)
+        repositories.entries.append(
+            _entry("entry_1", sequence=1), connection=connection
+        )
+        repositories.entries.append(direct_entry, connection=connection)
+        repositories.entries.append(
+            _entry("entry_3", sequence=3), connection=connection
+        )
+        repositories.entries.append(
+            _entry(
+                "entry_4",
+                sequence=4,
+                kind=ThreadEntryKind.ASSISTANT_MESSAGE,
+            ),
+            connection=connection,
+        )
+        repositories.turns.create(
+            Turn(
+                id="turn_1",
+                thread_id="thread_1",
+                checkpoint_key="turn_1",
+                status=TurnStatus.COMPLETED,
+                provider="deepseek",
+                model="deepseek/deepseek-v4-flash",
+                budgets=BudgetConfig(),
+                user_entry_id="entry_3",
+                assistant_entry_id="entry_4",
+                completed_at=now,
+                created_at=now,
+                updated_at=now,
+            ),
+            connection=connection,
+        )
+        repositories.tool_activities.append(
+            ToolActivity(
+                id="activity_agent",
+                thread_id="thread_1",
+                turn_id="turn_1",
+                operation_id="operation_agent",
+                call_id="call_agent",
+                sequence=1,
+                origin=ToolActivityOrigin.AGENT,
+                tool_name="read_file",
+                outcome=ToolActivityOutcome.SUCCESS,
+                duration_ms=1,
+                created_at=now,
+            ),
+            connection=connection,
+        )
+        repositories.tool_activities.append(
+            ToolActivity(
+                id="activity_direct",
+                thread_id="thread_1",
+                turn_id=None,
+                operation_id="operation_direct",
+                call_id="call_direct",
+                sequence=2,
+                origin=ToolActivityOrigin.DIRECT,
+                tool_name="execute",
+                outcome=ToolActivityOutcome.SUCCESS,
+                duration_ms=1,
+                created_at=now,
+            ),
+            connection=connection,
+        )
+
+    recent = repositories.read_thread_page("thread_1", before_sequence=None, limit=2)
+    older = repositories.read_thread_page("thread_1", before_sequence=3, limit=2)
+
+    assert [turn.id for turn in recent.view.turns] == ["turn_1"]
+    assert [item.id for item in recent.view.tool_activities] == ["activity_agent"]
+    assert older.view.turns == ()
+    assert [item.id for item in older.view.tool_activities] == ["activity_direct"]

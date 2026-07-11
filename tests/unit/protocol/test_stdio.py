@@ -16,7 +16,9 @@ from awesome_agent.application.contracts import (
     InteractionResult,
     OperationAccepted,
     ShutdownResult,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     WorkspacePresentation,
 )
 from awesome_agent.config import SecretStatus
@@ -75,11 +77,14 @@ class Facade:
             )
         )
 
-    async def list_threads(self) -> ApplicationResult[ThreadListResult]:
+    async def list_threads(
+        self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        del query
         return ApplicationResult.success(ThreadListResult())
 
-    async def read_thread(self, thread_id: str) -> object:
-        raise LookupError(thread_id)
+    async def read_thread(self, query: ThreadReadQuery) -> object:
+        raise LookupError(query.thread_id)
 
     async def submit_turn(
         self, thread_id: str, content: str

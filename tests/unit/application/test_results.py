@@ -10,6 +10,8 @@ from awesome_agent.application.contracts import (
     ProductError,
     ProductErrorCode,
     ShutdownResult,
+    ThreadListQuery,
+    ThreadReadQuery,
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import LocalApplication
@@ -123,3 +125,18 @@ async def test_facade_does_not_convert_unexpected_invariant_failures() -> None:
 
     with pytest.raises(RuntimeError, match="secret-provider-token"):
         await facade.initialize()
+
+
+def test_thread_queries_apply_exact_defaults_and_bounds() -> None:
+    assert ThreadListQuery().limit == 50
+    assert ThreadReadQuery(thread_id="thread_1").limit == 100
+
+    assert ThreadListQuery(limit=200).limit == 200
+    assert ThreadReadQuery(thread_id="thread_1", limit=500).limit == 500
+
+    with pytest.raises(ValidationError):
+        ThreadListQuery(limit=201)
+    with pytest.raises(ValidationError):
+        ThreadReadQuery(thread_id="thread_1", limit=501)
+    with pytest.raises(ValidationError):
+        ThreadReadQuery.model_validate({"thread_id": "thread_1", "extra": True})

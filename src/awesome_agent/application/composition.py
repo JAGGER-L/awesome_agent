@@ -27,15 +27,19 @@ from awesome_agent.application.commands import (
 )
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.contracts import (
+    ApplicationResult,
     ApplicationState,
     CancelResult,
+    ChangeSetSummary,
     InitializeResult,
     InitializeStatus,
     InteractionResult,
     OperationAccepted,
     ProductError,
     ProductErrorCode,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     ThreadReadResult,
     WorkspacePresentation,
 )
@@ -74,6 +78,7 @@ from awesome_agent.conversation import (
     ConversationService,
     Thread,
     ThreadNotFound,
+    ToolActivity,
     Turn,
     TurnBusy,
     TurnNotFound,
@@ -148,11 +153,18 @@ from awesome_agent.storage.checkpoints import (
     sqlite_checkpoint_saver,
 )
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+from awesome_agent.storage.pagination import (
+    InvalidThreadCursor,
+    decode_thread_cursor,
+    encode_thread_cursor,
+)
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 from awesome_agent.version import PRODUCT_VERSION
 
 type GatewayFactory = Callable[[ProviderId, str], ModelGateway]
 type McpClientFactory = Callable[[McpServerConfig], McpClient]
+
+_MAX_THREAD_RESULT_BYTES = 900_000
 
 _CAPABILITIES = (
     "threads",
@@ -354,6 +366,7 @@ class _LocalApplicationBackend:
         self._mem0_session: _Mem0Session | None = None
         self._mcp: McpManager | None = None
         self._change_scope: _ChangeScope | None = None
+        self._change_store: SQLiteChangeSetStore | None = None
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
 
@@ -456,25 +469,70 @@ class _LocalApplicationBackend:
             ),
         )
 
-    async def workspace_threads(self) -> ThreadListResult:
+    async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
+        self._require_active()
+        try:
+            cursor = (
+                decode_thread_cursor(query.cursor) if query.cursor is not None else None
+            )
+        except InvalidThreadCursor as error:
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Thread cursor is invalid.",
+            ) from error
+        page = self._conversation.list_thread_page(
+            self._workspace.key,
+            cursor=cursor,
+            limit=query.limit,
+        )
+        next_cursor = (
+            encode_thread_cursor((page.threads[-1].updated_at, page.threads[-1].id))
+            if page.has_more and page.threads
+            else None
+        )
         return ThreadListResult(
-            threads=self._conversation.list_threads(self._workspace.key)
+            threads=page.threads,
+            has_more=page.has_more,
+            next_cursor=next_cursor,
         )
 
-    async def thread_state(self, thread_id: str) -> ThreadReadResult:
-        try:
-            view = self._conversation.read_thread(thread_id)
-        except ThreadNotFound as error:
-            raise _application_failure(
-                ProductErrorCode.THREAD_NOT_FOUND,
-                "Thread was not found.",
-            ) from error
-        if view.thread.workspace_key != self._workspace.key:
-            raise _application_failure(
-                ProductErrorCode.THREAD_NOT_FOUND,
-                "Thread was not found.",
+    async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
+        self._require_active()
+        limit = query.limit
+        while True:
+            try:
+                page = self._conversation.read_thread_page(
+                    query.thread_id,
+                    before_sequence=query.before_sequence,
+                    limit=limit,
+                )
+            except ThreadNotFound as error:
+                raise _application_failure(
+                    ProductErrorCode.THREAD_NOT_FOUND,
+                    "Thread was not found.",
+                ) from error
+            if page.view.thread.workspace_key != self._workspace.key:
+                raise _application_failure(
+                    ProductErrorCode.THREAD_NOT_FOUND,
+                    "Thread was not found.",
+                )
+            result = ThreadReadResult(
+                view=page.view,
+                change_sets=self._page_change_summaries(page.view.tool_activities),
+                has_more=page.has_more,
+                next_before_sequence=page.next_before_sequence,
             )
-        return ThreadReadResult(view=view)
+            encoded = (
+                ApplicationResult.success(result).model_dump_json().encode("utf-8")
+            )
+            if len(encoded) <= _MAX_THREAD_RESULT_BYTES:
+                return result
+            if limit == 1:
+                raise _application_failure(
+                    ProductErrorCode.INTERNAL_ERROR,
+                    "Thread entry exceeds the protocol response limit.",
+                )
+            limit = max(1, limit // 2)
 
     async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
         self._require_active()
@@ -595,6 +653,7 @@ class _LocalApplicationBackend:
         gateway_router = _GatewayRouter(gateway_factory)
 
         change_store = SQLiteChangeSetStore(self._paths.application_db)
+        self._change_store = change_store
         change_blobs = FileChangeBlobStore(self._paths.state_dir / "change-journal")
         journal = ChangeJournal(change_store, change_blobs, self._workspace)
         self._change_scope = _ChangeScope(
@@ -1038,6 +1097,38 @@ class _LocalApplicationBackend:
             display_path=str(self._workspace.display_path),
             branch=self._workspace_branch if include_branch else None,
         )
+
+    def _page_change_summaries(
+        self,
+        activities: tuple[ToolActivity, ...],
+    ) -> tuple[ChangeSetSummary, ...]:
+        if self._change_store is None:
+            return ()
+        summaries: list[ChangeSetSummary] = []
+        seen: set[str] = set()
+        for activity in activities:
+            change_set_id = activity.change_set_id
+            if change_set_id is None or change_set_id in seen:
+                continue
+            seen.add(change_set_id)
+            change_set = self._change_store.get(change_set_id)
+            if change_set is None:
+                continue
+            summaries.append(
+                ChangeSetSummary(
+                    change_set_id=change_set.id,
+                    turn_id=change_set.turn_id,
+                    operation_id=activity.operation_id,
+                    lifecycle=change_set.lifecycle.value,
+                    changed_paths=tuple(
+                        sorted({item.path for item in change_set.files})
+                    ),
+                    reversibility=change_set.reversibility.value,
+                    created_at=change_set.created_at,
+                    sealed_at=change_set.sealed_at,
+                )
+            )
+        return tuple(summaries)
 
 
 def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:

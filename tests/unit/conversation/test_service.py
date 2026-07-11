@@ -184,3 +184,22 @@ def test_empty_user_message_is_rejected_without_durable_rows(tmp_path: Path) -> 
     view = service.read_thread(thread.id)
     assert view.entries == ()
     assert view.turns == ()
+
+
+def test_service_exposes_bounded_thread_and_entry_pages(tmp_path: Path) -> None:
+    service = _service(tmp_path / "application.db")
+    first = service.create_thread("workspace_1", "First")
+    service.create_thread("workspace_1", "Second")
+    service.begin_turn(first.id, "question", _turn_config())
+
+    threads = service.list_thread_page("workspace_1", cursor=None, limit=1)
+    entries = service.read_thread_page(
+        first.id,
+        before_sequence=None,
+        limit=1,
+    )
+
+    assert len(threads.threads) == 1
+    assert threads.has_more is True
+    assert [entry.content for entry in entries.view.entries] == ["question"]
+    assert entries.has_more is False

@@ -19,7 +19,9 @@ from awesome_agent.application.contracts import (
     ProductError,
     ProductErrorCode,
     ShutdownResult,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     WorkspacePresentation,
 )
 from awesome_agent.config import SecretStatus
@@ -71,12 +73,14 @@ class Facade:
             )
         )
 
-    async def list_threads(self) -> ApplicationResult[ThreadListResult]:
-        self.calls.append(("list", None))
+    async def list_threads(
+        self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        self.calls.append(("list", query))
         return ApplicationResult.success(ThreadListResult())
 
-    async def read_thread(self, thread_id: str) -> object:
-        self.calls.append(("read", thread_id))
+    async def read_thread(self, query: ThreadReadQuery) -> object:
+        self.calls.append(("read", query))
         raise RuntimeError("private database traceback")
 
     async def submit_turn(
@@ -273,6 +277,42 @@ def test_product_version_matches_distribution_and_repository_metadata() -> None:
 
     assert installed_version("awesome-agent") == PRODUCT_VERSION
     assert metadata["project"]["version"] == PRODUCT_VERSION
+
+
+@pytest.mark.asyncio
+async def test_thread_query_params_are_typed_and_bounded_before_facade_work() -> None:
+    facade = Facade()
+    dispatcher = JsonRpcDispatcher(facade)
+
+    listed = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "thread.list",
+            "params": {"cursor": "opaque", "limit": 200},
+        }
+    )
+    invalid_list = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "thread.list",
+            "params": {"limit": 201},
+        }
+    )
+    invalid_read = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "thread.read",
+            "params": {"thread_id": "thread_1", "before_sequence": 0, "limit": 501},
+        }
+    )
+
+    assert listed is not None and listed["result"]["ok"] is True
+    assert facade.calls == [("list", ThreadListQuery(cursor="opaque", limit=200))]
+    assert invalid_list is not None and invalid_list["error"]["code"] == -32602
+    assert invalid_read is not None and invalid_read["error"]["code"] == -32602
 
 
 @pytest.mark.asyncio

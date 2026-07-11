@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
 
@@ -136,16 +137,49 @@ class ApplicationState(BaseModel):
     configuration_diagnostics: tuple[str, ...] = ()
 
 
+class ThreadListQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class ThreadReadQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    thread_id: str = Field(min_length=1, max_length=128)
+    before_sequence: int | None = Field(default=None, ge=1)
+    limit: int = Field(default=100, ge=1, le=500)
+
+
 class ThreadListResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     threads: tuple[Thread, ...] = ()
+    has_more: bool = False
+    next_cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
+
+
+class ChangeSetSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    change_set_id: str = Field(min_length=1, max_length=128)
+    turn_id: str | None = Field(default=None, max_length=128)
+    operation_id: str | None = Field(default=None, max_length=128)
+    lifecycle: str = Field(min_length=1, max_length=64)
+    changed_paths: tuple[str, ...] = Field(default=(), max_length=1_000)
+    reversibility: str = Field(min_length=1, max_length=64)
+    created_at: datetime
+    sealed_at: datetime | None = None
 
 
 class ThreadReadResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     view: ThreadView
+    change_sets: tuple[ChangeSetSummary, ...] = ()
+    has_more: bool = False
+    next_before_sequence: int | None = Field(default=None, ge=1)
 
 
 class OperationAccepted(BaseModel):
