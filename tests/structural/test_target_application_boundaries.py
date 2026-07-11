@@ -71,7 +71,7 @@ def test_target_application_does_not_import_legacy_or_surface_layers() -> None:
 
 
 def test_headless_acceptance_uses_no_external_service_or_environment_hooks() -> None:
-    path = Path("tests/integration/test_headless_foundation.py")
+    path = Path("tests/integration/test_headless_product.py")
     source = path.read_text(encoding="utf-8")
     lowered = source.casefold()
 
