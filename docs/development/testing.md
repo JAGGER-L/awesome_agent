@@ -1,62 +1,50 @@
-# Testing During the Architecture Rewrite
+# Testing
 
-Tests exist to reduce product risk. During the local-first rewrite, the relevant
-risk is breaking an accepted target behavior, not failing to preserve an
-architecture that is being removed.
+Tests protect observable Local-first product behavior and stable contracts, not
+removed implementation structure.
 
-## Current Policy
+## While changing a module
 
-The rewrite uses a target-first test baseline:
+Run the smallest sufficient sequence: format/lint, affected type checks,
+targeted unit tests, affected structural contracts, then only the integration
+or E2E path crossed by the change. Do not restore a deleted interface merely to
+make an obsolete test pass. When behavior remains but a test is coupled to old
+structure, rewrite the test around the retained boundary.
 
-- keep tests for portable product invariants and accepted target contracts;
-- delete tests that only encode removed runtime, API, worker, PostgreSQL,
-  Textual TUI, artifact, approval, team, or deployment behavior;
-- do not add compatibility layers, permanent skips, or expected failures only
-  to satisfy deleted architecture contracts;
-- add tests with each new target module or behavior;
-- use Git history, not a quarantine directory, as the archive for removed
-  tests.
+Documentation-only work normally runs Markdown link/inventory tests and scans
+examples for removed commands. Packaging or startup changes also require a
+local install/startup smoke.
 
-An old test may be retained only when its observable behavior is still part of
-the target product and the test does not force the old architecture to remain.
-If the behavior remains but the test is implementation-coupled, record the
-behavior in the coverage ledger and rewrite the test with the target module.
+## Complete retained gate
 
-## Validation Gates
-
-For each refactor task, run the smallest set that covers its changed boundary:
-
-1. formatting and lint for changed and target-owned Python files;
-2. type checking for affected target modules;
-3. targeted unit tests;
-4. affected structural or contract tests;
-5. necessary local integration tests.
-
-The default target baseline is:
+Run before final integration or a release candidate:
 
 ```powershell
-.\scripts\check.ps1
+uv sync --extra memory --dev
+uv run --extra memory ruff format --check src tests scripts
+uv run --extra memory ruff check src tests scripts
+uv run --extra memory mypy src/awesome_agent scripts/release
+uv run --extra memory pytest -q tests/unit
+uv run --extra memory pytest -q tests/integration
+uv run --extra memory pytest -q tests/e2e
+uv run --extra memory pytest -q tests/packaging tests/structural
+uv run python scripts/generate_protocol_fixtures.py --check
+uv lock --check
+uv build --wheel
+
+npm --prefix tui ci
+node tui/scripts/sync-version.mjs --check
+npm --prefix tui run format:check
+npm --prefix tui run lint
+npm --prefix tui run typecheck
+npm --prefix tui test
+npm --prefix tui run build
+npm --prefix tui pack --dry-run
 ```
 
-The legacy repository-wide suite, legacy E2E suite, Docker/PostgreSQL system
-tests, and legacy smoke tests are not rewrite completion gates. They must not be
-used to justify compatibility code for removed behavior.
+Tests use deterministic fake DeepSeek, Kimi, Mem0, and MCP boundaries. Live
+credentials, cross-host installation, and external network checks are explicit
+release checks, not normal PR tests.
 
-## Phase Gates
-
-| Phase | Required evidence | Explicitly deferred |
-| --- | --- | --- |
-| Architecture rewrite | Target lint/type checks, affected unit and contract tests, necessary local integration tests | Legacy full suite, product E2E, external smoke, performance |
-| Target feature stabilization | Complete target unit/contract suite, component integrations, startup checks for implemented surfaces | User journeys that do not exist yet |
-| Product readiness | Complete target suite, Ink/React TUI E2E, smoke tests, workspace safety flows, upgrade/recovery checks | Nothing required by the release contract |
-
-Coverage percentage is informational until the target module set stabilizes.
-It becomes a gate only after the denominator contains target production code
-rather than code scheduled for deletion.
-
-## Evidence
-
-Record commands, results, deliberately removed or deferred coverage, unresolved
-risks, and the target behavior that will replace deleted coverage in the active
-execution plan or final handoff. The current coverage ledger lives in
-[`tests/README.md`](../../tests/README.md).
+Record the exact commands and outcomes. If an environmental gate is
+unavailable, state it and retain the risk; never report it as passing.

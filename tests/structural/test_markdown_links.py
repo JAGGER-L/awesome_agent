@@ -4,6 +4,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
+FINAL_DOCS = {
+    "README.md",
+    "roadmap.md",
+    "getting-started/quickstart.md",
+    "getting-started/quickstart.zh-CN.md",
+    "user-guide/commands.md",
+    "user-guide/configuration.md",
+    "user-guide/workspace-and-tools.md",
+    "user-guide/memory-skills-mcp.md",
+    "user-guide/troubleshooting.md",
+    "architecture/README.md",
+    "architecture/agent-core.md",
+    "architecture/runtime-and-langgraph.md",
+    "architecture/protocol-and-ink.md",
+    "architecture/persistence.md",
+    "architecture/security.md",
+    "architecture/decisions/0001-python-langgraph-thin-runtime.md",
+    "architecture/decisions/0002-sqlite-and-disposable-development-state.md",
+    "architecture/decisions/0003-workspace-trust-and-execution-policy.md",
+    "architecture/decisions/0004-tool-kernel-change-journal-and-commands.md",
+    "architecture/decisions/0005-dual-layer-memory-with-mem0-cloud.md",
+    "architecture/decisions/0006-python-core-and-ink-stdio-boundary.md",
+    "development/README.md",
+    "development/testing.md",
+    "development/release.md",
+}
+
 INSTALL_SH = (
     "curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/"
     "download/install.sh | sh"
@@ -49,6 +76,14 @@ def test_relative_markdown_links_resolve() -> None:
                 failures.append(f"{source.relative_to(ROOT)} -> {target}")
 
     assert not failures, "Broken Markdown links:\n" + "\n".join(failures)
+
+
+def test_final_documentation_inventory_is_exact() -> None:
+    actual = {
+        path.relative_to(ROOT / "docs").as_posix()
+        for path in (ROOT / "docs").rglob("*.md")
+    }
+    assert actual == FINAL_DOCS
 
 
 def test_entry_docs_describe_only_the_pilot_product() -> None:

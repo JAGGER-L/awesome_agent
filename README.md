@@ -90,6 +90,7 @@ awesome --help
 - [Troubleshooting](docs/user-guide/troubleshooting.md)
 - [Architecture](ARCHITECTURE.md)
 - [Development](docs/development/README.md)
+- [Roadmap](docs/roadmap.md)
 
 ## Security
 

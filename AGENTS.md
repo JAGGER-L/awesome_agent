@@ -108,6 +108,7 @@ These rules apply while the local-first architecture rewrite is in progress:
 * The legacy full suite, legacy end-to-end tests, and legacy smoke tests are not refactor completion gates unless the current task explicitly retains or changes the behavior they cover.
 * Add tests for each new target behavior as it is introduced. Rebuild product-level end-to-end, smoke, and performance coverage only after the corresponding target user flow exists.
 * Record the commands actually run, their results, intentionally removed or deferred coverage, and remaining risks in the execution plan or final handoff.
+* Use `docs/development/testing.md` as the canonical complete retained gate; run affected subsets during implementation and the complete gate before final integration or release.
 
 ## Safety and Execution Boundaries
 
@@ -165,73 +166,80 @@ Before ending, confirm that:
 - Primary product surface: `awesome` starts the Ink chat TUI and one private
   Python Core process. The TUI submits typed intent and renders events; it does
   not execute graphs, call providers, or run tools directly.
-- Runtime authority: `src/awesome_agent/application/` owns local lifecycle and
-  invokes the LangGraph graph compiled by `src/awesome_agent/agent/` directly.
+- Application authority: `src/awesome_agent/application/` owns workspace and
+  Thread/Turn lifecycle, one foreground operation, commands, cancellation,
+  interactions, composition, and event projection.
+- Agent authority: `src/awesome_agent/agent/` owns the only LangGraph graph,
+  graph state, nodes, routing, loop invariants, budgets, compression, and
+  finalization. Application invokes it directly; there is no independent
+  runtime platform.
 - Provider boundary: `src/awesome_agent/modeling/` defines provider-neutral
   messages, tools, streaming, usage, and execution contracts.
-  `src/awesome_agent/providers/` adapts concrete providers to those contracts.
+  `src/awesome_agent/providers/` contains only the supported DeepSeek and Kimi
+  adapters.
 - Tool boundary: `src/awesome_agent/core/tools/` owns built-in tool specs,
-  path/command policy, registry, executor, and local process execution.
+  path/command policy, registry, executor, normalized results, and local process
+  execution. `src/awesome_agent/core/changes/` owns Change Journal semantics.
 - State boundary: embedded state consists of Application SQLite, LangGraph
   SQLite checkpoints, Change Journal data, local memory files, workspace files,
   and TUI preferences under resolved Awesome paths.
-- Extension boundary: `src/awesome_agent/extensions/` discovers user/project
-  skills, MCP servers, community tools, catalog snapshots, diagnostics, and
-  extension config. Extension discovery does not bypass tool capability policy.
+- Extension boundary: `src/awesome_agent/extensions/` discovers bundled/user/
+  workspace Skills and MCP servers. Extensions use the shared tool and policy
+  boundary; they do not gain execution authority.
+- Non-goals: the product has no HTTP surface, Worker, distributed scheduler,
+  service database, general approval/artifact/event resources, or Docker
+  execution backend.
 
 ## File Architecture
 
 ### Documentation Map
 
 - `README.md` / `README.zh-CN.md`: user-facing project introduction,
-  quickstart, feature overview, and docs entry points.
+  installation, first run, feature summary, and docs entry points.
 - `docs/README.md`: reader-oriented documentation index.
-- `ARCHITECTURE.md`: system boundaries, source layout, and dependency
-  direction.
-- `docs/getting-started/quickstart.md`: manual first-run path.
-- `docs/user-guide/README.md`: user-facing runtime surfaces.
-- `docs/architecture/README.md`: durable architecture design contracts.
-- `docs/development/README.md`: repository development rules and validation.
-- `docs/development/repository-harness.md`: repository-agent engineering rules.
-- `docs/development/execution-plans.md`: local execution-plan rules.
-- `docs/governance/documentation.md`: where project information belongs.
-- `docs/governance/roadmap.md`: durable product and runtime roadmap.
-- `docs/governance/technical-debt.md`: durable debt registry.
-- `docs/governance/quality.md`: quality gates and current score.
-- `docs/reference/README.md`: generated and compact reference material.
-- `docs/architecture/runtime-kernel.md`: product runtime harness.
-- `docs/architecture/security-model.md`: sandbox, approval, and data-safety
-  rules.
+- `ARCHITECTURE.md`: concise topology, Turn flow, ownership, dependency
+  direction, and non-goals.
+- `docs/getting-started/`: English and Chinese first-run guides.
+- `docs/user-guide/`: commands, configuration, workspace/tools,
+  memory/Skills/MCP, and troubleshooting.
+- `docs/architecture/`: focused current contracts and six accepted ADRs.
+- `docs/development/`: contributor setup, testing, and manual release.
+- `docs/roadmap.md`: current pilot, near-term quality, and evidence-gated later
+  options.
 - `.codex/exec-plans/active/`: ignored local current execution plans.
 - `.codex/exec-plans/completed/`: ignored local completed execution plans.
 - `.codex/exec-plans/pending/`: ignored local future accepted plans.
 
 ### Repository Map
 
-- `src/awesome_agent/paths.py`: product data and installation path resolution,
-  including `AWESOME_HOME`.
+- `src/awesome_agent/paths.py` and `src/awesome_agent/config/`: product paths,
+  strict user/workspace configuration, secrets, precedence, and budgets.
+- `src/awesome_agent/core/`: workspace identity, tools, execution policy,
+  events, and Change Journal.
 - `src/awesome_agent/conversation/`: thread, turn, message, stream, and
-  conversation-run service contracts.
+  conversation service contracts.
 - `src/awesome_agent/agent/`: LangGraph graph, state, nodes, routing, budgets,
-  compression, retries, message repair, and finalization.
+  compression, retry accounting, message repair, and finalization.
 - `src/awesome_agent/application/`: local lifecycle, commands, foreground
-  operations, cancellation, composition, and event projection.
+  operations, interactions, cancellation, composition, and event projection.
 - `src/awesome_agent/protocol/`: private JSON-RPC/stdio host boundary.
 - `src/awesome_agent/storage/`: Application SQLite, LangGraph checkpoints,
   conversation, trust, Change Journal, and MCP enablement adapters.
-- `src/awesome_agent/core/tools/` and `src/awesome_agent/core/changes/`: tool
-  execution and reversible workspace change ownership.
-- `src/awesome_agent/extensions/`: extension catalog, skill, MCP, community
-  tool, diagnostics, and project extension config adapters.
-- `src/awesome_agent/memory/`: built-in and external memory models, policy, and
-  service.
+- `src/awesome_agent/context/`: deterministic prompt assembly, path references,
+  token budgets, summaries, and compression inputs.
+- `src/awesome_agent/extensions/`: Skill discovery/loading and MCP adapters.
+- `src/awesome_agent/memory/`: local file memory, Mem0 Cloud, identity,
+  redaction policy, distillation, and memory tools.
 - `src/awesome_agent/modeling/` and `src/awesome_agent/providers/`:
-  provider-neutral model protocol, process model backend, execution service,
-  provider adapters, model catalog, routing, and streaming.
+  provider-neutral protocol, process backend, gateway, catalog, DeepSeek/Kimi
+  adapters, and streaming.
 - `src/awesome_agent/safety/`: redaction and data-safety helpers.
-- `scripts/generate_protocol_fixtures.py`: deterministic protocol fixture
-  generator and checker.
-- `tests/`: unit, integration, e2e, and structural tests.
+- `tui/`: Node 22 Ink + React surface, protocol client, reducers, transcript,
+  commands, composer, lifecycle, and presentation tests.
+- `scripts/generate_protocol_fixtures.py` and `scripts/release/`: deterministic
+  protocol fixtures and the manual release bundle builder.
+- `install.sh` / `install.ps1`: pilot bootstrap installers.
+- `tests/`: retained unit, integration, E2E, packaging, and structural tests.
 - `.agents/`: repository-level agent support material; it is not product
   runtime state.
 - `.codex/`: ignored local development-agent plans and handoff state; do not

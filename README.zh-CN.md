@@ -86,6 +86,7 @@ awesome --help
 - [故障排查](docs/user-guide/troubleshooting.md)
 - [架构](ARCHITECTURE.md)
 - [开发](docs/development/README.md)
+- [Roadmap](docs/roadmap.md)
 
 ## 安全
 
