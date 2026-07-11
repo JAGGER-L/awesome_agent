@@ -90,6 +90,7 @@ class FakeGateway:
 
 async def run() -> None:
     provider = os.environ.get("AWESOME_FAKE_PROVIDER", "deepseek")
+    print("fixture core log", file=sys.stderr, flush=True)
     home = Path(os.environ["AWESOME_HOME"])
     workspace = Path(os.environ["AWESOME_WORKSPACE"])
     writer = JsonLineWriter(_Stdout())

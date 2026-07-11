@@ -206,6 +206,32 @@ describe("RpcClient events and close", () => {
     await client.close(new RpcClosedError("test complete"));
   });
 
+  it("normalizes Python null Event identities to absent values", async () => {
+    const transport = new FakeLineTransport();
+    const client = createRpcClient(transport);
+    const next = client.events()[Symbol.asyncIterator]().next();
+    transport.serverMessage({
+      jsonrpc: "2.0",
+      method: "event",
+      params: {
+        ...warningEvent,
+        thread_id: null,
+        turn_id: null,
+        operation_id: null,
+      },
+    });
+    await expect(next).resolves.toMatchObject({
+      done: false,
+      value: {
+        event_type: "warning",
+        thread_id: undefined,
+        turn_id: undefined,
+        operation_id: undefined,
+      },
+    });
+    await client.close(new RpcClosedError("test complete"));
+  });
+
   it("closes on an invalid Event notification", async () => {
     const transport = new FakeLineTransport();
     const client = createRpcClient(transport);

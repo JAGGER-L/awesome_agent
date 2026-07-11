@@ -119,12 +119,17 @@ export async function startCoreProcess(
   options: CoreLaunchOptions,
   arguments_: readonly string[],
 ): Promise<CoreSession> {
-  const child = spawn(options.executable, [...arguments_], {
+  const command = windowsScriptCommand(options.executable, arguments_);
+  const child = spawn(command.executable, command.arguments, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
+    windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
+  // Attach stdout/stderr/exit ownership immediately. A fast child may emit
+  // diagnostics before Node reports the asynchronous spawn event.
+  const session = new ProcessSession(child);
   await new Promise<void>((resolve, reject) => {
     const spawned = () => {
       child.off("error", failed);
@@ -142,5 +147,29 @@ export async function startCoreProcess(
     child.once("spawn", spawned);
     child.once("error", failed);
   });
-  return new ProcessSession(child);
+  return session;
+}
+
+function windowsScriptCommand(
+  executable: string,
+  arguments_: readonly string[],
+): {
+  readonly executable: string;
+  readonly arguments: readonly string[];
+  readonly windowsVerbatimArguments: boolean;
+} {
+  if (process.platform !== "win32" || !/\.(?:cmd|bat)$/iu.test(executable)) {
+    return {
+      executable,
+      arguments: [...arguments_],
+      windowsVerbatimArguments: false,
+    };
+  }
+  const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
+  const commandLine = `call ${[executable, ...arguments_].map(quote).join(" ")}`;
+  return {
+    executable: process.env.ComSpec ?? "cmd.exe",
+    arguments: ["/d", "/s", "/c", commandLine],
+    windowsVerbatimArguments: true,
+  };
 }
