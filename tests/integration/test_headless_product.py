@@ -139,7 +139,7 @@ async def test_fresh_home_trust_turn_direct_and_restart(
 
     model_result = _unwrap(
         await application.execute_command(
-            CommandIntent(name=CommandName.MODEL, arguments=(model,))
+            CommandIntent(name=CommandName.MODEL, arguments=(provider, model))
         )
     )
     assert model_result.status is CommandStatus.SUCCESS

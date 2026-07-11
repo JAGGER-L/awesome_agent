@@ -24,6 +24,32 @@ from awesome_agent.protocol.stdio import (
     ProtocolEventSink,
     serve_stdio,
 )
+from awesome_agent.providers import (
+    CredentialValidation,
+    CredentialValidationStatus,
+)
+
+
+class FakeCredentialValidator:
+    async def validate(
+        self, provider: str, api_key: object, **_: object
+    ) -> CredentialValidation:
+        del provider
+        raw = api_key.get_secret_value()  # type: ignore[attr-defined]
+        if raw == "invalid-test-key":
+            return CredentialValidation(
+                status=CredentialValidationStatus.INVALID,
+                code="credential_rejected",
+            )
+        if raw == "unverified-test-key":
+            return CredentialValidation(
+                status=CredentialValidationStatus.UNVERIFIED,
+                code="provider_unreachable",
+            )
+        return CredentialValidation(
+            status=CredentialValidationStatus.VALID,
+            code="credential_valid",
+        )
 
 
 class _Stdout:
@@ -99,12 +125,14 @@ async def run() -> None:
         return cast(object, FakeGateway(selected_provider, selected_model))
 
     secret_name = "DEEPSEEK_API_KEY" if provider == "deepseek" else "MOONSHOT_API_KEY"
+    credential_flow = os.environ.get("AWESOME_FAKE_CREDENTIAL_FLOW") == "1"
     facade = await compose_local_application(
         home=home,
         workspace=workspace,
         event_sink=ProtocolEventSink(writer),
-        environ={secret_name: "fake-key"},
+        environ={} if credential_flow else {secret_name: "fake-key"},
         gateway_factory=cast(Any, gateway_factory),
+        credential_validator=FakeCredentialValidator() if credential_flow else None,
     )
     await serve_stdio(facade, writer=writer)
 
