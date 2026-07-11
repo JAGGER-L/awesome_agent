@@ -42,9 +42,3 @@ interface.
 Check which state store the mode uses, whether migrations are current, and
 whether provider keys live in the user environment or `<AWESOME_HOME>/.env`.
 Do not assume a healthy Local CLI implies a healthy PostgreSQL-backed API mode.
-
-## Fallback And Debug Commands
-
-`awesome-agent start` is a fallback/debug supervisor for API and Worker in one
-local process group. Use `awesome-agent serve` and `awesome-agent worker`
-separately when another process manager should own them.

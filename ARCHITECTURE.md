@@ -198,7 +198,7 @@ dispatch events share one transaction.
 ### Durable Worker and Probe Graph
 
 ```text
-awesome-agent start
+legacy supervisor (removed)
         |
         +---- API process ---- PostgreSQL events ---- SSE polling
         |

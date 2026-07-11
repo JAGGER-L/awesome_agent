@@ -12,7 +12,6 @@ answer.
 ## Product Users
 
 - [User guide](user-guide/README.md)
-- [CLI and commands](user-guide/cli.md)
 - [Conversations](user-guide/conversations.md)
 - [Attachments](user-guide/attachments.md)
 - [Memory, skills, and MCP](user-guide/memory-skills-mcp.md)

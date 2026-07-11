@@ -23,9 +23,6 @@ dependencies.
 checkpoint storage, provider configuration, sandbox health, extension catalog
 health, and worker heartbeats.
 
-`awesome-agent start` is a fallback/debug supervisor for local API development,
-not the normal Local CLI path.
-
 For durable runtime boundaries, see the
 [architecture guide](../architecture/README.md). For thread and diagnostics API
 resources, see the [API guide](../api/README.md).

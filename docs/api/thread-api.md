@@ -57,6 +57,5 @@ stream.
 
 ## Related Documents
 
-- [Product surfaces](../architecture/product-surfaces.md)
 - [Conversations](../user-guide/conversations.md)
 - [Attachments](../user-guide/attachments.md)

@@ -27,4 +27,3 @@ must not infer runtime state from provider-specific chunks.
 
 - [Agent loop](agent-loop.md)
 - [Observability](observability.md)
-- [Product surfaces](product-surfaces.md)

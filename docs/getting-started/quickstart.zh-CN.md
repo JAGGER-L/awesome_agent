@@ -304,12 +304,6 @@ make install
 
 然后打开新的终端，尝试运行 `awesome --help`。
 
-### API 备用命令
-
-`awesome-agent start` 只作为 Local API 开发时的备用/调试 supervisor 使用。日常
-项目工作应使用 `awesome`；API 模式通常应使用 `make dev` 或
-`make docker-start`。
-
 ### Awesome 在错误的项目中启动
 
 退出 Awesome，切换到你希望处理的项目目录，再重新启动：

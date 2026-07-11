@@ -4,10 +4,9 @@
 >
 > Decision date: 2026-07-10
 >
-> Implementation status: Phase 3 implements the Python Core + Ink candidate as
-> `awesome-core` and `awesome-tui` on the local-first architecture branch.
-> Switching the default `awesome` entry and physically deleting Textual and
-> legacy platform code remain Phase 4 work.
+> Implementation status: the Python Core + public Ink `awesome` entry are
+> authoritative. Phase 4 continues physical deletion of the remaining legacy
+> platform code.
 
 ## Product Definition
 
@@ -419,10 +418,9 @@ The strategic sequence is:
    the fixed tool/change contracts.
 2. Establish the Python Agent Core with LangGraph, context, skills, memory, and
    a complete headless conversation path.
-3. Connect the `awesome-tui` Ink + React candidate through stdio JSON-RPC and
-   close the local product workflow. This phase is implemented without changing
-   the existing `awesome` entry.
-4. Cut over entry points and delete superseded PostgreSQL, worker, API,
+3. Connect the Ink + React surface through stdio JSON-RPC and make `awesome`
+   the public local product entry.
+4. Delete superseded PostgreSQL, worker, API,
    artifact, approval, team, and Docker-service architecture.
 
 Detailed local coordination belongs in `.codex/exec-plans/pending/`. Durable

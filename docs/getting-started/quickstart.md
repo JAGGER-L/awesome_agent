@@ -305,12 +305,6 @@ make install
 
 Then open a new terminal and try `awesome --help`.
 
-### API fallback command
-
-Use `awesome-agent start` only as a fallback/debug supervisor for local API
-development. Daily project work should use `awesome`; API modes should usually
-use `make dev` or `make docker-start`.
-
 ### Awesome opened in the wrong project
 
 Exit Awesome, change to the project directory you want to work in, and start it
