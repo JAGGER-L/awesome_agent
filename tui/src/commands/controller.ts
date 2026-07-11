@@ -1,0 +1,106 @@
+import type { ProductError } from "../protocol/base.js";
+import type {
+  MethodName,
+  MethodParams,
+  MethodValue,
+} from "../protocol/methods.js";
+import { findCommand } from "./catalog.js";
+import type {
+  CommandIntent,
+  LocalCommandIntent,
+  RoutedInput,
+} from "./parser.js";
+
+interface CommandRpc {
+  request<Method extends MethodName>(
+    method: Method,
+    params: MethodParams[Method],
+  ): Promise<
+    | { readonly ok: true; readonly value: MethodValue[Method] }
+    | { readonly ok: false; readonly error: ProductError }
+  >;
+}
+
+type OperationAccepted = MethodValue["turn.submit"];
+type CommandResult = MethodValue["command.execute"];
+type CommandSelection = NonNullable<CommandResult["selection"]>;
+
+export type CommandDispatchOutcome =
+  | { readonly kind: "accepted"; readonly operation: OperationAccepted }
+  | { readonly kind: "result"; readonly result: CommandResult }
+  | {
+      readonly kind: "picker";
+      readonly intent: CommandIntent;
+      readonly selection: CommandSelection;
+    }
+  | { readonly kind: "local"; readonly intent: LocalCommandIntent }
+  | { readonly kind: "error"; readonly error: ProductError }
+  | {
+      readonly kind: "error";
+      readonly code: "thread_required" | "unknown_command";
+    };
+
+export class CommandController {
+  constructor(private readonly rpc: CommandRpc) {}
+
+  async submit(
+    routed: RoutedInput,
+    threadId: string | undefined,
+  ): Promise<CommandDispatchOutcome> {
+    if (routed.kind === "local") {
+      return { kind: "local", intent: routed.intent };
+    }
+    if (routed.kind === "turn" || routed.kind === "direct") {
+      if (!threadId) return { kind: "error", code: "thread_required" };
+      const result =
+        routed.kind === "turn"
+          ? await this.rpc.request("turn.submit", {
+              thread_id: threadId,
+              content: routed.content,
+            })
+          : await this.rpc.request("direct.execute", {
+              thread_id: threadId,
+              command: routed.command,
+            });
+      return result.ok
+        ? { kind: "accepted", operation: result.value }
+        : { kind: "error", error: result.error };
+    }
+
+    if (!findCommand(routed.intent.name)) {
+      return { kind: "error", code: "unknown_command" };
+    }
+    const result = await this.rpc.request("command.execute", {
+      name: routed.intent.name,
+      ...(routed.intent.arguments
+        ? { arguments: [...routed.intent.arguments] }
+        : {}),
+    });
+    if (!result.ok) return { kind: "error", error: result.error };
+    if (result.value.selection) {
+      return {
+        kind: "picker",
+        intent: routed.intent,
+        selection: result.value.selection,
+      };
+    }
+    return { kind: "result", result: result.value };
+  }
+
+  async select(
+    intent: CommandIntent,
+    value: string,
+    threadId: string | undefined,
+  ): Promise<CommandDispatchOutcome> {
+    return await this.submit(
+      {
+        kind: "command",
+        intent: {
+          name: intent.name,
+          arguments: [...(intent.arguments ?? []), value],
+        },
+      },
+      threadId,
+    );
+  }
+}
