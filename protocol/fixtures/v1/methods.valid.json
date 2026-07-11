@@ -1,0 +1,205 @@
+{
+  "cases": [
+    {
+      "method": "initialize",
+      "name": "initialize.ready",
+      "params": {
+        "client_name": "awesome-tui",
+        "client_version": "0.1.0",
+        "protocol_version": 1
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "capabilities": [
+            "threads",
+            "turns",
+            "commands"
+          ],
+          "product_version": "0.1.0",
+          "protocol_version": 1,
+          "session_id": "session_11111111111111111111111111111111",
+          "status": "ready",
+          "workspace": {
+            "branch": "feature/fixtures",
+            "display_path": "C:\\workspace"
+          }
+        }
+      }
+    },
+    {
+      "method": "application.getState",
+      "name": "application.get_state",
+      "params": {},
+      "result": {
+        "ok": true,
+        "value": {
+          "configuration_diagnostics": [],
+          "configuration_valid": true,
+          "current_model": "deepseek/deepseek-v4-flash",
+          "current_thread_id": "thread_11111111111111111111111111111111",
+          "initialized": true,
+          "mcp_status": [],
+          "memory_status": {},
+          "secret_status": {
+            "deepseek_api_key": true,
+            "mem0_api_key": false,
+            "moonshot_api_key": false
+          },
+          "session_id": "session_11111111111111111111111111111111",
+          "skill_mode": "auto",
+          "thinking_enabled": false,
+          "usage": {},
+          "workspace": {
+            "branch": "feature/fixtures",
+            "display_path": "C:\\workspace"
+          },
+          "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "workspace_trusted": true
+        }
+      }
+    },
+    {
+      "method": "thread.list",
+      "name": "thread.list",
+      "params": {
+        "limit": 50
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "has_more": false,
+          "threads": [
+            {
+              "created_at": "2026-07-11T08:00:00Z",
+              "current_model": "deepseek/deepseek-v4-flash",
+              "id": "thread_11111111111111111111111111111111",
+              "skill_mode": "auto",
+              "thinking_enabled": false,
+              "title": "Fixture Thread",
+              "updated_at": "2026-07-11T08:00:00Z",
+              "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "thread.read",
+      "name": "thread.read",
+      "params": {
+        "limit": 50,
+        "thread_id": "thread_11111111111111111111111111111111"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "change_sets": [],
+          "has_more": false,
+          "view": {
+            "entries": [],
+            "thread": {
+              "created_at": "2026-07-11T08:00:00Z",
+              "current_model": "deepseek/deepseek-v4-flash",
+              "id": "thread_11111111111111111111111111111111",
+              "skill_mode": "auto",
+              "thinking_enabled": false,
+              "title": "Fixture Thread",
+              "updated_at": "2026-07-11T08:00:00Z",
+              "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "tool_activities": [],
+            "turns": []
+          }
+        }
+      }
+    },
+    {
+      "method": "turn.submit",
+      "name": "turn.submit",
+      "params": {
+        "content": "Inspect the repository.",
+        "thread_id": "thread_11111111111111111111111111111111"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "operation_id": "operation_33333333333333333333333333333333",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "turn_id": "turn_22222222222222222222222222222222"
+        }
+      }
+    },
+    {
+      "method": "direct.execute",
+      "name": "direct.execute",
+      "params": {
+        "command": "git status",
+        "thread_id": "thread_11111111111111111111111111111111"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "operation_id": "operation_33333333333333333333333333333333",
+          "thread_id": "thread_11111111111111111111111111111111"
+        }
+      }
+    },
+    {
+      "method": "command.execute",
+      "name": "command.execute",
+      "params": {
+        "arguments": [],
+        "name": "status"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "content": "",
+          "data": {},
+          "status": "success"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond",
+      "params": {
+        "decision": "trust",
+        "interaction_id": "interaction_1"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "operation.cancel",
+      "name": "operation.cancel",
+      "params": {
+        "operation_id": "operation_33333333333333333333333333333333"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "cancelled": true,
+          "operation_id": "operation_33333333333333333333333333333333"
+        }
+      }
+    },
+    {
+      "method": "shutdown",
+      "name": "shutdown",
+      "params": {},
+      "result": {
+        "ok": true,
+        "value": {
+          "stopped": true
+        }
+      }
+    }
+  ]
+}

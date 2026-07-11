@@ -1,0 +1,116 @@
+{
+  "commands": [
+    {
+      "name": "new",
+      "owner": "application"
+    },
+    {
+      "name": "resume",
+      "owner": "application"
+    },
+    {
+      "name": "context",
+      "owner": "application"
+    },
+    {
+      "name": "compact",
+      "owner": "application"
+    },
+    {
+      "name": "model",
+      "owner": "application"
+    },
+    {
+      "name": "thinking",
+      "owner": "application"
+    },
+    {
+      "name": "workspace",
+      "owner": "application"
+    },
+    {
+      "name": "diff",
+      "owner": "application"
+    },
+    {
+      "name": "undo",
+      "owner": "application"
+    },
+    {
+      "name": "redo",
+      "owner": "application"
+    },
+    {
+      "name": "tools",
+      "owner": "application"
+    },
+    {
+      "name": "skills",
+      "owner": "application"
+    },
+    {
+      "name": "skill",
+      "owner": "application"
+    },
+    {
+      "name": "mcp",
+      "owner": "application"
+    },
+    {
+      "name": "memory",
+      "owner": "application"
+    },
+    {
+      "name": "status",
+      "owner": "application"
+    },
+    {
+      "name": "usage",
+      "owner": "application"
+    },
+    {
+      "name": "doctor",
+      "owner": "application"
+    },
+    {
+      "name": "config",
+      "owner": "application"
+    },
+    {
+      "name": "init",
+      "owner": "skill"
+    },
+    {
+      "name": "review",
+      "owner": "skill"
+    },
+    {
+      "name": "debug",
+      "owner": "skill"
+    },
+    {
+      "name": "test",
+      "owner": "skill"
+    },
+    {
+      "name": "commit",
+      "owner": "skill"
+    },
+    {
+      "name": "help",
+      "owner": "ink"
+    },
+    {
+      "name": "theme",
+      "owner": "ink"
+    },
+    {
+      "name": "copy",
+      "owner": "ink"
+    },
+    {
+      "name": "quit",
+      "owner": "ink"
+    }
+  ]
+}
