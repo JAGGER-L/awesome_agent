@@ -1,72 +1,70 @@
 # Architecture
 
-Awesome is a single-user, local-first coding agent. The public `awesome`
-command starts an Ink interface and one private Python Core child process.
+Awesome is a single-user Local-first coding agent. The public `awesome`
+launcher starts one Ink process and one private Python Core process.
 
-## Product Topology
+## Topology
 
 ```text
-User
-  -> Ink + React
-  -> JSON-RPC 2.0 over stdio
-  -> Python Application
-  -> LangGraph Agent graph
-  -> ModelGateway
-  -> ToolExecutor
-  -> Workspace
-
-Python Application
-  -> typed Events -> Ink rendering
-  -> application SQLite
-  -> LangGraph SQLite checkpoints
+Ink -> stdio JSON-RPC Host -> Application -> LangGraph Agent
+                                      -> ModelGateway -> DeepSeek/Kimi
+                                      -> ToolExecutor -> workspace/process
+                                      -> SQLite/Change Journal/memory
+                                      -> Events -> Ink
 ```
 
-## Turn Flow
+## Turn flow
 
-1. Ink submits typed intent through the stdio protocol.
-2. Application validates workspace trust, configuration, and foreground
-   operation ownership.
-3. Application creates the Thread/Turn lifecycle and invokes the graph compiled
-   by `awesome_agent.agent.graph`.
-4. LangGraph owns graph execution, Agent state, routing, checkpoints, and
-   resumable graph progress.
-5. `ModelGateway` normalizes the selected DeepSeek or Kimi provider.
-6. Every model-requested action enters the shared Core `ToolExecutor`.
-7. Tool observations return to Agent state before the next model call.
-8. Application persists durable conversation state and projects typed live
-   Events to Ink.
+```text
+user input
+  -> Ink intent
+  -> versioned JSON-RPC over NDJSON/stdin/stdout
+  -> Application trust/config/foreground-operation checks
+  -> Thread and Turn lifecycle
+  -> LangGraph context -> model -> tools -> observation loop
+  -> LangGraph SQLite checkpoint
+  -> Application SQLite completion and Change Journal seal
+  -> typed event notifications
+  -> Ink transcript rendering
+```
 
-## Module Ownership
+Application commands enter the Application boundary without entering model
+reasoning. Every model-requested tool enters the same Tool Executor.
 
-- `awesome_agent.agent`: graph, state, nodes, routing, budgets, compression,
-  retries, message repair, and finalization.
-- `awesome_agent.application`: local lifecycle, trust coordination, foreground
-  operations, commands, cancellation, composition, and event projection.
-- `awesome_agent.modeling` and `awesome_agent.providers`: provider-neutral
-  contracts and DeepSeek/Kimi adapters.
-- `awesome_agent.core.tools`: built-in and extension tool registry, policy,
-  execution, results, and errors.
+## Package ownership
+
+- `awesome_agent.agent`: graph state, nodes, routing, budgets, compression, and
+  finalization.
+- `awesome_agent.application`: composition, Thread/Turn lifecycle, commands,
+  foreground operation serialization, interactions, cancellation, and events.
+- `awesome_agent.modeling` and `awesome_agent.providers`: Provider-neutral
+  contracts plus DeepSeek/Kimi adapters.
+- `awesome_agent.core`: workspace identity, tools, execution policy, typed
+  events, and Change Journal.
 - `awesome_agent.context`, `awesome_agent.memory`, and
-  `awesome_agent.extensions`: context assembly, dual-layer memory, skills, and
-  MCP integration.
-- `awesome_agent.conversation` and `awesome_agent.storage`: Thread/Turn models
-  and embedded state adapters.
-- `awesome_agent.protocol`: private stdio host boundary.
-- `tui/`: presentation and terminal interaction only.
+  `awesome_agent.extensions`: prompt context, two optional memory layers,
+  Skills, and MCP.
+- `awesome_agent.conversation` and `awesome_agent.storage`: product records and
+  embedded storage adapters.
+- `awesome_agent.protocol`: private stdio Host and JSON-RPC boundary.
+- `tui/`: Ink input, rendering, keyboard behavior, and local presentation
+  preferences only.
 
-## Dependency Direction
+## Dependency direction
 
-Ink depends on protocol contracts, not Python implementation packages. Protocol
-depends on Application contracts. Application composes the Agent, providers,
-tools, extensions, and storage. Agent depends on provider-neutral model, tool,
-context, event, and checkpoint contracts. Inner packages never import a user
-surface.
+Ink depends on protocol schemas, never Python implementation modules. Protocol
+calls the Application facade. Application is the outer composition root and
+may wire Agent, providers, tools, extensions, and storage. Agent depends on
+Provider-neutral and tool contracts, not concrete surfaces or storage
+implementations. Inner packages never import `tui/`.
 
-## Runtime Boundary
+## Non-goals
 
-Application lifecycle calls the LangGraph Agent directly. LangGraph is the
-execution and checkpoint authority; Application does not duplicate graph
-routing or checkpoint recovery. Events are ordered live projections and are
-not an independent source of truth.
+There is no hosted service, HTTP product path, distributed scheduler, Worker,
+custom durable runtime, general approval resource, artifact resource, event
+store, multi-user database, or Docker execution backend. A later API, IDE
+adapter, or Docker tool backend requires demonstrated demand and must reuse the
+same Application contracts.
 
-For focused design decisions, see [the architecture guide](docs/architecture/README.md).
+See the focused [architecture guide](docs/architecture/README.md) and
+[accepted decisions](docs/architecture/decisions/0001-python-langgraph-thin-runtime.md).

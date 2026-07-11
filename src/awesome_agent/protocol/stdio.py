@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -214,6 +215,7 @@ async def _run_main() -> None:
         home=paths.home,
         workspace=Path.cwd(),
         event_sink=ProtocolEventSink(writer),
+        environ=os.environ,
     )
     await serve_stdio(facade, writer=writer)
 

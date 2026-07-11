@@ -1,54 +1,31 @@
-# ADR 0003: Workspace Trust and Execution Policy
+# ADR 0003: Workspace trust and execution policy
 
-- Status: Accepted
+- Status: Accepted and implemented
 - Date: 2026-07-10
-- Scope: Workspace, permission, approval, and sandbox boundaries
-
-## Context
-
-A local coding agent needs broad access to the project it is asked to modify,
-but repository instructions and paths are untrusted until the developer accepts
-the workspace. Per-tool approval matrices create friction and do not provide a
-real operating-system sandbox.
 
 ## Decision
 
-The canonical startup directory is the workspace. The first visit requires an
-explicit trust decision stored in user-owned state. Declining trust exits before
-project instructions, skills, MCP declarations, or tools are loaded.
+The canonical launch directory is the workspace. First use requires explicit
+trust before project-controlled configuration, instructions, Skills, MCP, or
+tools load. Yes persists; No exits without persisting denial.
 
-Only acceptance is persisted. Declining ends the current launch and leaves the
-workspace unknown so the developer can make a different decision on a later
-launch. A symlink and its strictly resolved directory share one canonical
-identity; a moved directory is a new identity.
+Trust grants normal file and development-command work inside the workspace.
+File containment, sensitive-path rejection, command denial rules, and the
+exceptional outside-path `allow_once` interaction remain enforced by code at
+the Tool Executor boundary. Normal in-workspace tools do not prompt per call.
 
-Trust grants normal read, write, edit, delete, and development-command work
-inside that workspace. File tools still enforce canonical path containment and
-safe symlink handling. Tool policy is enforced at the executor boundary.
-
-The generalized durable approval subsystem is removed. Normal in-workspace
-operations do not prompt per tool. A small `interaction_required` protocol may
-ask trust or deny for workspace trust, and `allow_once` or deny for exceptional
-boundary crossings. It is not an approval resource or configurable approval
-mode system.
-
-Local host execution is the first backend. Docker may later be added as an
-optional execution sandbox backend below the tool executor. Docker is not the
-product runtime, and no Docker backend is built in the first phase.
+The current backend executes on the local host. There is no sandbox. A future
+Docker backend may isolate tool execution below the executor but cannot replace
+trust or policy.
 
 ## Consequences
 
-- Workspace configuration cannot grant its own trust or expand user policy.
-- The product must describe host execution honestly until isolation exists.
-- Security-critical path and execution checks remain code invariants even in a
-  trusted workspace.
-- Git worktrees may support workflows, but they are not called a sandbox.
+Workspace configuration cannot grant its own trust or expand policy. The
+product must describe host execution honestly. Git worktrees are workflows,
+not sandboxes.
 
-## Rejected Alternatives
+## Rejected
 
-- Trust every current directory implicitly: allows unreviewed project content
-  to influence the agent.
-- Prompt for every modifying tool: poor local coding workflow and no material
-  containment benefit.
-- Require Docker: increases startup cost and excludes normal host development
-  workflows.
+Implicit trust lets unreviewed project content influence Core. Prompting every
+tool adds friction without creating isolation. Requiring Docker makes the
+local development path heavier than the product need.
