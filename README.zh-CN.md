@@ -14,19 +14,17 @@ Awesome Agent 是一个面向本地项目的 AI coding agent，定位是运行�
 电脑上的轻量级本地开发助手。它可以读取代码库上下文、修改文件、执行命令，并
 辅助调试、重构和功能实现。相比传统代码补全工具，Awesome 更偏向任务级开发：
 用户描述目标后，它会围绕当前仓库状态进行多轮推理、编辑和验证，适合终端优先、
-自动化程度较高的工程工作流。当前主要使用入口是本地 CLI；如需连接其它客户端，
-也可以选择 Local API 或 Docker API 模式。
+自动化程度较高的工程工作流。唯一产品入口是本地 Ink `awesome` 界面，其后运行
+私有的 Python Core 进程。
 
 
-## 选择使用方式
+## 产品界面
 
 | 方式 | 适合场景 | 启动命令 |
 | --- | --- | --- |
-| Local CLI | 你想直接在本地项目里用终端工作。它使用 embedded local runtime，不需要 API server。 | `cd <your-project>` 然后运行 `awesome` |
-| Local API | 你想在本机提供 API 地址或查看接口文档。目前只支持 Windows。 | `make dev` |
-| Docker API | 你想通过 Docker 运行 API。目前只支持 Windows。 | `make docker-start` |
+| Local CLI | 在本地项目目录中通过终端工作；不需要 API Server、PostgreSQL、Worker 或 Docker Service。 | `cd <your-project>` 然后运行 `awesome` |
 
-大多数用户建议从 **Local CLI** 开始。公开的 `awesome` 命令始终启动本地 Ink
+公开的 `awesome` 命令始终启动本地 Ink
 界面及其私有 Python Core 进程。
 
 从项目目录运行 `awesome`。启动目录会成为默认 thread context。如果它是一个
@@ -162,7 +160,6 @@ Windows 上，`AWESOME_HOME` 默认是 `%LOCALAPPDATA%\awesome-agent`。其它�
 - [Quickstart](docs/getting-started/quickstart.md)
 - [快速开始](docs/getting-started/quickstart.zh-CN.md)
 - [用户指南](docs/user-guide/README.md)
-- [运维指南](docs/operations/README.md)
 - [架构](ARCHITECTURE.md)
 - [安全模型](docs/architecture/security-model.md)
 

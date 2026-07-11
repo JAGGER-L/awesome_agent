@@ -8,6 +8,5 @@ run `awesome` yet.
 - [Attachments](attachments.md)
 - [Memory, skills, and MCP](memory-skills-mcp.md)
 
-For startup modes, logs, readiness, and diagnostics, use the
-[operations guide](../operations/README.md). For API resources, use the
-[API guide](../api/README.md).
+Architecture and contributor material live in the corresponding documentation
+sections.

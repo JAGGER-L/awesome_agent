@@ -59,6 +59,5 @@ approval, and reuse a bounded same-run grant for the same approved resource.
 
 ## Related Documents
 
-- [Operations guide](../operations/README.md)
 - [Runtime kernel](runtime-kernel.md)
 - [Observability](observability.md)
