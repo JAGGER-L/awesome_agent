@@ -5,7 +5,10 @@ from pathlib import Path
 
 FORBIDDEN_AGENT_IMPORTS = {
     "awesome_agent.api",
+    "awesome_agent.agents",
     "awesome_agent.application",
+    "awesome_agent.observability",
+    "awesome_agent.orchestration",
     "awesome_agent.persistence",
     "awesome_agent.providers",
     "awesome_agent.runtime",
