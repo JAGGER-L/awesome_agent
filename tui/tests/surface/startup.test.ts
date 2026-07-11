@@ -285,6 +285,20 @@ function applicationState({
       moonshot_api_key: kimi,
       mem0_api_key: false,
     },
+    provider_credentials: {
+      deepseek: {
+        provider: "deepseek",
+        environment_variable: "DEEPSEEK_API_KEY",
+        source: deepseek ? "process_environment" : "missing",
+        mutable: !deepseek,
+      },
+      kimi: {
+        provider: "kimi",
+        environment_variable: "MOONSHOT_API_KEY",
+        source: kimi ? "process_environment" : "missing",
+        mutable: !kimi,
+      },
+    },
     memory_status: {},
     mcp_status: [],
     usage: {},

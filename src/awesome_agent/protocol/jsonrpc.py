@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
@@ -12,10 +12,12 @@ from awesome_agent.application.contracts import (
     InitializeResult,
     ProductError,
     ProductErrorCode,
+    ProviderCredentialSetRequest,
     ThreadListQuery,
     ThreadReadQuery,
 )
 from awesome_agent.application.facade import ApplicationFacade
+from awesome_agent.config import ProviderName
 from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
@@ -65,6 +67,14 @@ class _OperationParams(BaseModel):
     operation_id: str = Field(min_length=1, max_length=128)
 
 
+class _ProviderCredentialParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: ProviderName
+    api_key: str = Field(min_length=1, max_length=20_000)
+    allow_unverified: bool = False
+
+
 class JsonRpcDispatcher:
     def __init__(self, facade: ApplicationFacade) -> None:
         self._facade = facade
@@ -76,6 +86,7 @@ class JsonRpcDispatcher:
             "turn.submit": self._submit_turn,
             "direct.execute": self._execute_direct,
             "command.execute": self._execute_command,
+            "provider.credential.set": self._set_provider_credential,
             "interaction.respond": self._respond_interaction,
             "operation.cancel": self._cancel_operation,
             "shutdown": self._shutdown,
@@ -167,6 +178,15 @@ class JsonRpcDispatcher:
     async def _execute_command(self, params: Mapping[str, object]) -> object:
         intent = CommandIntent.model_validate(params)
         return await self._facade.execute_command(intent)
+
+    async def _set_provider_credential(self, params: Mapping[str, object]) -> object:
+        parsed = _ProviderCredentialParams.model_validate(params)
+        request = ProviderCredentialSetRequest(
+            provider=parsed.provider,
+            api_key=SecretStr(parsed.api_key),
+            allow_unverified=parsed.allow_unverified,
+        )
+        return await self._facade.set_provider_credential(request)
 
     async def _respond_interaction(self, params: Mapping[str, object]) -> object:
         parsed = _InteractionParams.model_validate(params)

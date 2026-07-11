@@ -20,14 +20,14 @@ describe("COMMAND_CATALOG", () => {
   it("has exact owner counts and useful metadata", () => {
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "application"),
-    ).toHaveLength(19);
+    ).toHaveLength(20);
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "skill"),
     ).toHaveLength(5);
     expect(COMMAND_CATALOG.filter(({ owner }) => owner === "ink")).toHaveLength(
       4,
     );
-    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(28);
+    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(29);
     for (const command of COMMAND_CATALOG) {
       expect(command.description.length).toBeGreaterThan(0);
       expect(command.usage).toMatch(new RegExp(`^/${command.name}(?: |$)`));

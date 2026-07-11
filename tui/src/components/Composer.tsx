@@ -19,6 +19,7 @@ export function Composer({
   active = true,
   clearRevision = 0,
   onSubmit,
+  onEmptySubmit,
   onValueChange,
 }: {
   readonly width: number;
@@ -28,6 +29,7 @@ export function Composer({
   readonly onSubmit: (
     value: string,
   ) => Promise<ComposerSubmitResult> | ComposerSubmitResult;
+  readonly onEmptySubmit?: () => void;
   readonly onValueChange?: (value: string) => void;
 }) {
   const [state, dispatch] = useReducer(composerReducer, undefined, () => {
@@ -79,7 +81,10 @@ export function Composer({
         apply(mapped.action);
         return;
       }
-      if (current.value.trim().length === 0) return;
+      if (current.value.trim().length === 0) {
+        onEmptySubmit?.();
+        return;
+      }
       const submitted = current.value;
       setSubmitting(true);
       void Promise.resolve(onSubmit(submitted))

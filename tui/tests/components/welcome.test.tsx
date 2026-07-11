@@ -74,7 +74,7 @@ describe("Welcome", () => {
     expect(view.lastFrame()).not.toContain("0.1.0");
   });
 
-  it("renders resumed, non-Git, missing-credential, and Kimi metadata", () => {
+  it("renders resumed, non-Git, and Kimi metadata", () => {
     const view = render(
       <Welcome
         {...baseProps}
@@ -85,7 +85,6 @@ describe("Welcome", () => {
         thinkingEnabled
         localMemoryEnabled
         mem0Enabled
-        credentialMissing
       />,
     );
     expect(view.lastFrame()).toContain(
@@ -93,7 +92,7 @@ describe("Welcome", () => {
     );
     expect(view.lastFrame()).not.toContain("feature/auth");
     expect(view.lastFrame()).toContain(
-      "kimi/kimi-k2.6 · credential missing · thinking on · local memory on · mem0 on",
+      "kimi/kimi-k2.6 · thinking on · local memory on · mem0 on",
     );
   });
 

@@ -66,6 +66,20 @@ INSTALL_PS1 = (
     "irm https://github.com/JAGGER-L/awesome_agent/releases/latest/"
     "download/install.ps1 | iex"
 )
+ENGLISH_QUICKSTART_STEPS = (
+    "## 1. Install Awesome",
+    "## 2. Start in a Project",
+    "## 3. Trust the Workspace",
+    "## 4. Configure a Model",
+    "## 5. Verify Your Setup",
+)
+CHINESE_QUICKSTART_STEPS = (
+    "## 1. 安装 Awesome",
+    "## 2. 在项目中启动",
+    "## 3. 信任 Workspace",
+    "## 4. 配置模型",
+    "## 5. 快速验证",
+)
 
 
 def test_relative_markdown_links_resolve() -> None:
@@ -165,6 +179,27 @@ def test_entry_docs_present_the_current_product() -> None:
     assert "默认关闭" in chinese
 
 
+def test_quickstarts_are_exactly_five_onboarding_steps() -> None:
+    english = (ROOT / "docs/getting-started/quickstart.md").read_text(encoding="utf-8")
+    chinese = (ROOT / "docs/getting-started/quickstart.zh-CN.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert tuple(re.findall(r"^## \d+\..+$", english, re.MULTILINE)) == (
+        ENGLISH_QUICKSTART_STEPS
+    )
+    assert tuple(re.findall(r"^## \d+\..+$", chinese, re.MULTILINE)) == (
+        CHINESE_QUICKSTART_STEPS
+    )
+    for content in (english, chinese):
+        assert "/model" in content
+        assert "/auth" in content
+        assert ".env" not in content
+        assert not re.search(r"^## [6-9]\d*\.", content, re.MULTILINE)
+    assert "Press Enter" in english
+    assert "按 Enter" in chinese
+
+
 def test_roadmap_has_the_approved_product_order() -> None:
     roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
     positions = [roadmap.index(f"## {heading}") for heading in ROADMAP_HEADINGS]
@@ -183,6 +218,7 @@ def test_public_command_and_configuration_contract_is_documented() -> None:
         "resume",
         "context",
         "compact",
+        "auth",
         "model",
         "thinking",
         "workspace",

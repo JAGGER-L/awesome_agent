@@ -37,6 +37,8 @@ from awesome_agent.application.contracts import (
     OperationAccepted,
     ProductError,
     ProductErrorCode,
+    ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
     StatusSnapshot,
     ThreadListQuery,
     ThreadListResult,
@@ -59,6 +61,11 @@ from awesome_agent.application.interactions import (
     InteractionKind,
 )
 from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.application.provider_configuration import (
+    CredentialValidator,
+    ProviderConfigurationService,
+    ProviderCredentialManagedExternally,
+)
 from awesome_agent.application.turns import TurnCoordinator
 from awesome_agent.config import (
     ApplicationConfig,
@@ -67,6 +74,7 @@ from awesome_agent.config import (
     ThreadConfigState,
     TurnConfig,
     UserConfigWriter,
+    UserSecretStore,
     load_config_sources,
     resolve_application_config,
     resolve_turn_config,
@@ -149,7 +157,11 @@ from awesome_agent.modeling import (
     SelectedModel,
 )
 from awesome_agent.paths import AwesomePaths
-from awesome_agent.providers import DeepSeekProvider, KimiProvider
+from awesome_agent.providers import (
+    DeepSeekProvider,
+    KimiProvider,
+    ProviderCredentialValidator,
+)
 from awesome_agent.storage import SQLiteMcpEnablementStore
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
@@ -192,6 +204,7 @@ async def compose_local_application(
     gateway_factory: GatewayFactory | None = None,
     mcp_client_factory: McpClientFactory | None = None,
     mem0_client: object | None = None,
+    credential_validator: CredentialValidator | None = None,
 ) -> LocalApplication:
     paths = AwesomePaths.from_home(home)
     identity = resolve_workspace(workspace)
@@ -209,6 +222,7 @@ async def compose_local_application(
         gateway_factory=gateway_factory,
         mcp_client_factory=mcp_client_factory,
         mem0_client=mem0_client,
+        credential_validator=credential_validator,
     )
     return LocalApplication(backend)
 
@@ -331,6 +345,7 @@ class _LocalApplicationBackend:
         gateway_factory: GatewayFactory | None,
         mcp_client_factory: McpClientFactory | None,
         mem0_client: object | None,
+        credential_validator: CredentialValidator | None,
     ) -> None:
         self._paths = paths
         self._workspace = workspace
@@ -339,6 +354,9 @@ class _LocalApplicationBackend:
         self._injected_gateway_factory = gateway_factory
         self._mcp_client_factory = mcp_client_factory
         self._injected_mem0_client = mem0_client
+        self._credential_validator = (
+            credential_validator or ProviderCredentialValidator()
+        )
         self._session_id = new_identifier("session")
         self._emitter = EventEmitter(
             session_id=self._session_id,
@@ -359,6 +377,7 @@ class _LocalApplicationBackend:
         self._initialized = False
         self._closed = False
         self._commands: ConversationCommandService | None = None
+        self._provider_configuration: ProviderConfigurationService | None = None
         self._turns: TurnCoordinator | None = None
         self._direct: DirectCommandService | None = None
         self._extensions: ApplicationExtensionService | None = None
@@ -447,6 +466,7 @@ class _LocalApplicationBackend:
             ),
             configuration_valid=True,
             secret_status=self._sources.secret_status,
+            provider_credentials=self._sources.provider_credentials,
             memory_status={
                 "local": {"enabled": local_enabled},
                 "mem0": {
@@ -605,12 +625,37 @@ class _LocalApplicationBackend:
     async def run_command(self, intent: CommandIntent) -> CommandResult:
         self._require_active()
         assert self._commands is not None
+        assert self._provider_configuration is not None
         try:
+            if intent.name is CommandName.AUTH:
+                return await self._provider_configuration.auth_command(intent)
+            if intent.name is CommandName.MODEL:
+                thread_id = self._commands.current_thread_id
+                if thread_id is None:
+                    return _error("thread_not_found", "Select a Thread first.")
+                return await self._provider_configuration.model_command(
+                    intent,
+                    thread_id=thread_id,
+                )
             return await self._commands.handle(intent)
         except ThreadNotFound as error:
             raise _application_failure(
                 ProductErrorCode.THREAD_NOT_FOUND,
                 "Thread was not found.",
+            ) from error
+
+    async def set_provider_credential(
+        self,
+        request: ProviderCredentialSetRequest,
+    ) -> ProviderCredentialSetResult:
+        self._require_active()
+        assert self._provider_configuration is not None
+        try:
+            return await self._provider_configuration.set_credential(request)
+        except ProviderCredentialManagedExternally as error:
+            raise _application_failure(
+                ProductErrorCode.CREDENTIAL_MANAGED_EXTERNALLY,
+                "Provider credential is managed by the process environment.",
             ) from error
 
     async def resolve_interaction(
@@ -866,7 +911,15 @@ class _LocalApplicationBackend:
             conversation=self._conversation,
             workspace_key=self._workspace.key,
             delegate=self._delegate_command,
-            default_model=self._initial_thread_model(),
+            default_model=self._initial_thread_model,
+        )
+        self._provider_configuration = ProviderConfigurationService(
+            conversation=self._conversation,
+            config_writer=UserConfigWriter(self._paths.config_file),
+            secret_store=UserSecretStore(self._paths.env_file),
+            validator=self._credential_validator,
+            sources=lambda: self._sources,
+            reload_configuration=self._reload_provider_configuration,
         )
         await self._turns.reconcile_startup()
         self._initialized = True
@@ -879,11 +932,14 @@ class _LocalApplicationBackend:
             environ=self._environ,
         )
 
-    def _provider_factory(self) -> GatewayFactory:
-        secrets = self._sources.secrets
-        retries = self._application_config.budgets.provider_retries
+    def _reload_provider_configuration(self) -> None:
+        self._sources = self._load_sources(workspace_trusted=True)
+        self._application_config = resolve_application_config(self._sources)
 
+    def _provider_factory(self) -> GatewayFactory:
         def build(provider: ProviderId, model: str) -> ModelGateway:
+            secrets = self._sources.secrets
+            retries = self._application_config.budgets.provider_retries
             if provider == "deepseek":
                 secret = secrets.deepseek_api_key
                 if secret is None:
@@ -1064,16 +1120,18 @@ class _LocalApplicationBackend:
                 },
             )
         if intent.name is CommandName.DOCTOR:
+            assert self._provider_configuration is not None
             return CommandResult(
                 status=CommandStatus.SUCCESS,
-                data={
-                    "configuration": "ok",
-                    "sqlite": "ok",
-                    "checkpoints": "ok",
-                    "provider_configured": any(
-                        self._sources.secret_status.model_dump(mode="json").values()
-                    ),
-                },
+                data=cast(
+                    dict[str, JsonValue],
+                    {
+                        "configuration": "ok",
+                        "sqlite": "ok",
+                        "checkpoints": "ok",
+                        "providers": await self._provider_configuration.doctor(),
+                    },
+                ),
             )
         if intent.name in {CommandName.DIFF, CommandName.UNDO, CommandName.REDO}:
             return self._change_command(intent)

@@ -17,7 +17,7 @@ import {
 import { z } from "zod";
 
 describe("protocol inventory", () => {
-  it("contains exactly the ten product methods", () => {
+  it("contains the complete product method inventory", () => {
     expect(methodNames).toEqual([
       "initialize",
       "application.getState",
@@ -26,6 +26,7 @@ describe("protocol inventory", () => {
       "turn.submit",
       "direct.execute",
       "command.execute",
+      "provider.credential.set",
       "interaction.respond",
       "operation.cancel",
       "shutdown",
@@ -61,7 +62,8 @@ describe("protocol inventory", () => {
   });
 
   it("freezes command ownership and excludes removed commands", () => {
-    expect(applicationCommandNames).toHaveLength(19);
+    expect(applicationCommandNames).toHaveLength(20);
+    expect(applicationCommandNames).toContain("auth");
     expect(skillCommandNames).toEqual([
       "init",
       "review",

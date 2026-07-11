@@ -368,6 +368,7 @@ function CliApplication({
               requestExit,
             }}
             interactionResponder={interactions}
+            providerSetupRequired={startup.readiness === "diagnostics_ready"}
             welcome={{
               workspacePath: startup.application.workspace.display_path,
               branch: startup.application.workspace.branch,
@@ -389,7 +390,6 @@ function CliApplication({
                 startup.application.memory_status,
                 "mem0",
               ),
-              credentialMissing: startup.readiness === "diagnostics_ready",
               theme,
             }}
           />

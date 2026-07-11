@@ -97,6 +97,18 @@
       }
     },
     {
+      "code": "credential_managed_externally",
+      "result": {
+        "error": {
+          "code": "credential_managed_externally",
+          "data": {},
+          "message": "Safe credential_managed_externally message.",
+          "retryable": false
+        },
+        "ok": false
+      }
+    },
+    {
       "code": "invalid_arguments",
       "result": {
         "error": {

@@ -63,6 +63,7 @@ export const productErrorCodes = [
   "operation_busy",
   "model_not_configured",
   "provider_not_configured",
+  "credential_managed_externally",
   "invalid_arguments",
   "command_not_available",
   "checkpoint_missing",

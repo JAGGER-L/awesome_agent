@@ -15,10 +15,16 @@ needs it.
 
 ## Model credentials
 
-Put `DEEPSEEK_API_KEY` or `MOONSHOT_API_KEY` in the process environment or
-`<AWESOME_HOME>/.env`, not in the workspace. If both exist, select a supported
-full model ID with `/model` or user configuration. Restart Awesome after editing
-environment files.
+If Awesome starts without a configured model, press Enter or run `/model`,
+choose DeepSeek or Kimi, and paste the key into the masked input. Use `/auth`
+to replace or remove a saved key. Invalid keys are not stored; network or
+Provider failures offer an explicit `Save anyway` choice.
+
+A process-environment credential overrides Awesome's user secret file and is
+read-only in the TUI. Update or remove it in the launching shell instead. As an
+advanced fallback, edit `<AWESOME_HOME>/.env` and restart Awesome. Run `/doctor`
+when you need an on-demand Provider network check; startup itself performs only
+a presence check.
 
 ## Workspace is not trusted
 

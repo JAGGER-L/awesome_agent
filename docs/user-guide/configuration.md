@@ -82,6 +82,20 @@ Secrets are `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`, and `MEM0_API_KEY`. A
 process environment value wins over the same name in `<AWESOME_HOME>/.env`.
 Secrets are never read from a workspace `.env` or printed by `/config`.
 
+For model credentials, the recommended path is the masked `/model` or `/auth`
+flow inside Awesome. Credential source metadata has three values:
+
+- `missing`: no credential is available;
+- `user_env_file`: Awesome can replace or remove the value stored in the user
+  secret file;
+- `process_environment`: the process supplied the value, so Awesome treats it
+  as read-only.
+
+Startup checks only whether a credential is present and performs no Provider
+network request. Saving through the TUI performs one short validation request.
+`/doctor` validates configured Providers on demand. As an advanced fallback,
+you may edit `<AWESOME_HOME>/.env` manually and restart Awesome.
+
 Approved startup overrides are:
 
 - `AWESOME_MODEL`: one supported full model ID;

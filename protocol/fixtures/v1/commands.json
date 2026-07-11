@@ -17,6 +17,10 @@
       "owner": "application"
     },
     {
+      "name": "auth",
+      "owner": "application"
+    },
+    {
       "name": "model",
       "owner": "application"
     },

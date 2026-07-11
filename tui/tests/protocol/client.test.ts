@@ -27,6 +27,34 @@ const warningEvent = {
 };
 
 describe("RpcClient requests", () => {
+  it("sends credentials only through the dedicated request", async () => {
+    const transport = new FakeLineTransport();
+    const client = createRpcClient(transport);
+    const secret = "never-render-this";
+    const pending = client.request("provider.credential.set", {
+      provider: "deepseek",
+      api_key: secret,
+    });
+
+    const request = await transport.nextClientMessage();
+    expect(request).toMatchObject({
+      method: "provider.credential.set",
+      params: { provider: "deepseek", api_key: secret },
+    });
+    transport.serverMessage(
+      success(1, {
+        provider: "deepseek",
+        status: "saved",
+        source: "user_env_file",
+        code: "credential_saved",
+      }),
+    );
+
+    const result = await pending;
+    expect(JSON.stringify(result)).not.toContain(secret);
+    await client.close(new RpcClosedError("test complete"));
+  });
+
   it("uses monotonic IDs and resolves concurrent calls out of order", async () => {
     const transport = new FakeLineTransport();
     const client = createRpcClient(transport);

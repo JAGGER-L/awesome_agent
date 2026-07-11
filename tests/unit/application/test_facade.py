@@ -5,12 +5,18 @@ from pathlib import Path
 from typing import get_type_hints
 
 import pytest
+from pydantic import SecretStr
 
 from awesome_agent.application.commands import (
     CommandIntent,
     CommandName,
     CommandResult,
     CommandStatus,
+)
+from awesome_agent.application.contracts import (
+    ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
+    ProviderCredentialSetStatus,
 )
 from awesome_agent.application.facade import (
     ApplicationFacade,
@@ -25,10 +31,11 @@ from awesome_agent.application.facade import (
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
+    ThreadReadResult,
     WorkspacePresentation,
 )
 from awesome_agent.application.headless import ConversationCommandService
-from awesome_agent.config import SecretStatus
+from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.conversation import ConversationService
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
@@ -40,6 +47,7 @@ METHODS = {
     "submit_turn",
     "execute_direct",
     "execute_command",
+    "set_provider_credential",
     "respond_interaction",
     "cancel_operation",
     "shutdown",
@@ -77,7 +85,7 @@ class Backend:
         self.calls.append(("threads", query))
         return ThreadListResult()
 
-    async def thread_state(self, query: ThreadReadQuery) -> object:
+    async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
         self.calls.append(("read", query))
         raise LookupError(query.thread_id)
 
@@ -92,6 +100,17 @@ class Backend:
     async def run_command(self, intent: CommandIntent) -> CommandResult:
         self.calls.append(("command", intent))
         return CommandResult(status=CommandStatus.SUCCESS)
+
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ProviderCredentialSetResult:
+        self.calls.append(("credential", request))
+        return ProviderCredentialSetResult(
+            provider=request.provider,
+            status=ProviderCredentialSetStatus.SAVED,
+            source=CredentialSource.USER_ENV_FILE,
+            code="credential_saved",
+        )
 
     async def resolve_interaction(
         self,
@@ -124,7 +143,7 @@ def _unwrap[T](result: ApplicationResult[T]) -> T:
     return result.value
 
 
-def test_facade_and_concrete_class_freeze_exact_ten_methods() -> None:
+def test_facade_and_concrete_class_freeze_exact_public_methods() -> None:
     assert _public_async_methods(ApplicationFacade) == METHODS
     assert _public_async_methods(LocalApplication) == METHODS
     assert not METHODS & {"start", "respond", "dispatch", "cancel", "close"}
@@ -134,7 +153,7 @@ def test_facade_and_concrete_class_freeze_exact_ten_methods() -> None:
         for name, member in ApplicationFacade.__dict__.items()
         if name in METHODS
     )
-    for concrete in ("Provider", "SQLite", "Mcp", "Mem0"):
+    for concrete in ("SQLite", "Mcp", "Mem0"):
         assert concrete not in annotations
 
 
@@ -166,6 +185,12 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
         == "operation_2"
     )
     assert _unwrap(await facade.execute_command(intent)).status is CommandStatus.SUCCESS
+    credential = ProviderCredentialSetRequest(
+        provider="deepseek", api_key=SecretStr("never-render-this")
+    )
+    saved = _unwrap(await facade.set_provider_credential(credential))
+    assert saved.status is ProviderCredentialSetStatus.SAVED
+    assert "never-render-this" not in repr(backend.calls)
     assert (
         _unwrap(await facade.respond_interaction("interaction_1", "trust")).accepted
         is True
@@ -174,7 +199,7 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
 
 
 @pytest.mark.asyncio
-async def test_conversation_commands_select_future_thread_configuration(
+async def test_conversation_commands_use_dynamic_defaults_and_delegate_model(
     tmp_path: Path,
 ) -> None:
     repositories = SQLiteConversationRepositories(tmp_path / "application.db")
@@ -185,11 +210,12 @@ async def test_conversation_commands_select_future_thread_configuration(
         delegated.append((intent.name, thread_id))
         return CommandResult(status=CommandStatus.SUCCESS)
 
+    default_model = "deepseek/deepseek-v4-flash"
     commands = ConversationCommandService(
         conversation=conversation,
         workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         delegate=delegate,
-        default_model="deepseek/deepseek-v4-flash",
+        default_model=lambda: default_model,
     )
 
     created = await commands.handle(
@@ -202,30 +228,32 @@ async def test_conversation_commands_select_future_thread_configuration(
         == "deepseek/deepseek-v4-flash"
     )
 
-    model_query = await commands.handle(CommandIntent(name=CommandName.MODEL))
     thinking_query = await commands.handle(CommandIntent(name=CommandName.THINKING))
-    assert model_query.selection is not None
     assert thinking_query.data["thinking_enabled"] is False
     assert thinking_query.selection is not None
 
-    model = await commands.handle(
-        CommandIntent(
-            name=CommandName.MODEL,
-            arguments=("kimi/kimi-k2.6",),
-        )
-    )
+    model = await commands.handle(CommandIntent(name=CommandName.MODEL))
     thinking = await commands.handle(
         CommandIntent(name=CommandName.THINKING, arguments=("on",))
     )
     selected = conversation.read_thread(str(thread_id)).thread
-    assert model.data["model"] == "kimi/kimi-k2.6"
+    assert model.status is CommandStatus.SUCCESS
     assert thinking.data["thinking_enabled"] is True
-    assert selected.current_model == "kimi/kimi-k2.6"
+    assert selected.current_model == "deepseek/deepseek-v4-flash"
     assert selected.thinking_enabled is True
+
+    default_model = "kimi/kimi-k2.6"
+    next_thread = await commands.handle(CommandIntent(name=CommandName.NEW))
+    assert conversation.read_thread(
+        str(next_thread.data["thread_id"])
+    ).thread.current_model == ("kimi/kimi-k2.6")
 
     delegated_result = await commands.handle(CommandIntent(name=CommandName.STATUS))
     assert delegated_result.status is CommandStatus.SUCCESS
-    assert delegated == [(CommandName.STATUS, thread_id)]
+    assert delegated == [
+        (CommandName.MODEL, thread_id),
+        (CommandName.STATUS, next_thread.data["thread_id"]),
+    ]
 
 
 @pytest.mark.asyncio

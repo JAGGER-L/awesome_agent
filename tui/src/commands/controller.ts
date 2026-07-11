@@ -24,6 +24,8 @@ interface CommandRpc {
 type OperationAccepted = MethodValue["turn.submit"];
 type CommandResult = MethodValue["command.execute"];
 type CommandSelection = NonNullable<CommandResult["selection"]>;
+type CommandSecretPrompt = NonNullable<CommandResult["secret_prompt"]>;
+type ProviderCredentialSetResult = MethodValue["provider.credential.set"];
 
 export type CommandDispatchOutcome =
   | { readonly kind: "accepted"; readonly operation: OperationAccepted }
@@ -32,6 +34,11 @@ export type CommandDispatchOutcome =
       readonly kind: "picker";
       readonly intent: CommandIntent;
       readonly selection: CommandSelection;
+    }
+  | {
+      readonly kind: "secret";
+      readonly intent: CommandIntent;
+      readonly prompt: CommandSecretPrompt;
     }
   | { readonly kind: "local"; readonly intent: LocalCommandIntent }
   | { readonly kind: "error"; readonly error: ProductError }
@@ -84,7 +91,39 @@ export class CommandController {
         selection: result.value.selection,
       };
     }
+    if (result.value.secret_prompt) {
+      return {
+        kind: "secret",
+        intent: routed.intent,
+        prompt: result.value.secret_prompt,
+      };
+    }
     return { kind: "result", result: result.value };
+  }
+
+  async setCredential(
+    provider: "deepseek" | "kimi",
+    apiKey: string,
+    allowUnverified: boolean,
+  ): Promise<
+    | {
+        readonly kind: "credential";
+        readonly result: ProviderCredentialSetResult;
+      }
+    | { readonly kind: "error"; readonly error: ProductError }
+  > {
+    const result = await this.rpc.request("provider.credential.set", {
+      provider,
+      api_key: apiKey,
+      allow_unverified: allowUnverified,
+    });
+    return result.ok
+      ? { kind: "credential", result: result.value }
+      : { kind: "error", error: result.error };
+  }
+
+  async refreshApplication() {
+    return await this.rpc.request("application.getState", {});
   }
 
   async select(

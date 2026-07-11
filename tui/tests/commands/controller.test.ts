@@ -113,6 +113,52 @@ describe("CommandController", () => {
     });
   });
 
+  it("returns a dedicated secret outcome and submits credentials by RPC", async () => {
+    const prompt = {
+      provider: "deepseek" as const,
+      action: "add" as const,
+      label: "DeepSeek API Key",
+      environment_variable: "DEEPSEEK_API_KEY",
+      help_url: "https://example.com",
+    };
+    const { controller } = harness({
+      ok: true,
+      value: {
+        status: "success",
+        content: "",
+        data: {},
+        secret_prompt: prompt,
+      },
+    });
+    await expect(
+      controller.submit(
+        { kind: "command", intent: { name: "model", arguments: ["deepseek"] } },
+        "thread_1",
+      ),
+    ).resolves.toMatchObject({ kind: "secret", prompt });
+
+    const credential = harness({
+      ok: true,
+      value: {
+        provider: "deepseek",
+        status: "saved",
+        source: "user_env_file",
+        code: "credential_saved",
+      },
+    });
+    await credential.controller.setCredential("deepseek", "private", false);
+    expect(credential.calls).toEqual([
+      {
+        method: "provider.credential.set",
+        params: {
+          provider: "deepseek",
+          api_key: "private",
+          allow_unverified: false,
+        },
+      },
+    ]);
+  });
+
   it("returns non-selection interaction-required results without inventing state", async () => {
     const value = {
       status: "interaction_required",

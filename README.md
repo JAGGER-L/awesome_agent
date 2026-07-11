@@ -53,15 +53,7 @@ workflows.
 
 ## Start Awesome
 
-Add at least one model key to `<AWESOME_HOME>/.env`:
-
-```dotenv
-DEEPSEEK_API_KEY=...
-# or
-MOONSHOT_API_KEY=...
-```
-
-Then start Awesome inside a project:
+Start Awesome inside a project:
 
 ```text
 cd <project>
@@ -71,6 +63,10 @@ awesome
 The first time Awesome opens a directory, it shows the path and asks whether
 you trust it. Choose Yes only for projects you are comfortable allowing Awesome
 to read and work in.
+
+If no model Provider is configured, press Enter or run `/model`. Choose
+DeepSeek or Kimi, paste the API key into the masked input, then select a model.
+Use `/auth` later to add, replace, or remove credentials.
 
 Useful launch options:
 
@@ -105,5 +101,6 @@ Analyze this project's structure and tell me where I should start reading.
 ## Security
 
 Only trust projects you understand. Review `/diff` before keeping changes, and
-store credentials in the operating-system environment or
-`<AWESOME_HOME>/.env`, never in project files.
+enter credentials only through Awesome's masked `/model` or `/auth` flow.
+Process-environment variables and `<AWESOME_HOME>/.env` remain advanced
+configuration options; never put credentials in project files.

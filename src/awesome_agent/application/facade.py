@@ -14,6 +14,8 @@ from awesome_agent.application.contracts import (
     OperationAccepted,
     ProductError,
     ProductErrorCode,
+    ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
     ShutdownResult,
     StatusSnapshot,
     ThreadListQuery,
@@ -55,6 +57,10 @@ class ApplicationFacade(Protocol):
         self, intent: CommandIntent
     ) -> ApplicationResult[CommandResult]: ...
 
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ApplicationResult[ProviderCredentialSetResult]: ...
+
     async def respond_interaction(
         self,
         interaction_id: str,
@@ -90,6 +96,10 @@ class _ApplicationBackend(Protocol):
     ) -> OperationAccepted: ...
 
     async def run_command(self, intent: CommandIntent) -> CommandResult: ...
+
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ProviderCredentialSetResult: ...
 
     async def resolve_interaction(
         self,
@@ -157,6 +167,11 @@ class LocalApplication:
     ) -> ApplicationResult[CommandResult]:
         return await self._call(lambda: self._backend.run_command(intent))
 
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ApplicationResult[ProviderCredentialSetResult]:
+        return await self._call(lambda: self._backend.set_provider_credential(request))
+
     async def respond_interaction(
         self,
         interaction_id: str,
@@ -205,6 +220,8 @@ __all__ = [
     "OperationAccepted",
     "ProductError",
     "ProductErrorCode",
+    "ProviderCredentialSetRequest",
+    "ProviderCredentialSetResult",
     "ShutdownResult",
     "StatusSnapshot",
     "ThreadListQuery",

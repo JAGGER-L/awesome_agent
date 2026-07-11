@@ -66,6 +66,19 @@ describe("Composer", () => {
     expect(view.lastFrame()).toContain("retry me");
   });
 
+  it("delegates empty Enter only when an empty handler exists", async () => {
+    const onEmptySubmit = vi.fn();
+    const view = render(
+      <Composer
+        width={40}
+        onSubmit={async () => ({ accepted: true })}
+        onEmptySubmit={onEmptySubmit}
+      />,
+    );
+    view.stdin.write("\r");
+    await eventually(() => expect(onEmptySubmit).toHaveBeenCalledOnce());
+  });
+
   it("renders the cursor at the grapheme editing position", async () => {
     const view = render(
       <Composer

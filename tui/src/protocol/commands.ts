@@ -7,6 +7,7 @@ export const applicationCommandNames = [
   "resume",
   "context",
   "compact",
+  "auth",
   "model",
   "thinking",
   "workspace",
@@ -74,6 +75,7 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   context: "application",
   compact: "application",
   model: "application",
+  auth: "application",
   thinking: "application",
   workspace: "application",
   diff: "application",
@@ -132,9 +134,27 @@ export const commandSelectionSchema = z
     }
   });
 
-export const commandResultSchema = z.strictObject({
-  status: z.enum(["success", "error", "interaction_required"]),
-  content: boundedText(0, 30_000),
-  data: z.record(z.string(), jsonValueSchema),
-  selection: commandSelectionSchema.optional(),
+export const commandSecretPromptSchema = z.strictObject({
+  provider: z.enum(["deepseek", "kimi"]),
+  action: z.enum(["add", "replace"]),
+  label: boundedText(1, 200),
+  environment_variable: boundedText(1, 128),
+  help_url: boundedText(1, 2_000),
 });
+
+export const commandResultSchema = z
+  .strictObject({
+    status: z.enum(["success", "error", "interaction_required"]),
+    content: boundedText(0, 30_000),
+    data: z.record(z.string(), jsonValueSchema),
+    selection: commandSelectionSchema.optional(),
+    secret_prompt: commandSecretPromptSchema.optional(),
+  })
+  .superRefine(({ selection, secret_prompt }, context) => {
+    if (selection && secret_prompt) {
+      context.addIssue({
+        code: "custom",
+        message: "Command result cannot request two inputs",
+      });
+    }
+  });

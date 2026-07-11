@@ -165,7 +165,7 @@ async def test_stdio_full_flow_and_restart(
 
     model_selected = await client.request(
         "command.execute",
-        {"name": "model", "arguments": [model]},
+        {"name": "model", "arguments": [provider, model]},
     )
     assert _value(model_selected)["data"]["model"] == model
     submitted = await client.request(

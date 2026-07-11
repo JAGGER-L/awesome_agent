@@ -10,9 +10,12 @@ from awesome_agent.config import (
     BudgetConfig,
     ConfigurationInvalid,
     ConfigurationResolutionError,
+    CredentialSource,
     MemoryConfig,
     ProjectBudgetConfig,
     ProviderConfig,
+    ProviderCredentialStatus,
+    ProviderCredentialStatuses,
     SecretStatus,
     StartupOverrides,
     ThreadConfigState,
@@ -49,6 +52,28 @@ def _application(
             secret_status=SecretStatus(
                 deepseek_api_key=deepseek,
                 moonshot_api_key=kimi,
+            ),
+            provider_credentials=ProviderCredentialStatuses(
+                deepseek=ProviderCredentialStatus(
+                    provider="deepseek",
+                    environment_variable="DEEPSEEK_API_KEY",
+                    source=(
+                        CredentialSource.USER_ENV_FILE
+                        if deepseek
+                        else CredentialSource.MISSING
+                    ),
+                    mutable=True,
+                ),
+                kimi=ProviderCredentialStatus(
+                    provider="kimi",
+                    environment_variable="MOONSHOT_API_KEY",
+                    source=(
+                        CredentialSource.USER_ENV_FILE
+                        if kimi
+                        else CredentialSource.MISSING
+                    ),
+                    mutable=True,
+                ),
             ),
         )
     )

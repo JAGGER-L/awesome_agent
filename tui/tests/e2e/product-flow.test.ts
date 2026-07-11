@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -30,6 +30,111 @@ afterEach(async () => {
 });
 
 describe("networkless candidate product flow", () => {
+  it("configures a clean home through the credential RPC without leaking the key", async () => {
+    const root = await mkdtemp(join(tmpdir(), "awesome-credential-"));
+    temporary.push(root);
+    const home = join(root, "home");
+    const workspace = join(root, "workspace");
+    const wrappers = join(root, "bin");
+    const secret = "valid-test-key";
+    await mkdir(workspace);
+    await writeFile(join(workspace, "sample.txt"), "fixture source", "utf8");
+    const wrapper = await createCoreWrapper({
+      directory: wrappers,
+      repository: resolve(".."),
+    });
+    const executable =
+      process.platform === "win32"
+        ? join(wrappers, "awesome-core.cmd")
+        : "awesome-core";
+    const surface = await connectSurface({
+      executable,
+      cwd: workspace,
+      env: {
+        ...wrapper.environment,
+        AWESOME_HOME: home,
+        AWESOME_WORKSPACE: workspace,
+        AWESOME_FAKE_CREDENTIAL_FLOW: "1",
+        PYTHONUNBUFFERED: "1",
+      },
+    });
+
+    try {
+      const ready = await trust(
+        surface,
+        { kind: "new" },
+        await beginStartup(surface, { kind: "new" }),
+      );
+      expect(ready.readiness).toBe("diagnostics_ready");
+      if (ready.thread.kind !== "ready") throw new Error("thread missing");
+      const threadId = ready.thread.thread.view.thread.id;
+      const commands = new CommandController(surface);
+      const providers = await commands.submit(
+        requiredInput("/model"),
+        threadId,
+      );
+      expect(providers).toMatchObject({ kind: "picker" });
+      if (providers.kind !== "picker")
+        throw new Error("provider picker missing");
+      const credential = await commands.select(
+        providers.intent,
+        "deepseek",
+        threadId,
+      );
+      expect(credential).toMatchObject({ kind: "secret" });
+
+      const saved = await commands.setCredential("deepseek", secret, false);
+      expect(saved).toMatchObject({
+        kind: "credential",
+        result: { status: "saved" },
+      });
+      const refreshed = await commands.refreshApplication();
+      expect(refreshed).toMatchObject({
+        ok: true,
+        value: {
+          provider_credentials: {
+            deepseek: { source: "user_env_file" },
+          },
+        },
+      });
+      const models = await commands.submit(
+        requiredInput("/model deepseek"),
+        threadId,
+      );
+      expect(models).toMatchObject({ kind: "picker" });
+      if (models.kind !== "picker") throw new Error("model picker missing");
+      const selected = await commands.select(
+        models.intent,
+        "deepseek/deepseek-v4-flash",
+        threadId,
+      );
+      expect(selected).toMatchObject({ kind: "result" });
+
+      const turn = await commands.submit(
+        requiredInput("inspect sample.txt"),
+        threadId,
+      );
+      expect(turn.kind).toBe("accepted");
+      if (turn.kind !== "accepted") throw new Error("turn not accepted");
+      await terminal(surface, turn.operation.operation_id);
+
+      const envFile = await readFile(join(home, ".env"), "utf8");
+      expect(envFile).toContain(`DEEPSEEK_API_KEY='${secret}'`);
+      const database = await readFile(join(home, "state", "application.db"));
+      expect(database.includes(Buffer.from(secret))).toBe(false);
+      expect(
+        new TextDecoder().decode(surface.session.stderrTail()),
+      ).not.toContain(secret);
+      const thread = await surface.request("thread.read", {
+        thread_id: threadId,
+        limit: 50,
+      });
+      expect(JSON.stringify(thread)).not.toContain(secret);
+    } finally {
+      await closeSurface(surface);
+    }
+  }, 60_000);
+
   it.each([
     ["deepseek", "deepseek/deepseek-v4-flash"],
     ["kimi", "kimi/kimi-k2.6"],
@@ -87,10 +192,13 @@ describe("networkless candidate product flow", () => {
             const commands = new CommandController(surface);
 
             const selected = await commands.submit(
-              requiredInput(`/model ${model}`),
+              requiredInput(`/model ${provider} ${model}`),
               threadId,
             );
-            expect(selected).toMatchObject({ kind: "result" });
+            expect(selected).toMatchObject({
+              kind: "result",
+              result: { status: "success" },
+            });
 
             const turn = await commands.submit(
               requiredInput("use tool to inspect @sample.txt"),

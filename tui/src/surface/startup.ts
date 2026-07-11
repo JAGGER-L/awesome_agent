@@ -23,6 +23,7 @@ export const SAFE_DIAGNOSTIC_COMMANDS = [
   "config",
   "doctor",
   "model",
+  "auth",
   "workspace",
   "help",
   "quit",
@@ -280,6 +281,17 @@ function startupDiagnostic(
       code: "configuration_invalid",
       model,
       messages: application.configuration_diagnostics,
+    };
+  }
+  if (
+    model.length === 0 &&
+    application.provider_credentials.deepseek.source === "missing" &&
+    application.provider_credentials.kimi.source === "missing"
+  ) {
+    return {
+      code: "provider_not_configured",
+      model,
+      messages: [],
     };
   }
   if (

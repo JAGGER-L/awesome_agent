@@ -21,7 +21,8 @@ No other public launch flags are supported.
 | `/resume [thread_id]` | Choose or resume a previous workspace thread. |
 | `/context` | Show the active context manifest and budget. |
 | `/compact` | Compact the current context now. |
-| `/model [model]` | Show or select a supported Provider/model ID. |
+| `/auth [deepseek\|kimi]` | Add, replace, or remove Provider credentials. |
+| `/model [deepseek\|kimi]` | Choose a Provider, then choose one of its models. |
 | `/thinking [on\|off]` | Show the current mode with a selector, or set it explicitly. |
 | `/workspace` | Show workspace identity and trust state. |
 | `/diff` | Show the latest or selected Change Journal change set. |
@@ -39,6 +40,18 @@ No other public launch flags are supported.
 
 `/thinking` defaults to off. A bare `/thinking` reports the current value and
 offers on/off choices.
+
+## Provider and model commands
+
+Run `/model` to choose DeepSeek or Kimi. If that Provider has no credential,
+Awesome opens a masked API-key input before showing its model picker. Selecting
+a model updates the current Thread and the user default for future Threads; it
+does not rewrite other existing Threads.
+
+Run `/auth`, `/auth deepseek`, or `/auth kimi` to manage credentials. Keys are
+never accepted as command arguments. A rejected key is not saved. When the
+Provider cannot be reached, Awesome asks whether to save the key unverified.
+Removing a local credential does not revoke it at the Provider.
 
 ## Skill-backed commands
 

@@ -18,6 +18,7 @@ from awesome_agent.application.commands import (
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ProductErrorCode,
+    ProviderCredentialSetRequest,
     ThreadListQuery,
     ThreadReadQuery,
 )
@@ -47,6 +48,7 @@ def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
         "turn.submit",
         "direct.execute",
         "command.execute",
+        "provider.credential.set",
         "interaction.respond",
         "operation.cancel",
         "shutdown",
@@ -113,6 +115,12 @@ class _FixtureFacade:
         self, intent: CommandIntent
     ) -> ApplicationResult[dict[str, object]]:
         del intent
+        return self._result
+
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ApplicationResult[dict[str, object]]:
+        del request
         return self._result
 
     async def respond_interaction(

@@ -18,13 +18,16 @@ from awesome_agent.application.contracts import (
     OperationAccepted,
     ProductError,
     ProductErrorCode,
+    ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
+    ProviderCredentialSetStatus,
     ShutdownResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     WorkspacePresentation,
 )
-from awesome_agent.config import SecretStatus
+from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
 from awesome_agent.protocol.jsonrpc import (
     PROTOCOL_VERSION,
@@ -110,6 +113,19 @@ class Facade:
             )
         )
 
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ApplicationResult[ProviderCredentialSetResult]:
+        self.calls.append(("credential", request))
+        return ApplicationResult.success(
+            ProviderCredentialSetResult(
+                provider=request.provider,
+                status=ProviderCredentialSetStatus.SAVED,
+                source=CredentialSource.USER_ENV_FILE,
+                code="credential_saved",
+            )
+        )
+
     async def respond_interaction(
         self,
         interaction_id: str,
@@ -142,6 +158,7 @@ def test_dispatcher_exposes_exact_protocol_v1_method_table() -> None:
         "turn.submit",
         "direct.execute",
         "command.execute",
+        "provider.credential.set",
         "interaction.respond",
         "operation.cancel",
         "shutdown",
@@ -169,6 +186,15 @@ def test_dispatcher_exposes_exact_protocol_v1_method_table() -> None:
             "command.execute",
             {"name": "status", "arguments": []},
             "command",
+        ),
+        (
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "api_key": "never-render-this",
+                "allow_unverified": False,
+            },
+            "credential",
         ),
         (
             "interaction.respond",
@@ -201,6 +227,36 @@ async def test_closed_method_table_dispatches_typed_params(
     assert "result" in response
     assert response["result"]["ok"] is (method != "command.execute")
     assert facade.calls[0][0] == call
+
+
+@pytest.mark.asyncio
+async def test_credential_rpc_is_strict_and_never_echoes_secret() -> None:
+    secret = "never-render-this"
+    facade = Facade()
+    dispatcher = JsonRpcDispatcher(facade)
+
+    response = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "provider.credential.set",
+            "params": {"provider": "kimi", "api_key": secret},
+        }
+    )
+    invalid = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "provider.credential.set",
+            "params": {"provider": "kimi", "api_key": secret, "extra": True},
+        }
+    )
+
+    assert response is not None and response["result"]["value"]["status"] == "saved"
+    assert secret not in str(response)
+    assert secret not in repr(facade.calls)
+    assert invalid is not None and invalid["error"]["code"] == -32602
+    assert secret not in str(invalid)
 
 
 @pytest.mark.asyncio
