@@ -39,7 +39,7 @@ npm --prefix tui run lint
 npm --prefix tui run typecheck
 npm --prefix tui test
 npm --prefix tui run build
-npm --prefix tui pack --dry-run
+npm pack ./tui --dry-run
 ```
 
 Tests use deterministic fake DeepSeek, Kimi, Mem0, and MCP boundaries. Live

@@ -23,9 +23,7 @@ def test_development_and_runtime_agent_state_are_separate() -> None:
     assert not any((ROOT / "docs" / "exec-plans").rglob("*.*"))
     assert ".codex/exec-plans/" in agent_contract
     development = " ".join(
-        (ROOT / "docs/development/README.md")
-        .read_text(encoding="utf-8")
-        .split()
+        (ROOT / "docs/development/README.md").read_text(encoding="utf-8").split()
     )
     assert "never define Awesome runtime behavior" in development
     assert "AGENTS.md" in claude_contract
