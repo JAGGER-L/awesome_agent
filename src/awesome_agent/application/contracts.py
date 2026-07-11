@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from awesome_agent.config.models import SecretStatus
 from awesome_agent.conversation.models import Thread, ThreadView
@@ -12,6 +13,7 @@ class ProductErrorCode(StrEnum):
     CONFIGURATION_INVALID = "configuration_invalid"
     WORKSPACE_NOT_TRUSTED = "workspace_not_trusted"
     THREAD_NOT_FOUND = "thread_not_found"
+    TURN_NOT_FOUND = "turn_not_found"
     TURN_BUSY = "turn_busy"
     OPERATION_BUSY = "operation_busy"
     MODEL_NOT_CONFIGURED = "model_not_configured"
@@ -21,6 +23,8 @@ class ProductErrorCode(StrEnum):
     CHECKPOINT_MISSING = "checkpoint_missing"
     CHECKPOINT_CORRUPT = "checkpoint_corrupt"
     RECOVERY_REQUIRED = "recovery_required"
+    CLIENT_VERSION_INCOMPATIBLE = "client_version_incompatible"
+    PROTOCOL_VERSION_INCOMPATIBLE = "protocol_version_incompatible"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -31,6 +35,36 @@ class ProductError(BaseModel):
     message: str = Field(min_length=1, max_length=2_000)
     retryable: bool = False
     data: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class ApplicationResult[T](BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ok: bool
+    value: T | None = None
+    error: ProductError | None = None
+
+    @classmethod
+    def success(cls, value: T) -> Self:
+        return cls(ok=True, value=value)
+
+    @classmethod
+    def failure(cls, error: ProductError) -> Self:
+        return cls(ok=False, error=error)
+
+    @model_validator(mode="after")
+    def validate_branch(self) -> Self:
+        if self.ok and self.value is not None and self.error is None:
+            return self
+        if not self.ok and self.value is None and self.error is not None:
+            return self
+        raise ValueError("ApplicationResult must contain exactly one matching branch.")
+
+
+class ShutdownResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    stopped: Literal[True] = True
 
 
 class InitializeStatus(StrEnum):

@@ -8,6 +8,7 @@ from time import monotonic
 from typing import Any, cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from pydantic import JsonValue
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
@@ -31,10 +32,13 @@ from awesome_agent.application.contracts import (
     InitializeStatus,
     InteractionResult,
     OperationAccepted,
+    ProductError,
+    ProductErrorCode,
     ThreadListResult,
     ThreadReadResult,
 )
 from awesome_agent.application.direct import DirectCommandService
+from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.facade import LocalApplication
 from awesome_agent.application.headless import (
@@ -46,7 +50,7 @@ from awesome_agent.application.interactions import (
     InteractionDecision,
     InteractionKind,
 )
-from awesome_agent.application.operations import OperationController
+from awesome_agent.application.operations import OperationBusy, OperationController
 from awesome_agent.application.turns import TurnCoordinator
 from awesome_agent.config import (
     ApplicationConfig,
@@ -64,7 +68,15 @@ from awesome_agent.context import (
     ThreadCompressor,
     mem0_context_source,
 )
-from awesome_agent.conversation import ConversationService, Thread, Turn, UsageSummary
+from awesome_agent.conversation import (
+    ConversationService,
+    Thread,
+    ThreadNotFound,
+    Turn,
+    TurnBusy,
+    TurnNotFound,
+    UsageSummary,
+)
 from awesome_agent.core.changes import (
     ChangeJournal,
     ChangeLifecycle,
@@ -436,25 +448,90 @@ class _LocalApplicationBackend:
         )
 
     async def thread_state(self, thread_id: str) -> ThreadReadResult:
-        view = self._conversation.read_thread(thread_id)
+        try:
+            view = self._conversation.read_thread(thread_id)
+        except ThreadNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            ) from error
         if view.thread.workspace_key != self._workspace.key:
-            raise LookupError(thread_id)
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            )
         return ThreadReadResult(view=view)
 
     async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
         self._require_active()
         assert self._turns is not None
-        return await self._turns.submit_turn(thread_id, content)
+        if not content.strip():
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Turn input is invalid.",
+            )
+        try:
+            thread = self._conversation.read_thread(thread_id).thread
+            config = self._turn_config(thread)
+            self._require_provider_configured(config.provider)
+            return await self._turns.submit_turn(thread_id, content)
+        except ApplicationFailure:
+            raise
+        except OperationBusy as error:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Another operation is active.",
+                retryable=True,
+            ) from error
+        except TurnBusy as error:
+            raise _application_failure(
+                ProductErrorCode.TURN_BUSY,
+                "The Thread already has an active Turn.",
+                retryable=True,
+            ) from error
+        except ThreadNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            ) from error
+        except TurnNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.TURN_NOT_FOUND,
+                "Turn was not found.",
+            ) from error
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
         self._require_active()
         assert self._direct is not None
-        return await self._direct.start(thread_id, command)
+        if not command.strip():
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Direct command is invalid.",
+            )
+        try:
+            return await self._direct.start(thread_id, command)
+        except OperationBusy as error:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Another operation is active.",
+                retryable=True,
+            ) from error
+        except ThreadNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            ) from error
 
     async def run_command(self, intent: CommandIntent) -> CommandResult:
         self._require_active()
         assert self._commands is not None
-        return await self._commands.handle(intent)
+        try:
+            return await self._commands.handle(intent)
+        except ThreadNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            ) from error
 
     async def resolve_interaction(
         self,
@@ -731,7 +808,7 @@ class _LocalApplicationBackend:
             if provider == "deepseek":
                 secret = secrets.deepseek_api_key
                 if secret is None:
-                    raise RuntimeError("provider_not_configured")
+                    raise AssertionError("DeepSeek credential preflight was bypassed.")
                 adapter: ModelProvider = DeepSeekProvider(
                     api_key=secret.get_secret_value(),
                     model=model,
@@ -739,7 +816,7 @@ class _LocalApplicationBackend:
             else:
                 secret = secrets.moonshot_api_key
                 if secret is None:
-                    raise RuntimeError("provider_not_configured")
+                    raise AssertionError("Kimi credential preflight was bypassed.")
                 adapter = KimiProvider(
                     api_key=secret.get_secret_value(),
                     model=model,
@@ -915,7 +992,24 @@ class _LocalApplicationBackend:
 
     def _require_active(self) -> None:
         if not self._initialized:
-            raise RuntimeError("workspace_not_trusted")
+            raise _application_failure(
+                ProductErrorCode.WORKSPACE_NOT_TRUSTED,
+                "Trust the workspace before using project capabilities.",
+            )
+
+    def _require_provider_configured(self, provider: ProviderId) -> None:
+        status = self._sources.secret_status
+        configured = (
+            status.deepseek_api_key
+            if provider == "deepseek"
+            else status.moonshot_api_key
+        )
+        if not configured:
+            raise _application_failure(
+                ProductErrorCode.PROVIDER_NOT_CONFIGURED,
+                f"{provider} credentials are not configured.",
+                data={"provider": provider},
+            )
 
 
 def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:
@@ -958,4 +1052,21 @@ def _error(code: str, message: str) -> CommandResult:
         status=CommandStatus.ERROR,
         content=message,
         data={"error_code": code},
+    )
+
+
+def _application_failure(
+    code: ProductErrorCode,
+    message: str,
+    *,
+    retryable: bool = False,
+    data: dict[str, JsonValue] | None = None,
+) -> ApplicationFailure:
+    return ApplicationFailure(
+        ProductError(
+            code=code,
+            message=message,
+            retryable=retryable,
+            data=data or {},
+        )
     )

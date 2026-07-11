@@ -14,6 +14,7 @@ from awesome_agent.application.commands import (
 )
 from awesome_agent.application.facade import (
     ApplicationFacade,
+    ApplicationResult,
     ApplicationState,
     CancelResult,
     InitializeResult,
@@ -109,6 +110,13 @@ def _public_async_methods(value: type[object]) -> set[str]:
     }
 
 
+def _unwrap[T](result: ApplicationResult[T]) -> T:
+    assert result.ok is True
+    assert result.error is None
+    assert result.value is not None
+    return result.value
+
+
 def test_facade_and_concrete_class_freeze_exact_ten_methods() -> None:
     assert _public_async_methods(ApplicationFacade) == METHODS
     assert _public_async_methods(LocalApplication) == METHODS
@@ -128,9 +136,9 @@ async def test_facade_initialization_and_shutdown_are_idempotent() -> None:
     backend = Backend()
     facade = LocalApplication(backend)
 
-    assert await facade.initialize() == await facade.initialize()
-    await facade.shutdown()
-    await facade.shutdown()
+    assert _unwrap(await facade.initialize()) == _unwrap(await facade.initialize())
+    assert _unwrap(await facade.shutdown()).stopped is True
+    assert _unwrap(await facade.shutdown()).stopped is True
 
     assert [name for name, _ in backend.calls] == ["initialize", "shutdown"]
 
@@ -141,17 +149,21 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     facade = LocalApplication(backend)
     intent = CommandIntent(name=CommandName.STATUS)
 
-    assert (await facade.get_state()).workspace_trusted is True
-    assert (await facade.list_threads()).threads == ()
-    assert (await facade.submit_turn("thread_1", "inspect")).operation_id == (
+    assert _unwrap(await facade.get_state()).workspace_trusted is True
+    assert _unwrap(await facade.list_threads()).threads == ()
+    assert _unwrap(await facade.submit_turn("thread_1", "inspect")).operation_id == (
         "operation_1"
     )
-    assert (await facade.execute_direct("thread_1", "git status")).operation_id == (
-        "operation_2"
+    assert (
+        _unwrap(await facade.execute_direct("thread_1", "git status")).operation_id
+        == "operation_2"
     )
-    assert (await facade.execute_command(intent)).status is CommandStatus.SUCCESS
-    assert (await facade.respond_interaction("interaction_1", "trust")).accepted is True
-    assert (await facade.cancel_operation("operation_1")).cancelled is True
+    assert _unwrap(await facade.execute_command(intent)).status is CommandStatus.SUCCESS
+    assert (
+        _unwrap(await facade.respond_interaction("interaction_1", "trust")).accepted
+        is True
+    )
+    assert _unwrap(await facade.cancel_operation("operation_1")).cancelled is True
 
 
 @pytest.mark.asyncio
