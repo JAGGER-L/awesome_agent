@@ -1,6 +1,6 @@
 # stdio protocol and Ink
 
-`tui/` is the only product surface. It uses Ink + React for terminal input,
+`tui/` is the terminal product surface. It uses Ink + React for terminal input,
 layout, transcript state, pickers, theme, clipboard, and lifecycle UX. It does
 not import or implement model, graph, tool, storage, memory, Skill, or MCP
 behavior.
@@ -16,5 +16,6 @@ sequences, and typed interaction responses let Ink reconcile live output with
 durable transcript reads after reconnect or resume.
 
 Presentation state such as scroll position, theme, composer history, expanded
-reasoning, and selection remains in the TUI. A future surface must adapt the
-same facade/event contracts rather than becoming another execution authority.
+reasoning, and selection remains in the TUI. Any additional surface must adapt
+the same facade/event contracts rather than becoming another execution
+authority.

@@ -16,19 +16,35 @@ FINAL_DOCS = {
     "user-guide/troubleshooting.md",
     "architecture/README.md",
     "architecture/agent-core.md",
-    "architecture/runtime-and-langgraph.md",
+    "architecture/application-and-langgraph.md",
     "architecture/protocol-and-ink.md",
-    "architecture/persistence.md",
     "architecture/security.md",
-    "architecture/decisions/0001-python-langgraph-thin-runtime.md",
-    "architecture/decisions/0002-sqlite-and-disposable-development-state.md",
-    "architecture/decisions/0003-workspace-trust-and-execution-policy.md",
-    "architecture/decisions/0004-tool-kernel-change-journal-and-commands.md",
-    "architecture/decisions/0005-dual-layer-memory-with-mem0-cloud.md",
-    "architecture/decisions/0006-python-core-and-ink-stdio-boundary.md",
+    "architecture/storage.md",
     "development/README.md",
     "development/testing.md",
     "development/release.md",
+}
+
+ARCHITECTURE_HEADINGS = {
+    "## System Overview",
+    "## Directory Structure",
+    "## Recommended Reading Order",
+    "## Data Flow",
+    "## Major Subsystems",
+    "## Design Principles",
+    "## File Dependency Chain",
+    "## State Ownership",
+    "## Error, Cancellation, and Recovery",
+    "## Extension Points",
+}
+ARCHITECTURE_DIAGRAM_LABELS = {
+    "Entry & Presentation",
+    "Python Application Host",
+    "Agent Core",
+    "Local State",
+    "Model Providers",
+    "Tool System",
+    "Workspace & Host",
 }
 
 INSTALL_SH = (
@@ -84,6 +100,13 @@ def test_final_documentation_inventory_is_exact() -> None:
         for path in (ROOT / "docs").rglob("*.md")
     }
     assert actual == FINAL_DOCS
+
+
+def test_architecture_is_the_complete_technical_entrypoint() -> None:
+    content = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    assert not {heading for heading in ARCHITECTURE_HEADINGS if heading not in content}
+    assert not {label for label in ARCHITECTURE_DIAGRAM_LABELS if label not in content}
 
 
 def test_entry_docs_describe_only_the_pilot_product() -> None:
