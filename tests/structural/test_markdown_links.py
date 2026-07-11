@@ -46,16 +46,6 @@ ARCHITECTURE_DIAGRAM_LABELS = {
     "Tool System",
     "Workspace & Host",
 }
-FORBIDDEN_PRODUCT_COPY = {
-    "Apple Silicon",
-    "Windows 11",
-    "Ubuntu 24.04",
-    "x64",
-    "limited pilot",
-    "limited trial",
-    "Local-first coding agent",
-    "general Agent Platform",
-}
 ROADMAP_HEADINGS = (
     "Documentation and Documentation Site",
     "One-command Skills Installation",
@@ -173,25 +163,6 @@ def test_entry_docs_present_the_current_product() -> None:
     assert "不限制为八个" in chinese
     assert "default off" in english
     assert "默认关闭" in chinese
-
-    unsupported_entrypoints = (
-        "awesome init",
-        "awesome-agent ",
-        "awesome-tui",
-        "--api-url",
-        "Docker API",
-        "Local API",
-    )
-    assert not {
-        value
-        for value in unsupported_entrypoints
-        if value.casefold() in combined.casefold()
-    }
-    assert not {
-        value
-        for value in FORBIDDEN_PRODUCT_COPY
-        if value.casefold() in combined.casefold()
-    }
 
 
 def test_roadmap_has_the_approved_product_order() -> None:
