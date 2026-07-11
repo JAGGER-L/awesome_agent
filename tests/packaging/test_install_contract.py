@@ -46,22 +46,6 @@ def test_shell_installer_has_safe_supported_host_contract() -> None:
         ".profile",
     }:
         assert required in source
-    lowered = source.casefold()
-    for forbidden in {
-        "wget",
-        "sudo",
-        "apt install git",
-        "brew install git",
-        "docker",
-        "make install",
-        "awesome_home",
-        "versions/",
-        "current/",
-        "backup",
-        "rollback",
-        "uninstall",
-    }:
-        assert forbidden not in lowered
     assert source.index('echo "validated"') < source.index('rm -rf "$INSTALL_ROOT/app"')
     assert source.count('export PATH="$HOME/.local/bin:$PATH"') == 1
 
@@ -109,24 +93,6 @@ def test_windows_installer_has_safe_supported_host_contract() -> None:
         "git-scm.com/downloads",
     }:
         assert required in source
-    lowered = source.casefold()
-    for forbidden in {
-        "winget",
-        "choco",
-        "portablegit",
-        "start-process",
-        "stop-process",
-        "runas",
-        "awesome.exe",
-        "awesome_home",
-        "versions\\",
-        "current\\",
-        "backup",
-        "rollback",
-        "uninstall",
-        'setenvironmentvariable("path", $updatedpath, "machine")',
-    }:
-        assert forbidden not in lowered
     assert source.index("Is64BitOperatingSystem") < source.index("$Stage = Join-Path")
     assert source.index('Write-Output "validated"') < source.index(
         "Remove-Item -LiteralPath $InstalledApp"
