@@ -44,6 +44,8 @@ class ConversationService:
         self,
         workspace_key: str,
         title: str | None = None,
+        *,
+        current_model: str | None = None,
     ) -> Thread:
         normalized_title = "New conversation" if title is None else title.strip()
         if not normalized_title:
@@ -54,6 +56,7 @@ class ConversationService:
                 id=self._id_factory("thread"),
                 workspace_key=workspace_key,
                 title=normalized_title,
+                current_model=current_model,
                 created_at=now,
                 updated_at=now,
             )

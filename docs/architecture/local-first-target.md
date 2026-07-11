@@ -4,9 +4,10 @@
 >
 > Decision date: 2026-07-10
 >
-> Implementation status: Phase 2 Python Agent Core and stdio reference Host are
-> implemented on the local-first architecture branch. Ink + React cutover and
-> physical legacy deletion remain Phase 3 and Phase 4 work.
+> Implementation status: Phase 3 implements the Python Core + Ink candidate as
+> `awesome-core` and `awesome-tui` on the local-first architecture branch.
+> Switching the default `awesome` entry and physically deleting Textual and
+> legacy platform code remain Phase 4 work.
 
 ## Product Definition
 
@@ -59,8 +60,9 @@ flowchart TD
     H --> S
 ```
 
-The initial surface may be a minimal Python CLI. The product TUI is Ink +
-React and contains rendering and input behavior only. A future API or IDE
+The candidate product TUI is Ink + React and contains rendering and input
+behavior only. It requires Node.js 22+ and the Python 3.12 `awesome-core` host
+on `PATH`. A future API or IDE
 plugin must reuse the same Python application host instead of reimplementing
 the agent loop.
 
@@ -417,8 +419,9 @@ The strategic sequence is:
    the fixed tool/change contracts.
 2. Establish the Python Agent Core with LangGraph, context, skills, memory, and
    a complete headless conversation path.
-3. connect the Ink + React TUI through stdio JSON-RPC and close the local
-   product workflow.
+3. Connect the `awesome-tui` Ink + React candidate through stdio JSON-RPC and
+   close the local product workflow. This phase is implemented without changing
+   the existing `awesome` entry.
 4. Cut over entry points and delete superseded PostgreSQL, worker, API,
    artifact, approval, team, and Docker-service architecture.
 

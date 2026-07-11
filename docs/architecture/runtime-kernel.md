@@ -51,9 +51,16 @@ stdout contains protocol frames only and stderr contains diagnostics. HTTP,
 WebSocket, LangGraph Server, authentication, and multi-client sessions are not
 part of this runtime.
 
-The existing Textual implementation remains physically present during Phase 2
-only. Phase 3 adds the Ink + React TUI and changes the default `awesome` entry;
-Phase 4 removes superseded platform code.
+`awesome-tui` starts one `awesome-core` child with piped stdin, stdout, and
+stderr. Core stdout is consumed privately as protocol and never copied to the
+terminal; Ink alone owns terminal stdout. Graceful exit requests protocol
+shutdown, waits up to five seconds, then terminates once. Unexpected exit keeps
+the bounded final 20 non-empty stderr lines only in fatal UI state.
+
+The existing Textual implementation and default `awesome` entry remain
+physically unchanged through Phase 3. Phase 4 switches the default entry only
+after the packaged candidate is accepted, then removes superseded platform
+code in separately reviewed deletion units.
 
 ## Runtime Budgets
 

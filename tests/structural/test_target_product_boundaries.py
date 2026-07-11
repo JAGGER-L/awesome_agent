@@ -163,13 +163,24 @@ def test_tui_is_one_minimal_node_22_package() -> None:
     assert package["version"] == PRODUCT_VERSION
     assert package["type"] == "module"
     assert package["engines"] == {"node": ">=22"}
+    assert package["bin"] == {"awesome-tui": "dist/cli/index.js"}
+    assert package["files"] == ["dist", "README.md", "LICENSE"]
+    assert package["license"] == "UNLICENSED"
     assert "workspaces" not in package
     assert (TUI_ROOT / "package-lock.json").is_file()
     dependencies = set(package.get("dependencies", {}))
     assert not dependencies & {
         "@langchain/langgraph",
+        "@modelcontextprotocol/sdk",
+        "@anthropic-ai/sdk",
+        "openai",
+        "mem0ai",
         "@reduxjs/toolkit",
         "axios",
+        "better-sqlite3",
+        "dockerode",
+        "execa",
+        "express",
         "redux",
         "rxjs",
         "xstate",
@@ -185,7 +196,9 @@ def test_tui_is_one_minimal_node_22_package() -> None:
 
 
 def test_tui_process_authority_is_confined_to_core_adapter() -> None:
-    sources = tuple((TUI_ROOT / "src").rglob("*.ts"))
+    sources = tuple((TUI_ROOT / "src").rglob("*.ts")) + tuple(
+        (TUI_ROOT / "src").rglob("*.tsx")
+    )
     assert sources
     imports_by_path = {
         path: set(
@@ -205,6 +218,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
         if any(imported.startswith("node:") for imported in imports)
     }
     assert node_importers == {
+        "src/cli/runtime-checks.ts": {"node:fs", "node:path"},
         "src/core/process.ts": {"node:child_process"},
         "src/preferences/paths.ts": {"node:os", "node:path"},
         "src/preferences/store.ts": {"node:fs/promises", "node:path"},
@@ -221,21 +235,41 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
     assert all(
         imported == "zod"
         or imported == "clipboardy"
+        or imported == "ink"
+        or imported == "react"
         or imported.startswith(".")
         or imported in approved_node_imports
         for imports in imports_by_path.values()
         for imported in imports
     )
+    external_imports = {
+        imported
+        for imports in imports_by_path.values()
+        for imported in imports
+        if not imported.startswith(".")
+    }
+    assert (
+        not {
+            "@anthropic-ai/sdk",
+            "@langchain/langgraph",
+            "@modelcontextprotocol/sdk",
+            "better-sqlite3",
+            "docker",
+            "dockerode",
+            "execa",
+            "express",
+            "fastapi",
+            "node:http",
+            "openai",
+            "sqlalchemy",
+            "textual",
+        }
+        & external_imports
+    )
+
     source = "\n".join(path.read_text(encoding="utf-8") for path in sources)
-    assert not {
-        "@langchain/langgraph",
-        "docker",
-        "fastapi",
-        "node:http",
-        "react",
-        "sqlalchemy",
-        "textual",
-    } & set(re.findall(r"[A-Za-z@][A-Za-z0-9_:@/-]*", source.casefold()))
+    assert "fetch(" not in source
+    assert "awesome_agent.tui" not in source.casefold()
 
     reducer_source = "\n".join(
         path.read_text(encoding="utf-8")

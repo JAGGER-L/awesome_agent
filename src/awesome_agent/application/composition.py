@@ -62,6 +62,7 @@ from awesome_agent.application.operations import OperationBusy, OperationControl
 from awesome_agent.application.turns import TurnCoordinator
 from awesome_agent.config import (
     ApplicationConfig,
+    ConfigurationResolutionError,
     LoadedConfigSources,
     ThreadConfigState,
     TurnConfig,
@@ -622,7 +623,7 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="not_found")
         try:
             parsed = InteractionDecision(decision)
-        except ValueError:
+        except ConfigurationResolutionError:
             return InteractionResult(accepted=False, status="invalid_decision")
         if not self._interactions.resolve(interaction_id, parsed):
             return InteractionResult(accepted=False, status="rejected")
@@ -865,6 +866,7 @@ class _LocalApplicationBackend:
             conversation=self._conversation,
             workspace_key=self._workspace.key,
             delegate=self._delegate_command,
+            default_model=self._initial_thread_model(),
         )
         await self._turns.reconcile_startup()
         self._initialized = True
@@ -917,6 +919,22 @@ class _LocalApplicationBackend:
             ),
             environ={},
         )
+
+    def _initial_thread_model(self) -> str | None:
+        selected = self._environ.get("AWESOME_MODEL")
+        if selected is not None:
+            return selected
+        selected = self._application_config.providers.default_model
+        if selected is not None:
+            return selected
+        try:
+            return resolve_turn_config(
+                self._application_config,
+                thread=ThreadConfigState(),
+                environ={},
+            ).model
+        except ValueError:
+            return None
 
     async def _delegate_command(
         self,

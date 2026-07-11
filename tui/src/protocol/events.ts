@@ -32,6 +32,15 @@ export const eventTypeSchema = z.enum(eventTypes);
 export type EventType = z.infer<typeof eventTypeSchema>;
 
 const boundedInteger = safeIntegerSchema.min(0);
+const nullableIdentifier = boundedText(1, 128)
+  .nullish()
+  .transform((value) => value ?? undefined);
+const nullableReason = boundedText(0, 200)
+  .nullish()
+  .transform((value) => value ?? undefined);
+const nullableErrorCode = boundedText(0, 128)
+  .nullish()
+  .transform((value) => value ?? undefined);
 function lifecyclePayload<
   Kind extends
     | "operation.started"
@@ -54,7 +63,7 @@ function turnPayload<
 >(kind: Kind) {
   return z.strictObject({
     kind: z.literal(kind),
-    reason: boundedText(0, 200).optional(),
+    reason: nullableReason,
   });
 }
 
@@ -66,7 +75,7 @@ function toolResultPayload<
     call_id: boundedText(1, 128),
     tool_name: boundedText(1, 200),
     summary: boundedText(0, 2_000),
-    error_code: boundedText(0, 128).optional(),
+    error_code: nullableErrorCode,
   });
 }
 
@@ -180,9 +189,9 @@ export const eventEnvelopeSchema = z
     sequence: safeIntegerSchema.min(1),
     session_id: boundedText(1, 128),
     workspace_key: boundedText(1, 512),
-    thread_id: boundedText(1, 128).optional(),
-    turn_id: boundedText(1, 128).optional(),
-    operation_id: boundedText(1, 128).optional(),
+    thread_id: nullableIdentifier,
+    turn_id: nullableIdentifier,
+    operation_id: nullableIdentifier,
     event_type: eventTypeSchema,
     timestamp: utcTimestampSchema,
     payload: eventPayloadSchema,
