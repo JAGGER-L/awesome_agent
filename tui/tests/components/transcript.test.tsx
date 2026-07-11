@@ -73,4 +73,18 @@ describe("scrollback transcript components", () => {
     );
     expect(view.lastFrame()).not.toContain("must disappear");
   });
+
+  it("hides token annotations at 40 columns", () => {
+    const live: LiveTranscriptProjection = {
+      reasoning_text: "",
+      terminal: false,
+      usage: { input_tokens: 10, output_tokens: 2 },
+      blocks: [{ key: "live", kind: "assistant", text: "essential" }],
+    };
+    const narrow = render(<ActiveTurn live={live} width={40} />);
+    expect(narrow.lastFrame()).toContain("essential");
+    expect(narrow.lastFrame()).not.toContain("Tokens");
+    const wide = render(<ActiveTurn live={live} width={60} />);
+    expect(wide.lastFrame()).toContain("Tokens 10 in · 2 out");
+  });
 });
