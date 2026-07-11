@@ -6,8 +6,16 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from awesome_agent.application.commands import CommandIntent
+from awesome_agent.application.contracts import (
+    ApplicationResult,
+    InitializeParams,
+    InitializeResult,
+    ProductError,
+    ProductErrorCode,
+)
 from awesome_agent.application.facade import ApplicationFacade
 from awesome_agent.core.events import EventEnvelope
+from awesome_agent.version import PRODUCT_VERSION
 
 JSONRPC_VERSION = "2.0"
 PROTOCOL_VERSION = 1
@@ -18,6 +26,14 @@ type MethodHandler = Callable[[Mapping[str, object]], Awaitable[object]]
 
 class _EmptyParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _InitializeWireParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    protocol_version: int = Field(strict=True)
+    client_name: str = Field(min_length=1, max_length=128, strict=True)
+    client_version: str = Field(min_length=1, max_length=64, strict=True)
 
 
 class _ThreadParams(BaseModel):
@@ -108,7 +124,22 @@ class JsonRpcDispatcher:
         }
 
     async def _initialize(self, params: Mapping[str, object]) -> object:
-        _EmptyParams.model_validate(params)
+        wire = _InitializeWireParams.model_validate(params)
+        if wire.protocol_version != PROTOCOL_VERSION:
+            return ApplicationResult[InitializeResult].failure(
+                ProductError(
+                    code=ProductErrorCode.PROTOCOL_VERSION_INCOMPATIBLE,
+                    message="Protocol version is incompatible.",
+                )
+            )
+        if wire.client_name != "awesome-tui" or wire.client_version != PRODUCT_VERSION:
+            return ApplicationResult[InitializeResult].failure(
+                ProductError(
+                    code=ProductErrorCode.CLIENT_VERSION_INCOMPATIBLE,
+                    message="Client identity is incompatible.",
+                )
+            )
+        InitializeParams.model_validate(wire.model_dump())
         return await self._facade.initialize()
 
     async def _get_state(self, params: Mapping[str, object]) -> object:
@@ -148,8 +179,7 @@ class JsonRpcDispatcher:
 
     async def _shutdown(self, params: Mapping[str, object]) -> object:
         _EmptyParams.model_validate(params)
-        await self._facade.shutdown()
-        return {"ok": True}
+        return await self._facade.shutdown()
 
 
 def event_notification(event: EventEnvelope) -> JsonObject:
@@ -199,5 +229,5 @@ def _request(
 
 def _serialize(value: object) -> object:
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
+        return value.model_dump(mode="json", exclude_none=True)
     return value

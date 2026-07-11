@@ -11,6 +11,7 @@ from awesome_agent.application.contracts import (
     ShutdownResult,
     ThreadListResult,
     ThreadReadResult,
+    WorkspacePresentation,
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import ApplicationFacade, LocalApplication
@@ -36,4 +37,5 @@ __all__ = [
     "StartupStatus",
     "ThreadListResult",
     "ThreadReadResult",
+    "WorkspacePresentation",
 ]

@@ -23,6 +23,7 @@ from awesome_agent.application.facade import (
     LocalApplication,
     OperationAccepted,
     ThreadListResult,
+    WorkspacePresentation,
 )
 from awesome_agent.application.headless import ConversationCommandService
 from awesome_agent.config import SecretStatus
@@ -50,8 +51,11 @@ class Backend:
     async def initialize_application(self) -> InitializeResult:
         self.calls.append(("initialize", None))
         return InitializeResult(
+            product_version="0.1.0",
+            protocol_version=1,
             status=InitializeStatus.READY,
             session_id="session_1",
+            workspace=WorkspacePresentation(display_path="C:\\workspace"),
             capabilities=("turns", "commands"),
         )
 
@@ -61,6 +65,7 @@ class Backend:
             initialized=True,
             session_id="session_1",
             workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            workspace=WorkspacePresentation(display_path="C:\\workspace"),
             workspace_trusted=True,
             configuration_valid=True,
             secret_status=SecretStatus(),

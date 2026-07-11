@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -36,6 +37,7 @@ from awesome_agent.application.contracts import (
     ProductErrorCode,
     ThreadListResult,
     ThreadReadResult,
+    WorkspacePresentation,
 )
 from awesome_agent.application.direct import DirectCommandService
 from awesome_agent.application.errors import ApplicationFailure
@@ -147,6 +149,7 @@ from awesome_agent.storage.checkpoints import (
 )
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
+from awesome_agent.version import PRODUCT_VERSION
 
 type GatewayFactory = Callable[[ProviderId, str], ModelGateway]
 type McpClientFactory = Callable[[McpServerConfig], McpClient]
@@ -352,12 +355,16 @@ class _LocalApplicationBackend:
         self._mcp: McpManager | None = None
         self._change_scope: _ChangeScope | None = None
         self._change_operations: ChangeOperations | None = None
+        self._workspace_branch: str | None = None
 
     async def initialize_application(self) -> InitializeResult:
         if self._initialized:
             return InitializeResult(
+                product_version=PRODUCT_VERSION,
+                protocol_version=1,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
+                workspace=self._workspace_presentation(include_branch=True),
                 capabilities=_CAPABILITIES,
             )
         if self._trust.status(self._workspace) is not TrustStatus.TRUSTED:
@@ -378,15 +385,21 @@ class _LocalApplicationBackend:
                     )
                 )
             return InitializeResult(
+                product_version=PRODUCT_VERSION,
+                protocol_version=1,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
+                workspace=self._workspace_presentation(include_branch=False),
                 capabilities=_CAPABILITIES,
             )
         await self._activate()
         return InitializeResult(
+            product_version=PRODUCT_VERSION,
+            protocol_version=1,
             status=InitializeStatus.READY,
             session_id=self._session_id,
+            workspace=self._workspace_presentation(include_branch=True),
             capabilities=_CAPABILITIES,
         )
 
@@ -403,6 +416,7 @@ class _LocalApplicationBackend:
             initialized=self._initialized,
             session_id=self._session_id,
             workspace_key=self._workspace.key,
+            workspace=self._workspace_presentation(include_branch=True),
             workspace_trusted=(
                 self._trust.status(self._workspace) is TrustStatus.TRUSTED
             ),
@@ -571,6 +585,10 @@ class _LocalApplicationBackend:
     async def _activate(self) -> None:
         if self._initialized:
             return
+        self._workspace_branch = await asyncio.to_thread(
+            _git_branch,
+            self._workspace.canonical_path,
+        )
         self._sources = self._load_sources(workspace_trusted=True)
         self._application_config = resolve_application_config(self._sources)
         gateway_factory = self._injected_gateway_factory or self._provider_factory()
@@ -1011,6 +1029,16 @@ class _LocalApplicationBackend:
                 data={"provider": provider},
             )
 
+    def _workspace_presentation(
+        self,
+        *,
+        include_branch: bool,
+    ) -> WorkspacePresentation:
+        return WorkspacePresentation(
+            display_path=str(self._workspace.display_path),
+            branch=self._workspace_branch if include_branch else None,
+        )
+
 
 def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:
     user = tuple(
@@ -1070,3 +1098,28 @@ def _application_failure(
             data=data or {},
         )
     )
+
+
+def _git_branch(workspace: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "HEAD",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    branch = completed.stdout.strip()
+    return branch or None

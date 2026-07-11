@@ -18,6 +18,7 @@ from awesome_agent.application.contracts import (
     ProductErrorCode,
     ThreadListResult,
     ThreadReadResult,
+    WorkspacePresentation,
 )
 from awesome_agent.config import SecretStatus
 
@@ -139,6 +140,7 @@ def test_surface_neutral_application_contracts_hide_secret_values() -> None:
         initialized=True,
         session_id="session_1",
         workspace_key="workspace_1",
+        workspace=WorkspacePresentation(display_path="C:\\workspace"),
         workspace_trusted=True,
         current_thread_id=None,
         current_model=None,

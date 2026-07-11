@@ -72,12 +72,30 @@ class InitializeStatus(StrEnum):
     TRUST_REQUIRED = "trust_required"
 
 
+class InitializeParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    protocol_version: Literal[1]
+    client_name: Literal["awesome-tui"]
+    client_version: str = Field(min_length=1, max_length=64)
+
+
+class WorkspacePresentation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    display_path: str = Field(min_length=1, max_length=4_096)
+    branch: str | None = Field(default=None, min_length=1, max_length=255)
+
+
 class InitializeResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    product_version: str = Field(min_length=1, max_length=64)
+    protocol_version: Literal[1]
     status: InitializeStatus
     session_id: str = Field(min_length=1, max_length=128)
     interaction_id: str | None = Field(default=None, max_length=128)
+    workspace: WorkspacePresentation
     capabilities: tuple[str, ...] = ()
 
 
@@ -102,6 +120,7 @@ class ApplicationState(BaseModel):
     initialized: bool
     session_id: str = Field(min_length=1, max_length=128)
     workspace_key: str = Field(min_length=1, max_length=128)
+    workspace: WorkspacePresentation
     workspace_trusted: bool
     current_thread_id: str | None = Field(default=None, max_length=128)
     current_model: str | None = Field(default=None, max_length=200)
