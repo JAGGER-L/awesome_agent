@@ -13,6 +13,7 @@ import { parseInput } from "../commands/parser.js";
 import { CommandMenu } from "../components/CommandMenu.js";
 import { Composer, type ComposerSubmitResult } from "../components/Composer.js";
 import { Help } from "../components/Help.js";
+import { InteractionPrompt } from "../components/InteractionPrompt.js";
 import { Picker, type PickerSelection } from "../components/Picker.js";
 import { StatusCommand } from "../components/StatusCommand.js";
 import { StatusLine } from "../components/StatusLine.js";
@@ -50,6 +51,7 @@ export function App({
   localCommands,
   cancellation = { status: "idle" },
   lifecycle,
+  interactionResponder,
 }: {
   store: SurfaceStore;
   controller?: CommandController;
@@ -59,6 +61,7 @@ export function App({
   localCommands?: LocalCommandService;
   cancellation?: CancellationSnapshot;
   lifecycle?: AppLifecycle;
+  interactionResponder?: { respond(decision: string): Promise<void> };
 }) {
   const state = useSyncExternalStore(
     store.subscribe,
@@ -79,6 +82,10 @@ export function App({
     (state.thread ? hydrateThreadPage(state.thread).blocks : []);
   const live = projectLiveTurn(state);
   const cancelling = cancellation.status === "requested";
+  const exceptionalInteraction =
+    state.pending_interaction?.interaction_kind === "workspace_trust"
+      ? undefined
+      : state.pending_interaction;
   const applyLocalResult = useCallback(
     (result: LocalCommandResult): ComposerSubmitResult => {
       switch (result.kind) {
@@ -238,12 +245,19 @@ export function App({
       <ActiveTurn live={live} width={columns} />
       {status ? <StatusCommand snapshot={status} /> : null}
       {localNotice ? <Text>{localNotice}</Text> : null}
-      {!cancelling ? (
+      {!cancelling && !exceptionalInteraction ? (
         <CommandMenu
           query={picker || helpCommand !== undefined ? "" : composerValue}
         />
       ) : null}
-      {cancelling ? null : picker ? (
+      {exceptionalInteraction ? (
+        <InteractionPrompt
+          interaction={exceptionalInteraction}
+          onRespond={(decision) => {
+            void interactionResponder?.respond(decision);
+          }}
+        />
+      ) : cancelling ? null : picker ? (
         <Picker
           selection={picker.selection}
           onSelect={select}
