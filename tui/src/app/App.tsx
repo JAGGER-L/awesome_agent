@@ -6,6 +6,7 @@ import type {
   LocalCommandResult,
   LocalCommandService,
 } from "../commands/local.js";
+import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { CommandIntent } from "../commands/parser.js";
 import { parseInput } from "../commands/parser.js";
 import { CommandMenu } from "../components/CommandMenu.js";
@@ -41,6 +42,7 @@ export function App({
   welcome,
   localCommands,
   onShutdownIntent,
+  cancellation = { status: "idle" },
 }: {
   store: SurfaceStore;
   controller?: CommandController;
@@ -49,6 +51,7 @@ export function App({
   welcome?: Omit<WelcomeProps, "width">;
   localCommands?: LocalCommandService;
   onShutdownIntent?: () => void;
+  cancellation?: CancellationSnapshot;
 }) {
   const state = useSyncExternalStore(
     store.subscribe,
@@ -66,6 +69,7 @@ export function App({
     state.committed_transcript ??
     (state.thread ? hydrateThreadPage(state.thread).blocks : []);
   const live = projectLiveTurn(state);
+  const cancelling = cancellation.status === "requested";
   const applyLocalResult = useCallback(
     (result: LocalCommandResult): ComposerSubmitResult => {
       switch (result.kind) {
@@ -200,10 +204,12 @@ export function App({
       <ActiveTurn live={live} width={columns} />
       {status ? <StatusCommand snapshot={status} /> : null}
       {localNotice ? <Text>{localNotice}</Text> : null}
-      <CommandMenu
-        query={picker || helpCommand !== undefined ? "" : composerValue}
-      />
-      {picker ? (
+      {!cancelling ? (
+        <CommandMenu
+          query={picker || helpCommand !== undefined ? "" : composerValue}
+        />
+      ) : null}
+      {cancelling ? null : picker ? (
         <Picker
           selection={picker.selection}
           onSelect={select}
@@ -222,7 +228,7 @@ export function App({
           onValueChange={setComposerValue}
         />
       )}
-      <StatusLine state={state} />
+      <StatusLine state={state} cancellation={cancellation} />
     </Box>
   );
 }
