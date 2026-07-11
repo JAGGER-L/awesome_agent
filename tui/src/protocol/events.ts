@@ -35,6 +35,12 @@ const boundedInteger = safeIntegerSchema.min(0);
 const nullableIdentifier = boundedText(1, 128)
   .nullish()
   .transform((value) => value ?? undefined);
+const nullableReason = boundedText(0, 200)
+  .nullish()
+  .transform((value) => value ?? undefined);
+const nullableErrorCode = boundedText(0, 128)
+  .nullish()
+  .transform((value) => value ?? undefined);
 function lifecyclePayload<
   Kind extends
     | "operation.started"
@@ -57,7 +63,7 @@ function turnPayload<
 >(kind: Kind) {
   return z.strictObject({
     kind: z.literal(kind),
-    reason: boundedText(0, 200).optional(),
+    reason: nullableReason,
   });
 }
 
@@ -69,7 +75,7 @@ function toolResultPayload<
     call_id: boundedText(1, 128),
     tool_name: boundedText(1, 200),
     summary: boundedText(0, 2_000),
-    error_code: boundedText(0, 128).optional(),
+    error_code: nullableErrorCode,
   });
 }
 
