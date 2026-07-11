@@ -12,10 +12,10 @@ scheduler, or workflow engine. The accepted destination is the
 
 ## Current Product State
 
-The Phase 2 Python Agent Core now has a complete in-process Application Facade
-and an `awesome-core` JSON-RPC/stdio reference Host. The existing `awesome`
-Textual entry remains unchanged until Phase 3 supplies Ink + React and owns the
-surface cutover.
+The Phase 3 candidate combines the Python Application Facade and `awesome-core`
+JSON-RPC/stdio Host with the packaged Ink + React `awesome-tui`. The existing
+`awesome` Textual entry remains unchanged; Phase 4 owns default cutover and
+physical legacy deletion.
 
 The repository also contains PostgreSQL adapters, Worker and dispatch
 machinery, custom durable run/recovery behavior, generalized approvals,
@@ -50,13 +50,13 @@ model/tool calls, retries, and rework.
 | --- | --- | --- |
 | Target contract freeze | Product boundaries, fixed tools, commands, trust, storage, memory, events, and surface protocol have one accepted source of truth. | Architecture decision records and structural contract tests agree. |
 | Phase 2 complete | Python Agent Core, the ten-method Application Facade, and the protocol-only `awesome-core` stdio Host are implemented. | Focused unit, integration, fake DeepSeek/Kimi E2E, structural, manual protocol smoke, lint, type, and lock gates pass. |
+| Phase 3 complete | The packaged `awesome-tui` candidate owns terminal input/rendering over the real stdio Host without TypeScript business logic. | TypeScript gates, tarball smoke, structural boundaries, and networkless DeepSeek/Kimi product flows pass. |
 
 ## Next
 
 | Initiative | Entry criteria | Exit shape |
 | --- | --- | --- |
-| Ink + React TUI | Python application, command, JSON-RPC, and event contracts pass headless acceptance tests. | `awesome` provides the complete local chat workflow through an Ink TUI with no business logic in TypeScript. |
-| Product cutover | The new TUI closes first-run trust, chat, tools, changes, memory, diagnostics, and recovery workflows. | Default entry points no longer depend on PostgreSQL, Worker, FastAPI, Textual, generalized approvals, artifacts, team runtime, or Docker services. |
+| Product cutover | The packaged Ink candidate closes first-run trust, chat, tools, changes, memory, diagnostics, cancellation, and recovery workflows. | `awesome` switches to Python Core + Ink without redesigning the accepted protocol. |
 | Legacy removal | All current callers have moved to target boundaries and required product tests pass. | Superseded runtime, persistence, API, team, artifact, approval, sandbox-service, migrations, and documentation are deleted rather than retained behind compatibility layers. |
 
 ## Later
@@ -118,6 +118,7 @@ Detailed historical task notes live in
 | --- | --- |
 | Local-first foundation | SQLite state and checkpoints, workspace trust, eight fixed tools, Change Journal, typed commands/events/interactions, cancellation, and a fresh-state headless acceptance slice without external infrastructure. |
 | Python Agent Core and stdio Host | Surface-neutral ten-method Facade, LangGraph Turn path, Provider/Tool/Context/Skill/MCP/memory composition, direct commands, JSON-RPC v1, and networkless DeepSeek/Kimi subprocess flows. |
+| Ink product candidate | Node 22 `awesome-tui`, Mint frameless Welcome, native scrollback, Unicode composer, typed commands/status, trust, cancellation/reconnect, isolated stdio channels, and clean npm packaging. |
 | Durable runtime foundation | Run intake, dispatch, Worker execution, model protocol, checkpoints, approvals, cancellation, validation, and observability. |
 | Team runtime foundation | Leader, Teammates, Subagents, Verifier, assignment-scoped tools, mailbox, patch aggregation, rework, and stress coverage. |
 | Extension foundation | Versioned catalogs, skills, MCP, community tools, diagnostics, and project/user extension configuration. |

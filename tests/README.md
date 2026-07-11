@@ -18,10 +18,12 @@ architecture being removed.
   trust, bounded read-tool execution, and restart-safe controlled change,
   recursive delete, diff, undo, redo, plus the complete headless Phase 1
   trust/tool/interaction/cancellation/reopen vertical slice;
-- `e2e/`: the protocol-only `awesome-core` subprocess workflow, including
+- `e2e/`: the protocol-only `awesome-core` subprocess workflow and the
+  `awesome-tui` candidate workflow, including
   trust, commands, fake Provider tools, direct execution, cancellation,
-  shutdown, and SQLite restart recovery. Ink + React surface E2E remains Phase
-  3 work.
+  shutdown, and SQLite restart recovery through fake DeepSeek and Kimi;
+- `../tui/tests/`: protocol, reducer, Ink component, composer, lifecycle,
+  real-stdio product-flow, structural, and isolated npm-package verification.
 
 ## Deletion Rule
 
@@ -45,7 +47,7 @@ replacement test when the owning target module is introduced.
 | Skills | discovery precedence, lazy loading, explicit slash selection, prompt-size limits, untrusted content handling |
 | Configuration | defaults, user/workspace/environment precedence, validation, secret handling, restart semantics |
 | Memory | `MEMORY.md`, `USER.md`, Mem0 Cloud adapter, fail-open behavior, opt-out, untrusted recall injection |
-| Ink TUI | Ink event rendering, keyboard interaction, visual details, and surface-specific end-to-end flows |
+| Ink TUI | Manual terminal compatibility across additional terminal engines and operating systems |
 | Sandbox | local process policy first; optional Docker execution backend only when implemented |
 | Product readiness | fresh install, first run, real repository edit/test flow, smoke, recovery, and performance regression tests |
 
@@ -60,6 +62,25 @@ uv run --extra memory pytest -q tests/integration/test_headless_product.py tests
 uv run --extra memory pytest -q tests/structural/test_target_*.py tests/structural/test_markdown_links.py
 ```
 
-For a task in progress, run the affected test files first. The complete current
-baseline is required before merging that task back into
+Phase 3 adds these Node and packaging gates:
+
+```powershell
+npm --prefix tui ci
+npm --prefix tui run format:check
+npm --prefix tui run lint
+npm --prefix tui run typecheck
+npm --prefix tui test
+npm --prefix tui run build
+npm --prefix tui pack --dry-run
+npm --prefix tui test -- tests/e2e tests/packaging tests/structural
+```
+
+The fake Provider/Mem0/MCP boundaries are deterministic and networkless. Live
+DeepSeek, Kimi, and Mem0 Cloud behavior remains an external, unverified release
+risk rather than a merge dependency.
+
+For a task in progress, run affected files first. Obsolete Textual, API,
+PostgreSQL, Worker, Docker, and hosted suites are not Phase 3 merge gates; they
+must not force compatibility layers into the replacement architecture. The
+complete target baseline is required before merging back into
 `codex/local-first-architecture`.
