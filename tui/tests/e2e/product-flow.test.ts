@@ -36,7 +36,7 @@ describe("networkless candidate product flow", () => {
   ] as const)(
     "runs the %s flow through CLI, controller, Python, and SQLite",
     async (provider, model) => {
-      const root = await mkdtemp(join(tmpdir(), "awesome-tui-product-"));
+      const root = await mkdtemp(join(tmpdir(), "awesome-product-"));
       temporary.push(root);
       const home = join(root, "home");
       const workspace = join(root, "workspace");

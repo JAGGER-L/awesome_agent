@@ -16,9 +16,9 @@ afterEach(async () => {
   );
 });
 
-describe("awesome-tui package", () => {
+describe("awesome package", () => {
   it("packs, installs, and runs from an isolated prefix", async () => {
-    const root = await mkdtemp(join(tmpdir(), "awesome-tui-package-"));
+    const root = await mkdtemp(join(tmpdir(), "awesome-package-"));
     temporary.push(root);
     const tarballs = join(root, "tarballs");
     const prefix = join(root, "prefix");
@@ -69,14 +69,14 @@ describe("awesome-tui package", () => {
     expect(installedPackage).toMatchObject({
       version: "1.0.0",
       type: "module",
-      bin: { "awesome-tui": "dist/cli/index.js" },
+      bin: { awesome: "dist/cli/index.js" },
       license: "UNLICENSED",
     });
 
     const bin =
       process.platform === "win32"
-        ? join(prefix, "node_modules", ".bin", "awesome-tui.cmd")
-        : join(prefix, "node_modules", ".bin", "awesome-tui");
+        ? join(prefix, "node_modules", ".bin", "awesome.cmd")
+        : join(prefix, "node_modules", ".bin", "awesome");
     const version =
       process.platform === "win32"
         ? spawnSync(

@@ -155,7 +155,7 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
         "initialize",
         {
             "protocol_version": 1,
-            "client_name": "awesome-tui",
+            "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
     )

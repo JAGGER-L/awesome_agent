@@ -65,7 +65,7 @@ describe("CoreProcess", () => {
     const session = await startCoreProcess(value, [fileURLToPath(fixture)]);
     const initialized = await session.rpc.request("initialize", {
       protocol_version: 1,
-      client_name: "awesome-tui",
+      client_name: "awesome",
       client_version: "0.1.0",
     });
     expect(initialized).toMatchObject({
@@ -108,7 +108,7 @@ describe("CoreProcess", () => {
     });
     await session.rpc.request("initialize", {
       protocol_version: 1,
-      client_name: "awesome-tui",
+      client_name: "awesome",
       client_version: "0.1.0",
     });
     expect(session.stderrTail()).toEqual(bytes.slice(bytes.length - 65_536));

@@ -19,7 +19,7 @@ architecture being removed.
   recursive delete, diff, undo, redo, plus the complete headless Phase 1
   trust/tool/interaction/cancellation/reopen vertical slice;
 - `e2e/`: the protocol-only `awesome-core` subprocess workflow and the
-  `awesome-tui` candidate workflow, including
+  public Ink `awesome` workflow, including
   trust, commands, fake Provider tools, direct execution, cancellation,
   shutdown, and SQLite restart recovery through fake DeepSeek and Kimi;
 - `../tui/tests/`: protocol, reducer, Ink component, composer, lifecycle,

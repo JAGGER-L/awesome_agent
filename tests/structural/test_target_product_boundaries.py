@@ -172,6 +172,9 @@ def test_product_version_has_one_manual_source(monkeypatch) -> None:
     )
     assert project["project"]["dynamic"] == ["version"]
     assert "version" not in project["project"]
+    assert project["project"]["scripts"] == {
+        "awesome-core": "awesome_agent.protocol.stdio:main"
+    }
     assert project["tool"]["hatch"]["version"]["path"] == "VERSION"
 
     package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
@@ -191,7 +194,7 @@ def test_tui_is_one_minimal_node_22_package() -> None:
     assert package["version"] == PRODUCT_VERSION
     assert package["type"] == "module"
     assert package["engines"] == {"node": ">=22"}
-    assert package["bin"] == {"awesome-tui": "dist/cli/index.js"}
+    assert package["bin"] == {"awesome": "dist/cli/index.js"}
     assert package["files"] == ["dist", "README.md", "LICENSE"]
     assert package["license"] == "UNLICENSED"
     assert "workspaces" not in package

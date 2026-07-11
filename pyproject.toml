@@ -43,8 +43,6 @@ memory = [
 ]
 
 [project.scripts]
-awesome = "awesome_agent.cli.interactive:main"
-awesome-agent = "awesome_agent.cli.app:app"
 awesome-core = "awesome_agent.protocol.stdio:main"
 
 [dependency-groups]

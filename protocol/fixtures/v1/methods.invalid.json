@@ -8,7 +8,7 @@
       "method": "initialize",
       "name": "initialize.missing_client_version",
       "params": {
-        "client_name": "awesome-tui",
+        "client_name": "awesome",
         "protocol_version": 1
       }
     },
@@ -20,8 +20,8 @@
       "method": "initialize",
       "name": "initialize.protocol_incompatible",
       "params": {
-        "client_name": "awesome-tui",
-        "client_version": "0.1.0",
+        "client_name": "awesome",
+        "client_version": "1.0.0",
         "protocol_version": 2
       }
     },

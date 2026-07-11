@@ -1,12 +1,12 @@
 {
   "name": "@awesome-agent/tui",
   "version": "1.0.0",
-  "description": "Ink candidate terminal interface for Awesome Agent",
+  "description": "Ink terminal interface for Awesome Agent",
   "license": "UNLICENSED",
   "private": true,
   "type": "module",
   "bin": {
-    "awesome-tui": "dist/cli/index.js"
+    "awesome": "dist/cli/index.js"
   },
   "files": [
     "dist",
