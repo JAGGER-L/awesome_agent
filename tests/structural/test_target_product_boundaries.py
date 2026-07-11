@@ -18,7 +18,10 @@ ENTRYPOINTS = (
     ROOT / "protocol" / "stdio.py",
 )
 FORBIDDEN_INTERNAL = {
+    "awesome_agent.agents",
     "awesome_agent.runtime",
+    "awesome_agent.observability",
+    "awesome_agent.orchestration",
     "awesome_agent.persistence",
     "awesome_agent.api",
     "awesome_agent.client",
@@ -39,6 +42,7 @@ FORBIDDEN_EXTERNAL = {
     "textual",
 }
 LEGACY_SURFACE_PACKAGES = {"cli", "client", "surfaces", "tui"}
+LEGACY_PLATFORM_PACKAGES = {"runtime", "agents", "observability", "orchestration"}
 TARGET_PACKAGES = {
     "agent",
     "application",
@@ -114,6 +118,55 @@ def test_target_host_recursive_import_graph_excludes_legacy_platform() -> None:
     assert len(visited) > 20
 
 
+def test_every_target_package_excludes_platform_runtime_imports() -> None:
+    denied = {
+        "awesome_agent.runtime",
+        "awesome_agent.agents",
+        "awesome_agent.observability",
+        "awesome_agent.orchestration",
+    }
+    violations = {
+        path.relative_to(ROOT).as_posix(): sorted(
+            imported
+            for imported in _imports(path)
+            if any(
+                imported == prefix or imported.startswith(f"{prefix}.")
+                for prefix in denied
+            )
+        )
+        for package in TARGET_PACKAGES
+        for path in (ROOT / package).rglob("*.py")
+    }
+
+    assert not {path: imports for path, imports in violations.items() if imports}
+
+
+def test_langgraph_compilation_belongs_only_to_agent_graph() -> None:
+    target_source = tuple(
+        path for package in TARGET_PACKAGES for path in (ROOT / package).rglob("*.py")
+    )
+    state_graph_importers = {
+        path.relative_to(ROOT).as_posix()
+        for path in target_source
+        if any(
+            imported == "langgraph.graph" or imported.startswith("langgraph.graph.")
+            for imported in _imports(path)
+        )
+    }
+    compile_graph_mentions = {
+        path.relative_to(ROOT).as_posix()
+        for path in target_source
+        if "compile_agent_graph" in path.read_text(encoding="utf-8")
+    }
+
+    assert state_graph_importers == {"agent/graph.py"}
+    assert compile_graph_mentions == {
+        "agent/__init__.py",
+        "agent/graph.py",
+        "application/composition.py",
+    }
+
+
 def test_python_legacy_surfaces_are_physically_absent() -> None:
     assert not {
         name for name in LEGACY_SURFACE_PACKAGES if any((ROOT / name).rglob("*.py"))
@@ -146,6 +199,15 @@ def test_python_legacy_surfaces_are_physically_absent() -> None:
     assert not {"textual", "typer"} & dependencies
     assert (Path("tui") / "src" / "cli" / "index.ts").is_file()
     assert (ROOT / "protocol" / "stdio.py").is_file()
+
+
+def test_platform_runtime_packages_and_dependencies_are_physically_absent() -> None:
+    assert not {
+        name for name in LEGACY_PLATFORM_PACKAGES if any((ROOT / name).rglob("*.py"))
+    }
+
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert "observability" not in project["project"]["optional-dependencies"]
 
 
 def test_api_and_container_product_paths_are_absent() -> None:

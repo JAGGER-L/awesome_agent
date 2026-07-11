@@ -19,30 +19,11 @@ new user message.
 Use `Ctrl+R` to retry the last failed conversation turn. Use `Ctrl+C` to
 request cancellation of the active turn.
 
-## Approval Flow
-
-When a tool needs approval, the response pauses and the TUI shows a fixed
-approval control. Approving once resumes the same run. Denying continues with a
-denied tool result. Cancelling requests run cancellation.
-
-After a decision, Awesome continues from the tool observation and lets the model
-finish the answer. It does not treat `continue` as a new user message. Repeated
-matching actions in the same run can reuse the prior decision when the scope is
-unchanged: the exact shell command argv or the exact patch target file set.
-Different commands or different files ask again.
-
 ## Tool Timeline
 
 Tool calls are grouped into a timeline so users can scan what happened during a
 turn. The collapsed view shows call counts and status counts; the expanded view
 shows individual tools and failure details.
-
-## Team Runs
-
-Team runs show a tree of work: Leader plan, Teammate assignments, Subagent
-evidence, Verifier decision, and rework or completion. The tree is the user
-surface for understanding why a team run is waiting, which child run produced
-evidence, and whether patch aggregation or verifier feedback already happened.
 
 ## Recovery
 
