@@ -134,7 +134,7 @@ class JsonRpcDispatcher:
                     message="Protocol version is incompatible.",
                 )
             )
-        if wire.client_name != "awesome-tui" or wire.client_version != PRODUCT_VERSION:
+        if wire.client_name != "awesome" or wire.client_version != PRODUCT_VERSION:
             return ApplicationResult[InitializeResult].failure(
                 ProductError(
                     code=ProductErrorCode.CLIENT_VERSION_INCOMPATIBLE,

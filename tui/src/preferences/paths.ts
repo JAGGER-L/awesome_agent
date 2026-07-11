@@ -20,9 +20,9 @@ export function resolveAwesomeHome({
   }
   if (windows) {
     const base = environ.LOCALAPPDATA || paths.join(home, "AppData", "Local");
-    return paths.join(base, "awesome-agent");
+    return paths.join(base, "Awesome");
   }
-  return paths.join(home, ".awesome-agent");
+  return paths.join(home, ".awesome");
 }
 
 function expandHome(

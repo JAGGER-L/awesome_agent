@@ -36,7 +36,7 @@ from awesome_agent.version import PRODUCT_VERSION
 
 INITIALIZE_PARAMS = {
     "protocol_version": 1,
-    "client_name": "awesome-tui",
+    "client_name": "awesome",
     "client_version": PRODUCT_VERSION,
 }
 
@@ -247,7 +247,7 @@ async def test_initialize_rejects_incompatible_identity_before_facade_work(
     "params",
     [
         {},
-        {"protocol_version": 1, "client_name": "awesome-tui"},
+        {"protocol_version": 1, "client_name": "awesome"},
         {**INITIALIZE_PARAMS, "extra": True},
         {**INITIALIZE_PARAMS, "protocol_version": "1"},
     ],
@@ -276,7 +276,9 @@ def test_product_version_matches_distribution_and_repository_metadata() -> None:
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert installed_version("awesome-agent") == PRODUCT_VERSION
-    assert metadata["project"]["version"] == PRODUCT_VERSION
+    assert metadata["project"]["dynamic"] == ["version"]
+    assert "version" not in metadata["project"]
+    assert (root / "VERSION").read_text(encoding="utf-8") == f"{PRODUCT_VERSION}\n"
 
 
 @pytest.mark.asyncio

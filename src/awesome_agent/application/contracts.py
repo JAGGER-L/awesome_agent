@@ -79,7 +79,7 @@ class InitializeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     protocol_version: Literal[1]
-    client_name: Literal["awesome-tui"]
+    client_name: Literal["awesome"]
     client_version: str = Field(min_length=1, max_length=64)
 
 

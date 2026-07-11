@@ -117,7 +117,7 @@ def _valid_methods() -> dict[str, object]:
             "initialize",
             {
                 "protocol_version": 1,
-                "client_name": "awesome-tui",
+                "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
@@ -223,7 +223,7 @@ def _invalid_methods() -> dict[str, object]:
             {
                 "name": "initialize.missing_client_version",
                 "method": "initialize",
-                "params": {"protocol_version": 1, "client_name": "awesome-tui"},
+                "params": {"protocol_version": 1, "client_name": "awesome"},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -231,7 +231,7 @@ def _invalid_methods() -> dict[str, object]:
                 "method": "initialize",
                 "params": {
                     "protocol_version": 2,
-                    "client_name": "awesome-tui",
+                    "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
                 "expected": {

@@ -23,7 +23,7 @@ describe("resolveAwesomeHome", () => {
         home: "C:\\Users\\dev",
         platform: "win32" as const,
       },
-      expected: "C:\\Users\\dev\\AppData\\Local\\awesome-agent",
+      expected: "C:\\Users\\dev\\AppData\\Local\\Awesome",
     },
     {
       name: "Windows home fallback",
@@ -32,12 +32,12 @@ describe("resolveAwesomeHome", () => {
         home: "C:\\Users\\dev",
         platform: "win32" as const,
       },
-      expected: "C:\\Users\\dev\\AppData\\Local\\awesome-agent",
+      expected: "C:\\Users\\dev\\AppData\\Local\\Awesome",
     },
     {
       name: "POSIX home",
       input: { environ: {}, home: "/home/dev", platform: "linux" as const },
-      expected: "/home/dev/.awesome-agent",
+      expected: "/home/dev/.awesome",
     },
     {
       name: "empty override",
@@ -46,7 +46,7 @@ describe("resolveAwesomeHome", () => {
         home: "/home/dev",
         platform: "linux" as const,
       },
-      expected: "/home/dev/.awesome-agent",
+      expected: "/home/dev/.awesome",
     },
     {
       name: "tilde override",

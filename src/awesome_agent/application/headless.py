@@ -960,7 +960,7 @@ class LocalApplication:
 
     def _activate_trusted_services(self) -> None:
         store = SQLiteChangeSetStore(self._paths.application_db)
-        blobs = FileChangeBlobStore(self._paths.state_dir / "change-journal")
+        blobs = FileChangeBlobStore(self._paths.change_journal_dir)
         journal = ChangeJournal(store, blobs, self._workspace)
         try:
             journal.reconcile_pending()

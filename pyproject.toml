@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "awesome-agent"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Observable local-first coding agent with teams and subagents."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -43,8 +43,6 @@ memory = [
 ]
 
 [project.scripts]
-awesome = "awesome_agent.cli.interactive:main"
-awesome-agent = "awesome_agent.cli.app:app"
 awesome-core = "awesome_agent.protocol.stdio:main"
 
 [dependency-groups]
@@ -62,6 +60,10 @@ packages = ["src/awesome_agent"]
 
 [tool.hatch.build]
 artifacts = ["src/awesome_agent/extensions/skills/bundled/**"]
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)$"
 
 [tool.ruff]
 target-version = "py312"

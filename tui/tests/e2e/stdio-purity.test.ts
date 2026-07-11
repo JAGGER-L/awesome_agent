@@ -23,7 +23,7 @@ describe("real Python stdio channel ownership", () => {
     "deepseek",
     "kimi",
   ])("keeps %s protocol on Core stdout and logs on Core stderr", async (provider) => {
-    const root = await mkdtemp(join(tmpdir(), "awesome-tui-stdio-"));
+    const root = await mkdtemp(join(tmpdir(), "awesome-stdio-"));
     temporary.push(root);
     const home = join(root, "home");
     const workspace = join(root, "workspace");
@@ -53,7 +53,7 @@ describe("real Python stdio channel ownership", () => {
     try {
       const initialized = await session.rpc.request("initialize", {
         protocol_version: 1,
-        client_name: "awesome-tui",
+        client_name: "awesome",
         client_version: PRODUCT_VERSION,
       });
       expect(initialized.ok).toBe(true);

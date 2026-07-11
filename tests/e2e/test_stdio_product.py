@@ -145,7 +145,7 @@ async def test_stdio_full_flow_and_restart(
         "initialize",
         {
             "protocol_version": 1,
-            "client_name": "awesome-tui",
+            "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
     )
@@ -215,7 +215,7 @@ async def test_stdio_full_flow_and_restart(
         "initialize",
         {
             "protocol_version": 1,
-            "client_name": "awesome-tui",
+            "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
     )

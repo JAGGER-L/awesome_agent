@@ -25,6 +25,8 @@ class AwesomePaths:
     state_dir: Path
     application_db: Path
     checkpoint_db: Path
+    change_journal_dir: Path
+    ui_file: Path
     runs_dir: Path
     logs_dir: Path
     threads_dir: Path
@@ -41,14 +43,19 @@ class AwesomePaths:
         env = os.environ if environ is None else environ
         host_home = home or Path.home()
         awesome_home = _path_from_env(env, "AWESOME_HOME")
+        resolved_platform = platform or sys.platform
         if awesome_home is None:
             awesome_home = _default_home(
                 env=env,
                 home=host_home,
-                platform=platform or sys.platform,
+                platform=resolved_platform,
             )
         install_dir = _path_from_env(env, "AWESOME_INSTALL_DIR") or (
-            awesome_home / "app"
+            _default_install_dir(
+                env=env,
+                home=host_home,
+                platform=resolved_platform,
+            )
         )
         return cls.from_home(awesome_home, install_dir=install_dir)
 
@@ -80,6 +87,8 @@ class AwesomePaths:
             state_dir=state_dir,
             application_db=state_dir / "application.db",
             checkpoint_db=state_dir / "checkpoints.db",
+            change_journal_dir=state_dir / "change-journal",
+            ui_file=resolved_home / "ui.json",
             runs_dir=resolved_home / "runs",
             logs_dir=resolved_home / "logs",
             threads_dir=resolved_home / "threads",
@@ -117,5 +126,18 @@ def _default_home(
     if platform.startswith("win"):
         localappdata = env.get("LOCALAPPDATA")
         base = Path(localappdata) if localappdata else home / "AppData" / "Local"
-        return base / "awesome-agent"
-    return home / ".awesome-agent"
+        return base / "Awesome"
+    return home / ".awesome"
+
+
+def _default_install_dir(
+    *,
+    env: Mapping[str, str],
+    home: Path,
+    platform: str,
+) -> Path:
+    if platform.startswith("win"):
+        localappdata = env.get("LOCALAPPDATA")
+        base = Path(localappdata) if localappdata else home / "AppData" / "Local"
+        return base / "Programs" / "Awesome"
+    return home / ".local" / "share" / "awesome"

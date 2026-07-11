@@ -662,7 +662,7 @@ class _LocalApplicationBackend:
 
         change_store = SQLiteChangeSetStore(self._paths.application_db)
         self._change_store = change_store
-        change_blobs = FileChangeBlobStore(self._paths.state_dir / "change-journal")
+        change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
         journal = ChangeJournal(change_store, change_blobs, self._workspace)
         self._change_scope = _ChangeScope(
             journal=journal,

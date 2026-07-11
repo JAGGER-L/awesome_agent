@@ -79,10 +79,35 @@ function harness(overrides: Partial<CliDependencies> = {}) {
 }
 
 describe("runCli", () => {
-  it("prints only the product version without starting Core", async () => {
-    const value = harness({ argv: ["--version"] });
+  it.each([
+    ["--version"],
+    ["-V"],
+  ])("prints only the product version for %s without starting Core", async (flag) => {
+    const value = harness({ argv: [flag] });
     await expect(runCli(value.dependencies)).resolves.toBe(0);
-    expect(value.stdout.join("")).toBe("0.1.0\n");
+    expect(value.stdout.join("")).toBe("1.0.0\n");
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--help"],
+    ["-h"],
+  ])("prints help for %s without checking TTY, Node, or Core", async (flag) => {
+    const value = harness({
+      argv: [flag],
+      nodeVersion: "invalid",
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+    });
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+    expect(value.stdout.join("")).toContain("Usage: awesome");
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+  });
+
+  it("rejects version with extra arguments before starting Core", async () => {
+    const value = harness({ argv: ["--version", "extra"] });
+    await expect(runCli(value.dependencies)).resolves.toBe(2);
+    expect(value.stderr.join("")).toContain("Usage: awesome");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 
@@ -111,7 +136,7 @@ describe("runCli", () => {
   it("rejects invalid combinations before starting Core", async () => {
     const value = harness({ argv: ["--continue", "--resume"] });
     await expect(runCli(value.dependencies)).resolves.toBe(2);
-    expect(value.stderr.join("")).toContain("Usage: awesome-tui");
+    expect(value.stderr.join("")).toContain("Usage: awesome");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 
@@ -138,7 +163,8 @@ describe("runCli", () => {
       }),
     });
     await expect(runCli(value.dependencies)).resolves.toBe(2);
-    expect(value.stderr.join("")).toContain("awesome-core");
+    expect(value.stderr.join("")).toContain("Awesome Core");
+    expect(value.stderr.join("")).not.toContain("awesome-core");
     expect(value.stderr.join("")).not.toContain("stack");
   });
 

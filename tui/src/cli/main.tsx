@@ -43,8 +43,9 @@ import {
 } from "../surface/startup.js";
 import { PRODUCT_VERSION } from "../version.js";
 import {
+  CLI_HELP,
   LaunchArgumentError,
-  parseLaunchIntent,
+  parseCliIntent,
   type LaunchIntent,
 } from "./args.js";
 import {
@@ -93,14 +94,18 @@ export interface CliDependencies {
 export async function runCli(
   dependencies: CliDependencies = productionDependencies(),
 ): Promise<0 | 1 | 2> {
-  if (dependencies.argv.length === 1 && dependencies.argv[0] === "--version") {
-    dependencies.writeStdout(`${PRODUCT_VERSION}\n`);
-    return 0;
-  }
-
   let intent: LaunchIntent;
   try {
-    intent = parseLaunchIntent(dependencies.argv);
+    const parsed = parseCliIntent(dependencies.argv);
+    if (parsed.kind === "version") {
+      dependencies.writeStdout(`${PRODUCT_VERSION}\n`);
+      return 0;
+    }
+    if (parsed.kind === "help") {
+      dependencies.writeStdout(CLI_HELP);
+      return 0;
+    }
+    intent = parsed;
     assertSupportedNode(dependencies.nodeVersion);
     assertInteractiveTerminal(
       dependencies.stdinIsTTY,
@@ -128,7 +133,7 @@ export async function runCli(
   } catch (error) {
     if (error instanceof CoreSpawnError) {
       dependencies.writeStderr(
-        "awesome-core was not found on PATH. Install the Python Core before starting awesome-tui.\n",
+        "Awesome Core could not be started. Reinstall AWESOME and try again.\n",
       );
       return 2;
     }

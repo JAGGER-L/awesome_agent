@@ -79,7 +79,7 @@ export async function beginStartup(
   surface.store?.dispatch({ type: "connection.handshaking" });
   const initialized = await surface.request("initialize", {
     protocol_version: 1,
-    client_name: "awesome-tui",
+    client_name: "awesome",
     client_version: PRODUCT_VERSION,
   });
   if (!initialized.ok) throw productFailure(initialized.error);

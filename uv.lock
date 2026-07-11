@@ -107,7 +107,6 @@ wheels = [
 
 [[package]]
 name = "awesome-agent"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -175,7 +174,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.16" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35" },
 ]
-provides-extras = ["postgres", "observability", "memory"]
+provides-extras = ["memory", "observability", "postgres"]
 
 [package.metadata.requires-dev]
 dev = [
