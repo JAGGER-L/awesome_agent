@@ -21,8 +21,8 @@ export const workspacePresentationSchema = z.strictObject({
 });
 
 export const initializeParamsSchema = z.strictObject({
-  protocol_version: z.literal(1),
-  client_name: z.literal("awesome-tui"),
+  protocol_version: safeIntegerSchema,
+  client_name: boundedText(1, 128),
   client_version: boundedText(1, 64),
 });
 
