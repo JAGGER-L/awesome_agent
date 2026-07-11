@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CommandController } from "../../src/commands/controller.js";
 import type { RoutedInput } from "../../src/commands/parser.js";
-import type {
-  MethodName,
-  MethodParams,
-} from "../../src/protocol/methods.js";
+import type { MethodName, MethodParams } from "../../src/protocol/methods.js";
 
 type Call = { method: MethodName; params: MethodParams[MethodName] };
 
@@ -78,23 +75,21 @@ describe("CommandController", () => {
     expect(calls).toEqual([]);
   });
 
-  it.each(["operation_busy", "model_not_configured"])(
-    "preserves product failure %s",
-    async (code) => {
-      const error = { code, message: code, retryable: true, data: {} };
-      const { controller } = harness({ ok: false, error });
-      await expect(
-        controller.submit({ kind: "turn", content: "hello" }, "thread_1"),
-      ).resolves.toEqual({ kind: "error", error });
-    },
-  );
+  it.each([
+    "operation_busy",
+    "model_not_configured",
+  ])("preserves product failure %s", async (code) => {
+    const error = { code, message: code, retryable: true, data: {} };
+    const { controller } = harness({ ok: false, error });
+    await expect(
+      controller.submit({ kind: "turn", content: "hello" }, "thread_1"),
+    ).resolves.toEqual({ kind: "error", error });
+  });
 
   it("opens a picker for CommandSelection and submits the selected value fresh", async () => {
     const selection = {
       prompt: "Choose model",
-      options: [
-        { value: "deepseek-chat", label: "DeepSeek", selected: true },
-      ],
+      options: [{ value: "deepseek-chat", label: "DeepSeek", selected: true }],
     };
     const { calls, controller } = harness({
       ok: true,

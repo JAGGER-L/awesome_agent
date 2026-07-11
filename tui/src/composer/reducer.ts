@@ -18,6 +18,8 @@ export function initialComposerState(): ComposerState {
       width: 80,
       startRow: 0,
       rows: [""],
+      cursorRow: 0,
+      cursorColumn: 0,
       hiddenAbove: false,
       hiddenBelow: false,
     },
@@ -75,33 +77,41 @@ export function composerReducer(
       if (codePointCount(value) > MAX_COMPOSER_CODE_POINTS) {
         return { ...state, error: "input_too_large" };
       }
-      return withViewport(clearError({
-        ...state,
-        value,
-        cursorGrapheme: state.cursorGrapheme + graphemeCount(action.text),
-      }));
+      return withViewport(
+        clearError({
+          ...state,
+          value,
+          cursorGrapheme: state.cursorGrapheme + graphemeCount(action.text),
+        }),
+      );
     }
     case "replace":
       return codePointCount(action.value) > MAX_COMPOSER_CODE_POINTS
         ? { ...state, error: "input_too_large" }
-        : withViewport(clearError({
-            ...state,
-            value: action.value,
-            cursorGrapheme: graphemeCount(action.value),
-          }));
+        : withViewport(
+            clearError({
+              ...state,
+              value: action.value,
+              cursorGrapheme: graphemeCount(action.value),
+            }),
+          );
     case "left":
-      return withViewport(clearError({
-        ...state,
-        cursorGrapheme: Math.max(0, state.cursorGrapheme - 1),
-      }));
+      return withViewport(
+        clearError({
+          ...state,
+          cursorGrapheme: Math.max(0, state.cursorGrapheme - 1),
+        }),
+      );
     case "right":
-      return withViewport(clearError({
-        ...state,
-        cursorGrapheme: Math.min(
-          graphemeCount(state.value),
-          state.cursorGrapheme + 1,
-        ),
-      }));
+      return withViewport(
+        clearError({
+          ...state,
+          cursorGrapheme: Math.min(
+            graphemeCount(state.value),
+            state.cursorGrapheme + 1,
+          ),
+        }),
+      );
     case "backspace":
       return removeRange(
         state,
@@ -113,20 +123,26 @@ export function composerReducer(
     case "buffer_home":
       return withViewport(clearError({ ...state, cursorGrapheme: 0 }));
     case "buffer_end":
-      return withViewport(clearError({
-        ...state,
-        cursorGrapheme: graphemeCount(state.value),
-      }));
+      return withViewport(
+        clearError({
+          ...state,
+          cursorGrapheme: graphemeCount(state.value),
+        }),
+      );
     case "home":
-      return withViewport(clearError({
-        ...state,
-        cursorGrapheme: lineBoundary(state, "start"),
-      }));
+      return withViewport(
+        clearError({
+          ...state,
+          cursorGrapheme: lineBoundary(state, "start"),
+        }),
+      );
     case "end":
-      return withViewport(clearError({
-        ...state,
-        cursorGrapheme: lineBoundary(state, "end"),
-      }));
+      return withViewport(
+        clearError({
+          ...state,
+          cursorGrapheme: lineBoundary(state, "end"),
+        }),
+      );
     case "delete_line_start":
       return removeRange(
         state,
@@ -157,13 +173,15 @@ function removeRange(
   const parts = graphemes(state.value);
   const boundedStart = Math.max(0, Math.min(parts.length, start));
   const boundedEnd = Math.max(boundedStart, Math.min(parts.length, end));
-  return withViewport(clearError({
-    ...state,
-    value: [...parts.slice(0, boundedStart), ...parts.slice(boundedEnd)].join(
-      "",
-    ),
-    cursorGrapheme: boundedStart,
-  }));
+  return withViewport(
+    clearError({
+      ...state,
+      value: [...parts.slice(0, boundedStart), ...parts.slice(boundedEnd)].join(
+        "",
+      ),
+      cursorGrapheme: boundedStart,
+    }),
+  );
 }
 
 function lineBoundary(state: ComposerState, side: "start" | "end"): number {

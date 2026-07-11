@@ -14,9 +14,13 @@ export function computeViewport(
   const rows: string[] = [""];
   let column = 0;
   let cursorRow = 0;
+  let cursorColumn = 0;
 
   for (let index = 0; index <= parts.length; index += 1) {
-    if (index === cursor) cursorRow = rows.length - 1;
+    if (index === cursor) {
+      cursorRow = rows.length - 1;
+      cursorColumn = column;
+    }
     if (index === parts.length) break;
 
     const part = parts[index] ?? "";
@@ -45,6 +49,8 @@ export function computeViewport(
     width,
     startRow,
     rows: rows.slice(startRow, startRow + MAX_COMPOSER_ROWS),
+    cursorRow: cursorRow - startRow,
+    cursorColumn,
     hiddenAbove: startRow > 0,
     hiddenBelow: startRow + MAX_COMPOSER_ROWS < rows.length,
   };

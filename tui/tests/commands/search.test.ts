@@ -5,11 +5,11 @@ import { searchCommands } from "../../src/commands/search.js";
 describe("searchCommands", () => {
   it("orders exact, prefix, then description matches", () => {
     expect(searchCommands("model")[0]?.name).toBe("model");
-    expect(searchCommands("m").slice(0, 3).map(({ name }) => name)).toEqual([
-      "model",
-      "mcp",
-      "memory",
-    ]);
+    expect(
+      searchCommands("m")
+        .slice(0, 3)
+        .map(({ name }) => name),
+    ).toEqual(["model", "mcp", "memory"]);
     expect(searchCommands("clipboard").map(({ name }) => name)).toEqual([
       "copy",
     ]);

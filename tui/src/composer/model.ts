@@ -2,6 +2,8 @@ export interface ComposerViewport {
   readonly width: number;
   readonly startRow: number;
   readonly rows: readonly string[];
+  readonly cursorRow: number;
+  readonly cursorColumn: number;
   readonly hiddenAbove: boolean;
   readonly hiddenBelow: boolean;
 }

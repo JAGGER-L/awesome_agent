@@ -19,9 +19,10 @@ describe("computeViewport", () => {
   });
 
   it("shows at most eight rows and follows the cursor", () => {
-    const value = Array.from({ length: 12 }, (_, index) => `line-${index}`).join(
-      "\n",
-    );
+    const value = Array.from(
+      { length: 12 },
+      (_, index) => `line-${index}`,
+    ).join("\n");
     const bottom = computeViewport(value, graphemeCount(value), 40);
     expect(bottom.rows).toHaveLength(MAX_COMPOSER_ROWS);
     expect(bottom.rows.at(-1)).toBe("line-11");

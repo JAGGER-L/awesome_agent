@@ -18,7 +18,9 @@ describe("parseInput", () => {
   });
 
   it("parses quoted and escaped slash arguments without host-shell rules", () => {
-    expect(parseInput('/skill "debug session" one\\ two \'three four\'')).toEqual({
+    expect(
+      parseInput("/skill \"debug session\" one\\ two 'three four'"),
+    ).toEqual({
       kind: "command",
       intent: {
         name: "skill",
@@ -38,23 +40,24 @@ describe("parseInput", () => {
     expect(parseInput(" \n\t ")).toBeUndefined();
   });
 
-  it.each(["/unknown", "/editor", "/details"])(
-    "rejects absent command %s",
-    (input) => {
-      expect(parseInput(input)).toEqual({
-        kind: "invalid",
-        code: "unknown_command",
-      });
-    },
-  );
+  it.each([
+    "/unknown",
+    "/editor",
+    "/details",
+  ])("rejects absent command %s", (input) => {
+    expect(parseInput(input)).toEqual({
+      kind: "invalid",
+      code: "unknown_command",
+    });
+  });
 
-  it.each(['/model "unterminated', "/model trailing\\"])(
-    "rejects malformed arguments in %s",
-    (input) => {
-      expect(parseInput(input)).toEqual({
-        kind: "invalid",
-        code: "invalid_arguments",
-      });
-    },
-  );
+  it.each([
+    '/model "unterminated',
+    "/model trailing\\",
+  ])("rejects malformed arguments in %s", (input) => {
+    expect(parseInput(input)).toEqual({
+      kind: "invalid",
+      code: "invalid_arguments",
+    });
+  });
 });
