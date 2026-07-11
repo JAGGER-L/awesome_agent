@@ -23,6 +23,20 @@ const ready: StartupResult = {
       moonshot_api_key: true,
       mem0_api_key: false,
     },
+    provider_credentials: {
+      deepseek: {
+        provider: "deepseek",
+        environment_variable: "DEEPSEEK_API_KEY",
+        source: "missing",
+        mutable: true,
+      },
+      kimi: {
+        provider: "kimi",
+        environment_variable: "MOONSHOT_API_KEY",
+        source: "missing",
+        mutable: true,
+      },
+    },
     memory_status: {},
     mcp_status: [],
     usage: {},

@@ -25,12 +25,14 @@ from awesome_agent.application.contracts import (
     OperationAccepted,
     ProductError,
     ProductErrorCode,
+    ProviderCredentialSetResult,
+    ProviderCredentialSetStatus,
     ShutdownResult,
     ThreadListResult,
     ThreadReadResult,
     WorkspacePresentation,
 )
-from awesome_agent.config import SecretStatus
+from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.conversation import Thread, ThreadView
 from awesome_agent.core.events import (
     AssistantReasoningDeltaPayload,
@@ -69,6 +71,7 @@ METHODS = (
     "turn.submit",
     "direct.execute",
     "command.execute",
+    "provider.credential.set",
     "interaction.respond",
     "operation.cancel",
     "shutdown",
@@ -189,6 +192,23 @@ def _valid_methods() -> dict[str, object]:
             "command.execute",
             _model(CommandIntent(name=CommandName.STATUS)),
             _success(CommandResult(status=CommandStatus.SUCCESS)),
+        ),
+        (
+            "provider.credential.set",
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "api_key": "fixture-request-secret",
+                "allow_unverified": False,
+            },
+            _success(
+                ProviderCredentialSetResult(
+                    provider="deepseek",
+                    status=ProviderCredentialSetStatus.SAVED,
+                    source=CredentialSource.USER_ENV_FILE,
+                    code="credential_saved",
+                )
+            ),
         ),
         (
             "interaction.respond",

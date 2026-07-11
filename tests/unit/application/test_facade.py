@@ -5,12 +5,18 @@ from pathlib import Path
 from typing import get_type_hints
 
 import pytest
+from pydantic import SecretStr
 
 from awesome_agent.application.commands import (
     CommandIntent,
     CommandName,
     CommandResult,
     CommandStatus,
+)
+from awesome_agent.application.contracts import (
+    ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
+    ProviderCredentialSetStatus,
 )
 from awesome_agent.application.facade import (
     ApplicationFacade,
@@ -29,7 +35,7 @@ from awesome_agent.application.facade import (
     WorkspacePresentation,
 )
 from awesome_agent.application.headless import ConversationCommandService
-from awesome_agent.config import SecretStatus
+from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.conversation import ConversationService
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
@@ -41,6 +47,7 @@ METHODS = {
     "submit_turn",
     "execute_direct",
     "execute_command",
+    "set_provider_credential",
     "respond_interaction",
     "cancel_operation",
     "shutdown",
@@ -94,6 +101,17 @@ class Backend:
         self.calls.append(("command", intent))
         return CommandResult(status=CommandStatus.SUCCESS)
 
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ProviderCredentialSetResult:
+        self.calls.append(("credential", request))
+        return ProviderCredentialSetResult(
+            provider=request.provider,
+            status=ProviderCredentialSetStatus.SAVED,
+            source=CredentialSource.USER_ENV_FILE,
+            code="credential_saved",
+        )
+
     async def resolve_interaction(
         self,
         interaction_id: str,
@@ -125,7 +143,7 @@ def _unwrap[T](result: ApplicationResult[T]) -> T:
     return result.value
 
 
-def test_facade_and_concrete_class_freeze_exact_ten_methods() -> None:
+def test_facade_and_concrete_class_freeze_exact_public_methods() -> None:
     assert _public_async_methods(ApplicationFacade) == METHODS
     assert _public_async_methods(LocalApplication) == METHODS
     assert not METHODS & {"start", "respond", "dispatch", "cancel", "close"}
@@ -135,7 +153,7 @@ def test_facade_and_concrete_class_freeze_exact_ten_methods() -> None:
         for name, member in ApplicationFacade.__dict__.items()
         if name in METHODS
     )
-    for concrete in ("Provider", "SQLite", "Mcp", "Mem0"):
+    for concrete in ("SQLite", "Mcp", "Mem0"):
         assert concrete not in annotations
 
 
@@ -167,6 +185,12 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
         == "operation_2"
     )
     assert _unwrap(await facade.execute_command(intent)).status is CommandStatus.SUCCESS
+    credential = ProviderCredentialSetRequest(
+        provider="deepseek", api_key=SecretStr("never-render-this")
+    )
+    saved = _unwrap(await facade.set_provider_credential(credential))
+    assert saved.status is ProviderCredentialSetStatus.SAVED
+    assert "never-render-this" not in repr(backend.calls)
     assert (
         _unwrap(await facade.respond_interaction("interaction_1", "trust")).accepted
         is True

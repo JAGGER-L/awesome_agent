@@ -41,6 +41,20 @@
           "initialized": true,
           "mcp_status": [],
           "memory_status": {},
+          "provider_credentials": {
+            "deepseek": {
+              "environment_variable": "DEEPSEEK_API_KEY",
+              "mutable": true,
+              "provider": "deepseek",
+              "source": "missing"
+            },
+            "kimi": {
+              "environment_variable": "MOONSHOT_API_KEY",
+              "mutable": true,
+              "provider": "kimi",
+              "source": "missing"
+            }
+          },
           "secret_status": {
             "deepseek_api_key": true,
             "mem0_api_key": false,
@@ -158,6 +172,24 @@
           "content": "",
           "data": {},
           "status": "success"
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set",
+      "params": {
+        "allow_unverified": false,
+        "api_key": "fixture-request-secret",
+        "provider": "deepseek"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_saved",
+          "provider": "deepseek",
+          "source": "user_env_file",
+          "status": "saved"
         }
       }
     },

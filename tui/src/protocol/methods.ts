@@ -42,6 +42,22 @@ const secretStatusSchema = z.strictObject({
   mem0_api_key: z.boolean(),
 });
 
+export const credentialSourceSchema = z.enum([
+  "missing",
+  "user_env_file",
+  "process_environment",
+]);
+export const providerCredentialStatusSchema = z.strictObject({
+  provider: z.enum(["deepseek", "kimi"]),
+  environment_variable: boundedText(1, 128),
+  source: credentialSourceSchema,
+  mutable: z.boolean(),
+});
+export const providerCredentialStatusesSchema = z.strictObject({
+  deepseek: providerCredentialStatusSchema,
+  kimi: providerCredentialStatusSchema,
+});
+
 export const applicationStateSchema = z.strictObject({
   initialized: z.boolean(),
   session_id: identifierSchema,
@@ -56,6 +72,7 @@ export const applicationStateSchema = z.strictObject({
   pending_interaction_id: identifierSchema.optional(),
   configuration_valid: z.boolean(),
   secret_status: secretStatusSchema,
+  provider_credentials: providerCredentialStatusesSchema,
   memory_status: z.record(z.string(), jsonValueSchema),
   mcp_status: z.array(z.record(z.string(), jsonValueSchema)),
   usage: z.record(z.string(), nonNegativeIntegerSchema),
@@ -267,6 +284,12 @@ const cancelResultSchema = z.strictObject({
   cancelled: z.boolean(),
 });
 const shutdownResultSchema = z.strictObject({ stopped: z.literal(true) });
+export const providerCredentialSetResultSchema = z.strictObject({
+  provider: z.enum(["deepseek", "kimi"]),
+  status: z.enum(["saved", "invalid", "confirm_unverified"]),
+  source: credentialSourceSchema,
+  code: boundedText(1, 128),
+});
 
 export const methodSchemas = {
   initialize: {
@@ -309,6 +332,15 @@ export const methodSchemas = {
     params: commandIntentSchema,
     value: commandResultSchema,
     result: applicationResultSchema(commandResultSchema),
+  },
+  "provider.credential.set": {
+    params: z.strictObject({
+      provider: z.enum(["deepseek", "kimi"]),
+      api_key: boundedText(1, 20_000),
+      allow_unverified: z.boolean().optional(),
+    }),
+    value: providerCredentialSetResultSchema,
+    result: applicationResultSchema(providerCredentialSetResultSchema),
   },
   "interaction.respond": {
     params: z.strictObject({
