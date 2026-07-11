@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +25,7 @@ from awesome_agent.application.contracts import (
 )
 from awesome_agent.config import SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
+from awesome_agent.protocol import stdio
 from awesome_agent.protocol.stdio import (
     JsonLineWriter,
     ProtocolEventSink,
@@ -230,3 +233,32 @@ async def test_invalid_shutdown_does_not_terminate_before_valid_shutdown() -> No
     assert frames[1]["result"]["ok"] is True
     assert frames[2]["result"]["value"] == {"stopped": True}
     assert facade.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_production_main_forwards_process_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    async def compose(
+        *,
+        home: Path,
+        workspace: Path,
+        event_sink: object,
+        environ: Mapping[str, str],
+    ) -> Facade:
+        del home, workspace, event_sink
+        captured.update(environ)
+        return Facade()
+
+    async def serve(facade: object, *, writer: object) -> None:
+        del facade, writer
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "release-smoke-key")
+    monkeypatch.setattr(stdio, "compose_local_application", compose)
+    monkeypatch.setattr(stdio, "serve_stdio", serve)
+
+    await stdio._run_main()
+
+    assert captured["DEEPSEEK_API_KEY"] == "release-smoke-key"
