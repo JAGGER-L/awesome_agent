@@ -29,4 +29,8 @@ export type ComposerAction =
   | { type: "delete_line_start" }
   | { type: "delete_line_end" }
   | { type: "delete_word" }
-  | { type: "replace"; value: string };
+  | { type: "replace"; value: string }
+  | { type: "resize"; width: number }
+  | { type: "submit_history"; value: string }
+  | { type: "history_previous" }
+  | { type: "history_next" };
