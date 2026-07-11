@@ -8,6 +8,7 @@ import { CommandMenu } from "../components/CommandMenu.js";
 import { Composer, type ComposerSubmitResult } from "../components/Composer.js";
 import { Picker, type PickerSelection } from "../components/Picker.js";
 import { StatusLine } from "../components/StatusLine.js";
+import type { WelcomeProps } from "../components/Welcome.js";
 import { ActiveTurn } from "../components/transcript/ActiveTurn.js";
 import { Transcript } from "../components/transcript/Transcript.js";
 import type { SurfaceStore } from "../state/index.js";
@@ -24,11 +25,13 @@ export function App({
   controller,
   width,
   blockingSelection = false,
+  welcome,
 }: {
   store: SurfaceStore;
   controller?: CommandController;
   width?: number;
   blockingSelection?: boolean;
+  welcome?: Omit<WelcomeProps, "width">;
 }) {
   const state = useSyncExternalStore(
     store.subscribe,
@@ -92,7 +95,7 @@ export function App({
 
   return (
     <Box flexDirection="column">
-      <Transcript blocks={historic} width={columns} />
+      <Transcript blocks={historic} width={columns} welcome={welcome} />
       <ActiveTurn live={live} width={columns} />
       <CommandMenu query={picker ? "" : composerValue} />
       {picker ? (
