@@ -1,4 +1,5 @@
 from awesome_agent.application.contracts import (
+    ApplicationResult,
     ApplicationState,
     CancelResult,
     InitializeResult,
@@ -7,15 +8,24 @@ from awesome_agent.application.contracts import (
     OperationAccepted,
     ProductError,
     ProductErrorCode,
+    ShutdownResult,
+    StatusSnapshot,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     ThreadReadResult,
+    WorkspacePresentation,
+    thread_display_id,
 )
+from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import ApplicationFacade, LocalApplication
 from awesome_agent.application.headless import StartupResult, StartupStatus
 from awesome_agent.application.interactions import InteractionDecision
 
 __all__ = [
     "ApplicationFacade",
+    "ApplicationFailure",
+    "ApplicationResult",
     "ApplicationState",
     "CancelResult",
     "InitializeResult",
@@ -26,8 +36,14 @@ __all__ = [
     "OperationAccepted",
     "ProductError",
     "ProductErrorCode",
+    "ShutdownResult",
     "StartupResult",
     "StartupStatus",
+    "StatusSnapshot",
+    "ThreadListQuery",
     "ThreadListResult",
+    "ThreadReadQuery",
     "ThreadReadResult",
+    "WorkspacePresentation",
+    "thread_display_id",
 ]

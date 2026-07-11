@@ -129,6 +129,7 @@ async def test_direct_command_is_foreground_operation_without_agent_turn(
     assert len(executor.requests) == 1
     assert len(view.entries) == 1
     assert view.entries[0].kind is ThreadEntryKind.DIRECT_COMMAND
+    assert view.entries[0].metadata["operation_id"] == accepted.operation_id
     assert "git status" in view.entries[0].content
     assert "working tree clean" in view.entries[0].content
     assert len(view.tool_activities) == 1

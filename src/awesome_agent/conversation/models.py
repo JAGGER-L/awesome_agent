@@ -205,3 +205,18 @@ class ThreadView(BaseModel):
     turns: tuple[Turn, ...] = ()
     summary: ThreadSummary | None = None
     tool_activities: tuple[ToolActivity, ...] = ()
+
+
+class ThreadListPage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    threads: tuple[Thread, ...] = ()
+    has_more: bool = False
+
+
+class ThreadPage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    view: ThreadView
+    has_more: bool = False
+    next_before_sequence: int | None = Field(default=None, ge=1)

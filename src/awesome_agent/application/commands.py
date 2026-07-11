@@ -39,9 +39,7 @@ class CommandName(StrEnum):
     COMMIT = "commit"
     HELP = "help"
     THEME = "theme"
-    DETAILS = "details"
     COPY = "copy"
-    EDITOR = "editor"
     QUIT = "quit"
 
 
@@ -85,9 +83,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
         for name in (
             CommandName.HELP,
             CommandName.THEME,
-            CommandName.DETAILS,
             CommandName.COPY,
-            CommandName.EDITOR,
             CommandName.QUIT,
         )
     },

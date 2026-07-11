@@ -81,6 +81,7 @@ class DirectCommandService:
                 except asyncio.CancelledError:
                     self._persist(
                         thread_id,
+                        operation_id=operation_id,
                         command=normalized,
                         output="Command was cancelled.",
                         status="cancelled",
@@ -90,13 +91,14 @@ class DirectCommandService:
                 except Exception:
                     self._persist(
                         thread_id,
+                        operation_id=operation_id,
                         command=normalized,
                         output="Command execution failed.",
                         status="error",
                         exit_code=None,
                     )
                     raise
-                self._persist_result(thread_id, normalized, result)
+                self._persist_result(thread_id, operation_id, normalized, result)
             finally:
                 self._finalize_operation(operation_id)
 
@@ -119,6 +121,7 @@ class DirectCommandService:
     def _persist_result(
         self,
         thread_id: str,
+        operation_id: str,
         command: str,
         result: ToolResult,
     ) -> None:
@@ -126,6 +129,7 @@ class DirectCommandService:
         exit_code = raw_exit if isinstance(raw_exit, int) else None
         self._persist(
             thread_id,
+            operation_id=operation_id,
             command=command,
             output=result.content,
             status=result.status.value,
@@ -136,6 +140,7 @@ class DirectCommandService:
         self,
         thread_id: str,
         *,
+        operation_id: str,
         command: str,
         output: str,
         status: str,
@@ -154,6 +159,7 @@ class DirectCommandService:
             cast(
                 dict[str, JsonValue],
                 {
+                    "operation_id": operation_id,
                     "exit_code": exit_code,
                     "status": status,
                     "truncated": truncated,

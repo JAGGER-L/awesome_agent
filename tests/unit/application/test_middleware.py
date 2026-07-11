@@ -4,7 +4,11 @@ import asyncio
 
 import pytest
 
-from awesome_agent.application.contracts import ProductError, ProductErrorCode
+from awesome_agent.application.contracts import (
+    ApplicationResult,
+    ProductError,
+    ProductErrorCode,
+)
 from awesome_agent.application.middleware import (
     ApplicationInvocation,
     ApplicationObservation,
@@ -22,9 +26,11 @@ async def test_observation_calls_next_once_and_preserves_exact_result(
     result: object = (
         object()
         if outcome == "success"
-        else ProductError(
-            code=ProductErrorCode.INVALID_ARGUMENTS,
-            message="invalid",
+        else ApplicationResult[object].failure(
+            ProductError(
+                code=ProductErrorCode.INVALID_ARGUMENTS,
+                message="invalid",
+            )
         )
     )
     observations: list[ApplicationObservation] = []

@@ -6,7 +6,7 @@ from typing import Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from awesome_agent.application.contracts import ProductError
+from awesome_agent.application.contracts import ApplicationResult
 from awesome_agent.safety import redact_value
 
 type ApplicationCall = Callable[["ApplicationInvocation"], Awaitable[object]]
@@ -86,7 +86,11 @@ class ObservationalMiddleware:
             invocation,
             correlation_id=correlation_id,
             started=started,
-            outcome="product_error" if isinstance(result, ProductError) else "success",
+            outcome=(
+                "product_error"
+                if isinstance(result, ApplicationResult) and not result.ok
+                else "success"
+            ),
             usage=_usage(result),
         )
         return result
@@ -144,6 +148,8 @@ def _safe_payload(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 def _usage(result: object) -> dict[str, int]:
+    if isinstance(result, ApplicationResult):
+        result = result.value if result.ok else None
     usage = getattr(result, "usage", None)
     if isinstance(usage, dict):
         return {

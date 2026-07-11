@@ -156,8 +156,6 @@ class SlashRouter:
                     ]
                 )
             )
-        if command.kind is SlashCommandKind.DETAILS:
-            return ChatMessage.system("Details\n\n  Off\n  On")
         if command.kind is SlashCommandKind.USAGE:
             usage = self.client.usage_summary(
                 state.backend_thread_id,

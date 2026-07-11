@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -8,6 +9,7 @@ from time import monotonic
 from typing import Any, cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from pydantic import JsonValue
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
@@ -25,16 +27,26 @@ from awesome_agent.application.commands import (
 )
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.contracts import (
+    ApplicationResult,
     ApplicationState,
     CancelResult,
+    ChangeSetSummary,
     InitializeResult,
     InitializeStatus,
     InteractionResult,
     OperationAccepted,
+    ProductError,
+    ProductErrorCode,
+    StatusSnapshot,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
     ThreadReadResult,
+    WorkspacePresentation,
+    thread_display_id,
 )
 from awesome_agent.application.direct import DirectCommandService
+from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.facade import LocalApplication
 from awesome_agent.application.headless import (
@@ -46,7 +58,7 @@ from awesome_agent.application.interactions import (
     InteractionDecision,
     InteractionKind,
 )
-from awesome_agent.application.operations import OperationController
+from awesome_agent.application.operations import OperationBusy, OperationController
 from awesome_agent.application.turns import TurnCoordinator
 from awesome_agent.config import (
     ApplicationConfig,
@@ -64,7 +76,16 @@ from awesome_agent.context import (
     ThreadCompressor,
     mem0_context_source,
 )
-from awesome_agent.conversation import ConversationService, Thread, Turn, UsageSummary
+from awesome_agent.conversation import (
+    ConversationService,
+    Thread,
+    ThreadNotFound,
+    ToolActivity,
+    Turn,
+    TurnBusy,
+    TurnNotFound,
+    UsageSummary,
+)
 from awesome_agent.core.changes import (
     ChangeJournal,
     ChangeLifecycle,
@@ -94,6 +115,7 @@ from awesome_agent.core.workspace import (
     resolve_workspace,
 )
 from awesome_agent.extensions.mcp import (
+    McpConnectionState,
     McpManager,
     McpServerConfig,
     McpSource,
@@ -134,10 +156,18 @@ from awesome_agent.storage.checkpoints import (
     sqlite_checkpoint_saver,
 )
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+from awesome_agent.storage.pagination import (
+    InvalidThreadCursor,
+    decode_thread_cursor,
+    encode_thread_cursor,
+)
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
+from awesome_agent.version import PRODUCT_VERSION
 
 type GatewayFactory = Callable[[ProviderId, str], ModelGateway]
 type McpClientFactory = Callable[[McpServerConfig], McpClient]
+
+_MAX_THREAD_RESULT_BYTES = 900_000
 
 _CAPABILITIES = (
     "threads",
@@ -339,13 +369,18 @@ class _LocalApplicationBackend:
         self._mem0_session: _Mem0Session | None = None
         self._mcp: McpManager | None = None
         self._change_scope: _ChangeScope | None = None
+        self._change_store: SQLiteChangeSetStore | None = None
         self._change_operations: ChangeOperations | None = None
+        self._workspace_branch: str | None = None
 
     async def initialize_application(self) -> InitializeResult:
         if self._initialized:
             return InitializeResult(
+                product_version=PRODUCT_VERSION,
+                protocol_version=1,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
+                workspace=self._workspace_presentation(include_branch=True),
                 capabilities=_CAPABILITIES,
             )
         if self._trust.status(self._workspace) is not TrustStatus.TRUSTED:
@@ -366,15 +401,21 @@ class _LocalApplicationBackend:
                     )
                 )
             return InitializeResult(
+                product_version=PRODUCT_VERSION,
+                protocol_version=1,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
+                workspace=self._workspace_presentation(include_branch=False),
                 capabilities=_CAPABILITIES,
             )
         await self._activate()
         return InitializeResult(
+            product_version=PRODUCT_VERSION,
+            protocol_version=1,
             status=InitializeStatus.READY,
             session_id=self._session_id,
+            workspace=self._workspace_presentation(include_branch=True),
             capabilities=_CAPABILITIES,
         )
 
@@ -391,6 +432,7 @@ class _LocalApplicationBackend:
             initialized=self._initialized,
             session_id=self._session_id,
             workspace_key=self._workspace.key,
+            workspace=self._workspace_presentation(include_branch=True),
             workspace_trusted=(
                 self._trust.status(self._workspace) is TrustStatus.TRUSTED
             ),
@@ -425,36 +467,150 @@ class _LocalApplicationBackend:
             usage=usage.model_dump(mode="json"),
             configuration_diagnostics=(
                 (self._mem0_diagnostic.code,)
-                if self._mem0_diagnostic is not None
+                if (
+                    self._mem0_diagnostic is not None
+                    and self._mem0_session is not None
+                    and self._mem0_session.enabled
+                )
                 else ()
             ),
         )
 
-    async def workspace_threads(self) -> ThreadListResult:
+    async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
+        self._require_active()
+        try:
+            cursor = (
+                decode_thread_cursor(query.cursor) if query.cursor is not None else None
+            )
+        except InvalidThreadCursor as error:
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Thread cursor is invalid.",
+            ) from error
+        page = self._conversation.list_thread_page(
+            self._workspace.key,
+            cursor=cursor,
+            limit=query.limit,
+        )
+        next_cursor = (
+            encode_thread_cursor((page.threads[-1].updated_at, page.threads[-1].id))
+            if page.has_more and page.threads
+            else None
+        )
         return ThreadListResult(
-            threads=self._conversation.list_threads(self._workspace.key)
+            threads=page.threads,
+            has_more=page.has_more,
+            next_cursor=next_cursor,
         )
 
-    async def thread_state(self, thread_id: str) -> ThreadReadResult:
-        view = self._conversation.read_thread(thread_id)
-        if view.thread.workspace_key != self._workspace.key:
-            raise LookupError(thread_id)
-        return ThreadReadResult(view=view)
+    async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
+        self._require_active()
+        limit = query.limit
+        while True:
+            try:
+                page = self._conversation.read_thread_page(
+                    query.thread_id,
+                    before_sequence=query.before_sequence,
+                    limit=limit,
+                )
+            except ThreadNotFound as error:
+                raise _application_failure(
+                    ProductErrorCode.THREAD_NOT_FOUND,
+                    "Thread was not found.",
+                ) from error
+            if page.view.thread.workspace_key != self._workspace.key:
+                raise _application_failure(
+                    ProductErrorCode.THREAD_NOT_FOUND,
+                    "Thread was not found.",
+                )
+            result = ThreadReadResult(
+                view=page.view,
+                change_sets=self._page_change_summaries(page.view.tool_activities),
+                has_more=page.has_more,
+                next_before_sequence=page.next_before_sequence,
+            )
+            encoded = (
+                ApplicationResult.success(result).model_dump_json().encode("utf-8")
+            )
+            if len(encoded) <= _MAX_THREAD_RESULT_BYTES:
+                return result
+            if limit == 1:
+                raise _application_failure(
+                    ProductErrorCode.INTERNAL_ERROR,
+                    "Thread entry exceeds the protocol response limit.",
+                )
+            limit = max(1, limit // 2)
 
     async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
         self._require_active()
         assert self._turns is not None
-        return await self._turns.submit_turn(thread_id, content)
+        if not content.strip():
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Turn input is invalid.",
+            )
+        try:
+            thread = self._conversation.read_thread(thread_id).thread
+            config = self._turn_config(thread)
+            self._require_provider_configured(config.provider)
+            return await self._turns.submit_turn(thread_id, content)
+        except ApplicationFailure:
+            raise
+        except OperationBusy as error:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Another operation is active.",
+                retryable=True,
+            ) from error
+        except TurnBusy as error:
+            raise _application_failure(
+                ProductErrorCode.TURN_BUSY,
+                "The Thread already has an active Turn.",
+                retryable=True,
+            ) from error
+        except ThreadNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            ) from error
+        except TurnNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.TURN_NOT_FOUND,
+                "Turn was not found.",
+            ) from error
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
         self._require_active()
         assert self._direct is not None
-        return await self._direct.start(thread_id, command)
+        if not command.strip():
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Direct command is invalid.",
+            )
+        try:
+            return await self._direct.start(thread_id, command)
+        except OperationBusy as error:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Another operation is active.",
+                retryable=True,
+            ) from error
+        except ThreadNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            ) from error
 
     async def run_command(self, intent: CommandIntent) -> CommandResult:
         self._require_active()
         assert self._commands is not None
-        return await self._commands.handle(intent)
+        try:
+            return await self._commands.handle(intent)
+        except ThreadNotFound as error:
+            raise _application_failure(
+                ProductErrorCode.THREAD_NOT_FOUND,
+                "Thread was not found.",
+            ) from error
 
     async def resolve_interaction(
         self,
@@ -494,12 +650,17 @@ class _LocalApplicationBackend:
     async def _activate(self) -> None:
         if self._initialized:
             return
+        self._workspace_branch = await asyncio.to_thread(
+            _git_branch,
+            self._workspace.canonical_path,
+        )
         self._sources = self._load_sources(workspace_trusted=True)
         self._application_config = resolve_application_config(self._sources)
         gateway_factory = self._injected_gateway_factory or self._provider_factory()
         gateway_router = _GatewayRouter(gateway_factory)
 
         change_store = SQLiteChangeSetStore(self._paths.application_db)
+        self._change_store = change_store
         change_blobs = FileChangeBlobStore(self._paths.state_dir / "change-journal")
         journal = ChangeJournal(change_store, change_blobs, self._workspace)
         self._change_scope = _ChangeScope(
@@ -705,13 +866,6 @@ class _LocalApplicationBackend:
             workspace_key=self._workspace.key,
             delegate=self._delegate_command,
         )
-        if not self._conversation.list_threads(self._workspace.key):
-            await self._commands.handle(CommandIntent(name=CommandName.NEW))
-        else:
-            first = self._conversation.list_threads(self._workspace.key)[0]
-            await self._commands.handle(
-                CommandIntent(name=CommandName.RESUME, arguments=(first.id,))
-            )
         await self._turns.reconcile_startup()
         self._initialized = True
 
@@ -731,7 +885,7 @@ class _LocalApplicationBackend:
             if provider == "deepseek":
                 secret = secrets.deepseek_api_key
                 if secret is None:
-                    raise RuntimeError("provider_not_configured")
+                    raise AssertionError("DeepSeek credential preflight was bypassed.")
                 adapter: ModelProvider = DeepSeekProvider(
                     api_key=secret.get_secret_value(),
                     model=model,
@@ -739,7 +893,7 @@ class _LocalApplicationBackend:
             else:
                 secret = secrets.moonshot_api_key
                 if secret is None:
-                    raise RuntimeError("provider_not_configured")
+                    raise AssertionError("Kimi credential preflight was bypassed.")
                 adapter = KimiProvider(
                     api_key=secret.get_secret_value(),
                     model=model,
@@ -821,9 +975,61 @@ class _LocalApplicationBackend:
                 },
             )
         if intent.name is CommandName.STATUS:
+            thread = self._conversation.read_thread(thread_id).thread
+            config = self._turn_config(thread)
+            initial_display_id = thread_display_id(thread.id)
+            display_candidates = self._conversation.match_thread_prefix(
+                self._workspace.key,
+                prefix=initial_display_id,
+                limit=200,
+            )
+            statuses = self._mcp.statuses() if self._mcp is not None else ()
+            local_enabled = self._local_memory.enabled if self._local_memory else False
+            mem0_enabled = (
+                self._mem0_session.enabled if self._mem0_session is not None else False
+            )
+            active_operation_id = self._operations.active_operation_id
+            snapshot = StatusSnapshot(
+                version=PRODUCT_VERSION,
+                workspace_path=str(self._workspace.display_path),
+                thread_title=thread.title,
+                thread_id=thread.id,
+                thread_display_id=thread_display_id(
+                    thread.id,
+                    candidate_ids=(item.id for item in display_candidates),
+                ),
+                model_id=config.model,
+                model_status=(
+                    "configured"
+                    if self._provider_is_configured(config.provider)
+                    else "not_configured"
+                ),
+                thinking_enabled=thread.thinking_enabled,
+                skill_mode=thread.skill_mode,
+                local_memory_enabled=local_enabled,
+                mem0_enabled=mem0_enabled,
+                mcp_ready=sum(
+                    status.state is McpConnectionState.CONNECTED for status in statuses
+                ),
+                mcp_degraded=sum(
+                    status.state is McpConnectionState.ERROR for status in statuses
+                ),
+                operation_status="active" if active_operation_id else "idle",
+                operation_id=active_operation_id,
+                configuration_valid=True,
+                configuration_diagnostic_count=(
+                    1
+                    if (
+                        self._mem0_diagnostic is not None
+                        and self._mem0_session is not None
+                        and self._mem0_session.enabled
+                    )
+                    else 0
+                ),
+            )
             return CommandResult(
                 status=CommandStatus.SUCCESS,
-                data=(await self.application_state()).model_dump(mode="json"),
+                data=cast(dict[str, JsonValue], snapshot.model_dump(mode="json")),
             )
         if intent.name is CommandName.USAGE:
             usage = _last_usage(self._conversation, thread_id)
@@ -915,7 +1121,68 @@ class _LocalApplicationBackend:
 
     def _require_active(self) -> None:
         if not self._initialized:
-            raise RuntimeError("workspace_not_trusted")
+            raise _application_failure(
+                ProductErrorCode.WORKSPACE_NOT_TRUSTED,
+                "Trust the workspace before using project capabilities.",
+            )
+
+    def _require_provider_configured(self, provider: ProviderId) -> None:
+        if not self._provider_is_configured(provider):
+            raise _application_failure(
+                ProductErrorCode.PROVIDER_NOT_CONFIGURED,
+                f"{provider} credentials are not configured.",
+                data={"provider": provider},
+            )
+
+    def _provider_is_configured(self, provider: ProviderId) -> bool:
+        status = self._sources.secret_status
+        return (
+            status.deepseek_api_key
+            if provider == "deepseek"
+            else status.moonshot_api_key
+        )
+
+    def _workspace_presentation(
+        self,
+        *,
+        include_branch: bool,
+    ) -> WorkspacePresentation:
+        return WorkspacePresentation(
+            display_path=str(self._workspace.display_path),
+            branch=self._workspace_branch if include_branch else None,
+        )
+
+    def _page_change_summaries(
+        self,
+        activities: tuple[ToolActivity, ...],
+    ) -> tuple[ChangeSetSummary, ...]:
+        if self._change_store is None:
+            return ()
+        summaries: list[ChangeSetSummary] = []
+        seen: set[str] = set()
+        for activity in activities:
+            change_set_id = activity.change_set_id
+            if change_set_id is None or change_set_id in seen:
+                continue
+            seen.add(change_set_id)
+            change_set = self._change_store.get(change_set_id)
+            if change_set is None:
+                continue
+            summaries.append(
+                ChangeSetSummary(
+                    change_set_id=change_set.id,
+                    turn_id=change_set.turn_id,
+                    operation_id=activity.operation_id,
+                    lifecycle=change_set.lifecycle.value,
+                    changed_paths=tuple(
+                        sorted({item.path for item in change_set.files})
+                    ),
+                    reversibility=change_set.reversibility.value,
+                    created_at=change_set.created_at,
+                    sealed_at=change_set.sealed_at,
+                )
+            )
+        return tuple(summaries)
 
 
 def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:
@@ -959,3 +1226,45 @@ def _error(code: str, message: str) -> CommandResult:
         content=message,
         data={"error_code": code},
     )
+
+
+def _application_failure(
+    code: ProductErrorCode,
+    message: str,
+    *,
+    retryable: bool = False,
+    data: dict[str, JsonValue] | None = None,
+) -> ApplicationFailure:
+    return ApplicationFailure(
+        ProductError(
+            code=code,
+            message=message,
+            retryable=retryable,
+            data=data or {},
+        )
+    )
+
+
+def _git_branch(workspace: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(workspace),
+                "symbolic-ref",
+                "--quiet",
+                "--short",
+                "HEAD",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    branch = completed.stdout.strip()
+    return branch or None

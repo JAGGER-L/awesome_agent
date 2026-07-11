@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-APPLICATION_SCHEMA_VERSION = 4
+APPLICATION_SCHEMA_VERSION = 5
 
 _MIGRATION_1 = """
 CREATE TABLE trusted_workspaces (
@@ -157,11 +157,22 @@ CREATE TABLE mcp_enablements (
 )
 """
 
+_MIGRATION_5 = """
+DROP INDEX idx_threads_workspace_updated;
+CREATE INDEX idx_threads_workspace_updated
+ON threads (workspace_key, updated_at DESC, thread_id);
+CREATE INDEX idx_tool_activities_thread_turn
+ON tool_activities (thread_id, turn_id);
+CREATE INDEX idx_tool_activities_thread_operation
+ON tool_activities (thread_id, operation_id)
+"""
+
 _MIGRATIONS: dict[int, str] = {
     1: _MIGRATION_1,
     2: _MIGRATION_2,
     3: _MIGRATION_3,
     4: _MIGRATION_4,
+    5: _MIGRATION_5,
 }
 
 

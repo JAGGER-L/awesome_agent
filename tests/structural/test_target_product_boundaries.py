@@ -133,9 +133,7 @@ def test_final_command_inventory_and_absent_commands_are_frozen() -> None:
         "commit",
         "help",
         "theme",
-        "details",
         "copy",
-        "editor",
         "quit",
     }
     assert not {
@@ -149,4 +147,6 @@ def test_final_command_inventory_and_absent_commands_are_frozen() -> None:
         "api",
         "agent",
         "team",
+        "details",
+        "editor",
     } & {name.value for name in CommandName}

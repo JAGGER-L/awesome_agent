@@ -14,6 +14,7 @@ from awesome_agent.application.commands import (
 )
 from awesome_agent.application.facade import (
     ApplicationFacade,
+    ApplicationResult,
     ApplicationState,
     CancelResult,
     InitializeResult,
@@ -21,7 +22,10 @@ from awesome_agent.application.facade import (
     InteractionResult,
     LocalApplication,
     OperationAccepted,
+    ThreadListQuery,
     ThreadListResult,
+    ThreadReadQuery,
+    WorkspacePresentation,
 )
 from awesome_agent.application.headless import ConversationCommandService
 from awesome_agent.config import SecretStatus
@@ -49,8 +53,11 @@ class Backend:
     async def initialize_application(self) -> InitializeResult:
         self.calls.append(("initialize", None))
         return InitializeResult(
+            product_version="0.1.0",
+            protocol_version=1,
             status=InitializeStatus.READY,
             session_id="session_1",
+            workspace=WorkspacePresentation(display_path="C:\\workspace"),
             capabilities=("turns", "commands"),
         )
 
@@ -60,18 +67,19 @@ class Backend:
             initialized=True,
             session_id="session_1",
             workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            workspace=WorkspacePresentation(display_path="C:\\workspace"),
             workspace_trusted=True,
             configuration_valid=True,
             secret_status=SecretStatus(),
         )
 
-    async def workspace_threads(self) -> ThreadListResult:
-        self.calls.append(("threads", None))
+    async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
+        self.calls.append(("threads", query))
         return ThreadListResult()
 
-    async def thread_state(self, thread_id: str) -> object:
-        self.calls.append(("read", thread_id))
-        raise LookupError(thread_id)
+    async def thread_state(self, query: ThreadReadQuery) -> object:
+        self.calls.append(("read", query))
+        raise LookupError(query.thread_id)
 
     async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
         self.calls.append(("turn", (thread_id, content)))
@@ -109,6 +117,13 @@ def _public_async_methods(value: type[object]) -> set[str]:
     }
 
 
+def _unwrap[T](result: ApplicationResult[T]) -> T:
+    assert result.ok is True
+    assert result.error is None
+    assert result.value is not None
+    return result.value
+
+
 def test_facade_and_concrete_class_freeze_exact_ten_methods() -> None:
     assert _public_async_methods(ApplicationFacade) == METHODS
     assert _public_async_methods(LocalApplication) == METHODS
@@ -128,9 +143,9 @@ async def test_facade_initialization_and_shutdown_are_idempotent() -> None:
     backend = Backend()
     facade = LocalApplication(backend)
 
-    assert await facade.initialize() == await facade.initialize()
-    await facade.shutdown()
-    await facade.shutdown()
+    assert _unwrap(await facade.initialize()) == _unwrap(await facade.initialize())
+    assert _unwrap(await facade.shutdown()).stopped is True
+    assert _unwrap(await facade.shutdown()).stopped is True
 
     assert [name for name, _ in backend.calls] == ["initialize", "shutdown"]
 
@@ -141,17 +156,21 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     facade = LocalApplication(backend)
     intent = CommandIntent(name=CommandName.STATUS)
 
-    assert (await facade.get_state()).workspace_trusted is True
-    assert (await facade.list_threads()).threads == ()
-    assert (await facade.submit_turn("thread_1", "inspect")).operation_id == (
+    assert _unwrap(await facade.get_state()).workspace_trusted is True
+    assert _unwrap(await facade.list_threads(ThreadListQuery())).threads == ()
+    assert _unwrap(await facade.submit_turn("thread_1", "inspect")).operation_id == (
         "operation_1"
     )
-    assert (await facade.execute_direct("thread_1", "git status")).operation_id == (
-        "operation_2"
+    assert (
+        _unwrap(await facade.execute_direct("thread_1", "git status")).operation_id
+        == "operation_2"
     )
-    assert (await facade.execute_command(intent)).status is CommandStatus.SUCCESS
-    assert (await facade.respond_interaction("interaction_1", "trust")).accepted is True
-    assert (await facade.cancel_operation("operation_1")).cancelled is True
+    assert _unwrap(await facade.execute_command(intent)).status is CommandStatus.SUCCESS
+    assert (
+        _unwrap(await facade.respond_interaction("interaction_1", "trust")).accepted
+        is True
+    )
+    assert _unwrap(await facade.cancel_operation("operation_1")).cancelled is True
 
 
 @pytest.mark.asyncio
@@ -237,3 +256,55 @@ async def test_resume_is_workspace_scoped_and_ink_commands_are_surface_owned(
     assert selected.data["thread_id"] == own.id
     assert surface.data["error_code"] == "surface_command"
     assert invalid.data["error_code"] == "thread_not_found"
+
+
+@pytest.mark.asyncio
+async def test_resume_accepts_full_or_unique_prefix_and_selects_ambiguity(
+    tmp_path: Path,
+) -> None:
+    identifiers = iter(
+        (
+            "thread_aaaaaaaa111111111111111111111111",
+            "thread_aaaaaaaa222222222222222222222222",
+            "thread_bbbbbbbb333333333333333333333333",
+        )
+    )
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(tmp_path / "application.db"),
+        id_factory=lambda prefix: next(identifiers),
+    )
+    first = conversation.create_thread("workspace_1", "First")
+    second = conversation.create_thread("workspace_1", "Second")
+    third = conversation.create_thread("workspace_1", "Third")
+
+    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
+        del intent, thread_id
+        return CommandResult(status=CommandStatus.SUCCESS)
+
+    commands = ConversationCommandService(
+        conversation=conversation,
+        workspace_key="workspace_1",
+        delegate=delegate,
+    )
+
+    exact = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=(first.id,))
+    )
+    unique = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=("thread_bbbbbbbb",))
+    )
+    ambiguous = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=("thread_aaaaaaaa",))
+    )
+    too_short = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=("thread_bbbbbbb",))
+    )
+
+    assert exact.data["thread_id"] == first.id
+    assert unique.data["thread_id"] == third.id
+    assert ambiguous.selection is not None
+    assert {option.value for option in ambiguous.selection.options} == {
+        first.id,
+        second.id,
+    }
+    assert too_short.data["error_code"] == "thread_not_found"
