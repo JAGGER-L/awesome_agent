@@ -42,6 +42,7 @@ FORBIDDEN_EXTERNAL = {
     "textual",
 }
 LEGACY_SURFACE_PACKAGES = {"cli", "client", "surfaces", "tui"}
+LEGACY_PLATFORM_PACKAGES = {"runtime", "agents", "observability", "orchestration"}
 TARGET_PACKAGES = {
     "agent",
     "application",
@@ -198,6 +199,15 @@ def test_python_legacy_surfaces_are_physically_absent() -> None:
     assert not {"textual", "typer"} & dependencies
     assert (Path("tui") / "src" / "cli" / "index.ts").is_file()
     assert (ROOT / "protocol" / "stdio.py").is_file()
+
+
+def test_platform_runtime_packages_and_dependencies_are_physically_absent() -> None:
+    assert not {
+        name for name in LEGACY_PLATFORM_PACKAGES if any((ROOT / name).rglob("*.py"))
+    }
+
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    assert "observability" not in project["project"]["optional-dependencies"]
 
 
 def test_api_and_container_product_paths_are_absent() -> None:

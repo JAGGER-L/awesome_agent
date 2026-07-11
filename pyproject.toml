@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "awesome-agent"
 dynamic = ["version"]
-description = "Observable local-first coding agent with teams and subagents."
+description = "Local-first terminal coding agent."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = {text = "MIT"}
@@ -27,12 +27,6 @@ postgres = [
   "langgraph-checkpoint-postgres>=2.0",
   "psycopg[binary,pool]>=3.2",
   "sqlalchemy[asyncio]>=2.0",
-]
-observability = [
-  "opentelemetry-api>=1.36",
-  "opentelemetry-exporter-otlp>=1.36",
-  "opentelemetry-sdk>=1.36",
-  "structlog>=25.4",
 ]
 memory = [
   "mem0ai>=2.0.7,<3",
