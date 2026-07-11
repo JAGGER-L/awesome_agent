@@ -212,8 +212,15 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
     approved_node_imports = {
         imported for imports in node_importers.values() for imported in imports
     }
+    clipboard_importers = {
+        path.relative_to(TUI_ROOT).as_posix()
+        for path, imports in imports_by_path.items()
+        if "clipboardy" in imports
+    }
+    assert clipboard_importers == {"src/adapters/clipboard.ts"}
     assert all(
         imported == "zod"
+        or imported == "clipboardy"
         or imported.startswith(".")
         or imported in approved_node_imports
         for imports in imports_by_path.values()
@@ -222,7 +229,6 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
     source = "\n".join(path.read_text(encoding="utf-8") for path in sources)
     assert not {
         "@langchain/langgraph",
-        "clipboardy",
         "docker",
         "fastapi",
         "node:http",

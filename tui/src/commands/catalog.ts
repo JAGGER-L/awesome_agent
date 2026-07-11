@@ -10,6 +10,7 @@ export interface CommandMetadata {
   readonly owner: CommandOwner;
   readonly usage: string;
   readonly description: string;
+  readonly examples: readonly string[];
 }
 
 const metadata: Readonly<Record<CommandName, readonly [string, string]>> = {
@@ -49,6 +50,7 @@ export const COMMAND_CATALOG: readonly CommandMetadata[] = commandNames.map(
     owner: commandOwners[name],
     usage: metadata[name][0],
     description: metadata[name][1],
+    examples: [metadata[name][0]],
   }),
 );
 
