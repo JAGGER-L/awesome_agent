@@ -41,9 +41,11 @@ export class FakeLineTransport implements LineTransport {
   readonly #writtenMessages: unknown[] = [];
   readonly readable: AsyncIterable<Uint8Array> = this.#source;
   closeCalls = 0;
+  writeCalls = 0;
   writeFailure: Error | undefined;
 
   async write(bytes: Uint8Array): Promise<void> {
+    this.writeCalls += 1;
     if (this.writeFailure) {
       const error = this.writeFailure;
       this.writeFailure = undefined;

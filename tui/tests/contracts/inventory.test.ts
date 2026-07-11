@@ -7,7 +7,9 @@ import {
   eventEnvelopeSchema,
   eventTypes,
   inkCommandNames,
+  jsonValueSchema,
   methodNames,
+  methodSchemas,
   requestIdSchema,
   skillCommandNames,
   threadEntrySchema,
@@ -111,6 +113,16 @@ describe("strict wire boundaries", () => {
     expect(requestIdSchema.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(
       false,
     );
+    expect(jsonValueSchema.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts omitted command arguments like the Python default", () => {
+    expect(
+      methodSchemas["command.execute"].params.safeParse({ name: "status" })
+        .success,
+    ).toBe(true);
   });
 
   it("rejects unknown result branches", () => {

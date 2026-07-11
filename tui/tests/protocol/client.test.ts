@@ -234,4 +234,13 @@ describe("RpcClient events and close", () => {
       RpcClosedError,
     );
   });
+
+  it("does not write a queued frame after close", async () => {
+    const transport = new FakeLineTransport();
+    const client = createRpcClient(transport);
+    const pending = client.request("shutdown", {});
+    await client.close(new RpcClosedError("closed before write"));
+    await expect(pending).rejects.toBeInstanceOf(RpcClosedError);
+    expect(transport.writeCalls).toBe(0);
+  });
 });

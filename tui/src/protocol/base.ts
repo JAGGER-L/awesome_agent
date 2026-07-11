@@ -8,11 +8,18 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+const jsonNumberSchema = z
+  .number()
+  .finite()
+  .refine((value) => !Number.isInteger(value) || Number.isSafeInteger(value), {
+    message: "JSON integers must be within the JavaScript safe integer range",
+  });
+
 export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([
     z.null(),
     z.boolean(),
-    z.number().finite(),
+    jsonNumberSchema,
     z.string(),
     z.array(jsonValueSchema),
     z.record(z.string(), jsonValueSchema),

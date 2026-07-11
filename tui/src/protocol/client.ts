@@ -186,7 +186,9 @@ class DefaultRpcClient implements RpcClient {
       },
     );
     this.#writeChain = this.#writeChain
-      .then(async () => await this.transport.write(frame))
+      .then(async () => {
+        if (!this.#closed) await this.transport.write(frame);
+      })
       .catch(async (error: unknown) => {
         await this.#closeInternal(
           new RpcClosedError("RPC transport write failed", { cause: error }),

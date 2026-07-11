@@ -79,7 +79,7 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
 
 export const commandIntentSchema = z.strictObject({
   name: commandNameSchema,
-  arguments: z.array(z.string()),
+  arguments: z.array(z.string()).optional(),
 });
 
 export const commandOptionSchema = z.strictObject({
