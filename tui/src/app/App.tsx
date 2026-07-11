@@ -1,5 +1,5 @@
-import { Box, Text, useStdout } from "ink";
-import { useCallback, useState, useSyncExternalStore } from "react";
+import { Box, Text, useInput, useStdout } from "ink";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import type { CommandController } from "../commands/controller.js";
 import type {
@@ -7,6 +7,7 @@ import type {
   LocalCommandService,
 } from "../commands/local.js";
 import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
+import type { ExitReason } from "../lifecycle/exit.js";
 import type { CommandIntent } from "../commands/parser.js";
 import { parseInput } from "../commands/parser.js";
 import { CommandMenu } from "../components/CommandMenu.js";
@@ -25,6 +26,7 @@ import {
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
 import { projectLiveTurn } from "../transcript/live.js";
+import { GlobalKeyController } from "./global-keys.js";
 
 type PendingPicker =
   | {
@@ -34,6 +36,11 @@ type PendingPicker =
     }
   | { readonly kind: "local_theme"; readonly selection: PickerSelection };
 
+export interface AppLifecycle {
+  cancelActiveOperation(): Promise<void>;
+  requestExit(reason: ExitReason): Promise<unknown>;
+}
+
 export function App({
   store,
   controller,
@@ -41,8 +48,8 @@ export function App({
   blockingSelection = false,
   welcome,
   localCommands,
-  onShutdownIntent,
   cancellation = { status: "idle" },
+  lifecycle,
 }: {
   store: SurfaceStore;
   controller?: CommandController;
@@ -50,8 +57,8 @@ export function App({
   blockingSelection?: boolean;
   welcome?: Omit<WelcomeProps, "width">;
   localCommands?: LocalCommandService;
-  onShutdownIntent?: () => void;
   cancellation?: CancellationSnapshot;
+  lifecycle?: AppLifecycle;
 }) {
   const state = useSyncExternalStore(
     store.subscribe,
@@ -65,6 +72,8 @@ export function App({
   const [helpCommand, setHelpCommand] = useState<string | null>();
   const [status, setStatus] = useState<StatusSnapshot>();
   const [localNotice, setLocalNotice] = useState<string>();
+  const [clearRevision, setClearRevision] = useState(0);
+  const globalKeys = useRef(new GlobalKeyController()).current;
   const historic =
     state.committed_transcript ??
     (state.thread ? hydrateThreadPage(state.thread).blocks : []);
@@ -84,12 +93,37 @@ export function App({
           setLocalNotice(result.message);
           return { accepted: true };
         case "shutdown":
-          onShutdownIntent?.();
+          void lifecycle?.requestExit("quit_command");
           return { accepted: true };
       }
     },
-    [onShutdownIntent],
+    [lifecycle],
   );
+
+  useInput((input, key) => {
+    const action = globalKeys.handle({
+      input,
+      key,
+      activeOperation: state.active_operation?.status === "active",
+      composerEmpty: composerValue.length === 0,
+    });
+    if (!action) return;
+    switch (action.kind) {
+      case "cancel":
+        void lifecycle?.cancelActiveOperation();
+        break;
+      case "clear_composer":
+        setClearRevision((value) => value + 1);
+        setLocalNotice(undefined);
+        break;
+      case "exit_hint":
+        setLocalNotice("Press Ctrl+C again to quit");
+        break;
+      case "exit":
+        void lifecycle?.requestExit(action.reason);
+        break;
+    }
+  });
   const submit = useCallback(
     async (value: string): Promise<ComposerSubmitResult> => {
       setStatus(undefined);
@@ -224,6 +258,7 @@ export function App({
       ) : (
         <Composer
           width={columns}
+          clearRevision={clearRevision}
           onSubmit={submit}
           onValueChange={setComposerValue}
         />
