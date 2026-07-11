@@ -58,6 +58,9 @@ const handleLine = (line) => {
         protocol_version: 1,
         status: mode === "trust-required" ? "trust_required" : "ready",
         session_id: "session_fake",
+        ...(mode === "trust-required"
+          ? { interaction_id: "interaction_fake" }
+          : {}),
         workspace: {
           display_path: process.cwd(),
           branch: process.env.AWESOME_FAKE_CORE_MARKER ?? "fake",
