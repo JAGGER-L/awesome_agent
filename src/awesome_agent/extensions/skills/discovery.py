@@ -13,16 +13,14 @@ from awesome_agent.extensions.skills.models import (
     SkillSource,
 )
 
-_LEGACY_FIELDS = frozenset(
+_ALLOWED_FIELDS = frozenset(
     {
-        "requested_tools",
-        "required_capabilities",
-        "risk_level",
-        "compatible_actor_kinds",
-        "compatible_routes",
-        "actor_kinds",
-        "routes",
-        "team",
+        "name",
+        "description",
+        "allowed-tools",
+        "license",
+        "compatibility",
+        "metadata",
     }
 )
 
@@ -54,17 +52,6 @@ def discover_skills(
                 continue
             try:
                 descriptor = _descriptor(directory, source)
-            except _LegacyFieldError as error:
-                diagnostics.append(
-                    _diagnostic(
-                        "unsupported_legacy_field",
-                        source,
-                        directory,
-                        directory.name,
-                        str(error),
-                    )
-                )
-                continue
             except (OSError, UnicodeError, ValueError, ValidationError) as error:
                 diagnostics.append(
                     _diagnostic(
@@ -105,15 +92,11 @@ def discover_skills(
     )
 
 
-class _LegacyFieldError(ValueError):
-    pass
-
-
 def _descriptor(directory: Path, source: SkillSource) -> SkillDescriptor:
     metadata = _frontmatter(directory / "SKILL.md")
-    legacy = _LEGACY_FIELDS & metadata.keys()
-    if legacy:
-        raise _LegacyFieldError(f"Unsupported legacy fields: {sorted(legacy)}")
+    unknown = metadata.keys() - _ALLOWED_FIELDS
+    if unknown:
+        raise ValueError(f"Unsupported Skill fields: {sorted(unknown)}")
     name = str(metadata.get("name") or "")
     if name != directory.name:
         raise ValueError("Skill name must match its directory")

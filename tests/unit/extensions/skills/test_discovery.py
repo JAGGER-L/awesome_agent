@@ -51,7 +51,7 @@ def test_invalid_packages_become_diagnostics_not_global_failure(tmp_path: Path) 
     user = tmp_path / "user"
     user.mkdir()
     _skill(user, "good", "valid", "allowed-tools: [read_file]\n")
-    _skill(user, "legacy", "invalid", "requested_tools: [execute]\n")
+    _skill(user, "unknown", "invalid", "unexpected-option: true\n")
     _skill(user, "mismatch", "invalid", "name: other\n")
     malformed = user / "broken"
     malformed.mkdir()
@@ -66,7 +66,5 @@ def test_invalid_packages_become_diagnostics_not_global_failure(tmp_path: Path) 
 
     assert [item.name for item in catalog.descriptors()] == ["good"]
     assert catalog.resolve("good").allowed_tools == ("read_file",)
-    assert {item.code for item in catalog.diagnostics()} >= {
-        "unsupported_legacy_field",
-        "invalid_skill",
-    }
+    assert len(catalog.diagnostics()) == 3
+    assert {item.code for item in catalog.diagnostics()} == {"invalid_skill"}
