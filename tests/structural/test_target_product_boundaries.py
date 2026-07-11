@@ -38,6 +38,22 @@ FORBIDDEN_EXTERNAL = {
     "docker",
     "textual",
 }
+LEGACY_SURFACE_PACKAGES = {"cli", "client", "surfaces", "tui"}
+TARGET_PACKAGES = {
+    "agent",
+    "application",
+    "config",
+    "context",
+    "conversation",
+    "core",
+    "extensions",
+    "memory",
+    "modeling",
+    "protocol",
+    "providers",
+    "safety",
+    "storage",
+}
 
 
 def _imports(path: Path) -> set[str]:
@@ -89,6 +105,40 @@ def test_target_host_recursive_import_graph_excludes_legacy_platform() -> None:
 
     assert not violations
     assert len(visited) > 20
+
+
+def test_python_legacy_surfaces_are_physically_absent() -> None:
+    assert not {
+        name for name in LEGACY_SURFACE_PACKAGES if any((ROOT / name).rglob("*.py"))
+    }
+
+    retained_source = tuple(
+        path for name in TARGET_PACKAGES for path in (ROOT / name).rglob("*.py")
+    )
+    violations = {
+        path.relative_to(ROOT).as_posix(): sorted(
+            imported
+            for imported in _imports(path)
+            if imported in {"textual", "typer"}
+            or imported.startswith(("textual.", "typer."))
+            or any(
+                imported == f"awesome_agent.{name}"
+                or imported.startswith(f"awesome_agent.{name}.")
+                for name in LEGACY_SURFACE_PACKAGES
+            )
+        )
+        for path in retained_source
+    }
+    assert not {path: imports for path, imports in violations.items() if imports}
+
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = {
+        value.split("[", 1)[0].split(">", 1)[0]
+        for value in project["project"]["dependencies"]
+    }
+    assert not {"textual", "typer"} & dependencies
+    assert (Path("tui") / "src" / "cli" / "index.ts").is_file()
+    assert (ROOT / "protocol" / "stdio.py").is_file()
 
 
 def test_concrete_external_adapters_are_wired_only_at_composition_boundary() -> None:

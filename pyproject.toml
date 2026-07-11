@@ -19,8 +19,6 @@ dependencies = [
   "openai>=1.100",
   "pydantic-settings>=2.10",
   "PyYAML>=6.0.2,<7",
-  "textual>=0.89",
-  "typer>=0.16",
   "uvicorn[standard]>=0.35",
 ]
 

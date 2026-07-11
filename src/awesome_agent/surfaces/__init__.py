@@ -1,1 +1,0 @@
-"""Shared product-surface contracts."""
