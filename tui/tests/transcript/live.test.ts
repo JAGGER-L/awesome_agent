@@ -20,8 +20,10 @@ function state(): SurfaceState {
       turn: {
         id: "turn_1",
         status: "active",
+        started_at: "2026-07-11T08:00:00Z",
         assistant_text: "Working",
         reasoning_text: "private live thought",
+        reasoning_seen: true,
         tool_order: ["call_1", "call_2"],
         tools: {
           call_1: {
@@ -64,12 +66,14 @@ describe("projectLiveTurn", () => {
 
   it("replaces tool updates by call ID without duplicating order", () => {
     const value = state();
+    const operation = value.active_operation;
+    if (!operation?.turn) throw new Error("fixture requires an active Turn");
     const live = projectLiveTurn({
       ...value,
       active_operation: {
-        ...value.active_operation!,
+        ...operation,
         turn: {
-          ...value.active_operation!.turn!,
+          ...operation.turn,
           tool_order: ["call_1", "call_1"],
         },
       },
@@ -78,11 +82,14 @@ describe("projectLiveTurn", () => {
   });
 
   it("marks only terminal operations terminal", () => {
-    expect(projectLiveTurn(state()).terminal).toBe(false);
+    const value = state();
+    const operation = value.active_operation;
+    if (!operation) throw new Error("fixture requires an active Operation");
+    expect(projectLiveTurn(value).terminal).toBe(false);
     expect(
       projectLiveTurn({
-        ...state(),
-        active_operation: { ...state().active_operation!, status: "completed" },
+        ...value,
+        active_operation: { ...operation, status: "completed" },
       }).terminal,
     ).toBe(true);
   });

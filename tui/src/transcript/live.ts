@@ -16,6 +16,13 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
       text: turn.assistant_text,
     });
   }
+  if (turn?.reasoning_marker) {
+    blocks.push({
+      key: `live:${turn.id}:reasoning`,
+      kind: "reasoning_marker",
+      label: turn.reasoning_marker,
+    });
+  }
   if (turn && turn.tool_order.length > 0) {
     const items = [...new Set(turn.tool_order)].flatMap(
       (callId): ToolItem[] => {

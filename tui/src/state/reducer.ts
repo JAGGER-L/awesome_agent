@@ -1,4 +1,8 @@
 import type { EventEnvelope } from "../protocol/index.js";
+import {
+  appendReasoningTail,
+  reasoningElapsedMarker,
+} from "../transcript/reasoning.js";
 import type { SurfaceAction } from "./actions.js";
 import type { SurfaceState, ToolProjection, TurnProjection } from "./model.js";
 
@@ -89,8 +93,10 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           turn: {
             id: event.turn_id ?? "",
             status: "active",
+            started_at: event.timestamp,
             assistant_text: "",
             reasoning_text: "",
+            reasoning_seen: false,
             tools: {},
             tool_order: [],
           },
@@ -109,6 +115,8 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
         );
       }
       return updateTurn(next, (turn) => {
+        const elapsed =
+          Date.parse(event.timestamp) - Date.parse(turn.started_at);
         return {
           ...turn,
           status:
@@ -117,6 +125,10 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
               : event.payload.kind === "turn.failed"
                 ? "failed"
                 : "cancelled",
+          reasoning_text: "",
+          ...(turn.reasoning_seen
+            ? { reasoning_marker: reasoningElapsedMarker(elapsed) }
+            : {}),
         };
       });
     }
@@ -277,8 +289,12 @@ export function surfaceReducer(
               : turn.assistant_text,
           reasoning_text:
             action.delta.delta_kind === "reasoning"
-              ? turn.reasoning_text + action.delta.text
+              ? appendReasoningTail(turn.reasoning_text, action.delta.text)
               : turn.reasoning_text,
+          reasoning_seen:
+            action.delta.delta_kind === "reasoning"
+              ? true
+              : turn.reasoning_seen,
         }),
       );
     case "protocol.fatal":

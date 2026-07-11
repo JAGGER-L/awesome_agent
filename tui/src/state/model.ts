@@ -25,8 +25,11 @@ export interface ToolProjection {
 export interface TurnProjection {
   readonly id: string;
   readonly status: "active" | "completed" | "failed" | "cancelled";
+  readonly started_at: string;
   readonly assistant_text: string;
   readonly reasoning_text: string;
+  readonly reasoning_seen: boolean;
+  readonly reasoning_marker?: string;
   readonly tools: Readonly<Record<string, ToolProjection>>;
   readonly tool_order: readonly string[];
 }

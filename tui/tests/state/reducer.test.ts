@@ -98,6 +98,42 @@ describe("surfaceReducer", () => {
     expect(state.connection).toBe("fatal");
   });
 
+  it("bounds live reasoning and discards it at Turn completion", () => {
+    let state = surfaceReducer(initialSurfaceState(), {
+      type: "event.received",
+      event: lifecycle(1, "operation.started"),
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      event: lifecycle(2, "turn.started"),
+    });
+    state = surfaceReducer(state, {
+      type: "delta.received",
+      delta: {
+        kind: "coalesced_delta",
+        session_id: "session_1",
+        thread_id: "thread_1",
+        turn_id: "turn_1",
+        operation_id: "operation_1",
+        delta_kind: "reasoning",
+        text: "r".repeat(40_000),
+        first_sequence: 3,
+        last_sequence: 3,
+      },
+    });
+    expect(
+      state.active_operation?.turn?.reasoning_text.length,
+    ).toBeLessThanOrEqual(32_000);
+    state = surfaceReducer(state, {
+      type: "event.received",
+      event: lifecycle(4, "turn.completed"),
+    });
+    expect(state.active_operation?.turn).toMatchObject({
+      reasoning_text: "",
+      reasoning_marker: "Thought for 0 ms",
+    });
+  });
+
   it("deduplicates warnings and preserves live projection during hydration", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "event.received",
