@@ -79,4 +79,29 @@ describe("connectSurface", () => {
       RpcClosedError,
     );
   });
+
+  it("reads one bounded durable page for a terminal Operation", async () => {
+    const connected = await connectSurface(
+      await options({ AWESOME_FAKE_CORE_TERMINAL: "1" }),
+    );
+    await connected.request("operation.cancel", {
+      operation_id: "operation_terminal",
+    });
+    for (
+      let attempt = 0;
+      attempt < 100 && !connected.store.getState().committed_transcript;
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    expect(connected.store.getState()).toMatchObject({
+      transcript_persisted: true,
+      committed_transcript: expect.arrayContaining([
+        expect.objectContaining({ kind: "assistant", text: "durable answer" }),
+      ]),
+    });
+    const stderr = new TextDecoder().decode(connected.session.stderrTail());
+    expect(stderr.match(/thread-read/g)).toHaveLength(1);
+    await connected.close();
+  });
 });

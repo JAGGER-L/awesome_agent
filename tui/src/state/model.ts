@@ -1,4 +1,5 @@
 import type { MethodValue } from "../protocol/index.js";
+import type { TranscriptBlock } from "../transcript/model.js";
 
 export type ConnectionState =
   | "idle"
@@ -67,6 +68,8 @@ export interface SurfaceState {
     readonly choices: readonly string[];
   };
   readonly warnings: readonly SurfaceWarning[];
+  readonly committed_transcript?: readonly TranscriptBlock[];
+  readonly transcript_persisted?: boolean;
   readonly fatal?: FatalState;
   readonly core_exit?: {
     readonly code: number | null;

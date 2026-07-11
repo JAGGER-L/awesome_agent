@@ -297,6 +297,12 @@ export function surfaceReducer(
               : turn.reasoning_seen,
         }),
       );
+    case "transcript.reconciled":
+      return {
+        ...state,
+        committed_transcript: action.result.blocks,
+        transcript_persisted: action.result.persisted,
+      };
     case "protocol.fatal":
       return fatal(state, action.code, action.message);
     case "core.exited":

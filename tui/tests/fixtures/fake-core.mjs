@@ -95,6 +95,8 @@ const handleLine = (line) => {
     });
   } else if (request.method === "thread.read") {
     const now = "2026-07-11T08:00:00Z";
+    const terminal = process.env.AWESOME_FAKE_CORE_TERMINAL === "1";
+    if (terminal) process.stderr.write("thread-read\n");
     output({
       jsonrpc: "2.0",
       id: request.id,
@@ -110,8 +112,69 @@ const handleLine = (line) => {
             created_at: now,
             updated_at: now,
           },
-          entries: [],
-          turns: [],
+          entries: terminal
+            ? [
+                {
+                  id: "entry_user",
+                  thread_id: request.params.thread_id,
+                  sequence: 1,
+                  kind: "user_message",
+                  content: "question",
+                  metadata: {},
+                  created_at: now,
+                },
+                {
+                  id: "entry_assistant",
+                  thread_id: request.params.thread_id,
+                  sequence: 2,
+                  kind: "assistant_message",
+                  content: "durable answer",
+                  metadata: {},
+                  created_at: now,
+                },
+              ]
+            : [],
+          turns: terminal
+            ? [
+                {
+                  id: "turn_terminal",
+                  thread_id: request.params.thread_id,
+                  checkpoint_key: "turn_terminal",
+                  status: "completed",
+                  provider: "deepseek",
+                  model: "deepseek-v4-flash",
+                  thinking_enabled: false,
+                  skill_mode: "auto",
+                  budgets: {
+                    model_calls: 32,
+                    tool_calls: 64,
+                    provider_retries: 2,
+                    compressions: 2,
+                    active_execution_seconds: 1800,
+                    total_context_tokens: 262144,
+                  },
+                  user_entry_id: "entry_user",
+                  assistant_entry_id: "entry_assistant",
+                  usage: {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                    model_calls: 0,
+                    tool_calls: 0,
+                    provider_retries: 0,
+                    compressions: 0,
+                    active_execution_seconds: 0,
+                  },
+                  termination_reason: "completed",
+                  context_manifest: [],
+                  created_at: now,
+                  updated_at: now,
+                  completed_at: now,
+                },
+              ]
+            : [],
           tool_activities: [],
         },
         change_sets: [],
@@ -119,6 +182,64 @@ const handleLine = (line) => {
       }),
     });
   } else if (request.method === "operation.cancel") {
+    if (process.env.AWESOME_FAKE_CORE_TERMINAL === "1") {
+      const common = {
+        jsonrpc: "2.0",
+        method: "event",
+      };
+      const envelope = (sequence, event_type, payload, identities = {}) => ({
+        ...common,
+        params: {
+          version: 1,
+          event_id: `event_${sequence}`,
+          sequence,
+          session_id: "session_fake",
+          workspace_key: "workspace_fake",
+          thread_id: "thread_terminal",
+          operation_id: request.params.operation_id,
+          event_type,
+          timestamp: "2026-07-11T08:00:00Z",
+          payload,
+          ...identities,
+        },
+      });
+      output(
+        envelope(1, "operation.started", {
+          kind: "operation.started",
+          message: "",
+        }),
+      );
+      output(
+        envelope(
+          2,
+          "turn.started",
+          { kind: "turn.started" },
+          { turn_id: "turn_terminal" },
+        ),
+      );
+      output(
+        envelope(
+          3,
+          "assistant.text.delta",
+          { kind: "assistant.text.delta", text: "transient" },
+          { turn_id: "turn_terminal" },
+        ),
+      );
+      output(
+        envelope(
+          4,
+          "turn.completed",
+          { kind: "turn.completed" },
+          { turn_id: "turn_terminal" },
+        ),
+      );
+      output(
+        envelope(5, "operation.completed", {
+          kind: "operation.completed",
+          message: "",
+        }),
+      );
+    }
     output({
       jsonrpc: "2.0",
       id: request.id,
