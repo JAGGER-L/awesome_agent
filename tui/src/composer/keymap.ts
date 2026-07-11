@@ -1,6 +1,18 @@
-import type { Key } from "ink";
-
 import type { ComposerAction } from "./model.js";
+
+export interface ComposerKey {
+  readonly return: boolean;
+  readonly ctrl: boolean;
+  readonly shift: boolean;
+  readonly backspace: boolean;
+  readonly delete: boolean;
+  readonly leftArrow: boolean;
+  readonly rightArrow: boolean;
+  readonly home: boolean;
+  readonly end: boolean;
+  readonly upArrow: boolean;
+  readonly downArrow: boolean;
+}
 
 export type ComposerKeyAction =
   | { readonly type: "edit"; readonly action: ComposerAction }
@@ -8,7 +20,7 @@ export type ComposerKeyAction =
 
 export function mapComposerKey(
   input: string,
-  key: Key,
+  key: ComposerKey,
   composerEmpty: boolean,
 ): ComposerKeyAction | undefined {
   if (key.return && ((key.ctrl && input.toLowerCase() === "j") || key.shift)) {
