@@ -11,7 +11,15 @@ def test_relative_markdown_links_resolve() -> None:
         path
         for path in ROOT.rglob("*.md")
         if not any(
-            part in {".codex", ".git", ".mypy_cache", ".ruff_cache", ".venv"}
+            part
+            in {
+                ".codex",
+                ".git",
+                ".mypy_cache",
+                ".ruff_cache",
+                ".venv",
+                "node_modules",
+            }
             for part in path.parts
         )
     ]

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import ast
+import json
+import re
 from pathlib import Path
 
 from awesome_agent.application.commands import COMMAND_OWNERS, CommandName
+from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path("src/awesome_agent")
+TUI_ROOT = Path("tui")
 ENTRYPOINTS = (
     ROOT / "application" / "composition.py",
     ROOT / "protocol" / "stdio.py",
@@ -150,3 +154,60 @@ def test_final_command_inventory_and_absent_commands_are_frozen() -> None:
         "details",
         "editor",
     } & {name.value for name in CommandName}
+
+
+def test_tui_is_one_minimal_node_22_package() -> None:
+    package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
+
+    assert package["name"] == "@awesome-agent/tui"
+    assert package["version"] == PRODUCT_VERSION
+    assert package["type"] == "module"
+    assert package["engines"] == {"node": ">=22"}
+    assert "workspaces" not in package
+    assert (TUI_ROOT / "package-lock.json").is_file()
+    dependencies = set(package.get("dependencies", {}))
+    assert not dependencies & {
+        "@langchain/langgraph",
+        "@reduxjs/toolkit",
+        "axios",
+        "redux",
+        "rxjs",
+        "xstate",
+        "zustand",
+    }
+    assert set(package["scripts"]) >= {
+        "build",
+        "format:check",
+        "lint",
+        "test",
+        "typecheck",
+    }
+
+
+def test_tui_protocol_source_has_no_product_or_process_authority() -> None:
+    sources = tuple((TUI_ROOT / "src").rglob("*.ts"))
+    assert sources
+    imports = {
+        imported
+        for path in sources
+        for imported in re.findall(
+            r'\bfrom\s+["\']([^"\']+)["\']',
+            path.read_text(encoding="utf-8"),
+        )
+    }
+
+    assert all(imported == "zod" or imported.startswith(".") for imported in imports)
+    source = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+    assert not {
+        "@langchain/langgraph",
+        "child_process",
+        "clipboardy",
+        "docker",
+        "fastapi",
+        "node:fs",
+        "node:http",
+        "node:path",
+        "react",
+        "sqlalchemy",
+        "textual",
+    } & set(re.findall(r"[A-Za-z@][A-Za-z0-9_:@/-]*", source.casefold()))
