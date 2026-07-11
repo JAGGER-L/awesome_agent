@@ -17,9 +17,9 @@ JSON-RPC/stdio Host with the public Ink + React `awesome` entry. The superseded
 Textual and duplicate Python surface paths have been removed; Phase 4 continues
 physical legacy deletion.
 
-The product now executes through the thin Application and LangGraph Agent path.
-Phase 4 continues physical removal of legacy state and repository adapters that
-are no longer reachable from that path.
+The product now executes through the thin Application and LangGraph Agent path
+with embedded SQLite, LangGraph checkpoints, Change Journal data, workspace
+files, local memory, and TUI preferences as its state model.
 
 Existing development and test data is disposable. The architecture rewrite
 does not preserve or migrate it.

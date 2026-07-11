@@ -162,28 +162,19 @@ Before ending, confirm that:
 
 ## Project Architecture
 
-- Primary product surface: `awesome` starts a local chat-first TUI. Plain user
-  messages enter the embedded `conversation-turn` runtime; surfaces submit
-  intent and render events, but do not execute graphs, call providers, or run
-  tools directly.
-- Runtime authority: `src/awesome_agent/runtime/` owns dispatch, graph routes,
-  AgentLoop integration, capability exposure, budgets, tool execution flow,
-  recovery, and worker execution.
-- Surface boundary: `src/awesome_agent/cli/`, `src/awesome_agent/tui/`,
-  `src/awesome_agent/surfaces/`, `src/awesome_agent/client/`, and
-  `src/awesome_agent/api/` are user/operator/API surfaces. They should call
-  shared runtime and surface services rather than duplicating runtime behavior.
+- Primary product surface: `awesome` starts the Ink chat TUI and one private
+  Python Core process. The TUI submits typed intent and renders events; it does
+  not execute graphs, call providers, or run tools directly.
+- Runtime authority: `src/awesome_agent/application/` owns local lifecycle and
+  invokes the LangGraph graph compiled by `src/awesome_agent/agent/` directly.
 - Provider boundary: `src/awesome_agent/modeling/` defines provider-neutral
   messages, tools, streaming, usage, and execution contracts.
   `src/awesome_agent/providers/` adapts concrete providers to those contracts.
-- Tool boundary: `src/awesome_agent/tools/` owns built-in tool specs,
-  guardrails, approval policy, registry, executor, repository tools, shell,
-  artifacts, attachments, and memory tools. Tool permission is runtime policy,
-  not prompt convention.
-- State boundary: local embedded state lives under the resolved `AWESOME_HOME`
-  state paths. PostgreSQL-backed adapters and migrations remain available for
-  API/worker modes. Runtime state must be inspected through repositories,
-  diagnostics, or tests rather than inferred from chat history.
+- Tool boundary: `src/awesome_agent/core/tools/` owns built-in tool specs,
+  path/command policy, registry, executor, and local process execution.
+- State boundary: embedded state consists of Application SQLite, LangGraph
+  SQLite checkpoints, Change Journal data, local memory files, workspace files,
+  and TUI preferences under resolved Awesome paths.
 - Extension boundary: `src/awesome_agent/extensions/` discovers user/project
   skills, MCP servers, community tools, catalog snapshots, diagnostics, and
   extension config. Extension discovery does not bypass tool capability policy.
@@ -219,48 +210,25 @@ Before ending, confirm that:
 
 - `src/awesome_agent/paths.py` and `src/awesome_agent/settings.py`: path and
   configuration resolution, including `AWESOME_HOME`.
-- `src/awesome_agent/domain/`: framework-free domain models, enums, and
-  transition rules.
 - `src/awesome_agent/conversation/`: thread, turn, message, stream, and
   conversation-run service contracts.
-- `src/awesome_agent/runtime/`: durable graph routes, conversation graph,
-  AgentLoop integration, dispatch, worker execution, context, budgets,
-  validation, tool exposure, and team runtime.
-- `src/awesome_agent/runtime/agent_loop/`: model/tool loop contracts and
-  middleware.
-- `src/awesome_agent/runtime/validation/`: validation plan detection,
-  execution, summaries, and gate models.
-- `src/awesome_agent/surfaces/`: local runtime host/container, local surface
-  client, capability/status services, and user-visible command guidance.
-- `src/awesome_agent/tui/`: Textual chat UI, rendering, chat state,
-  slash-router integration, pickers, and status panel.
-- `src/awesome_agent/client/`: HTTP conversation client adapters.
-- `src/awesome_agent/cli/`: Typer CLI, interactive entrypoint, first-run
-  config, repo context, profile, and slash-command registry.
-- `src/awesome_agent/attachments/` and `src/awesome_agent/artifacts/`:
-  attachment lifecycle, content storage, artifact metadata, and artifact store.
+- `src/awesome_agent/agent/`: LangGraph graph, state, nodes, routing, budgets,
+  compression, retries, message repair, and finalization.
+- `src/awesome_agent/application/`: local lifecycle, commands, foreground
+  operations, cancellation, composition, and event projection.
+- `src/awesome_agent/protocol/`: private JSON-RPC/stdio host boundary.
+- `src/awesome_agent/storage/`: Application SQLite, LangGraph checkpoints,
+  conversation, trust, Change Journal, and MCP enablement adapters.
+- `src/awesome_agent/core/tools/` and `src/awesome_agent/core/changes/`: tool
+  execution and reversible workspace change ownership.
 - `src/awesome_agent/extensions/`: extension catalog, skill, MCP, community
   tool, diagnostics, and project extension config adapters.
-- `src/awesome_agent/tools/`: built-in tool specs, registry, executor,
-  approval policy, repository tools, shell, and artifact tool.
 - `src/awesome_agent/memory/`: built-in and external memory models, policy, and
   service.
 - `src/awesome_agent/modeling/` and `src/awesome_agent/providers/`:
   provider-neutral model protocol, process model backend, execution service,
   provider adapters, model catalog, routing, and streaming.
-- `src/awesome_agent/persistence/`: PostgreSQL and local persistence adapters,
-  SQLAlchemy models, runtime repositories, conversations, approvals,
-  attachments, artifacts, threads, tool invocations, and local state stores.
-- `src/awesome_agent/repositories/`: repository policy, Git/worktree helpers,
-  registry, reservations, and managed workspace services.
 - `src/awesome_agent/safety/`: redaction and data-safety helpers.
-- `src/awesome_agent/sandbox/`: local, AIO, process, path-mapping, worktree, and
-  sandbox factory adapters.
-- `src/awesome_agent/observability/`: observability facade, repository, OTel,
-  and setup helpers.
-- `src/awesome_agent/agents/`: agent profile definitions.
-- `migrations/`: Alembic database migrations for PostgreSQL-backed modes.
-- `sandbox/`: sandbox service implementation and related files.
 - `scripts/`: local developer and operations helper scripts.
 - `skills/`: project runtime skill packages discovered as extension inventory.
 - `tests/`: unit, integration, e2e, and structural tests.
