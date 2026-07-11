@@ -1,0 +1,166 @@
+import {
+  type CoreLaunchOptions,
+  type CoreSession,
+  startCore,
+} from "../core/index.js";
+import {
+  type ApplicationResult,
+  type MethodName,
+  type MethodParams,
+  type MethodValue,
+  RpcClosedError,
+} from "../protocol/index.js";
+import { PRODUCT_VERSION } from "../version.js";
+import {
+  type BatchedEvent,
+  DeltaBatcher,
+  EventStreamGuard,
+  ProtocolDesynchronized,
+  type SurfaceStore,
+  createSurfaceStore,
+} from "../state/index.js";
+
+export class SurfaceConnectionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SurfaceConnectionError";
+  }
+}
+
+export interface SurfaceConnectOptions extends CoreLaunchOptions {
+  /** @internal Deterministic process seam for tests. */
+  readonly startSession?: (options: CoreLaunchOptions) => Promise<CoreSession>;
+}
+
+export interface ConnectedSurface {
+  readonly store: SurfaceStore;
+  readonly session: CoreSession;
+  request<Method extends MethodName>(
+    method: Method,
+    params: MethodParams[Method],
+  ): Promise<ApplicationResult<MethodValue[Method]>>;
+  close(): Promise<void>;
+}
+
+function dispatchBatched(store: SurfaceStore, value: BatchedEvent): void {
+  if ("event_type" in value) {
+    store.dispatch({ type: "event.received", event: value });
+  } else {
+    store.dispatch({ type: "delta.received", delta: value });
+  }
+}
+
+export async function connectSurface(
+  options: SurfaceConnectOptions,
+): Promise<ConnectedSurface> {
+  const store = createSurfaceStore();
+  store.dispatch({ type: "connection.start" });
+  const session = await (options.startSession ?? startCore)(options);
+  const guard = new EventStreamGuard();
+  const batcher = new DeltaBatcher(guard, (value) =>
+    dispatchBatched(store, value),
+  );
+  let closed = false;
+  let closePromise: Promise<void> | undefined;
+
+  const eventConsumer = (async () => {
+    for await (const event of session.rpc.events()) {
+      const fault = batcher.accept(event);
+      if (fault) {
+        store.dispatch({
+          type: "protocol.fatal",
+          code: "protocol_desynchronized",
+          message: fault.message,
+        });
+        await session.rpc.close(fault);
+        break;
+      }
+    }
+  })()
+    .catch((error: unknown) => {
+      const fault =
+        error instanceof Error
+          ? error
+          : new ProtocolDesynchronized("Unknown Event consumer failure");
+      store.dispatch({
+        type: "protocol.fatal",
+        code: "event_consumer_failed",
+        message: fault.message,
+      });
+    })
+    .finally(() => batcher.close());
+
+  void session.exit.then((exit) =>
+    store.dispatch({ type: "core.exited", exit }),
+  );
+
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closed = true;
+    closePromise = (async () => {
+      batcher.close();
+      try {
+        await session.requestShutdown();
+      } catch {
+        // The controller still closes its local transport; PR7 owns recovery UX.
+      }
+      await session.rpc.close(new RpcClosedError("Surface controller closed"));
+      await eventConsumer;
+      store.dispatch({ type: "surface.closed" });
+    })();
+    return closePromise;
+  };
+
+  try {
+    store.dispatch({ type: "connection.handshaking" });
+    const initialized = await session.rpc.request("initialize", {
+      protocol_version: 1,
+      client_name: "awesome-tui",
+      client_version: PRODUCT_VERSION,
+    });
+    if (!initialized.ok) {
+      throw new SurfaceConnectionError(initialized.error.message);
+    }
+    store.dispatch({
+      type:
+        initialized.value.status === "trust_required"
+          ? "handshake.trust_required"
+          : "handshake.ready",
+    });
+    const application = await session.rpc.request("application.getState", {});
+    if (!application.ok)
+      throw new SurfaceConnectionError(application.error.message);
+    store.dispatch({
+      type: "hydrate.application",
+      application: application.value,
+    });
+    if (application.value.current_thread_id) {
+      const thread = await session.rpc.request("thread.read", {
+        thread_id: application.value.current_thread_id,
+        limit: 50,
+      });
+      if (!thread.ok) throw new SurfaceConnectionError(thread.error.message);
+      store.dispatch({ type: "hydrate.thread", thread: thread.value });
+    }
+  } catch (error) {
+    await close();
+    throw error instanceof SurfaceConnectionError
+      ? error
+      : new SurfaceConnectionError("Unable to connect Surface", {
+          cause: error,
+        });
+  }
+
+  return {
+    store,
+    session,
+    request(method, params) {
+      if (closed)
+        return Promise.reject(
+          new RpcClosedError("Surface controller is closed"),
+        );
+      return session.rpc.request(method, params);
+    },
+    close,
+  };
+}

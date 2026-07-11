@@ -184,23 +184,37 @@ def test_tui_is_one_minimal_node_22_package() -> None:
     }
 
 
-def test_tui_protocol_source_has_no_product_or_process_authority() -> None:
+def test_tui_process_authority_is_confined_to_core_adapter() -> None:
     sources = tuple((TUI_ROOT / "src").rglob("*.ts"))
     assert sources
-    imports = {
-        imported
-        for path in sources
-        for imported in re.findall(
-            r'\bfrom\s+["\']([^"\']+)["\']',
-            path.read_text(encoding="utf-8"),
+    imports_by_path = {
+        path: set(
+            re.findall(
+                r'\bfrom\s+["\']([^"\']+)["\']',
+                path.read_text(encoding="utf-8"),
+            )
         )
+        for path in sources
     }
 
-    assert all(imported == "zod" or imported.startswith(".") for imported in imports)
+    node_importers = {
+        path.relative_to(TUI_ROOT).as_posix(): {
+            imported for imported in imports if imported.startswith("node:")
+        }
+        for path, imports in imports_by_path.items()
+        if any(imported.startswith("node:") for imported in imports)
+    }
+    assert node_importers == {"src/core/process.ts": {"node:child_process"}}
+    assert all(
+        imported == "zod"
+        or imported.startswith(".")
+        or imported == "node:child_process"
+        for imports in imports_by_path.values()
+        for imported in imports
+    )
     source = "\n".join(path.read_text(encoding="utf-8") for path in sources)
     assert not {
         "@langchain/langgraph",
-        "child_process",
         "clipboardy",
         "docker",
         "fastapi",
@@ -211,3 +225,10 @@ def test_tui_protocol_source_has_no_product_or_process_authority() -> None:
         "sqlalchemy",
         "textual",
     } & set(re.findall(r"[A-Za-z@][A-Za-z0-9_:@/-]*", source.casefold()))
+
+    reducer_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (TUI_ROOT / "src" / "state").glob("*.ts")
+    )
+    assert "node:" not in reducer_source
+    assert "react" not in reducer_source.casefold()
