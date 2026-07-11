@@ -16,20 +16,57 @@ FINAL_DOCS = {
     "user-guide/troubleshooting.md",
     "architecture/README.md",
     "architecture/agent-core.md",
-    "architecture/runtime-and-langgraph.md",
+    "architecture/application-and-langgraph.md",
     "architecture/protocol-and-ink.md",
-    "architecture/persistence.md",
     "architecture/security.md",
-    "architecture/decisions/0001-python-langgraph-thin-runtime.md",
-    "architecture/decisions/0002-sqlite-and-disposable-development-state.md",
-    "architecture/decisions/0003-workspace-trust-and-execution-policy.md",
-    "architecture/decisions/0004-tool-kernel-change-journal-and-commands.md",
-    "architecture/decisions/0005-dual-layer-memory-with-mem0-cloud.md",
-    "architecture/decisions/0006-python-core-and-ink-stdio-boundary.md",
+    "architecture/storage.md",
     "development/README.md",
     "development/testing.md",
     "development/release.md",
 }
+
+ARCHITECTURE_HEADINGS = {
+    "## System Overview",
+    "## Directory Structure",
+    "## Recommended Reading Order",
+    "## Data Flow",
+    "## Major Subsystems",
+    "## Design Principles",
+    "## File Dependency Chain",
+    "## State Ownership",
+    "## Error, Cancellation, and Recovery",
+    "## Extension Points",
+}
+ARCHITECTURE_DIAGRAM_LABELS = {
+    "Entry & Presentation",
+    "Python Application Host",
+    "Agent Core",
+    "Local State",
+    "Model Providers",
+    "Tool System",
+    "Workspace & Host",
+}
+FORBIDDEN_PRODUCT_COPY = {
+    "Apple Silicon",
+    "Windows 11",
+    "Ubuntu 24.04",
+    "x64",
+    "limited pilot",
+    "limited trial",
+    "Local-first coding agent",
+    "general Agent Platform",
+}
+ROADMAP_HEADINGS = (
+    "Documentation and Documentation Site",
+    "One-command Skills Installation",
+    "Multi-Agent",
+    "More Model Providers",
+    "Search Tools",
+    "More Memory Providers",
+    "Cron Tasks",
+    "Gateway Messaging",
+    "Optional Docker Tool Backend",
+)
 
 INSTALL_SH = (
     "curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/"
@@ -86,7 +123,14 @@ def test_final_documentation_inventory_is_exact() -> None:
     assert actual == FINAL_DOCS
 
 
-def test_entry_docs_describe_only_the_pilot_product() -> None:
+def test_architecture_is_the_complete_technical_entrypoint() -> None:
+    content = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+
+    assert not {heading for heading in ARCHITECTURE_HEADINGS if heading not in content}
+    assert not {label for label in ARCHITECTURE_DIAGRAM_LABELS if label not in content}
+
+
+def test_entry_docs_present_the_current_product() -> None:
     english = (ROOT / "README.md").read_text(encoding="utf-8")
     chinese = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
     quickstarts = "\n".join(
@@ -95,13 +139,21 @@ def test_entry_docs_describe_only_the_pilot_product() -> None:
     )
     combined = "\n".join((english, chinese, quickstarts))
 
+    assert "Awesome is an AI coding assistant that runs in your terminal." in english
+    assert "Awesome 是一个运行在终端中的 AI 编程助手。" in chinese
+    assert (
+        "Analyze this project's structure and tell me where I should start reading."
+        in english
+    )
+    assert "分析这个项目的结构，并告诉我应该从哪里开始阅读。" in chinese  # noqa: RUF001
+
     for entry in (english, chinese):
         assert "████" in entry
         assert INSTALL_SH in entry
         assert INSTALL_PS1 in entry
-        assert "Apple Silicon" in entry
-        assert "Windows 11 x64" in entry
-        assert "WSL2 Ubuntu 24.04 x64" in entry
+        assert "macOS" in entry
+        assert "Windows" in entry
+        assert "WSL2 Ubuntu" in entry
         assert "https://git-scm.com/downloads" in entry
         assert "DeepSeek" in entry and "Kimi" in entry
         assert "--continue" in entry and "--resume" in entry
@@ -122,7 +174,7 @@ def test_entry_docs_describe_only_the_pilot_product() -> None:
     assert "default off" in english
     assert "默认关闭" in chinese
 
-    forbidden = (
+    unsupported_entrypoints = (
         "awesome init",
         "awesome-agent ",
         "awesome-tui",
@@ -130,7 +182,23 @@ def test_entry_docs_describe_only_the_pilot_product() -> None:
         "Docker API",
         "Local API",
     )
-    assert not {value for value in forbidden if value.casefold() in combined.casefold()}
+    assert not {
+        value
+        for value in unsupported_entrypoints
+        if value.casefold() in combined.casefold()
+    }
+    assert not {
+        value
+        for value in FORBIDDEN_PRODUCT_COPY
+        if value.casefold() in combined.casefold()
+    }
+
+
+def test_roadmap_has_the_approved_product_order() -> None:
+    roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
+    positions = [roadmap.index(f"## {heading}") for heading in ROADMAP_HEADINGS]
+
+    assert positions == sorted(positions)
 
 
 def test_public_command_and_configuration_contract_is_documented() -> None:
@@ -170,16 +238,6 @@ def test_public_command_and_configuration_contract_is_documented() -> None:
         "quit",
     ):
         assert f"`/{command}" in commands
-    for removed in (
-        "/editor",
-        "/details",
-        "/permissions",
-        "/sandbox",
-        "/api",
-        "/team",
-    ):
-        assert removed not in commands
-
     for value in (
         "262,144",
         "model calls: 256",

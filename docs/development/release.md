@@ -1,27 +1,22 @@
-# Manual V1.0.0 pilot release
+# Release 1.0.0
 
-This limited pilot uses a manual GitHub Release. Perform these steps in order:
+Awesome 1.0.0 is published as a manual GitHub Release.
 
-1. Verify `codex/local-first-architecture` is clean and contains all eight
-   sequential Phase 4 PR merges.
-2. Run the complete retained gate in [Testing](testing.md).
+1. Confirm the release branch is clean and contains the intended changes.
+2. Run the complete [Release Gate](testing.md#release-gate).
 3. Run `uv run python scripts/release/build_bundle.py` and inspect
-   `dist/release` locally.
-4. On clean/disposable homes, smoke Windows 11 x64, Apple Silicon macOS, and
-   WSL2 Ubuntu 24.04 x64: install, new-terminal PATH, version/help, Welcome,
-   workspace trust, one deterministic local flow, closed-process reinstall,
-   and preserved user state.
-5. With non-committed credentials on one supported host, run one minimal real
-   DeepSeek Turn, one minimal real Kimi Turn, and one Mem0 Cloud
-   add/recall/remove roundtrip. Record only redacted pass/fail evidence.
-6. Review package contents, checksum, local/developer paths, credentials,
-   caches, tests, sources, and version lineage. The only public assets are
-   `install.sh`, `install.ps1`, `awesome-1.0.0.zip`, and `SHA256SUMS`.
-7. After explicit final integration approval, merge the complete
-   `codex/local-first-architecture` branch into `main`.
-8. Tag `v1.0.0`, create a manual GitHub Release, upload the four assets, and
-   state that it is a limited pilot for the three supported hosts.
+   `dist/release`.
+4. Test installation and first run on macOS, Windows, and WSL2 Ubuntu: open a
+   new terminal, check version/help, confirm workspace trust, complete one local
+   workflow, close Awesome, and rerun the installer.
+5. With credentials kept outside the repository, run one small DeepSeek Turn,
+   one small Kimi Turn, and one Mem0 Cloud add/recall/remove check. Record only
+   redacted pass/fail evidence.
+6. Confirm the release directory contains only `install.sh`, `install.ps1`,
+   `awesome-1.0.0.zip`, and `SHA256SUMS`, with no credentials, caches, tests,
+   sources, or local paths.
+7. Merge the approved release changes, tag `v1.0.0`, create the GitHub Release,
+   and upload the four assets.
 
-Do not create a release workflow, channel, signature/notarization system,
-background updater, update command, uninstaller, rollback system, package
-manager submission, website, or domain for this pilot.
+Users upgrade by closing Awesome and running the same installation command
+again.

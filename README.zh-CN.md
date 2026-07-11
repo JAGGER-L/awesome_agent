@@ -1,4 +1,4 @@
-# Awesome Agent
+# Awesome
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -10,41 +10,46 @@
  █   █ █   █ █████ █████  ███  █   █ █████
 ```
 
-Awesome 是一个在启动目录内工作的 Local-first AI Coding Agent；它不是托管
-服务，也不是通用 Agent Platform。
+Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码库、修改文件、执行
+命令，并协助你完成开发、调试、重构和测试。
 
-V1.0.0 是面向少量用户的有限试用版本。支持 Apple Silicon macOS、Windows 11
-x64 和 WSL2 Ubuntu 24.04 x64。
+在项目目录中启动 `awesome`，用自然语言描述你的目标。Awesome 会阅读相关代码、
+执行必要的工具、完成修改并验证结果。
+
+## Awesome 能做什么
+
+- 理解项目结构并解释代码之间的关系；
+- 实现功能、调试问题、重构代码和运行测试；
+- 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
+- 继续最近的 Thread，或通过 ID 恢复指定 Thread；
+- 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
+- 使用 DeepSeek 和 Kimi 模型。
+
+Awesome 最开始提供 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、
+`glob`、`grep` 和 `execute`。扩展可以继续增加工具，Awesome 不限制为八个工具。
+本地文件 Memory 与 Mem0 Cloud 相互独立，二者默认关闭。
 
 ## 安装
 
-Apple Silicon macOS 或 WSL2 Ubuntu 24.04 x64：
+### macOS 或 WSL2 Ubuntu
 
 ```bash
 curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-Windows 11 x64 PowerShell：
+### Windows
 
 ```powershell
 irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-安装后请打开新终端。用户无需预装 Python、Node.js、uv、npm、Docker 或 Make。
-Git 是可选能力，Awesome 不会安装 Git；如需 Git 工作流，请从
-[Git 官方网站](https://git-scm.com/downloads)安装。
+安装后请打开一个新终端。Awesome 已包含运行所需的环境，无需提前安装 Python、
+Node.js、uv 或 npm。Git 是可选能力，Awesome 不会自动安装；需要 Git 工作流时，
+请从 [Git 官方网站](https://git-scm.com/downloads)安装。
 
-## 首次运行
+## 开始使用
 
-```text
-cd <workspace>
-awesome
-```
-
-启动目录就是 workspace。读取项目配置、指令、Skills、MCP 声明或运行工具前，
-Awesome 会请求 trust；拒绝后直接退出，也不会记录该目录为可信。
-
-至少在 `<AWESOME_HOME>/.env` 中配置一个模型密钥：
+在 `<AWESOME_HOME>/.env` 中至少配置一个模型密钥：
 
 ```dotenv
 DEEPSEEK_API_KEY=...
@@ -52,28 +57,32 @@ DEEPSEEK_API_KEY=...
 MOONSHOT_API_KEY=...
 ```
 
-V1 仅正式支持 DeepSeek 和 Kimi。模型选择与第一个安全任务见
-[快速开始](docs/getting-started/quickstart.zh-CN.md)。
-
-## 核心能力
-
-最初的默认工具是 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、
-`glob`、`grep` 和 `execute`。MCP 与用户工具可以继续扩展，架构不限制为八个
-工具。文件修改进入 Change Journal，供 `/diff`、`/undo`、`/redo` 使用。
-
-本地 `USER.md`/workspace `MEMORY.md` 与 Mem0 Cloud 是相互独立的两层记忆，
-二者默认关闭。Skills 提供任务指令，MCP 连接外部工具；它们都不能绕过
-workspace trust 或工具策略。
-
-## 启动参数
+然后在项目目录中启动 Awesome：
 
 ```text
+cd <project>
 awesome
+```
+
+首次进入一个目录时，Awesome 会显示完整路径并询问是否信任。只有在你了解该项目、
+并愿意让 Awesome 读取和操作其中内容时才选择 Yes。
+
+常用启动参数：
+
+```text
 awesome --continue
 awesome --resume
 awesome --resume <thread_id>
 awesome --version
 awesome --help
+```
+
+## 第一个任务
+
+可以先让 Awesome 只阅读并介绍项目：
+
+```text
+分析这个项目的结构，并告诉我应该从哪里开始阅读。
 ```
 
 ## 文档
@@ -90,6 +99,5 @@ awesome --help
 
 ## 安全
 
-Awesome 当前直接在本地主机运行工具，没有 Docker sandbox。只信任你了解的
-workspace，检查 diff，并把密钥放在操作系统环境或 `<AWESOME_HOME>/.env`，
-不要写入项目文件。
+只信任你了解的项目，保留修改前先检查 `/diff`。密钥应存放在操作系统环境或
+`<AWESOME_HOME>/.env` 中，不要写入项目文件。

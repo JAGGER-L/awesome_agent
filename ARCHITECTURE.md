@@ -1,70 +1,431 @@
-# Architecture
+# Awesome Architecture
 
-Awesome is a single-user Local-first coding agent. The public `awesome`
-launcher starts one Ink process and one private Python Core process.
+Awesome is a terminal AI coding assistant. One `awesome` launcher starts an Ink
+interface and a private Python process; all product behavior remains in the
+Python Core, while the TUI submits intent and renders typed events.
 
-## Topology
+This document is the authoritative technical overview. Focused documents under
+[`docs/architecture/`](docs/architecture/README.md) explain individual
+boundaries without redefining the system.
 
-```text
-Ink -> stdio JSON-RPC Host -> Application -> LangGraph Agent
-                                      -> ModelGateway -> DeepSeek/Kimi
-                                      -> ToolExecutor -> workspace/process
-                                      -> SQLite/Change Journal/memory
-                                      -> Events -> Ink
-```
-
-## Turn flow
+## System Overview
 
 ```text
-user input
-  -> Ink intent
-  -> versioned JSON-RPC over NDJSON/stdin/stdout
-  -> Application trust/config/foreground-operation checks
-  -> Thread and Turn lifecycle
-  -> LangGraph context -> model -> tools -> observation loop
-  -> LangGraph SQLite checkpoint
-  -> Application SQLite completion and Change Journal seal
-  -> typed event notifications
-  -> Ink transcript rendering
+┌───────────────────────────────────────────────────────────────────────────┐
+│                         Entry & Presentation                              │
+│                                                                           │
+│  awesome launcher                     Ink + React TUI                     │
+│  CLI arguments                        Input / Rendering / Keyboard / UX   │
+└───────────────────────────────────┬───────────────────────────────────────┘
+                                    │
+                                    │ JSON-RPC 2.0 / NDJSON over stdio
+                                    ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                      Python Application Host                              │
+│                                                                           │
+│  ApplicationFacade   Commands       Interactions     Event Projection     │
+│  Workspace Trust     Thread/Turn    Cancellation     Composition          │
+└──────────────┬──────────────────┬──────────────────┬──────────────────────┘
+               │                  │                  │
+               ▼                  ▼                  ▼
+┌────────────────────────┐ ┌───────────────────┐ ┌──────────────────────────┐
+│ Agent Core             │ │ Extensions        │ │ Local State              │
+│ LangGraph              │ │ Skills / MCP      │ │ Application SQLite       │
+│ Context Assembly       │ │ Local Memory      │ │ LangGraph Checkpoints    │
+│ Model / Tool Loop      │ │ Mem0 Cloud        │ │ Change Journal           │
+│ Compression / Budgets  │ │                   │ │ TUI Preferences          │
+└───────────┬────────────┘ └─────────┬─────────┘ └──────────────────────────┘
+            │                        │
+            ├──────────────┬─────────┘
+            ▼              ▼
+┌────────────────────┐  ┌──────────────────────────────────────────────────┐
+│ Model Providers    │  │ Tool System                                      │
+│ DeepSeek / Kimi    │  │ Registry -> Policy -> Executor -> Result/Event   │
+└────────────────────┘  └────────────────────────┬─────────────────────────┘
+                                                 │
+                                                 ▼
+                                   ┌────────────────────────────┐
+                                   │ Workspace & Host           │
+                                   │ Files / Shell / Git        │
+                                   │ Tests / Build Tools        │
+                                   └────────────────────────────┘
 ```
 
-Application commands enter the Application boundary without entering model
-reasoning. Every model-requested tool enters the same Tool Executor.
+The Application Host is the composition and lifecycle boundary. It invokes the
+compiled LangGraph directly; it does not implement a second graph engine or
+copy graph channel state. Model calls use provider-neutral contracts, and every
+tool call follows the same Registry, Policy, and Executor path.
 
-## Package ownership
+## Directory Structure
 
-- `awesome_agent.agent`: graph state, nodes, routing, budgets, compression, and
-  finalization.
-- `awesome_agent.application`: composition, Thread/Turn lifecycle, commands,
-  foreground operation serialization, interactions, cancellation, and events.
-- `awesome_agent.modeling` and `awesome_agent.providers`: Provider-neutral
-  contracts plus DeepSeek/Kimi adapters.
-- `awesome_agent.core`: workspace identity, tools, execution policy, typed
-  events, and Change Journal.
-- `awesome_agent.context`, `awesome_agent.memory`, and
-  `awesome_agent.extensions`: prompt context, two optional memory layers,
-  Skills, and MCP.
-- `awesome_agent.conversation` and `awesome_agent.storage`: product records and
-  embedded storage adapters.
-- `awesome_agent.protocol`: private stdio Host and JSON-RPC boundary.
-- `tui/`: Ink input, rendering, keyboard behavior, and local presentation
-  preferences only.
+```text
+awesome_agent/
+├── src/awesome_agent/
+│   ├── agent/          # LangGraph state, nodes, routes, budgets
+│   ├── application/    # lifecycle, commands, operations, composition
+│   ├── config/         # user/workspace configuration and precedence
+│   ├── context/        # context assembly, token estimates, compression
+│   ├── conversation/   # Thread, Turn, transcript, repository contracts
+│   ├── core/
+│   │   ├── changes/    # Change Journal and undo/redo contracts
+│   │   ├── tools/      # tool registry, policy, executor, built-ins
+│   │   └── workspace/  # workspace identity and trust models
+│   ├── extensions/
+│   │   ├── mcp/        # MCP stdio client and tool adapter
+│   │   └── skills/     # Skill discovery, loading, and tool exposure
+│   ├── memory/         # USER.md, MEMORY.md, Mem0 Cloud, memory tools
+│   ├── modeling/       # provider-neutral messages and model gateway
+│   ├── protocol/       # JSON-RPC types and private stdio Host
+│   ├── providers/      # DeepSeek and Kimi adapters
+│   ├── safety/         # redaction helpers
+│   ├── storage/        # embedded SQLite and checkpoint adapters
+│   ├── paths.py        # AWESOME_HOME path ownership
+│   └── version.py      # product version reader
+├── tui/                # Ink + React presentation package
+├── protocol/fixtures/  # cross-language protocol fixtures
+├── scripts/release/    # release bundle builder
+├── tests/              # unit, integration, E2E, packaging, structural
+├── install.sh
+├── install.ps1
+├── pyproject.toml
+└── VERSION
+```
 
-## Dependency direction
+Generated environments, caches, development plans, and user secrets are not
+part of the product source tree.
 
-Ink depends on protocol schemas, never Python implementation modules. Protocol
-calls the Application facade. Application is the outer composition root and
-may wire Agent, providers, tools, extensions, and storage. Agent depends on
-Provider-neutral and tool contracts, not concrete surfaces or storage
-implementations. Inner packages never import `tui/`.
+## Recommended Reading Order
 
-## Non-goals
+1. `src/awesome_agent/application/facade.py` — surface-facing product API.
+2. `src/awesome_agent/application/composition.py` — concrete dependency wiring.
+3. `src/awesome_agent/application/turns.py` — Turn lifecycle and recovery.
+4. `src/awesome_agent/agent/graph.py` — the only graph compiler.
+5. `src/awesome_agent/agent/nodes.py` — model/tool loop and finalization.
+6. `src/awesome_agent/context/builder.py` — prompt context assembly.
+7. `src/awesome_agent/modeling/` and `src/awesome_agent/providers/` — model
+   contracts and supported adapters.
+8. `src/awesome_agent/core/tools/` — Registry, Policy, Executor, and built-ins.
+9. `src/awesome_agent/conversation/` and `src/awesome_agent/storage/` — product
+   records and embedded adapters.
+10. `src/awesome_agent/protocol/stdio.py` — private process boundary.
+11. `tui/src/app/App.tsx` — presentation composition.
 
-There is no hosted service, HTTP product path, distributed scheduler, Worker,
-custom durable runtime, general approval resource, artifact resource, event
-store, multi-user database, or Docker execution backend. A later API, IDE
-adapter, or Docker tool backend requires demonstrated demand and must reuse the
-same Application contracts.
+## Data Flow
 
-See the focused [architecture guide](docs/architecture/README.md) and
-[accepted decisions](docs/architecture/decisions/0001-python-langgraph-thin-runtime.md).
+### Startup and workspace trust
+
+```text
+awesome <current directory>
+        │
+        ▼
+Ink starts awesome-core
+        │ initialize(workspace, protocol version)
+        ▼
+Application resolves canonical workspace
+        │
+        ├── trusted ─────────────► load user/workspace configuration
+        │                          load Skills and MCP declarations
+        │                          create or resume a Thread
+        │
+        └── not trusted ─────────► interaction.required
+                                   Yes -> persist trust -> continue
+                                   No  -> exit without persisting denial
+```
+
+Project-controlled configuration, instructions, Skills, and MCP declarations
+are not loaded before trust is accepted.
+
+### Conversation Turn
+
+```text
+User Message
+    │
+    ▼
+turn.submit -> ApplicationFacade.submit_turn
+    │
+    ├── resolve Thread configuration
+    ├── create Turn and user transcript entry
+    └── acquire the single foreground operation
+             │
+             ▼
+       LangGraph Agent
+             │
+       prepare context
+             │
+       call ModelGateway
+             │
+       ┌─────┴─────┐
+       │ Tool Call │── No ──► finalize answer
+       └─────┬─────┘
+             │ Yes
+             ▼
+       Tool Executor
+             │
+       observation + checkpoint
+             │
+             └──────────────► call model
+```
+
+When the graph returns a final answer, Application completes the Turn, appends
+the assistant transcript entry, records bounded usage, seals its ChangeSet,
+deletes the finished checkpoint, and emits completion events.
+
+### Tool call
+
+```text
+Model ToolCall
+    -> ToolRegistry lookup
+    -> schema validation
+    -> workspace and command policy
+    -> ToolExecutor timeout/cancellation/event envelope
+    -> built-in or MCP adapter
+    -> normalized ToolResult
+    -> bounded activity summary + Agent observation
+```
+
+File-changing built-ins write through the Change Journal. `execute` runs in the
+workspace on the host and may produce effects the journal cannot reverse.
+
+### Slash command
+
+```text
+/command
+   ├── Ink-owned presentation command -> local UI state
+   ├── Application command -> command.execute -> typed result
+   └── Skill command -> shared Skill/Application boundary
+```
+
+Commands do not become model prompts unless their defined behavior explicitly
+starts an Agent Turn.
+
+### Resume and recovery
+
+`--continue` selects the most recent workspace Thread; `--resume` selects a
+specific Thread. On startup, Application reconciles unfinished product Turns
+with LangGraph checkpoints:
+
+- a completed graph state is finalized into product records;
+- a valid unfinished checkpoint is resumable;
+- a missing or corrupt checkpoint fails the Turn with a stable error code;
+- an uncertain shell or MCP side effect requires an explicit retry/abort
+  interaction;
+- checkpoints left behind by terminal product Turns are removed.
+
+## Major Subsystems
+
+### Application Host
+
+- **Responsibility:** workspace initialization, configuration resolution,
+  Thread/Turn lifecycle, commands, foreground operation serialization,
+  interactions, cancellation, event projection, recovery, and composition.
+- **Does not own:** model reasoning, graph routing, tool implementation, or UI
+  rendering.
+- **Primary files:** `application/facade.py`, `application/composition.py`,
+  `application/turns.py`, `application/operations.py`.
+- **Dependencies:** Agent Core, current adapters, Conversation, Storage, Core,
+  Context, Extensions, and Memory.
+
+### Agent Core and LangGraph
+
+- **Responsibility:** `AgentState`, node routing, context/model/tool loop,
+  message repair, compression, retry accounting, budgets, and finalization.
+- **Does not own:** product Thread records, concrete storage wiring, or surface
+  state.
+- **Primary files:** `agent/state.py`, `agent/graph.py`, `agent/nodes.py`,
+  `agent/budgets.py`.
+- **Dependencies:** provider-neutral Modeling, Core tools, and injected Memory
+  services.
+
+### Context Management
+
+- **Responsibility:** deterministic prompt assembly, explicit path references,
+  token estimates, Thread summaries, Skills, memory recall, and compression
+  inputs.
+- **Does not own:** graph routing or hidden persistence.
+- **Primary files:** `context/builder.py`, `context/compression.py`,
+  `context/path_refs.py`, `context/tokens.py`.
+
+### Model Gateway
+
+- **Responsibility:** provider-neutral messages, tools, streaming events,
+  errors, usage, model selection, retry reporting, and supported adapter calls.
+- **Does not own:** tools, graph state, or product lifecycle.
+- **Primary files:** `modeling/gateway.py`, `modeling/provider.py`,
+  `modeling/turns.py`, `providers/deepseek.py`, `providers/kimi.py`.
+
+### Tool System
+
+- **Responsibility:** tool registration, schemas, workspace/process policy,
+  execution context, cancellation, timeouts, normalized failures, events, and
+  bounded results.
+- **Does not own:** model routing or surface prompts.
+- **Primary files:** `core/tools/registry.py`, `core/tools/policy.py`,
+  `core/tools/executor.py`, `core/tools/builtins/`.
+
+The starting built-ins are `ls`, `read_file`, `write_file`, `edit_file`,
+`delete`, `glob`, `grep`, and `execute`. This is an initial baseline, not a
+maximum tool count.
+
+### Conversation and Storage
+
+- **Responsibility:** Thread, Turn, transcript, summary, tool activity, trust,
+  ChangeSet metadata, checkpoint access, and SQLite transactions.
+- **Does not own:** graph node transitions or TUI transcript state.
+- **Primary files:** `conversation/models.py`, `conversation/service.py`,
+  `storage/database.py`, `storage/conversations.py`, `storage/checkpoints.py`.
+
+### Change Journal
+
+- **Responsibility:** controlled before/after snapshots, conflict detection,
+  diff, undo, redo, and reversibility classification.
+- **Does not own:** arbitrary host effects created by `execute`.
+- **Primary files:** `core/changes/journal.py`, `core/changes/operations.py`,
+  `storage/changes.py`.
+
+Workspace files and their diffs are the generated work product; there is no
+parallel output object for ordinary file changes.
+
+### Skills and MCP
+
+- **Responsibility:** discover trusted bundled/user/workspace Skills, load
+  bounded instructions, connect configured MCP stdio servers, and adapt MCP
+  tools into the shared registry.
+- **Does not own:** permissions or an alternate execution path.
+- **Primary files:** `extensions/skills/discovery.py`,
+  `extensions/skills/loader.py`, `extensions/mcp/manager.py`,
+  `extensions/mcp/adapter.py`.
+
+### Memory
+
+- **Responsibility:** independent local files (`USER.md`, workspace
+  `MEMORY.md`) and optional Mem0 Cloud recall/distilled writes.
+- **Does not own:** policy, trust, raw transcript upload, or provider routing.
+- **Primary files:** `memory/local_file.py`, `memory/service.py`,
+  `memory/mem0_cloud.py`, `memory/distiller.py`.
+
+Both memory layers are independently enabled and default off. Mem0 Cloud is the
+only external memory adapter currently supported.
+
+### Protocol and Ink TUI
+
+- **Responsibility:** versioned JSON-RPC requests, typed events, bounded NDJSON,
+  terminal input, rendering, keyboard behavior, transcript projection, theme,
+  clipboard, and local presentation preferences.
+- **Does not own:** models, LangGraph, tools, storage, Memory, Skills, or MCP.
+- **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
+  `tui/src/core/process.ts`, `tui/src/app/App.tsx`.
+
+### Safety
+
+- **Responsibility:** workspace containment, sensitive-path rejection, command
+  policy, redaction, tool output bounds, and explicit outside-path interaction.
+- **Primary files:** `core/tools/policy.py`, `core/tools/command_policy.py`,
+  `safety/redaction.py`.
+
+## Design Principles
+
+1. Python Core is the only authority for product behavior.
+2. Ink owns interaction and rendering only.
+3. LangGraph owns graph execution, graph state, routes, and checkpoints.
+4. Application owns product lifecycle without recreating graph execution.
+5. Every tool follows one Registry, Policy, and Executor path.
+6. Workspace files are the primary work result.
+7. Execution is visible, cancellable, bounded, and recoverable where evidence
+   is sufficient.
+8. Product state uses embedded local storage under resolved Awesome paths.
+9. Skills, MCP, Memory, and workspace instructions are untrusted context and
+   cannot bypass tool policy.
+10. A new abstraction needs a concrete second implementation or demonstrated
+    product use.
+
+## File Dependency Chain
+
+```text
+core contracts / workspace / events
+                 │
+                 ▼
+ modeling     conversation      config
+     │             │              │
+     ├─────────────┼──────────────┤
+     ▼             ▼              ▼
+ providers       storage      extensions / memory
+          \         │         /
+           \        │        /
+            ▼       ▼       ▼
+              context + agent
+                     │
+                     ▼
+                application
+                     │
+                     ▼
+             protocol / stdio Host
+                     │
+                     ▼
+                Ink + React TUI
+```
+
+This is the architectural dependency direction, not a claim that every Python
+file imports the layer immediately above it. Structural tests maintain the
+current allowed package edges and framework owners.
+
+Concrete providers and storage adapters are wired in
+`application/composition.py`. The Agent imports provider-neutral contracts, and
+the protocol imports the Application facade rather than individual subsystems.
+
+## State Ownership
+
+| State | Owner | Location | Lifetime |
+| --- | --- | --- | --- |
+| Workspace trust | Application Storage | `state/application.db` | until user data removal |
+| Threads, Turns, transcript, summaries | Conversation + Storage | `state/application.db` | durable local history |
+| Tool activity summaries | Storage | `state/application.db` | bounded local history |
+| Agent graph channels | LangGraph | `state/checkpoints.db` | unfinished Turn only |
+| ChangeSet metadata | Change Journal + Storage | `state/application.db` | durable local history |
+| Change blobs | Change Journal | `state/change-journal/` | while referenced |
+| User memory | Memory | `memory/USER.md` | user controlled |
+| Workspace memory | Memory | `workspaces/<key>/MEMORY.md` | workspace scoped |
+| Cloud facts | Mem0 Cloud | external account | only when enabled |
+| UI preferences | Ink TUI | `ui.json` | user controlled |
+| Workspace files | user and tools | workspace | primary project state |
+
+Token deltas, spinners, raw provider payloads, unbounded shell output, and
+credentials are not stored as product history. Tool observations required for
+an unfinished Turn remain in the LangGraph checkpoint; user-facing activity
+history stores bounded summaries.
+
+## Error, Cancellation, and Recovery
+
+- Expected tool failures become normalized observations that the model can
+  address within remaining budgets.
+- Unexpected tool or graph failures terminate the Turn with a stable product
+  error and visible event.
+- Provider adapters classify errors and report retry usage; the Agent enforces
+  configured retry and model-call limits.
+- Cancellation propagates through the foreground operation, model call, and
+  tool execution. Application marks the Turn cancelled, seals known changes,
+  and removes its checkpoint.
+- Graph checkpoints are keyed by Turn ID. Application product records reference
+  the same key without copying graph channels.
+- Startup recovery acts only on evidence in product records and checkpoints.
+  Uncertain external side effects require a user decision instead of automatic
+  replay.
+- Context compression, message repair, budget exhaustion, and finalization are
+  Agent invariants rather than optional middleware.
+
+## Extension Points
+
+Current extension points are deliberately narrow:
+
+- new model adapters implement the existing provider contract and are composed
+  at the Application boundary;
+- new built-in or MCP tools enter the existing Registry/Policy/Executor path;
+- new Skills follow the current manifest schema and trusted discovery order;
+- a second external memory service must justify a shared provider abstraction;
+- a future surface adapts `ApplicationFacade` and typed events instead of
+  reimplementing Core behavior.
+
+The product roadmap also identifies documentation tooling, one-command Skills
+installation, Multi-Agent delegation, search tools, Cron tasks, Gateway
+messaging, and an optional Docker tool backend. These are future capabilities,
+not components in the current-system diagram. A Docker backend would sit below
+Tool Executor policy; it would not replace workspace trust.

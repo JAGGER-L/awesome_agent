@@ -1,4 +1,4 @@
-# Awesome Agent
+# Awesome
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -10,43 +10,50 @@
  █   █ █   █ █████ █████  ███  █   █ █████
 ```
 
-Awesome is a local-first AI coding agent that works inside the directory you
-launch it from; it is not a hosted service or a general Agent Platform.
+Awesome is an AI coding assistant that runs in your terminal. It can understand
+your codebase, edit files, run commands, and help with development, debugging,
+refactoring, and testing.
 
-V1.0.0 is a limited pilot for a few users. Supported hosts are Apple Silicon
-macOS, Windows 11 x64, and WSL2 Ubuntu 24.04 x64.
+Start `awesome` in a project directory and describe your goal in natural
+language. Awesome reads the relevant code, uses the tools it needs, makes the
+change, and helps verify the result.
+
+## What Awesome Can Do
+
+- understand a project and explain how its code fits together;
+- implement, debug, refactor, and test code;
+- show controlled file changes with `/diff`, `/undo`, and `/redo`;
+- continue the latest Thread or resume one by ID;
+- extend tasks with Skills, MCP tools, local Memory, and Mem0 Cloud;
+- work with DeepSeek and Kimi models.
+
+Awesome starts with `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
+`glob`, `grep`, and `execute`. Extensions can add more tools; the total is not limited to eight.
+Local file Memory and Mem0 Cloud are independent and default off.
 
 ## Install
 
-On Apple Silicon macOS or WSL2 Ubuntu 24.04 x64:
+### macOS or WSL2 Ubuntu
 
 ```bash
 curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-On Windows 11 x64 PowerShell:
+### Windows
 
 ```powershell
 irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-Open a new terminal after installation. Python, Node.js, uv, npm, Docker, and
-Make are not installation prerequisites. Git is optional and is never installed
-by Awesome; install it from the [official Git site](https://git-scm.com/downloads)
-if you want Git-aware workflows.
+Open a new terminal after installation. Awesome includes the runtimes it needs;
+you do not need to install Python, Node.js, uv, or npm first. Git is optional and
+is never installed by Awesome. Install it from the
+[official Git site](https://git-scm.com/downloads) when you want Git-aware
+workflows.
 
-## First run
+## Start Awesome
 
-```text
-cd <workspace>
-awesome
-```
-
-The launch directory is the workspace. Awesome asks for trust before reading
-project configuration, instructions, Skills, MCP declarations, or running
-tools. Declining exits without trusting the directory.
-
-Configure at least one model key in `<AWESOME_HOME>/.env`:
+Add at least one model key to `<AWESOME_HOME>/.env`:
 
 ```dotenv
 DEEPSEEK_API_KEY=...
@@ -54,30 +61,33 @@ DEEPSEEK_API_KEY=...
 MOONSHOT_API_KEY=...
 ```
 
-DeepSeek and Kimi are the only supported Providers in V1. See the
-[quickstart](docs/getting-started/quickstart.md) for model selection and the
-first safe task.
-
-## What it can do
-
-The initial default tools are `ls`, `read_file`, `write_file`, `edit_file`,
-`delete`, `glob`, `grep`, and `execute`. Extensions can add MCP and user tools;
-the architecture is not limited to eight tools. File changes are recorded in a
-Change Journal for `/diff`, `/undo`, and `/redo`.
-
-Local `USER.md`/workspace `MEMORY.md` memory and Mem0 Cloud memory are
-independent and default off. Skills provide task instructions; MCP connects
-external tools. Neither can bypass workspace trust or tool policy.
-
-## Launch options
+Then start Awesome inside a project:
 
 ```text
+cd <project>
 awesome
+```
+
+The first time Awesome opens a directory, it shows the path and asks whether
+you trust it. Choose Yes only for projects you are comfortable allowing Awesome
+to read and work in.
+
+Useful launch options:
+
+```text
 awesome --continue
 awesome --resume
 awesome --resume <thread_id>
 awesome --version
 awesome --help
+```
+
+## First Task
+
+Try a read-only introduction to the project:
+
+```text
+Analyze this project's structure and tell me where I should start reading.
 ```
 
 ## Documentation
@@ -94,6 +104,6 @@ awesome --help
 
 ## Security
 
-Awesome runs tools on the local host today; there is no Docker sandbox. Trust
-only workspaces you understand, review diffs, and keep credentials in the
-operating-system environment or `<AWESOME_HOME>/.env`, never in project files.
+Only trust projects you understand. Review `/diff` before keeping changes, and
+store credentials in the operating-system environment or
+`<AWESOME_HOME>/.env`, never in project files.

@@ -12,7 +12,7 @@ from awesome_agent.config import (
 from awesome_agent.paths import AwesomePaths
 
 
-def test_target_config_sources_are_exact_and_missing_files_are_not_created(
+def test_config_sources_are_exact_and_missing_files_are_not_created(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"

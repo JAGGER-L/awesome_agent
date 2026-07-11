@@ -272,7 +272,7 @@ def _invalid_methods() -> dict[str, object]:
             {
                 "name": "command.execute.unknown",
                 "method": "command.execute",
-                "params": {"name": "obsolete"},
+                "params": {"name": "unknown"},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {

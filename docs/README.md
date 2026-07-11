@@ -20,4 +20,4 @@ Start with the [quickstart](getting-started/quickstart.md) or
 - [Roadmap](roadmap.md)
 
 The root [README](../README.md) is the product front door and
-[ARCHITECTURE.md](../ARCHITECTURE.md) is the concise system map.
+[ARCHITECTURE.md](../ARCHITECTURE.md) is the complete technical overview.
