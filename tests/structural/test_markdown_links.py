@@ -96,3 +96,64 @@ def test_entry_docs_describe_only_the_pilot_product() -> None:
         "Local API",
     )
     assert not {value for value in forbidden if value.casefold() in combined.casefold()}
+
+
+def test_public_command_and_configuration_contract_is_documented() -> None:
+    commands = (ROOT / "docs/user-guide/commands.md").read_text(encoding="utf-8")
+    configuration = (ROOT / "docs/user-guide/configuration.md").read_text(
+        encoding="utf-8"
+    )
+
+    for command in (
+        "new",
+        "resume",
+        "context",
+        "compact",
+        "model",
+        "thinking",
+        "workspace",
+        "diff",
+        "undo",
+        "redo",
+        "tools",
+        "skills",
+        "skill",
+        "mcp",
+        "memory",
+        "status",
+        "usage",
+        "doctor",
+        "config",
+        "init",
+        "review",
+        "debug",
+        "test",
+        "commit",
+        "help",
+        "theme",
+        "copy",
+        "quit",
+    ):
+        assert f"`/{command}" in commands
+    for removed in (
+        "/editor",
+        "/details",
+        "/permissions",
+        "/sandbox",
+        "/api",
+        "/team",
+    ):
+        assert removed not in commands
+
+    for value in (
+        "262,144",
+        "model calls: 256",
+        "tool calls: 512",
+        "active execution: 21,600 seconds",
+        "provider retries: 6",
+        "compressions: 10",
+        "AWESOME_MODEL",
+        "AWESOME_THINKING",
+        "AWESOME_SKILL",
+    ):
+        assert value in configuration

@@ -86,5 +86,5 @@ thread 恢复流程。
 - `/context` 与 `/usage` 分别显示上下文和最近一次 usage 详情。
 - `/doctor` 检查本地配置、SQLite、checkpoint 与 Provider 可用性。
 
-遇到问题先运行 `/doctor`。升级时先关闭所有 Awesome 进程，再重新运行原安装
-命令；没有单独的 update 命令。
+遇到问题请看[故障排查](../user-guide/troubleshooting.md)。升级时先关闭所有 Awesome
+进程，再重新运行原安装命令；没有单独的 update 命令。

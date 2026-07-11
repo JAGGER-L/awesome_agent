@@ -1,40 +1,21 @@
-# Documentation
+# Awesome documentation
 
-Start here when you know what you want to do but not which document owns the
-answer.
+Start with the [quickstart](getting-started/quickstart.md) or
+[快速开始](getting-started/quickstart.zh-CN.md).
 
-## New Users
+## Use Awesome
 
-- [Project README](../README.md)
-- [Quickstart](getting-started/quickstart.md)
-- [快速开始](getting-started/quickstart.zh-CN.md)
+- [Commands](user-guide/commands.md)
+- [Configuration](user-guide/configuration.md)
+- [Workspace and tools](user-guide/workspace-and-tools.md)
+- [Memory, Skills, and MCP](user-guide/memory-skills-mcp.md)
+- [Troubleshooting](user-guide/troubleshooting.md)
 
-## Product Users
+## Understand and contribute
 
-- [User guide](user-guide/README.md)
-- [Conversations](user-guide/conversations.md)
-- [Memory, skills, and MCP](user-guide/memory-skills-mcp.md)
-
-## Contributors
-
-- [Development guide](development/README.md)
-- [Repository harness](development/repository-harness.md)
-- [Execution plans](development/execution-plans.md)
+- [Architecture](architecture/README.md)
+- [Development](development/README.md)
 - [Testing](development/testing.md)
 
-## Architecture Reviewers
-
-- [Architecture guide](architecture/README.md)
-- [Architecture overview](../ARCHITECTURE.md)
-
-## Maintainers
-
-- [Governance](governance/README.md)
-- [Roadmap](governance/roadmap.md)
-- [Technical debt](governance/technical-debt.md)
-- [Documentation governance](governance/documentation.md)
-- [Quality](governance/quality.md)
-
-## References
-
-- [Reference index](reference/README.md)
+The root [README](../README.md) is the product front door and
+[ARCHITECTURE.md](../ARCHITECTURE.md) is the concise system map.

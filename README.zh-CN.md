@@ -79,6 +79,11 @@ awesome --help
 ## 文档
 
 - [快速开始](docs/getting-started/quickstart.zh-CN.md)
+- [命令](docs/user-guide/commands.md)
+- [配置](docs/user-guide/configuration.md)
+- [Workspace 与工具](docs/user-guide/workspace-and-tools.md)
+- [Memory、Skills 与 MCP](docs/user-guide/memory-skills-mcp.md)
+- [故障排查](docs/user-guide/troubleshooting.md)
 - [架构](ARCHITECTURE.md)
 - [开发](docs/development/README.md)
 

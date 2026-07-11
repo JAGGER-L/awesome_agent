@@ -83,6 +83,11 @@ awesome --help
 ## Documentation
 
 - [Quickstart](docs/getting-started/quickstart.md)
+- [Commands](docs/user-guide/commands.md)
+- [Configuration](docs/user-guide/configuration.md)
+- [Workspace and tools](docs/user-guide/workspace-and-tools.md)
+- [Memory, Skills, and MCP](docs/user-guide/memory-skills-mcp.md)
+- [Troubleshooting](docs/user-guide/troubleshooting.md)
 - [Architecture](ARCHITECTURE.md)
 - [Development](docs/development/README.md)
 

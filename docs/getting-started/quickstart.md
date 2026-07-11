@@ -90,5 +90,6 @@ the TUI provides the same thread-oriented workflow.
 - `/doctor` checks local configuration, SQLite, checkpoints, and Provider
   readiness.
 
-For failures, run `/doctor`. To upgrade, close every Awesome process and rerun
-the original install command. There is no separate update command.
+For failures, see [Troubleshooting](../user-guide/troubleshooting.md). To
+upgrade, close every Awesome process and rerun the original install command.
+There is no separate update command.
