@@ -27,11 +27,7 @@ from awesome_agent.application.interactions import (
     InteractionKind,
 )
 from awesome_agent.application.operations import OperationController
-from awesome_agent.config import (
-    SUPPORTED_MODEL_IDS,
-    UserConfigDocument,
-    UserConfigWriter,
-)
+from awesome_agent.config import UserConfigDocument, UserConfigWriter
 from awesome_agent.conversation import ConversationService, Thread, ThreadNotFound
 from awesome_agent.core.changes import (
     ChangeJournal,
@@ -130,7 +126,7 @@ class ConversationCommandService:
         conversation: ConversationService,
         workspace_key: str,
         delegate: CommandDelegate,
-        default_model: str | None = None,
+        default_model: Callable[[], str | None] = lambda: None,
     ) -> None:
         self._conversation = conversation
         self._workspace_key = workspace_key
@@ -153,8 +149,6 @@ class ConversationCommandService:
             return self._new(intent)
         if intent.name is CommandName.RESUME:
             return self._resume(intent)
-        if intent.name is CommandName.MODEL:
-            return self._model(intent)
         if intent.name is CommandName.THINKING:
             return self._thinking(intent)
         thread_id = self._selected_thread_id()
@@ -170,7 +164,7 @@ class ConversationCommandService:
         thread = self._conversation.create_thread(
             self._workspace_key,
             title,
-            current_model=self._default_model,
+            current_model=self._default_model(),
         )
         self._current_thread_id = thread.id
         return CommandResult(
@@ -240,37 +234,6 @@ class ConversationCommandService:
         return CommandResult(
             status=CommandStatus.SUCCESS,
             data={"thread_id": thread.id, "title": thread.title},
-        )
-
-    def _model(self, intent: CommandIntent) -> CommandResult:
-        thread = self._selected_thread()
-        if thread is None:
-            return _command_error("thread_not_found", "Select a Thread first.")
-        if not intent.arguments:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={"model": thread.current_model},
-                selection=CommandSelection(
-                    prompt="Select the model for future Turns.",
-                    options=tuple(
-                        CommandOption(
-                            value=model,
-                            label=model,
-                            selected=model == thread.current_model,
-                        )
-                        for model in sorted(SUPPORTED_MODEL_IDS)
-                    ),
-                ),
-            )
-        if len(intent.arguments) != 1 or intent.arguments[0] not in SUPPORTED_MODEL_IDS:
-            return _command_error(
-                "invalid_arguments",
-                "Usage: /model [provider/model]",
-            )
-        updated = self._conversation.set_model(thread.id, intent.arguments[0])
-        return CommandResult(
-            status=CommandStatus.SUCCESS,
-            data={"model": updated.current_model},
         )
 
     def _thinking(self, intent: CommandIntent) -> CommandResult:

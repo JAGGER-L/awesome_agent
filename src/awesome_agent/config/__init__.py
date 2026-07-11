@@ -4,6 +4,7 @@ from awesome_agent.config.credentials import (
     ProviderCredentialStatuses,
     ProviderName,
     UserSecretStore,
+    missing_provider_credential_statuses,
     provider_environment_variable,
     resolve_provider_credential_statuses,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "WorkspaceConfigDocument",
     "config_source_paths",
     "load_config_sources",
+    "missing_provider_credential_statuses",
     "provider_environment_variable",
     "read_user_config_document",
     "resolve_application_config",

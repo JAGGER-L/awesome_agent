@@ -52,6 +52,13 @@ def provider_environment_variable(provider: ProviderName) -> str:
     return _PROVIDER_ENVIRONMENT_VARIABLES[provider]
 
 
+def missing_provider_credential_statuses() -> ProviderCredentialStatuses:
+    return ProviderCredentialStatuses(
+        deepseek=_missing_status("deepseek"),
+        kimi=_missing_status("kimi"),
+    )
+
+
 def resolve_provider_credential_statuses(
     path: Path,
     environ: Mapping[str, str],
@@ -78,6 +85,15 @@ def resolve_provider_credential_statuses(
     return ProviderCredentialStatuses(
         deepseek=status("deepseek"),
         kimi=status("kimi"),
+    )
+
+
+def _missing_status(provider: ProviderName) -> ProviderCredentialStatus:
+    return ProviderCredentialStatus(
+        provider=provider,
+        environment_variable=provider_environment_variable(provider),
+        source=CredentialSource.MISSING,
+        mutable=True,
     )
 
 

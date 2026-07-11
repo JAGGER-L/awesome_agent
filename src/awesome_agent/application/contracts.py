@@ -6,8 +6,22 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
+from awesome_agent.config.credentials import (
+    CredentialSource,
+    ProviderCredentialStatuses,
+    ProviderName,
+    missing_provider_credential_statuses,
+)
 from awesome_agent.config.models import SecretStatus
 from awesome_agent.conversation.models import Thread, ThreadView
 
@@ -21,6 +35,7 @@ class ProductErrorCode(StrEnum):
     OPERATION_BUSY = "operation_busy"
     MODEL_NOT_CONFIGURED = "model_not_configured"
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
+    CREDENTIAL_MANAGED_EXTERNALLY = "credential_managed_externally"
     INVALID_ARGUMENTS = "invalid_arguments"
     COMMAND_NOT_AVAILABLE = "command_not_available"
     CHECKPOINT_MISSING = "checkpoint_missing"
@@ -29,6 +44,37 @@ class ProductErrorCode(StrEnum):
     CLIENT_VERSION_INCOMPATIBLE = "client_version_incompatible"
     PROTOCOL_VERSION_INCOMPATIBLE = "protocol_version_incompatible"
     INTERNAL_ERROR = "internal_error"
+
+
+class ProviderCredentialSetStatus(StrEnum):
+    SAVED = "saved"
+    INVALID = "invalid"
+    CONFIRM_UNVERIFIED = "confirm_unverified"
+
+
+class ProviderCredentialSetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: ProviderName
+    api_key: SecretStr
+    allow_unverified: bool = False
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: SecretStr) -> SecretStr:
+        raw = value.get_secret_value()
+        if not raw.strip() or "\r" in raw or "\n" in raw:
+            raise ValueError("Provider credential value is invalid.")
+        return value
+
+
+class ProviderCredentialSetResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: ProviderName
+    status: ProviderCredentialSetStatus
+    source: CredentialSource
+    code: str = Field(min_length=1, max_length=128)
 
 
 class ProductError(BaseModel):
@@ -133,6 +179,9 @@ class ApplicationState(BaseModel):
     pending_interaction_id: str | None = Field(default=None, max_length=128)
     configuration_valid: bool
     secret_status: SecretStatus
+    provider_credentials: ProviderCredentialStatuses = Field(
+        default_factory=missing_provider_credential_statuses
+    )
     memory_status: dict[str, JsonValue] = Field(default_factory=dict)
     mcp_status: tuple[dict[str, JsonValue], ...] = ()
     usage: dict[str, int] = Field(default_factory=dict)

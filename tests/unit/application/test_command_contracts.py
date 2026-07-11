@@ -8,6 +8,7 @@ from awesome_agent.application.commands import (
     CommandOption,
     CommandOwner,
     CommandResult,
+    CommandSecretPrompt,
     CommandSelection,
     CommandStatus,
 )
@@ -29,6 +30,7 @@ def test_command_ownership_matrix_is_complete() -> None:
         "resume",
         "context",
         "compact",
+        "auth",
         "model",
         "thinking",
         "workspace",
@@ -114,6 +116,36 @@ def test_command_selection_is_stateless_and_round_trips() -> None:
 
     assert restored.selection == selection
     assert not hasattr(restored, "interaction_id")
+
+
+def test_secret_prompt_contains_metadata_only() -> None:
+    prompt = CommandSecretPrompt(
+        provider="deepseek",
+        action="add",
+        label="DeepSeek API Key",
+        environment_variable="DEEPSEEK_API_KEY",
+        help_url="https://platform.deepseek.com/api_keys",
+    )
+    result = CommandResult(status=CommandStatus.SUCCESS, secret_prompt=prompt)
+
+    serialized = result.model_dump(mode="json", exclude_none=True)
+
+    assert set(serialized["secret_prompt"]) == {
+        "provider",
+        "action",
+        "label",
+        "environment_variable",
+        "help_url",
+    }
+    with pytest.raises(ValidationError):
+        CommandResult(
+            status=CommandStatus.SUCCESS,
+            secret_prompt=prompt,
+            selection=CommandSelection(
+                prompt="Invalid",
+                options=(CommandOption(value="one", label="One"),),
+            ),
+        )
 
 
 @pytest.mark.parametrize(

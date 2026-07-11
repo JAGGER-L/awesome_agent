@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -17,6 +17,7 @@ class CommandName(StrEnum):
     RESUME = "resume"
     CONTEXT = "context"
     COMPACT = "compact"
+    AUTH = "auth"
     MODEL = "model"
     THINKING = "thinking"
     WORKSPACE = "workspace"
@@ -51,6 +52,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.RESUME,
             CommandName.CONTEXT,
             CommandName.COMPACT,
+            CommandName.AUTH,
             CommandName.MODEL,
             CommandName.THINKING,
             CommandName.WORKSPACE,
@@ -128,6 +130,16 @@ class CommandSelection(BaseModel):
         return self
 
 
+class CommandSecretPrompt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Literal["deepseek", "kimi"]
+    action: Literal["add", "replace"]
+    label: str = Field(min_length=1, max_length=200)
+    environment_variable: str = Field(min_length=1, max_length=128)
+    help_url: str = Field(min_length=1, max_length=2_000)
+
+
 class CommandResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -135,3 +147,10 @@ class CommandResult(BaseModel):
     content: str = Field(default="", max_length=30_000)
     data: dict[str, JsonValue] = Field(default_factory=dict)
     selection: CommandSelection | None = None
+    secret_prompt: CommandSecretPrompt | None = None
+
+    @model_validator(mode="after")
+    def validate_interaction(self) -> Self:
+        if self.selection is not None and self.secret_prompt is not None:
+            raise ValueError("Command result cannot contain two input requests.")
+        return self

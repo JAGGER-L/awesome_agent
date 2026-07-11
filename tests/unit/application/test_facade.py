@@ -25,6 +25,7 @@ from awesome_agent.application.facade import (
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
+    ThreadReadResult,
     WorkspacePresentation,
 )
 from awesome_agent.application.headless import ConversationCommandService
@@ -77,7 +78,7 @@ class Backend:
         self.calls.append(("threads", query))
         return ThreadListResult()
 
-    async def thread_state(self, query: ThreadReadQuery) -> object:
+    async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
         self.calls.append(("read", query))
         raise LookupError(query.thread_id)
 
@@ -174,7 +175,7 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
 
 
 @pytest.mark.asyncio
-async def test_conversation_commands_select_future_thread_configuration(
+async def test_conversation_commands_use_dynamic_defaults_and_delegate_model(
     tmp_path: Path,
 ) -> None:
     repositories = SQLiteConversationRepositories(tmp_path / "application.db")
@@ -185,11 +186,12 @@ async def test_conversation_commands_select_future_thread_configuration(
         delegated.append((intent.name, thread_id))
         return CommandResult(status=CommandStatus.SUCCESS)
 
+    default_model = "deepseek/deepseek-v4-flash"
     commands = ConversationCommandService(
         conversation=conversation,
         workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         delegate=delegate,
-        default_model="deepseek/deepseek-v4-flash",
+        default_model=lambda: default_model,
     )
 
     created = await commands.handle(
@@ -202,30 +204,32 @@ async def test_conversation_commands_select_future_thread_configuration(
         == "deepseek/deepseek-v4-flash"
     )
 
-    model_query = await commands.handle(CommandIntent(name=CommandName.MODEL))
     thinking_query = await commands.handle(CommandIntent(name=CommandName.THINKING))
-    assert model_query.selection is not None
     assert thinking_query.data["thinking_enabled"] is False
     assert thinking_query.selection is not None
 
-    model = await commands.handle(
-        CommandIntent(
-            name=CommandName.MODEL,
-            arguments=("kimi/kimi-k2.6",),
-        )
-    )
+    model = await commands.handle(CommandIntent(name=CommandName.MODEL))
     thinking = await commands.handle(
         CommandIntent(name=CommandName.THINKING, arguments=("on",))
     )
     selected = conversation.read_thread(str(thread_id)).thread
-    assert model.data["model"] == "kimi/kimi-k2.6"
+    assert model.status is CommandStatus.SUCCESS
     assert thinking.data["thinking_enabled"] is True
-    assert selected.current_model == "kimi/kimi-k2.6"
+    assert selected.current_model == "deepseek/deepseek-v4-flash"
     assert selected.thinking_enabled is True
+
+    default_model = "kimi/kimi-k2.6"
+    next_thread = await commands.handle(CommandIntent(name=CommandName.NEW))
+    assert conversation.read_thread(
+        str(next_thread.data["thread_id"])
+    ).thread.current_model == ("kimi/kimi-k2.6")
 
     delegated_result = await commands.handle(CommandIntent(name=CommandName.STATUS))
     assert delegated_result.status is CommandStatus.SUCCESS
-    assert delegated == [(CommandName.STATUS, thread_id)]
+    assert delegated == [
+        (CommandName.MODEL, thread_id),
+        (CommandName.STATUS, next_thread.data["thread_id"]),
+    ]
 
 
 @pytest.mark.asyncio
