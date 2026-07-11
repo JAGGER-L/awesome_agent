@@ -10,7 +10,6 @@ import {
   type MethodValue,
   RpcClosedError,
 } from "../protocol/index.js";
-import { PRODUCT_VERSION } from "../version.js";
 import {
   type BatchedEvent,
   DeltaBatcher,
@@ -21,13 +20,6 @@ import {
 } from "../state/index.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { reconcileCompletedTurn } from "../transcript/reconcile.js";
-
-export class SurfaceConnectionError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "SurfaceConnectionError";
-  }
-}
 
 export interface SurfaceConnectOptions extends CoreLaunchOptions {
   /** @internal Deterministic process seam for tests. */
@@ -158,46 +150,6 @@ export async function connectSurface(
     })();
     return closePromise;
   };
-
-  try {
-    store.dispatch({ type: "connection.handshaking" });
-    const initialized = await session.rpc.request("initialize", {
-      protocol_version: 1,
-      client_name: "awesome-tui",
-      client_version: PRODUCT_VERSION,
-    });
-    if (!initialized.ok) {
-      throw new SurfaceConnectionError(initialized.error.message);
-    }
-    store.dispatch({
-      type:
-        initialized.value.status === "trust_required"
-          ? "handshake.trust_required"
-          : "handshake.ready",
-    });
-    const application = await session.rpc.request("application.getState", {});
-    if (!application.ok)
-      throw new SurfaceConnectionError(application.error.message);
-    store.dispatch({
-      type: "hydrate.application",
-      application: application.value,
-    });
-    if (application.value.current_thread_id) {
-      const thread = await session.rpc.request("thread.read", {
-        thread_id: application.value.current_thread_id,
-        limit: 50,
-      });
-      if (!thread.ok) throw new SurfaceConnectionError(thread.error.message);
-      store.dispatch({ type: "hydrate.thread", thread: thread.value });
-    }
-  } catch (error) {
-    await close();
-    throw error instanceof SurfaceConnectionError
-      ? error
-      : new SurfaceConnectionError("Unable to connect Surface", {
-          cause: error,
-        });
-  }
 
   return {
     store,

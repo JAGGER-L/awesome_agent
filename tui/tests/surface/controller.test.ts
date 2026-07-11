@@ -10,10 +10,8 @@ import {
   type CoreLaunchOptions,
 } from "../../src/core/process.js";
 import { RpcClosedError } from "../../src/protocol/index.js";
-import {
-  connectSurface,
-  SurfaceConnectionError,
-} from "../../src/surface/controller.js";
+import { connectSurface } from "../../src/surface/controller.js";
+import { beginStartup, StartupError } from "../../src/surface/startup.js";
 
 const fixture = fileURLToPath(
   new URL("../fixtures/fake-core.mjs", import.meta.url),
@@ -33,39 +31,66 @@ async function options(extra: Record<string, string | undefined> = {}) {
 }
 
 describe("connectSurface", () => {
-  it("hydrates state/Thread and retains Events racing initialize", async () => {
+  it("opens transport without reading trusted project state implicitly", async () => {
     const connected = await connectSurface(
       await options({
-        AWESOME_FAKE_CORE_EVENT_BEFORE_INIT: "1",
         AWESOME_FAKE_CORE_THREAD: "1",
       }),
     );
     expect(connected.store.getState()).toMatchObject({
-      connection: "ready",
-      application: { current_thread_id: "thread_fake" },
-      thread: { view: { thread: { title: "Fake Thread" } } },
-      warnings: [{ code: "early" }],
+      connection: "starting",
     });
+    expect(connected.store.getState().application).toBeUndefined();
+    expect(connected.store.getState().thread).toBeUndefined();
     await connected.close();
   });
 
-  it("represents trust-required without inventing product decisions", async () => {
+  it("leaves trust resolution to the explicit startup controller", async () => {
     const connected = await connectSurface(
       await options({ AWESOME_FAKE_CORE_MODE: "trust-required" }),
     );
-    expect(connected.store.getState()).toMatchObject({
-      connection: "trust_required",
-      application: { workspace_trusted: false },
+    await expect(
+      beginStartup(connected, { kind: "new" }),
+    ).resolves.toMatchObject({
+      kind: "trust_required",
     });
     await connected.close();
   });
 
-  it("closes cleanly on product handshake failure", async () => {
+  it("retains an initialize Event racing the trust response", async () => {
+    const connected = await connectSurface(
+      await options({
+        AWESOME_FAKE_CORE_MODE: "trust-required",
+        AWESOME_FAKE_CORE_EVENT_BEFORE_INIT: "1",
+      }),
+    );
     await expect(
-      connectSurface(
-        await options({ AWESOME_FAKE_CORE_MODE: "handshake-failure" }),
-      ),
-    ).rejects.toBeInstanceOf(SurfaceConnectionError);
+      beginStartup(connected, { kind: "new" }),
+    ).resolves.toMatchObject({
+      kind: "trust_required",
+      interactionId: "interaction_fake",
+    });
+    for (
+      let attempt = 0;
+      attempt < 20 && connected.store.getState().warnings.length === 0;
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    expect(connected.store.getState().warnings).toEqual([
+      { code: "early", message: "Early warning." },
+    ]);
+    await connected.close();
+  });
+
+  it("surfaces product handshake failure through startup", async () => {
+    const connected = await connectSurface(
+      await options({ AWESOME_FAKE_CORE_MODE: "handshake-failure" }),
+    );
+    await expect(
+      beginStartup(connected, { kind: "new" }),
+    ).rejects.toBeInstanceOf(StartupError);
+    await connected.close();
   });
 
   it("passes requests through and rejects them after close", async () => {

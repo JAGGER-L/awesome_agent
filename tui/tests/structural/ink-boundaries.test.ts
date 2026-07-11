@@ -37,7 +37,11 @@ describe("Ink scrollback boundaries", () => {
       files
         .filter((file) => file.source.includes("useInput"))
         .map((file) => file.path),
-    ).toEqual(["components/Composer.tsx", "components/Picker.tsx"]);
+    ).toEqual([
+      "components/Composer.tsx",
+      "components/Help.tsx",
+      "components/Picker.tsx",
+    ]);
 
     const transcript = files
       .filter((file) => file.path.includes("transcript"))

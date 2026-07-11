@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { boundedText, jsonValueSchema } from "./base.js";
+import { boundedText, jsonValueSchema, safeIntegerSchema } from "./base.js";
 
 export const applicationCommandNames = [
   "new",
@@ -45,6 +45,28 @@ export const commandOwnerSchema = z.enum(["application", "skill", "ink"]);
 
 export type CommandName = z.infer<typeof commandNameSchema>;
 export type CommandOwner = z.infer<typeof commandOwnerSchema>;
+
+export const statusSnapshotSchema = z.strictObject({
+  version: z.string().regex(/^\d+\.\d+\.\d+$/u),
+  workspace_path: boundedText(1, 4_096),
+  thread_title: boundedText(1, 500),
+  thread_id: boundedText(1, 128),
+  thread_display_id: boundedText(1, 128),
+  model_id: boundedText(1, 200),
+  model_status: z.enum(["configured", "not_configured"]),
+  thinking_enabled: z.boolean(),
+  skill_mode: boundedText(1, 64),
+  local_memory_enabled: z.boolean(),
+  mem0_enabled: z.boolean(),
+  mcp_ready: safeIntegerSchema.min(0),
+  mcp_degraded: safeIntegerSchema.min(0),
+  operation_status: z.enum(["idle", "active"]),
+  operation_id: boundedText(1, 128).nullable(),
+  configuration_valid: z.boolean(),
+  configuration_diagnostic_count: safeIntegerSchema.min(0),
+});
+
+export type StatusSnapshot = z.infer<typeof statusSnapshotSchema>;
 
 export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   new: "application",
