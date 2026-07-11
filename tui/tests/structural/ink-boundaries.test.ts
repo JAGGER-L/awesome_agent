@@ -38,6 +38,7 @@ describe("Ink scrollback boundaries", () => {
         .filter((file) => file.source.includes("useInput"))
         .map((file) => file.path),
     ).toEqual([
+      "app/App.tsx",
       "components/Composer.tsx",
       "components/Help.tsx",
       "components/Picker.tsx",
