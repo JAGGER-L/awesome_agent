@@ -189,6 +189,7 @@ async def test_conversation_commands_select_future_thread_configuration(
         conversation=conversation,
         workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         delegate=delegate,
+        default_model="deepseek/deepseek-v4-flash",
     )
 
     created = await commands.handle(
@@ -196,6 +197,10 @@ async def test_conversation_commands_select_future_thread_configuration(
     )
     thread_id = created.data["thread_id"]
     assert created.data["title"] == "Feature work"
+    assert (
+        conversation.read_thread(str(thread_id)).thread.current_model
+        == "deepseek/deepseek-v4-flash"
+    )
 
     model_query = await commands.handle(CommandIntent(name=CommandName.MODEL))
     thinking_query = await commands.handle(CommandIntent(name=CommandName.THINKING))

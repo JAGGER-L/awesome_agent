@@ -65,6 +65,7 @@ function harness(overrides: Partial<CliDependencies> = {}) {
     nodeVersion: "22.18.0",
     stdinIsTTY: true,
     stdoutIsTTY: true,
+    coreExecutable: "awesome-core",
     writeStdout: (value) => stdout.push(value),
     writeStderr: (value) => stderr.push(value),
     startSurface: vi.fn(async () => surface),

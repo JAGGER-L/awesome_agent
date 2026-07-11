@@ -218,6 +218,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
         if any(imported.startswith("node:") for imported in imports)
     }
     assert node_importers == {
+        "src/cli/runtime-checks.ts": {"node:fs", "node:path"},
         "src/core/process.ts": {"node:child_process"},
         "src/preferences/paths.ts": {"node:os", "node:path"},
         "src/preferences/store.ts": {"node:fs/promises", "node:path"},

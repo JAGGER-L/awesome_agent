@@ -50,6 +50,7 @@ import {
 import {
   assertInteractiveTerminal,
   assertSupportedNode,
+  resolveCoreExecutable,
   RuntimeCheckError,
 } from "./runtime-checks.js";
 
@@ -74,6 +75,7 @@ export interface CliDependencies {
   readonly nodeVersion: string;
   readonly stdinIsTTY: boolean;
   readonly stdoutIsTTY: boolean;
+  readonly coreExecutable: string;
   readonly writeStdout: (value: string) => void;
   readonly writeStderr: (value: string) => void;
   readonly startSurface: (
@@ -119,7 +121,7 @@ export async function runCli(
   let surface: ConnectedSurface;
   try {
     surface = await dependencies.startSurface({
-      executable: "awesome-core",
+      executable: dependencies.coreExecutable,
       cwd,
       env: dependencies.env,
     });
@@ -160,6 +162,7 @@ function productionDependencies(): CliDependencies {
     nodeVersion: process.versions.node,
     stdinIsTTY: process.stdin.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
+    coreExecutable: resolveCoreExecutable(process.env),
     writeStdout: (value) => process.stdout.write(value),
     writeStderr: (value) => process.stderr.write(value),
     startSurface: connectSurface,

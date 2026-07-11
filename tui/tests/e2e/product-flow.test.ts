@@ -69,6 +69,7 @@ describe("networkless candidate product flow", () => {
         nodeVersion: "22.18.0",
         stdinIsTTY: true,
         stdoutIsTTY: true,
+        coreExecutable: executable,
         writeStdout: vi.fn(),
         writeStderr: vi.fn(),
         startSurface: async (options) =>

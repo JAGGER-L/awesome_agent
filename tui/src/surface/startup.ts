@@ -106,11 +106,23 @@ export async function beginStartup(
     application: application.value,
   });
   const thread = await runStartup(surface, intent);
-  const diagnostic = startupDiagnostic(application.value);
+  const refreshed =
+    thread.kind === "ready"
+      ? await surface.request("application.getState", {})
+      : application;
+  if (!refreshed.ok) throw productFailure(refreshed.error);
+  const resolvedApplication = refreshed.value;
+  if (resolvedApplication !== application.value) {
+    surface.store?.dispatch({
+      type: "hydrate.application",
+      application: resolvedApplication,
+    });
+  }
+  const diagnostic = startupDiagnostic(resolvedApplication);
   return {
     kind: "ready",
     readiness: diagnostic ? "diagnostics_ready" : "agent_ready",
-    application: application.value,
+    application: resolvedApplication,
     thread,
     ...(diagnostic
       ? { diagnostic, safeCommands: SAFE_DIAGNOSTIC_COMMANDS }

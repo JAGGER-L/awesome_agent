@@ -130,10 +130,12 @@ class ConversationCommandService:
         conversation: ConversationService,
         workspace_key: str,
         delegate: CommandDelegate,
+        default_model: str | None = None,
     ) -> None:
         self._conversation = conversation
         self._workspace_key = workspace_key
         self._delegate = delegate
+        self._default_model = default_model
         self._current_thread_id: str | None = None
 
     @property
@@ -165,7 +167,11 @@ class ConversationCommandService:
 
     def _new(self, intent: CommandIntent) -> CommandResult:
         title = " ".join(intent.arguments).strip() or None
-        thread = self._conversation.create_thread(self._workspace_key, title)
+        thread = self._conversation.create_thread(
+            self._workspace_key,
+            title,
+            current_model=self._default_model,
+        )
         self._current_thread_id = thread.id
         return CommandResult(
             status=CommandStatus.SUCCESS,

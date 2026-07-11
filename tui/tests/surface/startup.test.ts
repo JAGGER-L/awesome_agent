@@ -265,7 +265,7 @@ function applicationState({
   kimi = true,
   valid = true,
 }: {
-  model?: string;
+  model?: string | null;
   deepseek?: boolean;
   kimi?: boolean;
   valid?: boolean;
@@ -276,7 +276,7 @@ function applicationState({
     workspace_key: "workspace_1",
     workspace: { display_path: "E:\\projects\\awesome", branch: "main" },
     workspace_trusted: true,
-    current_model: model,
+    ...(model === null ? {} : { current_model: model }),
     thinking_enabled: false,
     skill_mode: "auto",
     configuration_valid: valid,
@@ -301,6 +301,7 @@ function startupHarness({
 } = {}) {
   const calls: Call[] = [];
   let trusted = !trustRequired;
+  let selectedThreadId: string | undefined;
   return {
     calls,
     surface: {
@@ -333,9 +334,20 @@ function startupHarness({
           } as never;
         }
         if (method === "application.getState") {
-          return { ok: true, value: application } as never;
+          return {
+            ok: true,
+            value: selectedThreadId
+              ? {
+                  ...application,
+                  current_thread_id: selectedThreadId,
+                  current_model:
+                    application.current_model ?? "deepseek/deepseek-chat",
+                }
+              : application,
+          } as never;
         }
         if (method === "command.execute") {
+          selectedThreadId = "thread_new";
           return {
             ok: true,
             value: {
@@ -387,6 +399,7 @@ describe("trusted startup state machine", () => {
       "application.getState",
       "command.execute",
       "thread.read",
+      "application.getState",
     ]);
   });
 
@@ -429,7 +442,22 @@ describe("trusted startup state machine", () => {
       "handshake.ready",
       "hydrate.application",
       "hydrate.thread",
+      "hydrate.application",
     ]);
+  });
+
+  it("binds the selected Thread and model into the startup application state", async () => {
+    const { surface } = startupHarness({
+      application: applicationState({ model: null }),
+    });
+    const result = await beginStartup(surface, { kind: "new" });
+    expect(result).toMatchObject({
+      kind: "ready",
+      application: {
+        current_thread_id: "thread_new",
+        current_model: "deepseek/deepseek-chat",
+      },
+    });
   });
 
   it.each([
