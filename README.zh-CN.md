@@ -49,15 +49,7 @@ Node.js、uv 或 npm。Git 是可选能力，Awesome 不会自动安装；需要
 
 ## 开始使用
 
-在 `<AWESOME_HOME>/.env` 中至少配置一个模型密钥：
-
-```dotenv
-DEEPSEEK_API_KEY=...
-# 或
-MOONSHOT_API_KEY=...
-```
-
-然后在项目目录中启动 Awesome：
+在项目目录中启动 Awesome：
 
 ```text
 cd <project>
@@ -66,6 +58,9 @@ awesome
 
 首次进入一个目录时，Awesome 会显示完整路径并询问是否信任。只有在你了解该项目、
 并愿意让 Awesome 读取和操作其中内容时才选择 Yes。
+
+尚未配置模型 Provider 时，按 Enter 或运行 `/model`。选择 DeepSeek 或 Kimi，
+在遮罩输入框中粘贴 API Key，再选择模型。之后可使用 `/auth` 添加、替换或删除凭据。
 
 常用启动参数：
 
@@ -99,5 +94,6 @@ awesome --help
 
 ## 安全
 
-只信任你了解的项目，保留修改前先检查 `/diff`。密钥应存放在操作系统环境或
-`<AWESOME_HOME>/.env` 中，不要写入项目文件。
+只信任你了解的项目，保留修改前先检查 `/diff`。只通过 Awesome 的
+`/model` 或 `/auth` 遮罩输入流程输入凭据。进程环境变量和 `<AWESOME_HOME>/.env`
+仍是高级配置方式；不要把凭据写入项目文件。
