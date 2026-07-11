@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from enum import StrEnum
@@ -174,9 +175,13 @@ class ConversationCommandService:
     def _resume(self, intent: CommandIntent) -> CommandResult:
         if len(intent.arguments) > 1:
             return _command_error("invalid_arguments", "Usage: /resume [thread_id]")
-        threads = self._conversation.list_threads(self._workspace_key)
         if not intent.arguments:
-            if not threads:
+            page = self._conversation.list_thread_page(
+                self._workspace_key,
+                cursor=None,
+                limit=200,
+            )
+            if not page.threads:
                 return CommandResult(
                     status=CommandStatus.SUCCESS,
                     data={"threads": []},
@@ -191,21 +196,44 @@ class ConversationCommandService:
                             label=thread.title,
                             selected=thread.id == self._current_thread_id,
                         )
-                        for thread in threads
+                        for thread in page.threads
                     ),
                 ),
             )
-        thread_id = intent.arguments[0]
+        requested = intent.arguments[0]
+        matches: list[Thread] = []
         try:
-            view = self._conversation.read_thread(thread_id)
+            exact = self._conversation.read_thread(requested).thread
         except ThreadNotFound:
+            exact = None
+        if exact is not None and exact.workspace_key == self._workspace_key:
+            matches = [exact]
+        elif re.fullmatch(r"thread_[a-f0-9]{8,32}", requested):
+            matches = list(
+                self._conversation.match_thread_prefix(
+                    self._workspace_key,
+                    prefix=requested,
+                    limit=200,
+                )
+            )
+        if not matches:
             return _command_error("thread_not_found", "Thread was not found.")
-        if view.thread.workspace_key != self._workspace_key:
-            return _command_error("thread_not_found", "Thread was not found.")
-        self._current_thread_id = thread_id
+        if len(matches) > 1:
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                selection=CommandSelection(
+                    prompt="Select a matching Thread to resume.",
+                    options=tuple(
+                        CommandOption(value=thread.id, label=thread.title)
+                        for thread in matches
+                    ),
+                ),
+            )
+        thread = matches[0]
+        self._current_thread_id = thread.id
         return CommandResult(
             status=CommandStatus.SUCCESS,
-            data={"thread_id": thread_id, "title": view.thread.title},
+            data={"thread_id": thread.id, "title": thread.title},
         )
 
     def _model(self, intent: CommandIntent) -> CommandResult:
@@ -278,12 +306,6 @@ class ConversationCommandService:
         )
 
     def _selected_thread_id(self) -> str | None:
-        if self._current_thread_id is not None:
-            return self._current_thread_id
-        threads = self._conversation.list_threads(self._workspace_key)
-        if not threads:
-            return None
-        self._current_thread_id = threads[0].id
         return self._current_thread_id
 
     def _selected_thread(self) -> Thread | None:

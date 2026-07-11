@@ -216,10 +216,6 @@ class AwesomeAgentTui(App[None]):
                 self.state = self.state.append(ChatMessage.command(raw))
             if parsed.kind is SlashCommandKind.STATUS:
                 self.state = self.state.open_status_panel()
-            elif parsed.kind is SlashCommandKind.DETAILS:
-                self.state = self.state.close_status_panel().toggle_details()
-                label = "enabled" if self.state.details_enabled else "disabled"
-                self.state = self.state.append(ChatMessage.system(f"Details {label}."))
             elif parsed.kind is SlashCommandKind.QUIT:
                 self.exit()
                 return

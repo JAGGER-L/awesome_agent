@@ -37,11 +37,13 @@ from awesome_agent.application.contracts import (
     OperationAccepted,
     ProductError,
     ProductErrorCode,
+    StatusSnapshot,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
     WorkspacePresentation,
+    thread_display_id,
 )
 from awesome_agent.application.direct import DirectCommandService
 from awesome_agent.application.errors import ApplicationFailure
@@ -113,6 +115,7 @@ from awesome_agent.core.workspace import (
     resolve_workspace,
 )
 from awesome_agent.extensions.mcp import (
+    McpConnectionState,
     McpManager,
     McpServerConfig,
     McpSource,
@@ -464,7 +467,11 @@ class _LocalApplicationBackend:
             usage=usage.model_dump(mode="json"),
             configuration_diagnostics=(
                 (self._mem0_diagnostic.code,)
-                if self._mem0_diagnostic is not None
+                if (
+                    self._mem0_diagnostic is not None
+                    and self._mem0_session is not None
+                    and self._mem0_session.enabled
+                )
                 else ()
             ),
         )
@@ -859,13 +866,6 @@ class _LocalApplicationBackend:
             workspace_key=self._workspace.key,
             delegate=self._delegate_command,
         )
-        if not self._conversation.list_threads(self._workspace.key):
-            await self._commands.handle(CommandIntent(name=CommandName.NEW))
-        else:
-            first = self._conversation.list_threads(self._workspace.key)[0]
-            await self._commands.handle(
-                CommandIntent(name=CommandName.RESUME, arguments=(first.id,))
-            )
         await self._turns.reconcile_startup()
         self._initialized = True
 
@@ -975,9 +975,61 @@ class _LocalApplicationBackend:
                 },
             )
         if intent.name is CommandName.STATUS:
+            thread = self._conversation.read_thread(thread_id).thread
+            config = self._turn_config(thread)
+            initial_display_id = thread_display_id(thread.id)
+            display_candidates = self._conversation.match_thread_prefix(
+                self._workspace.key,
+                prefix=initial_display_id,
+                limit=200,
+            )
+            statuses = self._mcp.statuses() if self._mcp is not None else ()
+            local_enabled = self._local_memory.enabled if self._local_memory else False
+            mem0_enabled = (
+                self._mem0_session.enabled if self._mem0_session is not None else False
+            )
+            active_operation_id = self._operations.active_operation_id
+            snapshot = StatusSnapshot(
+                version=PRODUCT_VERSION,
+                workspace_path=str(self._workspace.display_path),
+                thread_title=thread.title,
+                thread_id=thread.id,
+                thread_display_id=thread_display_id(
+                    thread.id,
+                    candidate_ids=(item.id for item in display_candidates),
+                ),
+                model_id=config.model,
+                model_status=(
+                    "configured"
+                    if self._provider_is_configured(config.provider)
+                    else "not_configured"
+                ),
+                thinking_enabled=thread.thinking_enabled,
+                skill_mode=thread.skill_mode,
+                local_memory_enabled=local_enabled,
+                mem0_enabled=mem0_enabled,
+                mcp_ready=sum(
+                    status.state is McpConnectionState.CONNECTED for status in statuses
+                ),
+                mcp_degraded=sum(
+                    status.state is McpConnectionState.ERROR for status in statuses
+                ),
+                operation_status="active" if active_operation_id else "idle",
+                operation_id=active_operation_id,
+                configuration_valid=True,
+                configuration_diagnostic_count=(
+                    1
+                    if (
+                        self._mem0_diagnostic is not None
+                        and self._mem0_session is not None
+                        and self._mem0_session.enabled
+                    )
+                    else 0
+                ),
+            )
             return CommandResult(
                 status=CommandStatus.SUCCESS,
-                data=(await self.application_state()).model_dump(mode="json"),
+                data=cast(dict[str, JsonValue], snapshot.model_dump(mode="json")),
             )
         if intent.name is CommandName.USAGE:
             usage = _last_usage(self._conversation, thread_id)
@@ -1075,18 +1127,20 @@ class _LocalApplicationBackend:
             )
 
     def _require_provider_configured(self, provider: ProviderId) -> None:
-        status = self._sources.secret_status
-        configured = (
-            status.deepseek_api_key
-            if provider == "deepseek"
-            else status.moonshot_api_key
-        )
-        if not configured:
+        if not self._provider_is_configured(provider):
             raise _application_failure(
                 ProductErrorCode.PROVIDER_NOT_CONFIGURED,
                 f"{provider} credentials are not configured.",
                 data={"provider": provider},
             )
+
+    def _provider_is_configured(self, provider: ProviderId) -> bool:
+        status = self._sources.secret_status
+        return (
+            status.deepseek_api_key
+            if provider == "deepseek"
+            else status.moonshot_api_key
+        )
 
     def _workspace_presentation(
         self,

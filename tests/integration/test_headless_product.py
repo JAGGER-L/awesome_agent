@@ -9,7 +9,12 @@ import pytest
 
 from awesome_agent.application.commands import CommandIntent, CommandName, CommandStatus
 from awesome_agent.application.composition import compose_local_application
-from awesome_agent.application.contracts import InitializeStatus
+from awesome_agent.application.contracts import (
+    ApplicationResult,
+    InitializeStatus,
+    ThreadListQuery,
+    ThreadReadQuery,
+)
 from awesome_agent.core.events import CollectingEventSink, EventType
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -59,6 +64,12 @@ class FakeGateway:
         return completed[0]
 
 
+def _unwrap[T](result: ApplicationResult[T]) -> T:
+    assert result.ok is True
+    assert result.value is not None
+    return result.value
+
+
 async def _wait_for_thread(
     application: object,
     thread_id: str,
@@ -66,8 +77,10 @@ async def _wait_for_thread(
     entries: int,
 ) -> object:
     for _ in range(200):
-        view = (await application.read_thread(thread_id)).view
-        state = await application.get_state()
+        view = _unwrap(
+            await application.read_thread(ThreadReadQuery(thread_id=thread_id))
+        ).view
+        state = _unwrap(await application.get_state())
         if len(view.entries) >= entries and state.active_operation_id is None:
             return view
         await asyncio.sleep(0.01)
@@ -107,36 +120,46 @@ async def test_fresh_home_trust_turn_direct_and_restart(
         gateway_factory=cast(object, gateway_factory),
     )
 
-    pending = await application.initialize()
+    pending = _unwrap(await application.initialize())
     assert pending.status is InitializeStatus.TRUST_REQUIRED
     assert pending.interaction_id is not None
-    trusted = await application.respond_interaction(pending.interaction_id, "trust")
+    trusted = _unwrap(
+        await application.respond_interaction(pending.interaction_id, "trust")
+    )
     assert trusted.accepted
-    assert (await application.initialize()).status is InitializeStatus.READY
-    state = await application.get_state()
+    assert _unwrap(await application.initialize()).status is InitializeStatus.READY
+    state = _unwrap(await application.get_state())
     assert state.initialized and state.workspace_trusted
-    assert state.current_thread_id is not None
+    assert state.current_thread_id is None
 
-    model_result = await application.execute_command(
-        CommandIntent(name=CommandName.MODEL, arguments=(model,))
+    created = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    thread_id = str(created.data["thread_id"])
+
+    model_result = _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.MODEL, arguments=(model,))
+        )
     )
     assert model_result.status is CommandStatus.SUCCESS
-    thread_id = state.current_thread_id
-    accepted = await application.submit_turn(thread_id, "inspect workspace")
+    accepted = _unwrap(await application.submit_turn(thread_id, "inspect workspace"))
     assert accepted.turn_id is not None
     turn_view = await _wait_for_thread(application, thread_id, entries=2)
     assert turn_view.entries[-1].content == "done"
     assert turn_view.turns[-1].provider == provider
     assert gateways
 
-    direct = await application.execute_direct(thread_id, "echo direct-ok")
+    direct = _unwrap(await application.execute_direct(thread_id, "echo direct-ok"))
     assert direct.turn_id is None
     direct_view = await _wait_for_thread(application, thread_id, entries=3)
     assert direct_view.turns == turn_view.turns
     assert "direct-ok" in direct_view.entries[-1].content
     assert direct_view.tool_activities[-1].turn_id is None
 
-    tools = await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    tools = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    )
     names = {item["name"] for item in tools.data["tools"]}
     assert {
         "ls",
@@ -158,11 +181,23 @@ async def test_fresh_home_trust_turn_direct_and_restart(
         environ={secret: "fake-key"},
         gateway_factory=cast(object, gateway_factory),
     )
-    ready = await restarted.initialize()
+    ready = _unwrap(await restarted.initialize())
     assert ready.status is InitializeStatus.READY
-    assert [item.id for item in (await restarted.list_threads()).threads] == [thread_id]
-    assert (await restarted.read_thread(thread_id)).view.entries[-1].kind.value == (
-        "direct_command"
+    assert _unwrap(await restarted.get_state()).current_thread_id is None
+    assert [
+        item.id
+        for item in _unwrap(await restarted.list_threads(ThreadListQuery())).threads
+    ] == [thread_id]
+    _unwrap(
+        await restarted.execute_command(
+            CommandIntent(name=CommandName.RESUME, arguments=(thread_id,))
+        )
+    )
+    assert (
+        _unwrap(await restarted.read_thread(ThreadReadQuery(thread_id=thread_id)))
+        .view.entries[-1]
+        .kind.value
+        == "direct_command"
     )
     assert not any(
         event.event_type in {EventType.TURN_STARTED, EventType.TURN_COMPLETED}

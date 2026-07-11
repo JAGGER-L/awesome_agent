@@ -62,6 +62,21 @@ class ConversationService:
     def list_threads(self, workspace_key: str) -> tuple[Thread, ...]:
         return tuple(self._store.list_threads(workspace_key))
 
+    def match_thread_prefix(
+        self,
+        workspace_key: str,
+        *,
+        prefix: str,
+        limit: int = 200,
+    ) -> tuple[Thread, ...]:
+        return tuple(
+            self._store.match_threads(
+                workspace_key,
+                prefix=prefix,
+                limit=limit,
+            )
+        )
+
     def list_thread_page(
         self,
         workspace_key: str,

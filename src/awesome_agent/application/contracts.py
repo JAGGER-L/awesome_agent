@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal, Self
@@ -171,6 +173,46 @@ class ChangeSetSummary(BaseModel):
     reversibility: str = Field(min_length=1, max_length=64)
     created_at: datetime
     sealed_at: datetime | None = None
+
+
+class StatusSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    workspace_path: str = Field(min_length=1, max_length=4_096)
+    thread_title: str = Field(min_length=1, max_length=500)
+    thread_id: str = Field(min_length=1, max_length=128)
+    thread_display_id: str = Field(min_length=1, max_length=128)
+    model_id: str = Field(min_length=1, max_length=200)
+    model_status: Literal["configured", "not_configured"]
+    thinking_enabled: bool
+    skill_mode: str = Field(min_length=1, max_length=64)
+    local_memory_enabled: bool
+    mem0_enabled: bool
+    mcp_ready: int = Field(ge=0)
+    mcp_degraded: int = Field(ge=0)
+    operation_status: Literal["idle", "active"]
+    operation_id: str | None = Field(default=None, max_length=128)
+    configuration_valid: bool
+    configuration_diagnostic_count: int = Field(ge=0)
+
+
+def thread_display_id(
+    thread_id: str,
+    *,
+    candidate_ids: Iterable[str] = (),
+) -> str:
+    matched = re.fullmatch(r"thread_([a-f0-9]{8,})", thread_id)
+    if matched is None:
+        return thread_id
+    suffix = matched.group(1)
+    candidates = set(candidate_ids)
+    candidates.add(thread_id)
+    for length in range(8, len(suffix) + 1):
+        prefix = f"thread_{suffix[:length]}"
+        if sum(candidate.startswith(prefix) for candidate in candidates) == 1:
+            return prefix
+    return thread_id
 
 
 class ThreadReadResult(BaseModel):

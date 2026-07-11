@@ -9,11 +9,13 @@ from awesome_agent.application.contracts import (
     ProductError,
     ProductErrorCode,
     ShutdownResult,
+    StatusSnapshot,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
     WorkspacePresentation,
+    thread_display_id,
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import ApplicationFacade, LocalApplication
@@ -37,9 +39,11 @@ __all__ = [
     "ShutdownResult",
     "StartupResult",
     "StartupStatus",
+    "StatusSnapshot",
     "ThreadListQuery",
     "ThreadListResult",
     "ThreadReadQuery",
     "ThreadReadResult",
     "WorkspacePresentation",
+    "thread_display_id",
 ]

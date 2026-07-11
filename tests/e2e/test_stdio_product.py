@@ -9,6 +9,14 @@ from typing import Any
 
 import pytest
 
+from awesome_agent.version import PRODUCT_VERSION
+
+
+def _value(frame: dict[str, Any]) -> dict[str, Any]:
+    result = frame["result"]
+    assert result["ok"] is True
+    return result["value"]
+
 
 class Client:
     def __init__(self, process: asyncio.subprocess.Process) -> None:
@@ -133,28 +141,38 @@ async def test_stdio_full_flow_and_restart(
     (workspace / "sample.txt").write_text("fixture source", encoding="utf-8")
     client = await _spawn(home=home, workspace=workspace, provider=provider)
 
-    initialized = await client.request("initialize")
-    interaction_id = initialized["result"]["interaction_id"]
-    assert initialized["result"]["status"] == "trust_required"
+    initialized = await client.request(
+        "initialize",
+        {
+            "protocol_version": 1,
+            "client_name": "awesome-tui",
+            "client_version": PRODUCT_VERSION,
+        },
+    )
+    initialized_value = _value(initialized)
+    interaction_id = initialized_value["interaction_id"]
+    assert initialized_value["status"] == "trust_required"
     trusted = await client.request(
         "interaction.respond",
         {"interaction_id": interaction_id, "decision": "trust"},
     )
-    assert trusted["result"]["accepted"] is True
+    assert _value(trusted)["accepted"] is True
     state = await client.request("application.getState")
-    thread_id = state["result"]["current_thread_id"]
-    assert state["result"]["initialized"] is True
+    assert _value(state).get("current_thread_id") is None
+    assert _value(state)["initialized"] is True
+    created = await client.request("command.execute", {"name": "new"})
+    thread_id = _value(created)["data"]["thread_id"]
 
     model_selected = await client.request(
         "command.execute",
         {"name": "model", "arguments": [model]},
     )
-    assert model_selected["result"]["data"]["model"] == model
+    assert _value(model_selected)["data"]["model"] == model
     submitted = await client.request(
         "turn.submit",
         {"thread_id": thread_id, "content": "use tool to inspect @sample.txt"},
     )
-    operation_id = submitted["result"]["operation_id"]
+    operation_id = _value(submitted)["operation_id"]
     turn_events = await client.wait_operation(operation_id)
     assert sum(event["event_type"] == "turn.completed" for event in turn_events) == 1
     assert any(event["event_type"] == "tool.completed" for event in turn_events)
@@ -163,11 +181,11 @@ async def test_stdio_full_flow_and_restart(
         "direct.execute",
         {"thread_id": thread_id, "command": "echo direct-e2e"},
     )
-    direct_events = await client.wait_operation(direct["result"]["operation_id"])
+    direct_events = await client.wait_operation(_value(direct)["operation_id"])
     assert direct_events[-1]["event_type"] == "operation.completed"
     read = await client.request("thread.read", {"thread_id": thread_id})
-    assert read["result"]["view"]["entries"][-1]["kind"] == "direct_command"
-    assert "direct-e2e" in read["result"]["view"]["entries"][-1]["content"]
+    assert _value(read)["view"]["entries"][-1]["kind"] == "direct_command"
+    assert "direct-e2e" in _value(read)["view"]["entries"][-1]["content"]
 
     waiting = await client.request(
         "turn.submit",
@@ -175,16 +193,16 @@ async def test_stdio_full_flow_and_restart(
     )
     cancelled = await client.request(
         "operation.cancel",
-        {"operation_id": waiting["result"]["operation_id"]},
+        {"operation_id": _value(waiting)["operation_id"]},
     )
-    assert cancelled["result"]["cancelled"] is True
-    cancel_events = await client.wait_operation(waiting["result"]["operation_id"])
+    assert _value(cancelled)["cancelled"] is True
+    cancel_events = await client.wait_operation(_value(waiting)["operation_id"])
     assert cancel_events[-1]["event_type"] == "operation.cancelled"
 
     listed = await client.request("thread.list")
-    assert listed["result"]["threads"][0]["id"] == thread_id
+    assert _value(listed)["threads"][0]["id"] == thread_id
     shutdown = await client.request("shutdown")
-    assert shutdown["result"] == {"ok": True}
+    assert _value(shutdown) == {"stopped": True}
     await asyncio.wait_for(client.process.wait(), timeout=10)
     assert client.process.returncode == 0, await client.stderr()
     assert len({event["event_id"] for event in client.events}) == len(client.events)
@@ -193,12 +211,24 @@ async def test_stdio_full_flow_and_restart(
     assert "fake-key" not in json.dumps(client.stdout_frames)
 
     restarted = await _spawn(home=home, workspace=workspace, provider=provider)
-    ready = await restarted.request("initialize")
-    assert ready["result"]["status"] == "ready"
+    ready = await restarted.request(
+        "initialize",
+        {
+            "protocol_version": 1,
+            "client_name": "awesome-tui",
+            "client_version": PRODUCT_VERSION,
+        },
+    )
+    assert _value(ready)["status"] == "ready"
+    resumed = await restarted.request(
+        "command.execute",
+        {"name": "resume", "arguments": [thread_id]},
+    )
+    assert _value(resumed)["data"]["thread_id"] == thread_id
     restored = await restarted.request("thread.read", {"thread_id": thread_id})
     assert any(
         entry["kind"] == "direct_command"
-        for entry in restored["result"]["view"]["entries"]
+        for entry in _value(restored)["view"]["entries"]
     )
     assert all(
         event["event_type"] != "assistant.reasoning.delta" for event in restarted.events

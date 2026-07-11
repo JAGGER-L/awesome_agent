@@ -75,6 +75,13 @@ class ConversationStore(Protocol):
     def create_thread(self, thread: Thread) -> Thread: ...
     def update_thread(self, thread: Thread) -> Thread: ...
     def list_threads(self, workspace_key: str) -> Sequence[Thread]: ...
+    def match_threads(
+        self,
+        workspace_key: str,
+        *,
+        prefix: str,
+        limit: int,
+    ) -> Sequence[Thread]: ...
     def list_threads_page(
         self,
         workspace_key: str,

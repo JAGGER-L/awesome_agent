@@ -256,3 +256,55 @@ async def test_resume_is_workspace_scoped_and_ink_commands_are_surface_owned(
     assert selected.data["thread_id"] == own.id
     assert surface.data["error_code"] == "surface_command"
     assert invalid.data["error_code"] == "thread_not_found"
+
+
+@pytest.mark.asyncio
+async def test_resume_accepts_full_or_unique_prefix_and_selects_ambiguity(
+    tmp_path: Path,
+) -> None:
+    identifiers = iter(
+        (
+            "thread_aaaaaaaa111111111111111111111111",
+            "thread_aaaaaaaa222222222222222222222222",
+            "thread_bbbbbbbb333333333333333333333333",
+        )
+    )
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(tmp_path / "application.db"),
+        id_factory=lambda prefix: next(identifiers),
+    )
+    first = conversation.create_thread("workspace_1", "First")
+    second = conversation.create_thread("workspace_1", "Second")
+    third = conversation.create_thread("workspace_1", "Third")
+
+    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
+        del intent, thread_id
+        return CommandResult(status=CommandStatus.SUCCESS)
+
+    commands = ConversationCommandService(
+        conversation=conversation,
+        workspace_key="workspace_1",
+        delegate=delegate,
+    )
+
+    exact = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=(first.id,))
+    )
+    unique = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=("thread_bbbbbbbb",))
+    )
+    ambiguous = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=("thread_aaaaaaaa",))
+    )
+    too_short = await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=("thread_bbbbbbb",))
+    )
+
+    assert exact.data["thread_id"] == first.id
+    assert unique.data["thread_id"] == third.id
+    assert ambiguous.selection is not None
+    assert {option.value for option in ambiguous.selection.options} == {
+        first.id,
+        second.id,
+    }
+    assert too_short.data["error_code"] == "thread_not_found"

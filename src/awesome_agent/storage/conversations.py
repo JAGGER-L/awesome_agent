@@ -57,6 +57,19 @@ class SQLiteConversationRepositories:
     def list_threads(self, workspace_key: str) -> Sequence[Thread]:
         return self.threads.list(workspace_key)
 
+    def match_threads(
+        self,
+        workspace_key: str,
+        *,
+        prefix: str,
+        limit: int,
+    ) -> Sequence[Thread]:
+        return self.threads.match_prefix(
+            workspace_key,
+            prefix=prefix,
+            limit=limit,
+        )
+
     def list_threads_page(
         self,
         workspace_key: str,
@@ -352,6 +365,26 @@ class SQLiteThreadRepository(_SQLiteRepository):
             tuple(_thread_from_row(row) for row in rows[:limit]),
             len(rows) > limit,
         )
+
+    def match_prefix(
+        self,
+        workspace_key: str,
+        *,
+        prefix: str,
+        limit: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[Thread, ...]:
+        with self._connection(connection) as active:
+            rows = active.execute(
+                """
+                SELECT * FROM threads
+                WHERE workspace_key = ? AND thread_id LIKE ?
+                ORDER BY updated_at DESC, thread_id
+                LIMIT ?
+                """,
+                (workspace_key, f"{prefix}%", limit),
+            ).fetchall()
+        return tuple(_thread_from_row(row) for row in rows)
 
     def update(
         self,

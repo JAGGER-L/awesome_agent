@@ -46,7 +46,7 @@ def test_command_ownership_matrix_is_complete() -> None:
         "config",
     }
     skill = {"init", "review", "debug", "test", "commit"}
-    ink = {"help", "theme", "details", "copy", "editor", "quit"}
+    ink = {"help", "theme", "copy", "quit"}
 
     assert {
         name.value
@@ -84,6 +84,8 @@ def test_command_intent_round_trips() -> None:
         "api",
         "agent",
         "team",
+        "details",
+        "editor",
     ],
 )
 def test_removed_commands_have_no_alias(removed: str) -> None:

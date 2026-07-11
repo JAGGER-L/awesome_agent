@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 
 from awesome_agent.application import composition
-from awesome_agent.application.contracts import ApplicationResult, InitializeStatus
+from awesome_agent.application.contracts import (
+    ApplicationResult,
+    InitializeStatus,
+    ThreadListQuery,
+)
 from awesome_agent.core.events import CollectingEventSink
 from awesome_agent.core.workspace import (
     TrustStatus,
@@ -115,5 +119,7 @@ async def test_branch_is_not_read_before_trust_and_is_cached_afterward(
 
     assert ready.workspace.branch == "feature/auth"
     assert state.workspace.branch == "feature/auth"
+    assert state.current_thread_id is None
+    assert _unwrap(await application.list_threads(ThreadListQuery())).threads == ()
     assert calls == [workspace.resolve()]
     _unwrap(await application.shutdown())

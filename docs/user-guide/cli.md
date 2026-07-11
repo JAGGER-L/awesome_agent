@@ -28,7 +28,6 @@ setup and reports actionable `OK`, `WARN`, `ERROR`, and `INFO` lines.
 | `/status` | Show current thread, run, and runtime status. |
 | `/usage` | Show token usage and context. |
 | `/config` | Show configuration. |
-| `/details` | Choose detail level. |
 | `/quit` | Exit the TUI. |
 
 ## Keys

@@ -15,7 +15,6 @@ class SlashCommandKind(StrEnum):
     TOOLS = "tools"
     MCP = "mcp"
     MEMORY = "memory"
-    DETAILS = "details"
     USAGE = "usage"
     CONFIG = "config"
     HELP = "help"
@@ -110,12 +109,6 @@ COMMAND_DEFINITIONS: tuple[SlashCommandDefinition, ...] = (
         kind=SlashCommandKind.MEMORY,
         description="Manage memory.",
         category="context",
-    ),
-    SlashCommandDefinition(
-        name="details",
-        kind=SlashCommandKind.DETAILS,
-        description="Choose detail level.",
-        category="display",
     ),
     SlashCommandDefinition(
         name="usage",

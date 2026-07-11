@@ -355,7 +355,7 @@ intents. Adding a command must not require a new branch in the reasoning loop.
 
 ### Ink-local commands
 
-- `/help`, `/theme`, `/details`, `/copy`, `/editor`, `/quit`.
+- `/help`, `/theme`, `/copy`, `/quit`.
 
 Ink-local commands affect presentation or process control and never enter the
 Agent Core. `@path` adds explicit workspace context. `!command` requests direct
