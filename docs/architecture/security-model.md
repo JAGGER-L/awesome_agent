@@ -53,5 +53,4 @@ prompt from an already-decided scope.
 ## Related Documents
 
 - [Tool capabilities](tool-capabilities.md)
-- [Operations troubleshooting](../operations/troubleshooting.md)
 - [Documentation governance](../governance/documentation.md)

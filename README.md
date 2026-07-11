@@ -17,21 +17,18 @@ development assistant that runs on your own machine. It can read repository
 context, edit files, run commands, and help with debugging, refactoring, and
 feature work. Unlike traditional code completion tools, Awesome works at the
 task level: you describe a goal, and it reasons across the current repository,
-edits, verifies, and prepares the work for review. The main entry point is the
-local CLI; if you need to connect another client, you can use Local API or
-Docker API mode.
+edits, verifies, and prepares the work for review. The only product entry is
+the local Ink `awesome` interface backed by a private Python Core process.
 
 
 
-## Choose A Mode
+## Product Surface
 
 | Mode | Use it when | Start command |
 | --- | --- | --- |
-| Local CLI | You want to work inside a local project from the terminal. It uses embedded local runtime mode and does not require an API server. | `cd <your-project>` then `awesome` |
-| Local API | You want a local API endpoint for clients or API docs. Currently Windows only. | `make dev` |
-| Docker API | You want the API to run through Docker. Currently Windows only. | `make docker-start` |
+| Local CLI | Work inside a local project from the terminal. It requires no API server, PostgreSQL, Worker, or Docker service. | `cd <your-project>` then `awesome` |
 
-Most users should start with **Local CLI**. The public `awesome` command always
+The public `awesome` command always
 starts the local Ink interface and its private Python Core process.
 
 Run `awesome` from the project directory. The launch directory becomes the
@@ -172,7 +169,6 @@ Run these inside `awesome`:
 - [Quickstart](docs/getting-started/quickstart.md)
 - [快速开始](docs/getting-started/quickstart.zh-CN.md)
 - [User guide](docs/user-guide/README.md)
-- [Operations guide](docs/operations/README.md)
 - [Architecture](ARCHITECTURE.md)
 - [Security model](docs/architecture/security-model.md)
 

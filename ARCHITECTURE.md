@@ -15,75 +15,15 @@ without coupling the whole application to one vendor.
 ## Component Topology
 
 ```text
-                         ┌──────────────────┐
-                         │  Browser / User  │
-                         └────────┬─────────┘
-                                  │ HTTP / SSE
-                                  ▼
-┌──────────────────┐     ┌──────────────────┐
-│    Typer CLI     │────►│     FastAPI      │
-└────────┬─────────┘     │ Inspection API   │
-         │               └────────┬─────────┘
-         │ local command          │ runtime commands / queries
-         └──────────────┬─────────┘
-                        ▼
-                 ┌──────────────────┐
-                 │ Runtime Service  │
-                 │ runs/events/API  │
-                 └────────┬─────────┘
-                          │
-                          ▼
-                 ┌──────────────────┐
-                 │ Leader Runtime   │
-                 │ LangGraph plan   │
-                 └───┬──────┬───────┘
-                     │      │
-          team tasks │      │ model requests
-                     ▼      ▼
-          ┌──────────────┐  ┌──────────────────┐
-          │ Team Runtime │  │ Provider Adapter │
-          │ + Verifier   │  │ DeepSeek default │
-          └──────┬───────┘  └────────┬─────────┘
-                 │                   │ HTTPS
-                 │ tools             ▼
-                 ▼          ┌──────────────────┐
-          ┌──────────────┐  │  Model Provider  │
-          │ Tool Registry│  └──────────────────┘
-          │ + Approval   │
-          └──────┬───────┘
-                 │ approved execution
-                 ▼
-          ┌──────────────┐
-          │ Sandbox      │
-          │ Docker/local │
-          └──────┬───────┘
-                 │
-                 ▼
-          ┌──────────────┐
-          │ User Project │
-          │ + worktrees  │
-          └──────────────┘
-
-        ┌────────────────────────────────────────────────────┐
-        │                 State and Evidence                 │
-        │                                                    │
-        │  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
-        │  │ PostgreSQL   │  │ Artifacts    │  │ OTel /   │ │
-        │  │ runs/events/ │  │ filesystem   │  │ events   │ │
-        │  │ checkpoints  │  └──────────────┘  └──────────┘ │
-        │  └──────────────┘                                 │
-        │                                                    │
-        │  ┌──────────────┐  ┌──────────────┐               │
-        │  │ USER.md /    │  │ Mem0         │               │
-        │  │ MEMORY.md    │  │ Platform     │               │
-        │  └──────────────┘  └──────────────┘               │
-        └────────────────────────────────────────────────────┘
+User -> Ink awesome -> stdio -> Python Application -> LangGraph Agent
+                                             |             |
+                                             |             +-> Model Provider
+                                             +----------------> Core Tools -> Workspace
 ```
 
-The CLI is the primary local execution surface. FastAPI exposes durable runs,
-agents, Todos, event history, approvals, artifacts, and live SSE updates for a
-future frontend. Both surfaces call application services rather than accessing
-provider, database, or sandbox implementations directly.
+The Ink CLI is the only product surface. It owns presentation and sends typed
+stdio messages to a private Python Core process. The Application owns local
+lifecycle and delegates Agent execution to LangGraph.
 
 ### Ordinary Conversation Turn Authority
 
@@ -104,77 +44,6 @@ conversation graph synchronously for deterministic TUI streaming. Its working
 directory is the launch/current working directory unless the thread explicitly
 sets another context path. Repository coding worktrees remain a separate
 explicit coding-run concern.
-
-### Health and Readiness
-
-```text
-CLI doctor --profile api/runtime
-        |
-        v
-shared readiness collector
-        |
-        +--> Python/Git/Docker checks
-        +--> PostgreSQL database check
-        +--> Alembic migration head check
-        +--> LangGraph checkpoint store check
-        +--> workspace-root write probe
-        +--> provider key and model-route checks
-        +--> API bind policy check
-        +--> worker_heartbeats table (runtime profile)
-
-FastAPI
-  GET /health                -> process liveness only
-  GET /ready?profile=api     -> API dependency readiness
-  GET /ready?profile=runtime -> API readiness plus Worker/provider readiness
-```
-
-`/health` is intentionally cheap and returns 200 when the API process can
-respond. `/ready` and `doctor` share the structured readiness model with
-`healthy`, `degraded`, and `unhealthy` statuses. `healthy` and `degraded`
-readiness return HTTP 200; `unhealthy` returns HTTP 503. CLI `doctor` exits 0
-for `healthy` and `degraded`, and exits 1 for `unhealthy`.
-
-Worker liveness is not inferred from active Run leases. Workers upsert a
-process-scoped row in `worker_heartbeats` with worker id, worker name,
-supported runtime routes, status, start time, and heartbeat time. The runtime
-readiness profile requires a fresh online heartbeat that covers the required
-runtime routes.
-
-### Repository-Aware Run Intake
-
-```text
-┌──────────────────┐      local path       ┌────────────────────┐
-│    Typer CLI     │──────────────────────►│ Allowed-root policy│
-└────────┬─────────┘                       └─────────┬──────────┘
-         │ repository UUID                           │ validated path
-         ▼                                           ▼
-┌──────────────────┐      repository ID    ┌────────────────────┐
-│     FastAPI      │──────────────────────►│ Repository registry│
-│ POST /runs       │                       │ PostgreSQL         │
-└────────┬─────────┘                       └─────────┬──────────┘
-         │                                           │ clean Git identity
-         ▼                                           ▼
-┌──────────────────┐      reserve first    ┌────────────────────┐
-│  Intake Service  │──────────────────────►│ Intake reservation │
-└────────┬─────────┘                       │ PostgreSQL         │
-         │ exact base commit               └────────────────────┘
-         ▼
-┌──────────────────┐      named branch     ┌────────────────────┐
-│ Managed worktree │──────────────────────►│ User Git repository│
-│ per Run          │                       │ original unchanged │
-└────────┬─────────┘                       └────────────────────┘
-         │ ready
-         ▼
-┌───────────────────────────────────────────────────────────────┐
-│ One transaction: Run(created/queued) + Leader + initial       │
-│ events + reservation(published)                              │
-└───────────────────────────────────────────────────────────────┘
-```
-
-Filesystem paths enter only through the local CLI. FastAPI accepts a registered
-repository UUID and exposes repository list/get for a future frontend. Both
-read-only and modifying intents use a stable worktree; intent later controls
-tool capabilities. Task 02 queues the Run but does not claim or execute it.
 
 ### PostgreSQL Dispatch Protocol
 
@@ -561,10 +430,7 @@ Migrated solo and forward distributed team AgentLoop stages record `agent.run`,
 `model.call`, and `tool.call` spans through `ObservabilityMiddleware`; scoped
 team compatibility routes keep event-projection observability until migrated.
 Model-call records store provider, model, status, stop reason, token usage,
-latency, and trace/span IDs. FastAPI exposes `GET /runs/{run_id}/trace`,
-`GET /runs/{run_id}/metrics`, `GET /runs/{run_id}/model-calls`,
-`GET /runs/{run_id}/diagnostics`, and
-`GET /runs/{run_id}/recovery-metrics` for the future frontend and operators.
+latency, and trace/span IDs.
 `runtime.diagnostics` is a read-only projection over existing durable evidence;
 it does not own graph transitions, dispatch state, or recovery policy.
 `runtime.recovery_metrics` is a second read-only projection over the same
@@ -666,12 +532,9 @@ intentionally outside the runtime kernel.
 
 ## Security Boundary
 
-Docker is the default command execution boundary. CLI users may explicitly opt
-into trusted local execution. Trusted local mode runs as the same OS user and
-uses soft command, path, write-root, approval, and environment-scrubbing
-guardrails; it is not a security boundary. FastAPI runs cannot use
-trusted-local mode. Writing Teammates use isolated Git worktrees with explicit
-workspace state persisted on the child Run.
+Trusted local execution runs as the same OS user and uses command, path,
+write-root, and environment guardrails; it is not an isolation boundary.
+Docker is deferred as an optional future Tool Execution Backend.
 
 Approval resume is scoped to one exact canonical tool invocation. Repository
 validation configuration and inferred project commands are untrusted input;

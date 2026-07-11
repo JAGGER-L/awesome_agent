@@ -12,8 +12,6 @@ execution plans, and roadmap governance from drifting into each other.
 | --- | --- | --- |
 | New user | Understand the project and run it once | `README.md`, `docs/getting-started/quickstart.md` |
 | Product user | Use the local CLI and product controls | `docs/user-guide/README.md` |
-| Operator | Start, inspect, and diagnose local runtime modes | `docs/operations/README.md` |
-| API integrator | Understand resource contracts | `docs/api/README.md` |
 | Contributor | Modify this repository safely | `docs/development/README.md` |
 | Architecture reviewer | Understand durable runtime boundaries | `docs/architecture/README.md` |
 | Maintainer | Govern roadmap, debt, quality, and documentation | `docs/governance/README.md` |
@@ -26,8 +24,6 @@ execution plans, and roadmap governance from drifting into each other.
 | `README.md` / `README.zh-CN.md` | Product intro, shortest setup path, docs links, safety note | Internal task history, implementation evidence, architecture deep dives |
 | `docs/getting-started/` | First-run setup and verification | Full diagnostics matrix or runtime design |
 | `docs/user-guide/` | User-visible product behavior | API resource specs, roadmap governance, implementation internals |
-| `docs/operations/` | Startup modes, readiness, logs, runtime data, troubleshooting | Product marketing copy or durable architecture contracts |
-| `docs/api/` | API resource shapes and integration contracts | TUI usage walkthroughs |
 | `docs/development/` | Rules for humans and coding agents modifying this repository | Runtime agent behavior as a product feature |
 | `docs/architecture/` | Durable system boundaries and design contracts | Local session handoffs or task journals |
 | `docs/governance/` | Roadmap, technical debt, quality, documentation policy | Per-branch execution plans or raw command output |

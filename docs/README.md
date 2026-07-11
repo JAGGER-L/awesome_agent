@@ -16,20 +16,6 @@ answer.
 - [Attachments](user-guide/attachments.md)
 - [Memory, skills, and MCP](user-guide/memory-skills-mcp.md)
 
-## Operators
-
-- [Operations guide](operations/README.md)
-- [Startup modes](operations/startup-modes.md)
-- [Diagnostics](operations/diagnostics.md)
-- [Runtime data](operations/runtime-data.md)
-- [Troubleshooting](operations/troubleshooting.md)
-
-## API Integrators
-
-- [API overview](api/README.md)
-- [Thread API](api/thread-api.md)
-- [Diagnostics API](api/diagnostics-api.md)
-
 ## Contributors
 
 - [Development guide](development/README.md)

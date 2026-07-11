@@ -19,8 +19,8 @@ physical legacy deletion.
 
 The repository also contains PostgreSQL adapters, Worker and dispatch
 machinery, custom durable run/recovery behavior, generalized approvals,
-artifacts, team runtime, multiple sandbox modes, FastAPI surfaces, and a legacy
-service stack. These are current implementation facts, not target requirements.
+artifacts, team runtime, multiple sandbox modes, and a legacy service stack.
+These are current implementation facts, not target requirements.
 
 Existing development and test data is disposable. The architecture rewrite
 does not preserve or migrate it.

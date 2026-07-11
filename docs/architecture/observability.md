@@ -13,18 +13,14 @@ The system records or exposes:
 - tool calls, approvals, and observations
 - checkpoint and compaction records
 - diagnostic readiness summaries
-- API health and readiness endpoints
 - optional OpenTelemetry export
 
 ## Reader Split
 
 User-facing status belongs in the TUI and [user guide](../user-guide/README.md).
-Operator checks belong in [diagnostics](../operations/diagnostics.md) and
-[diagnostics API](../api/diagnostics-api.md). Durable design rationale belongs
-in this architecture document.
+User-visible status and diagnostics belong in the local product surface.
+Durable design rationale belongs in this architecture document.
 
 ## Related Documents
 
-- [Diagnostics](../operations/diagnostics.md)
-- [Diagnostics API](../api/diagnostics-api.md)
 - [Persistence and recovery](persistence-recovery.md)

@@ -5,7 +5,6 @@ Task-specific notes and handoffs belong in ignored `.codex/exec-plans/`.
 
 | ID | Status | Area | Description | Priority | Exit condition |
 | --- | --- | --- | --- | --- | --- |
-| TD-003 | Open | Tests | FastAPI TestClient emits an upstream httpx deprecation warning. | Low | FastAPI/Starlette test client no longer emits the warning. |
 | TD-031 | Narrowed | Team runtime | Distributed team rework budgets have metrics, but production calibration has not adjusted policy from stable provider/model outcomes. | Medium | Rework budgets are adjusted by reviewed policy based on stable production recovery metrics. |
 | TD-035 | Narrowed | Security | Trusted local CLI/TUI execution runs approved commands as the same OS user and is not a security boundary. | High | Documentation, guardrails, redaction, approvals, and optional write bounds remain clear; any stronger boundary is delivered by a sandboxed mode. |
 | TD-036 | Open | Sandbox | Docker/AIO sandbox terminology remains mixed with product execution terminology. | Medium | User-facing sandbox configuration is normalized to `local` and `docker`, or AIO is clearly internal. |

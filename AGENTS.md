@@ -199,10 +199,7 @@ Before ending, confirm that:
   direction.
 - `docs/getting-started/quickstart.md`: manual first-run path.
 - `docs/user-guide/README.md`: user-facing runtime surfaces.
-- `docs/operations/README.md`: local operation, readiness, diagnostics, and
-  workspace guidance.
 - `docs/architecture/README.md`: durable architecture design contracts.
-- `docs/api/README.md`: API resource contracts.
 - `docs/development/README.md`: repository development rules and validation.
 - `docs/development/repository-harness.md`: repository-agent engineering rules.
 - `docs/development/execution-plans.md`: local execution-plan rules.
@@ -240,7 +237,6 @@ Before ending, confirm that:
 - `src/awesome_agent/client/`: HTTP conversation client adapters.
 - `src/awesome_agent/cli/`: Typer CLI, interactive entrypoint, first-run
   config, repo context, profile, and slash-command registry.
-- `src/awesome_agent/api/`: FastAPI app and schemas.
 - `src/awesome_agent/attachments/` and `src/awesome_agent/artifacts/`:
   attachment lifecycle, content storage, artifact metadata, and artifact store.
 - `src/awesome_agent/extensions/`: extension catalog, skill, MCP, community
