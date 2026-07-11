@@ -42,6 +42,7 @@ describe("Ink scrollback boundaries", () => {
       "components/Composer.tsx",
       "components/Help.tsx",
       "components/Picker.tsx",
+      "components/SecretInput.tsx",
     ]);
 
     const transcript = files
