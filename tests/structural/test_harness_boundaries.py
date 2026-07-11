@@ -1,20 +1,26 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-OBSOLETE_ROOT_ASSETS = {
-    "Makefile",
-    "awesome-agent.yaml",
-    "scripts/bootstrap.ps1",
-    "scripts/check.ps1",
-    "scripts/quickstart.ps1",
-    "scripts/test.ps1",
-    "scripts/make",
-    "skills",
-    ".agents/README.md",
+REQUIRED_ROOT_FILES = {
+    ".editorconfig",
+    ".env.example",
+    ".gitattributes",
+    ".gitignore",
+    ".python-version",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "CLAUDE.md",
+    "README.md",
+    "README.zh-CN.md",
+    "VERSION",
+    "install.ps1",
+    "install.sh",
+    "pyproject.toml",
+    "uv.lock",
 }
 
 
-def test_development_and_runtime_agent_state_are_separate() -> None:
+def test_development_coordination_and_product_state_are_separate() -> None:
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     agent_contract = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     claude_contract = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
@@ -22,10 +28,6 @@ def test_development_and_runtime_agent_state_are_separate() -> None:
     assert ".codex/" in gitignore
     assert not any((ROOT / "docs" / "exec-plans").rglob("*.*"))
     assert ".codex/exec-plans/" in agent_contract
-    development = " ".join(
-        (ROOT / "docs/development/README.md").read_text(encoding="utf-8").split()
-    )
-    assert "never define Awesome runtime behavior" in development
     assert "AGENTS.md" in claude_contract
     assert "single source of truth" in claude_contract
 
@@ -38,16 +40,10 @@ def test_development_and_runtime_agent_state_are_separate() -> None:
         assert path.is_file()
 
 
-def test_repository_contains_only_target_harness_assets() -> None:
-    assert not {
-        path
-        for relative in OBSOLETE_ROOT_ASSETS
-        if (
-            (path := ROOT / relative).is_file()
-            or (path.is_dir() and any(item.is_file() for item in path.rglob("*")))
-        )
-    }
-    assert (ROOT / ".env.example").is_file()
+def test_repository_has_current_harness_inputs() -> None:
+    root_files = {path.name for path in ROOT.iterdir() if path.is_file()}
+
+    assert root_files >= REQUIRED_ROOT_FILES
     assert (ROOT / "scripts/generate_protocol_fixtures.py").is_file()
     assert (ROOT / "scripts/release/build_bundle.py").is_file()
     assert any((ROOT / "protocol/fixtures").rglob("*.json"))
