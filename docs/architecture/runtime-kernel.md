@@ -70,5 +70,4 @@ cannot retry, short-circuit, change inputs, or alter results.
 ## Related Documents
 
 - [Local-first target architecture](local-first-target.md)
-- [Persistence and recovery](persistence-recovery.md)
 - [Security model](security-model.md)

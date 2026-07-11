@@ -20,7 +20,6 @@ documents from accepted target documents.
 ## Current Implementation Reading Order
 
 - [Runtime kernel](runtime-kernel.md)
-- [Persistence and recovery](persistence-recovery.md)
 - [Providers and streaming](providers-streaming.md)
 - [Extensions](extensions.md)
 - [Memory, skills, and MCP](../user-guide/memory-skills-mcp.md)
