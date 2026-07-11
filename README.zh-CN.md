@@ -26,9 +26,8 @@ Awesome Agent 是一个面向本地项目的 AI coding agent，定位是运行�
 | Local API | 你想在本机提供 API 地址或查看接口文档。目前只支持 Windows。 | `make dev` |
 | Docker API | 你想通过 Docker 运行 API。目前只支持 Windows。 | `make docker-start` |
 
-大多数用户建议从 **Local CLI** 开始。API 方式适合需要把其它客户端连接到
-Awesome 的场景。如需把 TUI 连接到已有 API，而不是使用 embedded local runtime，
-可以运行 `awesome --api-url <url>`。
+大多数用户建议从 **Local CLI** 开始。公开的 `awesome` 命令始终启动本地 Ink
+界面及其私有 Python Core 进程。
 
 从项目目录运行 `awesome`。启动目录会成为默认 thread context。如果它是一个
 Git checkout，runs 会继承该 repository；否则 Awesome 会使用 workspace-only
@@ -156,8 +155,6 @@ Windows 上，`AWESOME_HOME` 默认是 `%LOCALAPPDATA%\awesome-agent`。其它�
 | `/skills` | 列出可用 skills。 |
 | `/mcp` | 查看已配置的 MCP servers。 |
 | `/quit` | 退出 TUI。 |
-
-`awesome-agent start` 只作为 Local API 开发时的备用/调试 supervisor 使用。
 
 ## 文档
 

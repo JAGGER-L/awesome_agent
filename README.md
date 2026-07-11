@@ -31,9 +31,8 @@ Docker API mode.
 | Local API | You want a local API endpoint for clients or API docs. Currently Windows only. | `make dev` |
 | Docker API | You want the API to run through Docker. Currently Windows only. | `make docker-start` |
 
-Most users should start with **Local CLI**. The API modes are for people who
-want to connect another client to Awesome. To connect the TUI to an existing
-API instead of the embedded runtime, use `awesome --api-url <url>`.
+Most users should start with **Local CLI**. The public `awesome` command always
+starts the local Ink interface and its private Python Core process.
 
 Run `awesome` from the project directory. The launch directory becomes the
 default thread context. If it is a Git checkout, runs inherit that repository;
@@ -166,9 +165,6 @@ Run these inside `awesome`:
 | `/skills` | List available skills. |
 | `/mcp` | Show configured MCP servers. |
 | `/quit` | Exit the TUI. |
-
-Use `awesome-agent start` only as a fallback/debug supervisor for local API
-development.
 
 ## Documentation
 

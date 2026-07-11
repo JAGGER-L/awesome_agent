@@ -12,15 +12,15 @@ scheduler, or workflow engine. The accepted destination is the
 
 ## Current Product State
 
-The Phase 3 candidate combines the Python Application Facade and `awesome-core`
-JSON-RPC/stdio Host with the packaged Ink + React `awesome-tui`. The existing
-`awesome` Textual entry remains unchanged; Phase 4 owns default cutover and
+The product combines the Python Application Facade and `awesome-core`
+JSON-RPC/stdio Host with the public Ink + React `awesome` entry. The superseded
+Textual and duplicate Python surface paths have been removed; Phase 4 continues
 physical legacy deletion.
 
 The repository also contains PostgreSQL adapters, Worker and dispatch
 machinery, custom durable run/recovery behavior, generalized approvals,
-artifacts, team runtime, multiple sandbox modes, FastAPI surfaces, and a
-Textual TUI. These are current implementation facts, not target requirements.
+artifacts, team runtime, multiple sandbox modes, FastAPI surfaces, and a legacy
+service stack. These are current implementation facts, not target requirements.
 
 Existing development and test data is disposable. The architecture rewrite
 does not preserve or migrate it.
@@ -50,7 +50,7 @@ model/tool calls, retries, and rework.
 | --- | --- | --- |
 | Target contract freeze | Product boundaries, fixed tools, commands, trust, storage, memory, events, and surface protocol have one accepted source of truth. | Architecture decision records and structural contract tests agree. |
 | Phase 2 complete | Python Agent Core, the ten-method Application Facade, and the protocol-only `awesome-core` stdio Host are implemented. | Focused unit, integration, fake DeepSeek/Kimi E2E, structural, manual protocol smoke, lint, type, and lock gates pass. |
-| Phase 3 complete | The packaged `awesome-tui` candidate owns terminal input/rendering over the real stdio Host without TypeScript business logic. | TypeScript gates, tarball smoke, structural boundaries, and networkless DeepSeek/Kimi product flows pass. |
+| Phase 3 complete | The packaged Ink candidate owns terminal input/rendering over the real stdio Host without TypeScript business logic. | TypeScript gates, tarball smoke, structural boundaries, and networkless DeepSeek/Kimi product flows pass. |
 
 ## Next
 
@@ -118,7 +118,7 @@ Detailed historical task notes live in
 | --- | --- |
 | Local-first foundation | SQLite state and checkpoints, workspace trust, eight fixed tools, Change Journal, typed commands/events/interactions, cancellation, and a fresh-state headless acceptance slice without external infrastructure. |
 | Python Agent Core and stdio Host | Surface-neutral ten-method Facade, LangGraph Turn path, Provider/Tool/Context/Skill/MCP/memory composition, direct commands, JSON-RPC v1, and networkless DeepSeek/Kimi subprocess flows. |
-| Ink product candidate | Node 22 `awesome-tui`, Mint frameless Welcome, native scrollback, Unicode composer, typed commands/status, trust, cancellation/reconnect, isolated stdio channels, and clean npm packaging. |
+| Ink product entry | Node 22 public `awesome`, Mint frameless Welcome, native scrollback, Unicode composer, typed commands/status, trust, cancellation/reconnect, isolated stdio channels, and clean npm packaging. |
 | Durable runtime foundation | Run intake, dispatch, Worker execution, model protocol, checkpoints, approvals, cancellation, validation, and observability. |
 | Team runtime foundation | Leader, Teammates, Subagents, Verifier, assignment-scoped tools, mailbox, patch aggregation, rework, and stress coverage. |
 | Extension foundation | Versioned catalogs, skills, MCP, community tools, diagnostics, and project/user extension configuration. |

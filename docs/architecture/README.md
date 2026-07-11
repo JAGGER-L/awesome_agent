@@ -24,7 +24,6 @@ documents from accepted target documents.
 - [Runtime kernel](runtime-kernel.md)
 - [Agent loop](agent-loop.md)
 - [Team runtime](team-runtime.md)
-- [Product surfaces](product-surfaces.md)
 - [Tool capabilities](tool-capabilities.md)
 - [Persistence and recovery](persistence-recovery.md)
 - [Providers and streaming](providers-streaming.md)

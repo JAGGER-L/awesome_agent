@@ -4,7 +4,6 @@ This guide covers product behavior visible to people using Awesome Agent.
 Start with the [quickstart](../getting-started/quickstart.md) if you have not
 run `awesome` yet.
 
-- [CLI and commands](cli.md)
 - [Conversations](conversations.md)
 - [Attachments](attachments.md)
 - [Memory, skills, and MCP](memory-skills-mcp.md)
