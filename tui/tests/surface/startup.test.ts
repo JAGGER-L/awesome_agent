@@ -289,14 +289,14 @@ function applicationState({
       deepseek: {
         provider: "deepseek",
         environment_variable: "DEEPSEEK_API_KEY",
-        source: "missing",
-        mutable: true,
+        source: deepseek ? "process_environment" : "missing",
+        mutable: !deepseek,
       },
       kimi: {
         provider: "kimi",
         environment_variable: "MOONSHOT_API_KEY",
-        source: "missing",
-        mutable: true,
+        source: kimi ? "process_environment" : "missing",
+        mutable: !kimi,
       },
     },
     memory_status: {},

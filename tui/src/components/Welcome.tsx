@@ -14,7 +14,6 @@ export interface WelcomeProps {
   readonly thinkingEnabled: boolean;
   readonly localMemoryEnabled: boolean;
   readonly mem0Enabled: boolean;
-  readonly credentialMissing: boolean;
   readonly theme: Theme;
 }
 
@@ -32,7 +31,6 @@ export function Welcome(props: WelcomeProps) {
   ].join(" · ");
   const modes = [
     props.model,
-    ...(props.credentialMissing ? ["credential missing"] : []),
     `thinking ${props.thinkingEnabled ? "on" : "off"}`,
     `local memory ${props.localMemoryEnabled ? "on" : "off"}`,
     `mem0 ${props.mem0Enabled ? "on" : "off"}`,
