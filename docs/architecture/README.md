@@ -1,39 +1,22 @@
-# Architecture
+# Architecture guide
 
-These documents describe durable system boundaries for the local product.
+The root [architecture map](../../ARCHITECTURE.md) is the short overview.
+These documents define the retained V1 contracts:
 
-## Accepted Target
+- [Agent Core](agent-core.md)
+- [Application and LangGraph](runtime-and-langgraph.md)
+- [stdio protocol and Ink](protocol-and-ink.md)
+- [Persistence](persistence.md)
+- [Security](security.md)
 
-The repository is migrating toward the
-[Local-first Coding Agent target architecture](local-first-target.md). That
-document is an accepted destination, not a claim that the current source tree
-already implements the target.
+Accepted decisions:
 
-The accepted Phase 1 package boundaries, PR units, and headless exit criteria
-are specified in the
-[Local-first foundation detailed design](local-first-foundation.md).
+1. [Python, LangGraph, and a thin runtime](decisions/0001-python-langgraph-thin-runtime.md)
+2. [SQLite and disposable development state](decisions/0002-sqlite-and-disposable-development-state.md)
+3. [Workspace trust and execution policy](decisions/0003-workspace-trust-and-execution-policy.md)
+4. [Tool kernel, Change Journal, and commands](decisions/0004-tool-kernel-change-journal-and-commands.md)
+5. [Dual-layer memory with Mem0 Cloud](decisions/0005-dual-layer-memory-with-mem0-cloud.md)
+6. [Python Core and Ink stdio boundary](decisions/0006-python-core-and-ink-stdio-boundary.md)
 
-Key decisions are recorded under [`decisions/`](decisions/). During the
-migration, this index deliberately distinguishes current implementation
-documents from accepted target documents.
-
-## Current Implementation Reading Order
-
-- [Runtime kernel](runtime-kernel.md)
-- [Providers and streaming](providers-streaming.md)
-- [Extensions](extensions.md)
-- [Memory, skills, and MCP](../user-guide/memory-skills-mcp.md)
-- [Security model](security-model.md)
-
-The implemented product path is Application lifecycle -> LangGraph Agent graph
--> ModelGateway -> ToolExecutor -> typed Events and embedded SQLite state.
-
-## Architecture Boundary
-
-Architecture docs define durable contracts and dependency direction. They do
-not track local execution progress, task journals, or raw validation output.
-Those belong under `.codex/exec-plans/`, PR notes, or governance docs after the
-durable conclusion is known.
-
-For repository source layout, see [ARCHITECTURE.md](../../ARCHITECTURE.md).
-For roadmap direction, see [governance roadmap](../governance/roadmap.md).
+Architecture documents describe current code contracts. Execution progress and
+validation logs belong in ignored `.codex/exec-plans/` or PR evidence.

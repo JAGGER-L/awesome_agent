@@ -1,41 +1,27 @@
-# ADR 0006: Python Core and Ink stdio Boundary
+# ADR 0006: Python Core and Ink stdio boundary
 
-- Status: Accepted
+- Status: Accepted and implemented
 - Date: 2026-07-10
-- Scope: CLI, TUI, and future surfaces
-
-## Context
-
-The product needs a high-quality Ink + React TUI without moving agent behavior
-into TypeScript. Future API and IDE surfaces should reuse the same core, but an
-HTTP service is unnecessary for the local first-run path.
 
 ## Decision
 
-The application host and Agent Core remain Python. The TUI is TypeScript using
-Ink + React and owns only input, rendering, keyboard behavior, and presentation
-state.
+Python owns Application and Agent Core. TypeScript Ink + React owns input,
+rendering, keyboard behavior, and presentation state only. A versioned
+JSON-RPC/NDJSON stdio protocol carries intents, lifecycle calls, interactions,
+transcript reads, cancellation, and typed events.
 
-The first cross-process surface protocol is versioned JSON-RPC over stdio.
-Conversation turns, application commands, cancellation, interaction responses,
-and typed event notifications cross this boundary. The TUI never calls models,
-LangGraph, storage, Mem0, MCP, or tools directly.
-
-HTTP API and IDE integration are deferred until the application and event
-contracts are stable. They will adapt to the same Python host rather than
-becoming new runtime authorities.
+Ink never calls models, LangGraph, tools, storage, memory, Skills, or MCP
+directly. There is no HTTP server in the local product. Future API or IDE
+surfaces must adapt the same Application facade and event contracts.
 
 ## Consequences
 
-- Business rules are tested in Python independently of Ink.
-- Protocol compatibility is explicit and surface-neutral.
-- TUI crashes do not redefine core state ownership.
-- The project accepts a small Python/Node packaging boundary only at the
-  product surface.
+Core rules are tested without Ink; TUI crashes cannot redefine durable state;
+protocol compatibility is explicit. Packaging privately installs both Python
+and Node runtimes behind the single `awesome` launcher.
 
-## Rejected Alternatives
+## Rejected
 
-- All-TypeScript rewrite: violates the required Python core.
-- TUI imports or duplicates core behavior: creates two product authorities.
-- Require HTTP for local TUI communication: adds service lifecycle, ports, and
-  authentication concerns without product value.
+An all-TypeScript rewrite violates the Python requirement. Duplicating Core in
+Ink creates two authorities. HTTP adds ports, lifecycle, and authentication
+without helping the local first-run path.

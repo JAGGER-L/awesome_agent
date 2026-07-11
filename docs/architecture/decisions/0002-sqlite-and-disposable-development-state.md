@@ -1,50 +1,27 @@
-# ADR 0002: SQLite and Disposable Development State
+# ADR 0002: SQLite and disposable development state
 
-- Status: Accepted
+- Status: Accepted and implemented
 - Date: 2026-07-10
-- Scope: Persistence and migration
-
-## Context
-
-PostgreSQL, SQLAlchemy service adapters, migrations, and distributed runtime
-records impose setup and maintenance costs that do not serve a local,
-single-user coding agent. Existing records were created during development and
-testing and have no preservation value.
 
 ## Decision
 
-The target default persistence is SQLite plus ordinary files under the
-resolved `AWESOME_HOME`.
+V1 uses ordinary files plus two embedded SQLite databases under
+`AWESOME_HOME`: Application owns bounded product records in `application.db`;
+LangGraph owns graph checkpoints in `checkpoints.db`. Workspace files are the
+primary user-visible state.
 
-Application state and LangGraph checkpoints have separate ownership. The
-application persists bounded product records; LangGraph persists graph state
-through its native SQLite checkpointer. Workspace files remain the primary
-user-visible state.
-
-All existing user, conversation, run, checkpoint, approval, artifact, memory,
-and tool-execution data is considered disposable for this rewrite.
-
-The migration will not provide:
-
-- PostgreSQL-to-SQLite data import;
-- dual reads or dual writes;
-- compatibility adapters for old storage formats;
-- preservation of existing development databases or state directories.
+All state created before the Local-first cutover is disposable. There is no
+importer, dual read/write period, compatibility adapter, or preservation of old
+test conversations and checkpoints.
 
 ## Consequences
 
-- A cutover starts with a fresh SQLite schema and fresh built-in memory files.
-- Tests always create isolated fresh state.
-- New target schemas still require normal forward schema versioning after they
-  become product data.
-- PostgreSQL adapters and migrations can be deleted when no target path
-  references them.
+Installation needs no database service. Tests create isolated fresh state.
+V1 schemas become the starting point for future forward schema evolution.
 
-## Rejected Alternatives
+## Rejected
 
-- Keep PostgreSQL as the local default: harms installation and first-run
-  reliability.
-- Store everything as JSON: simple initially, but weak for concurrent reads,
-  indexes, atomic lifecycle updates, and schema evolution.
-- Preserve old development data: creates code and test burden without user
-  value.
+A service database harms local setup and adds operations work. JSON for all
+state lacks transactions and indexes needed for Thread/Turn and change
+lifecycle. Migrating valueless development records would preserve complexity,
+not user value.
