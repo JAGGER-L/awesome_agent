@@ -1,566 +1,72 @@
-﻿# Architecture
+# Architecture
 
-> This document describes the current implementation. The repository has
-> accepted a simpler
-> [Local-first target architecture](docs/architecture/local-first-target.md)
-> that is not yet fully implemented. Current and target contracts must remain
-> explicitly distinguished during the migration.
+Awesome is a single-user, local-first coding agent. The public `awesome`
+command starts an Ink interface and one private Python Core child process.
 
-## System Intent
-
-The system is a local-first coding agent runtime. It separates orchestration,
-side effects, persistence, observation, and model providers so each can evolve
-without coupling the whole application to one vendor.
-
-## Component Topology
+## Product Topology
 
 ```text
-User -> Ink awesome -> stdio -> Python Application -> LangGraph Agent
-                                             |             |
-                                             |             +-> Model Provider
-                                             +----------------> Core Tools -> Workspace
+User
+  -> Ink + React
+  -> JSON-RPC 2.0 over stdio
+  -> Python Application
+  -> LangGraph Agent graph
+  -> ModelGateway
+  -> ToolExecutor
+  -> Workspace
+
+Python Application
+  -> typed Events -> Ink rendering
+  -> application SQLite
+  -> LangGraph SQLite checkpoints
 ```
 
-The Ink CLI is the only product surface. It owns presentation and sends typed
-stdio messages to a private Python Core process. The Application owns local
-lifecycle and delegates Agent execution to LangGraph.
+## Turn Flow
 
-### Ordinary Conversation Turn Authority
+1. Ink submits typed intent through the stdio protocol.
+2. Application validates workspace trust, configuration, and foreground
+   operation ownership.
+3. Application creates the Thread/Turn lifecycle and invokes the graph compiled
+   by `awesome_agent.agent.graph`.
+4. LangGraph owns graph execution, Agent state, routing, checkpoints, and
+   resumable graph progress.
+5. `ModelGateway` normalizes the selected DeepSeek or Kimi provider.
+6. Every model-requested action enters the shared Core `ToolExecutor`.
+7. Tool observations return to Agent state before the next model call.
+8. Application persists durable conversation state and projects typed live
+   Events to Ink.
 
-Ordinary chat turns are durable conversation Runs, not direct provider calls.
-`ConversationRunIntakeService` creates a `conversation` Run, a Leader agent,
-and initial runtime events before any user or assistant thread message is
-written. A Worker route named `conversation-turn` executes `ConversationGraph`.
-The graph owns conversation message writes, model/tool execution, runtime
-events, usage metadata, changed-file metadata, and terminal Run state.
+## Module Ownership
 
-`ConversationService` is a projection boundary. It starts the durable turn and
-projects runtime events into the shared conversation stream event contract. It
-does not call model providers, execute tools, or append ordinary user/assistant
-messages directly.
-
-Embedded local mode uses the same Run/Graph semantics and drains the local
-conversation graph synchronously for deterministic TUI streaming. Its working
-directory is the launch/current working directory unless the thread explicitly
-sets another context path. Repository coding worktrees remain a separate
-explicit coding-run concern.
-
-### PostgreSQL Dispatch Protocol
-
-```text
-queued / retry_scheduled
-          |
-          | FOR UPDATE SKIP LOCKED
-          v
-       claimed ----- heartbeat -----> PostgreSQL lease extension
-          |                                  |
-          | fenced transition                | lease expires
-          v                                  v
-   retry / release / terminal        queued or recovery_required
-```
-
-The current lease lives on the Run row. A claim records a process-scoped
-worker UUID, diagnostic name, attempt, expiry, and monotonically increasing
-fencing token. PostgreSQL time decides lease validity. State changes and their
-dispatch events share one transaction.
-
-### Durable Worker and Probe Graph
-
-```text
-legacy supervisor (removed)
-        |
-        +---- API process ---- PostgreSQL events ---- SSE polling
-        |
-        +---- Worker process
-                 |
-                 +---- claim supported runtime routes
-                 +---- heartbeat lease
-                 +---- LangGraph sync checkpoint
-                 +---- fenced projection update
-```
-
-Each Worker process executes at most one Run. Workers always claim the
-diagnostic `runtime-probe` route and, when model providers are configured, also
-claim `solo-readonly`, `solo-modifying`, `conversation-turn`, `team-coding`,
-`team-role`, and `team-verifier` routes. Workers also publish process heartbeat
-rows for readiness; Run lease heartbeat remains a separate fencing mechanism.
-A crashed Worker leaves its checkpoint and lease; after lease expiry, a
-replacement Worker claims with a new fencing token and resumes from the
-checkpoint. Unsupported runtime routes enter `recovery_required`.
-
-## Agent Orchestration Topology
-
-```text
-                         ┌──────────────────┐
-                         │       User       │
-                         └────────┬─────────┘
-                                  │ task / approval
-                                  ▼
-                         ┌──────────────────┐
-                         │      Leader      │
-                         │ plan + final say │
-                         └───┬──────────┬───┘
-                             │ creates  │ observes all
-                   ┌─────────┘          └─────────┐
-                   ▼                              ▼
-          ┌──────────────────┐           ┌──────────────────┐
-          │    Teammate A    │◄─────────►│    Teammate B    │
-          │ durable context  │  mailbox  │ durable context  │
-          └───────┬──────────┘           └───────┬──────────┘
-                  │ creates without approval      │ creates without approval
-          ┌───────┴────────┐              ┌───────┴────────┐
-          ▼                ▼              ▼                ▼
- ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
- │  Subagent A1 │ │  Subagent A2 │ │  Subagent B1 │ │  Subagent B2 │
- │ isolated ctx │ │ isolated ctx │ │ isolated ctx │ │ isolated ctx │
- └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
-
-                         ┌──────────────────┐
-                         │     Verifier     │
-                         │ independent gate │
-                         └────────┬─────────┘
-                                  │ pass / reject evidence
-                                  ▼
-                         ┌──────────────────┐
-                         │      Leader      │
-                         │ completion choice│
-                         └──────────────────┘
-```
-
-The Leader is the only agent present initially. Team mode is explicit through
-CLI `--team` or API `mode: "team"`; automatic solo/team routing remains future
-work. The Leader owns the task tree, manages Teammates, integrates accepted
-work, and makes the final completion decision.
-
-Teammates own durable responsibilities and may communicate through an auditable
-mailbox. Each Teammate may independently create up to three Subagents.
-Subagents do not participate in team conversation and report only to their
-creator.
-
-The Verifier is a specialized Teammate created whenever team mode starts.
-Teammate output reaches the Leader only after verification passes or after
-rejected work is revised and re-verified.
-
-Distributed `team-coding` is the product architecture. The root Leader Run
-creates child Runs with durable lineage. The Leader calls the model through
-`TeamAgentLoop` middleware for a validated structured `TeamPlan` and creates
-Teammate child Runs from that plan; it does not create or direct Subagents.
-Teammate child Runs execute assignment-scoped model/tool loops through the
-same team AgentLoop boundary using only effective Leader-granted tools. When
-the Leader grants `can_delegate` and Subagent slots, a Teammate may call
-`team.create_subagent` to create read-only Subagent child Runs with depth and
-concurrency limits. Independent Workers can claim Teammate, Subagent, and
-Verifier child Runs through the same PostgreSQL dispatch protocol. Verifier
-child Runs produce structured model decisions through
-`TeamVerificationMiddleware`; the graph persists those decisions as child
-results and mailbox messages. Rework decisions create replacement Teammate
-child Runs instead of reopening original attempts. Parent Runs release their
-lease while waiting for child work and are requeued when child assignments
-become terminal.
-
-```text
-                         +----------------------+
-                         | Root Run             |
-                         | Leader team-coding |
-                         +----------+-----------+
-                                    |
-                                    | model TeamPlan -> Teammate child Runs
-                                    v
-                         +----------------------+
-                         | Child Run            |
-                         | Teammate team-role |
-                         +----------+-----------+
-                                    |
-                         terminal result wakes Leader
-                                    |
-                                    v
-                         +----------------------+
-                         | Child Run            |
-                         | Verifier team-verifier |
-                         +----------+-----------+
-                                    |
-                         pass/fail mailbox message wakes Leader
-                                    |
-                                    v
-                         +----------------------+
-                         | Root Run finalizes   |
-                         +----------------------+
-
-Durable state:
-  runs(parent_run_id, root_run_id, depth, child_role)
-  team_assignments(kind, runtime_route, permissions, status, handoff_context)
-  team_mailbox_messages(route, subject, status)
-  team_child_results(summary, patch_artifact_id, patch_aggregated)
-```
-
-## Harness and State Boundaries
-
-```text
-tracked repository governance
-  AGENTS.md
-  docs/development/
-  scripts/ and structural tests
-
-ignored development-agent state
-  .codex/exec-plans/
-
-tracked product runtime configuration
-  .agents/
-
-ignored or durable product runtime state
-  .awesome-agent/
-  PostgreSQL
-```
-
-The four locations are intentionally distinct. Development-agent plans never
-become product runtime plans. Runtime Leader plans and Todos are domain data,
-not repository-maintenance Markdown.
-
-## Source Layout
-
-```text
-src/
-`-- awesome_agent/
-    |-- agents/
-    |-- modeling/
-    |-- domain/
-    |-- providers/
-    |-- tools/
-    |-- sandbox/
-    |-- memory/
-    |-- persistence/
-    |-- observability/
-    |-- artifacts/
-    |-- repositories/
-    |-- runtime/
-    |-- api/
-    `-- cli/
-```
-
-The `src` layout is intentional. `src` is the import root and `awesome_agent` is
-the package. Tests must import the installed package rather than accidentally
-loading repository files.
+- `awesome_agent.agent`: graph, state, nodes, routing, budgets, compression,
+  retries, message repair, and finalization.
+- `awesome_agent.application`: local lifecycle, trust coordination, foreground
+  operations, commands, cancellation, composition, and event projection.
+- `awesome_agent.modeling` and `awesome_agent.providers`: provider-neutral
+  contracts and DeepSeek/Kimi adapters.
+- `awesome_agent.core.tools`: built-in and extension tool registry, policy,
+  execution, results, and errors.
+- `awesome_agent.context`, `awesome_agent.memory`, and
+  `awesome_agent.extensions`: context assembly, dual-layer memory, skills, and
+  MCP integration.
+- `awesome_agent.conversation` and `awesome_agent.storage`: Thread/Turn models
+  and embedded state adapters.
+- `awesome_agent.protocol`: private stdio host boundary.
+- `tui/`: presentation and terminal interaction only.
 
 ## Dependency Direction
 
-```text
-api / cli
-    -> runtime
-        -> modeling
-        -> domain
+Ink depends on protocol contracts, not Python implementation packages. Protocol
+depends on Application contracts. Application composes the Agent, providers,
+tools, extensions, and storage. Agent depends on provider-neutral model, tool,
+context, event, and checkpoint contracts. Inner packages never import a user
+surface.
 
-providers / tools / sandbox / memory / persistence / observability / artifacts
-    implement ports owned by domain, modeling, or runtime
-```
+## Runtime Boundary
 
-Rules:
+Application lifecycle calls the LangGraph Agent directly. LangGraph is the
+execution and checkpoint authority; Application does not duplicate graph
+routing or checkpoint recovery. Events are ordered live projections and are
+not an independent source of truth.
 
-- `domain` does not import infrastructure or framework modules.
-- `runtime` owns durable workflows but not concrete storage or provider details.
-- provider-specific message types do not cross provider boundaries.
-- `modeling` owns provider-neutral messages, tools, turns, reasoning,
-  continuation, usage, streaming events, and failure categories.
-- every Agent records its resolved model for API and event traceability.
-- tool execution always passes through effective capability policy, approval,
-  and sandbox policies.
-- runtime events are immutable and all state changes emit an event.
-- implementation agents cannot approve their own team-mode work.
-
-These rules must be enforced with structural tests once source modules exist.
-
-## Structured Model Boundary
-
-```text
-runtime / memory
-        |
-        | ModelRequest(messages, tools, continuation)
-        v
-provider-neutral modeling protocol
-        |
-        +---- DeepSeek adapter ---- Chat Completions stream
-        |
-        +---- OpenAI adapter ------ Responses stream
-        |
-        v
-reasoning/text/tool deltas -> completed ModelTurn
-```
-
-Visible reasoning is a frontend-capable trace. Private continuation is a
-separate opaque JSON value used only by the matching adapter and LangGraph
-checkpoint. SDK objects, encrypted continuation data, and provider-specific
-message types never enter runtime events, logs, memory, or public APIs.
-The Worker connects provider-neutral model turns to solo read-only, solo
-modifying, and distributed team coding graphs when a model provider is
-configured.
-
-Provider routing sits between AgentLoop model-call policy and concrete provider
-clients. A router returns ordered provider/model candidates for a runtime
-route, role, and task profile; a model-call executor checks token budget before
-each candidate, records token usage after a completed turn, and falls back only
-for retryable provider errors. Provider factories create clients for resolved
-candidates but do not own graph state, tool permissions, or monetary policy.
-The default route remains the existing single DeepSeek candidate unless routing
-configuration supplies a different ordered decision.
-
-## Read-Only Coding Loop
-
-Workers with a configured model provider also advertise the
-`coding + read_only + solo-readonly` route. The graph contains explicit
-`execute_tools -> model_turn` and `feedback -> model_turn` back edges, so tool
-selection and iteration count are model-driven rather than a fixed workflow.
-Only evidence-backed final answers terminate successfully.
-
-See [Agent loop](docs/architecture/agent-loop.md) for the
-complete node, loop, budget, tool, failure, and recovery contract.
-
-## Modifying Coding Loop
-
-Workers with a configured model provider also advertise the
-`coding + modifying + solo-modifying` route. The graph loops through model
-turns and sequential tool execution. It exposes the public workspace facade:
-`ReadFile`, `WriteFile`, `EditFile`, `Bash`, `Glob`, `Grep`, and optional
-artifact read tools. Internal `repo.*` and `shell.execute` adapters remain
-registered for compatibility paths, but they are hidden from default model
-tool definitions.
-
-Side-effecting modifying tools are recorded in PostgreSQL with stable
-idempotency keys before execution. Completed tool results are reused after
-checkpoint replay; ambiguous write state and unknown command completion enter
-`recovery_required` rather than replaying an unsafe side effect.
-
-Successful completion requires at least one write with durable changed-file
-evidence and passing required validation gates from configuration or
-conservative project detection. Failed required check commands feed bounded
-evidence back to the model for rework; exhausted or non-reworkable validation
-failure marks the Run failed.
-
-## Team Coding Loop
-
-Workers with a configured model provider advertise solo coding routes and the
-distributed team routes `team-coding`, `team-role`, and `team-verifier`. The
-caller must request team mode; default modifying Runs stay on the solo
-modifying graph.
-
-The legacy scoped team route `team-coding-scoped` has been retired. Historical
-stored rows may still exist, but current Workers do not claim or execute that
-route; non-terminal historical scoped rows should be cancelled and recreated
-through the distributed team runtime.
-
-Distributed `team-role` uses the same runtime tool registry and executor as the
-API/local/worker tool assembly. Team-native control tools stay in-process, but
-all ordinary repo, shell, artifact, memory, attachment, MCP, and community tool
-calls share the executable registry that produced the exposed tool set.
-
-Verifier rejection caused by model or quality output can trigger bounded
-same-Teammate rework. Verifier execution or external failures have a separate
-small retry budget. Completion is recorded as `team_validated` only after
-Verifier pass and Leader finalization. Task 13 E2E covers Worker claim,
-PostgreSQL checkpointing, fake provider calls, repository tool execution,
-patch/rework, durable validation records, tool invocation records, events, and
-observability query tables.
-
-## Persistence
-
-PostgreSQL is authoritative for LangGraph checkpoints and project-owned runtime
-records. Checkpoint semantics remain owned by LangGraph. The API reads runs,
-agents, tasks, and event history through a runtime repository instead of
-process-local dictionaries. The in-memory repository is an explicit test
-adapter only. SSE reads ordered events from PostgreSQL so API and Worker
-processes share one durable event history. `EventStream` remains a local
-notification adapter, not durable state.
-
-Project tables store runs, agents, tasks, messages, tool calls, artifacts,
-approvals, verification, and memory audit data. Agent records include the
-resolved model assignment. Repository identities and private intake
-reservations are also PostgreSQL records. Existing prototype Runs are preserved
-as legacy rows; unsafe non-terminal legacy rows become `recovery_required`.
-
-Local `~/.awesome-agent/config.toml` stores allowed roots and the managed
-worktree root. This local authorization is intentionally separate from the
-PostgreSQL repository registry.
-
-Large outputs live in external artifact storage. PostgreSQL stores metadata,
-hashes, ownership, and paths.
-
-Distributed `team-coding`, `team-role`, and `team-verifier` are the forward
-team routes. Their graph modules own durable child-run coordination, child
-wait/requeue behavior, patch aggregation, result persistence, mailbox messages,
-and terminal mapping. Leader planning, Teammate/Subagent model/tool execution,
-delegation tool calls, Verifier decisions, and team observability run through
-`TeamAgentLoop` middleware.
-
-Team role tool calls are durable tool invocations. Risky calls create a durable
-approval and an `approval.requested` event with a typed
-`team_role_approval_continuation`. Approved resume validates tool version,
-argument hash, workspace fingerprint, and effective capabilities before
-executing the original tool once with `approval_granted=True`, before model
-re-entry. Denied or expired approvals become tool-result errors.
-
-Writing teammates persist the isolated workspace path, integration branch, and
-allocator-returned workspace state. Team tree diagnostics report effective
-tools, denied tools, pending approval tool/risk/status, waiting reason, child
-results, and whether each child workspace is inherited or isolated.
-
-AgentLoop middleware receives a typed `MiddlewareContext` rather than relying
-on route-specific metadata for stable runtime facts. The context exposes
-focused envelopes for trace, capability subject, assignment, token budget,
-handoff, and error classification. Metadata remains a compatibility and
-annotation channel; new cross-cutting policy should consume the typed
-envelopes and leave durable state transitions to the graph.
-
-Capability resolution is the authorization boundary for tool exposure and
-execution. The registry owns tool inventory, schemas, risk, and required raw
-capabilities; `EffectiveToolPolicy` owns whether a subject may see or execute a
-tool in a route. API inspection and team-role execution consume the same
-resolver output, and the executor rejects invocations outside a provided
-effective policy even if their raw capability set is sufficient.
-
-## Observability
-
-Runtime observability has three layers:
-
-- durable evidence in PostgreSQL query tables: `observability_spans`,
-  `observability_metrics`, and `model_calls`;
-- ordered runtime events with a stable Run-scoped `trace_id`;
-- best-effort OpenTelemetry export and structured logs.
-
-The Worker records outer `run.execute` and `graph.execute` spans without
-letting observability writes or exporter failures affect Run execution.
-Migrated solo and forward distributed team AgentLoop stages record `agent.run`,
-`model.call`, and `tool.call` spans through `ObservabilityMiddleware`; scoped
-team compatibility routes keep event-projection observability until migrated.
-Model-call records store provider, model, status, stop reason, token usage,
-latency, and trace/span IDs.
-`runtime.diagnostics` is a read-only projection over existing durable evidence;
-it does not own graph transitions, dispatch state, or recovery policy.
-`runtime.recovery_metrics` is a second read-only projection over the same
-durable evidence plus team, validation, token ledger, and model-call records.
-It reports recovery-action, role, failure-kind, provider/model, Verifier, and
-token-pressure aggregates without changing retry, rework, or routing policy.
-
-Dashboards and dependency-aware health checks remain separate roadmap work.
-
-## Durable Execution Target
-
-The durable coding roadmap separates execution concerns instead of treating one
-status field or one store as authoritative for everything.
-
-```text
-CLI / API
-   |
-   | create Run(repository_id, base commit, policy)
-   v
-PostgreSQL dispatch state
-   | queued -> claimed -> executing -> waiting / retry -> terminal
-   | lease + heartbeat + fencing token
-   v
-Worker
-   |
-   | start/resume stable LangGraph thread
-   v
-LangGraph checkpoint ----------------------+
-   | next graph position and agent context |
-   |                                       |
-   +--> model/tool/approval/validation -----+
-                  |
-                  | fenced projection transition
-                  v
-PostgreSQL domain projections + ordered events
-                  |
-                  +--> API / SSE / future frontend
-
-Large output, patches, and evidence -> artifact storage
-```
-
-State ownership:
-
-- LangGraph checkpoints own the next executable position and resumable agent
-  context.
-- PostgreSQL domain tables own user-visible business projections.
-- Run, Agent, and Todo visible lifecycle transitions use a transaction-scoped
-  projection helper so projection rows, `updated_at`, Agent/Todo revisions, and
-  matching runtime events are committed together.
-- Separate `DispatchStatus` owns queue and worker scheduling state.
-- PostgreSQL row locking and `SKIP LOCKED` serialize claims without a separate
-  broker.
-- Runtime events are ordered audit records, not a replay-complete event store.
-- Stable transition IDs reconcile checkpoint-ahead and projection-ahead
-  partial failures.
-- An ambiguous mismatch enters `recovery_required`; it is never guessed
-  through automatically.
-- Active cancellation is a durable PostgreSQL request. The API records it, and
-  only the owning fenced Worker commits active `cancelled + terminal` after the
-  graph and subprocess boundary stops cleanly.
-
-Repository access also has two layers:
-
-- PostgreSQL stores stable registered repository identities.
-- local configuration stores allowed filesystem roots.
-
-Every modifying Run uses a dedicated integration worktree from a clean base
-commit. The user's checkout is never modified automatically, including when
-trusted-local command execution is selected.
-
-Managed execution workspaces remain explicit runtime evidence until the user
-requests cleanup. `workspace list` and the workspace cleanup API evaluate
-PostgreSQL Run state, ownership markers, managed-root containment, Git worktree
-state, branch identity, and dirty status before deletion. Cleanup defaults to
-preview; apply removes only owned inactive workspaces and matching
-`awesome-agent/run/<run_id>` branches. Failed or dirty workspaces require force
-with a reason, while `recovery_required` workspaces are retained.
-
-See [Persistence and recovery](docs/architecture/persistence-recovery.md) for the complete
-target contract.
-
-## Context And Budget Boundaries
-
-Task 16 adds a shared context manager and per-Run budget ledger. Solo
-`solo-readonly` and `solo-modifying` model turns compact context before
-provider calls when the soft context limit is crossed. Removed messages and
-oversized tool observations are written to artifact storage; checkpoints retain
-a deterministic rolling summary plus recent evidence. Compactions are visible
-through `context.compacted` events, `context_compactions` rows,
-`GET /runs/{run_id}/context-compactions`, and the matching CLI command.
-
-The budget ledger records input, output, reasoning tokens, model-call count,
-threshold status, and active Worker execution seconds. Worker active time is
-opened only while graph work is executing and is closed before approval wait,
-pause, retry, completion, or failure is projected. Distributed team boundaries
-use root-aware budget checks, deferred tool exposure, and artifact-backed
-handoff/result/verifier payload compaction. Monetary amount budgeting is
-intentionally outside the runtime kernel.
-
-## Security Boundary
-
-Trusted local execution runs as the same OS user and uses command, path,
-write-root, and environment guardrails; it is not an isolation boundary.
-Docker is deferred as an optional future Tool Execution Backend.
-
-Approval resume is scoped to one exact canonical tool invocation. Repository
-validation configuration and inferred project commands are untrusted input;
-only strongly evidenced check-only commands may run automatically.
-In `solo-modifying`, ambiguous shell execution creates a durable
-`approvals` row, checkpoints with LangGraph `interrupt(value)`, releases the
-worker lease as `paused + waiting`, and resumes with `Command(resume=...)`
-after API/CLI decision. Resume revalidates the canonical arguments hash, tool
-version, workspace fingerprint, and requested capabilities before execution.
-Conversation turns continue the model loop after the resumed tool result instead
-of producing a runtime placeholder answer. Later matching calls may reuse an
-approved or denied bounded grant only for exact shell argv or exact patch target
-paths with matching tool version, workspace, capabilities, and risk level. The
-public built-in workspace facade exposes `ReadFile`, `WriteFile`, `EditFile`,
-`Bash`, `Glob`, and `Grep`; `Bash` grants match exact parsed argv, and
-`WriteFile` / `EditFile` grants match exact target file paths. Internal
-`repo.*` and `shell.execute` adapters remain registered for compatibility but
-are hidden from default model-facing tool exposure.
-Unsafe shell commands are denied without approval.
-Distributed `team-role` uses the same approval binding checks, but stores its
-resume snapshot in runtime events because team role execution is not a
-conversation thread.
-
-## Detailed Designs
-
-See [docs/architecture/README.md](docs/architecture/README.md).
-
-Repository engineering rules are under
-[docs/development](docs/development/repository-harness.md).
+For focused design decisions, see [the architecture guide](docs/architecture/README.md).

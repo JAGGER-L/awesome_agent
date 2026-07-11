@@ -39,4 +39,3 @@ answer.
 ## References
 
 - [Reference index](reference/README.md)
-- [Generated database schema](reference/generated/db-schema.md)

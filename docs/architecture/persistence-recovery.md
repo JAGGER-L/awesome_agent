@@ -15,9 +15,6 @@ The runtime records:
 - assignment, verifier, and rework evidence
 - attachment and artifact metadata
 
-Generated table reference lives in
-[database schema](../reference/generated/db-schema.md).
-
 ## Replay
 
 Replay should reuse persisted tool results when idempotency and version checks
@@ -60,4 +57,3 @@ approval, and reuse a bounded same-run grant for the same approved resource.
 ## Related Documents
 
 - [Runtime kernel](runtime-kernel.md)
-- [Observability](observability.md)
