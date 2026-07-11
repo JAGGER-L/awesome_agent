@@ -139,13 +139,13 @@ Awesome keeps its own user files outside your projects.
 | Path | Purpose |
 | --- | --- |
 | `<AWESOME_HOME>/.env` | User-level model keys and local settings. |
+| `<AWESOME_HOME>/config.yaml` | User-level Provider, budget, memory, skill, and MCP settings. |
 | `<AWESOME_HOME>/skills/` | Personal skills available across projects. |
-| `<AWESOME_HOME>/awesome-agent.yaml` | User-level extension settings, including MCP sources. |
 | `<your-project>/skills/` | Project skills for the current repository. |
-| `<your-project>/awesome-agent.yaml` | Project extension settings. |
+| `<your-project>/.awesome/config.yaml` | Trusted workspace budget, skill, and MCP settings. |
 
-On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent`. On other
-platforms, it defaults to `~/.awesome-agent`. You can override it with the
+On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\Awesome`. On other
+platforms, it defaults to `~/.awesome`. You can override it with the
 `AWESOME_HOME` environment variable.
 
 Provider keys are not read from your project `.env`.
