@@ -70,7 +70,8 @@ class _ProviderCredentialParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     provider: Literal["deepseek", "kimi"]
-    api_key: str = Field(min_length=1, max_length=20_000)
+    action: Literal["add", "replace", "delete"]
+    api_key: str | None = Field(default=None, min_length=1, max_length=20_000)
     allow_unverified: bool = False
 
 
@@ -182,7 +183,8 @@ class JsonRpcDispatcher:
         parsed = _ProviderCredentialParams.model_validate(params)
         request = ProviderCredentialSetRequest(
             provider=parsed.provider,
-            api_key=SecretStr(parsed.api_key),
+            action=parsed.action,
+            api_key=SecretStr(parsed.api_key) if parsed.api_key is not None else None,
             allow_unverified=parsed.allow_unverified,
         )
         return await self._facade.set_provider_credential(request)

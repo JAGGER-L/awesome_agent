@@ -53,10 +53,6 @@ class CredentialValidator(Protocol):
     ) -> CredentialValidation: ...
 
 
-class ProviderCredentialManagedExternally(ValueError):
-    pass
-
-
 class ProviderConfigurationService:
     def __init__(
         self,
@@ -107,7 +103,7 @@ class ProviderConfigurationService:
                     prompt=f"{_PROVIDER_LABELS[provider]} Authentication",
                     options=(
                         CommandOption(value="replace", label="Replace API key"),
-                        CommandOption(value="remove", label="Remove API key"),
+                        CommandOption(value="delete", label="Delete API key"),
                         CommandOption(value="back", label="Back"),
                     ),
                 ),
@@ -119,33 +115,19 @@ class ProviderConfigurationService:
             return self._secret_prompt(provider, action="replace")
         if len(arguments) == 2 and action == "back":
             return CommandResult(status=CommandStatus.SUCCESS)
-        if len(arguments) == 2 and action == "remove":
+        if len(arguments) == 2 and action == "delete":
             return CommandResult(
                 status=CommandStatus.SUCCESS,
                 selection=CommandSelection(
                     prompt=(
-                        f"Remove {_PROVIDER_LABELS[provider]} API key? "
+                        f"Delete {_PROVIDER_LABELS[provider]} API key? "
                         "This does not revoke it at the Provider."
                     ),
                     options=(
                         CommandOption(value="back", label="Cancel", selected=True),
-                        CommandOption(value="confirm", label="Remove"),
+                        CommandOption(value="confirm", label="Delete"),
                     ),
                 ),
-            )
-        if len(arguments) == 3 and action == "remove":
-            if arguments[2] == "back":
-                return CommandResult(status=CommandStatus.SUCCESS)
-            if arguments[2] != "confirm":
-                return _error("invalid_arguments", "Invalid removal decision.")
-            if status.source is CredentialSource.PROCESS_ENVIRONMENT:
-                return _managed_error(status.environment_variable)
-            self._secret_store.delete(status.environment_variable)
-            self._reload_configuration()
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                content=f"Removed the local {_PROVIDER_LABELS[provider]} credential.",
-                data={"provider": provider, "removed": True},
             )
         return _error("invalid_arguments", "Usage: /auth [deepseek|kimi]")
 
@@ -228,9 +210,22 @@ class ProviderConfigurationService:
     ) -> ProviderCredentialSetResult:
         status = _status(self._sources(), request.provider)
         if status.source is CredentialSource.PROCESS_ENVIRONMENT:
-            raise ProviderCredentialManagedExternally(
-                "Provider credential is managed by the process environment."
+            return ProviderCredentialSetResult(
+                provider=request.provider,
+                status=ProviderCredentialSetStatus.ENVIRONMENT_MANAGED,
+                source=CredentialSource.PROCESS_ENVIRONMENT,
+                code="credential_managed_by_environment",
             )
+        if request.action == "delete":
+            self._secret_store.delete(status.environment_variable)
+            self._reload_configuration()
+            return ProviderCredentialSetResult(
+                provider=request.provider,
+                status=ProviderCredentialSetStatus.DELETED,
+                source=CredentialSource.MISSING,
+                code="credential_deleted",
+            )
+        assert request.api_key is not None
         result = await self._validator.validate(
             request.provider,
             request.api_key,
@@ -257,7 +252,7 @@ class ProviderConfigurationService:
         self._reload_configuration()
         return ProviderCredentialSetResult(
             provider=request.provider,
-            status=ProviderCredentialSetStatus.SAVED,
+            status=ProviderCredentialSetStatus.CONFIGURED,
             source=CredentialSource.USER_ENV_FILE,
             code=(
                 "credential_saved_unverified"

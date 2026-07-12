@@ -275,7 +275,7 @@ function hydrateSurface(
 function startupDiagnostic(
   application: MethodValue["application.getState"],
 ): StartupDiagnostic | undefined {
-  const model = application.current_model ?? "";
+  const model = application.model_identity?.effective_model ?? "";
   if (!application.configuration_valid) {
     return {
       code: "configuration_invalid",

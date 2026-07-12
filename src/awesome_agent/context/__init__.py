@@ -4,6 +4,7 @@ from awesome_agent.context.builder import (
     Mem0ContextResult,
     local_memory_context_sources,
     mem0_context_source,
+    model_identity_context_source,
 )
 from awesome_agent.context.compression import (
     CompressionPlan,
@@ -63,6 +64,7 @@ __all__ = [
     "estimate_text",
     "local_memory_context_sources",
     "mem0_context_source",
+    "model_identity_context_source",
     "parse_explicit_paths",
     "plan_compression",
     "snapshot_explicit_paths",

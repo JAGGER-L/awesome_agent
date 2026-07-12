@@ -493,7 +493,8 @@ function CliApplication({
                       title: startup.thread.thread.view.thread.title,
                     },
               model:
-                startup.application.current_model ?? "model not configured",
+                startup.application.model_identity?.effective_model ??
+                "model not configured",
               thinkingEnabled: startup.application.thinking_enabled,
               localMemoryEnabled: memoryEnabled(
                 startup.application.memory_status,

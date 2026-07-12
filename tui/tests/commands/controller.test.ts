@@ -174,17 +174,23 @@ describe("CommandController", () => {
       ok: true,
       value: {
         provider: "deepseek",
-        status: "saved",
+        status: "configured",
         source: "user_env_file",
         code: "credential_saved",
       },
     });
-    await credential.controller.setCredential("deepseek", "private", false);
+    await credential.controller.setCredential(
+      "deepseek",
+      "add",
+      "private",
+      false,
+    );
     expect(credential.calls).toEqual([
       {
         method: "provider.credential.set",
         params: {
           provider: "deepseek",
+          action: "add",
           api_key: "private",
           allow_unverified: false,
         },

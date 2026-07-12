@@ -11,6 +11,7 @@ from awesome_agent.modeling import (
     ModelErrorCode,
     ModelErrorInfo,
     ModelGateway,
+    ModelIdentitySnapshot,
     ModelRequest,
     ModelTurn,
     ProviderProtocolError,
@@ -27,6 +28,20 @@ from awesome_agent.modeling import (
     TurnFailed,
     UserMessage,
 )
+
+
+def test_model_identity_snapshot_reports_effective_fallback_without_guessing() -> None:
+    identity = ModelIdentitySnapshot.from_models(
+        configured_model="deepseek/deepseek-v4-pro",
+        effective_model="kimi/kimi-k2.6",
+    )
+
+    assert identity.provider == "kimi"
+    assert identity.configured_model == "deepseek/deepseek-v4-pro"
+    assert identity.effective_model == "kimi/kimi-k2.6"
+    assert identity.runtime_name == "Awesome Agent"
+    assert identity.fallback_active is True
+    assert identity.fallback_from == "deepseek/deepseek-v4-pro"
 
 
 def _request() -> ModelRequest:

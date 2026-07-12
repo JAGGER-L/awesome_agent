@@ -10,11 +10,11 @@ from pydantic import SecretStr
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
 )
 from awesome_agent.application.provider_configuration import (
     ProviderConfigurationService,
-    ProviderCredentialManagedExternally,
 )
 from awesome_agent.config import (
     CredentialSource,
@@ -133,6 +133,7 @@ async def test_valid_credential_enables_provider_model_selection(
     saved = await service.set_credential(
         ProviderCredentialSetRequest(
             provider="deepseek",
+            action="add",
             api_key=SecretStr("new-secret"),
         )
     )
@@ -141,7 +142,7 @@ async def test_valid_credential_enables_provider_model_selection(
         thread_id=thread.id,
     )
 
-    assert saved.status is ProviderCredentialSetStatus.SAVED
+    assert saved.status is ProviderCredentialSetStatus.CONFIGURED
     assert saved.source is CredentialSource.USER_ENV_FILE
     assert sources().provider_credentials.deepseek.configured is True
     assert models.selection is not None
@@ -165,6 +166,7 @@ async def test_invalid_replacement_preserves_the_existing_secret(
     result = await service.set_credential(
         ProviderCredentialSetRequest(
             provider="deepseek",
+            action="replace",
             api_key=SecretStr("invalid-secret"),
         )
     )
@@ -184,6 +186,7 @@ async def test_unverified_credential_requires_explicit_save_anyway(
     service, _, _ = _service(tmp_path, validator=validator)
     request = ProviderCredentialSetRequest(
         provider="kimi",
+        action="add",
         api_key=SecretStr("unverified-secret"),
     )
 
@@ -194,7 +197,7 @@ async def test_unverified_credential_requires_explicit_save_anyway(
     saved = await service.set_credential(
         request.model_copy(update={"allow_unverified": True})
     )
-    assert saved.status is ProviderCredentialSetStatus.SAVED
+    assert saved.status is ProviderCredentialSetStatus.CONFIGURED
     assert dotenv_values(tmp_path / "home" / ".env")["MOONSHOT_API_KEY"] == (
         "unverified-secret"
     )
@@ -208,23 +211,52 @@ async def test_process_environment_credentials_are_not_mutated(tmp_path: Path) -
         environ={"DEEPSEEK_API_KEY": "external-secret"},
     )
 
-    with pytest.raises(ProviderCredentialManagedExternally):
-        await service.set_credential(
-            ProviderCredentialSetRequest(
-                provider="deepseek",
-                api_key=SecretStr("replacement"),
-            )
+    replacement = await service.set_credential(
+        ProviderCredentialSetRequest(
+            provider="deepseek",
+            action="replace",
+            api_key=SecretStr("replacement"),
         )
-    result = await service.auth_command(
-        CommandIntent(
-            name=CommandName.AUTH,
-            arguments=("deepseek", "remove", "confirm"),
+    )
+    deletion = await service.set_credential(
+        ProviderCredentialSetRequest(
+            provider="deepseek",
+            action="delete",
         )
     )
 
-    assert result.status == "error"
-    assert result.data["error_code"] == "credential_managed_by_environment"
+    assert replacement.status is ProviderCredentialSetStatus.ENVIRONMENT_MANAGED
+    assert deletion.status is ProviderCredentialSetStatus.ENVIRONMENT_MANAGED
     assert not (tmp_path / "home" / ".env").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_only_the_selected_user_credential(
+    tmp_path: Path,
+) -> None:
+    service, _, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+    )
+    store = UserSecretStore(tmp_path / "home" / ".env")
+    store.set("DEEPSEEK_API_KEY", SecretStr("deepseek-secret"))
+    store.set("MOONSHOT_API_KEY", SecretStr("kimi-secret"))
+
+    result = await service.set_credential(
+        ProviderCredentialSetRequest(provider="deepseek", action="delete")
+    )
+
+    values = dotenv_values(tmp_path / "home" / ".env")
+    assert result.status is ProviderCredentialSetStatus.DELETED
+    assert result.source is CredentialSource.MISSING
+    assert "DEEPSEEK_API_KEY" not in values
+    assert values["MOONSHOT_API_KEY"] == "kimi-secret"
+    assert sources().provider_credentials.deepseek.configured is False
+    assert sources().provider_credentials.kimi.configured is True
+
+
+def test_credential_result_contract_cannot_contain_secret_content() -> None:
+    assert "api_key" not in ProviderCredentialSetResult.model_fields
 
 
 @pytest.mark.asyncio

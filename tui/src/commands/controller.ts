@@ -111,7 +111,8 @@ export class CommandController {
 
   async setCredential(
     provider: "deepseek" | "kimi",
-    apiKey: string,
+    action: "add" | "replace" | "delete",
+    apiKey: string | undefined,
     allowUnverified: boolean,
   ): Promise<
     | {
@@ -122,8 +123,9 @@ export class CommandController {
   > {
     const result = await this.rpc.request("provider.credential.set", {
       provider,
-      api_key: apiKey,
-      allow_unverified: allowUnverified,
+      action,
+      ...(apiKey === undefined ? {} : { api_key: apiKey }),
+      ...(action === "delete" ? {} : { allow_unverified: allowUnverified }),
     });
     return result.ok
       ? { kind: "credential", result: result.value }

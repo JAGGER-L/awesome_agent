@@ -10,6 +10,7 @@ from awesome_agent.application.contracts import StatusSnapshot, thread_display_i
 from awesome_agent.conversation import ConversationService
 from awesome_agent.core.events import CollectingEventSink
 from awesome_agent.core.workspace import WorkspaceTrustService, resolve_workspace
+from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
@@ -24,7 +25,10 @@ def test_status_snapshot_is_exact_and_resume_friendly() -> None:
         thread_title="Feature auth",
         thread_id=full_thread_id,
         thread_display_id=thread_display_id(full_thread_id),
-        model_id="deepseek/deepseek-v4-flash",
+        model_identity=ModelIdentitySnapshot.from_models(
+            configured_model="deepseek/deepseek-v4-flash",
+            effective_model="deepseek/deepseek-v4-flash",
+        ),
         model_status="configured",
         thinking_enabled=False,
         skill_mode="auto",
@@ -45,7 +49,7 @@ def test_status_snapshot_is_exact_and_resume_friendly() -> None:
         "thread_title",
         "thread_id",
         "thread_display_id",
-        "model_id",
+        "model_identity",
         "model_status",
         "thinking_enabled",
         "skill_mode",
@@ -107,12 +111,18 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     assert status.value.status is CommandStatus.SUCCESS
 
     snapshot = StatusSnapshot.model_validate(status.value.data)
+    application_state = await application.get_state()
+    assert application_state.ok is True
+    assert application_state.value is not None
     assert snapshot.version == PRODUCT_VERSION
     assert snapshot.workspace_path == str(workspace)
     assert snapshot.thread_title == "Feature auth"
     assert snapshot.thread_id == thread.id
     assert snapshot.thread_display_id == thread_display_id(thread.id)
-    assert snapshot.model_id == "deepseek/deepseek-v4-flash"
+    assert snapshot.model_identity == application_state.value.model_identity
+    assert snapshot.model_identity.provider == "deepseek"
+    assert snapshot.model_identity.effective_model == ("deepseek/deepseek-v4-flash")
+    assert snapshot.model_identity.fallback_active is False
     assert snapshot.model_status == "configured"
     assert snapshot.operation_status == "idle"
     assert snapshot.local_memory_enabled is False

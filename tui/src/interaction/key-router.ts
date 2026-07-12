@@ -84,8 +84,7 @@ export function routeTerminalKey(
     case "secret":
       if (!mode.submitting) {
         if (key.escape) intent = { type: "mode.cancel" };
-        else if (key.return && mode.value.length > 0)
-          intent = { type: "secret.submit" };
+        else if (key.return) intent = { type: "secret.submit" };
         else if (key.backspace || key.delete)
           intent = { type: "secret.backspace" };
         else if (!key.ctrl && !key.meta && input)

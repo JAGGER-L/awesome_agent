@@ -33,18 +33,19 @@ describe("RpcClient requests", () => {
     const secret = "never-render-this";
     const pending = client.request("provider.credential.set", {
       provider: "deepseek",
+      action: "add",
       api_key: secret,
     });
 
     const request = await transport.nextClientMessage();
     expect(request).toMatchObject({
       method: "provider.credential.set",
-      params: { provider: "deepseek", api_key: secret },
+      params: { provider: "deepseek", action: "add", api_key: secret },
     });
     transport.serverMessage(
       success(1, {
         provider: "deepseek",
-        status: "saved",
+        status: "configured",
         source: "user_env_file",
         code: "credential_saved",
       }),
