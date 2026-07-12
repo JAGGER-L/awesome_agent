@@ -84,6 +84,8 @@ export interface CliRenderRequest {
   readonly state: StartupRenderState;
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly stdoutIsTTY: boolean;
+  readonly stdoutColorDepth: number | undefined;
   readonly clipboard: ClipboardAdapter;
 }
 
@@ -94,6 +96,7 @@ export interface CliDependencies {
   readonly nodeVersion: string;
   readonly stdinIsTTY: boolean;
   readonly stdoutIsTTY: boolean;
+  readonly stdoutColorDepth: number | undefined;
   readonly coreExecutable: string;
   readonly writeStdout: (value: string) => void;
   readonly writeStderr: (value: string) => void;
@@ -182,6 +185,8 @@ export async function runCli(
       state,
       cwd,
       env: dependencies.env,
+      stdoutIsTTY: dependencies.stdoutIsTTY,
+      stdoutColorDepth: dependencies.stdoutColorDepth,
       clipboard: createClipboardAdapter(),
     });
     return outcome.exitCode;
@@ -200,6 +205,10 @@ function productionDependencies(): CliDependencies {
     nodeVersion: process.versions.node,
     stdinIsTTY: process.stdin.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
+    stdoutColorDepth:
+      typeof process.stdout.getColorDepth === "function"
+        ? process.stdout.getColorDepth()
+        : undefined,
     coreExecutable: resolveCoreExecutable(process.env),
     writeStdout: (value) => process.stdout.write(value),
     writeStderr: (value) => process.stderr.write(value),
@@ -258,6 +267,8 @@ function StartupFatalApplication({
   surface,
   state,
   env,
+  stdoutIsTTY,
+  stdoutColorDepth,
   initialTheme,
   onFinish,
 }: CliApplicationProps & {
@@ -270,7 +281,7 @@ function StartupFatalApplication({
   });
   const theme = resolveTheme(
     initialTheme,
-    detectColorCapability(env, process.stdout.isTTY === true),
+    detectColorCapability(env, stdoutIsTTY, stdoutColorDepth),
   );
   const quit = useCallback(() => {
     void surface
@@ -311,6 +322,8 @@ function RunningCliApplication({
   intent,
   state: { startup: initialStartup },
   env,
+  stdoutIsTTY,
+  stdoutColorDepth,
   clipboard,
   awesomeHome,
   initialTheme,
@@ -334,7 +347,7 @@ function RunningCliApplication({
   );
   const theme = resolveTheme(
     themePreference,
-    detectColorCapability(env, process.stdout.isTTY === true),
+    detectColorCapability(env, stdoutIsTTY, stdoutColorDepth),
   );
   const cancellation = useMemo(
     () =>

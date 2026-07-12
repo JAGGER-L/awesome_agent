@@ -21,27 +21,44 @@ export interface Theme extends SemanticThemeRoles {
   readonly logoRows: readonly (string | undefined)[];
 }
 
-const darkMint = [
-  "#A7F3D0",
-  "#6EE7B7",
-  "#34D399",
-  "#2DD4BF",
-  "#22D3EE",
-] as const;
-const lightMint = [
-  "#047857",
-  "#059669",
-  "#0F766E",
-  "#0E7490",
-  "#155E75",
-] as const;
-const systemRows = [
-  "greenBright",
-  "green",
-  "green",
-  "cyan",
-  "cyanBright",
-] as const;
+type BrandRole =
+  | "brand"
+  | "primary"
+  | "secondary"
+  | "border"
+  | "user"
+  | "assistant"
+  | "tool"
+  | "muted";
+
+type BrandPalette = { readonly [Role in BrandRole]: string } & {
+  readonly logoRows: readonly string[];
+};
+
+const darkAurora = {
+  logoRows: ["#D0F5E7", "#B0EADF", "#95DCDA", "#8BC9E5", "#96B5DF"],
+  brand: "#A9EADC",
+  primary: "#9BE4D6",
+  secondary: "#8FC8E8",
+  border: "#5EA9AA",
+  user: "#B8EADF",
+  tool: "#88C4E2",
+  assistant: "#E5ECEF",
+  muted: "#74838B",
+} as const satisfies BrandPalette;
+
+const lightAurora = {
+  logoRows: ["#2B7A70", "#337F7D", "#3D7E8C", "#3C7290", "#4B6290"],
+  brand: "#2B7A70",
+  primary: "#26766B",
+  secondary: "#326B8A",
+  border: "#4B7C7B",
+  user: "#256F66",
+  tool: "#316B86",
+  assistant: "#1B242B",
+  muted: "#5B6870",
+} as const satisfies BrandPalette;
+
 const ansi16Rows = [
   "greenBright",
   "greenBright",
@@ -53,6 +70,7 @@ const ansi16Rows = [
 export function detectColorCapability(
   environ: Readonly<Record<string, string | undefined>>,
   isTty: boolean,
+  colorDepth?: number,
 ): ColorCapability {
   if (environ.NO_COLOR !== undefined) return "none";
   const forced = environ.FORCE_COLOR;
@@ -63,6 +81,12 @@ export function detectColorCapability(
     return "ansi16";
   }
   if (!isTty) return "none";
+  if (colorDepth !== undefined) {
+    if (colorDepth >= 24) return "truecolor";
+    if (colorDepth >= 8) return "ansi256";
+    return "ansi16";
+  }
+  if (environ.WT_SESSION) return "truecolor";
   if (/^(?:truecolor|24bit)$/iu.test(environ.COLORTERM ?? "")) {
     return "truecolor";
   }
@@ -74,37 +98,82 @@ export function resolveTheme(
   preference: ThemePreference,
   capability: ColorCapability,
 ): Theme {
-  const source = preference === "light" ? lightMint : darkMint;
+  const source = preference === "light" ? lightAurora : darkAurora;
   const logoRows =
     capability === "none"
-      ? source.map(() => undefined)
-      : preference === "system"
-        ? systemRows
-        : capability === "truecolor"
-          ? source
-          : capability === "ansi256"
-            ? source.map(nearestXtermColor)
-            : ansi16Rows;
+      ? source.logoRows.map(() => undefined)
+      : capability === "truecolor"
+        ? source.logoRows
+        : capability === "ansi256"
+          ? source.logoRows.map(nearestXtermColor)
+          : ansi16Rows;
   const light = preference === "light";
+  const roles = resolveBrandRoles(source, capability, light);
   return {
     preference,
     colorEnabled: capability !== "none",
     logoRows,
-    brand:
-      capability === "none"
-        ? "white"
-        : (logoRows[1] ?? (light ? "green" : "greenBright")),
-    primary: light ? "green" : "greenBright",
-    secondary: light ? "cyan" : "cyanBright",
-    muted: "gray",
+    ...roles,
     success: "green",
     warning: "yellow",
     danger: "red",
-    border: light ? "green" : "greenBright",
-    user: light ? "green" : "greenBright",
-    assistant: light ? "black" : "white",
-    tool: light ? "cyan" : "cyanBright",
   };
+}
+
+function resolveBrandRoles(
+  source: BrandPalette,
+  capability: ColorCapability,
+  light: boolean,
+): Pick<
+  SemanticThemeRoles,
+  | "brand"
+  | "primary"
+  | "secondary"
+  | "border"
+  | "user"
+  | "assistant"
+  | "tool"
+  | "muted"
+> {
+  if (capability === "none") {
+    return {
+      brand: light ? "green" : "greenBright",
+      primary: light ? "green" : "greenBright",
+      secondary: light ? "cyan" : "cyanBright",
+      border: light ? "green" : "greenBright",
+      user: light ? "green" : "greenBright",
+      assistant: light ? "black" : "white",
+      tool: light ? "cyan" : "cyanBright",
+      muted: "gray",
+    };
+  }
+  if (capability === "ansi16") {
+    return {
+      brand: "greenBright",
+      primary: "greenBright",
+      secondary: "cyanBright",
+      border: "green",
+      user: "greenBright",
+      assistant: light ? "black" : "white",
+      tool: "cyanBright",
+      muted: "gray",
+    };
+  }
+  const map = capability === "ansi256" ? nearestXtermColor : identity;
+  return {
+    brand: map(source.brand),
+    primary: map(source.primary),
+    secondary: map(source.secondary),
+    border: map(source.border),
+    user: map(source.user),
+    assistant: map(source.assistant),
+    tool: map(source.tool),
+    muted: map(source.muted),
+  };
+}
+
+function identity(value: string): string {
+  return value;
 }
 
 function nearestXtermColor(value: string): string {

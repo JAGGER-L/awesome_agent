@@ -66,3 +66,12 @@ It restores the owning Composer, Auth, or Approval state before showing safe
 feedback. Initialization failures are represented separately from successful
 startup state and render through the Fatal surface instead of being collapsed
 into a one-line process error.
+
+## Terminal color boundary
+
+Ink components consume semantic roles rather than terminal color names.
+Aurora Mist is the TrueColor brand palette; light mode uses contrast-adjusted
+equivalents. Capability detection uses stdout depth and terminal signals, then
+degrades explicitly through ANSI256, ANSI16, and no-color output. Status roles
+remain separate from brand roles so success, warning, and failure retain their
+operational meaning.

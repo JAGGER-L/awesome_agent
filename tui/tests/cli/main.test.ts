@@ -87,6 +87,7 @@ function harness(overrides: Partial<CliDependencies> = {}) {
     nodeVersion: "22.18.0",
     stdinIsTTY: true,
     stdoutIsTTY: true,
+    stdoutColorDepth: 24,
     coreExecutable: "awesome-core",
     writeStdout: (value) => stdout.push(value),
     writeStderr: (value) => stderr.push(value),
@@ -174,6 +175,26 @@ describe("runCli", () => {
     await expect(runCli(value.dependencies)).resolves.toBe(2);
     expect(value.stderr.join("")).toContain("Node.js 22 or newer");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+  });
+
+  it("passes observed stdout color capability to the renderer", async () => {
+    const renderApplication = vi.fn(
+      async () => ({ kind: "quit", exitCode: 0 }) as const,
+    );
+    const value = harness({
+      env: {},
+      stdoutIsTTY: true,
+      stdoutColorDepth: 24,
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stdoutIsTTY: true,
+        stdoutColorDepth: 24,
+      }),
+    );
   });
 
   it("reports a missing Core safely with exit code 2", async () => {
