@@ -1,5 +1,12 @@
-import { Box, Text, useInput, useStdout } from "ink";
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { Box, Text, useStdout } from "ink";
+import {
+  useCallback,
+  type Dispatch,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import type {
   CommandController,
@@ -9,15 +16,13 @@ import type {
   LocalCommandResult,
   LocalCommandService,
 } from "../commands/local.js";
-import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
-import type { ExitReason } from "../lifecycle/exit.js";
 import type { CommandIntent } from "../commands/parser.js";
 import { parseInput } from "../commands/parser.js";
 import { CommandMenu } from "../components/CommandMenu.js";
-import { Composer, type ComposerSubmitResult } from "../components/Composer.js";
+import { Composer } from "../components/Composer.js";
 import { Help } from "../components/Help.js";
 import { InteractionPrompt } from "../components/InteractionPrompt.js";
-import { Picker, type PickerSelection } from "../components/Picker.js";
+import { Picker } from "../components/Picker.js";
 import { ProviderSetupNotice } from "../components/ProviderSetupNotice.js";
 import { SecretInput } from "../components/SecretInput.js";
 import { StatusCommand } from "../components/StatusCommand.js";
@@ -25,6 +30,23 @@ import { StatusLine } from "../components/StatusLine.js";
 import type { WelcomeProps } from "../components/Welcome.js";
 import { ActiveTurn } from "../components/transcript/ActiveTurn.js";
 import { Transcript } from "../components/transcript/Transcript.js";
+import {
+  routeTerminalKey,
+  type TerminalIntent,
+  type TerminalKey,
+} from "../interaction/key-router.js";
+import type {
+  PickerOwner,
+  PickerSelection,
+  SecretPrompt,
+  TerminalUiAction,
+  TerminalUiState,
+} from "../interaction/model.js";
+import { initialTerminalUiState } from "../interaction/reducer.js";
+import { TerminalInput } from "../interaction/TerminalInput.js";
+import { useTerminalUi } from "../interaction/use-terminal-ui.js";
+import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
+import type { ExitReason } from "../lifecycle/exit.js";
 import {
   statusSnapshotSchema,
   type StatusSnapshot,
@@ -34,32 +56,11 @@ import { hydrateThreadPage } from "../transcript/hydrate.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 
-type PendingPicker =
-  | {
-      readonly kind: "command";
-      readonly intent: CommandIntent;
-      readonly selection: PickerSelection;
-    }
-  | { readonly kind: "local_theme"; readonly selection: PickerSelection };
-
-type SecretPrompt = Extract<
-  CommandDispatchOutcome,
-  { kind: "secret" }
->["prompt"];
-type CredentialFlow =
-  | {
-      readonly kind: "input";
-      readonly intent: CommandIntent;
-      readonly prompt: SecretPrompt;
-      readonly message?: string;
-      readonly submitting?: boolean;
-    }
-  | {
-      readonly kind: "confirm";
-      readonly intent: CommandIntent;
-      readonly prompt: SecretPrompt;
-      readonly secret: string;
-    };
+interface ComposerSubmitResult {
+  readonly accepted: boolean;
+  readonly retryable?: boolean;
+  readonly message?: string;
+}
 
 export interface AppLifecycle {
   cancelActiveOperation(): Promise<void>;
@@ -96,15 +97,12 @@ export function App({
   );
   const { stdout } = useStdout();
   const columns = width ?? stdout.columns ?? 80;
-  const [composerValue, setComposerValue] = useState("");
-  const [picker, setPicker] = useState<PendingPicker>();
-  const [credentialFlow, setCredentialFlow] = useState<CredentialFlow>();
-  const [helpCommand, setHelpCommand] = useState<string | null>();
+  const terminal = useTerminalUi(initialRuntimeUi(state.pending_interaction));
+  const ui = terminal.state;
+  const uiRef = terminal.current;
+  const dispatch = terminal.dispatch;
   const [status, setStatus] = useState<StatusSnapshot>();
-  const [localNotice, setLocalNotice] = useState<string>();
-  const [clearRevision, setClearRevision] = useState(0);
   const globalKeys = useRef(new GlobalKeyController()).current;
-  const commandInputBlocked = useRef(false);
   const historic =
     state.committed_transcript ??
     (state.thread ? hydrateThreadPage(state.thread).blocks : []);
@@ -118,53 +116,66 @@ export function App({
     state.pending_interaction?.interaction_kind === "workspace_trust"
       ? undefined
       : state.pending_interaction;
+
+  useEffect(() => {
+    dispatch({
+      type: "composer.edit",
+      action: { type: "resize", width: columns },
+    });
+  }, [columns, dispatch]);
+
+  useEffect(() => {
+    if (exceptionalInteraction) {
+      if (
+        ui.mode.kind !== "approval" ||
+        ui.mode.interaction.interaction_id !==
+          exceptionalInteraction.interaction_id
+      ) {
+        dispatch({
+          type: "mode.open",
+          mode: {
+            kind: "approval",
+            interaction: exceptionalInteraction,
+            selected: 0,
+            submitting: false,
+          },
+        });
+      }
+    } else if (ui.mode.kind === "approval") {
+      dispatch({ type: "mode.cancel" });
+    }
+  }, [dispatch, exceptionalInteraction, ui.mode]);
+
   const applyLocalResult = useCallback(
     (result: LocalCommandResult): ComposerSubmitResult => {
       switch (result.kind) {
         case "help":
-          setHelpCommand(result.command ?? null);
+          dispatch({
+            type: "mode.open",
+            mode: {
+              kind: "help",
+              ...(result.command === undefined
+                ? {}
+                : { command: result.command }),
+            },
+          });
           return { accepted: true };
         case "picker":
-          setPicker({ kind: "local_theme", selection: result.selection });
+          dispatch({
+            type: "mode.open",
+            mode: pickerMode({ kind: "local_theme" }, result.selection, false),
+          });
           return { accepted: true };
         case "notice":
         case "warning":
-          setLocalNotice(result.message);
+          dispatch({ type: "notice.set", message: result.message });
           return { accepted: true };
         case "shutdown":
           void lifecycle?.requestExit("quit_command");
           return { accepted: true };
       }
     },
-    [lifecycle],
-  );
-
-  useInput(
-    (input, key) => {
-      const action = globalKeys.handle({
-        input,
-        key,
-        activeOperation: state.active_operation?.status === "active",
-        composerEmpty: composerValue.length === 0,
-      });
-      if (!action) return;
-      switch (action.kind) {
-        case "cancel":
-          void lifecycle?.cancelActiveOperation();
-          break;
-        case "clear_composer":
-          setClearRevision((value) => value + 1);
-          setLocalNotice(undefined);
-          break;
-        case "exit_hint":
-          setLocalNotice("Press Ctrl+C again to quit");
-          break;
-        case "exit":
-          void lifecycle?.requestExit(action.reason);
-          break;
-      }
-    },
-    { isActive: credentialFlow === undefined },
+    [dispatch, lifecycle],
   );
 
   const applyCommandOutcome = useCallback(
@@ -173,20 +184,20 @@ export function App({
       intent?: CommandIntent,
     ): Promise<ComposerSubmitResult> => {
       if (outcome.kind === "picker") {
-        commandInputBlocked.current = true;
-        setPicker({
-          kind: "command",
-          intent: outcome.intent,
-          selection: outcome.selection,
+        dispatch({
+          type: "mode.open",
+          mode: pickerMode(
+            { kind: "command", intent: outcome.intent },
+            outcome.selection,
+            blockingSelection,
+          ),
         });
         return { accepted: true };
       }
       if (outcome.kind === "secret") {
-        commandInputBlocked.current = true;
-        setCredentialFlow({
-          kind: "input",
-          intent: outcome.intent,
-          prompt: outcome.prompt,
+        dispatch({
+          type: "mode.open",
+          mode: secretMode(outcome.intent, outcome.prompt),
         });
         return { accepted: true };
       }
@@ -208,7 +219,6 @@ export function App({
         return applyLocalResult(await localCommands.execute(outcome.intent));
       }
       if (outcome.kind === "result") {
-        commandInputBlocked.current = false;
         if (outcome.result.status === "error") {
           return {
             accepted: false,
@@ -236,13 +246,13 @@ export function App({
       }
       return { accepted: true };
     },
-    [applyLocalResult, localCommands],
+    [applyLocalResult, blockingSelection, dispatch, localCommands],
   );
+
   const submit = useCallback(
     async (value: string): Promise<ComposerSubmitResult> => {
-      if (commandInputBlocked.current) return { accepted: false };
       setStatus(undefined);
-      setLocalNotice(undefined);
+      dispatch({ type: "notice.clear" });
       const routed = parseInput(value);
       if (!routed) return { accepted: true };
       if (routed.kind === "invalid") {
@@ -264,85 +274,114 @@ export function App({
         routed.kind === "command" ? routed.intent : undefined,
       );
     },
-    [applyCommandOutcome, controller, state.application?.current_thread_id],
-  );
-
-  const select = useCallback(
-    async (value: string) => {
-      if (!picker) return;
-      const pending = picker;
-      setPicker(undefined);
-      if (pending.kind === "local_theme") {
-        if (!localCommands) return;
-        applyLocalResult(
-          await localCommands.execute({ name: "theme", arguments: [value] }),
-        );
-        return;
-      }
-      if (!controller) return;
-      const outcome = await controller.select(
-        pending.intent,
-        value,
-        state.application?.current_thread_id,
-      );
-      await applyCommandOutcome(outcome, pending.intent);
-    },
     [
-      applyLocalResult,
       applyCommandOutcome,
       controller,
-      localCommands,
-      picker,
+      dispatch,
       state.application?.current_thread_id,
     ],
   );
 
+  const submitComposer = useCallback(async () => {
+    const value = uiRef.current.composer.value;
+    if (value.trim().length === 0) {
+      if (providerSetupVisible) {
+        const intent: CommandIntent = { name: "model" };
+        if (controller) {
+          const outcome = await controller.submit(
+            { kind: "command", intent },
+            state.application?.current_thread_id,
+          );
+          await applyCommandOutcome(outcome, intent);
+        }
+      }
+      return;
+    }
+    dispatch({ type: "composer.submitting", submitting: true });
+    dispatch({ type: "composer.message" });
+    try {
+      const result = await submit(value);
+      if (result.accepted) {
+        dispatch({
+          type: "composer.edit",
+          action: { type: "submit_history", value },
+        });
+        dispatch({
+          type: "composer.edit",
+          action: { type: "replace", value: "" },
+        });
+      }
+      dispatch({ type: "composer.message", message: result.message });
+    } finally {
+      dispatch({ type: "composer.submitting", submitting: false });
+    }
+  }, [
+    applyCommandOutcome,
+    controller,
+    dispatch,
+    providerSetupVisible,
+    state.application?.current_thread_id,
+    submit,
+    uiRef,
+  ]);
+
   const submitCredential = useCallback(
-    async (secret: string, allowUnverified = false) => {
-      if (!controller || !credentialFlow) return;
-      const current = credentialFlow;
-      setCredentialFlow(
-        current.kind === "input" ? { ...current, submitting: true } : current,
-      );
+    async (
+      intent: CommandIntent,
+      prompt: SecretPrompt,
+      secret: string,
+      allowUnverified = false,
+    ) => {
+      if (!controller) return;
+      if (!allowUnverified) {
+        dispatch({ type: "mode.secret.submitting", submitting: true });
+      }
       const outcome = await controller.setCredential(
-        current.prompt.provider,
+        prompt.provider,
         secret,
         allowUnverified,
       );
       if (outcome.kind === "error") {
-        setCredentialFlow({
-          kind: "input",
-          intent: current.intent,
-          prompt: current.prompt,
-          message: outcome.error.message,
+        dispatch({
+          type: "mode.open",
+          mode: secretMode(intent, prompt, outcome.error.message),
         });
         return;
       }
       if (outcome.result.status === "invalid") {
-        setCredentialFlow({
-          kind: "input",
-          intent: current.intent,
-          prompt: current.prompt,
-          message: "The API key was rejected. Try another key.",
+        dispatch({
+          type: "mode.open",
+          mode: secretMode(
+            intent,
+            prompt,
+            "The API key was rejected. Try another key.",
+          ),
         });
         return;
       }
       if (outcome.result.status === "confirm_unverified") {
-        setCredentialFlow({
-          kind: "confirm",
-          intent: current.intent,
-          prompt: current.prompt,
-          secret,
+        dispatch({
+          type: "mode.open",
+          mode: pickerMode(
+            { kind: "credential_confirm", intent, prompt, secret },
+            {
+              prompt:
+                "The Provider could not be reached. Save this key anyway?",
+              options: [
+                { value: "back", label: "Back", selected: true },
+                { value: "save", label: "Save anyway", selected: false },
+              ],
+            },
+            false,
+          ),
         });
         return;
       }
       const refreshed = await controller.refreshApplication();
       if (!refreshed.ok) {
-        setCredentialFlow({
-          kind: "input",
-          intent: current.intent,
-          prompt: current.prompt,
-          message: refreshed.error.message,
+        dispatch({
+          type: "mode.open",
+          mode: secretMode(intent, prompt, refreshed.error.message),
         });
         return;
       }
@@ -351,113 +390,302 @@ export function App({
         application: refreshed.value,
       });
       const resumed = await controller.submit(
-        { kind: "command", intent: current.intent },
+        { kind: "command", intent },
         refreshed.value.current_thread_id,
       );
-      await applyCommandOutcome(resumed, current.intent);
-      setCredentialFlow(undefined);
+      dispatch({ type: "mode.cancel" });
+      await applyCommandOutcome(resumed, intent);
     },
-    [applyCommandOutcome, controller, credentialFlow, store],
+    [applyCommandOutcome, controller, dispatch, store],
   );
 
-  const openProviderSetup = useCallback(() => {
-    if (!controller) return;
-    const intent: CommandIntent = { name: "model" };
-    void controller
-      .submit({ kind: "command", intent }, state.application?.current_thread_id)
-      .then((outcome) => applyCommandOutcome(outcome, intent));
-  }, [applyCommandOutcome, controller, state.application?.current_thread_id]);
+  const selectCurrent = useCallback(async () => {
+    const mode = uiRef.current.mode;
+    if (mode.kind === "approval") {
+      const decision = mode.interaction.choices[mode.selected];
+      if (!decision) return;
+      dispatch({ type: "mode.approval.submitting", submitting: true });
+      try {
+        await interactionResponder?.respond(decision);
+      } catch (error) {
+        dispatch({
+          type: "mode.approval.submitting",
+          submitting: false,
+        });
+        dispatch({
+          type: "mode.approval.message",
+          message:
+            error instanceof Error ? error.message : "Interaction failed.",
+        });
+      }
+      return;
+    }
+    if (mode.kind !== "picker") return;
+    const option = mode.selection.options[mode.selected];
+    if (!option) return;
+    const owner = mode.owner;
+    if (owner.kind === "local_theme") {
+      dispatch({ type: "mode.cancel" });
+      if (localCommands) {
+        applyLocalResult(
+          await localCommands.execute({
+            name: "theme",
+            arguments: [option.value],
+          }),
+        );
+      }
+      return;
+    }
+    if (owner.kind === "command") {
+      dispatch({ type: "mode.cancel" });
+      if (controller) {
+        const outcome = await controller.select(
+          owner.intent,
+          option.value,
+          state.application?.current_thread_id,
+        );
+        await applyCommandOutcome(outcome, owner.intent);
+      }
+      return;
+    }
+    if (owner.kind === "credential_confirm") {
+      if (option.value === "save") {
+        await submitCredential(owner.intent, owner.prompt, owner.secret, true);
+      } else {
+        dispatch({
+          type: "mode.open",
+          mode: secretMode(owner.intent, owner.prompt),
+        });
+      }
+    }
+  }, [
+    applyCommandOutcome,
+    applyLocalResult,
+    controller,
+    dispatch,
+    interactionResponder,
+    localCommands,
+    state.application?.current_thread_id,
+    submitCredential,
+    uiRef,
+  ]);
+
+  const handleLifecycle = useCallback(
+    (input: string, key: TerminalKey) => {
+      const action = globalKeys.handle({
+        input,
+        key,
+        activeOperation: state.active_operation?.status === "active",
+        composerEmpty: uiRef.current.composer.value.length === 0,
+      });
+      if (!action) return;
+      switch (action.kind) {
+        case "cancel":
+          void lifecycle?.cancelActiveOperation();
+          break;
+        case "clear_composer":
+          dispatch({
+            type: "composer.edit",
+            action: { type: "replace", value: "" },
+          });
+          dispatch({ type: "composer.message" });
+          dispatch({ type: "notice.clear" });
+          break;
+        case "exit_hint":
+          dispatch({
+            type: "notice.set",
+            message: "Press Ctrl+C again to quit",
+          });
+          break;
+        case "exit":
+          void lifecycle?.requestExit(action.reason);
+          break;
+      }
+    },
+    [dispatch, globalKeys, lifecycle, state.active_operation?.status, uiRef],
+  );
+
+  const handleTerminalInput = useCallback(
+    (input: string, key: TerminalKey) => {
+      const routed = routeTerminalKey(uiRef.current, input, key);
+      if (!routed) return;
+      handleTerminalIntent(routed, input, key, {
+        dispatch,
+        onSubmit: () => void submitComposer(),
+        onSelect: () => void selectCurrent(),
+        onDeny: () => {
+          if (uiRef.current.mode.kind !== "approval") return;
+          void interactionResponder?.respond("deny");
+        },
+        onSecretSubmit: () => {
+          if (uiRef.current.mode.kind !== "secret") return;
+          const { intent, prompt, value } = uiRef.current.mode;
+          void submitCredential(intent, prompt, value);
+        },
+        onLifecycle: handleLifecycle,
+      });
+    },
+    [
+      handleLifecycle,
+      dispatch,
+      interactionResponder,
+      selectCurrent,
+      submitComposer,
+      submitCredential,
+      uiRef,
+    ],
+  );
 
   return (
     <Box flexDirection="column">
+      <TerminalInput active={!cancelling} onInput={handleTerminalInput} />
       <Transcript blocks={historic} width={columns} welcome={welcome} />
       <ActiveTurn live={live} width={columns} />
       {status ? <StatusCommand snapshot={status} /> : null}
-      {localNotice ? <Text>{localNotice}</Text> : null}
-      {providerSetupVisible && !credentialFlow ? <ProviderSetupNotice /> : null}
-      {!cancelling && !exceptionalInteraction ? (
-        <CommandMenu
-          query={
-            picker || credentialFlow || helpCommand !== undefined
-              ? ""
-              : composerValue
-          }
-        />
+      {ui.notice ? <Text>{ui.notice}</Text> : null}
+      {providerSetupVisible && ui.mode.kind !== "secret" ? (
+        <ProviderSetupNotice />
       ) : null}
-      {exceptionalInteraction ? (
+      {!cancelling && ui.mode.kind === "composer" ? (
+        <CommandMenu query={ui.composer.value} />
+      ) : null}
+      {cancelling ? null : ui.mode.kind === "approval" ? (
         <InteractionPrompt
-          interaction={exceptionalInteraction}
-          onRespond={(decision) => {
-            void interactionResponder?.respond(decision);
-          }}
+          interaction={ui.mode.interaction}
+          selected={ui.mode.selected}
+          submitting={ui.mode.submitting}
+          {...(ui.mode.message === undefined
+            ? {}
+            : { message: ui.mode.message })}
         />
-      ) : cancelling ? null : credentialFlow?.kind === "input" ? (
+      ) : ui.mode.kind === "secret" ? (
         <SecretInput
-          label={credentialFlow.prompt.label}
-          {...(credentialFlow.submitting === undefined
+          label={ui.mode.prompt.label}
+          value={ui.mode.value}
+          submitting={ui.mode.submitting}
+          {...(ui.mode.message === undefined
             ? {}
-            : { submitting: credentialFlow.submitting })}
-          {...(credentialFlow.message === undefined
-            ? {}
-            : { message: credentialFlow.message })}
-          onSubmit={(value) => void submitCredential(value)}
-          onCancel={() => {
-            commandInputBlocked.current = false;
-            setCredentialFlow(undefined);
-          }}
+            : { message: ui.mode.message })}
         />
-      ) : credentialFlow?.kind === "confirm" ? (
-        <Picker
-          selection={{
-            prompt: "The Provider could not be reached. Save this key anyway?",
-            options: [
-              { value: "back", label: "Back", selected: true },
-              { value: "save", label: "Save anyway", selected: false },
-            ],
-          }}
-          onSelect={(value) => {
-            if (value === "save") {
-              void submitCredential(credentialFlow.secret, true);
-            } else {
-              setCredentialFlow({
-                kind: "input",
-                intent: credentialFlow.intent,
-                prompt: credentialFlow.prompt,
-              });
-            }
-          }}
-          onClose={() => {
-            commandInputBlocked.current = false;
-            setCredentialFlow(undefined);
-          }}
-        />
-      ) : picker ? (
-        <Picker
-          selection={picker.selection}
-          onSelect={select}
-          onClose={() => {
-            commandInputBlocked.current = false;
-            setPicker(undefined);
-          }}
-          blocking={blockingSelection}
-        />
-      ) : helpCommand !== undefined ? (
+      ) : ui.mode.kind === "picker" ? (
+        <Picker selection={ui.mode.selection} selected={ui.mode.selected} />
+      ) : ui.mode.kind === "help" ? (
         <Help
-          {...(helpCommand === null ? {} : { command: helpCommand })}
-          onClose={() => setHelpCommand(undefined)}
+          {...(ui.mode.command === undefined
+            ? {}
+            : { command: ui.mode.command })}
         />
       ) : (
         <Composer
-          width={columns}
-          clearRevision={clearRevision}
-          onSubmit={submit}
-          onValueChange={setComposerValue}
-          {...(providerSetupVisible
-            ? { onEmptySubmit: openProviderSetup }
-            : {})}
+          state={ui.composer}
+          submitting={ui.composerSubmitting}
+          {...(ui.composerMessage === undefined
+            ? {}
+            : { message: ui.composerMessage })}
         />
       )}
       <StatusLine state={state} cancellation={cancellation} />
     </Box>
   );
+}
+
+function pickerMode(
+  owner: PickerOwner,
+  selection: NonNullable<PickerSelection>,
+  blocking: boolean,
+): Extract<TerminalUiState["mode"], { kind: "picker" }> {
+  return {
+    kind: "picker",
+    owner,
+    selection,
+    selected: Math.max(
+      0,
+      selection.options.findIndex((option) => option.selected),
+    ),
+    blocking,
+  };
+}
+
+function secretMode(
+  intent: CommandIntent,
+  prompt: SecretPrompt,
+  message?: string,
+): Extract<TerminalUiState["mode"], { kind: "secret" }> {
+  return {
+    kind: "secret",
+    intent,
+    prompt,
+    value: "",
+    submitting: false,
+    ...(message === undefined ? {} : { message }),
+  };
+}
+
+function handleTerminalIntent(
+  intent: TerminalIntent,
+  input: string,
+  key: TerminalKey,
+  handlers: {
+    readonly dispatch: Dispatch<TerminalUiAction>;
+    readonly onSubmit: () => void;
+    readonly onSelect: () => void;
+    readonly onDeny: () => void;
+    readonly onSecretSubmit: () => void;
+    readonly onLifecycle: (input: string, key: TerminalKey) => void;
+  },
+): void {
+  switch (intent.type) {
+    case "mode.cancel":
+      handlers.dispatch({ type: "mode.cancel" });
+      break;
+    case "selection.move":
+      handlers.dispatch({ type: "mode.select", delta: intent.delta });
+      break;
+    case "selection.confirm":
+      handlers.onSelect();
+      break;
+    case "approval.deny":
+      handlers.onDeny();
+      break;
+    case "command.complete":
+      break;
+    case "secret.insert":
+      handlers.dispatch({ type: "mode.secret.insert", text: intent.text });
+      break;
+    case "secret.backspace":
+      handlers.dispatch({ type: "mode.secret.backspace" });
+      break;
+    case "secret.submit":
+      handlers.onSecretSubmit();
+      break;
+    case "composer.edit":
+      handlers.dispatch({ type: "composer.edit", action: intent.action });
+      handlers.dispatch({ type: "composer.message" });
+      break;
+    case "composer.submit":
+      handlers.onSubmit();
+      break;
+    case "lifecycle.evaluate":
+      handlers.onLifecycle(input, key);
+      break;
+  }
+}
+
+function initialRuntimeUi(
+  interaction: ReturnType<SurfaceStore["getState"]>["pending_interaction"],
+): TerminalUiState {
+  const initial = initialTerminalUiState();
+  return interaction?.interaction_kind === "workspace_trust"
+    ? initial
+    : interaction
+      ? {
+          ...initial,
+          mode: {
+            kind: "approval",
+            interaction,
+            selected: 0,
+            submitting: false,
+          },
+        }
+      : initial;
 }

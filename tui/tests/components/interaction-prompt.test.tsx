@@ -13,33 +13,31 @@ const interaction = {
   choices: ["allow_once", "deny"],
 };
 
+async function eventually(assertion: () => void): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  assertion();
+}
+
 describe("InteractionPrompt", () => {
-  it("renders exact Event prompt and choices", () => {
+  it("renders the controlled Event prompt and selection", () => {
     const frame =
       render(
-        <InteractionPrompt interaction={interaction} onRespond={() => {}} />,
+        <InteractionPrompt interaction={interaction} selected={1} />,
       ).lastFrame() ?? "";
     expect(frame).toContain("Run outside boundary?");
-    expect(frame).toContain("allow_once");
-    expect(frame).toContain("deny");
+    expect(frame).toContain("› deny");
     expect(frame).not.toContain("always allow");
   });
 
-  it("supports arrows/Enter and maps Esc to deny", async () => {
-    const onRespond = vi.fn();
-    const view = render(
-      <InteractionPrompt interaction={interaction} onRespond={onRespond} />,
-    );
-    view.stdin.write("\u001b[B");
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    view.stdin.write("\r");
-    expect(onRespond).toHaveBeenCalledWith("deny");
-    view.stdin.write("\u001b");
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    expect(onRespond).toHaveBeenLastCalledWith("deny");
-  });
-
-  it("removes Composer input while interaction is active", () => {
+  it("routes arrows and Enter through App to one interaction response", async () => {
+    const respond = vi.fn(async () => undefined);
     const seed: SurfaceState = {
       connection: "ready",
       event_sequence: 1,
@@ -49,10 +47,24 @@ describe("InteractionPrompt", () => {
     const view = render(
       <App
         store={createSurfaceStore(seed)}
-        interactionResponder={{ respond: async () => undefined }}
+        interactionResponder={{ respond }}
         width={60}
       />,
     );
+    view.stdin.write("\u001b[B");
+    view.stdin.write("\r");
+    await eventually(() => expect(respond).toHaveBeenCalledTimes(1));
+    expect(respond).toHaveBeenCalledWith("deny");
+  });
+
+  it("removes Composer input while interaction is active", () => {
+    const seed: SurfaceState = {
+      connection: "ready",
+      event_sequence: 1,
+      warnings: [],
+      pending_interaction: interaction,
+    };
+    const view = render(<App store={createSurfaceStore(seed)} width={60} />);
     expect(view.lastFrame()).toContain("Run outside boundary?");
     expect(view.lastFrame()).not.toContain("Message");
   });

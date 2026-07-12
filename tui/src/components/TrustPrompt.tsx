@@ -5,10 +5,10 @@ import { useTheme } from "./theme.js";
 
 export function TrustPrompt({
   workspacePath,
-  onDecision,
+  selected,
 }: {
   readonly workspacePath: string;
-  readonly onDecision: (decision: "trust" | "deny") => void;
+  readonly selected: number;
 }) {
   const theme = useTheme();
   return (
@@ -16,7 +16,7 @@ export function TrustPrompt({
       <Text color={theme.warning}>Trust this workspace?</Text>
       <Text>{workspacePath}</Text>
       <Picker
-        blocking
+        selected={selected}
         selection={{
           prompt: "Choose explicitly",
           options: [
@@ -24,8 +24,6 @@ export function TrustPrompt({
             { value: "deny", label: "Deny and exit", selected: false },
           ],
         }}
-        onSelect={(value) => onDecision(value === "trust" ? "trust" : "deny")}
-        onClose={() => {}}
       />
     </Box>
   );

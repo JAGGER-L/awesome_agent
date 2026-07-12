@@ -1,4 +1,4 @@
-import { Box, Text, useInput } from "ink";
+import { Box, Text } from "ink";
 
 import { COMMAND_CATALOG, findCommand } from "../commands/catalog.js";
 import type { CommandOwner } from "../protocol/commands.js";
@@ -10,18 +10,8 @@ const groups: readonly [CommandOwner, string][] = [
   ["ink", "Ink local"],
 ];
 
-export function Help({
-  command,
-  onClose,
-}: {
-  readonly command?: string;
-  readonly onClose: () => void;
-}) {
+export function Help({ command }: { readonly command?: string }) {
   const theme = useTheme();
-  useInput((_input, key) => {
-    if (key.escape) onClose();
-  });
-
   if (command) {
     const metadata = findCommand(command);
     if (!metadata) {
