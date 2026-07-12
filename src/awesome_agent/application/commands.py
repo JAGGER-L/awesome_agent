@@ -26,7 +26,6 @@ class CommandName(StrEnum):
     REDO = "redo"
     TOOLS = "tools"
     SKILLS = "skills"
-    SKILL = "skill"
     MCP = "mcp"
     MEMORY = "memory"
     STATUS = "status"
@@ -35,10 +34,6 @@ class CommandName(StrEnum):
     CONFIG = "config"
     PERMISSIONS = "permissions"
     INIT = "init"
-    REVIEW = "review"
-    DEBUG = "debug"
-    TEST = "test"
-    COMMIT = "commit"
     HELP = "help"
     THEME = "theme"
     COPY = "copy"
@@ -62,7 +57,6 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.REDO,
             CommandName.TOOLS,
             CommandName.SKILLS,
-            CommandName.SKILL,
             CommandName.MCP,
             CommandName.MEMORY,
             CommandName.STATUS,
@@ -72,16 +66,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.PERMISSIONS,
         )
     },
-    **{
-        name: CommandOwner.SKILL
-        for name in (
-            CommandName.INIT,
-            CommandName.REVIEW,
-            CommandName.DEBUG,
-            CommandName.TEST,
-            CommandName.COMMIT,
-        )
-    },
+    **{name: CommandOwner.SKILL for name in (CommandName.INIT,)},
     **{
         name: CommandOwner.INK
         for name in (

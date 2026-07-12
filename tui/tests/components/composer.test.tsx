@@ -242,7 +242,6 @@ describe("App composer integration", () => {
     view.stdin.write("/s");
     await eventually(() => expect(view.lastFrame()).toContain("/status"));
     view.stdin.write("\u001b[B");
-    view.stdin.write("\u001b[B");
     view.stdin.write("\r");
 
     await eventually(() => expect(controller.submit).toHaveBeenCalledOnce());
@@ -304,8 +303,12 @@ describe("App composer integration", () => {
         key: "old",
         kind: "command_result",
         command: "old",
-        tone: "info",
-        content: "old transcript",
+        presentation: {
+          kind: "lines",
+          title: "/old",
+          rows: [{ label: "", value: "old transcript" }],
+          tone: "info",
+        },
       },
     });
     const resetThreadScope = vi.fn();

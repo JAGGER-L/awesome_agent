@@ -76,11 +76,6 @@ describe("CommandController", () => {
       "command.execute",
       { name: "status" },
     ],
-    [
-      { kind: "command", intent: { name: "debug", arguments: ["failure"] } },
-      "command.execute",
-      { name: "debug", arguments: ["failure"] },
-    ],
   ] as const)("routes %s to %s", async (routed, method, params) => {
     const { calls, controller } = harness({
       ok: true,

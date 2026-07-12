@@ -53,10 +53,6 @@
       "owner": "application"
     },
     {
-      "name": "skill",
-      "owner": "application"
-    },
-    {
       "name": "mcp",
       "owner": "application"
     },
@@ -86,22 +82,6 @@
     },
     {
       "name": "init",
-      "owner": "skill"
-    },
-    {
-      "name": "review",
-      "owner": "skill"
-    },
-    {
-      "name": "debug",
-      "owner": "skill"
-    },
-    {
-      "name": "test",
-      "owner": "skill"
-    },
-    {
-      "name": "commit",
       "owner": "skill"
     },
     {

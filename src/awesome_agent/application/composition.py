@@ -1093,14 +1093,9 @@ class _LocalApplicationBackend:
         assert self._extensions is not None
         if intent.name in {
             CommandName.SKILLS,
-            CommandName.SKILL,
             CommandName.MCP,
             CommandName.MEMORY,
             CommandName.INIT,
-            CommandName.REVIEW,
-            CommandName.DEBUG,
-            CommandName.TEST,
-            CommandName.COMMIT,
         }:
             return await self._extensions.handle(intent, thread_id=thread_id)
         if intent.name is CommandName.CONTEXT:

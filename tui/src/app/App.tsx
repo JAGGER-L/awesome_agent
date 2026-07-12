@@ -13,6 +13,7 @@ import type {
   CommandDispatchOutcome,
 } from "../commands/controller.js";
 import { findCommand } from "../commands/catalog.js";
+import { presentCommandResult } from "../commands/presenters.js";
 import type {
   LocalCommandResult,
   LocalCommandService,
@@ -58,6 +59,7 @@ import { hydrateThreadPage } from "../transcript/hydrate.js";
 import { createClientMessageId } from "../transcript/identity.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
+import { useCommandExecution } from "./use-command-execution.js";
 
 interface ComposerSubmitResult {
   readonly accepted: boolean;
@@ -108,7 +110,11 @@ export function App({
   const uiRef = terminal.current;
   const dispatch = terminal.dispatch;
   const [status, setStatus] = useState<StatusSnapshot>();
-  const commandResultSequence = useRef(0);
+  const {
+    appendPresentation,
+    appendTextResult: appendCommandResult,
+    beginProgress,
+  } = useCommandExecution(store);
   const globalKeys = useRef(new GlobalKeyController()).current;
   const historic =
     state.committed_transcript ??
@@ -178,29 +184,6 @@ export function App({
       dispatch({ type: "mode.cancel" });
     }
   }, [dispatch, exceptionalInteraction, ui.mode]);
-
-  const appendCommandResult = useCallback(
-    (
-      command: string,
-      tone: "info" | "warning" | "error",
-      content: string,
-      generation: number,
-    ) => {
-      commandResultSequence.current += 1;
-      store.dispatch({
-        type: "transcript.command_result",
-        generation,
-        block: {
-          key: `command_result_${commandResultSequence.current}`,
-          kind: "command_result",
-          command,
-          tone,
-          content,
-        },
-      });
-    },
-    [store],
-  );
 
   const applyLocalResult = useCallback(
     (result: LocalCommandResult, generation: number): ComposerSubmitResult => {
@@ -348,18 +331,10 @@ export function App({
           });
           lifecycle?.resetThreadScope?.();
           setStatus(undefined);
-        } else if (intent?.name === "usage") {
-          appendCommandResult(
-            "usage",
-            "info",
-            formatUsage(outcome.result.data),
-            generation,
-          );
-        } else if (intent && outcome.result.content) {
-          appendCommandResult(
+        } else if (intent) {
+          appendPresentation(
             intent.name,
-            "info",
-            outcome.result.content,
+            presentCommandResult(intent.name, outcome.result),
             generation,
           );
         }
@@ -391,6 +366,7 @@ export function App({
     [
       applyLocalResult,
       appendCommandResult,
+      appendPresentation,
       blockingSelection,
       controller,
       dispatch,
@@ -440,12 +416,22 @@ export function App({
         });
       }
       let outcome: CommandDispatchOutcome;
+      const finishProgress =
+        routed.kind === "command" && routed.intent.name === "compact"
+          ? beginProgress("compact", "Compressing context...", generation)
+          : undefined;
       try {
         outcome = optimisticMessage
           ? await controller.submit(routed, threadId, optimisticMessage.id)
           : await controller.submit(routed, threadId);
       } catch (error) {
         const failure = classifyTerminalActionError(error);
+        finishProgress?.({
+          kind: "progress",
+          title: "/compact",
+          message: `Context compression failed · ${failure.kind === "request" ? failure.message : "Protocol failure"}`,
+          tone: "error",
+        });
         if (
           failure.kind === "request" &&
           optimisticMessage &&
@@ -464,6 +450,19 @@ export function App({
           };
         }
         throw failure.kind === "fatal" ? failure.error : error;
+      }
+      if (finishProgress) {
+        if (outcome.kind === "result") {
+          finishProgress(presentCommandResult("compact", outcome.result));
+        } else if (outcome.kind === "error") {
+          finishProgress({
+            kind: "progress",
+            title: "/compact",
+            message: `Context compression failed · ${"error" in outcome ? outcome.error.message : outcome.code}`,
+            tone: "error",
+          });
+        }
+        return { accepted: true };
       }
       if (
         optimisticMessage &&
@@ -501,6 +500,7 @@ export function App({
     [
       applyCommandOutcome,
       appendCommandResult,
+      beginProgress,
       controller,
       dispatch,
       state.application?.current_thread_id,
@@ -1069,17 +1069,6 @@ function handleTerminalIntent(
       handlers.onLifecycle(input, key);
       break;
   }
-}
-
-function formatUsage(data: Readonly<Record<string, unknown>>): string {
-  const entries = Object.entries(data).filter(
-    (entry): entry is [string, number] =>
-      typeof entry[1] === "number" && entry[1] > 0,
-  );
-  if (entries.length === 0) return "No usage recorded yet.";
-  return entries
-    .map(([name, value]) => `${name.replaceAll("_", " ")}: ${value}`)
-    .join("\n");
 }
 
 function initialRuntimeUi(

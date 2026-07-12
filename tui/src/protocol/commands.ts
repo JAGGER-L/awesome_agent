@@ -17,7 +17,6 @@ export const applicationCommandNames = [
   "redo",
   "tools",
   "skills",
-  "skill",
   "mcp",
   "memory",
   "status",
@@ -27,13 +26,7 @@ export const applicationCommandNames = [
   "permissions",
 ] as const;
 
-export const skillCommandNames = [
-  "init",
-  "review",
-  "debug",
-  "test",
-  "commit",
-] as const;
+export const skillCommandNames = ["init"] as const;
 
 export const inkCommandNames = ["help", "theme", "copy", "quit"] as const;
 
@@ -86,7 +79,6 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   redo: "application",
   tools: "application",
   skills: "application",
-  skill: "application",
   mcp: "application",
   memory: "application",
   status: "application",
@@ -95,10 +87,6 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   config: "application",
   permissions: "application",
   init: "skill",
-  review: "skill",
-  debug: "skill",
-  test: "skill",
-  commit: "skill",
   help: "ink",
   theme: "ink",
   copy: "ink",
@@ -162,3 +150,5 @@ export const commandResultSchema = z
       });
     }
   });
+
+export type CommandResult = z.infer<typeof commandResultSchema>;

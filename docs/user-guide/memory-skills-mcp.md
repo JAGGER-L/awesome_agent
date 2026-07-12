@@ -37,10 +37,11 @@ discovers bundled Skills, user Skills under `<AWESOME_HOME>/skills/`, and
 trusted workspace Skills under `<workspace>/.awesome/skills/`. Invalid entries
 produce diagnostics rather than silently changing behavior.
 
-`/skills` lists the catalog. `/skill` shows or selects `auto`, `off`, or one
-named Skill for the thread. Skill bodies and resources are loaded on demand;
-they are not injected into every turn. Bundled `/init`, `/review`, `/debug`,
-`/test`, and `/commit` commands select a Skill and submit a normal task.
+`/skills` opens the catalog and selects `auto`, `off`, or one named Skill for
+the thread. You can also select directly with `/skills <name>`. Skill bodies
+and resources are loaded on demand; they are not injected into every turn.
+`/init` remains a shortcut for repository initialization. Other workflows use
+`/skills` or a natural-language request.
 
 ## MCP
 

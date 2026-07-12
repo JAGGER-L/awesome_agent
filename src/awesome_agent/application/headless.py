@@ -117,10 +117,6 @@ type Mem0StateChanged = Callable[[bool, Mem0Identity | None], None]
 
 _SKILL_COMMANDS = {
     CommandName.INIT: ("init", "Initialize durable workspace guidance."),
-    CommandName.REVIEW: ("review", "Review the current change."),
-    CommandName.DEBUG: ("debug", "Debug the current failure from evidence."),
-    CommandName.TEST: ("test", "Design and run focused validation."),
-    CommandName.COMMIT: ("git-workflow", "Prepare the current change for commit."),
 }
 
 
@@ -351,9 +347,7 @@ class ApplicationExtensionService:
         thread_id: str,
     ) -> CommandResult:
         if intent.name is CommandName.SKILLS:
-            return self._skills(intent)
-        if intent.name is CommandName.SKILL:
-            return self._skill(intent, thread_id)
+            return self._skills(intent, thread_id)
         if intent.name is CommandName.MCP:
             return await self._mcp(intent)
         if intent.name is CommandName.MEMORY:
@@ -611,9 +605,10 @@ class ApplicationExtensionService:
             "search <query>|remove <id>]",
         )
 
-    def _skills(self, intent: CommandIntent) -> CommandResult:
+    def _skills(self, intent: CommandIntent, thread_id: str) -> CommandResult:
         if intent.arguments:
-            return self._error("invalid_arguments", "Usage: /skills")
+            return self._select_skill(intent, thread_id)
+        current = self._conversation.read_thread(thread_id).thread.skill_mode
         effective = [
             {
                 "name": item.name,
@@ -635,46 +630,37 @@ class ApplicationExtensionService:
             status=CommandStatus.SUCCESS,
             data=cast(
                 dict[str, JsonValue],
-                {"effective": effective, "diagnostics": diagnostics},
+                {
+                    "effective": effective,
+                    "diagnostics": diagnostics,
+                    "skill_mode": current,
+                },
+            ),
+            selection=CommandSelection(
+                prompt="Select the Skill mode for future Turns.",
+                options=(
+                    CommandOption(
+                        value="auto", label="Auto", selected=current == "auto"
+                    ),
+                    CommandOption(value="off", label="Off", selected=current == "off"),
+                    *tuple(
+                        CommandOption(
+                            value=item.name,
+                            label=item.name,
+                            description=item.description,
+                            selected=current == item.name,
+                        )
+                        for item in self._catalog.descriptors()
+                    ),
+                ),
             ),
         )
 
-    def _skill(self, intent: CommandIntent, thread_id: str) -> CommandResult:
-        current = self._conversation.read_thread(thread_id).thread.skill_mode
-        if not intent.arguments:
-            options = (
-                CommandOption(
-                    value="auto",
-                    label="Auto",
-                    selected=current == "auto",
-                ),
-                CommandOption(
-                    value="off",
-                    label="Off",
-                    selected=current == "off",
-                ),
-                *tuple(
-                    CommandOption(
-                        value=item.name,
-                        label=item.name,
-                        description=item.description,
-                        selected=current == item.name,
-                    )
-                    for item in self._catalog.descriptors()
-                ),
-            )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={"skill_mode": current},
-                selection=CommandSelection(
-                    prompt="Select the Skill mode for future Turns.",
-                    options=options,
-                ),
-            )
+    def _select_skill(self, intent: CommandIntent, thread_id: str) -> CommandResult:
         if len(intent.arguments) != 1:
             return self._error(
                 "invalid_arguments",
-                "Usage: /skill [auto|off|name]",
+                "Usage: /skills [auto|off|name]",
             )
         selection = intent.arguments[0]
         if selection not in {"auto", "off"}:

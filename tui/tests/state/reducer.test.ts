@@ -147,8 +147,12 @@ describe("surfaceReducer", () => {
         key: "old-command",
         kind: "command_result",
         command: "usage",
-        tone: "info",
-        content: "old command result",
+        presentation: {
+          kind: "lines",
+          title: "/usage",
+          rows: [{ label: "", value: "old command result" }],
+          tone: "info",
+        },
       },
     });
 

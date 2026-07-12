@@ -57,8 +57,7 @@ export interface StatusBlock extends BlockBase {
 export interface CommandResultBlock extends BlockBase {
   readonly kind: "command_result";
   readonly command: string;
-  readonly tone: "info" | "warning" | "error";
-  readonly content: string;
+  readonly presentation: import("../commands/presenters.js").CommandPresentation;
 }
 export interface ErrorBlock extends BlockBase {
   readonly kind: "error";

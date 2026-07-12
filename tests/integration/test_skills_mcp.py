@@ -126,7 +126,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         submit_turn=submit_turn,
     )
     selected = await extensions.handle(
-        CommandIntent(name=CommandName.SKILL, arguments=("workspace-review",)),
+        CommandIntent(name=CommandName.SKILLS, arguments=("workspace-review",)),
         thread_id=thread.id,
     )
     assert selected.data["skill_mode"] == "workspace-review"
@@ -288,7 +288,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skill_commands_select_one_skill_and_submit_a_normal_turn(
+async def test_skills_select_mode_and_init_submits_a_normal_turn(
     tmp_path: Path,
 ) -> None:
     skill_root = tmp_path / "skills"
@@ -333,11 +333,11 @@ async def test_skill_commands_select_one_skill_and_submit_a_normal_turn(
         thread_id=thread.id,
     )
     picker = await service.handle(
-        CommandIntent(name=CommandName.SKILL),
+        CommandIntent(name=CommandName.SKILLS),
         thread_id=thread.id,
     )
-    committed = await service.handle(
-        CommandIntent(name=CommandName.COMMIT, arguments=("carefully",)),
+    initialized = await service.handle(
+        CommandIntent(name=CommandName.INIT, arguments=("carefully",)),
         thread_id=thread.id,
     )
 
@@ -354,8 +354,8 @@ async def test_skill_commands_select_one_skill_and_submit_a_normal_turn(
         "test",
         "git-workflow",
     }
-    assert committed.data["skill"] == "git-workflow"
-    assert conversation.read_thread(thread.id).thread.skill_mode == "git-workflow"
+    assert initialized.data["skill"] == "init"
+    assert conversation.read_thread(thread.id).thread.skill_mode == "init"
     assert submitted == [
-        (thread.id, "Prepare the current change for commit. carefully")
+        (thread.id, "Initialize durable workspace guidance. carefully")
     ]

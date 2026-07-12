@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 
 import { MarkdownBlock } from "../../../markdown/MarkdownBlock.js";
 import type { TranscriptBlock } from "../../../transcript/model.js";
+import { CommandResultView } from "../../CommandResultView.js";
 import { useTheme } from "../../theme.js";
 
 export function BlockView({
@@ -86,20 +87,7 @@ export function BlockView({
       return <Text color={theme.muted}>{block.message}</Text>;
     case "command_result":
       return (
-        <Box flexDirection="column">
-          <Text
-            color={
-              block.tone === "error"
-                ? theme.danger
-                : block.tone === "warning"
-                  ? theme.warning
-                  : theme.muted
-            }
-          >
-            /{block.command}
-          </Text>
-          <Text>{block.content}</Text>
-        </Box>
+        <CommandResultView presentation={block.presentation} width={width} />
       );
     case "error":
       return <Text color={theme.danger}>Error · {block.message}</Text>;
