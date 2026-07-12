@@ -4,7 +4,11 @@ import { RpcProtocolError, RpcValidationError } from "../protocol/client.js";
 import { ProtocolDesynchronized } from "../state/event-stream.js";
 
 export type FatalState =
-  | { readonly kind: "protocol"; readonly message: string }
+  | {
+      readonly kind: "protocol";
+      readonly message: string;
+      readonly diagnosticCode?: string;
+    }
   | {
       readonly kind: "core_exit";
       readonly exit: CoreExit;
@@ -42,7 +46,15 @@ export function toFatalState(
     error instanceof RpcProtocolError ||
     error instanceof ProtocolDesynchronized
   ) {
-    return { kind: "protocol", message: error.message };
+    const diagnosticCode =
+      error instanceof RpcProtocolError
+        ? protocolDiagnosticCode(error.data)
+        : undefined;
+    return {
+      kind: "protocol",
+      message: error.message,
+      ...(diagnosticCode === undefined ? {} : { diagnosticCode }),
+    };
   }
   if (isCoreExit(error)) {
     if (error.shutdown_requested && error.code === 0) return undefined;
@@ -59,6 +71,16 @@ export function toFatalState(
         ? "The terminal interface failed to render."
         : "The terminal interface failed unexpectedly.",
   };
+}
+
+function protocolDiagnosticCode(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  if (!("diagnostic_code" in value)) return undefined;
+  return typeof value.diagnostic_code === "string"
+    ? value.diagnostic_code
+    : undefined;
 }
 
 export function boundedStderrLines(bytes: Uint8Array): readonly string[] {

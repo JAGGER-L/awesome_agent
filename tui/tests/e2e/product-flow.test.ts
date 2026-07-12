@@ -185,9 +185,13 @@ describe("networkless candidate product flow", () => {
         startSurface: async (options) =>
           await connectSurface({ ...options, executable }),
         startApplication: beginStartup,
-        renderApplication: async ({ surface, intent, startup }) => {
+        renderApplication: async ({ surface, intent, state }) => {
           try {
             surfaceSeen = surface;
+            if (state.kind !== "startup") {
+              throw new Error("unexpected startup failure");
+            }
+            const { startup } = state;
             const ready = await trust(surface, intent, startup);
             expect(ready.readiness).toBe("agent_ready");
             expect(ready.thread.kind).toBe("ready");

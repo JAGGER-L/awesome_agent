@@ -74,10 +74,14 @@ export type CliRenderOutcome =
   | { readonly kind: "trust_denied"; readonly exitCode: 0 }
   | { readonly kind: "fatal"; readonly exitCode: 1 | 2 };
 
+export type StartupRenderState =
+  | { readonly kind: "startup"; readonly startup: StartupResult }
+  | { readonly kind: "fatal"; readonly fatal: FatalState };
+
 export interface CliRenderRequest {
   readonly surface: ConnectedSurface;
   readonly intent: LaunchIntent;
-  readonly startup: StartupResult;
+  readonly state: StartupRenderState;
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly clipboard: ClipboardAdapter;
@@ -155,12 +159,27 @@ export async function runCli(
     return 1;
   }
 
+  let state: StartupRenderState;
   try {
-    const startup = await dependencies.startApplication(surface, intent);
+    state = {
+      kind: "startup",
+      startup: await dependencies.startApplication(surface, intent),
+    };
+  } catch (error) {
+    const classified = toFatalState(error, surface.session);
+    state = {
+      kind: "fatal",
+      fatal: classified ?? {
+        kind: "render",
+        message: "The terminal interface failed unexpectedly.",
+      },
+    };
+  }
+  try {
     const outcome = await dependencies.renderApplication({
       surface,
       intent,
-      startup,
+      state,
       cwd,
       env: dependencies.env,
       clipboard: createClipboardAdapter(),
@@ -220,10 +239,77 @@ async function renderInkApplication(
   });
 }
 
-function CliApplication({
+type CliApplicationProps = CliRenderRequest & {
+  readonly awesomeHome: string;
+  readonly initialTheme: ThemePreference;
+  readonly preferenceWarning?: string;
+  readonly onFinish: (outcome: CliRenderOutcome) => void;
+  readonly unmount: () => void;
+};
+
+function CliApplication(props: CliApplicationProps) {
+  if (props.state.kind === "fatal") {
+    return <StartupFatalApplication {...props} state={props.state} />;
+  }
+  return <RunningCliApplication {...props} state={props.state} />;
+}
+
+function StartupFatalApplication({
+  surface,
+  state,
+  env,
+  initialTheme,
+  onFinish,
+}: CliApplicationProps & {
+  readonly state: Extract<StartupRenderState, { kind: "fatal" }>;
+}) {
+  const initial = initialTerminalUiState();
+  const terminal = useTerminalUi({
+    ...initial,
+    mode: { kind: "fatal", selected: 0 },
+  });
+  const theme = resolveTheme(
+    initialTheme,
+    detectColorCapability(env, process.stdout.isTTY === true),
+  );
+  const quit = useCallback(() => {
+    void surface
+      .close()
+      .catch(() => undefined)
+      .then(() => onFinish({ kind: "fatal", exitCode: 1 }));
+  }, [onFinish, surface]);
+  const handleInput = useCallback(
+    (input: string, key: TerminalKey) => {
+      const routed = routeTerminalKey(terminal.current.current, input, key);
+      if (!routed) return;
+      if (routed.type === "selection.confirm") {
+        quit();
+        return;
+      }
+      if (routed.type === "lifecycle.evaluate") quit();
+    },
+    [quit, terminal.current],
+  );
+  return (
+    <ThemeProvider value={theme}>
+      <TerminalInput onInput={handleInput} />
+      <FatalScreen
+        fatal={state.fatal}
+        selected={
+          terminal.state.mode.kind === "fatal"
+            ? terminal.state.mode.selected
+            : 0
+        }
+        startup
+      />
+    </ThemeProvider>
+  );
+}
+
+function RunningCliApplication({
   surface,
   intent,
-  startup: initialStartup,
+  state: { startup: initialStartup },
   env,
   clipboard,
   awesomeHome,
@@ -231,12 +317,8 @@ function CliApplication({
   preferenceWarning,
   onFinish,
   unmount,
-}: CliRenderRequest & {
-  readonly awesomeHome: string;
-  readonly initialTheme: ThemePreference;
-  readonly preferenceWarning?: string;
-  readonly onFinish: (outcome: CliRenderOutcome) => void;
-  readonly unmount: () => void;
+}: CliApplicationProps & {
+  readonly state: Extract<StartupRenderState, { kind: "startup" }>;
 }) {
   const [startup, setStartup] = useState(initialStartup);
   const terminal = useTerminalUi(initialStartupUi(initialStartup));

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CoreSpawnError } from "../../src/core/errors.js";
 import { runCli, type CliDependencies } from "../../src/cli/main.js";
+import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
 
@@ -207,5 +208,37 @@ describe("runCli", () => {
     await expect(runCli(value.dependencies)).resolves.toBe(1);
     expect(value.stderr.join("")).toContain("terminal interface failed");
     expect(value.stderr.join("")).not.toContain("private render details");
+  });
+
+  it("renders a startup rejection through the fatal surface", async () => {
+    const renderApplication = vi.fn(
+      async () => ({ kind: "fatal", exitCode: 1 }) as const,
+    );
+    const value = harness({
+      startApplication: vi.fn(async () => {
+        throw new RpcProtocolError(-32603, "Internal error", {
+          diagnostic_code: "core_request_failed",
+        });
+      }),
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+    expect(renderApplication).toHaveBeenCalledOnce();
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: {
+          kind: "fatal",
+          fatal: {
+            kind: "protocol",
+            message: "Internal error",
+            diagnosticCode: "core_request_failed",
+          },
+        },
+      }),
+    );
+    expect(value.stderr.join("")).not.toContain(
+      "The terminal interface failed unexpectedly.",
+    );
   });
 });

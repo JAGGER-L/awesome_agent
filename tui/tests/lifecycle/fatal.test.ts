@@ -41,6 +41,21 @@ describe("toFatalState", () => {
     });
   });
 
+  it("preserves only the stable diagnostic code for an internal response", () => {
+    expect(
+      toFatalState(
+        new RpcProtocolError(-32603, "Internal error", {
+          diagnostic_code: "core_request_failed",
+        }),
+        session(),
+      ),
+    ).toEqual({
+      kind: "protocol",
+      message: "Internal error",
+      diagnosticCode: "core_request_failed",
+    });
+  });
+
   it("classifies version incompatibility separately", () => {
     expect(
       toFatalState(
