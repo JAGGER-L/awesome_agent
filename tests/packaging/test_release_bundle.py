@@ -52,6 +52,22 @@ def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
     )
     wheel = root / "dist" / f"awesome_agent-{version}-py3-none-any.whl"
     wheel.parent.mkdir(exist_ok=True)
+    (root / "dist" / "release-requirements.txt").write_text(
+        "\n".join(
+            [
+                "langgraph==1.2.6 \\",
+                "    --hash=sha256:" + "a" * 64,
+                "mcp==1.28.1 \\",
+                "    --hash=sha256:" + "b" * 64,
+                "mem0ai==2.0.7 \\",
+                "    --hash=sha256:" + "c" * 64,
+                "openai==2.43.0 \\",
+                "    --hash=sha256:" + "d" * 64,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     with ZipFile(wheel, "w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("awesome_agent/__init__.py", "")
         archive.writestr(
@@ -91,6 +107,11 @@ def test_bundle_requires_wheel_and_compiled_tui(tmp_path: Path) -> None:
     wheel = _fixture(tmp_path)
     (tmp_path / "tui" / "dist" / "cli" / "index.js").unlink()
     with pytest.raises(BundleError, match="TUI"):
+        assemble_bundle(tmp_path, "1.0.0")
+
+    _fixture(tmp_path)
+    (tmp_path / "dist" / "release-requirements.txt").unlink()
+    with pytest.raises(BundleError, match="requirements"):
         assemble_bundle(tmp_path, "1.0.0")
 
 
@@ -140,6 +161,7 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
         assert archive.namelist() == [
             "awesome-1.0.0/VERSION",
             "awesome-1.0.0/core/awesome_agent-1.0.0-py3-none-any.whl",
+            "awesome-1.0.0/core/requirements.lock",
             "awesome-1.0.0/tui/LICENSE",
             "awesome-1.0.0/tui/dist/cli/index.js",
             "awesome-1.0.0/tui/package-lock.json",
@@ -151,6 +173,9 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
         wheel_name = "awesome-1.0.0/core/awesome_agent-1.0.0-py3-none-any.whl"
         with archive.open(wheel_name) as wheel_stream:
             assert wheel_stream.read(2) == b"PK"
+        constraints = archive.read("awesome-1.0.0/core/requirements.lock")
+        assert b"langgraph==1.2.6" in constraints
+        assert b"--hash=sha256:" in constraints
 
 
 @pytest.mark.parametrize(

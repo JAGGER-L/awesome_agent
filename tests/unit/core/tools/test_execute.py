@@ -60,6 +60,8 @@ class RecordingProcessRunner(ProcessRunner):
 def execute_fixture(
     tmp_path: Path,
     runner: ShellExecutionBackend,
+    *,
+    origin: ToolExecutionOrigin = ToolExecutionOrigin.AGENT,
 ) -> tuple[ToolExecutor, ToolExecutionContext, ChangeJournal, Path]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -80,8 +82,8 @@ def execute_fixture(
         workspace=identity,
         thread_id="thread_1",
         operation_id="operation_1",
-        turn_id="turn_1",
-        origin=ToolExecutionOrigin.AGENT,
+        turn_id="turn_1" if origin is ToolExecutionOrigin.AGENT else None,
+        origin=origin,
         emitter=EventEmitter(
             session_id="session_1",
             workspace_key=identity.key,
@@ -102,7 +104,33 @@ def test_command_policy_denies_host_destructive_commands(tmp_path: Path) -> None
         decision = evaluate_command(command, workspace)
         assert decision.action is CommandPolicyAction.DENY
 
-    assert evaluate_command("pytest", workspace).action is CommandPolicyAction.ALLOW
+    assert (
+        evaluate_command("pytest", workspace).action
+        is CommandPolicyAction.INTERACTION_REQUIRED
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf ../outside",
+        "echo ok && sudo pytest",
+        'sh -c "rm -rf ../outside"',
+        "python -c \"from pathlib import Path; Path('../outside').unlink()\"",
+        "echo data > ../outside",
+    ],
+)
+def test_command_policy_never_implicitly_allows_shell_bypasses(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert evaluate_command(command, workspace).action in {
+        CommandPolicyAction.DENY,
+        CommandPolicyAction.INTERACTION_REQUIRED,
+    }
 
 
 def test_command_policy_returns_stable_scope_for_outside_path(tmp_path: Path) -> None:
@@ -117,6 +145,51 @@ def test_command_policy_returns_stable_scope_for_outside_path(tmp_path: Path) ->
     assert first.action is CommandPolicyAction.INTERACTION_REQUIRED
     assert first.scope == second.scope
     assert first.scope is not None
+    assert first.scope != evaluate_command(f"type {outside}", workspace).scope
+
+
+@pytest.mark.asyncio
+async def test_agent_execute_requires_allow_once_for_simple_command(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingProcessRunner()
+    executor, context, _, _ = execute_fixture(tmp_path, runner)
+
+    with pytest.raises(InteractionRequired):
+        await executor.execute(
+            ToolRequest(
+                call_id="call_execute",
+                tool_name="execute",
+                arguments={"command": "pytest"},
+            ),
+            context=context,
+        )
+
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
+async def test_direct_execute_is_already_explicit_user_authority(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingProcessRunner()
+    executor, context, _, _ = execute_fixture(
+        tmp_path,
+        runner,
+        origin=ToolExecutionOrigin.DIRECT,
+    )
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_execute",
+            tool_name="execute",
+            arguments={"command": "pytest"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert len(runner.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -142,6 +215,12 @@ async def test_execute_strips_secrets_redacts_and_records_observation(
     )
     command = f'"{sys.executable}" -c "{script}"'
 
+    decision = evaluate_command(command, workspace)
+    assert decision.scope is not None
+    context = replace(
+        context,
+        allowed_interaction_scopes=frozenset({decision.scope}),
+    )
     result = await executor.execute(
         ToolRequest(
             call_id="call_execute",

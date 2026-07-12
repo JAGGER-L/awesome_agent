@@ -797,6 +797,30 @@ class _LocalApplicationBackend:
             turn_id = turn.id
             budgets = turn.budgets
 
+            async def resolve_tool_interaction(scope: str, prompt: str) -> bool:
+                pending = self._interactions.create(
+                    kind=InteractionKind.EXECUTE_BOUNDARY,
+                    prompt=prompt,
+                    choices=(
+                        InteractionDecision.ALLOW_ONCE,
+                        InteractionDecision.DENY,
+                    ),
+                    scope=scope,
+                )
+                await self._emitter.emit(
+                    InteractionRequiredPayload(
+                        interaction_id=pending.id,
+                        interaction_kind="execute_boundary",
+                        prompt=pending.prompt,
+                        choices=tuple(choice.value for choice in pending.choices),
+                    ),
+                    thread_id=turn.thread_id,
+                    turn_id=turn_id,
+                    operation_id=operation_id,
+                )
+                decision = await self._interactions.wait(pending.id)
+                return decision is InteractionDecision.ALLOW_ONCE
+
             def tool_context(state: object) -> ToolExecutionContext:
                 assert self._change_scope is not None
                 return ToolExecutionContext(
@@ -812,6 +836,7 @@ class _LocalApplicationBackend:
                         turn_id,
                         turn_id=turn_id,
                     ),
+                    interaction_resolver=resolve_tool_interaction,
                 )
 
             post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()

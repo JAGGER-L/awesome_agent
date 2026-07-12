@@ -140,17 +140,29 @@ class UserSecretStore:
             return True
 
     def _write(self, lines: list[str]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if os.name != "nt":
+            os.chmod(self._path.parent, stat.S_IRWXU)
         temporary = self._path.parent / f".{self._path.name}.{uuid4().hex}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        descriptor = os.open(
+            temporary,
+            flags,
+            stat.S_IRUSR | stat.S_IWUSR,
+        )
         try:
-            with temporary.open("x", encoding="utf-8", newline="") as stream:
+            stream = os.fdopen(descriptor, "w", encoding="utf-8", newline="")
+            descriptor = -1
+            with stream:
                 stream.writelines(lines)
                 stream.flush()
                 os.fsync(stream.fileno())
-            if os.name != "nt":
-                os.chmod(temporary, stat.S_IRUSR | stat.S_IWUSR)
             os.replace(temporary, self._path)
         finally:
+            if descriptor >= 0:
+                os.close(descriptor)
             temporary.unlink(missing_ok=True)
 
 

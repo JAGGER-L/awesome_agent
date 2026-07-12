@@ -122,14 +122,14 @@ def evaluate_command(command: str, workspace: Path) -> CommandPolicyDecision:
         if not resolved.is_relative_to(workspace):
             detected.append(resolved)
 
-    if detected:
-        normalized = "\n".join(sorted(os.path.normcase(str(path)) for path in detected))
-        scope = (
-            f"execute_boundary_{hashlib.sha256(normalized.encode()).hexdigest()[:24]}"
-        )
-        return CommandPolicyDecision(
-            CommandPolicyAction.INTERACTION_REQUIRED,
-            "Command references an absolute path outside the workspace.",
-            scope=scope,
-        )
-    return CommandPolicyDecision(CommandPolicyAction.ALLOW, "Command is allowed.")
+    scope = f"execute_command_{hashlib.sha256(command.encode()).hexdigest()[:24]}"
+    reason = (
+        "Command references an absolute path outside the workspace."
+        if detected
+        else "Agent shell commands require explicit approval."
+    )
+    return CommandPolicyDecision(
+        CommandPolicyAction.INTERACTION_REQUIRED,
+        reason,
+        scope=scope,
+    )

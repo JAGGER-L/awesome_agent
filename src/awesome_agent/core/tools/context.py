@@ -13,6 +13,8 @@ from awesome_agent.core.tools.contracts import (
 )
 from awesome_agent.core.workspace import WorkspaceIdentity
 
+type ToolInteractionResolver = Callable[[str, str], Awaitable[bool]]
+
 
 @dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
@@ -26,6 +28,7 @@ class ToolExecutionContext:
     monotonic: Callable[[], float]
     change_set_id: str | None = None
     allowed_interaction_scopes: frozenset[str] = frozenset()
+    interaction_resolver: ToolInteractionResolver | None = None
     turn_active: bool = True
 
     def __post_init__(self) -> None:

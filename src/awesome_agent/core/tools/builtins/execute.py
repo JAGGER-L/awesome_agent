@@ -12,8 +12,15 @@ from awesome_agent.core.tools.command_policy import (
     InteractionRequired,
     evaluate_command,
 )
-from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
+from awesome_agent.core.tools.context import (
+    ToolExecutionContext,
+    ToolHandler,
+)
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolExecutionOrigin,
+    ToolOutput,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
 from awesome_agent.core.tools.policy import resolve_workspace_path
 from awesome_agent.core.tools.process import ShellExecutionBackend
@@ -78,7 +85,10 @@ def create_execute_handler(
                 ToolErrorCode.PERMISSION_DENIED,
                 decision.reason,
             )
-        if decision.action is CommandPolicyAction.INTERACTION_REQUIRED:
+        if (
+            context.origin is ToolExecutionOrigin.AGENT
+            and decision.action is CommandPolicyAction.INTERACTION_REQUIRED
+        ):
             assert decision.scope is not None
             if decision.scope not in context.allowed_interaction_scopes:
                 raise InteractionRequired(

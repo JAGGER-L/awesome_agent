@@ -5,8 +5,9 @@ Awesome 1.0.0 is published as a manual GitHub Release.
 1. Confirm the release branch is clean and contains the intended changes.
 2. Run the complete [Release Gate](testing.md#release-gate).
 3. Run `uv run python scripts/release/build_bundle.py` and inspect
-   `dist/release`.
-4. Test installation and first run on macOS, Windows, and WSL2 Ubuntu: open a
+   `dist/release`. Confirm the ZIP contains the hashed production requirements
+   exported from the checked `uv.lock`.
+4. For this pilot, test installation and first run directly on Windows: open a
    new terminal, check version/help, confirm workspace trust, complete one local
    workflow, close Awesome, and rerun the installer.
 5. With credentials kept outside the repository, run one small DeepSeek Turn,

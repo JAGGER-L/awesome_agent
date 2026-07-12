@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Literal
 
 from pydantic import JsonValue, ValidationError
 
 from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedPayload
+from awesome_agent.core.tools.command_policy import InteractionRequired
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
@@ -69,8 +71,40 @@ class ToolExecutor:
             )
         try:
             arguments = registered.input_model.model_validate(request.arguments)
-            async with asyncio.timeout(self._timeout_seconds):
-                output = await registered.handler(arguments, context)
+            execution_context = context
+            interaction_attempted = False
+            while True:
+                try:
+                    async with asyncio.timeout(self._timeout_seconds):
+                        output = await registered.handler(
+                            arguments,
+                            execution_context,
+                        )
+                    break
+                except InteractionRequired as interaction:
+                    resolver = context.interaction_resolver
+                    if resolver is None:
+                        raise
+                    if interaction_attempted:
+                        raise ToolInvariantError(
+                            "Tool requested the same interaction more than once."
+                        ) from interaction
+                    interaction_attempted = True
+                    allowed = await resolver(interaction.scope, interaction.prompt)
+                    if not allowed:
+                        return await self._error_result(
+                            request,
+                            context,
+                            started,
+                            ToolErrorCode.PERMISSION_DENIED,
+                            "Command execution was denied.",
+                        )
+                    execution_context = replace(
+                        context,
+                        allowed_interaction_scopes=(
+                            context.allowed_interaction_scopes | {interaction.scope}
+                        ),
+                    )
         except asyncio.CancelledError:
             await self._finalize(
                 request,

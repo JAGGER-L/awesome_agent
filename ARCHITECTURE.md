@@ -183,8 +183,11 @@ Model ToolCall
     -> bounded activity summary + Agent observation
 ```
 
-File-changing built-ins write through the Change Journal. `execute` runs in the
-workspace on the host and may produce effects the journal cannot reverse.
+File-changing built-ins write through the Change Journal. `execute` runs on the
+host and is not a sandbox: every Agent-originated shell command requires an
+explicit `allow_once` decision. A command entered directly with `!` is already
+explicit user authority. Shell effects may escape the workspace and cannot be
+reversed by the journal.
 
 ### Slash command
 
@@ -317,8 +320,9 @@ only external memory adapter currently supported.
 
 ### Safety
 
-- **Responsibility:** workspace containment, sensitive-path rejection, command
-  policy, redaction, tool output bounds, and explicit outside-path interaction.
+- **Responsibility:** workspace containment for file tools, sensitive-path
+  rejection, explicit approval for Agent shell execution, command policy,
+  redaction, and tool output bounds.
 - **Primary files:** `core/tools/policy.py`, `core/tools/command_policy.py`,
   `safety/redaction.py`.
 

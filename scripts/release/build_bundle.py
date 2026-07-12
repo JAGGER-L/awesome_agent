@@ -13,6 +13,7 @@ _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\n\Z")
 _ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _FORBIDDEN_PARTS = {"__pycache__", "tests", ".env"}
 _FORBIDDEN_SUFFIXES = {".map", ".pyc", ".pyo", ".ts", ".tsx"}
+_RELEASE_REQUIREMENTS = "release-requirements.txt"
 
 
 class BundleError(RuntimeError):
@@ -115,6 +116,25 @@ def _installer_assets(root: Path, version: str) -> dict[str, bytes]:
     return assets
 
 
+def _locked_requirements(root: Path) -> bytes:
+    path = root / "dist" / _RELEASE_REQUIREMENTS
+    try:
+        content = path.read_bytes()
+        rendered = content.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise BundleError(
+            "locked release requirements are missing or invalid"
+        ) from error
+    required = ("langgraph==", "mcp==", "mem0ai==", "openai==")
+    if not content or any(name not in rendered for name in required):
+        raise BundleError("locked release requirements are incomplete")
+    if "--hash=sha256:" not in rendered:
+        raise BundleError("locked release requirements must include hashes")
+    if any(marker in rendered for marker in ("file://", "-e ", "--editable")):
+        raise BundleError("locked release requirements contain local dependencies")
+    return content
+
+
 def _write_member(archive: ZipFile, name: str, content: bytes) -> None:
     info = ZipInfo(name, date_time=_ZIP_TIME)
     info.compress_type = ZIP_DEFLATED
@@ -128,6 +148,7 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
     installers = _installer_assets(root, version)
     wheel = root / "dist" / f"awesome_agent-{version}-py3-none-any.whl"
     _validate_wheel(wheel, version)
+    requirements = _locked_requirements(root)
     tui_dist = _tui_dist_files(root)
     tui = root / "tui"
     required = (tui / "package.json", tui / "package-lock.json", tui / "LICENSE")
@@ -145,6 +166,7 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
     members: dict[str, bytes] = {
         f"{prefix}/VERSION": (root / "VERSION").read_bytes(),
         f"{prefix}/core/{wheel.name}": wheel.read_bytes(),
+        f"{prefix}/core/requirements.lock": requirements,
         f"{prefix}/tui/LICENSE": (tui / "LICENSE").read_bytes(),
         f"{prefix}/tui/package-lock.json": (tui / "package-lock.json").read_bytes(),
         f"{prefix}/tui/package.json": (tui / "package.json").read_bytes(),
@@ -178,6 +200,21 @@ def build_bundle(root: Path) -> BundleResult:
     validate_version_files(root, version)
     _run(root, "node", "tui/scripts/sync-version.mjs", "--check")
     _run(root, "uv", "build", "--wheel")
+    _run(
+        root,
+        "uv",
+        "export",
+        "--quiet",
+        "--locked",
+        "--format",
+        "requirements-txt",
+        "--no-dev",
+        "--extra",
+        "memory",
+        "--no-emit-project",
+        "--output-file",
+        f"dist/{_RELEASE_REQUIREMENTS}",
+    )
     _run(root, "npm", "--prefix", "tui", "ci")
     _run(root, "npm", "--prefix", "tui", "run", "build")
     return assemble_bundle(root, version)
