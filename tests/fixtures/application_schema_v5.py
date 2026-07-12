@@ -1,13 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from pathlib import Path
-
-APPLICATION_SCHEMA_VERSION = 6
-
-type Migration = str | Callable[[sqlite3.Connection], None]
 
 _MIGRATION_1 = """
 CREATE TABLE trusted_workspaces (
@@ -48,7 +42,7 @@ CREATE TABLE pending_mutations (
 );
 """
 
-_MIGRATION_3 = """
+_MIGRATION_3_PREFIX = """
 CREATE TABLE threads (
     thread_id TEXT PRIMARY KEY,
     workspace_key TEXT NOT NULL,
@@ -61,7 +55,9 @@ CREATE TABLE threads (
 );
 CREATE INDEX idx_threads_workspace_updated
 ON threads (workspace_key, updated_at DESC);
+"""
 
+_V10_THREAD_ENTRIES = """
 CREATE TABLE thread_entries (
     entry_id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL REFERENCES threads(thread_id) ON DELETE CASCADE,
@@ -74,6 +70,30 @@ CREATE TABLE thread_entries (
     created_at TEXT NOT NULL,
     UNIQUE (thread_id, entry_id)
 );
+"""
+
+_V11_THREAD_ENTRIES = """
+CREATE TABLE thread_entries (
+    entry_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES threads(thread_id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK (sequence >= 1),
+    kind TEXT NOT NULL CHECK (
+        kind IN ('user_message', 'assistant_message', 'direct_command')
+    ),
+    content TEXT NOT NULL,
+    client_message_id TEXT,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK (
+        (kind = 'user_message' AND client_message_id IS NOT NULL)
+        OR (kind <> 'user_message' AND client_message_id IS NULL)
+    ),
+    UNIQUE (thread_id, entry_id),
+    UNIQUE (thread_id, client_message_id)
+);
+"""
+
+_MIGRATION_3_SUFFIX = """
 CREATE UNIQUE INDEX idx_thread_entries_sequence
 ON thread_entries (thread_id, sequence);
 
@@ -170,146 +190,117 @@ ON tool_activities (thread_id, operation_id)
 """
 
 
-def _migration_6(connection: sqlite3.Connection) -> None:
-    columns = {
-        str(row[1]) for row in connection.execute("PRAGMA table_info(thread_entries)")
-    }
-    if "client_message_id" not in columns:
-        connection.execute(
-            "ALTER TABLE thread_entries ADD COLUMN client_message_id TEXT"
-        )
-    connection.execute(
-        """
-        UPDATE thread_entries
-        SET client_message_id = 'client_legacy_' || entry_id
-        WHERE kind = 'user_message' AND client_message_id IS NULL
-        """
-    )
-    connection.execute(
-        """
-        UPDATE thread_entries
-        SET client_message_id = NULL
-        WHERE kind <> 'user_message' AND client_message_id IS NOT NULL
-        """
-    )
-    invalid = connection.execute(
-        """
-        SELECT entry_id FROM thread_entries
-        WHERE (kind = 'user_message' AND client_message_id IS NULL)
-           OR (kind <> 'user_message' AND client_message_id IS NOT NULL)
-        LIMIT 1
-        """
-    ).fetchone()
-    if invalid is not None:
-        raise sqlite3.IntegrityError("thread entry client identity is invalid")
-    connection.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_entries_client_message
-        ON thread_entries (thread_id, client_message_id)
-        WHERE client_message_id IS NOT NULL
-        """
-    )
-    connection.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS trg_thread_entries_client_identity_insert
-        BEFORE INSERT ON thread_entries
-        WHEN (NEW.kind = 'user_message' AND NEW.client_message_id IS NULL)
-          OR (NEW.kind <> 'user_message' AND NEW.client_message_id IS NOT NULL)
-        BEGIN
-            SELECT RAISE(ABORT, 'thread entry client identity is invalid');
-        END
-        """
-    )
-    connection.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS trg_thread_entries_client_identity_update
-        BEFORE UPDATE OF kind, client_message_id ON thread_entries
-        WHEN (NEW.kind = 'user_message' AND NEW.client_message_id IS NULL)
-          OR (NEW.kind <> 'user_message' AND NEW.client_message_id IS NOT NULL)
-        BEGIN
-            SELECT RAISE(ABORT, 'thread entry client identity is invalid');
-        END
-        """
-    )
+def create_v10_schema_v5(path: Path) -> None:
+    _create_schema_v5(path, thread_entries=_V10_THREAD_ENTRIES)
 
 
-_MIGRATIONS: dict[int, Migration] = {
-    1: _MIGRATION_1,
-    2: _MIGRATION_2,
-    3: _MIGRATION_3,
-    4: _MIGRATION_4,
-    5: _MIGRATION_5,
-    6: _migration_6,
-}
+def create_v11_schema_v5(path: Path) -> None:
+    _create_schema_v5(path, thread_entries=_V11_THREAD_ENTRIES)
 
 
-class ApplicationSchemaTooNew(RuntimeError):
-    def __init__(self, *, found: int, supported: int) -> None:
-        super().__init__(
-            f"Application state schema {found} is newer than supported {supported}."
-        )
-        self.found = found
-        self.supported = supported
-
-
-def _connect(path: Path) -> sqlite3.Connection:
-    database_path = path.expanduser().resolve()
-    database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path, timeout=5.0)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA synchronous = NORMAL")
-    return connection
-
-
-def initialize_application_database(path: Path) -> None:
-    connection = _connect(path)
-    try:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version > APPLICATION_SCHEMA_VERSION:
-            raise ApplicationSchemaTooNew(
-                found=version,
-                supported=APPLICATION_SCHEMA_VERSION,
+def _create_schema_v5(path: Path, *, thread_entries: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    migration_3 = _MIGRATION_3_PREFIX + thread_entries + _MIGRATION_3_SUFFIX
+    migrations = (_MIGRATION_1, _MIGRATION_2, migration_3, _MIGRATION_4, _MIGRATION_5)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        for version, migration in enumerate(migrations, start=1):
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n"
+                f"{migration.rstrip().rstrip(';')};\n"
+                f"PRAGMA user_version = {version};\n"
+                "COMMIT;"
             )
-        for target_version in range(version + 1, APPLICATION_SCHEMA_VERSION + 1):
-            _apply_migration(connection, target_version, _MIGRATIONS[target_version])
-    finally:
-        connection.close()
-
-
-def _apply_migration(
-    connection: sqlite3.Connection,
-    target_version: int,
-    migration: Migration,
-) -> None:
-    if isinstance(migration, str):
-        script = (
-            "BEGIN IMMEDIATE;\n"
-            f"{migration.rstrip().rstrip(';')};\n"
-            f"PRAGMA user_version = {target_version};\n"
-            "COMMIT;"
+        _seed_released_state(
+            connection,
+            include_client_identity=thread_entries == _V11_THREAD_ENTRIES,
         )
-        connection.executescript(script)
-        return
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        migration(connection)
-        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-            raise sqlite3.IntegrityError("foreign key check failed")
-        connection.execute(f"PRAGMA user_version = {target_version}")
-        connection.commit()
-    except BaseException:
-        connection.rollback()
-        raise
 
 
-@contextmanager
-def application_connection(path: Path) -> Iterator[sqlite3.Connection]:
-    initialize_application_database(path)
-    connection = _connect(path)
-    try:
-        yield connection
-    finally:
-        connection.close()
+def _seed_released_state(
+    connection: sqlite3.Connection,
+    *,
+    include_client_identity: bool,
+) -> None:
+    connection.execute(
+        "INSERT INTO trusted_workspaces VALUES (?, ?, ?)",
+        ("workspace_existing", "E:/release-smoke", "2026-07-12T00:00:00+00:00"),
+    )
+    connection.execute(
+        "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "thread_existing",
+            "workspace_existing",
+            "Existing",
+            "deepseek/deepseek-v4-pro",
+            0,
+            "auto",
+            "2026-07-12T00:00:00+00:00",
+            "2026-07-12T00:00:01+00:00",
+        ),
+    )
+    columns = "" if not include_client_identity else ", client_message_id"
+    placeholders = "" if not include_client_identity else ", ?"
+    connection.execute(
+        f"""
+        INSERT INTO thread_entries (
+            entry_id, thread_id, sequence, kind, content,
+            metadata_json, created_at{columns}
+        ) VALUES (?, ?, ?, ?, ?, ?, ?{placeholders})
+        """,
+        (
+            "entry_user",
+            "thread_existing",
+            1,
+            "user_message",
+            "hello",
+            "{}",
+            "2026-07-12T00:00:00+00:00",
+            *(("client_existing",) if include_client_identity else ()),
+        ),
+    )
+    connection.execute(
+        f"""
+        INSERT INTO thread_entries (
+            entry_id, thread_id, sequence, kind, content,
+            metadata_json, created_at{columns}
+        ) VALUES (?, ?, ?, ?, ?, ?, ?{placeholders})
+        """,
+        (
+            "entry_assistant",
+            "thread_existing",
+            2,
+            "assistant_message",
+            "hello back",
+            "{}",
+            "2026-07-12T00:00:01+00:00",
+            *((None,) if include_client_identity else ()),
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO turns VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        )
+        """,
+        (
+            "turn_existing",
+            "thread_existing",
+            "turn_existing",
+            "completed",
+            "deepseek",
+            "deepseek/deepseek-v4-pro",
+            0,
+            "auto",
+            "{}",
+            "entry_user",
+            "entry_assistant",
+            "{}",
+            "completed",
+            None,
+            "[]",
+            "2026-07-12T00:00:00+00:00",
+            "2026-07-12T00:00:01+00:00",
+            "2026-07-12T00:00:01+00:00",
+        ),
+    )
