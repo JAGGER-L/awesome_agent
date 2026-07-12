@@ -213,7 +213,6 @@ describe("surfaceReducer", () => {
       },
     });
     expect(state.active_operation?.turn?.timeline).toEqual([
-      expect.objectContaining({ kind: "thinking", duration_ms: 1_000 }),
       expect.objectContaining({ kind: "assistant", text: "hello" }),
     ]);
     expect(state.event_sequence).toBe(4);
@@ -274,7 +273,7 @@ describe("surfaceReducer", () => {
     expect(new Set(assistants?.map((item) => item.id)).size).toBe(2);
   });
 
-  it("preserves thinking, tool, thinking, and answer order with independent durations", () => {
+  it("measures only provider-emitted reasoning boundaries", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "event.received",
       generation: 0,
@@ -289,10 +288,27 @@ describe("surfaceReducer", () => {
       },
     });
     state = surfaceReducer(state, {
+      type: "delta.received",
+      generation: 0,
+      delta: {
+        kind: "coalesced_delta",
+        session_id: "session_1",
+        thread_id: "thread_1",
+        turn_id: "turn_1",
+        operation_id: "operation_1",
+        delta_kind: "reasoning",
+        text: "considering",
+        first_timestamp: "2026-07-11T08:00:01Z",
+        last_timestamp: "2026-07-11T08:00:01.500Z",
+        first_sequence: 3,
+        last_sequence: 3,
+      },
+    });
+    state = surfaceReducer(state, {
       type: "event.received",
       generation: 0,
       event: {
-        ...lifecycle(3, "warning"),
+        ...lifecycle(4, "warning"),
         event_type: "tool.started",
         timestamp: "2026-07-11T08:00:02Z",
         payload: {
@@ -308,7 +324,7 @@ describe("surfaceReducer", () => {
       type: "event.received",
       generation: 0,
       event: {
-        ...lifecycle(4, "warning"),
+        ...lifecycle(5, "warning"),
         event_type: "tool.completed",
         timestamp: "2026-07-11T08:00:02.018Z",
         payload: {
@@ -336,15 +352,15 @@ describe("surfaceReducer", () => {
         text: "done",
         first_timestamp: "2026-07-11T08:00:03Z",
         last_timestamp: "2026-07-11T08:00:03Z",
-        first_sequence: 5,
-        last_sequence: 5,
+        first_sequence: 6,
+        last_sequence: 6,
       },
     });
     state = surfaceReducer(state, {
       type: "event.received",
       generation: 0,
       event: {
-        ...lifecycle(6, "turn.completed"),
+        ...lifecycle(7, "turn.completed"),
         timestamp: "2026-07-11T08:00:05Z",
         payload: {
           kind: "turn.completed",
@@ -357,12 +373,47 @@ describe("surfaceReducer", () => {
     expect(state.active_operation?.turn).toMatchObject({
       duration_ms: 5_000,
       timeline: [
-        { kind: "thinking", duration_ms: 2_000 },
+        { kind: "thinking", duration_ms: 1_000 },
         { kind: "tool", outcome: "Created", duration_ms: 18 },
-        { kind: "thinking", duration_ms: 982 },
         { kind: "assistant", text: "done" },
       ],
     });
+  });
+
+  it("does not fabricate a Thought marker without reasoning deltas", () => {
+    let state = surfaceReducer(initialSurfaceState(), {
+      type: "event.received",
+      generation: 0,
+      event: lifecycle(1, "operation.started"),
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: lifecycle(2, "turn.started"),
+    });
+    state = surfaceReducer(state, {
+      type: "delta.received",
+      generation: 0,
+      delta: {
+        kind: "coalesced_delta",
+        session_id: "session_1",
+        thread_id: "thread_1",
+        turn_id: "turn_1",
+        operation_id: "operation_1",
+        delta_kind: "text",
+        text: "done",
+        first_timestamp: "2026-07-11T08:00:03Z",
+        last_timestamp: "2026-07-11T08:00:03Z",
+        first_sequence: 3,
+        last_sequence: 3,
+      },
+    });
+
+    expect(
+      state.active_operation?.turn?.timeline.filter(
+        (item) => item.kind === "thinking",
+      ),
+    ).toEqual([]);
   });
 
   it("enters fatal state for terminal-before-start and duplicate terminals", () => {

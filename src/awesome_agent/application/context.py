@@ -142,7 +142,12 @@ class ApplicationContextService:
             )
         ]
         if self._model_identity is not None:
-            sources.append(model_identity_context_source(self._model_identity(turn)))
+            sources.append(
+                model_identity_context_source(
+                    self._model_identity(turn),
+                    workspace_path=str(self._workspace.canonical_path),
+                )
+            )
         if self._workspace_instructions:
             sources.append(
                 ContextSource(
