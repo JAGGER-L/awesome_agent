@@ -4,13 +4,14 @@ from pathlib import Path
 import pytest
 
 from awesome_agent.extensions.skills import (
+    SkillCatalog,
     SkillLoader,
     SkillResourceError,
     discover_skills,
 )
 
 
-def _catalog(tmp_path: Path):
+def _catalog(tmp_path: Path) -> SkillCatalog:
     root = tmp_path / "skills"
     skill = root / "review"
     skill.mkdir(parents=True)

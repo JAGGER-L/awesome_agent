@@ -5,15 +5,18 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError, NodeCancelledError
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
+    AgentState,
     PreparedAgentContext,
     TurnBudget,
     compile_agent_graph,
     new_agent_state,
+    validate_agent_state,
 )
 from awesome_agent.core.tools import (
     ToolError,
@@ -105,6 +108,9 @@ class FakeProjector:
     async def project_warning(self, *, code: str, message: str) -> None:
         del code, message
 
+    async def project_memory_status(self, *, enabled: bool, status: str) -> None:
+        del enabled, status
+
 
 def _completed(
     content: str,
@@ -172,33 +178,34 @@ class _Monotonic:
         return self._value
 
 
-def _state() -> dict[str, object]:
-    return dict(
-        new_agent_state(
-            thread_id="thread_1",
-            turn_id="turn_1",
-            workspace_key="workspace_1",
-            provider="deepseek",
-            model="deepseek/deepseek-v4-flash",
-            thinking_enabled=False,
-        )
+def _state() -> AgentState:
+    return new_agent_state(
+        thread_id="thread_1",
+        turn_id="turn_1",
+        workspace_key="workspace_1",
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+        thinking_enabled=False,
     )
 
 
 async def _invoke(
     runtime: AgentRuntimeContext,
     *,
-    state: dict[str, object] | None = None,
+    state: AgentState | None = None,
     recursion_limit: int = 2_048,
-) -> dict[str, object]:
+) -> AgentState:
     graph = compile_agent_graph(InMemorySaver())
-    return await graph.ainvoke(
-        state or _state(),
-        config={
-            "configurable": {"thread_id": "turn_1"},
-            "recursion_limit": recursion_limit,
-        },
-        context=runtime,
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "turn_1"},
+        "recursion_limit": recursion_limit,
+    }
+    return validate_agent_state(
+        await graph.ainvoke(
+            state or _state(),
+            config=config,
+            context=runtime,
+        )
     )
 
 
@@ -423,7 +430,7 @@ async def test_zero_retry_and_compression_budgets_still_allow_normal_calls() -> 
 
 @pytest.mark.asyncio
 async def test_graph_does_not_mutate_caller_owned_state_lists() -> None:
-    initial = cast(dict[str, object], _state())
+    initial = _state()
     original_messages = list(cast(list[object], initial["messages"]))
 
     await _invoke(_runtime(FakeGateway(((_completed("done"),),))), state=initial)

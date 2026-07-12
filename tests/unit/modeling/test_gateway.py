@@ -12,8 +12,11 @@ from awesome_agent.modeling import (
     ModelErrorInfo,
     ModelGateway,
     ModelIdentitySnapshot,
+    ModelProvider,
     ModelRequest,
+    ModelStreamEvent,
     ModelTurn,
+    ProviderId,
     ProviderProtocolError,
     ProviderRetrying,
     ReasoningDelta,
@@ -78,23 +81,23 @@ def _failure(code: ModelErrorCode) -> TurnFailed:
     )
 
 
-class ScriptedProvider:
-    provider_id = "deepseek"
+class ScriptedProvider(ModelProvider):
+    provider_id: ProviderId = "deepseek"
 
-    def __init__(self, attempts: tuple[tuple[GatewayEvent, ...], ...]) -> None:
+    def __init__(self, attempts: tuple[tuple[ModelStreamEvent, ...], ...]) -> None:
         self._attempts = list(attempts)
         self.requests: list[ModelRequest] = []
 
-    async def stream(self, request: ModelRequest) -> AsyncIterator[GatewayEvent]:
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         self.requests.append(request)
         for event in self._attempts.pop(0):
             yield event
 
 
-class CancellingProvider:
-    provider_id = "deepseek"
+class CancellingProvider(ModelProvider):
+    provider_id: ProviderId = "deepseek"
 
-    async def stream(self, request: ModelRequest) -> AsyncIterator[GatewayEvent]:
+    async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
         del request
         raise asyncio.CancelledError
         yield TextDelta(text="unreachable")
@@ -173,7 +176,9 @@ async def test_retryable_failure_before_output_retries_same_provider(
         ToolArgumentsDelta(index=0, text="{"),
     ],
 )
-async def test_visible_output_permanently_disables_retry(visible: GatewayEvent) -> None:
+async def test_visible_output_permanently_disables_retry(
+    visible: ModelStreamEvent,
+) -> None:
     provider = ScriptedProvider(((visible, _failure(ModelErrorCode.TIMEOUT)),))
     gateway = ModelGateway(
         {"deepseek": provider},
@@ -279,7 +284,7 @@ async def test_gateway_rejects_terminal_turn_for_a_different_frozen_model() -> N
     [(), (TurnCompleted(turn=_turn()), TurnCompleted(turn=_turn()))],
 )
 async def test_complete_requires_exactly_one_terminal_turn(
-    attempt: tuple[GatewayEvent, ...],
+    attempt: tuple[ModelStreamEvent, ...],
 ) -> None:
     gateway = ModelGateway(
         {"deepseek": ScriptedProvider((attempt,))},

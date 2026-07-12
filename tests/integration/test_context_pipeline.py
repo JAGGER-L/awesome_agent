@@ -145,8 +145,7 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
 
     (workspace_path / "note.txt").write_text("after", encoding="utf-8")
     state["messages"] = [
-        cast(dict[str, Any], message.model_dump(mode="json"))
-        for message in prepared.messages
+        message.model_dump(mode="json") for message in prepared.messages
     ]
     state["context_manifest"] = list(prepared.manifest)
     assert "after" not in "\n".join(str(message) for message in state["messages"])

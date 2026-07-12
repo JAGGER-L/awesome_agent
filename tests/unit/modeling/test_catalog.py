@@ -129,4 +129,4 @@ def test_selected_model_rejects_cross_provider_model_pair() -> None:
 
 def test_kimi_region_is_closed_to_cn_and_global() -> None:
     with pytest.raises(ValidationError):
-        ProviderConfig(kimi_region="custom")
+        ProviderConfig.model_validate({"kimi_region": "custom"})

@@ -95,7 +95,9 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         CommandIntent(name=CommandName.MEMORY),
         thread_id=thread.id,
     )
-    assert initial.data["local"]["enabled"] is False
+    local_status = initial.data["local"]
+    assert isinstance(local_status, dict)
+    assert local_status["enabled"] is False
     assert initial.data["mem0"] == {"available": False, "enabled": False}
 
     enabled = await extensions.handle(
@@ -123,7 +125,11 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         CommandIntent(name=CommandName.MEMORY, arguments=("list", "user")),
         thread_id=thread.id,
     )
-    assert listed.data["entries"][0]["content"] == "Prefer concise answers."
+    entries = listed.data["entries"]
+    assert isinstance(entries, list)
+    first_entry = entries[0]
+    assert isinstance(first_entry, dict)
+    assert first_entry["content"] == "Prefer concise answers."
 
     turn = conversation.begin_turn(
         thread.id,
