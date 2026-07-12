@@ -82,14 +82,12 @@ Secrets are `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`, and `MEM0_API_KEY`. A
 process environment value wins over the same name in `<AWESOME_HOME>/.env`.
 Secrets are never read from a workspace `.env` or printed by `/config`.
 
-For model credentials, the recommended path is the masked `/model` or `/auth`
-flow inside Awesome. Credential source metadata has three values:
-
-- `missing`: no credential is available;
-- `user_env_file`: Awesome can replace or remove the value stored in the user
-  secret file;
-- `process_environment`: the process supplied the value, so Awesome treats it
-  as read-only.
+Use the masked `/auth` flow to manage DeepSeek, Kimi, and Mem0 Cloud
+credentials. Each service shows Environment and Awesome API key independently.
+Environment is read-only and selectable only when detected. Awesome API keys
+can be added, replaced, or deleted. The selected source is stored in user
+configuration; if it later becomes unavailable, Awesome reports that condition
+and does not silently switch to the other source.
 
 Startup checks only whether a credential is present and performs no Provider
 network request. Saving through the TUI performs one short validation request.

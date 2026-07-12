@@ -50,16 +50,22 @@
           "permission_mode": "request_approval",
           "provider_credentials": {
             "deepseek": {
+              "awesome_configured": false,
+              "environment_configured": false,
               "environment_variable": "DEEPSEEK_API_KEY",
-              "mutable": true,
-              "provider": "deepseek",
-              "source": "missing"
+              "provider": "deepseek"
             },
             "kimi": {
+              "awesome_configured": false,
+              "environment_configured": false,
               "environment_variable": "MOONSHOT_API_KEY",
-              "mutable": true,
-              "provider": "kimi",
-              "source": "missing"
+              "provider": "kimi"
+            },
+            "mem0": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "MEM0_API_KEY",
+              "provider": "mem0"
             }
           },
           "secret_status": {
@@ -226,7 +232,7 @@
         "value": {
           "code": "credential_saved",
           "provider": "deepseek",
-          "source": "user_env_file",
+          "source": "awesome",
           "status": "configured"
         }
       }

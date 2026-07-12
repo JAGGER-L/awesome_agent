@@ -17,12 +17,11 @@ from pydantic import (
 )
 
 from awesome_agent.config.credentials import (
-    CredentialSource,
+    CredentialService,
     ProviderCredentialStatuses,
-    ProviderName,
     missing_provider_credential_statuses,
 )
-from awesome_agent.config.models import SecretStatus
+from awesome_agent.config.models import CredentialSource, SecretStatus
 from awesome_agent.conversation.models import Thread, ThreadView
 from awesome_agent.core.tools.permissions import PermissionMode
 from awesome_agent.modeling.catalog import ModelIdentitySnapshot
@@ -37,7 +36,6 @@ class ProductErrorCode(StrEnum):
     OPERATION_BUSY = "operation_busy"
     MODEL_NOT_CONFIGURED = "model_not_configured"
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
-    CREDENTIAL_MANAGED_EXTERNALLY = "credential_managed_externally"
     INVALID_ARGUMENTS = "invalid_arguments"
     COMMAND_NOT_AVAILABLE = "command_not_available"
     CHECKPOINT_MISSING = "checkpoint_missing"
@@ -53,13 +51,12 @@ class ProviderCredentialSetStatus(StrEnum):
     DELETED = "deleted"
     INVALID = "invalid"
     CONFIRM_UNVERIFIED = "confirm_unverified"
-    ENVIRONMENT_MANAGED = "environment_managed"
 
 
 class ProviderCredentialSetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: ProviderName
+    provider: CredentialService
     action: Literal["add", "replace", "delete"]
     api_key: SecretStr | None = None
     allow_unverified: bool = False
@@ -88,9 +85,9 @@ class ProviderCredentialSetRequest(BaseModel):
 class ProviderCredentialSetResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: ProviderName
+    provider: CredentialService
     status: ProviderCredentialSetStatus
-    source: CredentialSource
+    source: CredentialSource | None
     code: str = Field(min_length=1, max_length=128)
 
 

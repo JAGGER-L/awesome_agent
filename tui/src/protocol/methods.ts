@@ -46,20 +46,18 @@ const secretStatusSchema = z.strictObject({
   mem0_api_key: z.boolean(),
 });
 
-export const credentialSourceSchema = z.enum([
-  "missing",
-  "user_env_file",
-  "process_environment",
-]);
+export const credentialSourceSchema = z.enum(["environment", "awesome"]);
 export const providerCredentialStatusSchema = z.strictObject({
-  provider: z.enum(["deepseek", "kimi"]),
+  provider: z.enum(["deepseek", "kimi", "mem0"]),
   environment_variable: boundedText(1, 128),
-  source: credentialSourceSchema,
-  mutable: z.boolean(),
+  environment_configured: z.boolean(),
+  awesome_configured: z.boolean(),
+  selected_source: credentialSourceSchema.nullable().optional(),
 });
 export const providerCredentialStatusesSchema = z.strictObject({
   deepseek: providerCredentialStatusSchema,
   kimi: providerCredentialStatusSchema,
+  mem0: providerCredentialStatusSchema,
 });
 
 export const applicationStateSchema = z.strictObject({
@@ -303,15 +301,9 @@ const cancelResultSchema = z.strictObject({
 });
 const shutdownResultSchema = z.strictObject({ stopped: z.literal(true) });
 export const providerCredentialSetResultSchema = z.strictObject({
-  provider: z.enum(["deepseek", "kimi"]),
-  status: z.enum([
-    "configured",
-    "deleted",
-    "invalid",
-    "confirm_unverified",
-    "environment_managed",
-  ]),
-  source: credentialSourceSchema,
+  provider: z.enum(["deepseek", "kimi", "mem0"]),
+  status: z.enum(["configured", "deleted", "invalid", "confirm_unverified"]),
+  source: credentialSourceSchema.nullable(),
   code: boundedText(1, 128),
 });
 
@@ -361,7 +353,7 @@ export const methodSchemas = {
   "provider.credential.set": {
     params: z
       .strictObject({
-        provider: z.enum(["deepseek", "kimi"]),
+        provider: z.enum(["deepseek", "kimi", "mem0"]),
         action: z.enum(["add", "replace", "delete"]),
         api_key: boundedText(1, 20_000).optional(),
         allow_unverified: z.boolean().optional(),

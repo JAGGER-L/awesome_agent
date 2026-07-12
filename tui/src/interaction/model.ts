@@ -21,7 +21,7 @@ export type PickerOwner =
   | {
       readonly kind: "credential_delete";
       readonly intent: CommandIntent;
-      readonly provider: "deepseek" | "kimi";
+      readonly provider: "deepseek" | "kimi" | "mem0";
     }
   | {
       readonly kind: "credential_confirm";

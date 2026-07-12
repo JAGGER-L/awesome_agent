@@ -12,11 +12,15 @@ from uuid import uuid4
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-type ProviderName = Literal["deepseek", "kimi"]
+from awesome_agent.config.models import CredentialSelectionConfig, CredentialSource
 
-_PROVIDER_ENVIRONMENT_VARIABLES: dict[ProviderName, str] = {
+type ProviderName = Literal["deepseek", "kimi"]
+type CredentialService = Literal["deepseek", "kimi", "mem0"]
+
+_PROVIDER_ENVIRONMENT_VARIABLES: dict[CredentialService, str] = {
     "deepseek": "DEEPSEEK_API_KEY",
     "kimi": "MOONSHOT_API_KEY",
+    "mem0": "MEM0_API_KEY",
 }
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[Path, threading.RLock] = {}
@@ -35,23 +39,26 @@ class CredentialValidation(BaseModel):
     code: str
 
 
-class CredentialSource(StrEnum):
-    MISSING = "missing"
-    USER_ENV_FILE = "user_env_file"
-    PROCESS_ENVIRONMENT = "process_environment"
-
-
 class ProviderCredentialStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: ProviderName
+    provider: CredentialService
     environment_variable: str
-    source: CredentialSource
-    mutable: bool
+    environment_configured: bool
+    awesome_configured: bool
+    selected_source: CredentialSource | None = None
 
     @property
     def configured(self) -> bool:
-        return self.source is not CredentialSource.MISSING
+        return self.selected_source is not None and self.source_available
+
+    @property
+    def source_available(self) -> bool:
+        if self.selected_source is CredentialSource.ENVIRONMENT:
+            return self.environment_configured
+        if self.selected_source is CredentialSource.AWESOME:
+            return self.awesome_configured
+        return False
 
 
 class ProviderCredentialStatuses(BaseModel):
@@ -59,9 +66,10 @@ class ProviderCredentialStatuses(BaseModel):
 
     deepseek: ProviderCredentialStatus
     kimi: ProviderCredentialStatus
+    mem0: ProviderCredentialStatus
 
 
-def provider_environment_variable(provider: ProviderName) -> str:
+def provider_environment_variable(provider: CredentialService) -> str:
     return _PROVIDER_ENVIRONMENT_VARIABLES[provider]
 
 
@@ -69,44 +77,55 @@ def missing_provider_credential_statuses() -> ProviderCredentialStatuses:
     return ProviderCredentialStatuses(
         deepseek=_missing_status("deepseek"),
         kimi=_missing_status("kimi"),
+        mem0=_missing_status("mem0"),
     )
 
 
 def resolve_provider_credential_statuses(
     path: Path,
     environ: Mapping[str, str],
+    selections: CredentialSelectionConfig | None = None,
 ) -> ProviderCredentialStatuses:
     from_file = dotenv_values(path) if path.is_file() else {}
+    configured = selections or CredentialSelectionConfig()
 
-    def status(provider: ProviderName) -> ProviderCredentialStatus:
+    def status(provider: CredentialService) -> ProviderCredentialStatus:
         name = provider_environment_variable(provider)
         process_value = environ.get(name)
         file_value = from_file.get(name)
-        if process_value is not None and process_value.strip():
-            source = CredentialSource.PROCESS_ENVIRONMENT
-        elif isinstance(file_value, str) and file_value.strip():
-            source = CredentialSource.USER_ENV_FILE
-        else:
-            source = CredentialSource.MISSING
+        environment_configured = bool(process_value and process_value.strip())
+        awesome_configured = bool(isinstance(file_value, str) and file_value.strip())
+        selected = getattr(configured, provider)
+        if selected is None:
+            selected = (
+                CredentialSource.ENVIRONMENT
+                if environment_configured
+                else CredentialSource.AWESOME
+                if awesome_configured
+                else None
+            )
         return ProviderCredentialStatus(
             provider=provider,
             environment_variable=name,
-            source=source,
-            mutable=source is not CredentialSource.PROCESS_ENVIRONMENT,
+            environment_configured=environment_configured,
+            awesome_configured=awesome_configured,
+            selected_source=selected,
         )
 
     return ProviderCredentialStatuses(
         deepseek=status("deepseek"),
         kimi=status("kimi"),
+        mem0=status("mem0"),
     )
 
 
-def _missing_status(provider: ProviderName) -> ProviderCredentialStatus:
+def _missing_status(provider: CredentialService) -> ProviderCredentialStatus:
     return ProviderCredentialStatus(
         provider=provider,
         environment_variable=provider_environment_variable(provider),
-        source=CredentialSource.MISSING,
-        mutable=True,
+        environment_configured=False,
+        awesome_configured=False,
+        selected_source=None,
     )
 
 

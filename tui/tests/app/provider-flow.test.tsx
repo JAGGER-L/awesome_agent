@@ -43,7 +43,7 @@ describe("Provider setup flow", () => {
                 : credentialAttempts === 1
                   ? "invalid"
                   : "confirm_unverified",
-              source: allowUnverified ? "user_env_file" : "missing",
+              source: allowUnverified ? "awesome" : null,
               code: allowUnverified
                 ? "credential_saved_unverified"
                 : credentialAttempts === 1
@@ -181,7 +181,7 @@ describe("Provider setup flow", () => {
             value: {
               provider: "deepseek",
               status: "configured",
-              source: "user_env_file",
+              source: "awesome",
               code: "credential_saved",
             },
           } as never;
@@ -291,7 +291,7 @@ describe("Provider setup flow", () => {
             value: {
               provider: "deepseek",
               status: action === "delete" ? "deleted" : "configured",
-              source: action === "delete" ? "missing" : "user_env_file",
+              source: "awesome",
               code:
                 action === "delete" ? "credential_deleted" : "credential_saved",
             },
@@ -520,14 +520,23 @@ function applicationState(configured: boolean) {
       deepseek: {
         provider: "deepseek" as const,
         environment_variable: "DEEPSEEK_API_KEY",
-        source: configured ? ("user_env_file" as const) : ("missing" as const),
-        mutable: true,
+        environment_configured: false,
+        awesome_configured: configured,
+        selected_source: configured ? ("awesome" as const) : null,
       },
       kimi: {
         provider: "kimi" as const,
         environment_variable: "MOONSHOT_API_KEY",
-        source: "missing" as const,
-        mutable: true,
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: null,
+      },
+      mem0: {
+        provider: "mem0" as const,
+        environment_variable: "MEM0_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: null,
       },
     },
     memory_status: {},

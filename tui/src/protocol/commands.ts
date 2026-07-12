@@ -103,6 +103,7 @@ export const commandOptionSchema = z.strictObject({
   label: boundedText(1, 200),
   description: boundedText(0, 1_000).optional(),
   selected: z.boolean(),
+  disabled: z.boolean().optional(),
 });
 
 export const commandSelectionSchema = z
@@ -127,7 +128,7 @@ export const commandSelectionSchema = z
   });
 
 export const commandSecretPromptSchema = z.strictObject({
-  provider: z.enum(["deepseek", "kimi"]),
+  provider: z.enum(["deepseek", "kimi", "mem0"]),
   action: z.enum(["add", "replace"]),
   label: boundedText(1, 200),
   environment_variable: boundedText(1, 128),

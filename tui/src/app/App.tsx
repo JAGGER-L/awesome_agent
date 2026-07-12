@@ -22,6 +22,7 @@ import type { CommandIntent } from "../commands/parser.js";
 import { parseInput } from "../commands/parser.js";
 import { searchCommands } from "../commands/search.js";
 import { CommandMenu } from "../components/CommandMenu.js";
+import { AuthPicker } from "../components/AuthPicker.js";
 import { Composer } from "../components/Composer.js";
 import { InteractionPrompt } from "../components/InteractionPrompt.js";
 import { Picker } from "../components/Picker.js";
@@ -60,6 +61,10 @@ import { createClientMessageId } from "../transcript/identity.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 import { useCommandExecution } from "./use-command-execution.js";
+import {
+  isAuthPicker,
+  unavailableSelectionMessage,
+} from "./use-interaction-flow.js";
 
 interface ComposerSubmitResult {
   readonly accepted: boolean;
@@ -123,8 +128,8 @@ export function App({
   const cancelling = cancellation.status === "requested";
   const providerSetupVisible =
     providerSetupRequired &&
-    state.application?.provider_credentials.deepseek.source === "missing" &&
-    state.application.provider_credentials.kimi.source === "missing";
+    !credentialConfigured(state.application?.provider_credentials.deepseek) &&
+    !credentialConfigured(state.application?.provider_credentials.kimi);
 
   const runTerminalAction = useCallback(
     (action: () => Promise<void>) => {
@@ -556,7 +561,7 @@ export function App({
   const mutateCredential = useCallback(
     async (
       intent: CommandIntent,
-      provider: "deepseek" | "kimi",
+      provider: "deepseek" | "kimi" | "mem0",
       action: "add" | "replace" | "delete",
       secret?: string,
       prompt?: SecretPrompt,
@@ -627,16 +632,6 @@ export function App({
             false,
           ),
         });
-        return;
-      }
-      if (outcome.result.status === "environment_managed") {
-        dispatch({ type: "mode.cancel" });
-        appendCommandResult(
-          "auth",
-          "warning",
-          `${providerLabel(provider)} credential is managed by the process environment.`,
-          generation,
-        );
         return;
       }
       const refreshed = await controller.refreshApplication();
@@ -732,6 +727,11 @@ export function App({
     if (mode.kind !== "picker") return;
     const option = mode.selection.options[mode.selected];
     if (!option) return;
+    const unavailable = unavailableSelectionMessage(option.disabled);
+    if (unavailable) {
+      dispatch({ type: "notice.set", message: unavailable });
+      return;
+    }
     const owner = mode.owner;
     if (owner.kind === "local_theme") {
       const generation = store.getState().thread_generation;
@@ -947,6 +947,12 @@ export function App({
             ? {}
             : { message: ui.mode.message })}
         />
+      ) : isAuthPicker(ui.mode) ? (
+        <AuthPicker
+          selection={ui.mode.selection}
+          selected={ui.mode.selected}
+          width={columns}
+        />
       ) : ui.mode.kind === "picker" ? (
         <Picker selection={ui.mode.selection} selected={ui.mode.selected} />
       ) : (
@@ -967,16 +973,36 @@ function commandPickerOwner(intent: CommandIntent): PickerOwner {
   const provider = intent.arguments?.[0];
   if (
     intent.name === "auth" &&
-    intent.arguments?.[1] === "delete" &&
-    (provider === "deepseek" || provider === "kimi")
+    intent.arguments?.at(-1) === "delete" &&
+    (provider === "deepseek" || provider === "kimi" || provider === "mem0")
   ) {
     return { kind: "credential_delete", intent, provider };
   }
   return { kind: "command", intent };
 }
 
-function providerLabel(provider: "deepseek" | "kimi"): string {
-  return provider === "deepseek" ? "DeepSeek" : "Kimi";
+function providerLabel(provider: "deepseek" | "kimi" | "mem0"): string {
+  return provider === "deepseek"
+    ? "DeepSeek"
+    : provider === "kimi"
+      ? "Kimi"
+      : "Mem0 Cloud";
+}
+
+function credentialConfigured(
+  status:
+    | {
+        selected_source?: "environment" | "awesome" | null | undefined;
+        environment_configured: boolean;
+        awesome_configured: boolean;
+      }
+    | undefined,
+): boolean {
+  return status?.selected_source === "environment"
+    ? status.environment_configured
+    : status?.selected_source === "awesome"
+      ? status.awesome_configured
+      : false;
 }
 
 function pickerMode(
