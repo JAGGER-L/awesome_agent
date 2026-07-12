@@ -1,5 +1,5 @@
 import type { ClipboardAdapter } from "../adapters/clipboard.js";
-import type { PickerSelection } from "../components/Picker.js";
+import type { PickerSelection } from "../interaction/model.js";
 import type { MethodValue } from "../protocol/methods.js";
 import type { ThemePreference } from "../preferences/theme.js";
 import { findCommand } from "./catalog.js";

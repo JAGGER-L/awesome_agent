@@ -1,5 +1,5 @@
 import { render } from "ink-testing-library";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { Picker } from "../../src/components/Picker.js";
 
@@ -12,41 +12,15 @@ const selection = {
 };
 
 describe("Picker", () => {
-  it("moves with arrows and selects with Enter", async () => {
-    const onSelect = vi.fn();
-    const view = render(
-      <Picker selection={selection} onSelect={onSelect} onClose={() => {}} />,
-    );
-    view.stdin.write("\u001b[B");
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    view.stdin.write("\r");
-    expect(onSelect).toHaveBeenCalledWith("b");
+  it("renders the controlled selection", () => {
+    expect(
+      render(<Picker selection={selection} selected={1} />).lastFrame(),
+    ).toContain("› Beta");
   });
 
-  it("closes ordinary pickers with Esc", async () => {
-    const onClose = vi.fn();
-    const view = render(
-      <Picker selection={selection} onSelect={() => {}} onClose={onClose} />,
-    );
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    view.stdin.write("\u001b");
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    expect(onClose).toHaveBeenCalledOnce();
-  });
-
-  it("does not dismiss a blocking trust interaction with Esc", async () => {
-    const onClose = vi.fn();
-    const view = render(
-      <Picker
-        selection={selection}
-        onSelect={() => {}}
-        onClose={onClose}
-        blocking
-      />,
-    );
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    view.stdin.write("\u001b");
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    expect(onClose).not.toHaveBeenCalled();
+  it("does not own terminal input", () => {
+    const view = render(<Picker selection={selection} selected={0} />);
+    view.stdin.write("\u001b[B\r");
+    expect(view.lastFrame()).toContain("› Alpha");
   });
 });

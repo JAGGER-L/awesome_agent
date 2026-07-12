@@ -2,6 +2,11 @@ import { render } from "ink-testing-library";
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app/App.js";
+import type { CommandController } from "../../src/commands/controller.js";
+import {
+  composerReducer,
+  initialComposerState,
+} from "../../src/composer/reducer.js";
 import { CommandMenu } from "../../src/components/CommandMenu.js";
 import { Composer } from "../../src/components/Composer.js";
 import { createSurfaceStore } from "../../src/state/store.js";
@@ -20,75 +25,48 @@ async function eventually(assertion: () => void): Promise<void> {
   throw last;
 }
 
+function composerState(value: string, width: number) {
+  return composerReducer(
+    composerReducer(initialComposerState(), { type: "resize", width }),
+    { type: "replace", value },
+  );
+}
+
+function controllerReturning(outcome: unknown): CommandController {
+  return {
+    submit: vi.fn(async () => outcome),
+  } as unknown as CommandController;
+}
+
 describe("Composer", () => {
   it.each([
     40, 60, 120,
-  ])("renders multiline input and a cursor at %i columns", (width) => {
+  ])("renders controlled multiline input and a cursor at %i columns", (width) => {
     const view = render(
-      <Composer
-        width={width}
-        initialValue={"first\nsecond"}
-        onSubmit={async () => ({ accepted: true })}
-      />,
+      <Composer state={composerState("first\nsecond", width)} />,
     );
     expect(view.lastFrame()).toContain("first");
     expect(view.lastFrame()).toContain("second");
     expect(view.lastFrame()).toContain("▌");
   });
 
-  it("accepts pasted text and clears only after accepted dispatch", async () => {
-    const onSubmit = vi.fn(async () => ({ accepted: true as const }));
-    const view = render(<Composer width={40} onSubmit={onSubmit} />);
-    view.stdin.write("hello\nworld");
-    await eventually(() => expect(view.lastFrame()).toContain("hello"));
-    expect(view.lastFrame()).toContain("world");
-    view.stdin.write("\r");
-    await eventually(() =>
-      expect(onSubmit).toHaveBeenCalledWith("hello\nworld"),
-    );
-    await eventually(() => expect(view.lastFrame()).not.toContain("hello"));
+  it("renders the cursor at the controlled grapheme position", () => {
+    const state = composerReducer(composerState("a😀c", 40), { type: "left" });
+    expect(render(<Composer state={state} />).lastFrame()).toContain("a😀▌c");
   });
 
-  it("retains a retryable draft after an immediate product error", async () => {
-    const view = render(
-      <Composer
-        width={40}
-        onSubmit={async () => ({
-          accepted: false,
-          retryable: true,
-          message: "busy",
-        })}
-      />,
-    );
-    view.stdin.write("retry me");
-    view.stdin.write("\r");
-    await eventually(() => expect(view.lastFrame()).toContain("busy"));
-    expect(view.lastFrame()).toContain("retry me");
-  });
-
-  it("delegates empty Enter only when an empty handler exists", async () => {
-    const onEmptySubmit = vi.fn();
-    const view = render(
-      <Composer
-        width={40}
-        onSubmit={async () => ({ accepted: true })}
-        onEmptySubmit={onEmptySubmit}
-      />,
-    );
-    view.stdin.write("\r");
-    await eventually(() => expect(onEmptySubmit).toHaveBeenCalledOnce());
-  });
-
-  it("renders the cursor at the grapheme editing position", async () => {
-    const view = render(
-      <Composer
-        width={40}
-        initialValue="a😀c"
-        onSubmit={async () => ({ accepted: true })}
-      />,
-    );
-    view.stdin.write("\u001b[D");
-    await eventually(() => expect(view.lastFrame()).toContain("a😀▌c"));
+  it("renders controlled submission and error states", () => {
+    const frame =
+      render(
+        <Composer
+          state={composerState("retry me", 40)}
+          submitting
+          message="busy"
+        />,
+      ).lastFrame() ?? "";
+    expect(frame).toContain("Sending…");
+    expect(frame).toContain("retry me");
+    expect(frame).toContain("busy");
   });
 });
 
@@ -103,9 +81,32 @@ describe("CommandMenu", () => {
 });
 
 describe("App composer integration", () => {
-  it("places the composer below the transcript at narrow width", () => {
-    const view = render(<App store={createSurfaceStore()} width={40} />);
-    expect(view.lastFrame()).toContain("Message");
-    expect(view.lastFrame()).toContain("▌");
+  it("routes pasted input and Enter through the root terminal owner", async () => {
+    const controller = controllerReturning({
+      kind: "accepted",
+      operation: { operation_id: "operation_1", thread_id: "thread_1" },
+    });
+    const view = render(
+      <App store={createSurfaceStore()} controller={controller} width={40} />,
+    );
+    view.stdin.write("hello\nworld");
+    await eventually(() => expect(view.lastFrame()).toContain("hello"));
+    view.stdin.write("\r");
+    await eventually(() => expect(controller.submit).toHaveBeenCalledOnce());
+    await eventually(() => expect(view.lastFrame()).not.toContain("hello"));
+  });
+
+  it("retains a retryable draft after an immediate product error", async () => {
+    const controller = controllerReturning({
+      kind: "error",
+      error: { code: "operation_busy", message: "busy", retryable: true },
+    });
+    const view = render(
+      <App store={createSurfaceStore()} controller={controller} width={40} />,
+    );
+    view.stdin.write("retry me");
+    view.stdin.write("\r");
+    await eventually(() => expect(view.lastFrame()).toContain("busy"));
+    expect(view.lastFrame()).toContain("retry me");
   });
 });

@@ -1,5 +1,11 @@
 import { render, type Instance } from "ink";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import {
   createClipboardAdapter,
@@ -23,6 +29,14 @@ import {
   RenderFailure,
 } from "../lifecycle/fatal.js";
 import { InteractionController } from "../lifecycle/interactions.js";
+import {
+  routeTerminalKey,
+  type TerminalKey,
+} from "../interaction/key-router.js";
+import type { TerminalUiState, UiMode } from "../interaction/model.js";
+import { initialTerminalUiState } from "../interaction/reducer.js";
+import { TerminalInput } from "../interaction/TerminalInput.js";
+import { useTerminalUi } from "../interaction/use-terminal-ui.js";
 import { resolveAwesomeHome } from "../preferences/paths.js";
 import { loadPreferences, savePreferences } from "../preferences/store.js";
 import {
@@ -225,6 +239,10 @@ function CliApplication({
   readonly unmount: () => void;
 }) {
   const [startup, setStartup] = useState(initialStartup);
+  const terminal = useTerminalUi(initialStartupUi(initialStartup));
+  const terminalUi = terminal.state;
+  const terminalUiRef = terminal.current;
+  const dispatchTerminal = terminal.dispatch;
   const [themePreference, setThemePreference] = useState(initialTheme);
   const [fatal, setFatal] = useState<FatalState>();
   const state = useSyncExternalStore(
@@ -312,6 +330,80 @@ function CliApplication({
       ? toFatalState(new RenderFailure(state.fatal.message), surface.session)
       : undefined);
 
+  useEffect(() => {
+    const mode = startupUiMode(startup, renderFailure !== undefined);
+    if (mode && !sameStartupMode(terminalUi.mode, mode)) {
+      dispatchTerminal({ type: "mode.open", mode });
+    }
+  }, [dispatchTerminal, renderFailure, startup, terminalUi.mode]);
+
+  const handleStartupInput = useCallback(
+    (input: string, key: TerminalKey) => {
+      const routed = routeTerminalKey(terminalUiRef.current, input, key);
+      if (!routed) return;
+      if (routed.type === "selection.move") {
+        dispatchTerminal({ type: "mode.select", delta: routed.delta });
+        return;
+      }
+      if (routed.type !== "selection.confirm") return;
+      const mode = terminalUiRef.current.mode;
+      if (mode.kind === "fatal") {
+        if (mode.selected === 0) return;
+        void requestExit("quit_command");
+        return;
+      }
+      if (
+        mode.kind === "workspace_trust" &&
+        startup.kind === "trust_required"
+      ) {
+        const decision = mode.selected === 0 ? "trust" : "deny";
+        dispatchTerminal({ type: "mode.trust.submitting", submitting: true });
+        void respondStartupTrust(
+          surface,
+          intent,
+          startup.interactionId,
+          decision,
+        )
+          .then((result) => {
+            if (result.kind === "denied") {
+              void requestExit("trust_denied");
+            } else {
+              setStartup(result);
+            }
+          })
+          .catch((error: unknown) => {
+            dispatchTerminal({
+              type: "mode.trust.submitting",
+              submitting: false,
+            });
+            dispatchTerminal({
+              type: "mode.trust.message",
+              message: error instanceof Error ? error.message : "Trust failed.",
+            });
+          });
+        return;
+      }
+      if (
+        mode.kind === "picker" &&
+        mode.owner.kind === "thread" &&
+        startup.kind === "ready" &&
+        startup.thread.kind === "selection_required"
+      ) {
+        const threadId = mode.selection.options[mode.selected]?.value;
+        if (!threadId) return;
+        void selectStartupThread(surface, threadId).then((thread) =>
+          setStartup({ ...startup, thread }),
+        );
+      }
+    },
+    [dispatchTerminal, intent, requestExit, startup, surface, terminalUiRef],
+  );
+
+  const startupInputActive =
+    renderFailure !== undefined ||
+    startup.kind === "trust_required" ||
+    (startup.kind === "ready" && startup.thread.kind === "selection_required");
+
   return (
     <ThemeProvider value={theme}>
       <AppErrorBoundary
@@ -321,41 +413,32 @@ function CliApplication({
           if (classified) setFatal(classified);
         }}
       >
+        {startupInputActive ? (
+          <TerminalInput onInput={handleStartupInput} />
+        ) : null}
         {renderFailure ? (
           <FatalScreen
             fatal={renderFailure}
-            onReconnect={() => undefined}
-            onQuit={() => void requestExit("quit_command")}
+            selected={
+              terminalUi.mode.kind === "fatal" ? terminalUi.mode.selected : 0
+            }
           />
         ) : startup.kind === "trust_required" ? (
           <TrustPrompt
             workspacePath={startup.workspacePath}
-            onDecision={(decision) => {
-              void respondStartupTrust(
-                surface,
-                intent,
-                startup.interactionId,
-                decision,
-              ).then((result) => {
-                if (result.kind === "denied") {
-                  void requestExit("trust_denied");
-                } else {
-                  setStartup(result);
-                }
-              });
-            }}
+            selected={
+              terminalUi.mode.kind === "workspace_trust"
+                ? terminalUi.mode.selected
+                : 0
+            }
           />
         ) : startup.kind === "denied" ? null : startup.thread.kind ===
           "selection_required" ? (
           <Picker
-            blocking
+            selected={
+              terminalUi.mode.kind === "picker" ? terminalUi.mode.selected : 0
+            }
             selection={startup.thread.selection}
-            onClose={() => undefined}
-            onSelect={(threadId) => {
-              void selectStartupThread(surface, threadId).then((thread) =>
-                setStartup({ ...startup, thread }),
-              );
-            }}
           />
         ) : (
           <App
@@ -413,3 +496,51 @@ function memoryEnabled(
 }
 
 export type { SurfaceStore };
+
+function initialStartupUi(startup: StartupResult): TerminalUiState {
+  const state = initialTerminalUiState();
+  const mode = startupUiMode(startup, false);
+  return mode ? { ...state, mode } : state;
+}
+
+function startupUiMode(
+  startup: StartupResult,
+  fatal: boolean,
+): Exclude<UiMode, { kind: "composer" }> | undefined {
+  if (fatal) return { kind: "fatal", selected: 0 };
+  if (startup.kind === "trust_required") {
+    return {
+      kind: "workspace_trust",
+      workspacePath: startup.workspacePath,
+      selected: 0,
+      submitting: false,
+    };
+  }
+  if (
+    startup.kind === "ready" &&
+    startup.thread.kind === "selection_required"
+  ) {
+    return {
+      kind: "picker",
+      owner: { kind: "thread" },
+      selection: startup.thread.selection,
+      selected: Math.max(
+        0,
+        startup.thread.selection.options.findIndex((option) => option.selected),
+      ),
+      blocking: true,
+    };
+  }
+  return undefined;
+}
+
+function sameStartupMode(current: UiMode, next: UiMode): boolean {
+  if (current.kind !== next.kind) return false;
+  if (current.kind === "workspace_trust" && next.kind === "workspace_trust") {
+    return current.workspacePath === next.workspacePath;
+  }
+  if (current.kind === "picker" && next.kind === "picker") {
+    return current.owner.kind === next.owner.kind;
+  }
+  return current.kind === "fatal" && next.kind === "fatal";
+}
