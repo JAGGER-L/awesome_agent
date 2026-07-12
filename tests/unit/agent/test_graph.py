@@ -242,6 +242,73 @@ async def test_three_tools_execute_in_provider_order_one_per_node() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_only_executes_the_requested_write_then_stops() -> None:
+    write = ToolCall(
+        call_id="call_write",
+        name="write_file",
+        arguments_json='{"path":"circle_area.py","content":"pass\\n"}',
+    )
+    gateway = FakeGateway(
+        ((_completed("", tool_calls=(write,)),), (_completed("Created the file."),))
+    )
+    executor = FakeExecutor()
+
+    result = await _invoke(_runtime(gateway, executor))
+
+    assert [request.tool_name for request in executor.requests] == ["write_file"]
+    assert len(gateway.requests) == 2
+    assert result["final_answer"] == "Created the file."
+
+
+@pytest.mark.asyncio
+async def test_tool_failure_is_observed_before_one_corrected_tool_call() -> None:
+    first = ToolCall(
+        call_id="call_read",
+        name="read_file",
+        arguments_json="{}",
+    )
+    corrected = ToolCall(
+        call_id="call_edit",
+        name="edit_file",
+        arguments_json="{}",
+    )
+    failure = ToolResult(
+        call_id="call_read",
+        tool_name="read_file",
+        status=ToolStatus.ERROR,
+        content="not found",
+        error=ToolError(code=ToolErrorCode.NOT_FOUND, message="not found"),
+    )
+    success = ToolResult(
+        call_id="call_edit",
+        tool_name="edit_file",
+        status=ToolStatus.SUCCESS,
+        content="edited",
+    )
+    gateway = FakeGateway(
+        (
+            (_completed("", tool_calls=(first,)),),
+            (_completed("", tool_calls=(corrected,)),),
+            (_completed("done"),),
+        )
+    )
+
+    executor = FakeExecutor((failure, success))
+    await _invoke(_runtime(gateway, executor))
+
+    assert [request.call_id for request in executor.requests] == [
+        "call_read",
+        "call_edit",
+    ]
+    first_observation = gateway.requests[1].messages[-1]
+    corrected_observation = gateway.requests[2].messages[-1]
+    assert first_observation.role == "tool"
+    assert corrected_observation.role == "tool"
+    assert first_observation.call_id == "call_read"
+    assert corrected_observation.call_id == "call_edit"
+
+
+@pytest.mark.asyncio
 async def test_normalized_tool_error_returns_to_model_observation() -> None:
     call = ToolCall(call_id="call_1", name="read_file", arguments_json="{}")
     error = ToolResult(

@@ -54,16 +54,22 @@ function lifecyclePayload<
   });
 }
 
-function turnPayload<
-  Kind extends
-    | "turn.started"
-    | "turn.completed"
-    | "turn.failed"
-    | "turn.cancelled",
+const turnStartedPayload = z.strictObject({
+  kind: z.literal("turn.started"),
+  reason: nullableReason,
+  duration_ms: z
+    .null()
+    .optional()
+    .transform(() => undefined),
+});
+
+function turnTerminalPayload<
+  Kind extends "turn.completed" | "turn.failed" | "turn.cancelled",
 >(kind: Kind) {
   return z.strictObject({
     kind: z.literal(kind),
     reason: nullableReason,
+    duration_ms: boundedInteger,
   });
 }
 
@@ -74,7 +80,16 @@ function toolResultPayload<
     kind: z.literal(kind),
     call_id: boundedText(1, 128),
     tool_name: boundedText(1, 200),
+    verb: boundedText(1, 64),
+    target: boundedText(1, 2_000)
+      .nullish()
+      .transform((value) => value ?? undefined),
+    outcome: boundedText(1, 128),
     summary: boundedText(0, 2_000),
+    detail: boundedText(0, 4_000)
+      .nullish()
+      .transform((value) => value ?? undefined),
+    duration_ms: boundedInteger,
     error_code: nullableErrorCode,
   });
 }
@@ -94,10 +109,10 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
   lifecyclePayload("operation.completed"),
   lifecyclePayload("operation.failed"),
   lifecyclePayload("operation.cancelled"),
-  turnPayload("turn.started"),
-  turnPayload("turn.completed"),
-  turnPayload("turn.failed"),
-  turnPayload("turn.cancelled"),
+  turnStartedPayload,
+  turnTerminalPayload("turn.completed"),
+  turnTerminalPayload("turn.failed"),
+  turnTerminalPayload("turn.cancelled"),
   z.strictObject({
     kind: z.literal("assistant.text.delta"),
     text: boundedText(1, 30_000),
@@ -117,6 +132,10 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
     kind: z.literal("tool.started"),
     call_id: boundedText(1, 128),
     tool_name: boundedText(1, 200),
+    verb: boundedText(1, 64),
+    target: boundedText(1, 2_000)
+      .nullish()
+      .transform((value) => value ?? undefined),
   }),
   toolResultPayload("tool.completed"),
   toolResultPayload("tool.failed"),

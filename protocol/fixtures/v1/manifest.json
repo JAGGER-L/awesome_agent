@@ -59,7 +59,7 @@
   "files": {
     "commands.json": "bb31de5367b1660304f69eb4257e4735e1f8e46104f61df89ecc0f6dd47cd592",
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
-    "events.valid.json": "e6cd50d88429b58debbb67e95d4f5700d8ff21f5f836104cef69fdd89f6d12b4",
+    "events.valid.json": "9ebd3de90accfa08c4c64951c40faa776a4ffe0405d45e45bb8f9b248e1bf2a6",
     "methods.invalid.json": "5334d06a703d249dbfdd3acbb4c9744ee905fd360a606d6147d7536e09cb1708",
     "methods.valid.json": "c4bb4763308a213c8a0a0ba593dac85c0fb9d5df67adeacab3cec329cac81eaa",
     "results.failures.json": "f9f79a3a1cc5f92a65f871877baced63dc4454b635b5e4120031059d39af1f6e"

@@ -83,6 +83,7 @@ from awesome_agent.config import (
     resolve_turn_config,
 )
 from awesome_agent.context import (
+    CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
     Mem0ContextResult,
     ThreadCompressor,
@@ -819,9 +820,7 @@ class _LocalApplicationBackend:
             compressor=ThreadCompressor(gateway_router),
             configured_total_tokens=self._application_config.budgets.total_context_tokens,
             model_context_limit=self._application_config.budgets.total_context_tokens,
-            product_instructions=(
-                "You are a local-first coding agent. Use tools when evidence is needed."
-            ),
+            product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
             model_identity=lambda turn: ModelIdentitySnapshot.from_models(
                 configured_model=turn.model,
                 effective_model=turn.model,

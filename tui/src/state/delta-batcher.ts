@@ -12,6 +12,8 @@ export interface CoalescedDelta {
   readonly operation_id?: string;
   readonly delta_kind: "text" | "reasoning";
   readonly text: string;
+  readonly first_timestamp: string;
+  readonly last_timestamp: string;
   readonly first_sequence: number;
   readonly last_sequence: number;
 }
@@ -63,6 +65,7 @@ export class DeltaBatcher {
           ...this.#pending,
           text: this.#pending.text + delta.text,
           last_sequence: delta.last_sequence,
+          last_timestamp: delta.last_timestamp,
         };
         return undefined;
       }
@@ -108,6 +111,8 @@ export class DeltaBatcher {
       delta_kind:
         event.payload.kind === "assistant.text.delta" ? "text" : "reasoning",
       text: event.payload.text,
+      first_timestamp: event.timestamp,
+      last_timestamp: event.timestamp,
       first_sequence: event.sequence,
       last_sequence: event.sequence,
     };

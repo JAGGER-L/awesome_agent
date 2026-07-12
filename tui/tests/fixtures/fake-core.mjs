@@ -270,7 +270,7 @@ const handleLine = (line) => {
         envelope(
           4,
           "turn.completed",
-          { kind: "turn.completed" },
+          { kind: "turn.completed", duration_ms: 1000 },
           { turn_id: "turn_terminal" },
         ),
       );

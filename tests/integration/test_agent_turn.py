@@ -103,6 +103,14 @@ def _completed(
             {"path": "note.txt", "old_string": "before", "new_string": "after"},
             "success",
         ),
+        (
+            "write_file",
+            {
+                "path": "circle_area.py",
+                "content": "def area(radius):\n    return 3.14 * radius**2\n",
+            },
+            "success",
+        ),
         ("read_file", {"path": "missing.txt"}, "error"),
     ],
 )
@@ -243,6 +251,11 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
     assert stored_change.lifecycle is ChangeLifecycle.APPLIED
     if tool_name == "edit_file":
         assert (workspace_path / "note.txt").read_text(encoding="utf-8") == "after"
+    if tool_name == "write_file":
+        assert (workspace_path / "circle_area.py").is_file()
+        assert [activity.tool_name for activity in view.tool_activities] == [
+            "write_file"
+        ]
     if expected_status == "error":
         observation = gateway.requests[1].messages[-1]
         assert observation.role == "tool"

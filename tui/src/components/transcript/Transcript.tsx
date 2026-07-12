@@ -20,10 +20,12 @@ export function Transcript({
   blocks,
   width,
   welcome,
+  toolDetailsExpanded = false,
 }: {
   blocks: readonly TranscriptBlock[];
   width: number;
   welcome?: Omit<WelcomeProps, "width"> | undefined;
+  toolDetailsExpanded?: boolean;
 }) {
   const items: StaticItem[] = [
     ...(welcome
@@ -47,7 +49,12 @@ export function Transcript({
         item.kind === "welcome" ? (
           <Welcome key={item.key} {...item.props} />
         ) : (
-          <BlockView key={item.key} block={item.block} width={width} />
+          <BlockView
+            key={item.key}
+            block={item.block}
+            width={width}
+            toolDetailsExpanded={toolDetailsExpanded}
+          />
         )
       }
     </Static>

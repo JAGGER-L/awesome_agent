@@ -847,8 +847,17 @@ export function App({
   return (
     <Box flexDirection="column">
       <TerminalInput active={!cancelling} onInput={handleTerminalInput} />
-      <Transcript blocks={historic} width={columns} welcome={welcome} />
-      <ActiveTurn live={live} width={columns} />
+      <Transcript
+        blocks={historic}
+        width={columns}
+        welcome={welcome}
+        toolDetailsExpanded={ui.toolDetailsExpanded}
+      />
+      <ActiveTurn
+        live={live}
+        width={columns}
+        toolDetailsExpanded={ui.toolDetailsExpanded}
+      />
       {status ? <StatusCommand snapshot={status} /> : null}
       {ui.notice ? <Text>{ui.notice}</Text> : null}
       {providerSetupVisible && ui.mode.kind !== "secret" ? (
@@ -994,6 +1003,9 @@ function handleTerminalIntent(
       break;
     case "composer.submit":
       handlers.onSubmit();
+      break;
+    case "tool_details.toggle":
+      handlers.dispatch({ type: "tool_details.toggle" });
       break;
     case "lifecycle.evaluate":
       handlers.onLifecycle(input, key);

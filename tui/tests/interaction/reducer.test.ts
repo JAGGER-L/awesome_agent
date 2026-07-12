@@ -6,6 +6,18 @@ import {
 } from "../../src/interaction/reducer.js";
 
 describe("terminalUiReducer", () => {
+  it("toggles one presentation-only tool detail state", () => {
+    const initial = initialTerminalUiState();
+    const expanded = terminalUiReducer(initial, {
+      type: "tool_details.toggle",
+    });
+    expect(expanded.toolDetailsExpanded).toBe(true);
+    expect(
+      terminalUiReducer(expanded, { type: "tool_details.toggle" })
+        .toolDetailsExpanded,
+    ).toBe(false);
+  });
+
   it("keeps exactly one active input owner", () => {
     const state = terminalUiReducer(initialTerminalUiState(), {
       type: "mode.open",

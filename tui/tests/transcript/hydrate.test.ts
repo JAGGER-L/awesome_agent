@@ -96,9 +96,9 @@ describe("hydrateThreadPage", () => {
     expect(projection.blocks.map((block) => block.kind)).toEqual([
       "omitted_history",
       "user",
-      "assistant",
       "tools",
       "change",
+      "assistant",
       "direct_command",
       "tools",
     ]);
@@ -108,11 +108,11 @@ describe("hydrateThreadPage", () => {
       client_message_id: "client_1",
       status: "persisted",
     });
-    expect(projection.blocks[3]).toMatchObject({
+    expect(projection.blocks[2]).toMatchObject({
       kind: "tools",
       items: [{ name: "read_file", summary: "Read file" }],
     });
-    expect(projection.blocks[4]).toMatchObject({
+    expect(projection.blocks[3]).toMatchObject({
       kind: "change",
       paths: ["src/a.py"],
       reversibility: "full",

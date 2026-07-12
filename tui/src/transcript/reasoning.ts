@@ -56,7 +56,7 @@ function isLowSurrogate(value: number): boolean {
   return value >= 0xdc00 && value <= 0xdfff;
 }
 
-function formatDuration(elapsedMs: number): string {
+export function formatDuration(elapsedMs: number): string {
   const safe = Math.max(0, Math.round(elapsedMs));
   if (safe < 1_000) return `${safe} ms`;
   const seconds = (safe / 1_000).toFixed(1).replace(/\.0$/, "");

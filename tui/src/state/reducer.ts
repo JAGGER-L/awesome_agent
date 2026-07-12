@@ -1,12 +1,15 @@
 import type { EventEnvelope } from "../protocol/index.js";
 import { mergeTranscriptBlocks } from "../transcript/merge.js";
 import type { TranscriptBlock } from "../transcript/model.js";
-import {
-  appendReasoningTail,
-  reasoningElapsedMarker,
-} from "../transcript/reasoning.js";
+import { appendReasoningTail } from "../transcript/reasoning.js";
 import type { SurfaceAction } from "./actions.js";
-import type { SurfaceState, ToolProjection, TurnProjection } from "./model.js";
+import type { CoalescedDelta } from "./delta-batcher.js";
+import type {
+  SurfaceState,
+  TimelineProjection,
+  ToolProjection,
+  TurnProjection,
+} from "./model.js";
 
 export function initialSurfaceState(): SurfaceState {
   return {
@@ -35,6 +38,56 @@ function updateTurn(
   return {
     ...state,
     active_operation: { ...operation, turn: update(operation.turn) },
+  };
+}
+
+function closeThinking(
+  timeline: readonly TimelineProjection[],
+  endedAt: string,
+): readonly TimelineProjection[] {
+  const activeIndex = timeline.findLastIndex(
+    (item) => item.kind === "thinking" && item.duration_ms === undefined,
+  );
+  if (activeIndex < 0) return timeline;
+  return timeline.map((item, index) =>
+    index === activeIndex && item.kind === "thinking"
+      ? {
+          ...item,
+          duration_ms: Math.max(
+            0,
+            Date.parse(endedAt) - Date.parse(item.started_at),
+          ),
+        }
+      : item,
+  );
+}
+
+function projectDelta(
+  turn: TurnProjection,
+  delta: CoalescedDelta,
+): TurnProjection {
+  const timeline = closeThinking(turn.timeline, delta.first_timestamp);
+  if (delta.delta_kind === "reasoning") {
+    return {
+      ...turn,
+      timeline,
+      reasoning_text: appendReasoningTail(turn.reasoning_text, delta.text),
+    };
+  }
+  const last = timeline.at(-1);
+  return {
+    ...turn,
+    timeline:
+      last?.kind === "assistant"
+        ? [...timeline.slice(0, -1), { ...last, text: last.text + delta.text }]
+        : [
+            ...timeline,
+            {
+              kind: "assistant",
+              id: `assistant:${turn.id}`,
+              text: delta.text,
+            },
+          ],
   };
 }
 
@@ -101,11 +154,15 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             id: event.turn_id ?? "",
             status: "active",
             started_at: event.timestamp,
-            assistant_text: "",
             reasoning_text: "",
-            reasoning_seen: false,
-            tools: {},
-            tool_order: [],
+            timeline: [
+              {
+                kind: "thinking",
+                id: "thinking:0",
+                started_at: event.timestamp,
+              },
+            ],
+            thinking_sequence: 1,
           },
         },
       };
@@ -113,6 +170,7 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
     case "turn.completed":
     case "turn.failed":
     case "turn.cancelled": {
+      const payload = event.payload;
       const turn = state.active_operation?.turn;
       if (!turn || turn.id !== event.turn_id || turn.status !== "active") {
         return fatal(
@@ -122,27 +180,29 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
         );
       }
       return updateTurn(next, (turn) => {
-        const elapsed =
-          Date.parse(event.timestamp) - Date.parse(turn.started_at);
         return {
           ...turn,
           status:
-            event.payload.kind === "turn.completed"
+            payload.kind === "turn.completed"
               ? "completed"
-              : event.payload.kind === "turn.failed"
+              : payload.kind === "turn.failed"
                 ? "failed"
                 : "cancelled",
           reasoning_text: "",
-          ...(turn.reasoning_seen
-            ? { reasoning_marker: reasoningElapsedMarker(elapsed) }
-            : {}),
+          timeline: closeThinking(turn.timeline, event.timestamp),
+          duration_ms: payload.duration_ms,
         };
       });
     }
     case "tool.started": {
       const payload = event.payload;
       const turn = state.active_operation?.turn;
-      if (!turn || turn.tools[payload.call_id]) {
+      if (
+        !turn ||
+        turn.timeline.some(
+          (item) => item.kind === "tool" && item.call_id === payload.call_id,
+        )
+      ) {
         return fatal(
           next,
           "tool_start_invalid",
@@ -151,15 +211,17 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
       }
       return updateTurn(next, (turn) => {
         const tool: ToolProjection = {
+          kind: "tool",
           call_id: payload.call_id,
           tool_name: payload.tool_name,
           status: "running",
+          verb: payload.verb,
+          ...(payload.target === undefined ? {} : { target: payload.target }),
           summary: "",
         };
         return {
           ...turn,
-          tools: { ...turn.tools, [tool.call_id]: tool },
-          tool_order: [...turn.tool_order, tool.call_id],
+          timeline: [...closeThinking(turn.timeline, event.timestamp), tool],
         };
       });
     }
@@ -167,8 +229,10 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
     case "tool.failed":
     case "tool.cancelled": {
       const payload = event.payload;
-      const current = state.active_operation?.turn?.tools[payload.call_id];
-      if (current?.status !== "running") {
+      const current = state.active_operation?.turn?.timeline.find(
+        (item) => item.kind === "tool" && item.call_id === payload.call_id,
+      );
+      if (current?.kind !== "tool" || current.status !== "running") {
         return fatal(
           next,
           "tool_terminal_invalid",
@@ -176,26 +240,46 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
         );
       }
       return updateTurn(next, (turn) => {
-        const tool = turn.tools[payload.call_id];
-        if (!tool) return turn;
+        let matched = false;
+        const timeline = turn.timeline.map((item) => {
+          if (item.kind !== "tool" || item.call_id !== payload.call_id) {
+            return item;
+          }
+          matched = true;
+          return {
+            ...item,
+            status:
+              payload.kind === "tool.completed"
+                ? ("completed" as const)
+                : payload.kind === "tool.failed"
+                  ? ("failed" as const)
+                  : ("cancelled" as const),
+            verb: payload.verb,
+            ...(payload.target === undefined ? {} : { target: payload.target }),
+            outcome: payload.outcome,
+            summary: payload.summary,
+            ...(payload.detail === undefined ? {} : { detail: payload.detail }),
+            duration_ms: payload.duration_ms,
+            ...(payload.error_code === undefined
+              ? {}
+              : { error_code: payload.error_code }),
+          };
+        });
+        if (!matched) return turn;
+        if (payload.kind === "tool.cancelled") {
+          return { ...turn, timeline };
+        }
         return {
           ...turn,
-          tools: {
-            ...turn.tools,
-            [tool.call_id]: {
-              ...tool,
-              status:
-                payload.kind === "tool.completed"
-                  ? "completed"
-                  : payload.kind === "tool.failed"
-                    ? "failed"
-                    : "cancelled",
-              summary: payload.summary,
-              ...(payload.error_code === undefined
-                ? {}
-                : { error_code: payload.error_code }),
+          timeline: [
+            ...timeline,
+            {
+              kind: "thinking",
+              id: `thinking:${turn.thinking_sequence}`,
+              started_at: event.timestamp,
             },
-          },
+          ],
+          thinking_sequence: turn.thinking_sequence + 1,
         };
       });
     }
@@ -321,21 +405,7 @@ export function surfaceReducer(
       }
       return updateTurn(
         { ...state, event_sequence: action.delta.last_sequence },
-        (turn) => ({
-          ...turn,
-          assistant_text:
-            action.delta.delta_kind === "text"
-              ? turn.assistant_text + action.delta.text
-              : turn.assistant_text,
-          reasoning_text:
-            action.delta.delta_kind === "reasoning"
-              ? appendReasoningTail(turn.reasoning_text, action.delta.text)
-              : turn.reasoning_text,
-          reasoning_seen:
-            action.delta.delta_kind === "reasoning"
-              ? true
-              : turn.reasoning_seen,
-        }),
+        (turn) => projectDelta(turn, action.delta),
       );
     case "transcript.reconciled":
       if (action.generation !== state.thread_generation) return state;

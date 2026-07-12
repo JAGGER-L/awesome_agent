@@ -13,7 +13,10 @@ function lifecycle(
   const payload = kind.startsWith("operation.")
     ? { kind, message: "" }
     : kind.startsWith("turn.")
-      ? { kind }
+      ? {
+          kind,
+          ...(kind === "turn.started" ? {} : { duration_ms: 1_000 }),
+        }
       : kind === "warning"
         ? { kind, code: "safe", message: "warning" }
         : {
@@ -199,12 +202,108 @@ describe("surfaceReducer", () => {
         operation_id: "operation_1",
         delta_kind: "text",
         text: "hello",
+        first_timestamp: "2026-07-11T08:00:01Z",
+        last_timestamp: "2026-07-11T08:00:01Z",
         first_sequence: 3,
         last_sequence: 4,
       },
     });
-    expect(state.active_operation?.turn?.assistant_text).toBe("hello");
+    expect(state.active_operation?.turn?.timeline).toEqual([
+      expect.objectContaining({ kind: "thinking", duration_ms: 1_000 }),
+      expect.objectContaining({ kind: "assistant", text: "hello" }),
+    ]);
     expect(state.event_sequence).toBe(4);
+  });
+
+  it("preserves thinking, tool, thinking, and answer order with independent durations", () => {
+    let state = surfaceReducer(initialSurfaceState(), {
+      type: "event.received",
+      generation: 0,
+      event: lifecycle(1, "operation.started"),
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: {
+        ...lifecycle(2, "turn.started"),
+        timestamp: "2026-07-11T08:00:00Z",
+      },
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: {
+        ...lifecycle(3, "warning"),
+        event_type: "tool.started",
+        timestamp: "2026-07-11T08:00:02Z",
+        payload: {
+          kind: "tool.started",
+          call_id: "call_1",
+          tool_name: "write_file",
+          verb: "Write",
+          target: "circle_area.py",
+        },
+      } as EventEnvelope,
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: {
+        ...lifecycle(4, "warning"),
+        event_type: "tool.completed",
+        timestamp: "2026-07-11T08:00:02.018Z",
+        payload: {
+          kind: "tool.completed",
+          call_id: "call_1",
+          tool_name: "write_file",
+          verb: "Write",
+          target: "circle_area.py",
+          outcome: "Created",
+          summary: "21 lines",
+          duration_ms: 18,
+        },
+      } as EventEnvelope,
+    });
+    state = surfaceReducer(state, {
+      type: "delta.received",
+      generation: 0,
+      delta: {
+        kind: "coalesced_delta",
+        session_id: "session_1",
+        thread_id: "thread_1",
+        turn_id: "turn_1",
+        operation_id: "operation_1",
+        delta_kind: "text",
+        text: "done",
+        first_timestamp: "2026-07-11T08:00:03Z",
+        last_timestamp: "2026-07-11T08:00:03Z",
+        first_sequence: 5,
+        last_sequence: 5,
+      },
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: {
+        ...lifecycle(6, "turn.completed"),
+        timestamp: "2026-07-11T08:00:05Z",
+        payload: {
+          kind: "turn.completed",
+          reason: "completed",
+          duration_ms: 5_000,
+        },
+      } as EventEnvelope,
+    });
+
+    expect(state.active_operation?.turn).toMatchObject({
+      duration_ms: 5_000,
+      timeline: [
+        { kind: "thinking", duration_ms: 2_000 },
+        { kind: "tool", outcome: "Created", duration_ms: 18 },
+        { kind: "thinking", duration_ms: 982 },
+        { kind: "assistant", text: "done" },
+      ],
+    });
   });
 
   it("enters fatal state for terminal-before-start and duplicate terminals", () => {
@@ -255,6 +354,8 @@ describe("surfaceReducer", () => {
         operation_id: "operation_1",
         delta_kind: "reasoning",
         text: "r".repeat(40_000),
+        first_timestamp: "2026-07-11T08:00:01Z",
+        last_timestamp: "2026-07-11T08:00:01Z",
         first_sequence: 3,
         last_sequence: 3,
       },
@@ -269,7 +370,7 @@ describe("surfaceReducer", () => {
     });
     expect(state.active_operation?.turn).toMatchObject({
       reasoning_text: "",
-      reasoning_marker: "Thought for 0 ms",
+      duration_ms: 1_000,
     });
   });
 

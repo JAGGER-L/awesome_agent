@@ -40,6 +40,7 @@ def _register(
     input_model: type[BaseModel],
     handler: ToolHandler,
     capability: ToolCapability,
+    verb: str,
     read_only: bool = True,
 ) -> None:
     registry.register(
@@ -49,6 +50,7 @@ def _register(
             input_schema=input_model.model_json_schema(),
             capability=capability,
             read_only=read_only,
+            display_metadata={"verb": verb},
         ),
         input_model=input_model,
         handler=handler,
@@ -63,6 +65,7 @@ def register_read_tools(registry: ToolRegistry) -> None:
         input_model=GlobArguments,
         handler=glob_files,
         capability=ToolCapability.WORKSPACE_READ,
+        verb="Glob",
     )
     _register(
         registry,
@@ -71,6 +74,7 @@ def register_read_tools(registry: ToolRegistry) -> None:
         input_model=GrepArguments,
         handler=grep_files,
         capability=ToolCapability.WORKSPACE_READ,
+        verb="Grep",
     )
     _register(
         registry,
@@ -79,6 +83,7 @@ def register_read_tools(registry: ToolRegistry) -> None:
         input_model=LsArguments,
         handler=list_directory,
         capability=ToolCapability.WORKSPACE_READ,
+        verb="List",
     )
     _register(
         registry,
@@ -87,6 +92,7 @@ def register_read_tools(registry: ToolRegistry) -> None:
         input_model=ReadFileArguments,
         handler=read_file,
         capability=ToolCapability.WORKSPACE_READ,
+        verb="Read",
     )
 
 
@@ -102,6 +108,7 @@ def register_modifying_tools(
         input_model=DeleteArguments,
         handler=create_delete_handler(journal),
         capability=ToolCapability.WORKSPACE_DELETE,
+        verb="Delete",
         read_only=False,
     )
     _register(
@@ -111,6 +118,7 @@ def register_modifying_tools(
         input_model=EditFileArguments,
         handler=create_edit_file_handler(journal),
         capability=ToolCapability.WORKSPACE_WRITE,
+        verb="Edit",
         read_only=False,
     )
     if process_runner is not None:
@@ -121,6 +129,7 @@ def register_modifying_tools(
             input_model=ExecuteArguments,
             handler=create_execute_handler(journal, process_runner),
             capability=ToolCapability.SHELL_EXECUTE,
+            verb="Run",
             read_only=False,
         )
     _register(
@@ -130,6 +139,7 @@ def register_modifying_tools(
         input_model=WriteFileArguments,
         handler=create_write_file_handler(journal),
         capability=ToolCapability.WORKSPACE_WRITE,
+        verb="Write",
         read_only=False,
     )
 

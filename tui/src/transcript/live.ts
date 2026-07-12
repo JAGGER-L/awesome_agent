@@ -4,52 +4,66 @@ import type {
   ToolItem,
   TranscriptBlock,
 } from "./model.js";
+import { formatDuration, reasoningElapsedMarker } from "./reasoning.js";
 
 export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
   const blocks: TranscriptBlock[] = [];
   const operation = state.active_operation;
   const turn = operation?.turn;
-  if (turn?.assistant_text) {
-    blocks.push({
-      key: `live:${turn.id}:assistant`,
-      kind: "assistant",
-      text: turn.assistant_text,
-    });
-  }
-  if (turn?.reasoning_marker) {
-    blocks.push({
-      key: `live:${turn.id}:reasoning`,
-      kind: "reasoning_marker",
-      label: turn.reasoning_marker,
-    });
-  }
-  if (turn && turn.tool_order.length > 0) {
-    const items = [...new Set(turn.tool_order)].flatMap(
-      (callId): ToolItem[] => {
-        const tool = turn.tools[callId];
-        if (!tool) return [];
-        return [
-          {
-            call_id: tool.call_id,
-            name: tool.tool_name,
-            outcome:
-              tool.status === "completed"
-                ? "success"
-                : tool.status === "failed"
-                  ? "error"
-                  : tool.status === "cancelled"
-                    ? "cancelled"
-                    : "running",
-            summary: tool.status === "running" ? "Running…" : tool.summary,
-            duration_ms: 0,
-            ...(tool.error_code === undefined
-              ? {}
-              : { error_code: tool.error_code }),
-          },
-        ];
-      },
-    );
-    blocks.push({ key: `live:${turn.id}:tools`, kind: "tools", items });
+  if (turn) {
+    for (const item of turn.timeline) {
+      if (item.kind === "thinking" && item.duration_ms !== undefined) {
+        blocks.push({
+          key: `live:${turn.id}:${item.id}`,
+          kind: "reasoning_marker",
+          label: reasoningElapsedMarker(item.duration_ms),
+        });
+      } else if (item.kind === "assistant") {
+        blocks.push({
+          key: `live:${turn.id}:${item.id}`,
+          kind: "assistant",
+          text: item.text,
+        });
+      } else if (item.kind === "tool") {
+        const tool: ToolItem = {
+          call_id: item.call_id,
+          name: item.tool_name,
+          verb: item.verb,
+          ...(item.target === undefined ? {} : { target: item.target }),
+          outcome:
+            item.status === "completed"
+              ? "success"
+              : item.status === "failed"
+                ? "error"
+                : item.status === "cancelled"
+                  ? "cancelled"
+                  : "running",
+          ...(item.outcome === undefined
+            ? {}
+            : { presentation_outcome: item.outcome }),
+          summary: item.status === "running" ? "Running…" : item.summary,
+          ...(item.detail === undefined ? {} : { detail: item.detail }),
+          ...(item.duration_ms === undefined
+            ? {}
+            : { duration_ms: item.duration_ms }),
+          ...(item.error_code === undefined
+            ? {}
+            : { error_code: item.error_code }),
+        };
+        blocks.push({
+          key: `live:${turn.id}:tool:${item.call_id}`,
+          kind: "tools",
+          items: [tool],
+        });
+      }
+    }
+    if (turn.duration_ms !== undefined) {
+      blocks.push({
+        key: `live:${turn.id}:duration`,
+        kind: "status",
+        message: `Worked for ${formatDuration(turn.duration_ms)}`,
+      });
+    }
   }
   if (state.latest_change) {
     blocks.push({

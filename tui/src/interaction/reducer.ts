@@ -8,6 +8,7 @@ export function initialTerminalUiState(): TerminalUiState {
     mode: { kind: "composer" },
     composer: initialComposerState(),
     composerSubmitting: false,
+    toolDetailsExpanded: false,
   };
 }
 
@@ -84,6 +85,8 @@ export function terminalUiReducer(
       return { ...state, notice: action.message };
     case "notice.clear":
       return withoutNotice(state);
+    case "tool_details.toggle":
+      return { ...state, toolDetailsExpanded: !state.toolDetailsExpanded };
   }
 }
 

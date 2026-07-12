@@ -8,9 +8,11 @@ import { BlockView } from "./blocks/BlockView.js";
 export function ActiveTurn({
   live,
   width,
+  toolDetailsExpanded = false,
 }: {
   live: LiveTranscriptProjection;
   width: number;
+  toolDetailsExpanded?: boolean;
 }) {
   const theme = useTheme();
   if (live.terminal) return null;
@@ -24,7 +26,12 @@ export function ActiveTurn({
             <Text wrap="wrap">{formatStreamingMarkdown(block.text)}</Text>
           </Box>
         ) : (
-          <BlockView key={block.key} block={block} width={width} />
+          <BlockView
+            key={block.key}
+            block={block}
+            width={width}
+            toolDetailsExpanded={toolDetailsExpanded}
+          />
         ),
       )}
       {width >= 60 && live.usage ? (

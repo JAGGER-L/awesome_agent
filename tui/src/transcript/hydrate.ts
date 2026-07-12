@@ -43,11 +43,6 @@ export function hydrateThreadPage(page: ThreadPage): TranscriptProjection {
         text: entry.content,
       });
     } else if (entry.kind === "assistant_message") {
-      blocks.push({
-        key: `entry:${entry.id}`,
-        kind: "assistant",
-        text: entry.content,
-      });
       const turn = turnsByAssistant.get(entry.id);
       if (turn)
         appendTools(blocks, `turn:${turn.id}`, toolsByTurn.get(turn.id) ?? []);
@@ -60,6 +55,11 @@ export function hydrateThreadPage(page: ThreadPage): TranscriptProjection {
         });
       }
       appendChanges(blocks, page, turn?.id, undefined);
+      blocks.push({
+        key: `entry:${entry.id}`,
+        kind: "assistant",
+        text: entry.content,
+      });
     } else {
       blocks.push({
         key: `entry:${entry.id}`,
@@ -110,6 +110,7 @@ function appendTools(
       .map((tool) => ({
         call_id: tool.call_id,
         name: tool.tool_name,
+        verb: toolVerb(tool.tool_name),
         outcome: tool.outcome,
         summary: tool.result_summary,
         duration_ms: tool.duration_ms,
@@ -138,4 +139,18 @@ function appendChanges(
       reversibility: change.reversibility,
     });
   }
+}
+
+function toolVerb(name: string): string {
+  const known: Record<string, string> = {
+    delete: "Delete",
+    edit_file: "Edit",
+    execute: "Run",
+    glob: "Glob",
+    grep: "Grep",
+    ls: "List",
+    read_file: "Read",
+    write_file: "Write",
+  };
+  return known[name] ?? name;
 }

@@ -7,9 +7,11 @@ import { useTheme } from "../../theme.js";
 export function BlockView({
   block,
   width,
+  toolDetailsExpanded = false,
 }: {
   block: TranscriptBlock;
   width: number;
+  toolDetailsExpanded?: boolean;
 }) {
   const theme = useTheme();
   switch (block.kind) {
@@ -39,23 +41,34 @@ export function BlockView({
       return (
         <Box flexDirection="column">
           {block.items.map((item) => (
-            <Text
-              key={item.call_id}
-              color={item.outcome === "error" ? theme.error : theme.muted}
-            >
-              {item.outcome === "running"
-                ? "…"
-                : item.outcome === "success"
-                  ? "✓"
-                  : "!"}{" "}
-              {item.name} · {item.summary}
-              {width >= 60 && item.duration_ms > 0
-                ? ` · ${item.duration_ms}ms`
-                : ""}
-              {item.outcome === "error" && item.error_code
-                ? ` · ${item.error_code}`
-                : ""}
-            </Text>
+            <Box key={item.call_id} flexDirection="column">
+              <Text
+                color={item.outcome === "error" ? theme.error : theme.assistant}
+              >
+                ● {item.verb}
+                {item.target ? ` ${item.target}` : ""}
+              </Text>
+              <Text
+                color={item.outcome === "error" ? theme.error : theme.muted}
+              >
+                {"  └ "}
+                {item.outcome === "running"
+                  ? item.summary
+                  : `${item.presentation_outcome ?? presentationOutcome(item.outcome)} · ${item.summary}`}
+                {width >= 60 && item.duration_ms !== undefined
+                  ? ` · ${item.duration_ms}ms`
+                  : ""}
+                {item.outcome === "error" && item.error_code
+                  ? ` · ${item.error_code}`
+                  : ""}
+              </Text>
+              {toolDetailsExpanded && item.detail ? (
+                <Text color={theme.muted}>
+                  {"    "}
+                  {item.detail}
+                </Text>
+              ) : null}
+            </Box>
           ))}
         </Box>
       );
@@ -93,4 +106,12 @@ export function BlockView({
     case "omitted_history":
       return <Text dimColor>{block.message}</Text>;
   }
+}
+
+function presentationOutcome(
+  outcome: "success" | "error" | "cancelled",
+): string {
+  if (outcome === "success") return "Completed";
+  if (outcome === "error") return "Failed";
+  return "Cancelled";
 }

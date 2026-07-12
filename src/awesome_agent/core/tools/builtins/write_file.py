@@ -11,7 +11,11 @@ from pydantic import BaseModel, Field
 from awesome_agent.core.changes import ChangeJournal, NodeSnapshot
 from awesome_agent.core.changes.models import FileChangeKind, FileNodeType
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolOutput,
+    ToolPresentation,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
 from awesome_agent.core.tools.policy import resolve_workspace_path
 
@@ -87,6 +91,17 @@ def create_write_file_handler(journal: ChangeJournal) -> ToolHandler:
         return ToolOutput(
             content=f"Wrote {change.path}.",
             metadata={"path": change.path, "change_set_id": context.change_set_id},
+            presentation=ToolPresentation(
+                verb="Write",
+                target=change.path,
+                outcome="Updated" if existed else "Created",
+                summary=_line_summary(options.content),
+            ),
         )
 
     return write_file
+
+
+def _line_summary(content: str) -> str:
+    count = len(content.splitlines())
+    return f"{count} {'line' if count == 1 else 'lines'}"

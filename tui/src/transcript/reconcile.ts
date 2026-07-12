@@ -28,7 +28,15 @@ export function reconcileCompletedTurn(
       ],
     };
   }
-  return { ...hydrateThreadPage(page), persisted: true };
+  const durable = hydrateThreadPage(page);
+  return {
+    ...durable,
+    blocks: [
+      ...durable.blocks,
+      ...live.blocks.filter((block) => block.kind === "status"),
+    ],
+    persisted: true,
+  };
 }
 
 function validateDurableTurn(

@@ -5,7 +5,11 @@ from typing import cast
 from pydantic import BaseModel, Field
 
 from awesome_agent.core.tools.context import ToolExecutionContext
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolOutput,
+    ToolPresentation,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure
 from awesome_agent.core.tools.policy import resolve_workspace_path
 
@@ -80,8 +84,10 @@ async def read_file(
         last_line = index + 1
 
     truncated = content_truncated or end_index < total_lines
+    content = "".join(rendered)
+    line_count = max(0, last_line - start_index)
     return ToolOutput(
-        content="".join(rendered),
+        content=content,
         metadata={
             "path": safe.relative.as_posix(),
             "start_line": options.start_line,
@@ -89,4 +95,11 @@ async def read_file(
             "total_lines": total_lines,
             "truncated": truncated,
         },
+        presentation=ToolPresentation(
+            verb="Read",
+            target=safe.relative.as_posix(),
+            outcome="Read",
+            summary=f"{line_count} {'line' if line_count == 1 else 'lines'}",
+            detail=content[:4_000] or None,
+        ),
     )
