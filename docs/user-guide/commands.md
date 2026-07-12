@@ -30,8 +30,7 @@ No other public launch flags are supported.
 | `/undo` | Undo the latest or selected reversible change set. |
 | `/redo` | Redo the latest or selected undone change set. |
 | `/tools` | List the effective built-in and extension tools. |
-| `/skills` | List discovered Skills and diagnostics. |
-| `/skill [auto\|off\|name]` | Show or select thread Skill mode. |
+| `/skills [auto\|off\|name]` | List Skills or select thread Skill mode. |
 | `/mcp` | Show MCP server status. |
 | `/memory` | Show memory status; see the [memory guide](memory-skills-mcp.md). |
 | `/status` | Show the current product and thread status. |
@@ -56,9 +55,9 @@ Removing a local credential does not revoke it at the Provider.
 
 ## Skill-backed commands
 
-`/init`, `/review`, `/debug`, `/test`, and `/commit` select the corresponding
-bundled Skill and submit the remaining text as a normal Agent task. They do not
-create a second execution system.
+`/init` selects the bundled initialization Skill and submits the remaining text
+as a normal Agent task. Other workflows are selected through `/skills` or
+requested naturally; none create a second execution system.
 
 ## Ink-local commands
 

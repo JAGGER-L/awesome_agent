@@ -20,14 +20,14 @@ describe("COMMAND_CATALOG", () => {
   it("has exact owner counts and useful metadata", () => {
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "application"),
-    ).toHaveLength(21);
+    ).toHaveLength(20);
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "skill"),
-    ).toHaveLength(5);
+    ).toHaveLength(1);
     expect(COMMAND_CATALOG.filter(({ owner }) => owner === "ink")).toHaveLength(
       4,
     );
-    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(30);
+    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(25);
     for (const command of COMMAND_CATALOG) {
       expect(command.description.length).toBeGreaterThan(0);
       expect(command.usage).toMatch(new RegExp(`^/${command.name}(?: |$)`));
@@ -39,6 +39,13 @@ describe("COMMAND_CATALOG", () => {
     "details",
     "history",
     "clear",
+    "exit",
+    "skill",
+    "review",
+    "debug",
+    "test",
+    "commit",
+    "workplace",
   ])("does not restore /%s", (name) => {
     expect(COMMAND_CATALOG.some((command) => command.name === name)).toBe(
       false,

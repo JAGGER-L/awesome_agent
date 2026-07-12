@@ -19,11 +19,11 @@ describe("parseInput", () => {
 
   it("parses quoted and escaped slash arguments without host-shell rules", () => {
     expect(
-      parseInput("/skill \"debug session\" one\\ two 'three four'"),
+      parseInput("/skills \"debug session\" one\\ two 'three four'"),
     ).toEqual({
       kind: "command",
       intent: {
-        name: "skill",
+        name: "skills",
         arguments: ["debug session", "one two", "three four"],
       },
     });
@@ -44,6 +44,12 @@ describe("parseInput", () => {
     "/unknown",
     "/editor",
     "/details",
+    "/skill",
+    "/review",
+    "/debug",
+    "/test",
+    "/commit",
+    "/workplace",
   ])("rejects absent command %s", (input) => {
     expect(parseInput(input)).toEqual({
       kind: "invalid",

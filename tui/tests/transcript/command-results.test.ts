@@ -9,8 +9,12 @@ describe("command result transcript blocks", () => {
       key: "command_1",
       kind: "command_result",
       command: "usage",
-      tone: "info",
-      content: "No usage recorded yet.",
+      presentation: {
+        kind: "lines",
+        title: "/usage",
+        rows: [{ label: "", value: "No usage recorded yet." }],
+        tone: "info",
+      },
     };
 
     expect(mergeTranscriptBlocks([], [block], [block])).toEqual([block]);

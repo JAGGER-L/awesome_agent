@@ -62,19 +62,25 @@ describe("protocol inventory", () => {
   });
 
   it("freezes command ownership and excludes removed commands", () => {
-    expect(applicationCommandNames).toHaveLength(21);
+    expect(applicationCommandNames).toHaveLength(20);
     expect(applicationCommandNames).toContain("auth");
     expect(applicationCommandNames).toContain("permissions");
-    expect(skillCommandNames).toEqual([
-      "init",
+    expect(skillCommandNames).toEqual(["init"]);
+    expect(inkCommandNames).toEqual(["help", "theme", "copy", "quit"]);
+    expect(commandNameSchema.safeParse("editor").success).toBe(false);
+    expect(commandNameSchema.safeParse("details").success).toBe(false);
+    for (const removed of [
+      "skill",
       "review",
       "debug",
       "test",
       "commit",
-    ]);
-    expect(inkCommandNames).toEqual(["help", "theme", "copy", "quit"]);
-    expect(commandNameSchema.safeParse("editor").success).toBe(false);
-    expect(commandNameSchema.safeParse("details").success).toBe(false);
+      "workplace",
+      "clear",
+      "exit",
+    ]) {
+      expect(commandNameSchema.safeParse(removed).success).toBe(false);
+    }
   });
 });
 

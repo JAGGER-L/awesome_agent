@@ -3,7 +3,7 @@
 Awesome reads a small strict configuration surface. Unknown or duplicate YAML
 keys are errors; configuration is loaded when Core starts, so restart Awesome
 after editing files or environment variables. Thread choices made by commands
-such as `/model`, `/thinking`, and `/skill` apply without a restart.
+such as `/model`, `/thinking`, and `/skills` apply without a restart.
 
 ## Locations
 

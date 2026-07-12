@@ -423,6 +423,14 @@ export function surfaceReducer(
           [action.block],
         ),
       };
+    case "transcript.command_result.replace":
+      if (action.generation !== state.thread_generation) return state;
+      return {
+        ...state,
+        committed_transcript: (state.committed_transcript ?? []).map((block) =>
+          block.key === action.block.key ? action.block : block,
+        ),
+      };
     case "transcript.user.pending":
       if (action.generation !== state.thread_generation) return state;
       return {

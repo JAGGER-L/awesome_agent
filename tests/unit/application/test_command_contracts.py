@@ -39,7 +39,6 @@ def test_command_ownership_matrix_is_complete() -> None:
         "redo",
         "tools",
         "skills",
-        "skill",
         "mcp",
         "memory",
         "status",
@@ -48,7 +47,7 @@ def test_command_ownership_matrix_is_complete() -> None:
         "config",
         "permissions",
     }
-    skill = {"init", "review", "debug", "test", "commit"}
+    skill = {"init"}
     ink = {"help", "theme", "copy", "quit"}
 
     assert {
@@ -88,6 +87,12 @@ def test_command_intent_round_trips() -> None:
         "team",
         "details",
         "editor",
+        "skill",
+        "review",
+        "debug",
+        "test",
+        "commit",
+        "workplace",
     ],
 )
 def test_removed_commands_have_no_alias(removed: str) -> None:

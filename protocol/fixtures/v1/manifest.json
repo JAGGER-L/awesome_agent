@@ -1,12 +1,10 @@
 {
   "command_owners": {
     "auth": "application",
-    "commit": "skill",
     "compact": "application",
     "config": "application",
     "context": "application",
     "copy": "ink",
-    "debug": "skill",
     "diff": "application",
     "doctor": "application",
     "help": "ink",
@@ -19,11 +17,8 @@
     "quit": "ink",
     "redo": "application",
     "resume": "application",
-    "review": "skill",
-    "skill": "application",
     "skills": "application",
     "status": "application",
-    "test": "skill",
     "theme": "ink",
     "thinking": "application",
     "tools": "application",
@@ -57,7 +52,7 @@
     "warning"
   ],
   "files": {
-    "commands.json": "bb31de5367b1660304f69eb4257e4735e1f8e46104f61df89ecc0f6dd47cd592",
+    "commands.json": "c7f8c0c4202f1041e6508e7fe961d064a15400c4f974c3a45c689cc2cf05cf18",
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
     "events.valid.json": "9ebd3de90accfa08c4c64951c40faa776a4ffe0405d45e45bb8f9b248e1bf2a6",
     "methods.invalid.json": "9c23ee879019f3da90ca87c8e4f5efb39b5a00302d1894e0b85f431d5d221559",
