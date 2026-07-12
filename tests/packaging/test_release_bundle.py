@@ -19,6 +19,14 @@ from scripts.release.build_bundle import (
 
 def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
     (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    (root / "install.sh").write_text(
+        f'#!/bin/sh\nVERSION="{version}"\n',
+        encoding="utf-8",
+    )
+    (root / "install.ps1").write_text(
+        f'$Version = "{version}"\n',
+        encoding="utf-8",
+    )
     tui = root / "tui"
     (tui / "dist" / "cli").mkdir(parents=True, exist_ok=True)
     (tui / "dist" / "cli" / "index.js").write_text(
@@ -115,6 +123,18 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
     assert second.archive.read_bytes() == first_bytes
     assert second.checksums.read_text(encoding="utf-8") == first_sums
     assert first_sums.endswith("  awesome-1.0.0.zip\n")
+    assert {path.name for path in second.archive.parent.iterdir()} == {
+        "install.sh",
+        "install.ps1",
+        "awesome-1.0.0.zip",
+        "SHA256SUMS",
+    }
+    assert (second.archive.parent / "install.sh").read_bytes() == (
+        tmp_path / "install.sh"
+    ).read_bytes()
+    assert (second.archive.parent / "install.ps1").read_bytes() == (
+        tmp_path / "install.ps1"
+    ).read_bytes()
 
     with ZipFile(second.archive) as archive:
         assert archive.namelist() == [
@@ -131,3 +151,22 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
         wheel_name = "awesome-1.0.0/core/awesome_agent-1.0.0-py3-none-any.whl"
         with archive.open(wheel_name) as wheel_stream:
             assert wheel_stream.read(2) == b"PK"
+
+
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("install.sh", '#!/bin/sh\nVERSION="9.9.9"\n'),
+        ("install.ps1", '$Version = "9.9.9"\n'),
+    ],
+)
+def test_bundle_rejects_installer_version_drift(
+    tmp_path: Path,
+    name: str,
+    content: str,
+) -> None:
+    _fixture(tmp_path)
+    (tmp_path / name).write_text(content, encoding="utf-8")
+
+    with pytest.raises(BundleError, match="installer version"):
+        assemble_bundle(tmp_path, "1.0.0")
