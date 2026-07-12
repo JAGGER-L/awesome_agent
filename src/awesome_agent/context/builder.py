@@ -22,6 +22,7 @@ from awesome_agent.memory.mem0_cloud import MEM0_MAX_RESULTS, Mem0CloudError
 from awesome_agent.memory.models import CloudMemory, Mem0Diagnostic, MemoryDocument
 from awesome_agent.modeling import (
     AssistantMessage,
+    ModelIdentitySnapshot,
     ModelMessage,
     SystemMessage,
     UserMessage,
@@ -147,6 +148,30 @@ class ContextBuilder:
             effective_input_limit=budget.effective_input_limit,
             compression_recommended=estimated >= budget.compression_threshold,
         )
+
+
+def model_identity_context_source(
+    identity: ModelIdentitySnapshot,
+) -> ContextSource:
+    fallback = (
+        f"yes, from {identity.fallback_from}" if identity.fallback_active else "no"
+    )
+    return ContextSource(
+        kind=ContextSourceKind.PRODUCT_INSTRUCTIONS,
+        source_id="model_identity",
+        role="system",
+        mandatory=True,
+        content=(
+            "Runtime identity (authoritative):\n"
+            f"- Runtime: {identity.runtime_name}\n"
+            f"- Provider: {identity.provider}\n"
+            f"- Configured model: {identity.configured_model}\n"
+            f"- Effective model: {identity.effective_model}\n"
+            f"- Fallback active: {fallback}\n"
+            "When asked about your identity, report these facts and do not infer "
+            "a different model or runtime."
+        ),
+    )
 
 
 def local_memory_context_sources(

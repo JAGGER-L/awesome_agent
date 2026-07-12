@@ -19,6 +19,11 @@ export type PickerOwner =
   | { readonly kind: "local_theme" }
   | { readonly kind: "thread" }
   | {
+      readonly kind: "credential_delete";
+      readonly intent: CommandIntent;
+      readonly provider: "deepseek" | "kimi";
+    }
+  | {
       readonly kind: "credential_confirm";
       readonly intent: CommandIntent;
       readonly prompt: SecretPrompt;

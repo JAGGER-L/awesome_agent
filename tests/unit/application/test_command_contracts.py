@@ -177,7 +177,7 @@ def test_surface_neutral_application_contracts_hide_secret_values() -> None:
         workspace=WorkspacePresentation(display_path="C:\\workspace"),
         workspace_trusted=True,
         current_thread_id=None,
-        current_model=None,
+        model_identity=None,
         thinking_enabled=False,
         skill_mode="auto",
         active_operation_id=None,

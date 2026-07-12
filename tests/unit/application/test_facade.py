@@ -107,7 +107,7 @@ class Backend:
         self.calls.append(("credential", request))
         return ProviderCredentialSetResult(
             provider=request.provider,
-            status=ProviderCredentialSetStatus.SAVED,
+            status=ProviderCredentialSetStatus.CONFIGURED,
             source=CredentialSource.USER_ENV_FILE,
             code="credential_saved",
         )
@@ -186,10 +186,12 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     )
     assert _unwrap(await facade.execute_command(intent)).status is CommandStatus.SUCCESS
     credential = ProviderCredentialSetRequest(
-        provider="deepseek", api_key=SecretStr("never-render-this")
+        provider="deepseek",
+        action="add",
+        api_key=SecretStr("never-render-this"),
     )
     saved = _unwrap(await facade.set_provider_credential(credential))
-    assert saved.status is ProviderCredentialSetStatus.SAVED
+    assert saved.status is ProviderCredentialSetStatus.CONFIGURED
     assert "never-render-this" not in repr(backend.calls)
     assert (
         _unwrap(await facade.respond_interaction("interaction_1", "trust")).accepted

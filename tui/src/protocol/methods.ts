@@ -9,6 +9,7 @@ import {
   utcTimestampSchema,
 } from "./base.js";
 import { commandIntentSchema, commandResultSchema } from "./commands.js";
+import { modelIdentitySchema } from "./identity.js";
 
 const nonNegativeIntegerSchema = safeIntegerSchema.min(0);
 const positiveIntegerSchema = safeIntegerSchema.min(1);
@@ -65,7 +66,7 @@ export const applicationStateSchema = z.strictObject({
   workspace: workspacePresentationSchema,
   workspace_trusted: z.boolean(),
   current_thread_id: identifierSchema.optional(),
-  current_model: boundedText(0, 200).optional(),
+  model_identity: modelIdentitySchema.optional(),
   thinking_enabled: z.boolean(),
   skill_mode: boundedText(1, 64),
   active_operation_id: identifierSchema.optional(),
@@ -287,7 +288,13 @@ const cancelResultSchema = z.strictObject({
 const shutdownResultSchema = z.strictObject({ stopped: z.literal(true) });
 export const providerCredentialSetResultSchema = z.strictObject({
   provider: z.enum(["deepseek", "kimi"]),
-  status: z.enum(["saved", "invalid", "confirm_unverified"]),
+  status: z.enum([
+    "configured",
+    "deleted",
+    "invalid",
+    "confirm_unverified",
+    "environment_managed",
+  ]),
   source: credentialSourceSchema,
   code: boundedText(1, 128),
 });
@@ -335,11 +342,26 @@ export const methodSchemas = {
     result: applicationResultSchema(commandResultSchema),
   },
   "provider.credential.set": {
-    params: z.strictObject({
-      provider: z.enum(["deepseek", "kimi"]),
-      api_key: boundedText(1, 20_000),
-      allow_unverified: z.boolean().optional(),
-    }),
+    params: z
+      .strictObject({
+        provider: z.enum(["deepseek", "kimi"]),
+        action: z.enum(["add", "replace", "delete"]),
+        api_key: boundedText(1, 20_000).optional(),
+        allow_unverified: z.boolean().optional(),
+      })
+      .superRefine(({ action, api_key, allow_unverified }, context) => {
+        if (action === "delete" && (api_key || allow_unverified)) {
+          context.addIssue({
+            code: "custom",
+            message: "Delete does not accept credential content",
+          });
+        } else if (action !== "delete" && !api_key) {
+          context.addIssue({
+            code: "custom",
+            message: "Credential content is required",
+          });
+        }
+      }),
     value: providerCredentialSetResultSchema,
     result: applicationResultSchema(providerCredentialSetResultSchema),
   },

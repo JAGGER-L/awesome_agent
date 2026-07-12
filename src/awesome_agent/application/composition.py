@@ -69,7 +69,6 @@ from awesome_agent.application.operations import OperationBusy, OperationControl
 from awesome_agent.application.provider_configuration import (
     CredentialValidator,
     ProviderConfigurationService,
-    ProviderCredentialManagedExternally,
 )
 from awesome_agent.application.turns import TurnCoordinator
 from awesome_agent.config import (
@@ -161,6 +160,7 @@ from awesome_agent.memory.mem0_cloud import Mem0Client
 from awesome_agent.modeling import (
     GatewayEvent,
     ModelGateway,
+    ModelIdentitySnapshot,
     ModelProvider,
     ModelRequest,
     ModelTurn,
@@ -482,7 +482,7 @@ class _LocalApplicationBackend:
                 self._trust.status(self._workspace) is TrustStatus.TRUSTED
             ),
             current_thread_id=current_id,
-            current_model=current.current_model if current else None,
+            model_identity=self._model_identity(current) if current else None,
             thinking_enabled=current.thinking_enabled if current else False,
             skill_mode=current.skill_mode if current else "auto",
             active_operation_id=self._operations.active_operation_id,
@@ -676,13 +676,7 @@ class _LocalApplicationBackend:
     ) -> ProviderCredentialSetResult:
         self._require_active()
         assert self._provider_configuration is not None
-        try:
-            return await self._provider_configuration.set_credential(request)
-        except ProviderCredentialManagedExternally as error:
-            raise _application_failure(
-                ProductErrorCode.CREDENTIAL_MANAGED_EXTERNALLY,
-                "Provider credential is managed by the process environment.",
-            ) from error
+        return await self._provider_configuration.set_credential(request)
 
     async def resolve_interaction(
         self,
@@ -819,6 +813,10 @@ class _LocalApplicationBackend:
             product_instructions=(
                 "You are a local-first coding agent. Use tools when evidence is needed."
             ),
+            model_identity=lambda turn: ModelIdentitySnapshot.from_models(
+                configured_model=turn.model,
+                effective_model=turn.model,
+            ),
             skill_loader=skill_loader,
             local_memory=self._local_memory,
             mem0_recall=self._mem0_session.recall,
@@ -953,9 +951,7 @@ class _LocalApplicationBackend:
                     operation_id,
                     turn_id=None,
                 ),
-                permission_session=PermissionSession(
-                    mode=PermissionMode.FULL_ACCESS
-                ),
+                permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
             )
 
         self._direct = DirectCommandService(
@@ -1055,6 +1051,16 @@ class _LocalApplicationBackend:
             environ={},
         )
 
+    def _model_identity(self, thread: Thread) -> ModelIdentitySnapshot | None:
+        try:
+            model = self._turn_config(thread).model
+        except ValueError:
+            return None
+        return ModelIdentitySnapshot.from_models(
+            configured_model=model,
+            effective_model=model,
+        )
+
     def _initial_thread_model(self) -> str | None:
         selected = self._environ.get("AWESOME_MODEL")
         if selected is not None:
@@ -1144,6 +1150,8 @@ class _LocalApplicationBackend:
                 self._mem0_session.enabled if self._mem0_session is not None else False
             )
             active_operation_id = self._operations.active_operation_id
+            model_identity = self._model_identity(thread)
+            assert model_identity is not None
             snapshot = StatusSnapshot(
                 version=PRODUCT_VERSION,
                 workspace_path=str(self._workspace.display_path),
@@ -1153,7 +1161,7 @@ class _LocalApplicationBackend:
                     thread.id,
                     candidate_ids=(item.id for item in display_candidates),
                 ),
-                model_id=config.model,
+                model_identity=model_identity,
                 model_status=(
                     "configured"
                     if self._provider_is_configured(config.provider)

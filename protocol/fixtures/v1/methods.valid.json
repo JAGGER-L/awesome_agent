@@ -36,11 +36,17 @@
         "value": {
           "configuration_diagnostics": [],
           "configuration_valid": true,
-          "current_model": "deepseek/deepseek-v4-flash",
           "current_thread_id": "thread_11111111111111111111111111111111",
           "initialized": true,
           "mcp_status": [],
           "memory_status": {},
+          "model_identity": {
+            "configured_model": "deepseek/deepseek-v4-flash",
+            "effective_model": "deepseek/deepseek-v4-flash",
+            "fallback_active": false,
+            "provider": "deepseek",
+            "runtime_name": "Awesome Agent"
+          },
           "permission_mode": "request_approval",
           "provider_credentials": {
             "deepseek": {
@@ -180,6 +186,7 @@
       "method": "provider.credential.set",
       "name": "provider.credential.set",
       "params": {
+        "action": "add",
         "allow_unverified": false,
         "api_key": "fixture-request-secret",
         "provider": "deepseek"
@@ -190,7 +197,7 @@
           "code": "credential_saved",
           "provider": "deepseek",
           "source": "user_env_file",
-          "status": "saved"
+          "status": "configured"
         }
       }
     },

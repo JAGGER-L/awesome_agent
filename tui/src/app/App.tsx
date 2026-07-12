@@ -213,7 +213,7 @@ export function App({
         dispatch({
           type: "mode.open",
           mode: pickerMode(
-            { kind: "command", intent: outcome.intent },
+            commandPickerOwner(outcome.intent),
             outcome.selection,
             blockingSelection,
           ),
@@ -459,30 +459,53 @@ export function App({
     uiRef,
   ]);
 
-  const submitCredential = useCallback(
+  const mutateCredential = useCallback(
     async (
       intent: CommandIntent,
-      prompt: SecretPrompt,
-      secret: string,
+      provider: "deepseek" | "kimi",
+      action: "add" | "replace" | "delete",
+      secret?: string,
+      prompt?: SecretPrompt,
       allowUnverified = false,
     ) => {
       if (!controller) return;
-      if (!allowUnverified) {
-        dispatch({ type: "mode.secret.submitting", submitting: true });
-      }
-      const outcome = await controller.setCredential(
-        prompt.provider,
-        secret,
-        allowUnverified,
-      );
-      if (outcome.kind === "error") {
+      const generation = store.getState().thread_generation;
+      if (action !== "delete" && !secret) {
         dispatch({
-          type: "mode.open",
-          mode: secretMode(intent, prompt, outcome.error.message),
+          type: "mode.secret.message",
+          message: "API key is required.",
         });
         return;
       }
+      if (prompt && !allowUnverified) {
+        dispatch({ type: "mode.secret.submitting", submitting: true });
+      }
+      const outcome = await controller.setCredential(
+        provider,
+        action,
+        secret,
+        allowUnverified,
+      );
+      if (store.getState().thread_generation !== generation) return;
+      if (outcome.kind === "error") {
+        if (prompt) {
+          dispatch({
+            type: "mode.open",
+            mode: secretMode(intent, prompt, outcome.error.message),
+          });
+        } else {
+          dispatch({ type: "mode.cancel" });
+          appendCommandResult(
+            "auth",
+            "error",
+            outcome.error.message,
+            generation,
+          );
+        }
+        return;
+      }
       if (outcome.result.status === "invalid") {
+        if (!prompt) return;
         dispatch({
           type: "mode.open",
           mode: secretMode(
@@ -494,6 +517,7 @@ export function App({
         return;
       }
       if (outcome.result.status === "confirm_unverified") {
+        if (!prompt || !secret) return;
         dispatch({
           type: "mode.open",
           mode: pickerMode(
@@ -511,26 +535,65 @@ export function App({
         });
         return;
       }
+      if (outcome.result.status === "environment_managed") {
+        dispatch({ type: "mode.cancel" });
+        appendCommandResult(
+          "auth",
+          "warning",
+          `${providerLabel(provider)} credential is managed by the process environment.`,
+          generation,
+        );
+        return;
+      }
       const refreshed = await controller.refreshApplication();
+      if (store.getState().thread_generation !== generation) return;
       if (!refreshed.ok) {
-        dispatch({
-          type: "mode.open",
-          mode: secretMode(intent, prompt, refreshed.error.message),
-        });
+        if (prompt) {
+          dispatch({
+            type: "mode.open",
+            mode: secretMode(intent, prompt, refreshed.error.message),
+          });
+        } else {
+          dispatch({ type: "mode.cancel" });
+          appendCommandResult(
+            "auth",
+            "error",
+            refreshed.error.message,
+            generation,
+          );
+        }
         return;
       }
       store.dispatch({
         type: "hydrate.application",
         application: refreshed.value,
       });
+      dispatch({ type: "mode.cancel" });
+      if (outcome.result.status === "deleted") {
+        appendCommandResult(
+          "auth",
+          "info",
+          `${providerLabel(provider)} credential deleted.`,
+          generation,
+        );
+        return;
+      }
+      if (intent.name !== "model") {
+        appendCommandResult(
+          "auth",
+          "info",
+          `${providerLabel(provider)} credential configured.`,
+          generation,
+        );
+        return;
+      }
       const resumed = await controller.submit(
         { kind: "command", intent },
         refreshed.value.current_thread_id,
       );
-      dispatch({ type: "mode.cancel" });
-      await applyCommandOutcome(resumed, intent);
+      await applyCommandOutcome(resumed, intent, generation);
     },
-    [applyCommandOutcome, controller, dispatch, store],
+    [applyCommandOutcome, appendCommandResult, controller, dispatch, store],
   );
 
   const respondApproval = useCallback(
@@ -615,9 +678,24 @@ export function App({
       }
       return;
     }
+    if (owner.kind === "credential_delete") {
+      if (option.value === "confirm") {
+        await mutateCredential(owner.intent, owner.provider, "delete");
+      } else {
+        dispatch({ type: "mode.cancel" });
+      }
+      return;
+    }
     if (owner.kind === "credential_confirm") {
       if (option.value === "save") {
-        await submitCredential(owner.intent, owner.prompt, owner.secret, true);
+        await mutateCredential(
+          owner.intent,
+          owner.prompt.provider,
+          owner.prompt.action,
+          owner.secret,
+          owner.prompt,
+          true,
+        );
       } else {
         dispatch({
           type: "mode.open",
@@ -633,7 +711,7 @@ export function App({
     localCommands,
     state.application?.current_thread_id,
     store,
-    submitCredential,
+    mutateCredential,
     respondApproval,
     submitComposer,
     uiRef,
@@ -703,7 +781,13 @@ export function App({
         onSecretSubmit: () => {
           if (uiRef.current.mode.kind !== "secret") return;
           const { intent, prompt, value } = uiRef.current.mode;
-          void submitCredential(intent, prompt, value);
+          void mutateCredential(
+            intent,
+            prompt.provider,
+            prompt.action,
+            value,
+            prompt,
+          );
         },
         onLifecycle: handleLifecycle,
       });
@@ -715,7 +799,7 @@ export function App({
       respondApproval,
       selectCurrent,
       submitComposer,
-      submitCredential,
+      mutateCredential,
       uiRef,
     ],
   );
@@ -770,6 +854,22 @@ export function App({
       <StatusLine state={state} cancellation={cancellation} />
     </Box>
   );
+}
+
+function commandPickerOwner(intent: CommandIntent): PickerOwner {
+  const provider = intent.arguments?.[0];
+  if (
+    intent.name === "auth" &&
+    intent.arguments?.[1] === "delete" &&
+    (provider === "deepseek" || provider === "kimi")
+  ) {
+    return { kind: "credential_delete", intent, provider };
+  }
+  return { kind: "command", intent };
+}
+
+function providerLabel(provider: "deepseek" | "kimi"): string {
+  return provider === "deepseek" ? "DeepSeek" : "Kimi";
 }
 
 function pickerMode(

@@ -20,7 +20,12 @@ from awesome_agent.context import ContextBuilder, ThreadCompressor
 from awesome_agent.conversation import ConversationService, UsageSummary
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.workspace import resolve_workspace
-from awesome_agent.modeling import AssistantMessage, ModelTurn, StopReason
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelIdentitySnapshot,
+    ModelTurn,
+    StopReason,
+)
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 
@@ -93,6 +98,10 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         configured_total_tokens=262_144,
         model_context_limit=262_144,
         product_instructions="product policy",
+        model_identity=lambda _turn: ModelIdentitySnapshot.from_models(
+            configured_model="deepseek/deepseek-v4-flash",
+            effective_model="deepseek/deepseek-v4-flash",
+        ),
     )
 
     compacted = await context_service.compact_thread(
@@ -123,6 +132,8 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
     assert "before" in frozen_json
     assert "child.txt" in frozen_json
     assert "pytest: passed" in frozen_json
+    assert "Awesome Agent" in frozen_json
+    assert "deepseek/deepseek-v4-flash" in frozen_json
     assert "question 4" in frozen_json
     assert "question 0" not in frozen_json
 

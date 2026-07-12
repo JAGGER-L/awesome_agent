@@ -7,6 +7,7 @@ describe("provider credential protocol", () => {
   it("accepts a dedicated credential request and rejects unknown fields", () => {
     const params = {
       provider: "deepseek",
+      action: "add",
       api_key: "never-render-this",
     };
 
@@ -17,6 +18,19 @@ describe("provider credential protocol", () => {
       methodSchemas["provider.credential.set"].params.safeParse({
         ...params,
         extra: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas["provider.credential.set"].params.safeParse({
+        provider: "deepseek",
+        action: "delete",
+      }).success,
+    ).toBe(true);
+    expect(
+      methodSchemas["provider.credential.set"].params.safeParse({
+        provider: "deepseek",
+        action: "delete",
+        api_key: "must-not-be-accepted",
       }).success,
     ).toBe(false);
   });

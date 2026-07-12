@@ -54,6 +54,7 @@ from awesome_agent.core.events import (
     WarningPayload,
     WorkspaceChangedPayload,
 )
+from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -147,7 +148,10 @@ def _valid_methods() -> dict[str, object]:
                     workspace=workspace,
                     workspace_trusted=True,
                     current_thread_id=THREAD_ID,
-                    current_model="deepseek/deepseek-v4-flash",
+                    model_identity=ModelIdentitySnapshot.from_models(
+                        configured_model="deepseek/deepseek-v4-flash",
+                        effective_model="deepseek/deepseek-v4-flash",
+                    ),
                     configuration_valid=True,
                     secret_status=SecretStatus(deepseek_api_key=True),
                 )
@@ -199,13 +203,14 @@ def _valid_methods() -> dict[str, object]:
             "provider.credential.set",
             {
                 "provider": "deepseek",
+                "action": "add",
                 "api_key": "fixture-request-secret",
                 "allow_unverified": False,
             },
             _success(
                 ProviderCredentialSetResult(
                     provider="deepseek",
-                    status=ProviderCredentialSetStatus.SAVED,
+                    status=ProviderCredentialSetStatus.CONFIGURED,
                     source=CredentialSource.USER_ENV_FILE,
                     code="credential_saved",
                 )

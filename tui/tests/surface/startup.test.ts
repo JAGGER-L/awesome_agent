@@ -259,6 +259,18 @@ describe("runStartup", () => {
   });
 });
 
+function modelIdentity(model: string) {
+  return {
+    provider: model.startsWith("kimi/")
+      ? ("kimi" as const)
+      : ("deepseek" as const),
+    configured_model: model,
+    effective_model: model,
+    runtime_name: "Awesome Agent" as const,
+    fallback_active: false,
+  };
+}
+
 function applicationState({
   model = "deepseek/deepseek-v4-flash",
   deepseek = true,
@@ -276,7 +288,7 @@ function applicationState({
     workspace_key: "workspace_1",
     workspace: { display_path: "E:\\projects\\awesome", branch: "main" },
     workspace_trusted: true,
-    ...(model === null ? {} : { current_model: model }),
+    ...(model === null ? {} : { model_identity: modelIdentity(model) }),
     thinking_enabled: false,
     skill_mode: "auto",
     permission_mode: "request_approval",
@@ -355,8 +367,9 @@ function startupHarness({
               ? {
                   ...application,
                   current_thread_id: selectedThreadId,
-                  current_model:
-                    application.current_model ?? "deepseek/deepseek-chat",
+                  model_identity:
+                    application.model_identity ??
+                    modelIdentity("deepseek/deepseek-v4-flash"),
                 }
               : application,
           } as never;
@@ -470,7 +483,7 @@ describe("trusted startup state machine", () => {
       kind: "ready",
       application: {
         current_thread_id: "thread_new",
-        current_model: "deepseek/deepseek-chat",
+        model_identity: modelIdentity("deepseek/deepseek-v4-flash"),
       },
     });
   });

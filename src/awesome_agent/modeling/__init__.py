@@ -1,6 +1,7 @@
 from awesome_agent.modeling.catalog import (
     ModelCatalog,
     ModelCatalogError,
+    ModelIdentitySnapshot,
     ModelProfile,
     SelectedModel,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "ModelErrorCode",
     "ModelErrorInfo",
     "ModelGateway",
+    "ModelIdentitySnapshot",
     "ModelMessage",
     "ModelProfile",
     "ModelProvider",

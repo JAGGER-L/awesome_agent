@@ -83,10 +83,15 @@ describe("networkless candidate product flow", () => {
       );
       expect(credential).toMatchObject({ kind: "secret" });
 
-      const saved = await commands.setCredential("deepseek", secret, false);
+      const saved = await commands.setCredential(
+        "deepseek",
+        "add",
+        secret,
+        false,
+      );
       expect(saved).toMatchObject({
         kind: "credential",
-        result: { status: "saved" },
+        result: { status: "configured" },
       });
       const refreshed = await commands.refreshApplication();
       expect(refreshed).toMatchObject({
