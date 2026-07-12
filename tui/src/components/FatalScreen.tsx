@@ -10,8 +10,6 @@ export function FatalScreen({
   disabled = false,
 }: {
   readonly fatal: FatalState;
-  readonly onReconnect: () => void;
-  readonly onQuit: () => void;
   readonly selected?: number;
   readonly disabled?: boolean;
 }) {

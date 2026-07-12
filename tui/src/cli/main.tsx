@@ -419,8 +419,6 @@ function CliApplication({
         {renderFailure ? (
           <FatalScreen
             fatal={renderFailure}
-            onReconnect={() => undefined}
-            onQuit={() => void requestExit("quit_command")}
             selected={
               terminalUi.mode.kind === "fatal" ? terminalUi.mode.selected : 0
             }

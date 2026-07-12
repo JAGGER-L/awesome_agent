@@ -12,10 +12,7 @@ const fatal: FatalState = {
 
 describe("FatalScreen", () => {
   it("renders category, exit, bounded lines, and actionable choices", () => {
-    const frame =
-      render(
-        <FatalScreen fatal={fatal} onReconnect={() => {}} onQuit={() => {}} />,
-      ).lastFrame() ?? "";
+    const frame = render(<FatalScreen fatal={fatal} />).lastFrame() ?? "";
     expect(frame).toContain("Core exited unexpectedly");
     expect(frame).toContain("Exit code 23");
     expect(frame).toContain("safe-0");
@@ -27,14 +24,7 @@ describe("FatalScreen", () => {
 
   it("renders the selection owned by the root terminal controller", () => {
     const frame =
-      render(
-        <FatalScreen
-          fatal={fatal}
-          onReconnect={() => {}}
-          onQuit={() => {}}
-          selected={1}
-        />,
-      ).lastFrame() ?? "";
+      render(<FatalScreen fatal={fatal} selected={1} />).lastFrame() ?? "";
     expect(frame).toContain("› Quit");
   });
 
@@ -42,8 +32,6 @@ describe("FatalScreen", () => {
     const runtime = render(
       <FatalScreen
         fatal={{ kind: "runtime_missing", executable: "awesome-core" }}
-        onReconnect={() => {}}
-        onQuit={() => {}}
       />,
     ).lastFrame();
     expect(runtime).toContain("awesome-core");

@@ -57,6 +57,27 @@ describe("InteractionPrompt", () => {
     expect(respond).toHaveBeenCalledWith("deny");
   });
 
+  it("enters submitting state before sending an Escape rejection", async () => {
+    const respond = vi.fn(async () => await new Promise<void>(() => undefined));
+    const seed: SurfaceState = {
+      connection: "ready",
+      event_sequence: 1,
+      warnings: [],
+      pending_interaction: interaction,
+    };
+    const view = render(
+      <App
+        store={createSurfaceStore(seed)}
+        interactionResponder={{ respond }}
+        width={60}
+      />,
+    );
+    view.stdin.write("\u001b");
+    await eventually(() => expect(view.lastFrame()).toContain("Submitting…"));
+    await eventually(() => expect(respond).toHaveBeenCalledOnce());
+    expect(respond).toHaveBeenCalledWith("deny");
+  });
+
   it("removes Composer input while interaction is active", () => {
     const seed: SurfaceState = {
       connection: "ready",

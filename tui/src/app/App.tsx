@@ -399,11 +399,8 @@ export function App({
     [applyCommandOutcome, controller, dispatch, store],
   );
 
-  const selectCurrent = useCallback(async () => {
-    const mode = uiRef.current.mode;
-    if (mode.kind === "approval") {
-      const decision = mode.interaction.choices[mode.selected];
-      if (!decision) return;
+  const respondApproval = useCallback(
+    async (decision: string) => {
       dispatch({ type: "mode.approval.submitting", submitting: true });
       try {
         await interactionResponder?.respond(decision);
@@ -418,6 +415,16 @@ export function App({
             error instanceof Error ? error.message : "Interaction failed.",
         });
       }
+    },
+    [dispatch, interactionResponder],
+  );
+
+  const selectCurrent = useCallback(async () => {
+    const mode = uiRef.current.mode;
+    if (mode.kind === "approval") {
+      const decision = mode.interaction.choices[mode.selected];
+      if (!decision) return;
+      await respondApproval(decision);
       return;
     }
     if (mode.kind !== "picker") return;
@@ -463,10 +470,10 @@ export function App({
     applyLocalResult,
     controller,
     dispatch,
-    interactionResponder,
     localCommands,
     state.application?.current_thread_id,
     submitCredential,
+    respondApproval,
     uiRef,
   ]);
 
@@ -514,8 +521,9 @@ export function App({
         onSubmit: () => void submitComposer(),
         onSelect: () => void selectCurrent(),
         onDeny: () => {
-          if (uiRef.current.mode.kind !== "approval") return;
-          void interactionResponder?.respond("deny");
+          const mode = uiRef.current.mode;
+          if (mode.kind !== "approval") return;
+          void respondApproval("deny");
         },
         onSecretSubmit: () => {
           if (uiRef.current.mode.kind !== "secret") return;
@@ -528,7 +536,7 @@ export function App({
     [
       handleLifecycle,
       dispatch,
-      interactionResponder,
+      respondApproval,
       selectCurrent,
       submitComposer,
       submitCredential,
