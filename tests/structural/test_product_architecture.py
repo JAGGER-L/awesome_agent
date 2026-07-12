@@ -40,6 +40,7 @@ EXPECTED_DIRECT_DEPENDENCIES = {
     "pyyaml",
 }
 CURRENT_COMMANDS = {
+    "auth",
     "commit",
     "compact",
     "config",
