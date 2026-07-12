@@ -15,19 +15,25 @@ export function TrustPrompt({
 }) {
   const theme = useTheme();
   return (
-    <Box flexDirection="column">
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={theme.brand}
+      paddingX={1}
+    >
       <Text bold color={theme.brand}>
         Trust this workspace?
       </Text>
       <Text> </Text>
       <Text color={theme.brand}>{workspacePath}</Text>
       <Text> </Text>
-      <Text>Is this a project you created or trust?</Text>
-      <Text color={theme.muted}>
-        Awesome can read files in this workspace. File changes and shell
-        commands
+      <Text>
+        Quick safety check: Is this a project you created or one you trust?
       </Text>
-      <Text color={theme.muted}>follow your current permission mode.</Text>
+      <Text color={theme.muted}>
+        Awesome can read, edit, and execute files in this workspace. Review
+        unfamiliar projects before continuing.
+      </Text>
       <Text> </Text>
       <TrustChoice
         active={selected === 0}
@@ -36,7 +42,9 @@ export function TrustPrompt({
       <TrustChoice active={selected === 1} label="2. No, exit" />
       <Text> </Text>
       <Text color={theme.muted}>
-        {submitting ? "Saving trust…" : "↑/↓ Select · Enter Confirm · Esc Exit"}
+        {submitting
+          ? "Saving trust…"
+          : "↑/↓ select · Enter confirm · Esc cancel"}
       </Text>
       {message ? <Text color={theme.danger}>{message}</Text> : null}
     </Box>

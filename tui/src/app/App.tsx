@@ -127,6 +127,29 @@ export function App({
     (state.thread ? hydrateThreadPage(state.thread).blocks : []);
   const live = projectLiveTurn(state);
   const cancelling = cancellation.status === "requested";
+  const liveWelcome = welcome
+    ? {
+        ...welcome,
+        workspacePath:
+          state.application?.workspace.display_path ?? welcome.workspacePath,
+        model:
+          state.application?.model_identity?.effective_model ?? welcome.model,
+        thinkingEnabled:
+          state.application?.thinking_enabled ?? welcome.thinkingEnabled,
+        permissionMode:
+          state.application?.permission_mode ?? welcome.permissionMode,
+        localMemoryEnabled: memoryStateEnabled(
+          state.application?.memory_status,
+          "local",
+          welcome.localMemoryEnabled,
+        ),
+        mem0Enabled: memoryStateEnabled(
+          state.application?.memory_status,
+          "mem0",
+          welcome.mem0Enabled,
+        ),
+      }
+    : undefined;
   const providerSetupVisible =
     providerSetupRequired &&
     !credentialConfigured(state.application?.provider_credentials.deepseek) &&
@@ -915,7 +938,7 @@ export function App({
   return (
     <Box flexDirection="column">
       <TerminalInput active={!cancelling} onInput={handleTerminalInput} />
-      {welcome ? <Welcome {...welcome} width={columns} /> : null}
+      {liveWelcome ? <Welcome {...liveWelcome} width={columns} /> : null}
       <Transcript
         key={threadViewportKey(state)}
         blocks={historic}
@@ -1014,6 +1037,19 @@ function credentialConfigured(
     : status?.selected_source === "awesome"
       ? status.awesome_configured
       : false;
+}
+
+function memoryStateEnabled(
+  status: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const value = status?.[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "object" && value !== null && "enabled" in value) {
+    return value.enabled === true;
+  }
+  return fallback;
 }
 
 function pickerMode(

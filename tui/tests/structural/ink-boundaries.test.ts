@@ -92,7 +92,7 @@ describe("Ink scrollback boundaries", () => {
     const expectedRoles = new Map<string, readonly string[]>([
       [
         "components/Welcome.tsx",
-        ["theme.primary", "theme.secondary", "theme.muted"],
+        ["props.theme.logoRows", "props.theme.border", "props.theme.muted"],
       ],
       [
         "components/Composer.tsx",

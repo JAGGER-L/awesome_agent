@@ -10,11 +10,11 @@ describe("TrustPrompt", () => {
         <TrustPrompt workspacePath={"E:\\projects\\awesome"} selected={0} />,
       ).lastFrame() ?? "";
     expect(frame).toContain("E:\\projects\\awesome");
-    expect(frame).toContain("Is this a project you created or trust?");
-    expect(frame).toContain("File changes and shell commands");
+    expect(frame).toContain("Quick safety check");
+    expect(frame).toContain("read, edit, and execute files");
     expect(frame).toContain("1. Yes, I trust this folder");
     expect(frame).toContain("2. No, exit");
-    expect(frame).toContain("Enter Confirm · Esc Exit");
+    expect(frame).toContain("Enter confirm · Esc cancel");
     expect(frame).not.toContain("branch");
   });
 
