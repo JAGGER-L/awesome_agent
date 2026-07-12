@@ -67,10 +67,38 @@ def test_secret_store_rejects_non_provider_names(tmp_path: Path) -> None:
         store.set("MEM0_API_KEY", SecretStr("value"))
 
 
+def test_secret_store_creates_temporary_file_with_owner_only_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_modes: list[int] = []
+    real_open = os.open
+
+    def recording_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+    ) -> int:
+        if str(path).endswith(".tmp"):
+            observed_modes.append(mode)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", recording_open)
+
+    UserSecretStore(tmp_path / "secrets" / ".env").set(
+        "DEEPSEEK_API_KEY",
+        SecretStr("secret"),
+    )
+
+    assert observed_modes == [0o600]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode is not available on Windows")
 def test_secret_store_uses_owner_only_mode_on_posix(tmp_path: Path) -> None:
-    path = tmp_path / ".env"
+    parent = tmp_path / "secrets"
+    path = parent / ".env"
 
     UserSecretStore(path).set("MOONSHOT_API_KEY", SecretStr("secret"))
 
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o700
