@@ -285,8 +285,8 @@ function startupDiagnostic(
   }
   if (
     model.length === 0 &&
-    application.provider_credentials.deepseek.source === "missing" &&
-    application.provider_credentials.kimi.source === "missing"
+    !credentialConfigured(application.provider_credentials.deepseek) &&
+    !credentialConfigured(application.provider_credentials.kimi)
   ) {
     return {
       code: "provider_not_configured",
@@ -317,4 +317,16 @@ function startupDiagnostic(
     };
   }
   return undefined;
+}
+
+function credentialConfigured(status: {
+  selected_source?: "environment" | "awesome" | null | undefined;
+  environment_configured: boolean;
+  awesome_configured: boolean;
+}): boolean {
+  return status.selected_source === "environment"
+    ? status.environment_configured
+    : status.selected_source === "awesome"
+      ? status.awesome_configured
+      : false;
 }

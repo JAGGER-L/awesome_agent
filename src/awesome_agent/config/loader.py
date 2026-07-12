@@ -12,10 +12,12 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from yaml.nodes import MappingNode
 
 from awesome_agent.config.credentials import (
+    ProviderCredentialStatus,
     ProviderCredentialStatuses,
     resolve_provider_credential_statuses,
 )
 from awesome_agent.config.models import (
+    CredentialSource,
     SecretStatus,
     UserConfigDocument,
     WorkspaceConfigDocument,
@@ -121,10 +123,12 @@ def load_config_sources(
             source_label="workspace config",
         )
     environment = os.environ if environ is None else environ
-    secrets = _load_secrets(
+    provider_credentials = resolve_provider_credential_statuses(
         sources.user_env,
         environment,
+        user.credentials,
     )
+    secrets = _load_secrets(sources.user_env, environment, provider_credentials)
     status = SecretStatus(
         deepseek_api_key=secrets.deepseek_api_key is not None,
         moonshot_api_key=secrets.moonshot_api_key is not None,
@@ -135,10 +139,7 @@ def load_config_sources(
         workspace=workspace_document,
         secrets=secrets,
         secret_status=status,
-        provider_credentials=resolve_provider_credential_statuses(
-            sources.user_env,
-            environment,
-        ),
+        provider_credentials=provider_credentials,
     )
 
 
@@ -182,12 +183,18 @@ def read_user_config_document(path: Path) -> UserConfigDocument:
     return _read_yaml_document(path, UserConfigDocument, source_label="user config")
 
 
-def _load_secrets(path: Path, environ: Mapping[str, str]) -> SecretValues:
+def _load_secrets(
+    path: Path,
+    environ: Mapping[str, str],
+    statuses: ProviderCredentialStatuses,
+) -> SecretValues:
     from_file = dotenv_values(path) if path.is_file() else {}
 
-    def value(name: str) -> SecretStr | None:
-        raw = environ.get(name)
-        if raw is None:
+    def value(name: str, status: ProviderCredentialStatus) -> SecretStr | None:
+        raw: str | None = None
+        if status.selected_source is CredentialSource.ENVIRONMENT:
+            raw = environ.get(name)
+        elif status.selected_source is CredentialSource.AWESOME:
             file_value = from_file.get(name)
             raw = file_value if isinstance(file_value, str) else None
         if raw is None or not raw.strip():
@@ -195,7 +202,7 @@ def _load_secrets(path: Path, environ: Mapping[str, str]) -> SecretValues:
         return SecretStr(raw)
 
     return SecretValues(
-        deepseek_api_key=value(_SECRET_NAMES[0]),
-        moonshot_api_key=value(_SECRET_NAMES[1]),
-        mem0_api_key=value(_SECRET_NAMES[2]),
+        deepseek_api_key=value(_SECRET_NAMES[0], statuses.deepseek),
+        moonshot_api_key=value(_SECRET_NAMES[1], statuses.kimi),
+        mem0_api_key=value(_SECRET_NAMES[2], statuses.mem0),
     )

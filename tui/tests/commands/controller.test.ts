@@ -174,7 +174,7 @@ describe("CommandController", () => {
       value: {
         provider: "deepseek",
         status: "configured",
-        source: "user_env_file",
+        source: "awesome",
         code: "credential_saved",
       },
     });

@@ -98,7 +98,10 @@ describe("networkless candidate product flow", () => {
         ok: true,
         value: {
           provider_credentials: {
-            deepseek: { source: "user_env_file" },
+            deepseek: {
+              awesome_configured: true,
+              selected_source: "awesome",
+            },
           },
         },
       });

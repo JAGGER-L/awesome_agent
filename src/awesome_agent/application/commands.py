@@ -99,6 +99,7 @@ class CommandOption(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1_000)
     selected: bool = False
+    disabled: bool = False
 
 
 class CommandSelection(BaseModel):
@@ -120,7 +121,7 @@ class CommandSelection(BaseModel):
 class CommandSecretPrompt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["deepseek", "kimi"]
+    provider: Literal["deepseek", "kimi", "mem0"]
     action: Literal["add", "replace"]
     label: str = Field(min_length=1, max_length=200)
     environment_variable: str = Field(min_length=1, max_length=128)

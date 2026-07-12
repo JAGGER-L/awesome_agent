@@ -60,11 +60,13 @@ def test_secret_store_rejects_invalid_values_without_leaking_them(
     assert not (tmp_path / ".env").exists()
 
 
-def test_secret_store_rejects_non_provider_names(tmp_path: Path) -> None:
+def test_secret_store_supports_mem0_and_rejects_unknown_names(tmp_path: Path) -> None:
     store = UserSecretStore(tmp_path / ".env")
 
+    store.set("MEM0_API_KEY", SecretStr("value"))
+
     with pytest.raises(ValueError, match="Unsupported"):
-        store.set("MEM0_API_KEY", SecretStr("value"))
+        store.set("OTHER_API_KEY", SecretStr("value"))
 
 
 def test_secret_store_creates_temporary_file_with_owner_only_mode(
