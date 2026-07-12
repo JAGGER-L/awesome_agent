@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from awesome_agent.core.tools import ToolOutput, ToolSpec
 from awesome_agent.core.tools.context import ToolExecutionContext
+from awesome_agent.core.tools.permissions import ToolCapability
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.extensions.skills.loader import SkillLoader
 
@@ -62,6 +63,7 @@ def register_skill_tools(registry: ToolRegistry, loader: SkillLoader) -> None:
             name="load_skill",
             description="Load bounded instructions for one selected Skill",
             input_schema=LoadSkillArguments.model_json_schema(),
+            capability=ToolCapability.WORKSPACE_READ,
             read_only=True,
         ),
         input_model=LoadSkillArguments,
@@ -72,6 +74,7 @@ def register_skill_tools(registry: ToolRegistry, loader: SkillLoader) -> None:
             name="read_skill_resource",
             description="Read one bounded text resource from a Skill package",
             input_schema=ReadSkillResourceArguments.model_json_schema(),
+            capability=ToolCapability.WORKSPACE_READ,
             read_only=True,
         ),
         input_model=ReadSkillResourceArguments,

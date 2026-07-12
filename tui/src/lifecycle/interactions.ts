@@ -39,7 +39,7 @@ export class InteractionController {
     if (this.#responsePromise) return this.#responsePromise;
     const pending = this.source.getState().pending_interaction;
     if (!pending) return Promise.resolve();
-    if (!pending.choices.includes(decision)) {
+    if (!pending.choices.some((choice) => choice.decision === decision)) {
       return Promise.reject(
         new Error(`Interaction choice ${decision} is not available.`),
       );

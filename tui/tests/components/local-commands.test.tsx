@@ -61,6 +61,7 @@ function controller() {
             operation_id: null,
             configuration_valid: true,
             configuration_diagnostic_count: 0,
+            permission_mode: "request_approval",
           },
         },
       } as never;

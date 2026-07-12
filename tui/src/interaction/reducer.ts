@@ -94,9 +94,7 @@ function moveSelection(
         ? mode.interaction.choices.length
         : mode.kind === "workspace_trust" || mode.kind === "fatal"
           ? 2
-          : mode.kind === "permission_confirmation"
-            ? 2
-            : 0;
+          : 0;
   if (size === 0 || !("selected" in mode)) return mode;
   return { ...mode, selected: (mode.selected + delta + size) % size };
 }
@@ -113,11 +111,7 @@ function setSelection(
 function selectionSize(mode: TerminalUiState["mode"]): number {
   if (mode.kind === "picker") return mode.selection.options.length;
   if (mode.kind === "approval") return mode.interaction.choices.length;
-  if (
-    mode.kind === "workspace_trust" ||
-    mode.kind === "fatal" ||
-    mode.kind === "permission_confirmation"
-  ) {
+  if (mode.kind === "workspace_trust" || mode.kind === "fatal") {
     return 2;
   }
   return 0;

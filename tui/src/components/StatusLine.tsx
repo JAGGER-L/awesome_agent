@@ -16,7 +16,8 @@ export function StatusLine({
   const operation = state.active_operation?.status ?? "idle";
   return (
     <Text dimColor>
-      {state.connection} · {operation}
+      {state.connection} · {operation} ·{" "}
+      {state.application?.permission_mode ?? "request_approval"}
     </Text>
   );
 }

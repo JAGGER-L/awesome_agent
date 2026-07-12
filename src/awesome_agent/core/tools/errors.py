@@ -25,9 +25,5 @@ class ToolInvariantError(RuntimeError):
     pass
 
 
-class ToolControlFlow(Exception):
-    """Non-error control flow that must reach the application boundary."""
-
-
 class DuplicateToolName(ValueError):
     pass

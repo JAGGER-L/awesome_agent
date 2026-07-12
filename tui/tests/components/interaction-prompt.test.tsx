@@ -8,9 +8,15 @@ import { createSurfaceStore } from "../../src/state/store.js";
 
 const interaction = {
   interaction_id: "interaction_1",
-  interaction_kind: "execute_boundary" as const,
-  prompt: "Run outside boundary?",
-  choices: ["allow_once", "deny"],
+  interaction_kind: "tool_approval" as const,
+  prompt: "Do you want to run pytest?",
+  operation: "run",
+  target: "pytest",
+  capability: "shell.execute",
+  choices: [
+    { decision: "allow_once", label: "Yes" },
+    { decision: "deny", label: "No" },
+  ],
 };
 
 async function eventually(assertion: () => void): Promise<void> {
@@ -26,14 +32,14 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("InteractionPrompt", () => {
-  it("renders the controlled Event prompt and selection", () => {
+  it("renders structured labels without exposing raw decisions", () => {
     const frame =
       render(
         <InteractionPrompt interaction={interaction} selected={1} />,
       ).lastFrame() ?? "";
-    expect(frame).toContain("Run outside boundary?");
-    expect(frame).toContain("› deny");
-    expect(frame).not.toContain("always allow");
+    expect(frame).toContain("Do you want to run pytest?");
+    expect(frame).toContain("No");
+    expect(frame).not.toContain("allow_once");
   });
 
   it("routes arrows and Enter through App to one interaction response", async () => {
@@ -86,7 +92,7 @@ describe("InteractionPrompt", () => {
       pending_interaction: interaction,
     };
     const view = render(<App store={createSurfaceStore(seed)} width={60} />);
-    expect(view.lastFrame()).toContain("Run outside boundary?");
+    expect(view.lastFrame()).toContain("Do you want to run pytest?");
     expect(view.lastFrame()).not.toContain("Message");
   });
 });

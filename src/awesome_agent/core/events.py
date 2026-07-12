@@ -148,6 +148,14 @@ class MemoryStatusPayload(BaseModel):
     status: str = Field(min_length=1, max_length=128)
 
 
+class InteractionChoicePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1_000)
+
+
 class InteractionRequiredPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -155,11 +163,18 @@ class InteractionRequiredPayload(BaseModel):
     interaction_id: str = Field(min_length=1, max_length=128)
     interaction_kind: Literal[
         "workspace_trust",
-        "execute_boundary",
+        "tool_approval",
+        "full_access_confirmation",
         "recovery_decision",
     ]
     prompt: str = Field(min_length=1, max_length=2_000)
-    choices: tuple[str, ...] = Field(min_length=1, max_length=16)
+    operation: str = Field(min_length=1, max_length=128)
+    target: str = Field(min_length=1, max_length=8_000)
+    capability: str | None = Field(default=None, max_length=200)
+    choices: tuple[InteractionChoicePayload, ...] = Field(
+        min_length=1,
+        max_length=16,
+    )
 
 
 class InteractionResolvedPayload(BaseModel):

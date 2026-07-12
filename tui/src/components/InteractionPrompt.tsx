@@ -18,8 +18,11 @@ export function InteractionPrompt({
       selection={{
         prompt: message ?? (submitting ? "Submitting…" : interaction.prompt),
         options: interaction.choices.map((choice, index) => ({
-          value: choice,
-          label: choice,
+          value: choice.decision,
+          label: choice.label,
+          ...(choice.description === undefined
+            ? {}
+            : { description: choice.description }),
           selected: index === 0,
         })),
       }}

@@ -75,6 +75,7 @@ class ToolSpec(BaseModel):
     name: str = Field(pattern=TOOL_NAME_PATTERN)
     description: str = Field(min_length=1, max_length=500)
     input_schema: dict[str, JsonValue]
+    capability: str = Field(pattern=r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
     read_only: bool
     display_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 

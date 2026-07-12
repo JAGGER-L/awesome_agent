@@ -34,6 +34,7 @@ const metadata: Readonly<Record<CommandName, readonly [string, string]>> = {
   usage: ["/usage", "Show token and operation usage"],
   doctor: ["/doctor", "Run local diagnostics"],
   config: ["/config", "Show effective configuration"],
+  permissions: ["/permissions", "Show or choose permission mode"],
   init: ["/init", "Initialize repository instructions"],
   review: ["/review", "Review the current code changes"],
   debug: ["/debug", "Investigate a defect"],

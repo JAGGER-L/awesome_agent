@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field, JsonValue
 from awesome_agent.core.changes import ChangeJournal
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
-    InteractionRequired,
     evaluate_command,
 )
 from awesome_agent.core.tools.context import (
@@ -18,7 +17,6 @@ from awesome_agent.core.tools.context import (
 )
 from awesome_agent.core.tools.contracts import (
     ToolErrorCode,
-    ToolExecutionOrigin,
     ToolOutput,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
@@ -85,17 +83,6 @@ def create_execute_handler(
                 ToolErrorCode.PERMISSION_DENIED,
                 decision.reason,
             )
-        if (
-            context.origin is ToolExecutionOrigin.AGENT
-            and decision.action is CommandPolicyAction.INTERACTION_REQUIRED
-        ):
-            assert decision.scope is not None
-            if decision.scope not in context.allowed_interaction_scopes:
-                raise InteractionRequired(
-                    scope=decision.scope,
-                    prompt=decision.reason,
-                )
-
         environment = _sanitized_environment()
         if os.name == "nt":
             environment["AWESOME_EXEC_COMMAND"] = options.command

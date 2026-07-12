@@ -62,10 +62,18 @@ export interface SurfaceState {
     readonly interaction_id: string;
     readonly interaction_kind:
       | "workspace_trust"
-      | "execute_boundary"
+      | "tool_approval"
+      | "full_access_confirmation"
       | "recovery_decision";
     readonly prompt: string;
-    readonly choices: readonly string[];
+    readonly operation: string;
+    readonly target: string;
+    readonly capability?: string;
+    readonly choices: readonly {
+      readonly decision: string;
+      readonly label: string;
+      readonly description?: string | undefined;
+    }[];
   };
   readonly warnings: readonly SurfaceWarning[];
   readonly committed_transcript?: readonly TranscriptBlock[];

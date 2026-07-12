@@ -115,6 +115,7 @@ class McpToolAdapter:
                 name=namespace_name,
                 description=tool.description or f"MCP tool {tool.name}",
                 input_schema=schema,
+                capability="mcp.invoke",
                 read_only=False,
                 display_metadata={"mcp_annotations": annotations},
             ),

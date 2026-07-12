@@ -219,6 +219,11 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           interaction_id: event.payload.interaction_id,
           interaction_kind: event.payload.interaction_kind,
           prompt: event.payload.prompt,
+          operation: event.payload.operation,
+          target: event.payload.target,
+          ...(event.payload.capability === undefined
+            ? {}
+            : { capability: event.payload.capability }),
           choices: event.payload.choices,
         },
       };

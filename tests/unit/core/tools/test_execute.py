@@ -19,8 +19,13 @@ from awesome_agent.core.tools import (
 from awesome_agent.core.tools.builtins import register_modifying_tools
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
-    InteractionRequired,
     evaluate_command,
+)
+from awesome_agent.core.tools.permissions import (
+    PermissionMode,
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
 )
 from awesome_agent.core.tools.process import (
     ProcessResult,
@@ -92,6 +97,13 @@ def execute_fixture(
         activity_writer=Mock(),
         monotonic=monotonic,
         change_set_id=change_set.id,
+        permission_session=PermissionSession(
+            mode=(
+                PermissionMode.FULL_ACCESS
+                if origin is ToolExecutionOrigin.DIRECT
+                else PermissionMode.REQUEST_APPROVAL
+            )
+        ),
     )
     return ToolExecutor(registry), context, journal, workspace
 
@@ -105,8 +117,7 @@ def test_command_policy_denies_host_destructive_commands(tmp_path: Path) -> None
         assert decision.action is CommandPolicyAction.DENY
 
     assert (
-        evaluate_command("pytest", workspace).action
-        is CommandPolicyAction.INTERACTION_REQUIRED
+        evaluate_command("pytest", workspace).action is CommandPolicyAction.ALLOW
     )
 
 
@@ -129,23 +140,21 @@ def test_command_policy_never_implicitly_allows_shell_bypasses(
 
     assert evaluate_command(command, workspace).action in {
         CommandPolicyAction.DENY,
-        CommandPolicyAction.INTERACTION_REQUIRED,
+        CommandPolicyAction.ALLOW,
     }
 
 
-def test_command_policy_returns_stable_scope_for_outside_path(tmp_path: Path) -> None:
+def test_command_policy_reports_outside_path_without_creating_approval_scope(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
     command = f"echo {outside}"
 
     first = evaluate_command(command, workspace)
-    second = evaluate_command(command, workspace)
-
-    assert first.action is CommandPolicyAction.INTERACTION_REQUIRED
-    assert first.scope == second.scope
-    assert first.scope is not None
-    assert first.scope != evaluate_command(f"type {outside}", workspace).scope
+    assert first.action is CommandPolicyAction.ALLOW
+    assert "outside" in first.reason
 
 
 @pytest.mark.asyncio
@@ -155,17 +164,26 @@ async def test_agent_execute_requires_allow_once_for_simple_command(
     runner = RecordingProcessRunner()
     executor, context, _, _ = execute_fixture(tmp_path, runner)
 
-    with pytest.raises(InteractionRequired):
-        await executor.execute(
-            ToolRequest(
-                call_id="call_execute",
-                tool_name="execute",
-                arguments={"command": "pytest"},
-            ),
-            context=context,
-        )
+    approvals: list[ToolApprovalRequest] = []
 
-    assert runner.calls == []
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        assert runner.calls == []
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_execute",
+            tool_name="execute",
+            arguments={"command": "pytest"},
+        ),
+        context=replace(context, approval_resolver=approve),
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert len(runner.calls) == 1
+    assert approvals[0].operation == "run"
+    assert approvals[0].target == "pytest"
 
 
 @pytest.mark.asyncio
@@ -215,11 +233,9 @@ async def test_execute_strips_secrets_redacts_and_records_observation(
     )
     command = f'"{sys.executable}" -c "{script}"'
 
-    decision = evaluate_command(command, workspace)
-    assert decision.scope is not None
     context = replace(
         context,
-        allowed_interaction_scopes=frozenset({decision.scope}),
+        permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
     )
     result = await executor.execute(
         ToolRequest(
@@ -254,7 +270,10 @@ async def test_execute_hard_denial_never_starts_process(tmp_path: Path) -> None:
             tool_name="execute",
             arguments={"command": "sudo pytest"},
         ),
-        context=context,
+        context=replace(
+            context,
+            permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
+        ),
     )
 
     assert result.status is ToolStatus.ERROR
@@ -268,27 +287,26 @@ async def test_execute_outside_path_requires_matching_allow_once_scope(
     tmp_path: Path,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, workspace = execute_fixture(tmp_path, runner)
+    executor, context, _, _workspace = execute_fixture(tmp_path, runner)
     outside = tmp_path / "outside.txt"
     command = f"echo {outside}"
-    decision = evaluate_command(command, workspace)
-    assert decision.scope is not None
     request = ToolRequest(
         call_id="call_execute",
         tool_name="execute",
         arguments={"command": command},
     )
 
-    with pytest.raises(InteractionRequired) as captured:
-        await executor.execute(request, context=context)
-    assert captured.value.scope == decision.scope
-    assert runner.calls == []
+    approvals: list[ToolApprovalRequest] = []
 
-    allowed = replace(
-        context,
-        allowed_interaction_scopes=frozenset({decision.scope}),
+    async def approve(approval: ToolApprovalRequest) -> ToolApprovalDecision:
+        approvals.append(approval)
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    result = await executor.execute(
+        request,
+        context=replace(context, approval_resolver=approve),
     )
-    result = await executor.execute(request, context=allowed)
 
     assert result.status is ToolStatus.SUCCESS
     assert len(runner.calls) == 1
+    assert approvals[0].target == command

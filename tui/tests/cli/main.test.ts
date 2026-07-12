@@ -17,6 +17,7 @@ const ready: StartupResult = {
     current_model: "deepseek/deepseek-v4-flash",
     thinking_enabled: false,
     skill_mode: "auto",
+    permission_mode: "request_approval",
     configuration_valid: true,
     secret_status: {
       deepseek_api_key: true,

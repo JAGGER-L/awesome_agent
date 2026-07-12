@@ -17,9 +17,15 @@ describe("routeTerminalKey", () => {
       kind: "approval",
       interaction: {
         interaction_id: "interaction_1",
-        interaction_kind: "execute_boundary",
+        interaction_kind: "tool_approval",
         prompt: "Run command?",
-        choices: ["allow_once", "deny"],
+        operation: "run",
+        target: "pytest",
+        capability: "shell.execute",
+        choices: [
+          { decision: "allow_once", label: "Yes" },
+          { decision: "deny", label: "No" },
+        ],
       },
       selected: 0,
       submitting: false,

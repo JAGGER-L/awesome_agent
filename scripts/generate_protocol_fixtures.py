@@ -41,6 +41,7 @@ from awesome_agent.core.events import (
     EventEnvelope,
     EventPayload,
     EventType,
+    InteractionChoicePayload,
     InteractionRequiredPayload,
     InteractionResolvedPayload,
     MemoryStatusPayload,
@@ -397,7 +398,13 @@ def _payload(event_type: EventType) -> EventPayload:
             interaction_id="interaction_1",
             interaction_kind="workspace_trust",
             prompt="Trust this workspace?",
-            choices=("trust", "deny"),
+            operation="trust",
+            target="C:\\workspace",
+            capability=None,
+            choices=(
+                InteractionChoicePayload(decision="trust", label="Yes"),
+                InteractionChoicePayload(decision="deny", label="No"),
+            ),
         )
     if event_type is EventType.INTERACTION_RESOLVED:
         return InteractionResolvedPayload(

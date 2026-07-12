@@ -29,6 +29,7 @@ from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
+from awesome_agent.core.tools.permissions import PermissionMode, PermissionSession
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.modeling import (
@@ -193,6 +194,9 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                     activity_writer=repositories.tool_activities,
                     monotonic=time.monotonic,
                     change_set_id=change_set.id,
+                    permission_session=PermissionSession(
+                        mode=PermissionMode.FULL_ACCESS
+                    ),
                 ),
                 event_projector=projector,
                 context_builder=context_builder,

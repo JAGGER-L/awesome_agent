@@ -5,7 +5,7 @@ import json
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -142,6 +142,77 @@ async def _wait_for_interaction(application: object) -> str:
 
 
 @pytest.mark.asyncio
+async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=cast(
+            Any,
+            lambda provider, model: FakeGateway(provider, model),
+        ),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    first = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    first_id = str(first.data["thread_id"])
+
+    picker = _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.PERMISSIONS)
+        )
+    )
+    assert picker.selection is not None
+    assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+
+    confirmation = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert confirmation.status is CommandStatus.INTERACTION_REQUIRED
+    interaction_id = str(confirmation.data["interaction_id"])
+    blocked = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("request_approval",),
+            )
+        )
+    )
+    assert blocked.status is CommandStatus.ERROR
+    assert blocked.data["error_code"] == "interaction_busy"
+    _unwrap(
+        await application.respond_interaction(
+            interaction_id,
+            "enable_full_access",
+        )
+    )
+    assert _unwrap(await application.get_state()).permission_mode == "full_access"
+
+    _unwrap(await application.execute_command(CommandIntent(name=CommandName.NEW)))
+    assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+    _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.RESUME, arguments=(first_id,))
+        )
+    )
+    assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("decision", "command_runs", "terminal_event"),
     [
@@ -186,6 +257,16 @@ async def test_composed_agent_execute_waits_for_application_decision(
     _unwrap(await application.submit_turn(thread_id, "run the command"))
     interaction_id = await _wait_for_interaction(application)
     assert not marker.exists()
+    blocked = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert blocked.status is CommandStatus.ERROR
+    assert blocked.data["error_code"] == "operation_busy"
 
     resolved = _unwrap(await application.respond_interaction(interaction_id, decision))
     assert resolved.accepted
@@ -195,6 +276,9 @@ async def test_composed_agent_execute_waits_for_application_decision(
     assert view.entries[-1].content == "done"
     assert any(
         event.event_type is EventType.INTERACTION_REQUIRED for event in sink.events
+    )
+    assert any(
+        event.event_type is EventType.INTERACTION_RESOLVED for event in sink.events
     )
     event_types = [event.event_type for event in sink.events]
     assert event_types.count(EventType.TOOL_STARTED) == 1

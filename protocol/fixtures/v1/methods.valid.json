@@ -41,6 +41,7 @@
           "initialized": true,
           "mcp_status": [],
           "memory_status": {},
+          "permission_mode": "request_approval",
           "provider_credentials": {
             "deepseek": {
               "environment_variable": "DEEPSEEK_API_KEY",

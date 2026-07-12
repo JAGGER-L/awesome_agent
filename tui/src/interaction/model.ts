@@ -57,8 +57,7 @@ export type UiMode =
       readonly submitting: boolean;
       readonly message?: string | undefined;
     }
-  | { readonly kind: "help"; readonly command?: string }
-  | { readonly kind: "permission_confirmation"; readonly selected: number };
+  | { readonly kind: "help"; readonly command?: string };
 
 export interface TerminalUiState {
   readonly mode: UiMode;
