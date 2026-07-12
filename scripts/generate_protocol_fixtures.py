@@ -28,6 +28,7 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    StatusSnapshot,
     ThreadListResult,
     ThreadReadResult,
     WorkspacePresentation,
@@ -117,6 +118,28 @@ def _valid_methods() -> dict[str, object]:
         display_path="C:\\workspace",
         branch="feature/fixtures",
     )
+    status_snapshot = StatusSnapshot(
+        version=PRODUCT_VERSION,
+        workspace_path=workspace.display_path,
+        thread_title="Fixture Thread",
+        thread_id=THREAD_ID,
+        thread_display_id="thread_11111111",
+        model_identity=ModelIdentitySnapshot.from_models(
+            configured_model="deepseek/deepseek-v4-flash",
+            effective_model="deepseek/deepseek-v4-flash",
+        ),
+        model_status="configured",
+        thinking_enabled=False,
+        skill_mode="auto",
+        local_memory_enabled=False,
+        mem0_enabled=False,
+        mcp_ready=0,
+        mcp_degraded=0,
+        operation_status="idle",
+        operation_id=None,
+        configuration_valid=True,
+        configuration_diagnostic_count=0,
+    )
     cases: tuple[tuple[str, str, dict[str, object], object], ...] = (
         (
             "initialize.ready",
@@ -155,6 +178,7 @@ def _valid_methods() -> dict[str, object]:
                     ),
                     configuration_valid=True,
                     secret_status=SecretStatus(deepseek_api_key=True),
+                    usage={"active_execution_seconds": 0.5},
                 )
             ),
         ),
@@ -202,7 +226,12 @@ def _valid_methods() -> dict[str, object]:
             "command.execute",
             "command.execute",
             _model(CommandIntent(name=CommandName.STATUS)),
-            _success(CommandResult(status=CommandStatus.SUCCESS)),
+            _success(
+                CommandResult(
+                    status=CommandStatus.SUCCESS,
+                    data=cast(dict[str, Any], status_snapshot.model_dump(mode="json")),
+                )
+            ),
         ),
         (
             "provider.credential.set",

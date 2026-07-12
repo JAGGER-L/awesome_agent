@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CoreSpawnError } from "../../src/core/errors.js";
-import { runCli, type CliDependencies } from "../../src/cli/main.js";
+import {
+  executeFatalRecoverySelection,
+  reconnectAndReplaceSurface,
+  runCli,
+  type CliDependencies,
+} from "../../src/cli/main.js";
 import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
@@ -261,5 +266,75 @@ describe("runCli", () => {
     expect(value.stderr.join("")).not.toContain(
       "The terminal interface failed unexpectedly.",
     );
+  });
+});
+
+describe("fatal recovery selection", () => {
+  it("runs Reconnect for the first recovery option", async () => {
+    const reconnect = vi.fn(async () => undefined);
+    const quit = vi.fn(async () => undefined);
+
+    await executeFatalRecoverySelection(0, { reconnect, quit });
+
+    expect(reconnect).toHaveBeenCalledOnce();
+    expect(quit).not.toHaveBeenCalled();
+  });
+
+  it("closes the stale Surface before replacing its subscriptions", async () => {
+    const close = vi.fn(async () => undefined);
+    const connected = {} as ConnectedSurface;
+    const reconnect = vi.fn(async () => connected);
+    const replace = vi.fn();
+
+    await expect(
+      reconnectAndReplaceSurface(
+        { close },
+        { reconnect },
+        { cwd: "E:\\workspace", threadId: "thread_1" },
+        replace,
+      ),
+    ).resolves.toBe(connected);
+
+    expect(reconnect).toHaveBeenCalledWith({
+      cwd: "E:\\workspace",
+      threadId: "thread_1",
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith(connected);
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(
+      replace.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("closes the recovered Surface and preserves the current one when cleanup fails", async () => {
+    const cleanupError = new Error("stale surface cleanup failed");
+    const closeCurrent = vi.fn(async () => {
+      throw cleanupError;
+    });
+    const closeRecovered = vi.fn(async () => undefined);
+    const connected = { close: closeRecovered } as unknown as ConnectedSurface;
+    const replace = vi.fn();
+
+    await expect(
+      reconnectAndReplaceSurface(
+        { close: closeCurrent },
+        { reconnect: async () => connected },
+        { cwd: "E:\\workspace", threadId: "thread_1" },
+        replace,
+      ),
+    ).rejects.toBe(cleanupError);
+
+    expect(closeRecovered).toHaveBeenCalledOnce();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("runs Quit for the second recovery option", async () => {
+    const reconnect = vi.fn(async () => undefined);
+    const quit = vi.fn(async () => undefined);
+
+    await executeFatalRecoverySelection(1, { reconnect, quit });
+
+    expect(quit).toHaveBeenCalledOnce();
+    expect(reconnect).not.toHaveBeenCalled();
   });
 });

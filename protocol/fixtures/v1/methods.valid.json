@@ -70,7 +70,9 @@
           "session_id": "session_11111111111111111111111111111111",
           "skill_mode": "auto",
           "thinking_enabled": false,
-          "usage": {},
+          "usage": {
+            "active_execution_seconds": 0.5
+          },
           "workspace": {
             "branch": "feature/fixtures",
             "display_path": "C:\\workspace"
@@ -179,7 +181,33 @@
         "ok": true,
         "value": {
           "content": "",
-          "data": {},
+          "data": {
+            "configuration_diagnostic_count": 0,
+            "configuration_valid": true,
+            "local_memory_enabled": false,
+            "mcp_degraded": 0,
+            "mcp_ready": 0,
+            "mem0_enabled": false,
+            "model_identity": {
+              "configured_model": "deepseek/deepseek-v4-flash",
+              "effective_model": "deepseek/deepseek-v4-flash",
+              "fallback_active": false,
+              "fallback_from": null,
+              "provider": "deepseek",
+              "runtime_name": "Awesome Agent"
+            },
+            "model_status": "configured",
+            "operation_id": null,
+            "operation_status": "idle",
+            "permission_mode": "request_approval",
+            "skill_mode": "auto",
+            "thinking_enabled": false,
+            "thread_display_id": "thread_11111111",
+            "thread_id": "thread_11111111111111111111111111111111",
+            "thread_title": "Fixture Thread",
+            "version": "1.1.1",
+            "workspace_path": "C:\\workspace"
+          },
           "status": "success"
         }
       }
