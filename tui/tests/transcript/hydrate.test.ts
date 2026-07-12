@@ -24,6 +24,7 @@ function page(): MethodValue["thread.read"] {
           sequence: 1,
           kind: "user_message",
           content: "Inspect",
+          client_message_id: "client_1",
           metadata: {},
           created_at: now,
         },
@@ -102,6 +103,11 @@ describe("hydrateThreadPage", () => {
       "tools",
     ]);
     expect(projection.blocks[0]).toMatchObject({ key: "history:omitted" });
+    expect(projection.blocks[1]).toMatchObject({
+      key: "user:client_1",
+      client_message_id: "client_1",
+      status: "persisted",
+    });
     expect(projection.blocks[3]).toMatchObject({
       kind: "tools",
       items: [{ name: "read_file", summary: "Read file" }],

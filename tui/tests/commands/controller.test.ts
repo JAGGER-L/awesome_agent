@@ -60,7 +60,11 @@ describe("CommandController", () => {
     [
       { kind: "turn", content: "hello" },
       "turn.submit",
-      { thread_id: "thread_1", content: "hello" },
+      {
+        thread_id: "thread_1",
+        content: "hello",
+        client_message_id: "client_1",
+      },
     ],
     [
       { kind: "direct", command: "pwd" },
@@ -85,7 +89,7 @@ describe("CommandController", () => {
           ? { status: "success", content: "ok", data: {} }
           : { operation_id: "operation_1", thread_id: "thread_1" },
     });
-    await controller.submit(routed as RoutedInput, "thread_1");
+    await controller.submit(routed as RoutedInput, "thread_1", "client_1");
     expect(calls).toEqual([{ method, params }]);
   });
 

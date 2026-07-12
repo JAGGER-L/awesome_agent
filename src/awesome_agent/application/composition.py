@@ -588,7 +588,12 @@ class _LocalApplicationBackend:
                 )
             limit = max(1, limit // 2)
 
-    async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
+    async def start_turn(
+        self,
+        thread_id: str,
+        content: str,
+        client_message_id: str,
+    ) -> OperationAccepted:
         self._require_active()
         assert self._turns is not None
         if not content.strip():
@@ -600,7 +605,11 @@ class _LocalApplicationBackend:
             thread = self._conversation.read_thread(thread_id).thread
             config = self._turn_config(thread)
             self._require_provider_configured(config.provider)
-            return await self._turns.submit_turn(thread_id, content)
+            return await self._turns.submit_turn(
+                thread_id,
+                content,
+                client_message_id=client_message_id,
+            )
         except ApplicationFailure:
             raise
         except OperationBusy as error:

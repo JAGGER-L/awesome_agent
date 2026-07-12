@@ -141,8 +141,14 @@ def _extensions(
     catalog = SkillCatalog((), ())
     enablements = SQLiteMcpEnablementStore(paths.application_db)
 
-    async def submit_turn(thread_id: str, content: str) -> object:
-        return {"thread_id": thread_id, "content": content}
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        return {
+            "thread_id": thread_id,
+            "content": content,
+            "client_message_id": client_message_id,
+        }
 
     adapter = Mem0CloudAdapter(client)
     current_config = read_user_config_document(paths.config_file)

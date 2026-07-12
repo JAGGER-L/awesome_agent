@@ -40,6 +40,37 @@ function lifecycle(
 }
 
 describe("surfaceReducer", () => {
+  it("moves an optimistic user message through pending, accepted, and failed", () => {
+    let state = surfaceReducer(initialSurfaceState(), {
+      type: "transcript.user.pending",
+      generation: 0,
+      client_message_id: "client_1",
+      text: "inspect",
+    });
+    expect(state.committed_transcript).toEqual([
+      expect.objectContaining({ status: "pending", text: "inspect" }),
+    ]);
+
+    state = surfaceReducer(state, {
+      type: "transcript.user.accepted",
+      generation: 0,
+      client_message_id: "client_1",
+    });
+    expect(state.committed_transcript).toEqual([
+      expect.objectContaining({ status: "accepted" }),
+    ]);
+
+    state = surfaceReducer(state, {
+      type: "transcript.user.failed",
+      generation: 0,
+      client_message_id: "client_1",
+      message: "busy",
+    });
+    expect(state.committed_transcript).toEqual([
+      expect.objectContaining({ status: "failed", error_message: "busy" }),
+    ]);
+  });
+
   it("atomically replaces every thread-scoped projection and increments generation", () => {
     const dirty = {
       ...initialSurfaceState(),

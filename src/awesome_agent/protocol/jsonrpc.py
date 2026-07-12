@@ -47,6 +47,10 @@ class _ThreadParams(BaseModel):
 
 class _TurnParams(_ThreadParams):
     content: str = Field(min_length=1, max_length=200_000)
+    client_message_id: str = Field(
+        pattern=r"^client_[A-Za-z0-9_-]+$",
+        max_length=128,
+    )
 
 
 class _DirectParams(_ThreadParams):
@@ -169,7 +173,11 @@ class JsonRpcDispatcher:
 
     async def _submit_turn(self, params: Mapping[str, object]) -> object:
         parsed = _TurnParams.model_validate(params)
-        return await self._facade.submit_turn(parsed.thread_id, parsed.content)
+        return await self._facade.submit_turn(
+            parsed.thread_id,
+            parsed.content,
+            parsed.client_message_id,
+        )
 
     async def _execute_direct(self, params: Mapping[str, object]) -> object:
         parsed = _DirectParams.model_validate(params)

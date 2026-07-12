@@ -45,6 +45,7 @@ class ApplicationFacade(Protocol):
         self,
         thread_id: str,
         content: str,
+        client_message_id: str,
     ) -> ApplicationResult[OperationAccepted]: ...
 
     async def execute_direct(
@@ -87,6 +88,7 @@ class _ApplicationBackend(Protocol):
         self,
         thread_id: str,
         content: str,
+        client_message_id: str,
     ) -> OperationAccepted: ...
 
     async def start_direct(
@@ -152,8 +154,15 @@ class LocalApplication:
         self,
         thread_id: str,
         content: str,
+        client_message_id: str,
     ) -> ApplicationResult[OperationAccepted]:
-        return await self._call(lambda: self._backend.start_turn(thread_id, content))
+        return await self._call(
+            lambda: self._backend.start_turn(
+                thread_id,
+                content,
+                client_message_id,
+            )
+        )
 
     async def execute_direct(
         self,

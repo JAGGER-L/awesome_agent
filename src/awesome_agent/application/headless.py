@@ -110,7 +110,7 @@ from awesome_agent.storage.conversations import SQLiteToolActivityRepository
 from awesome_agent.storage.mcp import SQLiteMcpEnablementStore
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
-type TurnSubmitter = Callable[[str, str], Awaitable[object]]
+type TurnSubmitter = Callable[[str, str, str], Awaitable[object]]
 type CommandDelegate = Callable[[CommandIntent, str], Awaitable[CommandResult]]
 type Mem0StateChanged = Callable[[bool, Mem0Identity | None], None]
 
@@ -699,7 +699,11 @@ class ApplicationExtensionService:
             return self._error("skill_not_found", "Bundled Skill is unavailable.")
         self._conversation.set_skill_mode(thread_id, skill_name)
         content = " ".join((prompt, *intent.arguments)).strip()
-        accepted = await self._submit_turn(thread_id, content)
+        accepted = await self._submit_turn(
+            thread_id,
+            content,
+            new_identifier("client"),
+        )
         return CommandResult(
             status=CommandStatus.SUCCESS,
             content="Agent Turn submitted.",
@@ -1046,6 +1050,7 @@ class LocalApplication:
                         "Change journal recovery requires attention.",
                     )
                 change_set_id = self._change_set_for_turn(turn_id)
+
             async def resolve_tool_approval(
                 request: ToolApprovalRequest,
             ) -> ToolApprovalDecision:

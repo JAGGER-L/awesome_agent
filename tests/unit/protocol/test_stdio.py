@@ -90,7 +90,7 @@ class Facade:
         raise LookupError(query.thread_id)
 
     async def submit_turn(
-        self, thread_id: str, content: str
+        self, thread_id: str, content: str, client_message_id: str
     ) -> ApplicationResult[OperationAccepted]:
         del content
         if self.event_sink is not None:
@@ -107,7 +107,12 @@ class Facade:
                 )
             )
         return ApplicationResult.success(
-            OperationAccepted(operation_id="operation_1", thread_id=thread_id)
+            OperationAccepted(
+                operation_id="operation_1",
+                thread_id=thread_id,
+                turn_id="turn_1",
+                client_message_id=client_message_id,
+            )
         )
 
     async def execute_direct(
@@ -184,7 +189,11 @@ async def test_event_and_response_share_one_serialized_protocol_writer() -> None
     request = _request(
         1,
         "turn.submit",
-        {"thread_id": "thread_1", "content": "inspect"},
+        {
+            "thread_id": "thread_1",
+            "content": "inspect",
+            "client_message_id": "client_1",
+        },
     )
     output = Output()
     writer = JsonLineWriter(output)

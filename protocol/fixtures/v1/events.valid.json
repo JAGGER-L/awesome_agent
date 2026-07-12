@@ -57,6 +57,7 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_005",
       "event_type": "turn.started",
       "payload": {
@@ -71,6 +72,7 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_006",
       "event_type": "turn.completed",
       "payload": {
@@ -85,6 +87,7 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_007",
       "event_type": "turn.failed",
       "payload": {
@@ -99,6 +102,7 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_008",
       "event_type": "turn.cancelled",
       "payload": {

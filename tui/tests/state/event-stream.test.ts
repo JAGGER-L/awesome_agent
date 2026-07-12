@@ -145,6 +145,31 @@ describe("DeltaBatcher", () => {
     ]);
   });
 
+  it("bounds a batch even when many deltas arrive within one tick", () => {
+    const scheduler = new ManualScheduler();
+    const output: { text: string }[] = [];
+    const batcher = new DeltaBatcher(
+      new EventStreamGuard(),
+      (value) => {
+        if ("kind" in value) output.push(value);
+      },
+      scheduler,
+    );
+    batcher.accept(
+      event(1, "assistant.text.delta", {
+        payload: { kind: "assistant.text.delta", text: "a".repeat(6_000) },
+      } as Partial<EventEnvelope>),
+    );
+    batcher.accept(
+      event(2, "assistant.text.delta", {
+        payload: { kind: "assistant.text.delta", text: "b".repeat(6_000) },
+      } as Partial<EventEnvelope>),
+    );
+    batcher.close();
+
+    expect(output.map((item) => item.text.length)).toEqual([6_000, 6_000]);
+  });
+
   it("flushes once on close and reports sequence faults", () => {
     const scheduler = new ManualScheduler();
     const output: unknown[] = [];

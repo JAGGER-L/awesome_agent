@@ -46,6 +46,7 @@ def _view(turn_count: int, summary: ThreadSummary | None = None) -> ThreadView:
             sequence=sequence,
             kind=ThreadEntryKind.USER_MESSAGE,
             content=f"question {index}",
+            client_message_id=f"client_{index}",
             created_at=now,
         )
         assistant = ThreadEntry(

@@ -143,6 +143,7 @@ const handleLine = (line) => {
                   thread_id: request.params.thread_id,
                   sequence: 1,
                   kind: "user_message",
+                  client_message_id: "client_fake",
                   content: "question",
                   metadata: {},
                   created_at: now,

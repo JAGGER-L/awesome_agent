@@ -89,9 +89,19 @@ class Backend:
         self.calls.append(("read", query))
         raise LookupError(query.thread_id)
 
-    async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
-        self.calls.append(("turn", (thread_id, content)))
-        return OperationAccepted(operation_id="operation_1", thread_id=thread_id)
+    async def start_turn(
+        self,
+        thread_id: str,
+        content: str,
+        client_message_id: str,
+    ) -> OperationAccepted:
+        self.calls.append(("turn", (thread_id, content, client_message_id)))
+        return OperationAccepted(
+            operation_id="operation_1",
+            thread_id=thread_id,
+            turn_id="turn_1",
+            client_message_id=client_message_id,
+        )
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
         self.calls.append(("direct", (thread_id, command)))
@@ -177,8 +187,11 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
 
     assert _unwrap(await facade.get_state()).workspace_trusted is True
     assert _unwrap(await facade.list_threads(ThreadListQuery())).threads == ()
-    assert _unwrap(await facade.submit_turn("thread_1", "inspect")).operation_id == (
-        "operation_1"
+    assert (
+        _unwrap(
+            await facade.submit_turn("thread_1", "inspect", "client_1")
+        ).operation_id
+        == "operation_1"
     )
     assert (
         _unwrap(await facade.execute_direct("thread_1", "git status")).operation_id

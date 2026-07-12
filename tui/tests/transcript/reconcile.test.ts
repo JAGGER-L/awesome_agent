@@ -48,6 +48,7 @@ function page(): MethodValue["thread.read"] {
           sequence: 1,
           kind: "user_message",
           content: "question",
+          client_message_id: "client_1",
           metadata: {},
           created_at: now,
         },

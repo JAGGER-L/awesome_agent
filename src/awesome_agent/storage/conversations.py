@@ -428,8 +428,8 @@ class SQLiteThreadEntryRepository(_SQLiteRepository):
                     """
                     INSERT INTO thread_entries (
                         entry_id, thread_id, sequence, kind, content,
-                        metadata_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        client_message_id, metadata_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         entry.id,
@@ -437,6 +437,7 @@ class SQLiteThreadEntryRepository(_SQLiteRepository):
                         entry.sequence,
                         entry.kind.value,
                         entry.content,
+                        entry.client_message_id,
                         _json(entry.metadata),
                         _time(entry.created_at),
                     ),
@@ -864,6 +865,7 @@ def _entry_from_row(row: sqlite3.Row) -> ThreadEntry:
         sequence=row["sequence"],
         kind=row["kind"],
         content=row["content"],
+        client_message_id=row["client_message_id"],
         metadata=json.loads(row["metadata_json"]),
         created_at=_parse_time(row["created_at"]),
     )

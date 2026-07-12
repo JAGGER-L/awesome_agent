@@ -61,7 +61,9 @@ def test_fresh_home_multi_thread_history_survives_restart_without_checkpoint(
     )
     first = service.create_thread("workspace_key", "First")
     second = service.create_thread("workspace_key", "Second")
-    turn = service.begin_turn(first.id, "Inspect", turn_config)
+    turn = service.begin_turn(
+        first.id, "Inspect", turn_config, client_message_id="client_inspect"
+    )
     service.complete_turn(
         turn.id,
         "Inspection complete",
@@ -73,7 +75,12 @@ def test_fresh_home_multi_thread_history_survives_restart_without_checkpoint(
         "$ pytest\nexit=0",
         {"exit_code": 0},
     )
-    service.begin_turn(second.id, "Independent", turn_config)
+    service.begin_turn(
+        second.id,
+        "Independent",
+        turn_config,
+        client_message_id="client_independent",
+    )
 
     reopened = ConversationService(
         store=SQLiteConversationRepositories(paths.application_db)

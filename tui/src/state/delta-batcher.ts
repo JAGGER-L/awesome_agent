@@ -32,6 +32,7 @@ const defaultScheduler: DeltaScheduler = {
     return { cancel: () => clearTimeout(timer) };
   },
 };
+const MAX_BATCH_CHARACTERS = 8_192;
 
 export class DeltaBatcher {
   #pending: CoalescedDelta | undefined;
@@ -54,12 +55,18 @@ export class DeltaBatcher {
       return undefined;
     }
     if (this.#pending && this.#matches(this.#pending, delta)) {
-      this.#pending = {
-        ...this.#pending,
-        text: this.#pending.text + delta.text,
-        last_sequence: delta.last_sequence,
-      };
-      return undefined;
+      if (
+        this.#pending.text.length + delta.text.length <=
+        MAX_BATCH_CHARACTERS
+      ) {
+        this.#pending = {
+          ...this.#pending,
+          text: this.#pending.text + delta.text,
+          last_sequence: delta.last_sequence,
+        };
+        return undefined;
+      }
+      this.flush();
     }
     this.flush();
     this.#pending = delta;

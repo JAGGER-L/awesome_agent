@@ -47,8 +47,14 @@ class OperationController:
         *,
         thread_id: str | None = None,
         turn_id: str | None = None,
+        client_message_id: str | None = None,
     ) -> T:
-        handle = await self.start(factory, thread_id=thread_id, turn_id=turn_id)
+        handle = await self.start(
+            factory,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            client_message_id=client_message_id,
+        )
         return await handle.task
 
     async def start(
@@ -57,6 +63,7 @@ class OperationController:
         *,
         thread_id: str | None = None,
         turn_id: str | None = None,
+        client_message_id: str | None = None,
     ) -> OperationHandle[T]:
         if self._active_id is not None:
             raise OperationBusy("Another operation is active.")
@@ -69,6 +76,7 @@ class OperationController:
                 thread_id=thread_id,
                 turn_id=turn_id,
                 operation_id=operation_id,
+                client_message_id=client_message_id,
             )
         except BaseException:
             self._active_id = None
@@ -86,6 +94,7 @@ class OperationController:
                     operation_id,
                     thread_id,
                     turn_id,
+                    client_message_id,
                 )
                 raise
             except Exception:
@@ -94,6 +103,7 @@ class OperationController:
                     operation_id,
                     thread_id,
                     turn_id,
+                    client_message_id,
                 )
                 raise
             else:
@@ -102,6 +112,7 @@ class OperationController:
                     operation_id,
                     thread_id,
                     turn_id,
+                    client_message_id,
                 )
                 return result
             finally:
@@ -119,6 +130,7 @@ class OperationController:
         operation_id: str,
         thread_id: str | None,
         turn_id: str | None,
+        client_message_id: str | None,
     ) -> None:
         await self._emitter.emit(
             OperationLifecyclePayload(
@@ -127,6 +139,7 @@ class OperationController:
             thread_id=thread_id,
             turn_id=turn_id,
             operation_id=operation_id,
+            client_message_id=client_message_id,
         )
 
     async def cancel(self, operation_id: str) -> bool:

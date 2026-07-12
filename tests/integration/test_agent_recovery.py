@@ -71,6 +71,7 @@ def _turn(conversation: ConversationService, thread_id: str) -> Turn:
             model="deepseek/deepseek-v4-flash",
             budgets=BudgetConfig(),
         ),
+        client_message_id="client_recovery",
     )
 
 

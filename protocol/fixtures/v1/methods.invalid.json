@@ -65,8 +65,21 @@
         "kind": "jsonrpc_error"
       },
       "method": "turn.submit",
+      "name": "turn.submit.client_message_id_missing",
+      "params": {
+        "content": "Inspect.",
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "turn.submit",
       "name": "turn.submit.empty",
       "params": {
+        "client_message_id": "client_44444444444444444444444444444444",
         "content": "",
         "thread_id": "thread_11111111111111111111111111111111"
       }

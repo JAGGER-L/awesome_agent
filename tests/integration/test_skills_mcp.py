@@ -102,8 +102,14 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     registry = ToolRegistry()
     register_read_tools(registry)
 
-    async def submit_turn(thread_id: str, content: str) -> object:
-        return {"thread_id": thread_id, "content": content}
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        return {
+            "thread_id": thread_id,
+            "content": content,
+            "client_message_id": client_message_id,
+        }
 
     extensions = ApplicationExtensionService(
         conversation=conversation,
@@ -132,6 +138,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
             skill_mode=configured_thread.skill_mode,
             budgets=BudgetConfig(),
         ),
+        client_message_id="client_skills",
     )
     context_service = ApplicationContextService(
         conversation=conversation,
@@ -284,7 +291,10 @@ async def test_skill_commands_select_one_skill_and_submit_a_normal_turn(
     thread = conversation.create_thread("workspace")
     submitted: list[tuple[str, str]] = []
 
-    async def submit_turn(thread_id: str, content: str) -> object:
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        del client_message_id
         submitted.append((thread_id, content))
         return {"operation_id": "operation"}
 
