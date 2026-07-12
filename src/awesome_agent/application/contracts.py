@@ -184,7 +184,7 @@ class ApplicationState(BaseModel):
     )
     memory_status: dict[str, JsonValue] = Field(default_factory=dict)
     mcp_status: tuple[dict[str, JsonValue], ...] = ()
-    usage: dict[str, int] = Field(default_factory=dict)
+    usage: dict[str, int | float] = Field(default_factory=dict)
     configuration_diagnostics: tuple[str, ...] = ()
 
 

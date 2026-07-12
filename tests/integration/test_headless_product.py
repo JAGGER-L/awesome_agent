@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
@@ -24,6 +26,7 @@ from awesome_agent.modeling import (
     SelectedModel,
     StopReason,
     TextDelta,
+    ToolCall,
     TurnCompleted,
 )
 
@@ -64,6 +67,48 @@ class FakeGateway:
         return completed[0]
 
 
+class ExecuteGateway(FakeGateway):
+    def __init__(self, provider: str, model: str, command: str) -> None:
+        super().__init__(provider, model)
+        self.command = command
+        self.calls = 0
+
+    async def stream(
+        self,
+        selected: SelectedModel,
+        request: ModelRequest,
+    ) -> AsyncIterator[GatewayEvent]:
+        self.requests.append(request)
+        self.calls += 1
+        if self.calls == 1:
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    provider=selected.provider,
+                    model=selected.model,
+                    assistant=AssistantMessage(
+                        tool_calls=(
+                            ToolCall(
+                                call_id="call_execute",
+                                name="execute",
+                                arguments_json=json.dumps({"command": self.command}),
+                            ),
+                        )
+                    ),
+                    stop_reason=StopReason.TOOL_CALLS,
+                )
+            )
+            return
+        yield TextDelta(text="done")
+        yield TurnCompleted(
+            turn=ModelTurn(
+                provider=selected.provider,
+                model=selected.model,
+                assistant=AssistantMessage(content="done"),
+                stop_reason=StopReason.COMPLETED,
+            )
+        )
+
+
 def _unwrap[T](result: ApplicationResult[T]) -> T:
     assert result.ok is True
     assert result.value is not None
@@ -85,6 +130,76 @@ async def _wait_for_thread(
             return view
         await asyncio.sleep(0.01)
     raise AssertionError("foreground operation did not complete")
+
+
+async def _wait_for_interaction(application: object) -> str:
+    for _ in range(200):
+        state = _unwrap(await application.get_state())
+        if state.pending_interaction_id is not None:
+            return state.pending_interaction_id
+        await asyncio.sleep(0.01)
+    raise AssertionError("execute interaction was not requested")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("decision", "command_runs", "terminal_event"),
+    [
+        ("allow_once", True, EventType.TOOL_COMPLETED),
+        ("deny", False, EventType.TOOL_FAILED),
+    ],
+)
+async def test_composed_agent_execute_waits_for_application_decision(
+    tmp_path: Path,
+    decision: str,
+    command_runs: bool,
+    terminal_event: EventType,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    marker = workspace / "agent-executed.txt"
+    command = (
+        f'"{sys.executable}" -c "from pathlib import Path; '
+        "Path('agent-executed.txt').write_text('ran', encoding='utf-8')\""
+    )
+
+    def gateway_factory(provider: str, model: str) -> object:
+        return cast(object, ExecuteGateway(provider, model, command))
+
+    sink = CollectingEventSink()
+    application = await compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=sink,
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=cast(object, gateway_factory),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    created = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    thread_id = str(created.data["thread_id"])
+
+    _unwrap(await application.submit_turn(thread_id, "run the command"))
+    interaction_id = await _wait_for_interaction(application)
+    assert not marker.exists()
+
+    resolved = _unwrap(await application.respond_interaction(interaction_id, decision))
+    assert resolved.accepted
+    view = await _wait_for_thread(application, thread_id, entries=2)
+
+    assert marker.exists() is command_runs
+    assert view.entries[-1].content == "done"
+    assert any(
+        event.event_type is EventType.INTERACTION_REQUIRED for event in sink.events
+    )
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.TOOL_STARTED) == 1
+    assert event_types.count(terminal_event) == 1
+    await application.shutdown()
 
 
 @pytest.mark.asyncio
