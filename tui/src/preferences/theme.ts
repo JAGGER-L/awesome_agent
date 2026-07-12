@@ -6,6 +6,7 @@ export interface Theme {
   readonly colorEnabled: boolean;
   readonly logoRows: readonly (string | undefined)[];
   readonly accent: string;
+  readonly brand: string;
   readonly assistant: string;
   readonly error: string;
   readonly muted: string;
@@ -83,6 +84,10 @@ export function resolveTheme(
     colorEnabled: capability !== "none",
     logoRows,
     accent: light ? "cyan" : "cyanBright",
+    brand:
+      capability === "none"
+        ? "white"
+        : (logoRows[1] ?? (light ? "green" : "greenBright")),
     assistant: light ? "black" : "white",
     error: "red",
     muted: "gray",

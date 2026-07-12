@@ -75,6 +75,7 @@ export type TerminalUiAction =
     }
   | { readonly type: "mode.cancel" }
   | { readonly type: "mode.select"; readonly delta: -1 | 1 }
+  | { readonly type: "mode.set"; readonly selected: number }
   | { readonly type: "mode.secret.insert"; readonly text: string }
   | { readonly type: "mode.secret.backspace" }
   | { readonly type: "mode.secret.submitting"; readonly submitting: boolean }
