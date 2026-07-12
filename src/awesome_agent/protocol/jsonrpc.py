@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
@@ -17,7 +17,6 @@ from awesome_agent.application.contracts import (
     ThreadReadQuery,
 )
 from awesome_agent.application.facade import ApplicationFacade
-from awesome_agent.config import ProviderName
 from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
@@ -70,7 +69,7 @@ class _OperationParams(BaseModel):
 class _ProviderCredentialParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: ProviderName
+    provider: Literal["deepseek", "kimi"]
     api_key: str = Field(min_length=1, max_length=20_000)
     allow_unverified: bool = False
 

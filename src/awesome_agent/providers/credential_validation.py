@@ -2,31 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from enum import StrEnum
 from typing import Any
 
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import SecretStr
 
-from awesome_agent.config import KimiRegion, ProviderName
+from awesome_agent.config import (
+    CredentialValidation,
+    CredentialValidationStatus,
+    KimiRegion,
+    ProviderName,
+)
 from awesome_agent.providers.deepseek import DEEPSEEK_OFFICIAL_BASE_URL
 from awesome_agent.providers.kimi import KIMI_OFFICIAL_BASE_URLS
 
 type CredentialClientFactory = Callable[..., Any]
-
-
-class CredentialValidationStatus(StrEnum):
-    VALID = "valid"
-    INVALID = "invalid"
-    UNVERIFIED = "unverified"
-
-
-class CredentialValidation(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    status: CredentialValidationStatus
-    code: str
 
 
 class ProviderCredentialValidator:

@@ -1,5 +1,7 @@
 from awesome_agent.config.credentials import (
     CredentialSource,
+    CredentialValidation,
+    CredentialValidationStatus,
     ProviderCredentialStatus,
     ProviderCredentialStatuses,
     ProviderName,
@@ -51,6 +53,8 @@ __all__ = [
     "ConfigurationInvalid",
     "ConfigurationResolutionError",
     "CredentialSource",
+    "CredentialValidation",
+    "CredentialValidationStatus",
     "KimiRegion",
     "LoadedConfigSources",
     "McpServerDeclaration",

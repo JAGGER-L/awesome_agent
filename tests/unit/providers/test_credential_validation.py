@@ -9,11 +9,8 @@ import openai
 import pytest
 from pydantic import SecretStr
 
-from awesome_agent.config import KimiRegion
-from awesome_agent.providers import (
-    CredentialValidationStatus,
-    ProviderCredentialValidator,
-)
+from awesome_agent.config import CredentialValidationStatus, KimiRegion
+from awesome_agent.providers import ProviderCredentialValidator
 
 
 class FakeModels:
