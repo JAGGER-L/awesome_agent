@@ -48,6 +48,7 @@ export interface FatalState {
 
 export interface SurfaceState {
   readonly connection: ConnectionState;
+  readonly thread_generation: number;
   readonly application?: MethodValue["application.getState"];
   readonly thread?: MethodValue["thread.read"];
   readonly active_operation?: OperationProjection;

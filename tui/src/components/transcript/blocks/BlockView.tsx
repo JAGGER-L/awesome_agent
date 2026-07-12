@@ -54,6 +54,23 @@ export function BlockView({
       return <Text color={theme.warning}>Warning · {block.message}</Text>;
     case "status":
       return <Text color={theme.muted}>{block.message}</Text>;
+    case "command_result":
+      return (
+        <Box flexDirection="column">
+          <Text
+            color={
+              block.tone === "error"
+                ? theme.error
+                : block.tone === "warning"
+                  ? theme.warning
+                  : theme.muted
+            }
+          >
+            /{block.command}
+          </Text>
+          <Text>{block.content}</Text>
+        </Box>
+      );
     case "error":
       return <Text color={theme.error}>Error · {block.message}</Text>;
     case "omitted_history":

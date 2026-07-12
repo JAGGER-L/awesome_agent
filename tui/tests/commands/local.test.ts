@@ -86,17 +86,27 @@ function harness(overrides: Partial<LocalCommandDependencies> = {}) {
 describe("LocalCommandService", () => {
   it("opens all-command or focused help without RPC", async () => {
     const { service } = harness();
-    await expect(service.execute({ name: "help" })).resolves.toEqual({
-      kind: "help",
+    await expect(service.execute({ name: "help" })).resolves.toMatchObject({
+      kind: "result",
+      command: "help",
+      tone: "info",
+      content: expect.stringContaining("Commands"),
     });
     await expect(
       service.execute({ name: "help", arguments: ["thinking"] }),
-    ).resolves.toEqual({ kind: "help", command: "thinking" });
+    ).resolves.toMatchObject({
+      kind: "result",
+      command: "help",
+      tone: "info",
+      content: expect.stringContaining("/thinking"),
+    });
     await expect(
       service.execute({ name: "help", arguments: ["editor"] }),
     ).resolves.toEqual({
-      kind: "warning",
-      message: "No command named /editor.",
+      kind: "result",
+      command: "help",
+      tone: "warning",
+      content: "No command named /editor.",
     });
   });
 
@@ -108,7 +118,12 @@ describe("LocalCommandService", () => {
     });
     await expect(
       service.execute({ name: "theme", arguments: ["dark"] }),
-    ).resolves.toEqual({ kind: "notice", message: "Theme changed to dark." });
+    ).resolves.toEqual({
+      kind: "result",
+      command: "theme",
+      tone: "info",
+      content: "Theme changed to dark.",
+    });
     expect(saveTheme).toHaveBeenCalledWith("dark");
     expect(setTheme).toHaveBeenCalledWith("dark");
   });
@@ -116,8 +131,10 @@ describe("LocalCommandService", () => {
   it("copies only the latest durable Assistant entry", async () => {
     const { service, writeText } = harness();
     await expect(service.execute({ name: "copy" })).resolves.toEqual({
-      kind: "notice",
-      message: "Copied latest Assistant answer.",
+      kind: "result",
+      command: "copy",
+      tone: "info",
+      content: "Copied latest Assistant answer.",
     });
     expect(writeText).toHaveBeenCalledWith("latest durable answer");
   });
@@ -127,7 +144,9 @@ describe("LocalCommandService", () => {
     empty.view.entries = [];
     const { service } = harness({ getThread: () => empty });
     await expect(service.execute({ name: "copy" })).resolves.toMatchObject({
-      kind: "warning",
+      kind: "result",
+      command: "copy",
+      tone: "warning",
     });
   });
 
@@ -140,8 +159,10 @@ describe("LocalCommandService", () => {
       },
     });
     await expect(service.execute({ name: "copy" })).resolves.toEqual({
-      kind: "warning",
-      message: "Clipboard is unavailable.",
+      kind: "result",
+      command: "copy",
+      tone: "warning",
+      content: "Clipboard is unavailable.",
     });
   });
 

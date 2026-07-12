@@ -107,9 +107,12 @@ export function routeTerminalKey(
       else if (key.tab) intent = { type: "command.complete" };
       else if (key.return) intent = { type: "selection.confirm" };
       else if (key.escape) intent = { type: "mode.cancel" };
-      break;
-    case "help":
-      if (key.escape) intent = { type: "mode.cancel" };
+      else {
+        const mapped = mapComposerKey(input, key, false);
+        if (mapped?.type === "edit") {
+          intent = { type: "composer.edit", action: mapped.action };
+        }
+      }
       break;
     case "composer": {
       if (state.composerSubmitting) break;

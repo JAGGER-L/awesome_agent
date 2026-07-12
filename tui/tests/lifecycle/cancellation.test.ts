@@ -14,6 +14,7 @@ function deferred<T>() {
 function state(operation: "turn" | "direct" | "none" = "turn"): SurfaceState {
   return {
     connection: "ready",
+    thread_generation: 0,
     event_sequence: 0,
     warnings: [],
     ...(operation === "none"

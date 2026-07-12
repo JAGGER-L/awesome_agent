@@ -115,7 +115,7 @@ const handleLine = (line) => {
     const now = "2026-07-11T08:00:00Z";
     const terminal = process.env.AWESOME_FAKE_CORE_TERMINAL === "1";
     if (terminal) process.stderr.write("thread-read\n");
-    output({
+    const response = {
       jsonrpc: "2.0",
       id: request.id,
       result: application({
@@ -198,7 +198,12 @@ const handleLine = (line) => {
         change_sets: [],
         has_more: false,
       }),
-    });
+    };
+    const delay = Number(
+      process.env.AWESOME_FAKE_CORE_THREAD_READ_DELAY_MS ?? 0,
+    );
+    if (delay > 0) setTimeout(() => output(response), delay);
+    else output(response);
   } else if (request.method === "command.execute") {
     const threadId = request.params.arguments?.[0] ?? "thread_fake";
     output({

@@ -2,7 +2,7 @@ import type { ClipboardAdapter } from "../adapters/clipboard.js";
 import type { PickerSelection } from "../interaction/model.js";
 import type { MethodValue } from "../protocol/methods.js";
 import type { ThemePreference } from "../preferences/theme.js";
-import { findCommand } from "./catalog.js";
+import { COMMAND_CATALOG, findCommand } from "./catalog.js";
 import type { LocalCommandIntent } from "./parser.js";
 
 export interface LocalCommandDependencies {
@@ -14,10 +14,13 @@ export interface LocalCommandDependencies {
 }
 
 export type LocalCommandResult =
-  | { readonly kind: "help"; readonly command?: string }
+  | {
+      readonly kind: "result";
+      readonly command: string;
+      readonly tone: "info" | "warning" | "error";
+      readonly content: string;
+    }
   | { readonly kind: "picker"; readonly selection: PickerSelection }
-  | { readonly kind: "notice"; readonly message: string }
-  | { readonly kind: "warning"; readonly message: string }
   | { readonly kind: "shutdown" };
 
 export class LocalCommandService {
@@ -33,20 +36,48 @@ export class LocalCommandService {
         return await this.#copy(intent.arguments ?? []);
       case "quit":
         return intent.arguments?.length
-          ? { kind: "warning", message: "Usage: /quit" }
+          ? {
+              kind: "result",
+              command: "quit",
+              tone: "warning",
+              content: "Usage: /quit",
+            }
           : { kind: "shutdown" };
     }
   }
 
   #help(arguments_: readonly string[]): LocalCommandResult {
-    if (arguments_.length === 0) return { kind: "help" };
+    if (arguments_.length === 0) {
+      return {
+        kind: "result",
+        command: "help",
+        tone: "info",
+        content: helpOverview(),
+      };
+    }
     if (arguments_.length !== 1) {
-      return { kind: "warning", message: "Usage: /help [command]" };
+      return {
+        kind: "result",
+        command: "help",
+        tone: "warning",
+        content: "Usage: /help [command]",
+      };
     }
     const command = arguments_[0]?.replace(/^\//u, "") ?? "";
-    return findCommand(command)
-      ? { kind: "help", command }
-      : { kind: "warning", message: `No command named /${command}.` };
+    const metadata = findCommand(command);
+    return metadata
+      ? {
+          kind: "result",
+          command: "help",
+          tone: "info",
+          content: `${metadata.usage}\n${metadata.description}\nOwner: ${metadata.owner}`,
+        }
+      : {
+          kind: "result",
+          command: "help",
+          tone: "warning",
+          content: `No command named /${command}.`,
+        };
   }
 
   async #theme(arguments_: readonly string[]): Promise<LocalCommandResult> {
@@ -70,36 +101,64 @@ export class LocalCommandService {
       (selected !== "system" && selected !== "dark" && selected !== "light")
     ) {
       return {
-        kind: "warning",
-        message: "Usage: /theme [system|dark|light]",
+        kind: "result",
+        command: "theme",
+        tone: "warning",
+        content: "Usage: /theme [system|dark|light]",
       };
     }
     await this.dependencies.saveTheme(selected);
     this.dependencies.setTheme(selected);
-    return { kind: "notice", message: `Theme changed to ${selected}.` };
+    return {
+      kind: "result",
+      command: "theme",
+      tone: "info",
+      content: `Theme changed to ${selected}.`,
+    };
   }
 
   async #copy(arguments_: readonly string[]): Promise<LocalCommandResult> {
     if (arguments_.length > 0) {
-      return { kind: "warning", message: "Usage: /copy" };
+      return {
+        kind: "result",
+        command: "copy",
+        tone: "warning",
+        content: "Usage: /copy",
+      };
     }
     const answer = latestAssistantAnswer(this.dependencies.getThread());
     if (answer === undefined) {
       return {
-        kind: "warning",
-        message: "No durable Assistant answer is available to copy.",
+        kind: "result",
+        command: "copy",
+        tone: "warning",
+        content: "No durable Assistant answer is available to copy.",
       };
     }
     try {
       await this.dependencies.clipboard.writeText(answer);
       return {
-        kind: "notice",
-        message: "Copied latest Assistant answer.",
+        kind: "result",
+        command: "copy",
+        tone: "info",
+        content: "Copied latest Assistant answer.",
       };
     } catch {
-      return { kind: "warning", message: "Clipboard is unavailable." };
+      return {
+        kind: "result",
+        command: "copy",
+        tone: "warning",
+        content: "Clipboard is unavailable.",
+      };
     }
   }
+}
+
+function helpOverview(): string {
+  const names = COMMAND_CATALOG.map((command) => `/${command.name}`).join(
+    " · ",
+  );
+  return `Commands\n${names}`;
 }
 
 export function latestAssistantAnswer(

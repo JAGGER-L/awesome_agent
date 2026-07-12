@@ -6,6 +6,7 @@ import { projectLiveTurn } from "../../src/transcript/live.js";
 function state(): SurfaceState {
   return {
     connection: "ready",
+    thread_generation: 0,
     event_sequence: 8,
     warnings: [{ code: "retry", message: "Provider retrying." }],
     usage: { input_tokens: 12, output_tokens: 4 },

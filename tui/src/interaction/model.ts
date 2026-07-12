@@ -1,4 +1,5 @@
 import type { CommandIntent } from "../commands/parser.js";
+import type { CommandName } from "../protocol/commands.js";
 import type { ComposerAction, ComposerState } from "../composer/model.js";
 import type { MethodValue } from "../protocol/index.js";
 import type { SurfaceState } from "../state/model.js";
@@ -34,7 +35,11 @@ export type UiMode =
       readonly message?: string | undefined;
     }
   | { readonly kind: "fatal"; readonly selected: number }
-  | { readonly kind: "command_menu"; readonly selected: number }
+  | {
+      readonly kind: "command_menu";
+      readonly query: string;
+      readonly selectedCommand?: CommandName;
+    }
   | {
       readonly kind: "picker";
       readonly owner: PickerOwner;
@@ -56,8 +61,7 @@ export type UiMode =
       readonly selected: number;
       readonly submitting: boolean;
       readonly message?: string | undefined;
-    }
-  | { readonly kind: "help"; readonly command?: string };
+    };
 
 export interface TerminalUiState {
   readonly mode: UiMode;

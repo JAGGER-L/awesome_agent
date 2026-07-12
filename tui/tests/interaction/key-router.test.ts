@@ -12,6 +12,26 @@ function stateWithMode(mode: UiMode) {
 }
 
 describe("routeTerminalKey", () => {
+  it("routes command menu arrows, Tab, Enter, and Esc before composer history", () => {
+    const state = stateWithMode({
+      kind: "command_menu",
+      query: "/th",
+      selectedCommand: "thinking",
+    });
+
+    expect(
+      routeTerminalKey(state, "", { ...emptyTerminalKey(), downArrow: true }),
+    ).toEqual({ type: "selection.move", delta: 1 });
+    expect(
+      routeTerminalKey(state, "", { ...emptyTerminalKey(), tab: true }),
+    ).toEqual({ type: "command.complete" });
+    expect(
+      routeTerminalKey(state, "", { ...emptyTerminalKey(), return: true }),
+    ).toEqual({ type: "selection.confirm" });
+    expect(
+      routeTerminalKey(state, "", { ...emptyTerminalKey(), escape: true }),
+    ).toEqual({ type: "mode.cancel" });
+  });
   it("routes Enter only to an active approval", () => {
     const state = stateWithMode({
       kind: "approval",
@@ -59,7 +79,11 @@ describe("routeTerminalKey", () => {
   it("routes command-menu Tab without submitting", () => {
     expect(
       routeTerminalKey(
-        stateWithMode({ kind: "command_menu", selected: 0 }),
+        stateWithMode({
+          kind: "command_menu",
+          query: "/th",
+          selectedCommand: "thinking",
+        }),
         "",
         { ...emptyTerminalKey(), tab: true },
       ),
