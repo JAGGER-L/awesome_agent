@@ -46,6 +46,7 @@ def test_command_ownership_matrix_is_complete() -> None:
         "usage",
         "doctor",
         "config",
+        "permissions",
     }
     skill = {"init", "review", "debug", "test", "commit"}
     ink = {"help", "theme", "copy", "quit"}
@@ -81,7 +82,6 @@ def test_command_intent_round_trips() -> None:
         "threads",
         "attach",
         "clear",
-        "permissions",
         "sandbox",
         "api",
         "agent",
@@ -201,6 +201,7 @@ def test_surface_neutral_application_contracts_hide_secret_values() -> None:
         "moonshot_api_key": False,
         "mem0_api_key": False,
     }
+    assert state.permission_mode == "request_approval"
     with pytest.raises(ValidationError):
         SecretStatus.model_validate({"deepseek_api_key": "raw-secret-value"})
     assert accepted.turn_id == "turn_1"

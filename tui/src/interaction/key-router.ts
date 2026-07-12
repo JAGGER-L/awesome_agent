@@ -98,9 +98,6 @@ export function routeTerminalKey(
         if (key.escape) intent = { type: "approval.deny" };
       }
       break;
-    case "permission_confirmation":
-      intent = routeSelectionKey(key, false);
-      break;
     case "picker":
       intent = routeSelectionKey(key, mode.blocking);
       break;

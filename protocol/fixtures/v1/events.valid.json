@@ -295,13 +295,21 @@
       "event_type": "interaction.required",
       "payload": {
         "choices": [
-          "trust",
-          "deny"
+          {
+            "decision": "trust",
+            "label": "Yes"
+          },
+          {
+            "decision": "deny",
+            "label": "No"
+          }
         ],
         "interaction_id": "interaction_1",
         "interaction_kind": "workspace_trust",
         "kind": "interaction.required",
-        "prompt": "Trust this workspace?"
+        "operation": "trust",
+        "prompt": "Trust this workspace?",
+        "target": "C:\\workspace"
       },
       "sequence": 21,
       "session_id": "session_11111111111111111111111111111111",

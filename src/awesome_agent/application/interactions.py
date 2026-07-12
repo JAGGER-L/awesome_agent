@@ -9,13 +9,24 @@ from pydantic import BaseModel, ConfigDict
 
 class InteractionKind(StrEnum):
     WORKSPACE_TRUST = "workspace_trust"
-    EXECUTE_BOUNDARY = "execute_boundary"
+    TOOL_APPROVAL = "tool_approval"
+    FULL_ACCESS_CONFIRMATION = "full_access_confirmation"
 
 
 class InteractionDecision(StrEnum):
     TRUST = "trust"
     ALLOW_ONCE = "allow_once"
+    ALLOW_THREAD_WRITES = "allow_thread_writes"
+    ENABLE_FULL_ACCESS = "enable_full_access"
     DENY = "deny"
+
+
+class InteractionChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision: InteractionDecision
+    label: str
+    description: str | None = None
 
 
 class PendingInteraction(BaseModel):
@@ -24,12 +35,55 @@ class PendingInteraction(BaseModel):
     id: str
     kind: InteractionKind
     prompt: str
-    choices: tuple[InteractionDecision, ...]
-    scope: str | None
+    operation: str
+    target: str
+    capability: str | None
+    choices: tuple[InteractionChoice, ...]
 
 
 class InteractionBusy(RuntimeError):
     pass
+
+
+def workspace_trust_choices() -> tuple[InteractionChoice, ...]:
+    return (
+        InteractionChoice(
+            decision=InteractionDecision.TRUST,
+            label="Yes, I trust this folder",
+        ),
+        InteractionChoice(decision=InteractionDecision.DENY, label="No, exit"),
+    )
+
+
+def tool_approval_choices(capability: str) -> tuple[InteractionChoice, ...]:
+    choices = [
+        InteractionChoice(decision=InteractionDecision.ALLOW_ONCE, label="Yes")
+    ]
+    if capability == "workspace.write":
+        choices.append(
+            InteractionChoice(
+                decision=InteractionDecision.ALLOW_THREAD_WRITES,
+                label="Yes, allow all edits during this session",
+            )
+        )
+    choices.append(InteractionChoice(decision=InteractionDecision.DENY, label="No"))
+    return tuple(choices)
+
+
+def full_access_confirmation_choices() -> tuple[InteractionChoice, ...]:
+    return (
+        InteractionChoice(
+            decision=InteractionDecision.ENABLE_FULL_ACCESS,
+            label="Enable Full access for this thread",
+            description=(
+                "Awesome will edit files and run shell commands without approval."
+            ),
+        ),
+        InteractionChoice(
+            decision=InteractionDecision.DENY,
+            label="Keep Request approval",
+        ),
+    )
 
 
 class InteractionCoordinator:
@@ -43,8 +97,10 @@ class InteractionCoordinator:
         *,
         kind: InteractionKind,
         prompt: str,
-        choices: tuple[InteractionDecision, ...],
-        scope: str | None,
+        operation: str,
+        target: str,
+        capability: str | None,
+        choices: tuple[InteractionChoice, ...],
     ) -> PendingInteraction:
         if self.pending is not None:
             raise InteractionBusy("Another interaction is pending.")
@@ -52,8 +108,10 @@ class InteractionCoordinator:
             id=f"interaction_{uuid4().hex}",
             kind=kind,
             prompt=prompt,
+            operation=operation,
+            target=target,
+            capability=capability,
             choices=choices,
-            scope=scope,
         )
         self.pending = pending
         self._future = None
@@ -69,7 +127,7 @@ class InteractionCoordinator:
         if (
             pending is None
             or pending.id != interaction_id
-            or decision not in pending.choices
+            or decision not in {choice.decision for choice in pending.choices}
             or self._resolved is not None
         ):
             return False

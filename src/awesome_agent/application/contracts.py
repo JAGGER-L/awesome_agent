@@ -24,6 +24,7 @@ from awesome_agent.config.credentials import (
 )
 from awesome_agent.config.models import SecretStatus
 from awesome_agent.conversation.models import Thread, ThreadView
+from awesome_agent.core.tools.permissions import PermissionMode
 
 
 class ProductErrorCode(StrEnum):
@@ -177,6 +178,7 @@ class ApplicationState(BaseModel):
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
     active_operation_id: str | None = Field(default=None, max_length=128)
     pending_interaction_id: str | None = Field(default=None, max_length=128)
+    permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     configuration_valid: bool
     secret_status: SecretStatus
     provider_credentials: ProviderCredentialStatuses = Field(
@@ -244,6 +246,7 @@ class StatusSnapshot(BaseModel):
     operation_id: str | None = Field(default=None, max_length=128)
     configuration_valid: bool
     configuration_diagnostic_count: int = Field(ge=0)
+    permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
 
 
 def thread_display_id(

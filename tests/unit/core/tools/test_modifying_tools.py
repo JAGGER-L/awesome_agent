@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 from unittest.mock import Mock
@@ -17,6 +18,12 @@ from awesome_agent.core.tools import (
     ToolStatus,
 )
 from awesome_agent.core.tools.builtins import register_modifying_tools
+from awesome_agent.core.tools.permissions import (
+    PermissionMode,
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
+)
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
@@ -58,8 +65,44 @@ def modifying_fixture(
         activity_writer=Mock(),
         monotonic=monotonic,
         change_set_id=change_set_id,
+        permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
     )
     return ToolExecutor(registry), context, journal, workspace
+
+
+@pytest.mark.asyncio
+async def test_write_file_approval_describes_the_real_target(tmp_path: Path) -> None:
+    executor, context, _, workspace = modifying_fixture(tmp_path)
+    approvals: list[ToolApprovalRequest] = []
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        assert not (workspace / "circle_area.py").exists()
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    context = replace(
+        context,
+        permission_session=PermissionSession(),
+        approval_resolver=approve,
+    )
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_write",
+            tool_name="write_file",
+            arguments={"path": "circle_area.py", "content": "pass\n"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert approvals == [
+        ToolApprovalRequest(
+            capability="workspace.write",
+            operation="create",
+            target="circle_area.py",
+            prompt="Do you want to create circle_area.py?",
+        )
+    ]
 
 
 @pytest.mark.asyncio

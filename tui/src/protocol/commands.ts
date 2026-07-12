@@ -23,6 +23,7 @@ export const applicationCommandNames = [
   "usage",
   "doctor",
   "config",
+  "permissions",
 ] as const;
 
 export const skillCommandNames = [
@@ -65,6 +66,7 @@ export const statusSnapshotSchema = z.strictObject({
   operation_id: boundedText(1, 128).nullable(),
   configuration_valid: z.boolean(),
   configuration_diagnostic_count: safeIntegerSchema.min(0),
+  permission_mode: z.enum(["request_approval", "full_access"]),
 });
 
 export type StatusSnapshot = z.infer<typeof statusSnapshotSchema>;
@@ -90,6 +92,7 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   usage: "application",
   doctor: "application",
   config: "application",
+  permissions: "application",
   init: "skill",
   review: "skill",
   debug: "skill",

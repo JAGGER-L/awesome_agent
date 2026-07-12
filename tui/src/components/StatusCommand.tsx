@@ -22,6 +22,7 @@ export function StatusCommand({
       "Modes",
       `thinking ${snapshot.thinking_enabled ? "on" : "off"} · skill ${snapshot.skill_mode}`,
     ],
+    ["Permissions", snapshot.permission_mode.replace("_", " ")],
     [
       "Memory",
       `local ${snapshot.local_memory_enabled ? "on" : "off"} · mem0 ${snapshot.mem0_enabled ? "on" : "off"}`,

@@ -147,6 +147,7 @@ function applicationState(configured: boolean) {
     current_model: "deepseek/deepseek-chat",
     thinking_enabled: false,
     skill_mode: "auto",
+    permission_mode: "request_approval" as const,
     configuration_valid: true,
     secret_status: {
       deepseek_api_key: configured,

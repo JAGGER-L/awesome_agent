@@ -70,6 +70,7 @@ export const applicationStateSchema = z.strictObject({
   skill_mode: boundedText(1, 64),
   active_operation_id: identifierSchema.optional(),
   pending_interaction_id: identifierSchema.optional(),
+  permission_mode: z.enum(["request_approval", "full_access"]),
   configuration_valid: z.boolean(),
   secret_status: secretStatusSchema,
   provider_credentials: providerCredentialStatusesSchema,

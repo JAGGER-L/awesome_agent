@@ -14,21 +14,39 @@ from awesome_agent.core.tools.contracts import (
 from awesome_agent.core.tools.errors import (
     DuplicateToolName,
     ExpectedToolFailure,
-    ToolControlFlow,
     ToolInvariantError,
 )
 from awesome_agent.core.tools.executor import ToolExecutor
+from awesome_agent.core.tools.permissions import (
+    PermissionMode,
+    PermissionPolicy,
+    PermissionSession,
+    PolicyAction,
+    PolicyDecision,
+    PolicyRequest,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
+    ToolCapability,
+)
 from awesome_agent.core.tools.policy import SafeWorkspacePath, resolve_workspace_path
 from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
 
 __all__ = [
     "DuplicateToolName",
     "ExpectedToolFailure",
+    "PermissionMode",
+    "PermissionPolicy",
+    "PermissionSession",
+    "PolicyAction",
+    "PolicyDecision",
+    "PolicyRequest",
     "RegisteredTool",
     "SafeWorkspacePath",
     "ToolActivityDraft",
     "ToolActivityWriter",
-    "ToolControlFlow",
+    "ToolApprovalDecision",
+    "ToolApprovalRequest",
+    "ToolCapability",
     "ToolError",
     "ToolErrorCode",
     "ToolExecutionContext",

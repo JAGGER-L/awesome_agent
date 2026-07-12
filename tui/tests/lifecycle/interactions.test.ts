@@ -18,9 +18,15 @@ function pendingState(): SurfaceState {
     warnings: [],
     pending_interaction: {
       interaction_id: "interaction_1",
-      interaction_kind: "execute_boundary",
-      prompt: "Run outside boundary?",
-      choices: ["allow_once", "deny"],
+      interaction_kind: "tool_approval",
+      prompt: "Do you want to run pytest?",
+      operation: "run",
+      target: "pytest",
+      capability: "shell.execute",
+      choices: [
+        { decision: "allow_once", label: "Yes" },
+        { decision: "deny", label: "No" },
+      ],
     },
   };
 }

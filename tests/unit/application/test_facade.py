@@ -292,6 +292,35 @@ async def test_resume_is_workspace_scoped_and_ink_commands_are_surface_owned(
 
 
 @pytest.mark.asyncio
+async def test_new_and_resume_replace_thread_scoped_permission_state(
+    tmp_path: Path,
+) -> None:
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(tmp_path / "application.db")
+    )
+    existing = conversation.create_thread("workspace_1")
+    resets: list[str] = []
+
+    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
+        del intent, thread_id
+        return CommandResult(status=CommandStatus.SUCCESS)
+
+    commands = ConversationCommandService(
+        conversation=conversation,
+        workspace_key="workspace_1",
+        delegate=delegate,
+        on_thread_selected=lambda: resets.append("reset"),
+    )
+
+    await commands.handle(CommandIntent(name=CommandName.NEW))
+    await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=(existing.id,))
+    )
+
+    assert resets == ["reset", "reset"]
+
+
+@pytest.mark.asyncio
 async def test_resume_accepts_full_or_unique_prefix_and_selects_ambiguity(
     tmp_path: Path,
 ) -> None:

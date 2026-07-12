@@ -33,6 +33,7 @@ class CommandName(StrEnum):
     USAGE = "usage"
     DOCTOR = "doctor"
     CONFIG = "config"
+    PERMISSIONS = "permissions"
     INIT = "init"
     REVIEW = "review"
     DEBUG = "debug"
@@ -68,6 +69,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.USAGE,
             CommandName.DOCTOR,
             CommandName.CONFIG,
+            CommandName.PERMISSIONS,
         )
     },
     **{

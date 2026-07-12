@@ -5,6 +5,7 @@ from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
+from awesome_agent.core.tools.permissions import ToolCapability
 from awesome_agent.core.tools.process import ProcessRunner
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
@@ -43,3 +44,15 @@ def test_baseline_tools_exist_without_fixing_total_tool_count(tmp_path: Path) ->
         for name in baseline
         if next(spec for spec in specifications if spec.name == name).read_only
     } == {"glob", "grep", "ls", "read_file"}
+    assert {
+        spec.name: spec.capability for spec in specifications
+    } == {
+        "delete": ToolCapability.WORKSPACE_DELETE,
+        "edit_file": ToolCapability.WORKSPACE_WRITE,
+        "execute": ToolCapability.SHELL_EXECUTE,
+        "glob": ToolCapability.WORKSPACE_READ,
+        "grep": ToolCapability.WORKSPACE_READ,
+        "ls": ToolCapability.WORKSPACE_READ,
+        "read_file": ToolCapability.WORKSPACE_READ,
+        "write_file": ToolCapability.WORKSPACE_WRITE,
+    }

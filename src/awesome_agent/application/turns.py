@@ -24,7 +24,11 @@ from awesome_agent.conversation import (
     TurnStatus,
     UsageSummary,
 )
-from awesome_agent.core.events import EventEmitter, InteractionRequiredPayload
+from awesome_agent.core.events import (
+    EventEmitter,
+    InteractionChoicePayload,
+    InteractionRequiredPayload,
+)
 from awesome_agent.storage.checkpoints import CheckpointCorrupt, TurnCheckpointStore
 
 
@@ -290,7 +294,19 @@ class TurnCoordinator:
                             interaction_id=f"interaction_recovery_{turn.id}",
                             interaction_kind="recovery_decision",
                             prompt="A tool may have produced external side effects.",
-                            choices=("retry", "abort"),
+                            operation="recover",
+                            target="uncertain external tool call",
+                            capability=None,
+                            choices=(
+                                InteractionChoicePayload(
+                                    decision="retry",
+                                    label="Retry",
+                                ),
+                                InteractionChoicePayload(
+                                    decision="abort",
+                                    label="Abort",
+                                ),
+                            ),
                         ),
                         thread_id=turn.thread_id,
                         turn_id=turn.id,

@@ -57,6 +57,7 @@ def test_status_snapshot_is_exact_and_resume_friendly() -> None:
         "operation_id",
         "configuration_valid",
         "configuration_diagnostic_count",
+        "permission_mode",
     }
     serialized = snapshot.model_dump_json()
     for excluded in ("trusted", "branch", "usage", "secret", "database", "dirty"):

@@ -237,6 +237,19 @@ export function App({
           }
           setStatus(snapshot.data);
         }
+        if (
+          intent?.name === "permissions" &&
+          outcome.result.status === "success" &&
+          controller
+        ) {
+          const refreshed = await controller.refreshApplication();
+          if (refreshed.ok) {
+            store.dispatch({
+              type: "hydrate.application",
+              application: refreshed.value,
+            });
+          }
+        }
         return {
           accepted: true,
           ...(outcome.result.content
@@ -246,7 +259,14 @@ export function App({
       }
       return { accepted: true };
     },
-    [applyLocalResult, blockingSelection, dispatch, localCommands],
+    [
+      applyLocalResult,
+      blockingSelection,
+      controller,
+      dispatch,
+      localCommands,
+      store,
+    ],
   );
 
   const submit = useCallback(
@@ -404,6 +424,15 @@ export function App({
       dispatch({ type: "mode.approval.submitting", submitting: true });
       try {
         await interactionResponder?.respond(decision);
+        if (controller) {
+          const refreshed = await controller.refreshApplication();
+          if (refreshed.ok) {
+            store.dispatch({
+              type: "hydrate.application",
+              application: refreshed.value,
+            });
+          }
+        }
       } catch (error) {
         dispatch({
           type: "mode.approval.submitting",
@@ -416,15 +445,15 @@ export function App({
         });
       }
     },
-    [dispatch, interactionResponder],
+    [controller, dispatch, interactionResponder, store],
   );
 
   const selectCurrent = useCallback(async () => {
     const mode = uiRef.current.mode;
     if (mode.kind === "approval") {
-      const decision = mode.interaction.choices[mode.selected];
-      if (!decision) return;
-      await respondApproval(decision);
+      const choice = mode.interaction.choices[mode.selected];
+      if (!choice) return;
+      await respondApproval(choice.decision);
       return;
     }
     if (mode.kind !== "picker") return;

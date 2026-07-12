@@ -279,6 +279,7 @@ function applicationState({
     ...(model === null ? {} : { current_model: model }),
     thinking_enabled: false,
     skill_mode: "auto",
+    permission_mode: "request_approval",
     configuration_valid: valid,
     secret_status: {
       deepseek_api_key: deepseek,

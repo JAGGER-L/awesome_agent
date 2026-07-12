@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from time import monotonic
@@ -25,6 +24,8 @@ from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
+    tool_approval_choices,
+    workspace_trust_choices,
 )
 from awesome_agent.application.operations import OperationController
 from awesome_agent.config import UserConfigDocument, UserConfigWriter
@@ -47,7 +48,9 @@ from awesome_agent.core.events import (
     EventEmitter,
     EventSink,
     EventType,
+    InteractionChoicePayload,
     InteractionRequiredPayload,
+    InteractionResolvedPayload,
     ToolResultPayload,
 )
 from awesome_agent.core.tools import (
@@ -64,8 +67,11 @@ from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
-from awesome_agent.core.tools.command_policy import (
-    InteractionRequired as ExecuteInteractionRequired,
+from awesome_agent.core.tools.permissions import (
+    PermissionMode,
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
 )
 from awesome_agent.core.tools.process import ProcessRunner
 from awesome_agent.core.tools.registry import ToolRegistry
@@ -127,11 +133,13 @@ class ConversationCommandService:
         workspace_key: str,
         delegate: CommandDelegate,
         default_model: Callable[[], str | None] = lambda: None,
+        on_thread_selected: Callable[[], None] = lambda: None,
     ) -> None:
         self._conversation = conversation
         self._workspace_key = workspace_key
         self._delegate = delegate
         self._default_model = default_model
+        self._on_thread_selected = on_thread_selected
         self._current_thread_id: str | None = None
 
     @property
@@ -167,6 +175,7 @@ class ConversationCommandService:
             current_model=self._default_model(),
         )
         self._current_thread_id = thread.id
+        self._on_thread_selected()
         return CommandResult(
             status=CommandStatus.SUCCESS,
             data={"thread_id": thread.id, "title": thread.title},
@@ -231,6 +240,7 @@ class ConversationCommandService:
             )
         thread = matches[0]
         self._current_thread_id = thread.id
+        self._on_thread_selected()
         return CommandResult(
             status=CommandStatus.SUCCESS,
             data={"thread_id": thread.id, "title": thread.title},
@@ -872,6 +882,7 @@ class LocalApplication:
         self._recovery_error: str | None = None
         self._open_change_set_id: str | None = None
         self._open_turn_id: str | None = None
+        self._permission_session = PermissionSession()
 
     @classmethod
     def create(
@@ -904,15 +915,27 @@ class LocalApplication:
             pending = self._interactions.create(
                 kind=InteractionKind.WORKSPACE_TRUST,
                 prompt="Trust this workspace?",
-                choices=(InteractionDecision.TRUST, InteractionDecision.DENY),
-                scope=None,
+                operation="trust",
+                target=str(self._workspace.display_path),
+                capability=None,
+                choices=workspace_trust_choices(),
             )
             await self._emitter.emit(
                 InteractionRequiredPayload(
                     interaction_id=pending.id,
                     interaction_kind="workspace_trust",
                     prompt=pending.prompt,
-                    choices=tuple(choice.value for choice in pending.choices),
+                    operation=pending.operation,
+                    target=pending.target,
+                    capability=pending.capability,
+                    choices=tuple(
+                        InteractionChoicePayload(
+                            decision=choice.decision.value,
+                            label=choice.label,
+                            description=choice.description,
+                        )
+                        for choice in pending.choices
+                    ),
                 )
             )
         return StartupResult(
@@ -951,16 +974,32 @@ class LocalApplication:
         pending = self._interactions.pending
         if pending is None or pending.id != interaction_id:
             return None
-        if pending.kind is InteractionKind.EXECUTE_BOUNDARY:
+        if pending.kind is InteractionKind.TOOL_APPROVAL:
             if decision is InteractionDecision.TRUST:
                 raise ValueError("trust is invalid for execute interactions.")
             self._interactions.resolve(interaction_id, decision)
+            await self._emitter.emit(
+                InteractionResolvedPayload(
+                    interaction_id=interaction_id,
+                    decision=decision.value,
+                )
+            )
             return None
-        if decision is InteractionDecision.ALLOW_ONCE:
+        if decision in {
+            InteractionDecision.ALLOW_ONCE,
+            InteractionDecision.ALLOW_THREAD_WRITES,
+            InteractionDecision.ENABLE_FULL_ACCESS,
+        }:
             raise ValueError("allow_once is invalid for workspace trust.")
         if not self._interactions.resolve(interaction_id, decision):
             return None
         resolved = await self._interactions.wait(interaction_id)
+        await self._emitter.emit(
+            InteractionResolvedPayload(
+                interaction_id=interaction_id,
+                decision=resolved.value,
+            )
+        )
         if resolved is InteractionDecision.DENY:
             return None
         self._trust.accept(self._workspace)
@@ -1007,6 +1046,44 @@ class LocalApplication:
                         "Change journal recovery requires attention.",
                     )
                 change_set_id = self._change_set_for_turn(turn_id)
+            async def resolve_tool_approval(
+                request: ToolApprovalRequest,
+            ) -> ToolApprovalDecision:
+                pending = self._interactions.create(
+                    kind=InteractionKind.TOOL_APPROVAL,
+                    prompt=request.prompt,
+                    operation=request.operation,
+                    target=request.target,
+                    capability=request.capability,
+                    choices=tool_approval_choices(request.capability),
+                )
+                await self._emitter.emit(
+                    InteractionRequiredPayload(
+                        interaction_id=pending.id,
+                        interaction_kind="tool_approval",
+                        prompt=pending.prompt,
+                        operation=pending.operation,
+                        target=pending.target,
+                        capability=pending.capability,
+                        choices=tuple(
+                            InteractionChoicePayload(
+                                decision=choice.decision.value,
+                                label=choice.label,
+                                description=choice.description,
+                            )
+                            for choice in pending.choices
+                        ),
+                    ),
+                    turn_id=turn_id,
+                )
+                decision = await self._interactions.wait(pending.id)
+                return ToolApprovalDecision(decision.value)
+
+            permission_session = (
+                self._permission_session
+                if turn_id is not None
+                else PermissionSession(mode=PermissionMode.FULL_ACCESS)
+            )
             context = ToolExecutionContext(
                 workspace=self._workspace,
                 thread_id=turn_id or self._session_id,
@@ -1021,48 +1098,11 @@ class LocalApplication:
                 activity_writer=self._activity_writer,
                 monotonic=monotonic,
                 change_set_id=change_set_id,
+                permission_session=permission_session,
+                approval_resolver=resolve_tool_approval,
             )
             try:
-                try:
-                    result = await executor.execute(request, context=context)
-                except ExecuteInteractionRequired as interaction:
-                    pending = self._interactions.create(
-                        kind=InteractionKind.EXECUTE_BOUNDARY,
-                        prompt=interaction.prompt,
-                        choices=(
-                            InteractionDecision.ALLOW_ONCE,
-                            InteractionDecision.DENY,
-                        ),
-                        scope=interaction.scope,
-                    )
-                    await self._emitter.emit(
-                        InteractionRequiredPayload(
-                            interaction_id=pending.id,
-                            interaction_kind="execute_boundary",
-                            prompt=pending.prompt,
-                            choices=tuple(choice.value for choice in pending.choices),
-                        ),
-                        turn_id=turn_id,
-                    )
-                    decision = await self._interactions.wait(pending.id)
-                    if decision is InteractionDecision.DENY:
-                        result = await self._tool_error(
-                            request,
-                            turn_id,
-                            ToolErrorCode.PERMISSION_DENIED,
-                            "Command execution was denied.",
-                        )
-                    else:
-                        result = await executor.execute(
-                            request,
-                            context=replace(
-                                context,
-                                allowed_interaction_scopes=frozenset(
-                                    {interaction.scope}
-                                ),
-                            ),
-                        )
-                return result
+                return await executor.execute(request, context=context)
             finally:
                 if modifying and turn_id is None:
                     self._seal_open_change_set()
