@@ -102,7 +102,12 @@ SITE_PACKAGES="$CORE_ENV/site-packages"
 CORE_BIN="$CORE_ENV/bin"
 mkdir -p "$SITE_PACKAGES" "$CORE_BIN"
 WHEEL="$STAGED_APP/core/awesome_agent-$VERSION-py3-none-any.whl"
-"$UV" pip install --python "$PYTHON" --target "$SITE_PACKAGES" "${WHEEL}[memory]"
+REQUIREMENTS="$STAGED_APP/core/requirements.lock"
+[ -f "$REQUIREMENTS" ] || fail "locked Core requirements are missing"
+"$UV" pip install --python "$PYTHON" --target "$SITE_PACKAGES" \
+    --require-hashes --requirement "$REQUIREMENTS"
+"$UV" pip install --python "$PYTHON" --target "$SITE_PACKAGES" \
+    --no-deps "${WHEEL}[memory]"
 PYTHON_RELATIVE=${PYTHON#"$STAGED_APP/"}
 cat >"$CORE_BIN/awesome-core" <<EOF
 #!/bin/sh

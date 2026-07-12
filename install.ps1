@@ -119,7 +119,15 @@ try {
     $CoreBin = Join-Path $CoreEnvironment "Scripts"
     New-Item -ItemType Directory -Force -Path $SitePackages, $CoreBin | Out-Null
     $Wheel = Join-Path $StagedApp "core\awesome_agent-$Version-py3-none-any.whl"
-    & $Uv pip install --python $Python --target $SitePackages "$Wheel[memory]"
+    $Requirements = Join-Path $StagedApp "core\requirements.lock"
+    if (-not (Test-Path -LiteralPath $Requirements -PathType Leaf)) {
+        throw "Locked Core requirements are missing."
+    }
+    & $Uv pip install --python $Python --target $SitePackages `
+        --require-hashes --requirement $Requirements
+    Assert-NativeSuccess "private Core dependency install"
+    & $Uv pip install --python $Python --target $SitePackages `
+        --no-deps "$Wheel[memory]"
     Assert-NativeSuccess "private Core install"
     $ResolvedApp = [IO.Path]::GetFullPath($StagedApp).TrimEnd("\") + "\"
     $PythonRelative = $ResolvedPython.Substring($ResolvedApp.Length)
