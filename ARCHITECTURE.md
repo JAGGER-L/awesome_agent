@@ -1,697 +1,435 @@
-﻿# Architecture
+# Awesome Architecture
 
-## System Intent
+Awesome is a terminal AI coding assistant. One `awesome` launcher starts an Ink
+interface and a private Python process; all product behavior remains in the
+Python Core, while the TUI submits intent and renders typed events.
 
-The system is a local-first coding agent runtime. It separates orchestration,
-side effects, persistence, observation, and model providers so each can evolve
-without coupling the whole application to one vendor.
+This document is the authoritative technical overview. Focused documents under
+[`docs/architecture/`](docs/architecture/README.md) explain individual
+boundaries without redefining the system.
 
-## Component Topology
+## System Overview
 
 ```text
-                         ┌──────────────────┐
-                         │  Browser / User  │
-                         └────────┬─────────┘
-                                  │ HTTP / SSE
-                                  ▼
-┌──────────────────┐     ┌──────────────────┐
-│    Typer CLI     │────►│     FastAPI      │
-└────────┬─────────┘     │ Inspection API   │
-         │               └────────┬─────────┘
-         │ local command          │ runtime commands / queries
-         └──────────────┬─────────┘
-                        ▼
-                 ┌──────────────────┐
-                 │ Runtime Service  │
-                 │ runs/events/API  │
-                 └────────┬─────────┘
-                          │
-                          ▼
-                 ┌──────────────────┐
-                 │ Leader Runtime   │
-                 │ LangGraph plan   │
-                 └───┬──────┬───────┘
-                     │      │
-          team tasks │      │ model requests
-                     ▼      ▼
-          ┌──────────────┐  ┌──────────────────┐
-          │ Team Runtime │  │ Provider Adapter │
-          │ + Verifier   │  │ DeepSeek default │
-          └──────┬───────┘  └────────┬─────────┘
-                 │                   │ HTTPS
-                 │ tools             ▼
-                 ▼          ┌──────────────────┐
-          ┌──────────────┐  │  Model Provider  │
-          │ Tool Registry│  └──────────────────┘
-          │ + Approval   │
-          └──────┬───────┘
-                 │ approved execution
-                 ▼
-          ┌──────────────┐
-          │ Sandbox      │
-          │ Docker/local │
-          └──────┬───────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                         Entry & Presentation                              │
+│                                                                           │
+│  awesome launcher                     Ink + React TUI                     │
+│  CLI arguments                        Input / Rendering / Keyboard / UX   │
+└───────────────────────────────────┬───────────────────────────────────────┘
+                                    │
+                                    │ JSON-RPC 2.0 / NDJSON over stdio
+                                    ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                      Python Application Host                              │
+│                                                                           │
+│  ApplicationFacade   Commands       Interactions     Event Projection     │
+│  Workspace Trust     Thread/Turn    Cancellation     Composition          │
+└──────────────┬──────────────────┬──────────────────┬──────────────────────┘
+               │                  │                  │
+               ▼                  ▼                  ▼
+┌────────────────────────┐ ┌───────────────────┐ ┌──────────────────────────┐
+│ Agent Core             │ │ Extensions        │ │ Local State              │
+│ LangGraph              │ │ Skills / MCP      │ │ Application SQLite       │
+│ Context Assembly       │ │ Local Memory      │ │ LangGraph Checkpoints    │
+│ Model / Tool Loop      │ │ Mem0 Cloud        │ │ Change Journal           │
+│ Compression / Budgets  │ │                   │ │ TUI Preferences          │
+└───────────┬────────────┘ └─────────┬─────────┘ └──────────────────────────┘
+            │                        │
+            ├──────────────┬─────────┘
+            ▼              ▼
+┌────────────────────┐  ┌──────────────────────────────────────────────────┐
+│ Model Providers    │  │ Tool System                                      │
+│ DeepSeek / Kimi    │  │ Registry -> Policy -> Executor -> Result/Event   │
+└────────────────────┘  └────────────────────────┬─────────────────────────┘
+                                                 │
+                                                 ▼
+                                   ┌────────────────────────────┐
+                                   │ Workspace & Host           │
+                                   │ Files / Shell / Git        │
+                                   │ Tests / Build Tools        │
+                                   └────────────────────────────┘
+```
+
+The Application Host is the composition and lifecycle boundary. It invokes the
+compiled LangGraph directly; it does not implement a second graph engine or
+copy graph channel state. Model calls use provider-neutral contracts, and every
+tool call follows the same Registry, Policy, and Executor path.
+
+## Directory Structure
+
+```text
+awesome_agent/
+├── src/awesome_agent/
+│   ├── agent/          # LangGraph state, nodes, routes, budgets
+│   ├── application/    # lifecycle, commands, operations, composition
+│   ├── config/         # user/workspace configuration and precedence
+│   ├── context/        # context assembly, token estimates, compression
+│   ├── conversation/   # Thread, Turn, transcript, repository contracts
+│   ├── core/
+│   │   ├── changes/    # Change Journal and undo/redo contracts
+│   │   ├── tools/      # tool registry, policy, executor, built-ins
+│   │   └── workspace/  # workspace identity and trust models
+│   ├── extensions/
+│   │   ├── mcp/        # MCP stdio client and tool adapter
+│   │   └── skills/     # Skill discovery, loading, and tool exposure
+│   ├── memory/         # USER.md, MEMORY.md, Mem0 Cloud, memory tools
+│   ├── modeling/       # provider-neutral messages and model gateway
+│   ├── protocol/       # JSON-RPC types and private stdio Host
+│   ├── providers/      # DeepSeek and Kimi adapters
+│   ├── safety/         # redaction helpers
+│   ├── storage/        # embedded SQLite and checkpoint adapters
+│   ├── paths.py        # AWESOME_HOME path ownership
+│   └── version.py      # product version reader
+├── tui/                # Ink + React presentation package
+├── protocol/fixtures/  # cross-language protocol fixtures
+├── scripts/release/    # release bundle builder
+├── tests/              # unit, integration, E2E, packaging, structural
+├── install.sh
+├── install.ps1
+├── pyproject.toml
+└── VERSION
+```
+
+Generated environments, caches, development plans, and user secrets are not
+part of the product source tree.
+
+## Recommended Reading Order
+
+1. `src/awesome_agent/application/facade.py` — surface-facing product API.
+2. `src/awesome_agent/application/composition.py` — concrete dependency wiring.
+3. `src/awesome_agent/application/turns.py` — Turn lifecycle and recovery.
+4. `src/awesome_agent/agent/graph.py` — the only graph compiler.
+5. `src/awesome_agent/agent/nodes.py` — model/tool loop and finalization.
+6. `src/awesome_agent/context/builder.py` — prompt context assembly.
+7. `src/awesome_agent/modeling/` and `src/awesome_agent/providers/` — model
+   contracts and supported adapters.
+8. `src/awesome_agent/core/tools/` — Registry, Policy, Executor, and built-ins.
+9. `src/awesome_agent/conversation/` and `src/awesome_agent/storage/` — product
+   records and embedded adapters.
+10. `src/awesome_agent/protocol/stdio.py` — private process boundary.
+11. `tui/src/app/App.tsx` — presentation composition.
+
+## Data Flow
+
+### Startup and workspace trust
+
+```text
+awesome <current directory>
+        │
+        ▼
+Ink starts awesome-core
+        │ initialize(workspace, protocol version)
+        ▼
+Application resolves canonical workspace
+        │
+        ├── trusted ─────────────► load user/workspace configuration
+        │                          load Skills and MCP declarations
+        │                          create or resume a Thread
+        │
+        └── not trusted ─────────► interaction.required
+                                   Yes -> persist trust -> continue
+                                   No  -> exit without persisting denial
+```
+
+Project-controlled configuration, instructions, Skills, and MCP declarations
+are not loaded before trust is accepted.
+
+### Conversation Turn
+
+```text
+User Message
+    │
+    ▼
+turn.submit -> ApplicationFacade.submit_turn
+    │
+    ├── resolve Thread configuration
+    ├── create Turn and user transcript entry
+    └── acquire the single foreground operation
+             │
+             ▼
+       LangGraph Agent
+             │
+       prepare context
+             │
+       call ModelGateway
+             │
+       ┌─────┴─────┐
+       │ Tool Call │── No ──► finalize answer
+       └─────┬─────┘
+             │ Yes
+             ▼
+       Tool Executor
+             │
+       observation + checkpoint
+             │
+             └──────────────► call model
+```
+
+When the graph returns a final answer, Application completes the Turn, appends
+the assistant transcript entry, records bounded usage, seals its ChangeSet,
+deletes the finished checkpoint, and emits completion events.
+
+### Tool call
+
+```text
+Model ToolCall
+    -> ToolRegistry lookup
+    -> schema validation
+    -> workspace and command policy
+    -> ToolExecutor timeout/cancellation/event envelope
+    -> built-in or MCP adapter
+    -> normalized ToolResult
+    -> bounded activity summary + Agent observation
+```
+
+File-changing built-ins write through the Change Journal. `execute` runs on the
+host and is not a sandbox: every Agent-originated shell command requires an
+explicit `allow_once` decision. A command entered directly with `!` is already
+explicit user authority. Shell effects may escape the workspace and cannot be
+reversed by the journal.
+
+### Slash command
+
+```text
+/command
+   ├── Ink-owned presentation command -> local UI state
+   ├── Application command -> command.execute -> typed result
+   └── Skill command -> shared Skill/Application boundary
+```
+
+Commands do not become model prompts unless their defined behavior explicitly
+starts an Agent Turn.
+
+### Resume and recovery
+
+`--continue` selects the most recent workspace Thread; `--resume` selects a
+specific Thread. On startup, Application reconciles unfinished product Turns
+with LangGraph checkpoints:
+
+- a completed graph state is finalized into product records;
+- a valid unfinished checkpoint is resumable;
+- a missing or corrupt checkpoint fails the Turn with a stable error code;
+- an uncertain shell or MCP side effect requires an explicit retry/abort
+  interaction;
+- checkpoints left behind by terminal product Turns are removed.
+
+## Major Subsystems
+
+### Application Host
+
+- **Responsibility:** workspace initialization, configuration resolution,
+  Thread/Turn lifecycle, commands, foreground operation serialization,
+  interactions, cancellation, event projection, recovery, and composition.
+- **Does not own:** model reasoning, graph routing, tool implementation, or UI
+  rendering.
+- **Primary files:** `application/facade.py`, `application/composition.py`,
+  `application/turns.py`, `application/operations.py`.
+- **Dependencies:** Agent Core, current adapters, Conversation, Storage, Core,
+  Context, Extensions, and Memory.
+
+### Agent Core and LangGraph
+
+- **Responsibility:** `AgentState`, node routing, context/model/tool loop,
+  message repair, compression, retry accounting, budgets, and finalization.
+- **Does not own:** product Thread records, concrete storage wiring, or surface
+  state.
+- **Primary files:** `agent/state.py`, `agent/graph.py`, `agent/nodes.py`,
+  `agent/budgets.py`.
+- **Dependencies:** provider-neutral Modeling, Core tools, and injected Memory
+  services.
+
+### Context Management
+
+- **Responsibility:** deterministic prompt assembly, explicit path references,
+  token estimates, Thread summaries, Skills, memory recall, and compression
+  inputs.
+- **Does not own:** graph routing or hidden persistence.
+- **Primary files:** `context/builder.py`, `context/compression.py`,
+  `context/path_refs.py`, `context/tokens.py`.
+
+### Model Gateway
+
+- **Responsibility:** provider-neutral messages, tools, streaming events,
+  errors, usage, model selection, retry reporting, and supported adapter calls.
+- **Does not own:** tools, graph state, or product lifecycle.
+- **Primary files:** `modeling/gateway.py`, `modeling/provider.py`,
+  `modeling/turns.py`, `providers/deepseek.py`, `providers/kimi.py`.
+
+### Tool System
+
+- **Responsibility:** tool registration, schemas, workspace/process policy,
+  execution context, cancellation, timeouts, normalized failures, events, and
+  bounded results.
+- **Does not own:** model routing or surface prompts.
+- **Primary files:** `core/tools/registry.py`, `core/tools/policy.py`,
+  `core/tools/executor.py`, `core/tools/builtins/`.
+
+The starting built-ins are `ls`, `read_file`, `write_file`, `edit_file`,
+`delete`, `glob`, `grep`, and `execute`. This is an initial baseline, not a
+maximum tool count.
+
+### Conversation and Storage
+
+- **Responsibility:** Thread, Turn, transcript, summary, tool activity, trust,
+  ChangeSet metadata, checkpoint access, and SQLite transactions.
+- **Does not own:** graph node transitions or TUI transcript state.
+- **Primary files:** `conversation/models.py`, `conversation/service.py`,
+  `storage/database.py`, `storage/conversations.py`, `storage/checkpoints.py`.
+
+### Change Journal
+
+- **Responsibility:** controlled before/after snapshots, conflict detection,
+  diff, undo, redo, and reversibility classification.
+- **Does not own:** arbitrary host effects created by `execute`.
+- **Primary files:** `core/changes/journal.py`, `core/changes/operations.py`,
+  `storage/changes.py`.
+
+Workspace files and their diffs are the generated work product; there is no
+parallel output object for ordinary file changes.
+
+### Skills and MCP
+
+- **Responsibility:** discover trusted bundled/user/workspace Skills, load
+  bounded instructions, connect configured MCP stdio servers, and adapt MCP
+  tools into the shared registry.
+- **Does not own:** permissions or an alternate execution path.
+- **Primary files:** `extensions/skills/discovery.py`,
+  `extensions/skills/loader.py`, `extensions/mcp/manager.py`,
+  `extensions/mcp/adapter.py`.
+
+### Memory
+
+- **Responsibility:** independent local files (`USER.md`, workspace
+  `MEMORY.md`) and optional Mem0 Cloud recall/distilled writes.
+- **Does not own:** policy, trust, raw transcript upload, or provider routing.
+- **Primary files:** `memory/local_file.py`, `memory/service.py`,
+  `memory/mem0_cloud.py`, `memory/distiller.py`.
+
+Both memory layers are independently enabled and default off. Mem0 Cloud is the
+only external memory adapter currently supported.
+
+### Protocol and Ink TUI
+
+- **Responsibility:** versioned JSON-RPC requests, typed events, bounded NDJSON,
+  terminal input, rendering, keyboard behavior, transcript projection, theme,
+  clipboard, and local presentation preferences.
+- **Does not own:** models, LangGraph, tools, storage, Memory, Skills, or MCP.
+- **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
+  `tui/src/core/process.ts`, `tui/src/app/App.tsx`.
+
+### Safety
+
+- **Responsibility:** workspace containment for file tools, sensitive-path
+  rejection, explicit approval for Agent shell execution, command policy,
+  redaction, and tool output bounds.
+- **Primary files:** `core/tools/policy.py`, `core/tools/command_policy.py`,
+  `safety/redaction.py`.
+
+## Design Principles
+
+1. Python Core is the only authority for product behavior.
+2. Ink owns interaction and rendering only.
+3. LangGraph owns graph execution, graph state, routes, and checkpoints.
+4. Application owns product lifecycle without recreating graph execution.
+5. Every tool follows one Registry, Policy, and Executor path.
+6. Workspace files are the primary work result.
+7. Execution is visible, cancellable, bounded, and recoverable where evidence
+   is sufficient.
+8. Product state uses embedded local storage under resolved Awesome paths.
+9. Skills, MCP, Memory, and workspace instructions are untrusted context and
+   cannot bypass tool policy.
+10. A new abstraction needs a concrete second implementation or demonstrated
+    product use.
+
+## File Dependency Chain
+
+```text
+core contracts / workspace / events
                  │
                  ▼
-          ┌──────────────┐
-          │ User Project │
-          │ + worktrees  │
-          └──────────────┘
-
-        ┌────────────────────────────────────────────────────┐
-        │                 State and Evidence                 │
-        │                                                    │
-        │  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │
-        │  │ PostgreSQL   │  │ Artifacts    │  │ OTel /   │ │
-        │  │ runs/events/ │  │ filesystem   │  │ events   │ │
-        │  │ checkpoints  │  └──────────────┘  └──────────┘ │
-        │  └──────────────┘                                 │
-        │                                                    │
-        │  ┌──────────────┐  ┌──────────────┐               │
-        │  │ USER.md /    │  │ Mem0         │               │
-        │  │ MEMORY.md    │  │ Platform     │               │
-        │  └──────────────┘  └──────────────┘               │
-        └────────────────────────────────────────────────────┘
+ modeling     conversation      config
+     │             │              │
+     ├─────────────┼──────────────┤
+     ▼             ▼              ▼
+ providers       storage      extensions / memory
+          \         │         /
+           \        │        /
+            ▼       ▼       ▼
+              context + agent
+                     │
+                     ▼
+                application
+                     │
+                     ▼
+             protocol / stdio Host
+                     │
+                     ▼
+                Ink + React TUI
 ```
 
-The CLI is the primary local execution surface. FastAPI exposes durable runs,
-agents, Todos, event history, approvals, artifacts, and live SSE updates for a
-future frontend. Both surfaces call application services rather than accessing
-provider, database, or sandbox implementations directly.
-
-### Ordinary Conversation Turn Authority
-
-Ordinary chat turns are durable conversation Runs, not direct provider calls.
-`ConversationRunIntakeService` creates a `conversation` Run, a Leader agent,
-and initial runtime events before any user or assistant thread message is
-written. A Worker route named `conversation-turn` executes `ConversationGraph`.
-The graph owns conversation message writes, model/tool execution, runtime
-events, usage metadata, changed-file metadata, and terminal Run state.
-
-`ConversationService` is a projection boundary. It starts the durable turn and
-projects runtime events into the shared conversation stream event contract. It
-does not call model providers, execute tools, or append ordinary user/assistant
-messages directly.
-
-Embedded local mode uses the same Run/Graph semantics and drains the local
-conversation graph synchronously for deterministic TUI streaming. Its working
-directory is the launch/current working directory unless the thread explicitly
-sets another context path. Repository coding worktrees remain a separate
-explicit coding-run concern.
-
-### Health and Readiness
-
-```text
-CLI doctor --profile api/runtime
-        |
-        v
-shared readiness collector
-        |
-        +--> Python/Git/Docker checks
-        +--> PostgreSQL database check
-        +--> Alembic migration head check
-        +--> LangGraph checkpoint store check
-        +--> workspace-root write probe
-        +--> provider key and model-route checks
-        +--> API bind policy check
-        +--> worker_heartbeats table (runtime profile)
-
-FastAPI
-  GET /health                -> process liveness only
-  GET /ready?profile=api     -> API dependency readiness
-  GET /ready?profile=runtime -> API readiness plus Worker/provider readiness
-```
-
-`/health` is intentionally cheap and returns 200 when the API process can
-respond. `/ready` and `doctor` share the structured readiness model with
-`healthy`, `degraded`, and `unhealthy` statuses. `healthy` and `degraded`
-readiness return HTTP 200; `unhealthy` returns HTTP 503. CLI `doctor` exits 0
-for `healthy` and `degraded`, and exits 1 for `unhealthy`.
-
-Worker liveness is not inferred from active Run leases. Workers upsert a
-process-scoped row in `worker_heartbeats` with worker id, worker name,
-supported runtime routes, status, start time, and heartbeat time. The runtime
-readiness profile requires a fresh online heartbeat that covers the required
-runtime routes.
-
-### Repository-Aware Run Intake
-
-```text
-┌──────────────────┐      local path       ┌────────────────────┐
-│    Typer CLI     │──────────────────────►│ Allowed-root policy│
-└────────┬─────────┘                       └─────────┬──────────┘
-         │ repository UUID                           │ validated path
-         ▼                                           ▼
-┌──────────────────┐      repository ID    ┌────────────────────┐
-│     FastAPI      │──────────────────────►│ Repository registry│
-│ POST /runs       │                       │ PostgreSQL         │
-└────────┬─────────┘                       └─────────┬──────────┘
-         │                                           │ clean Git identity
-         ▼                                           ▼
-┌──────────────────┐      reserve first    ┌────────────────────┐
-│  Intake Service  │──────────────────────►│ Intake reservation │
-└────────┬─────────┘                       │ PostgreSQL         │
-         │ exact base commit               └────────────────────┘
-         ▼
-┌──────────────────┐      named branch     ┌────────────────────┐
-│ Managed worktree │──────────────────────►│ User Git repository│
-│ per Run          │                       │ original unchanged │
-└────────┬─────────┘                       └────────────────────┘
-         │ ready
-         ▼
-┌───────────────────────────────────────────────────────────────┐
-│ One transaction: Run(created/queued) + Leader + initial       │
-│ events + reservation(published)                              │
-└───────────────────────────────────────────────────────────────┘
-```
-
-Filesystem paths enter only through the local CLI. FastAPI accepts a registered
-repository UUID and exposes repository list/get for a future frontend. Both
-read-only and modifying intents use a stable worktree; intent later controls
-tool capabilities. Task 02 queues the Run but does not claim or execute it.
-
-### PostgreSQL Dispatch Protocol
-
-```text
-queued / retry_scheduled
-          |
-          | FOR UPDATE SKIP LOCKED
-          v
-       claimed ----- heartbeat -----> PostgreSQL lease extension
-          |                                  |
-          | fenced transition                | lease expires
-          v                                  v
-   retry / release / terminal        queued or recovery_required
-```
-
-The current lease lives on the Run row. A claim records a process-scoped
-worker UUID, diagnostic name, attempt, expiry, and monotonically increasing
-fencing token. PostgreSQL time decides lease validity. State changes and their
-dispatch events share one transaction.
-
-### Durable Worker and Probe Graph
-
-```text
-awesome-agent start
-        |
-        +---- API process ---- PostgreSQL events ---- SSE polling
-        |
-        +---- Worker process
-                 |
-                 +---- claim supported runtime routes
-                 +---- heartbeat lease
-                 +---- LangGraph sync checkpoint
-                 +---- fenced projection update
-```
-
-Each Worker process executes at most one Run. Workers always claim the
-diagnostic `runtime-probe` route and, when model providers are configured, also
-claim `solo-readonly`, `solo-modifying`, `conversation-turn`, `team-coding`,
-`team-role`, and `team-verifier` routes. Workers also publish process heartbeat
-rows for readiness; Run lease heartbeat remains a separate fencing mechanism.
-A crashed Worker leaves its checkpoint and lease; after lease expiry, a
-replacement Worker claims with a new fencing token and resumes from the
-checkpoint. Unsupported runtime routes enter `recovery_required`.
-
-## Agent Orchestration Topology
-
-```text
-                         ┌──────────────────┐
-                         │       User       │
-                         └────────┬─────────┘
-                                  │ task / approval
-                                  ▼
-                         ┌──────────────────┐
-                         │      Leader      │
-                         │ plan + final say │
-                         └───┬──────────┬───┘
-                             │ creates  │ observes all
-                   ┌─────────┘          └─────────┐
-                   ▼                              ▼
-          ┌──────────────────┐           ┌──────────────────┐
-          │    Teammate A    │◄─────────►│    Teammate B    │
-          │ durable context  │  mailbox  │ durable context  │
-          └───────┬──────────┘           └───────┬──────────┘
-                  │ creates without approval      │ creates without approval
-          ┌───────┴────────┐              ┌───────┴────────┐
-          ▼                ▼              ▼                ▼
- ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
- │  Subagent A1 │ │  Subagent A2 │ │  Subagent B1 │ │  Subagent B2 │
- │ isolated ctx │ │ isolated ctx │ │ isolated ctx │ │ isolated ctx │
- └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
-
-                         ┌──────────────────┐
-                         │     Verifier     │
-                         │ independent gate │
-                         └────────┬─────────┘
-                                  │ pass / reject evidence
-                                  ▼
-                         ┌──────────────────┐
-                         │      Leader      │
-                         │ completion choice│
-                         └──────────────────┘
-```
-
-The Leader is the only agent present initially. Team mode is explicit through
-CLI `--team` or API `mode: "team"`; automatic solo/team routing remains future
-work. The Leader owns the task tree, manages Teammates, integrates accepted
-work, and makes the final completion decision.
-
-Teammates own durable responsibilities and may communicate through an auditable
-mailbox. Each Teammate may independently create up to three Subagents.
-Subagents do not participate in team conversation and report only to their
-creator.
-
-The Verifier is a specialized Teammate created whenever team mode starts.
-Teammate output reaches the Leader only after verification passes or after
-rejected work is revised and re-verified.
-
-Distributed `team-coding` is the product architecture. The root Leader Run
-creates child Runs with durable lineage. The Leader calls the model through
-`TeamAgentLoop` middleware for a validated structured `TeamPlan` and creates
-Teammate child Runs from that plan; it does not create or direct Subagents.
-Teammate child Runs execute assignment-scoped model/tool loops through the
-same team AgentLoop boundary using only effective Leader-granted tools. When
-the Leader grants `can_delegate` and Subagent slots, a Teammate may call
-`team.create_subagent` to create read-only Subagent child Runs with depth and
-concurrency limits. Independent Workers can claim Teammate, Subagent, and
-Verifier child Runs through the same PostgreSQL dispatch protocol. Verifier
-child Runs produce structured model decisions through
-`TeamVerificationMiddleware`; the graph persists those decisions as child
-results and mailbox messages. Rework decisions create replacement Teammate
-child Runs instead of reopening original attempts. Parent Runs release their
-lease while waiting for child work and are requeued when child assignments
-become terminal.
-
-```text
-                         +----------------------+
-                         | Root Run             |
-                         | Leader team-coding |
-                         +----------+-----------+
-                                    |
-                                    | model TeamPlan -> Teammate child Runs
-                                    v
-                         +----------------------+
-                         | Child Run            |
-                         | Teammate team-role |
-                         +----------+-----------+
-                                    |
-                         terminal result wakes Leader
-                                    |
-                                    v
-                         +----------------------+
-                         | Child Run            |
-                         | Verifier team-verifier |
-                         +----------+-----------+
-                                    |
-                         pass/fail mailbox message wakes Leader
-                                    |
-                                    v
-                         +----------------------+
-                         | Root Run finalizes   |
-                         +----------------------+
-
-Durable state:
-  runs(parent_run_id, root_run_id, depth, child_role)
-  team_assignments(kind, runtime_route, permissions, status, handoff_context)
-  team_mailbox_messages(route, subject, status)
-  team_child_results(summary, patch_artifact_id, patch_aggregated)
-```
-
-## Harness and State Boundaries
-
-```text
-tracked repository governance
-  AGENTS.md
-  docs/development/
-  scripts/ and structural tests
-
-ignored development-agent state
-  .codex/exec-plans/
-
-tracked product runtime configuration
-  .agents/
-
-ignored or durable product runtime state
-  .awesome-agent/
-  PostgreSQL
-```
-
-The four locations are intentionally distinct. Development-agent plans never
-become product runtime plans. Runtime Leader plans and Todos are domain data,
-not repository-maintenance Markdown.
-
-## Source Layout
-
-```text
-src/
-`-- awesome_agent/
-    |-- agents/
-    |-- modeling/
-    |-- domain/
-    |-- providers/
-    |-- tools/
-    |-- sandbox/
-    |-- memory/
-    |-- persistence/
-    |-- observability/
-    |-- artifacts/
-    |-- repositories/
-    |-- runtime/
-    |-- api/
-    `-- cli/
-```
-
-The `src` layout is intentional. `src` is the import root and `awesome_agent` is
-the package. Tests must import the installed package rather than accidentally
-loading repository files.
-
-## Dependency Direction
-
-```text
-api / cli
-    -> runtime
-        -> modeling
-        -> domain
-
-providers / tools / sandbox / memory / persistence / observability / artifacts
-    implement ports owned by domain, modeling, or runtime
-```
-
-Rules:
-
-- `domain` does not import infrastructure or framework modules.
-- `runtime` owns durable workflows but not concrete storage or provider details.
-- provider-specific message types do not cross provider boundaries.
-- `modeling` owns provider-neutral messages, tools, turns, reasoning,
-  continuation, usage, streaming events, and failure categories.
-- every Agent records its resolved model for API and event traceability.
-- tool execution always passes through effective capability policy, approval,
-  and sandbox policies.
-- runtime events are immutable and all state changes emit an event.
-- implementation agents cannot approve their own team-mode work.
-
-These rules must be enforced with structural tests once source modules exist.
-
-## Structured Model Boundary
-
-```text
-runtime / memory
-        |
-        | ModelRequest(messages, tools, continuation)
-        v
-provider-neutral modeling protocol
-        |
-        +---- DeepSeek adapter ---- Chat Completions stream
-        |
-        +---- OpenAI adapter ------ Responses stream
-        |
-        v
-reasoning/text/tool deltas -> completed ModelTurn
-```
-
-Visible reasoning is a frontend-capable trace. Private continuation is a
-separate opaque JSON value used only by the matching adapter and LangGraph
-checkpoint. SDK objects, encrypted continuation data, and provider-specific
-message types never enter runtime events, logs, memory, or public APIs.
-The Worker connects provider-neutral model turns to solo read-only, solo
-modifying, and distributed team coding graphs when a model provider is
-configured.
-
-Provider routing sits between AgentLoop model-call policy and concrete provider
-clients. A router returns ordered provider/model candidates for a runtime
-route, role, and task profile; a model-call executor checks token budget before
-each candidate, records token usage after a completed turn, and falls back only
-for retryable provider errors. Provider factories create clients for resolved
-candidates but do not own graph state, tool permissions, or monetary policy.
-The default route remains the existing single DeepSeek candidate unless routing
-configuration supplies a different ordered decision.
-
-## Read-Only Coding Loop
-
-Workers with a configured model provider also advertise the
-`coding + read_only + solo-readonly` route. The graph contains explicit
-`execute_tools -> model_turn` and `feedback -> model_turn` back edges, so tool
-selection and iteration count are model-driven rather than a fixed workflow.
-Only evidence-backed final answers terminate successfully.
-
-See [Agent loop](docs/architecture/agent-loop.md) for the
-complete node, loop, budget, tool, failure, and recovery contract.
-
-## Modifying Coding Loop
-
-Workers with a configured model provider also advertise the
-`coding + modifying + solo-modifying` route. The graph loops through model
-turns and sequential tool execution. It exposes the public workspace facade:
-`ReadFile`, `WriteFile`, `EditFile`, `Bash`, `Glob`, `Grep`, and optional
-artifact read tools. Internal `repo.*` and `shell.execute` adapters remain
-registered for compatibility paths, but they are hidden from default model
-tool definitions.
-
-Side-effecting modifying tools are recorded in PostgreSQL with stable
-idempotency keys before execution. Completed tool results are reused after
-checkpoint replay; ambiguous write state and unknown command completion enter
-`recovery_required` rather than replaying an unsafe side effect.
-
-Successful completion requires at least one write with durable changed-file
-evidence and passing required validation gates from configuration or
-conservative project detection. Failed required check commands feed bounded
-evidence back to the model for rework; exhausted or non-reworkable validation
-failure marks the Run failed.
-
-## Team Coding Loop
-
-Workers with a configured model provider advertise solo coding routes and the
-distributed team routes `team-coding`, `team-role`, and `team-verifier`. The
-caller must request team mode; default modifying Runs stay on the solo
-modifying graph.
-
-The legacy scoped team route `team-coding-scoped` has been retired. Historical
-stored rows may still exist, but current Workers do not claim or execute that
-route; non-terminal historical scoped rows should be cancelled and recreated
-through the distributed team runtime.
-
-Distributed `team-role` uses the same runtime tool registry and executor as the
-API/local/worker tool assembly. Team-native control tools stay in-process, but
-all ordinary repo, shell, artifact, memory, attachment, MCP, and community tool
-calls share the executable registry that produced the exposed tool set.
-
-Verifier rejection caused by model or quality output can trigger bounded
-same-Teammate rework. Verifier execution or external failures have a separate
-small retry budget. Completion is recorded as `team_validated` only after
-Verifier pass and Leader finalization. Task 13 E2E covers Worker claim,
-PostgreSQL checkpointing, fake provider calls, repository tool execution,
-patch/rework, durable validation records, tool invocation records, events, and
-observability query tables.
-
-## Persistence
-
-PostgreSQL is authoritative for LangGraph checkpoints and project-owned runtime
-records. Checkpoint semantics remain owned by LangGraph. The API reads runs,
-agents, tasks, and event history through a runtime repository instead of
-process-local dictionaries. The in-memory repository is an explicit test
-adapter only. SSE reads ordered events from PostgreSQL so API and Worker
-processes share one durable event history. `EventStream` remains a local
-notification adapter, not durable state.
-
-Project tables store runs, agents, tasks, messages, tool calls, artifacts,
-approvals, verification, and memory audit data. Agent records include the
-resolved model assignment. Repository identities and private intake
-reservations are also PostgreSQL records. Existing prototype Runs are preserved
-as legacy rows; unsafe non-terminal legacy rows become `recovery_required`.
-
-Local `~/.awesome-agent/config.toml` stores allowed roots and the managed
-worktree root. This local authorization is intentionally separate from the
-PostgreSQL repository registry.
-
-Large outputs live in external artifact storage. PostgreSQL stores metadata,
-hashes, ownership, and paths.
-
-Distributed `team-coding`, `team-role`, and `team-verifier` are the forward
-team routes. Their graph modules own durable child-run coordination, child
-wait/requeue behavior, patch aggregation, result persistence, mailbox messages,
-and terminal mapping. Leader planning, Teammate/Subagent model/tool execution,
-delegation tool calls, Verifier decisions, and team observability run through
-`TeamAgentLoop` middleware.
-
-Team role tool calls are durable tool invocations. Risky calls create a durable
-approval and an `approval.requested` event with a typed
-`team_role_approval_continuation`. Approved resume validates tool version,
-argument hash, workspace fingerprint, and effective capabilities before
-executing the original tool once with `approval_granted=True`, before model
-re-entry. Denied or expired approvals become tool-result errors.
-
-Writing teammates persist the isolated workspace path, integration branch, and
-allocator-returned workspace state. Team tree diagnostics report effective
-tools, denied tools, pending approval tool/risk/status, waiting reason, child
-results, and whether each child workspace is inherited or isolated.
-
-AgentLoop middleware receives a typed `MiddlewareContext` rather than relying
-on route-specific metadata for stable runtime facts. The context exposes
-focused envelopes for trace, capability subject, assignment, token budget,
-handoff, and error classification. Metadata remains a compatibility and
-annotation channel; new cross-cutting policy should consume the typed
-envelopes and leave durable state transitions to the graph.
-
-Capability resolution is the authorization boundary for tool exposure and
-execution. The registry owns tool inventory, schemas, risk, and required raw
-capabilities; `EffectiveToolPolicy` owns whether a subject may see or execute a
-tool in a route. API inspection and team-role execution consume the same
-resolver output, and the executor rejects invocations outside a provided
-effective policy even if their raw capability set is sufficient.
-
-## Observability
-
-Runtime observability has three layers:
-
-- durable evidence in PostgreSQL query tables: `observability_spans`,
-  `observability_metrics`, and `model_calls`;
-- ordered runtime events with a stable Run-scoped `trace_id`;
-- best-effort OpenTelemetry export and structured logs.
-
-The Worker records outer `run.execute` and `graph.execute` spans without
-letting observability writes or exporter failures affect Run execution.
-Migrated solo and forward distributed team AgentLoop stages record `agent.run`,
-`model.call`, and `tool.call` spans through `ObservabilityMiddleware`; scoped
-team compatibility routes keep event-projection observability until migrated.
-Model-call records store provider, model, status, stop reason, token usage,
-latency, and trace/span IDs. FastAPI exposes `GET /runs/{run_id}/trace`,
-`GET /runs/{run_id}/metrics`, `GET /runs/{run_id}/model-calls`,
-`GET /runs/{run_id}/diagnostics`, and
-`GET /runs/{run_id}/recovery-metrics` for the future frontend and operators.
-`runtime.diagnostics` is a read-only projection over existing durable evidence;
-it does not own graph transitions, dispatch state, or recovery policy.
-`runtime.recovery_metrics` is a second read-only projection over the same
-durable evidence plus team, validation, token ledger, and model-call records.
-It reports recovery-action, role, failure-kind, provider/model, Verifier, and
-token-pressure aggregates without changing retry, rework, or routing policy.
-
-Dashboards and dependency-aware health checks remain separate roadmap work.
-
-## Durable Execution Target
-
-The durable coding roadmap separates execution concerns instead of treating one
-status field or one store as authoritative for everything.
-
-```text
-CLI / API
-   |
-   | create Run(repository_id, base commit, policy)
-   v
-PostgreSQL dispatch state
-   | queued -> claimed -> executing -> waiting / retry -> terminal
-   | lease + heartbeat + fencing token
-   v
-Worker
-   |
-   | start/resume stable LangGraph thread
-   v
-LangGraph checkpoint ----------------------+
-   | next graph position and agent context |
-   |                                       |
-   +--> model/tool/approval/validation -----+
-                  |
-                  | fenced projection transition
-                  v
-PostgreSQL domain projections + ordered events
-                  |
-                  +--> API / SSE / future frontend
-
-Large output, patches, and evidence -> artifact storage
-```
-
-State ownership:
-
-- LangGraph checkpoints own the next executable position and resumable agent
-  context.
-- PostgreSQL domain tables own user-visible business projections.
-- Run, Agent, and Todo visible lifecycle transitions use a transaction-scoped
-  projection helper so projection rows, `updated_at`, Agent/Todo revisions, and
-  matching runtime events are committed together.
-- Separate `DispatchStatus` owns queue and worker scheduling state.
-- PostgreSQL row locking and `SKIP LOCKED` serialize claims without a separate
-  broker.
-- Runtime events are ordered audit records, not a replay-complete event store.
-- Stable transition IDs reconcile checkpoint-ahead and projection-ahead
-  partial failures.
-- An ambiguous mismatch enters `recovery_required`; it is never guessed
-  through automatically.
-- Active cancellation is a durable PostgreSQL request. The API records it, and
-  only the owning fenced Worker commits active `cancelled + terminal` after the
-  graph and subprocess boundary stops cleanly.
-
-Repository access also has two layers:
-
-- PostgreSQL stores stable registered repository identities.
-- local configuration stores allowed filesystem roots.
-
-Every modifying Run uses a dedicated integration worktree from a clean base
-commit. The user's checkout is never modified automatically, including when
-trusted-local command execution is selected.
-
-Managed execution workspaces remain explicit runtime evidence until the user
-requests cleanup. `workspace list` and the workspace cleanup API evaluate
-PostgreSQL Run state, ownership markers, managed-root containment, Git worktree
-state, branch identity, and dirty status before deletion. Cleanup defaults to
-preview; apply removes only owned inactive workspaces and matching
-`awesome-agent/run/<run_id>` branches. Failed or dirty workspaces require force
-with a reason, while `recovery_required` workspaces are retained.
-
-See [Persistence and recovery](docs/architecture/persistence-recovery.md) for the complete
-target contract.
-
-## Context And Budget Boundaries
-
-Task 16 adds a shared context manager and per-Run budget ledger. Solo
-`solo-readonly` and `solo-modifying` model turns compact context before
-provider calls when the soft context limit is crossed. Removed messages and
-oversized tool observations are written to artifact storage; checkpoints retain
-a deterministic rolling summary plus recent evidence. Compactions are visible
-through `context.compacted` events, `context_compactions` rows,
-`GET /runs/{run_id}/context-compactions`, and the matching CLI command.
-
-The budget ledger records input, output, reasoning tokens, model-call count,
-threshold status, and active Worker execution seconds. Worker active time is
-opened only while graph work is executing and is closed before approval wait,
-pause, retry, completion, or failure is projected. Distributed team boundaries
-use root-aware budget checks, deferred tool exposure, and artifact-backed
-handoff/result/verifier payload compaction. Monetary amount budgeting is
-intentionally outside the runtime kernel.
-
-## Security Boundary
-
-Docker is the default command execution boundary. CLI users may explicitly opt
-into trusted local execution. Trusted local mode runs as the same OS user and
-uses soft command, path, write-root, approval, and environment-scrubbing
-guardrails; it is not a security boundary. FastAPI runs cannot use
-trusted-local mode. Writing Teammates use isolated Git worktrees with explicit
-workspace state persisted on the child Run.
-
-Approval resume is scoped to one exact canonical tool invocation. Repository
-validation configuration and inferred project commands are untrusted input;
-only strongly evidenced check-only commands may run automatically.
-In `solo-modifying`, ambiguous shell execution creates a durable
-`approvals` row, checkpoints with LangGraph `interrupt(value)`, releases the
-worker lease as `paused + waiting`, and resumes with `Command(resume=...)`
-after API/CLI decision. Resume revalidates the canonical arguments hash, tool
-version, workspace fingerprint, and requested capabilities before execution.
-Conversation turns continue the model loop after the resumed tool result instead
-of producing a runtime placeholder answer. Later matching calls may reuse an
-approved or denied bounded grant only for exact shell argv or exact patch target
-paths with matching tool version, workspace, capabilities, and risk level. The
-public built-in workspace facade exposes `ReadFile`, `WriteFile`, `EditFile`,
-`Bash`, `Glob`, and `Grep`; `Bash` grants match exact parsed argv, and
-`WriteFile` / `EditFile` grants match exact target file paths. Internal
-`repo.*` and `shell.execute` adapters remain registered for compatibility but
-are hidden from default model-facing tool exposure.
-Unsafe shell commands are denied without approval.
-Distributed `team-role` uses the same approval binding checks, but stores its
-resume snapshot in runtime events because team role execution is not a
-conversation thread.
-
-## Detailed Designs
-
-See [docs/architecture/README.md](docs/architecture/README.md).
-
-Repository engineering rules are under
-[docs/development](docs/development/repository-harness.md).
+This is the architectural dependency direction, not a claim that every Python
+file imports the layer immediately above it. Structural tests maintain the
+current allowed package edges and framework owners.
+
+Concrete providers and storage adapters are wired in
+`application/composition.py`. The Agent imports provider-neutral contracts, and
+the protocol imports the Application facade rather than individual subsystems.
+
+## State Ownership
+
+| State | Owner | Location | Lifetime |
+| --- | --- | --- | --- |
+| Workspace trust | Application Storage | `state/application.db` | until user data removal |
+| Threads, Turns, transcript, summaries | Conversation + Storage | `state/application.db` | durable local history |
+| Tool activity summaries | Storage | `state/application.db` | bounded local history |
+| Agent graph channels | LangGraph | `state/checkpoints.db` | unfinished Turn only |
+| ChangeSet metadata | Change Journal + Storage | `state/application.db` | durable local history |
+| Change blobs | Change Journal | `state/change-journal/` | while referenced |
+| User memory | Memory | `memory/USER.md` | user controlled |
+| Workspace memory | Memory | `workspaces/<key>/MEMORY.md` | workspace scoped |
+| Cloud facts | Mem0 Cloud | external account | only when enabled |
+| UI preferences | Ink TUI | `ui.json` | user controlled |
+| Workspace files | user and tools | workspace | primary project state |
+
+Token deltas, spinners, raw provider payloads, unbounded shell output, and
+credentials are not stored as product history. Tool observations required for
+an unfinished Turn remain in the LangGraph checkpoint; user-facing activity
+history stores bounded summaries.
+
+## Error, Cancellation, and Recovery
+
+- Expected tool failures become normalized observations that the model can
+  address within remaining budgets.
+- Unexpected tool or graph failures terminate the Turn with a stable product
+  error and visible event.
+- Provider adapters classify errors and report retry usage; the Agent enforces
+  configured retry and model-call limits.
+- Cancellation propagates through the foreground operation, model call, and
+  tool execution. Application marks the Turn cancelled, seals known changes,
+  and removes its checkpoint.
+- Graph checkpoints are keyed by Turn ID. Application product records reference
+  the same key without copying graph channels.
+- Startup recovery acts only on evidence in product records and checkpoints.
+  Uncertain external side effects require a user decision instead of automatic
+  replay.
+- Context compression, message repair, budget exhaustion, and finalization are
+  Agent invariants rather than optional middleware.
+
+## Extension Points
+
+Current extension points are deliberately narrow:
+
+- new model adapters implement the existing provider contract and are composed
+  at the Application boundary;
+- new built-in or MCP tools enter the existing Registry/Policy/Executor path;
+- new Skills follow the current manifest schema and trusted discovery order;
+- a second external memory service must justify a shared provider abstraction;
+- a future surface adapts `ApplicationFacade` and typed events instead of
+  reimplementing Core behavior.
+
+The product roadmap also identifies documentation tooling, one-command Skills
+installation, Multi-Agent delegation, search tools, Cron tasks, Gateway
+messaging, and an optional Docker tool backend. These are future capabilities,
+not components in the current-system diagram. A Docker backend would sit below
+Tool Executor policy; it would not replace workspace trust.

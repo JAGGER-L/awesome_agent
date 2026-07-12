@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictBool,
+    model_validator,
+)
 
 from awesome_agent.modeling.messages import AssistantMessage, ModelMessage
-from awesome_agent.modeling.tools import ToolChoice, ToolDefinition
+from awesome_agent.modeling.tools import ToolChoice, ToolChoiceMode, ToolDefinition
+
+type ProviderId = Literal["deepseek", "kimi"]
 
 
 class StopReason(StrEnum):
@@ -16,63 +26,74 @@ class StopReason(StrEnum):
     UNKNOWN = "unknown"
 
 
-class ReasoningStatus(StrEnum):
-    STARTED = "started"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    INCOMPLETE = "incomplete"
-
-
-class ReasoningSegment(BaseModel):
-    sequence: int = Field(ge=1)
-    text: str
-
-
-class ReasoningTrace(BaseModel):
-    status: ReasoningStatus
-    segments: list[ReasoningSegment] = Field(default_factory=list)
-
-    @property
-    def text(self) -> str:
-        return "".join(segment.text for segment in self.segments)
-
-
 class ContinuationState(BaseModel):
-    provider: str = Field(min_length=1)
-    kind: str = Field(min_length=1)
-    schema_version: int = Field(default=1, ge=1)
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: ProviderId
+    kind: str = Field(min_length=1, max_length=128)
+    schema_version: int = Field(default=1, ge=1, le=32)
     data: JsonValue
 
 
 class ModelUsage(BaseModel):
-    input_tokens: int | None = Field(default=None, ge=0)
-    output_tokens: int | None = Field(default=None, ge=0)
-    reasoning_tokens: int | None = Field(default=None, ge=0)
-    cache_read_tokens: int | None = Field(default=None, ge=0)
-    cache_write_tokens: int | None = Field(default=None, ge=0)
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
+    provider_retries: int = Field(default=0, ge=0, le=6)
+
+    def __add__(self, other: ModelUsage) -> ModelUsage:
+        return ModelUsage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
+            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
+            provider_retries=self.provider_retries + other.provider_retries,
+        )
 
 
 class ModelRequest(BaseModel):
-    messages: list[ModelMessage] = Field(min_length=1)
-    tools: list[ToolDefinition] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    messages: tuple[ModelMessage, ...] = Field(min_length=1)
+    tools: tuple[ToolDefinition, ...] = ()
     tool_choice: ToolChoice = Field(default_factory=ToolChoice)
-    max_output_tokens: int = Field(default=6000, ge=1)
-    thinking: str | None = Field(default=None, max_length=32)
+    max_output_tokens: int = Field(default=6_000, ge=1, le=262_144)
+    thinking_enabled: StrictBool
     continuation: ContinuationState | None = Field(
         default=None,
         exclude=True,
         repr=False,
     )
 
+    @model_validator(mode="after")
+    def validate_tool_selection(self) -> Self:
+        names = [tool.name for tool in self.tools]
+        if len(names) != len(set(names)):
+            raise ValueError("Tool definitions must have unique names.")
+        if (
+            self.tool_choice.mode is ToolChoiceMode.TOOL
+            and self.tool_choice.name not in set(names)
+        ):
+            raise ValueError("Specific tool choice must reference a defined tool.")
+        if self.tool_choice.mode is ToolChoiceMode.REQUIRED and not names:
+            raise ValueError("Required tool choice needs at least one defined tool.")
+        return self
+
 
 class ModelTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: ProviderId
+    model: str = Field(min_length=1, max_length=200)
     assistant: AssistantMessage
     stop_reason: StopReason
-    model: str
-    provider: str
-    response_id: str | None = None
     usage: ModelUsage = Field(default_factory=ModelUsage)
-    reasoning: ReasoningTrace | None = None
+    response_id: str | None = Field(default=None, max_length=512)
     continuation: ContinuationState | None = Field(
         default=None,
         exclude=True,

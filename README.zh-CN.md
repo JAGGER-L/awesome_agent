@@ -1,175 +1,99 @@
-﻿# Awesome Agent
+# Awesome
 
 [English](README.md) | [简体中文](README.zh-CN.md)
+
 ```text
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃  ███  █   █ █████ █████  ███  █   █ █████        ┃
-┃ █   █ █   █ █     █     █   █ ██ ██ █            ┃
-┃ █████ █ █ █ ████  █████ █   █ █ █ █ ████         ┃
-┃ █   █ ██ ██ █         █ █   █ █   █ █            ┃
-┃ █   █ █   █ █████ █████  ███  █   █ █████        ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-```
-Awesome Agent 是一个面向本地项目的 AI coding agent，定位是运行在开发者
-电脑上的轻量级本地开发助手。它可以读取代码库上下文、修改文件、执行命令，并
-辅助调试、重构和功能实现。相比传统代码补全工具，Awesome 更偏向任务级开发：
-用户描述目标后，它会围绕当前仓库状态进行多轮推理、编辑和验证，适合终端优先、
-自动化程度较高的工程工作流。当前主要使用入口是本地 CLI；如需连接其它客户端，
-也可以选择 Local API 或 Docker API 模式。
-
-
-## 选择使用方式
-
-| 方式 | 适合场景 | 启动命令 |
-| --- | --- | --- |
-| Local CLI | 你想直接在本地项目里用终端工作。它使用 embedded local runtime，不需要 API server。 | `cd <your-project>` 然后运行 `awesome` |
-| Local API | 你想在本机提供 API 地址或查看接口文档。目前只支持 Windows。 | `make dev` |
-| Docker API | 你想通过 Docker 运行 API。目前只支持 Windows。 | `make docker-start` |
-
-大多数用户建议从 **Local CLI** 开始。API 方式适合需要把其它客户端连接到
-Awesome 的场景。如需把 TUI 连接到已有 API，而不是使用 embedded local runtime，
-可以运行 `awesome --api-url <url>`。
-
-从项目目录运行 `awesome`。启动目录会成为默认 thread context。如果它是一个
-Git checkout，runs 会继承该 repository；否则 Awesome 会使用 workspace-only
-mode，并且仍然接受用户消息 turn。普通用户消息是唯一的产品执行创建路径。
-
-## 快速开始
-
-克隆并安装 Awesome：
-
-Windows PowerShell：
-
-```powershell
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
+  ███  █   █ █████ █████  ███  █   █ █████
+ █   █ █   █ █     █     █   █ ██ ██ █
+ █████ █ █ █ ████  █████ █   █ █ █ █ ████
+ █   █ ██ ██ █         █ █   █ █   █ █
+ █   █ █   █ █████ █████  ███  █   █ █████
 ```
 
-macOS/Linux：
+Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码库、修改文件、执行
+命令，并协助你完成开发、调试、重构和测试。
+
+在项目目录中启动 `awesome`，用自然语言描述你的目标。Awesome 会阅读相关代码、
+执行必要的工具、完成修改并验证结果。
+
+## Awesome 能做什么
+
+- 理解项目结构并解释代码之间的关系；
+- 实现功能、调试问题、重构代码和运行测试；
+- 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
+- 继续最近的 Thread，或通过 ID 恢复指定 Thread；
+- 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
+- 使用 DeepSeek 和 Kimi 模型。
+
+Awesome 最开始提供 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、
+`glob`、`grep` 和 `execute`。扩展可以继续增加工具，Awesome 不限制为八个工具。
+本地文件 Memory 与 Mem0 Cloud 相互独立，二者默认关闭。
+
+## 安装
+
+### macOS 或 WSL2 Ubuntu
 
 ```bash
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
+curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-`make install` 也会通过 `uv tool` 安装用户级 `awesome` 命令。安装结束后
-打开一个新终端，再确认命令已经进入 PATH：
-
-Windows PowerShell：
+### Windows
 
 ```powershell
-Get-Command awesome
-awesome --help
+irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-macOS/Linux：
+安装后请打开一个新终端。Awesome 已包含运行所需的环境，无需提前安装 Python、
+Node.js、uv 或 npm。Git 是可选能力，Awesome 不会自动安装；需要 Git 工作流时，
+请从 [Git 官方网站](https://git-scm.com/downloads)安装。
 
-```bash
-command -v awesome
-awesome --help
-```
+## 开始使用
 
-如果仍然找不到命令，运行 `uv tool update-shell`，再打开新终端重新检查。
+在项目目录中启动 Awesome：
 
-创建 Awesome 用户目录：
-
-Windows PowerShell：
-
-```powershell
-awesome init
-```
-
-macOS/Linux：
-
-```bash
-awesome init
-```
-
-把模型 key 设置到操作系统环境变量，或写入 `<AWESOME_HOME>/.env`：
-
-Windows PowerShell：
-
-```powershell
-setx AWESOME_AGENT_DEEPSEEK_API_KEY "your-key"
-```
-
-macOS/Linux：
-
-```bash
-mkdir -p "${AWESOME_HOME:-$HOME/.awesome-agent}"
-printf 'AWESOME_AGENT_DEEPSEEK_API_KEY=your-key\n' >> "${AWESOME_HOME:-$HOME/.awesome-agent}/.env"
-```
-
-然后进入你的项目并启动 Awesome：
-
-Windows PowerShell：
-
-```powershell
-cd E:\my-project
+```text
+cd <project>
 awesome
 ```
 
-macOS/Linux：
+首次进入一个目录时，Awesome 会显示完整路径并询问是否信任。只有在你了解该项目、
+并愿意让 Awesome 读取和操作其中内容时才选择 Yes。
 
-```bash
-cd ~/my-project
-awesome
-```
+尚未配置模型 Provider 时，按 Enter 或运行 `/model`。选择 DeepSeek 或 Kimi，
+在遮罩输入框中粘贴 API Key，再选择模型。之后可使用 `/auth` 添加、替换或删除凭据。
 
-发送一条普通消息，例如：
+常用启动参数：
 
 ```text
-Read this project and explain how it is organized.
+awesome --continue
+awesome --resume
+awesome --resume <thread_id>
+awesome --version
+awesome --help
 ```
 
-完整步骤见 [Quickstart](docs/getting-started/quickstart.md) 或
-[快速开始](docs/getting-started/quickstart.zh-CN.md)。
+## 第一个任务
 
-## 配置基础
+可以先让 Awesome 只阅读并介绍项目：
 
-Awesome 会把自己的用户文件放在项目目录之外。
-
-| 路径 | 作用 |
-| --- | --- |
-| `<AWESOME_HOME>/.env` | 用户级模型 key 和本机配置。 |
-| `<AWESOME_HOME>/skills/` | 跨项目可用的个人 skills。 |
-| `<AWESOME_HOME>/awesome-agent.yaml` | 用户级 extension 设置，包括 MCP sources。 |
-| `<your-project>/skills/` | 当前仓库的项目级 skills。 |
-| `<your-project>/awesome-agent.yaml` | 项目级 extension 设置。 |
-
-Windows 上，`AWESOME_HOME` 默认是 `%LOCALAPPDATA%\awesome-agent`。其它平台
-默认是 `~/.awesome-agent`。你可以用 `AWESOME_HOME` 环境变量覆盖默认路径。
-
-模型密钥不会从项目 `.env` 读取。
-
-## 常用命令
-
-在 `awesome` 中使用这些命令：
-
-| 命令 | 作用 |
-| --- | --- |
-| `/help` | 查看可用命令。 |
-| `/config` | 查看当前生效的 Awesome 路径和 key 状态。 |
-| `/status` | 查看当前会话状态。 |
-| `/skills` | 列出可用 skills。 |
-| `/mcp` | 查看已配置的 MCP servers。 |
-| `/quit` | 退出 TUI。 |
-
-`awesome-agent start` 只作为 Local API 开发时的备用/调试 supervisor 使用。
+```text
+分析这个项目的结构，并告诉我应该从哪里开始阅读。
+```
 
 ## 文档
 
-- [文档地图](docs/README.md)
-- [Quickstart](docs/getting-started/quickstart.md)
 - [快速开始](docs/getting-started/quickstart.zh-CN.md)
-- [用户指南](docs/user-guide/README.md)
-- [运维指南](docs/operations/README.md)
+- [命令](docs/user-guide/commands.md)
+- [配置](docs/user-guide/configuration.md)
+- [Workspace 与工具](docs/user-guide/workspace-and-tools.md)
+- [Memory、Skills 与 MCP](docs/user-guide/memory-skills-mcp.md)
+- [故障排查](docs/user-guide/troubleshooting.md)
 - [架构](ARCHITECTURE.md)
-- [安全模型](docs/architecture/security-model.md)
+- [开发](docs/development/README.md)
+- [Roadmap](docs/roadmap.md)
 
-## 安全提示
+## 安全
 
-只在你信任的项目中运行 Awesome。不要把 API key 提交到 Git；请把它们放在
-操作系统环境变量或 `<AWESOME_HOME>/.env` 中。
+只信任你了解的项目，保留修改前先检查 `/diff`。只通过 Awesome 的
+`/model` 或 `/auth` 遮罩输入流程输入凭据。进程环境变量和 `<AWESOME_HOME>/.env`
+仍是高级配置方式；不要把凭据写入项目文件。

@@ -1,0 +1,95 @@
+{
+  "cases": [
+    {
+      "event": {
+        "event_id": "event_001",
+        "event_type": "warning",
+        "payload": {
+          "code": "safe_warning",
+          "kind": "warning",
+          "message": "Safe warning."
+        },
+        "sequence": 0,
+        "session_id": "session_11111111111111111111111111111111",
+        "timestamp": "2026-07-11T08:00:00Z",
+        "version": 1,
+        "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "name": "sequence.zero",
+      "reason": "sequence"
+    },
+    {
+      "event": {
+        "event_id": "event_001",
+        "event_type": "assistant.text.delta",
+        "payload": {
+          "code": "safe_warning",
+          "kind": "warning",
+          "message": "Safe warning."
+        },
+        "sequence": 1,
+        "session_id": "session_11111111111111111111111111111111",
+        "timestamp": "2026-07-11T08:00:00Z",
+        "version": 1,
+        "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "name": "event_type.payload_mismatch",
+      "reason": "event_type must match"
+    },
+    {
+      "event": {
+        "event_id": "event_001",
+        "event_type": "warning",
+        "payload": {
+          "code": "safe_warning",
+          "kind": "warning",
+          "message": "Safe warning."
+        },
+        "sequence": 1,
+        "session_id": "session_11111111111111111111111111111111",
+        "timestamp": "2026-07-11T16:00:00+08:00",
+        "version": 1,
+        "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "name": "timestamp.non_utc",
+      "reason": "timestamp"
+    },
+    {
+      "event": {
+        "event_id": "event_002",
+        "event_type": "operation.started",
+        "operation_id": null,
+        "payload": {
+          "kind": "operation.started",
+          "message": ""
+        },
+        "sequence": 2,
+        "session_id": "session_11111111111111111111111111111111",
+        "timestamp": "2026-07-11T08:00:00Z",
+        "version": 1,
+        "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "name": "operation.missing_identity",
+      "reason": "operation_id"
+    },
+    {
+      "event": {
+        "event_id": "event_001",
+        "event_type": "warning",
+        "payload": {
+          "code": "safe_warning",
+          "kind": "warning",
+          "message": "Safe warning."
+        },
+        "sequence": 1,
+        "session_id": "session_11111111111111111111111111111111",
+        "timestamp": "2026-07-11T08:00:00Z",
+        "traceback": "private",
+        "version": 1,
+        "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "name": "unknown.field",
+      "reason": "extra"
+    }
+  ]
+}

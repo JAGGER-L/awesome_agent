@@ -101,9 +101,27 @@ def redact_text(text: str) -> RedactionResult:
         "token",
     )
     redacted = _replace(redacted, _CREDENTIAL_ASSIGN_RE, _typed_assignment, counts)
-    redacted = _replace(redacted, _ANTHROPIC_KEY_RE, "[REDACTED:api_key]", counts)
-    redacted = _replace(redacted, _OPENAI_KEY_RE, "[REDACTED:api_key]", counts)
-    redacted = _replace(redacted, _JWT_RE, "[REDACTED:token]", counts)
+    redacted = _replace(
+        redacted,
+        _ANTHROPIC_KEY_RE,
+        "[REDACTED:api_key]",
+        counts,
+        "api_key",
+    )
+    redacted = _replace(
+        redacted,
+        _OPENAI_KEY_RE,
+        "[REDACTED:api_key]",
+        counts,
+        "api_key",
+    )
+    redacted = _replace(
+        redacted,
+        _JWT_RE,
+        "[REDACTED:token]",
+        counts,
+        "token",
+    )
     redacted = _replace(
         redacted, _URL_PASSWORD_RE, r"\1[REDACTED:password]\3", counts, "password"
     )

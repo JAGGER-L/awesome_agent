@@ -4,44 +4,29 @@ build-backend = "hatchling.build"
 
 [project]
 name = "awesome-agent"
-version = "0.1.0"
-description = "Observable local-first coding agent with teams and subagents."
+dynamic = ["version"]
+description = "AI coding agent for the terminal."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = {text = "MIT"}
 authors = [{name = "JAGGER-L"}]
 dependencies = [
-  "fastapi>=0.115",
-  "httpx2>=2.4.0",
   "langgraph>=0.6",
+  "langgraph-checkpoint-sqlite>=3.1.0",
+  "mcp>=1,<2",
   "openai>=1.100",
-  "pydantic-settings>=2.10",
-  "textual>=0.89",
-  "typer>=0.16",
-  "uvicorn[standard]>=0.35",
+  "pydantic>=2.11,<3",
+  "python-dotenv>=1.1,<2",
+  "PyYAML>=6.0.2,<7",
 ]
 
 [project.optional-dependencies]
-postgres = [
-  "alembic>=1.16",
-  "asyncpg>=0.30",
-  "langgraph-checkpoint-postgres>=2.0",
-  "psycopg[binary,pool]>=3.2",
-  "sqlalchemy[asyncio]>=2.0",
-]
-observability = [
-  "opentelemetry-api>=1.36",
-  "opentelemetry-exporter-otlp>=1.36",
-  "opentelemetry-sdk>=1.36",
-  "structlog>=25.4",
-]
 memory = [
-  "mem0ai>=0.1",
+  "mem0ai>=2.0.7,<3",
 ]
 
 [project.scripts]
-awesome = "awesome_agent.cli.interactive:main"
-awesome-agent = "awesome_agent.cli.app:app"
+awesome-core = "awesome_agent.protocol.stdio:main"
 
 [dependency-groups]
 dev = [
@@ -50,10 +35,18 @@ dev = [
   "pytest-asyncio>=1.1",
   "pytest-cov>=6.2",
   "ruff>=0.12",
+  "types-PyYAML>=6.0.12.20250516",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/awesome_agent"]
+
+[tool.hatch.build]
+artifacts = ["src/awesome_agent/extensions/skills/bundled/**"]
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "^(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)$"
 
 [tool.ruff]
 target-version = "py312"
@@ -79,12 +72,13 @@ module = ["mem0", "mem0.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers --cov=awesome_agent --cov-report=term-missing"
+addopts = "--strict-config --strict-markers --import-mode=importlib"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-  "integration: requires local infrastructure such as PostgreSQL or Docker",
-  "e2e: exercises a complete user-facing workflow",
+  "integration: crosses a target local component or persistence boundary",
+  "e2e: exercises a complete target user-facing workflow",
+  "external: requires explicit credentials or network access and is excluded from the default local gate",
 ]
 
 [tool.coverage.run]

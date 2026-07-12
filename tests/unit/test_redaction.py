@@ -59,43 +59,6 @@ def test_redact_value_recurses_and_reports_counts() -> None:
     assert report.counts["password"] == 2
 
 
-def test_redact_value_preserves_guardrail_schema() -> None:
-    payload = {
-        "guardrails": {
-            "version": 1,
-            "assessments": [
-                {
-                    "subject": "command",
-                    "operation": "execute",
-                    "decision": "ask",
-                    "severity": "medium",
-                    "reason": "Command references token=secret-value",
-                    "rule_ids": ["guard.command.sensitive_target"],
-                    "targets": [
-                        {
-                            "kind": "command",
-                            "value": "echo token=secret-value",
-                            "sensitivity": "sensitive",
-                        }
-                    ],
-                    "approval_scope": None,
-                    "bypass_used": False,
-                    "stats": {},
-                }
-            ],
-        }
-    }
-
-    redacted, report = redact_value(payload)
-    assessment = redacted["guardrails"]["assessments"][0]
-
-    assert assessment["decision"] == "ask"
-    assert assessment["rule_ids"] == ["guard.command.sensitive_target"]
-    assert assessment["reason"] == "Command references token=[REDACTED:token]"
-    assert assessment["targets"][0]["value"] == "echo token=[REDACTED:token]"
-    assert report.applied is True
-
-
 def test_redacting_log_filter_redacts_formatted_message_arguments() -> None:
     record = logging.LogRecord(
         name="awesome_agent.test",

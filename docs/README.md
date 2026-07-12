@@ -1,57 +1,23 @@
-# Documentation
+# Awesome documentation
 
-Start here when you know what you want to do but not which document owns the
-answer.
+Start with the [quickstart](getting-started/quickstart.md) or
+[快速开始](getting-started/quickstart.zh-CN.md).
 
-## New Users
+## Use Awesome
 
-- [Project README](../README.md)
-- [Quickstart](getting-started/quickstart.md)
-- [快速开始](getting-started/quickstart.zh-CN.md)
+- [Commands](user-guide/commands.md)
+- [Configuration](user-guide/configuration.md)
+- [Workspace and tools](user-guide/workspace-and-tools.md)
+- [Memory, Skills, and MCP](user-guide/memory-skills-mcp.md)
+- [Troubleshooting](user-guide/troubleshooting.md)
 
-## Product Users
+## Understand and contribute
 
-- [User guide](user-guide/README.md)
-- [CLI and commands](user-guide/cli.md)
-- [Conversations](user-guide/conversations.md)
-- [Attachments](user-guide/attachments.md)
-- [Memory, skills, and MCP](user-guide/memory-skills-mcp.md)
-
-## Operators
-
-- [Operations guide](operations/README.md)
-- [Startup modes](operations/startup-modes.md)
-- [Diagnostics](operations/diagnostics.md)
-- [Runtime data](operations/runtime-data.md)
-- [Troubleshooting](operations/troubleshooting.md)
-
-## API Integrators
-
-- [API overview](api/README.md)
-- [Thread API](api/thread-api.md)
-- [Diagnostics API](api/diagnostics-api.md)
-
-## Contributors
-
-- [Development guide](development/README.md)
-- [Repository harness](development/repository-harness.md)
-- [Execution plans](development/execution-plans.md)
+- [Architecture](architecture/README.md)
+- [Development](development/README.md)
 - [Testing](development/testing.md)
+- [Manual release](development/release.md)
+- [Roadmap](roadmap.md)
 
-## Architecture Reviewers
-
-- [Architecture guide](architecture/README.md)
-- [Architecture overview](../ARCHITECTURE.md)
-
-## Maintainers
-
-- [Governance](governance/README.md)
-- [Roadmap](governance/roadmap.md)
-- [Technical debt](governance/technical-debt.md)
-- [Documentation governance](governance/documentation.md)
-- [Quality](governance/quality.md)
-
-## References
-
-- [Reference index](reference/README.md)
-- [Generated database schema](reference/generated/db-schema.md)
+The root [README](../README.md) is the product front door and
+[ARCHITECTURE.md](../ARCHITECTURE.md) is the complete technical overview.

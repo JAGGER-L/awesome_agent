@@ -1,3 +1,0 @@
-from awesome_agent.runtime.asyncio import configure_event_loop_policy
-
-configure_event_loop_policy()

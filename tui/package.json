@@ -1,0 +1,42 @@
+{
+  "name": "@awesome-agent/tui",
+  "version": "1.0.0",
+  "description": "Ink terminal interface for Awesome Agent",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "awesome": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run version:sync && node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
+    "format:check": "biome format --no-errors-on-unmatched .",
+    "lint": "biome lint --no-errors-on-unmatched .",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "version:sync": "node scripts/sync-version.mjs"
+  },
+  "dependencies": {
+    "clipboardy": "^5.3.1",
+    "ink": "^7.1.0",
+    "react": "^19.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,254 +1,222 @@
 # Agent Guide
 
-This document constrains all coding agents that modify this repository, including Codex, Claude Code, and other automated development agents.
+This document constrains coding agents that modify this repository, including
+Codex, Claude Code, and other automated development agents.
 
 ## Core Principles
 
-* Repository files are the source of truth. Chat history may be used only as context; it must not replace verification against the current code, documentation, tests, and plan files.
-* Prefer small, explicit changes. Do not perform unrelated refactors, opportunistic optimizations, or scope expansion.
-* Preserve the work of the user and other agents. Do not discard, overwrite, move, or revert changes unrelated to the current task.
-* When multiple worktrees or branches are active in parallel, modify only the files and plans owned by the current task. Do not affect other active worktrees, branches, or tasks.
-* Do not weaken acceptance criteria to make the task pass. Do not claim implementation is complete without recorded verification evidence.
-* Do not commit secrets, credentials, private configuration, temporary files, debugging code, large full-source dumps, or large raw tool outputs.
+- Repository files are the source of truth. Chat history is context, not a
+  substitute for checking current code, documentation, tests, and plans.
+- Prefer small, explicit changes. Do not perform unrelated refactors,
+  opportunistic optimization, or scope expansion.
+- Preserve user and agent work. Do not discard, overwrite, move, or revert
+  unrelated changes.
+- When branches or worktrees run in parallel, modify only the files owned by
+  the current task.
+- Do not weaken acceptance criteria to make a task pass. Completion claims
+  require recorded verification evidence.
+- Never commit secrets, private configuration, generated caches, debugging
+  code, temporary payloads, or large raw tool output.
 
 ## Start Work
 
-Before editing, perform enough context checks to understand the task without over-auditing the repository:
+Before editing:
 
-1. Confirm the repository root, current branch, and `git status`.
-2. If `.codex/exec-plans/active/` contains a plan related to the current task, read that plan first.
-3. Read the design documents, interface contracts, test files, and call chains directly relevant to the current task.
-4. If the task affects code behavior, confirm the available baseline check commands. If no canonical command exists, choose the closest lightweight check and record it.
+1. Confirm repository root, current branch, worktree status, and `git status`.
+2. Read the current plan under `.codex/exec-plans/active/` when one exists.
+3. Read the design documents, public contracts, tests, and call chains directly
+   relevant to the task.
+4. Identify the lightest baseline check that covers the affected behavior.
 
-Do not perform a full-repository audit by default at the start of every task. Expand the reading scope only when the task involves architecture, public interfaces, cross-component behavior, or unclear context.
+Expand the audit only when the task changes architecture, public interfaces,
+cross-component behavior, or an unclear boundary.
 
 ## Planning and Scope
 
-* If an execution plan already exists, follow it. Do not re-evaluate whether the plan is reasonable unless you find a clear conflict between the plan and the code, interfaces, or documentation.
-* If no execution plan exists, decide whether a short plan is needed based on task complexity. Small localized changes may be implemented directly.
-* Keep changes within the current task scope.
-* When you find out-of-scope issues, record them as follow-up items. Do not fix them opportunistically unless they block the current task.
-* Each worktree maintains its own plan state. Do not move, close, or rewrite plan files belonging to other active worktrees.
+- Follow an accepted execution plan unless current source proves a conflict.
+- Use a short plan for multi-file or cross-boundary work; localized edits may be
+  implemented directly.
+- Record out-of-scope findings as follow-up work instead of fixing them
+  opportunistically.
+- Each worktree owns its plan state and branch changes.
+- `.codex/` is ignored, temporary development coordination state. Keep only the
+  current active plan and explicitly accepted pending work; remove completed
+  plans and task artifacts after handoff rather than maintaining a repository
+  archive.
+- `.codex/` content never defines Awesome product behavior.
 
 ## Product Thinking
 
-For product-facing work, think from three angles before implementing:
+For product-facing work, evaluate:
 
-* First principles: identify the underlying problem, invariant, or user need instead of only patching the visible symptom.
-* Productization: prefer solutions that are coherent, reusable, documented, testable, and aligned with the product architecture.
-* User experience: evaluate setup, first run, common workflows, error messages, recovery paths, and whether the behavior is understandable to a real user.
+- **First principles:** identify the underlying user need and invariant.
+- **Productization:** prefer coherent, reusable, documented, and testable
+  behavior aligned with the current architecture.
+- **User experience:** consider setup, first run, common workflows, errors,
+  cancellation, and recovery.
 
-Do not turn every task into a broad redesign. Apply this thinking to guide implementation choices, then keep the actual change within the current task scope. Record larger product, architecture, or UX issues as follow-up items.
-
-## `.codex/` Rules
-
-* Store development plans, handoff notes, and temporary session state under `.codex/`.
-* Do not commit `.codex/` content by default, unless explicitly required by the user or repository rules.
-* `.codex/exec-plans/active/` should contain only the current active plan. If explicitly requested by the user, it may also contain the next approved plan.
-* Accepted but not-yet-started plans belong in `.codex/exec-plans/pending/`.
-* Completed, merged, or otherwise closed plans belong in `.codex/exec-plans/completed/`.
-* Local execution plans are development coordination state; they do not define the behavior of the `awesome_agent` product runtime.
+Use this reasoning to guide the scoped change; do not turn every task into a
+broad redesign.
 
 ## Code Change Rules
 
-* Reuse the existing architecture, module boundaries, naming style, and error-handling patterns.
-* Before changing public interfaces, configuration, persistence formats, CLI/API behavior, or AgentLoop behavior, confirm the relevant design documents and callers.
-* Do not use temporary compatibility layers to hide real interface inconsistencies unless explicitly required by the plan or the user.
-* Do not introduce new production dependencies unless explicitly allowed by the plan or the user.
-* Do not leave behind debugging code, temporary logs, one-off scripts, or unused code.
-* Be restrained with large files. When adding complex functionality, prefer extracting it into new modules and keeping tests close to the logic being verified.
+- Reuse current module boundaries, naming, and error semantics.
+- Before changing public interfaces, configuration, storage formats, protocol
+  behavior, or the Agent loop, confirm relevant callers and architecture docs.
+- Do not add compatibility layers unless the user or accepted plan explicitly
+  requires them.
+- Do not add production dependencies without explicit scope.
+- Do not leave debugging code, unused modules, temporary logs, or one-off
+  scripts.
+- Prefer focused modules when adding complex behavior, while avoiding unrelated
+  file restructuring.
 
 ## Documentation Rules
 
-After changing code, determine whether the behavior, interfaces, configuration, or architecture described in the documentation also changed.
+Update documentation when changing:
 
-The following changes usually require documentation updates:
+- user-visible behavior;
+- commands, protocol methods, output, or error semantics;
+- configuration keys, environment variables, or defaults;
+- architecture boundaries, responsibilities, or call chains;
+- installation, startup, packaging, or development commands.
 
-* User-visible behavior changes
-* CLI/API parameter, output, or error-semantics changes
-* Configuration option, environment variable, or default-value changes
-* Architecture boundary, module responsibility, or call-chain changes
-* Installation, startup, deployment, or development-command changes
-
-Pure bug fixes, internal refactors, test additions, and non-behavioral cleanups do not require artificial documentation edits.
-
-If user-facing entry documentation needs to be updated, keep `README.md` and `README.zh-CN.md` consistent in the same change.
+Keep `README.md` and `README.zh-CN.md` behaviorally consistent. Internal
+refactors and test-only changes do not require artificial documentation edits.
 
 ## Validation Rules
 
-Choose the lightest validation set that sufficiently covers the risk of the current change. Use the following priority order:
+Choose the smallest validation set that covers current risk, in this order:
 
-1. formatting and lint
-2. type checking
-3. targeted unit tests
-4. affected structural tests
-5. affected integration tests
-6. application startup or basic smoke validation
-7. end-to-end tests for cross-component behavior
+1. formatting and lint;
+2. type checking;
+3. affected unit tests;
+4. structural contracts;
+5. affected integration tests;
+6. startup or packaging checks;
+7. end-to-end tests for cross-component user flows.
 
-Validation requirements:
+During architecture stabilization, tests protect current behavior and current
+public contracts. Delete tests that only encode discarded implementation
+details; do not add adapters, skips, or expected failures solely to satisfy
+them. Full E2E, smoke, performance, live-provider, network, and cross-host
+installer suites are release evidence once their corresponding user flows are
+stable, not automatic gates for every repository refactor.
 
-* Documentation-only changes usually do not require code validation; when relevant, check links, headings, and example commands.
-* Localized implementation changes should run at least the relevant lint, typecheck, and targeted tests, depending on the commands available in the repository.
-* Public interfaces, configuration, persistence, CLI/API entrypoints, AgentLoop, tool execution, or cross-component changes require higher-level validation.
-* Dependency, packaging, startup, or deployment changes require startup or basic smoke validation.
-* If a lower-level validation gate fails, do not continue to heavier validation unless the failure is unrelated to the current change and has been clearly recorded.
-* If a validation gate does not exist, record it as unavailable instead of silently skipping it.
-
-Record the commands actually run, their results, and any unverified risk areas in the execution plan, handoff notes, PR description, or final response.
+If a lower validation gate fails, stop before heavier checks unless the failure
+is proven unrelated. Record commands, results, deferred coverage, and
+unverified risks in the plan, PR, or final handoff.
 
 ## Safety and Execution Boundaries
 
-* Host execution is only for routine repository commands and must not include clearly destructive operations.
-* Obtain explicit consent before deleting files, rewriting history, cleaning large directory areas, modifying production configuration, accessing external services, or executing unknown scripts.
-* Do not write secrets, credentials, private paths, full source files, or large raw tool outputs into long-term memory, plan files, or handoff notes. Record only necessary summaries and key error lines.
+- Host execution is limited to routine repository commands and known project
+  checks.
+- Obtain explicit consent before deleting source or user files, rewriting
+  history, cleaning broad directory areas, modifying production configuration,
+  accessing external services, or running unknown scripts.
+- Before recursive deletion or movement on Windows, resolve absolute targets
+  and prove they remain under the intended workspace.
+- Do not copy secret values or private paths into plans, logs, PR bodies, or
+  long-term memory.
 
 ## Commits, PRs, and Merges
 
-* Each commit should correspond to one completed, verified, and clearly scoped logical change.
-
-* Do not commit speculative, partially completed, unverified, or out-of-scope work.
-
-* Before committing, inspect `git diff` and `git status` to confirm there are no temporary files, debugging code, secrets, or unrelated changes.
-
-* For tasks that are completed, verified, and clearly scoped, the agent may commit, push the branch, and create a PR without asking the user for confirmation again.
-
-* A PR may be automatically merged only when all of the following conditions are satisfied:
-
-  * The current task is complete.
-  * Required validation has passed, and verification evidence has been recorded.
-  * The PR contains only changes within the current task scope.
-  * The branch is synchronized with the target branch, and there are no merge conflicts.
-  * CI or repository-required checks have passed, or it is clear that no such checks exist.
-  * There are no secrets, debugging code, temporary files, or unrelated changes.
-  * The current task does not require an independent Verifier, manual review, or final user confirmation.
-  * The change does not involve production configuration, deployment flow, security boundaries, permission models, data migrations, destructive operations, or major public API changes.
-
-* If automatic push, PR creation, or merge fails, do not repeatedly retry destructive operations. Record the failure reason, current branch state, and recommended next step.
-
-* PR or handoff notes should include: change summary, validation commands, results, unverified risks, and follow-up items.
+- Each commit represents one complete, verified logical change.
+- Before committing, inspect the diff and status for unrelated files, secrets,
+  generated state, and debug output.
+- Completed scoped work may be committed, pushed, and opened as a PR without
+  asking for repeated confirmation.
+- Automatically merge only when the task is complete, required checks pass, the
+  PR is conflict-free and scoped, and no manual security/deployment/data review
+  is required.
+- If push, PR creation, checks, or merge fail, record the exact failure and next
+  safe action; do not retry destructive operations blindly.
+- PR or handoff notes include summary, validation commands/results, deferred
+  checks, risks, and follow-up work.
 
 ## Finish Work
 
-Before ending, confirm that:
+Before ending:
 
-1. The current changes remain within task scope.
-2. Relevant code, tests, and documentation have been validated according to risk level.
-3. Validation commands, results, and unverified risks have been recorded.
-4. Temporary files, debugging code, and unrelated changes have been removed.
-5. `git status` is explainable, and the worktree is reviewable and recoverable.
-6. If the task is complete, verified, and satisfies the commit, PR, and merge conditions, the commit, push, PR creation, and merge have been completed. If not, the reason and next step have been clearly recorded.
-
+1. Confirm changes match the accepted scope.
+2. Run and record the required validation set.
+3. Remove temporary files, caches created specifically for the task, and debug
+   output.
+4. Confirm `git status` is explainable and the worktree is recoverable.
+5. Complete the scoped commit and approved integration workflow, or state the
+   blocker and next action.
 
 ## Project Architecture
 
-- Primary product surface: `awesome` starts a local chat-first TUI. Plain user
-  messages enter the embedded `conversation-turn` runtime; surfaces submit
-  intent and render events, but do not execute graphs, call providers, or run
-  tools directly.
-- Runtime authority: `src/awesome_agent/runtime/` owns dispatch, graph routes,
-  AgentLoop integration, capability exposure, budgets, tool execution flow,
-  recovery, and worker execution.
-- Surface boundary: `src/awesome_agent/cli/`, `src/awesome_agent/tui/`,
-  `src/awesome_agent/surfaces/`, `src/awesome_agent/client/`, and
-  `src/awesome_agent/api/` are user/operator/API surfaces. They should call
-  shared runtime and surface services rather than duplicating runtime behavior.
-- Provider boundary: `src/awesome_agent/modeling/` defines provider-neutral
-  messages, tools, streaming, usage, and execution contracts.
-  `src/awesome_agent/providers/` adapts concrete providers to those contracts.
-- Tool boundary: `src/awesome_agent/tools/` owns built-in tool specs,
-  guardrails, approval policy, registry, executor, repository tools, shell,
-  artifacts, attachments, and memory tools. Tool permission is runtime policy,
-  not prompt convention.
-- State boundary: local embedded state lives under the resolved `AWESOME_HOME`
-  state paths. PostgreSQL-backed adapters and migrations remain available for
-  API/worker modes. Runtime state must be inspected through repositories,
-  diagnostics, or tests rather than inferred from chat history.
-- Extension boundary: `src/awesome_agent/extensions/` discovers user/project
-  skills, MCP servers, community tools, catalog snapshots, diagnostics, and
-  extension config. Extension discovery does not bypass tool capability policy.
+- **Product surface:** `awesome` starts the Ink chat TUI and one private Python
+  Core process. Ink submits typed intent and renders events; it does not call
+  models, execute graphs, run tools, or write product state.
+- **Application boundary:** `src/awesome_agent/application/` owns workspace
+  initialization, Thread/Turn lifecycle, commands, one foreground operation,
+  interactions, cancellation, recovery, composition, and event projection.
+- **Agent boundary:** `src/awesome_agent/agent/` owns the only LangGraph graph,
+  AgentState, nodes, routing, context/model/tool loop invariants, budgets,
+  compression, and finalization.
+- **Model boundary:** `src/awesome_agent/modeling/` defines provider-neutral
+  messages, tools, streams, usage, errors, and the gateway.
+  `src/awesome_agent/providers/` contains DeepSeek and Kimi adapters.
+- **Tool boundary:** `src/awesome_agent/core/tools/` owns built-in tools,
+  registry, policy, executor, normalized results, and process execution.
+  `src/awesome_agent/core/changes/` owns Change Journal behavior.
+- **State boundary:** `src/awesome_agent/conversation/` defines product records;
+  `src/awesome_agent/storage/` implements embedded Application SQLite,
+  LangGraph checkpoint, trust, conversation, MCP, and Change Journal adapters.
+- **Context and extension boundary:** `src/awesome_agent/context/`,
+  `src/awesome_agent/extensions/`, and `src/awesome_agent/memory/` assemble
+  bounded context, Skills, MCP, local memory, and optional Mem0 Cloud. None can
+  bypass tool policy.
+- **Protocol boundary:** `src/awesome_agent/protocol/` exposes versioned
+  JSON-RPC/NDJSON over private stdio. `tui/` is the Ink + React presentation
+  package.
 
 ## File Architecture
 
 ### Documentation Map
 
-- `README.md` / `README.zh-CN.md`: user-facing project introduction,
-  quickstart, feature overview, and docs entry points.
+- `README.md` / `README.zh-CN.md`: product introduction, installation, first
+  use, capabilities, and documentation links.
 - `docs/README.md`: reader-oriented documentation index.
-- `ARCHITECTURE.md`: system boundaries, source layout, and dependency
-  direction.
-- `docs/getting-started/quickstart.md`: manual first-run path.
-- `docs/user-guide/README.md`: user-facing runtime surfaces.
-- `docs/operations/README.md`: local operation, readiness, diagnostics, and
-  workspace guidance.
-- `docs/architecture/README.md`: durable architecture design contracts.
-- `docs/api/README.md`: API resource contracts.
-- `docs/development/README.md`: repository development rules and validation.
-- `docs/development/repository-harness.md`: repository-agent engineering rules.
-- `docs/development/execution-plans.md`: local execution-plan rules.
-- `docs/governance/documentation.md`: where project information belongs.
-- `docs/governance/roadmap.md`: durable product and runtime roadmap.
-- `docs/governance/technical-debt.md`: durable debt registry.
-- `docs/governance/quality.md`: quality gates and current score.
-- `docs/reference/README.md`: generated and compact reference material.
-- `docs/architecture/runtime-kernel.md`: product runtime harness.
-- `docs/architecture/security-model.md`: sandbox, approval, and data-safety
-  rules.
-- `.codex/exec-plans/active/`: ignored local current execution plans.
-- `.codex/exec-plans/completed/`: ignored local completed execution plans.
-- `.codex/exec-plans/pending/`: ignored local future accepted plans.
+- `ARCHITECTURE.md`: authoritative topology, data flow, package ownership,
+  state, dependency direction, and extension boundaries.
+- `docs/getting-started/`: English and Chinese first-run guides.
+- `docs/user-guide/`: commands, configuration, workspace/tools,
+  Memory/Skills/MCP, and troubleshooting.
+- `docs/architecture/`: focused Agent, Application/LangGraph, protocol/Ink,
+  Storage, and security guides.
+- `docs/development/`: contributor setup, testing, and release guidance.
+- `docs/roadmap.md`: current foundation and future product capabilities.
 
 ### Repository Map
 
-- `src/awesome_agent/paths.py` and `src/awesome_agent/settings.py`: path and
-  configuration resolution, including `AWESOME_HOME`.
-- `src/awesome_agent/domain/`: framework-free domain models, enums, and
-  transition rules.
-- `src/awesome_agent/conversation/`: thread, turn, message, stream, and
-  conversation-run service contracts.
-- `src/awesome_agent/runtime/`: durable graph routes, conversation graph,
-  AgentLoop integration, dispatch, worker execution, context, budgets,
-  validation, tool exposure, and team runtime.
-- `src/awesome_agent/runtime/agent_loop/`: model/tool loop contracts and
-  middleware.
-- `src/awesome_agent/runtime/validation/`: validation plan detection,
-  execution, summaries, and gate models.
-- `src/awesome_agent/surfaces/`: local runtime host/container, local surface
-  client, capability/status services, and user-visible command guidance.
-- `src/awesome_agent/tui/`: Textual chat UI, rendering, chat state,
-  slash-router integration, pickers, and status panel.
-- `src/awesome_agent/client/`: HTTP conversation client adapters.
-- `src/awesome_agent/cli/`: Typer CLI, interactive entrypoint, first-run
-  config, repo context, profile, and slash-command registry.
-- `src/awesome_agent/api/`: FastAPI app and schemas.
-- `src/awesome_agent/attachments/` and `src/awesome_agent/artifacts/`:
-  attachment lifecycle, content storage, artifact metadata, and artifact store.
-- `src/awesome_agent/extensions/`: extension catalog, skill, MCP, community
-  tool, diagnostics, and project extension config adapters.
-- `src/awesome_agent/tools/`: built-in tool specs, registry, executor,
-  approval policy, repository tools, shell, and artifact tool.
-- `src/awesome_agent/memory/`: built-in and external memory models, policy, and
-  service.
+- `src/awesome_agent/agent/`: graph, state, nodes, budgets, and routing.
+- `src/awesome_agent/application/`: facade, lifecycle, commands, interactions,
+  operations, composition, recovery, and event projection.
+- `src/awesome_agent/config/`: configuration models, loading, precedence, and
+  user configuration writes.
+- `src/awesome_agent/context/`: prompt assembly, path references, token
+  estimates, summaries, and compression.
+- `src/awesome_agent/conversation/`: Thread, Turn, transcript, summary, and
+  repository contracts.
+- `src/awesome_agent/core/`: workspace identity, events, tools, policy, and
+  Change Journal.
+- `src/awesome_agent/extensions/`: Skills and MCP stdio adapters.
+- `src/awesome_agent/memory/`: local USER/MEMORY files, Mem0 Cloud,
+  distillation, identity, policy, and memory tools.
 - `src/awesome_agent/modeling/` and `src/awesome_agent/providers/`:
-  provider-neutral model protocol, process model backend, execution service,
-  provider adapters, model catalog, routing, and streaming.
-- `src/awesome_agent/persistence/`: PostgreSQL and local persistence adapters,
-  SQLAlchemy models, runtime repositories, conversations, approvals,
-  attachments, artifacts, threads, tool invocations, and local state stores.
-- `src/awesome_agent/repositories/`: repository policy, Git/worktree helpers,
-  registry, reservations, and managed workspace services.
-- `src/awesome_agent/safety/`: redaction and data-safety helpers.
-- `src/awesome_agent/sandbox/`: local, AIO, process, path-mapping, worktree, and
-  sandbox factory adapters.
-- `src/awesome_agent/observability/`: observability facade, repository, OTel,
-  and setup helpers.
-- `src/awesome_agent/agents/`: agent profile definitions.
-- `migrations/`: Alembic database migrations for PostgreSQL-backed modes.
-- `sandbox/`: sandbox service implementation and related files.
-- `scripts/`: local developer and operations helper scripts.
-- `skills/`: project runtime skill packages discovered as extension inventory.
-- `tests/`: unit, integration, e2e, and structural tests.
-- `.agents/`: repository-level agent support material; it is not product
-  runtime state.
-- `.codex/`: ignored local development-agent plans and handoff state; do not
-  commit it by default.
+  provider-neutral model contracts, gateway, catalog, and DeepSeek/Kimi.
+- `src/awesome_agent/protocol/`: JSON-RPC messages and private stdio Host.
+- `src/awesome_agent/safety/`: redaction helpers.
+- `src/awesome_agent/storage/`: Application SQLite, checkpoints,
+  conversations, trust, Change Journal, pagination, and MCP enablement.
+- `tui/`: Node Ink + React UI, protocol client, state reducers, transcript,
+  commands, composer, and presentation tests.
+- `protocol/fixtures/`: deterministic cross-language protocol examples.
+- `scripts/release/`: release bundle construction.
+- `install.sh` / `install.ps1`: bootstrap installers.
+- `tests/`: unit, integration, E2E, packaging, and structural contracts.
+- `.codex/`: ignored temporary development coordination state.

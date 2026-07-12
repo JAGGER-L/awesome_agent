@@ -1,186 +1,106 @@
-﻿# Awesome Agent
+# Awesome
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 ```text
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃  ███  █   █ █████ █████  ███  █   █ █████        ┃
-┃ █   █ █   █ █     █     █   █ ██ ██ █            ┃
-┃ █████ █ █ █ ████  █████ █   █ █ █ █ ████         ┃
-┃ █   █ ██ ██ █         █ █   █ █   █ █            ┃
-┃ █   █ █   █ █████ █████  ███  █   █ █████        ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+  ███  █   █ █████ █████  ███  █   █ █████
+ █   █ █   █ █     █     █   █ ██ ██ █
+ █████ █ █ █ ████  █████ █   █ █ █ █ ████
+ █   █ ██ ██ █         █ █   █ █   █ █
+ █   █ █   █ █████ █████  ███  █   █ █████
 ```
 
-Awesome Agent is a local-project AI coding agent. It is a lightweight local
-development assistant that runs on your own machine. It can read repository
-context, edit files, run commands, and help with debugging, refactoring, and
-feature work. Unlike traditional code completion tools, Awesome works at the
-task level: you describe a goal, and it reasons across the current repository,
-edits, verifies, and prepares the work for review. The main entry point is the
-local CLI; if you need to connect another client, you can use Local API or
-Docker API mode.
+Awesome is an AI coding assistant that runs in your terminal. It can understand
+your codebase, edit files, run commands, and help with development, debugging,
+refactoring, and testing.
 
+Start `awesome` in a project directory and describe your goal in natural
+language. Awesome reads the relevant code, uses the tools it needs, makes the
+change, and helps verify the result.
 
+## What Awesome Can Do
 
-## Choose A Mode
+- understand a project and explain how its code fits together;
+- implement, debug, refactor, and test code;
+- show controlled file changes with `/diff`, `/undo`, and `/redo`;
+- continue the latest Thread or resume one by ID;
+- extend tasks with Skills, MCP tools, local Memory, and Mem0 Cloud;
+- work with DeepSeek and Kimi models.
 
-| Mode | Use it when | Start command |
-| --- | --- | --- |
-| Local CLI | You want to work inside a local project from the terminal. It uses embedded local runtime mode and does not require an API server. | `cd <your-project>` then `awesome` |
-| Local API | You want a local API endpoint for clients or API docs. Currently Windows only. | `make dev` |
-| Docker API | You want the API to run through Docker. Currently Windows only. | `make docker-start` |
+Awesome starts with `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
+`glob`, `grep`, and `execute`. Extensions can add more tools; the total is not limited to eight.
+Local file Memory and Mem0 Cloud are independent and default off.
 
-Most users should start with **Local CLI**. The API modes are for people who
-want to connect another client to Awesome. To connect the TUI to an existing
-API instead of the embedded runtime, use `awesome --api-url <url>`.
+## Install
 
-Run `awesome` from the project directory. The launch directory becomes the
-default thread context. If it is a Git checkout, runs inherit that repository;
-otherwise Awesome uses workspace-only mode and still accepts user message
-turns. Plain user messages are the only product execution creation path.
-
-## Quick Start
-
-Clone and install Awesome:
-
-Windows PowerShell:
-
-```powershell
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
-```
-
-macOS/Linux:
+### macOS or WSL2 Ubuntu
 
 ```bash
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-make install
+curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-`make install` also installs the user-level `awesome` command with `uv tool`.
-Open a new terminal after it finishes, then verify the command is on PATH:
-
-Windows PowerShell:
+### Windows
 
 ```powershell
-Get-Command awesome
-awesome --help
+irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-macOS/Linux:
+Open a new terminal after installation. Awesome includes the runtimes it needs;
+you do not need to install Python, Node.js, uv, or npm first. Git is optional and
+is never installed by Awesome. Install it from the
+[official Git site](https://git-scm.com/downloads) when you want Git-aware
+workflows.
 
-```bash
-command -v awesome
-awesome --help
-```
+## Start Awesome
 
-If the command is still missing, run `uv tool update-shell`, open a new
-terminal, and check again.
-
-Create Awesome's user directory:
-
-Windows PowerShell:
-
-```powershell
-awesome init
-```
-
-macOS/Linux:
-
-```bash
-awesome init
-```
-
-Set your model key in your operating-system environment or in
-`<AWESOME_HOME>/.env`:
-
-Windows PowerShell:
-
-```powershell
-setx AWESOME_AGENT_DEEPSEEK_API_KEY "your-key"
-```
-
-macOS/Linux:
-
-```bash
-mkdir -p "${AWESOME_HOME:-$HOME/.awesome-agent}"
-printf 'AWESOME_AGENT_DEEPSEEK_API_KEY=your-key\n' >> "${AWESOME_HOME:-$HOME/.awesome-agent}/.env"
-```
-
-Then open a project and start Awesome:
-
-Windows PowerShell:
-
-```powershell
-cd E:\my-project
-awesome
-```
-
-macOS/Linux:
-
-```bash
-cd ~/my-project
-awesome
-```
-
-Send a normal message, for example:
+Start Awesome inside a project:
 
 ```text
-Read this project and explain how it is organized.
+cd <project>
+awesome
 ```
 
-For the full step-by-step guide, see
-[Quickstart](docs/getting-started/quickstart.md) or
-[快速开始](docs/getting-started/quickstart.zh-CN.md).
+The first time Awesome opens a directory, it shows the path and asks whether
+you trust it. Choose Yes only for projects you are comfortable allowing Awesome
+to read and work in.
 
-## Configuration Basics
+If no model Provider is configured, press Enter or run `/model`. Choose
+DeepSeek or Kimi, paste the API key into the masked input, then select a model.
+Use `/auth` later to add, replace, or remove credentials.
 
-Awesome keeps its own user files outside your projects.
+Useful launch options:
 
-| Path | Purpose |
-| --- | --- |
-| `<AWESOME_HOME>/.env` | User-level model keys and local settings. |
-| `<AWESOME_HOME>/skills/` | Personal skills available across projects. |
-| `<AWESOME_HOME>/awesome-agent.yaml` | User-level extension settings, including MCP sources. |
-| `<your-project>/skills/` | Project skills for the current repository. |
-| `<your-project>/awesome-agent.yaml` | Project extension settings. |
+```text
+awesome --continue
+awesome --resume
+awesome --resume <thread_id>
+awesome --version
+awesome --help
+```
 
-On Windows, `AWESOME_HOME` defaults to `%LOCALAPPDATA%\awesome-agent`. On other
-platforms, it defaults to `~/.awesome-agent`. You can override it with the
-`AWESOME_HOME` environment variable.
+## First Task
 
-Provider keys are not read from your project `.env`.
+Try a read-only introduction to the project:
 
-## Common Commands
-
-Run these inside `awesome`:
-
-| Command | Purpose |
-| --- | --- |
-| `/help` | Show available commands. |
-| `/config` | Show the resolved Awesome paths and key status. |
-| `/status` | Show the current conversation status. |
-| `/skills` | List available skills. |
-| `/mcp` | Show configured MCP servers. |
-| `/quit` | Exit the TUI. |
-
-Use `awesome-agent start` only as a fallback/debug supervisor for local API
-development.
+```text
+Analyze this project's structure and tell me where I should start reading.
+```
 
 ## Documentation
 
-- [Documentation map](docs/README.md)
 - [Quickstart](docs/getting-started/quickstart.md)
-- [快速开始](docs/getting-started/quickstart.zh-CN.md)
-- [User guide](docs/user-guide/README.md)
-- [Operations guide](docs/operations/README.md)
+- [Commands](docs/user-guide/commands.md)
+- [Configuration](docs/user-guide/configuration.md)
+- [Workspace and tools](docs/user-guide/workspace-and-tools.md)
+- [Memory, Skills, and MCP](docs/user-guide/memory-skills-mcp.md)
+- [Troubleshooting](docs/user-guide/troubleshooting.md)
 - [Architecture](ARCHITECTURE.md)
-- [Security model](docs/architecture/security-model.md)
+- [Development](docs/development/README.md)
+- [Roadmap](docs/roadmap.md)
 
-## Safety
+## Security
 
-Run Awesome only in projects you trust. Keep API keys out of Git and store them
-in your operating-system environment or `<AWESOME_HOME>/.env`.
+Only trust projects you understand. Review `/diff` before keeping changes, and
+enter credentials only through Awesome's masked `/model` or `/auth` flow.
+Process-environment variables and `<AWESOME_HOME>/.env` remain advanced
+configuration options; never put credentials in project files.
