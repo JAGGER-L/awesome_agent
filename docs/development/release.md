@@ -1,24 +1,24 @@
-# Release 1.1.0
+# Release 1.1.1
 
-Awesome 1.1.0 is published as a manual GitHub Release.
+Awesome 1.1.1 is published as a manual GitHub Release in this order:
 
-1. Confirm the release branch is clean and contains the intended changes.
-2. Run the complete [Release Gate](testing.md#release-gate).
-3. Run `uv run python scripts/release/build_bundle.py` and inspect
-   `dist/release`. Confirm the ZIP contains the hashed production requirements
-   exported from the checked `uv.lock`.
-4. For this pilot, test installation and first run directly on Windows: open a
-   new terminal, check version/help, confirm workspace trust, complete one local
-   workflow, close Awesome, and rerun the installer.
-5. With credentials kept outside the repository, run one small DeepSeek Turn,
-   one small Kimi Turn, and one Mem0 Cloud add/recall/remove check. Record only
-   redacted pass/fail evidence using the explicit live-service command in the
-   [testing guide](testing.md#release-gate).
-6. Confirm the release directory contains only `install.sh`, `install.ps1`,
-   `awesome-1.1.0.zip`, and `SHA256SUMS`, with no credentials, caches, tests,
-   sources, or local paths.
-7. Merge the approved release changes, tag `v1.1.0`, create the GitHub Release,
-   and upload the four assets.
+1. Confirm PR1 through PR3 are merged into the hotfix branch and PR4 is its only
+   remaining pull request.
+2. Run the deterministic Python and TUI [Release Gate](testing.md#release-gate).
+3. Build and inspect exactly four assets: `install.sh`, `install.ps1`,
+   `awesome-1.1.1.zip`, and `SHA256SUMS`.
+4. Run `scripts/release/verify_bundle.py` against `awesome-1.1.1.zip` to prove
+   the bundled database upgrade and TUI version contract.
+5. Run the external DeepSeek, Kimi, and Mem0 Cloud checks only with temporary
+   process credentials. Record only redacted status, duration, and diagnostic
+   codes.
+6. Merge PR4 into the hotfix branch.
+7. Merge the hotfix branch into `main`.
+8. Rebuild from `main`, create the `v1.1.1` tag and GitHub Release, upload the
+   four assets, and verify their remote hashes.
+9. Close every running Awesome process and rerun the original one-line
+   installer to upgrade.
+10. In a new terminal, verify `awesome --version`, workspace startup, and one
+    `hi` Turn.
 
-Users upgrade by closing Awesome and running the same installation command
-again.
+Users upgrade by closing Awesome and rerunning the same installation command.

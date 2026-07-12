@@ -60,8 +60,8 @@
     "commands.json": "bb31de5367b1660304f69eb4257e4735e1f8e46104f61df89ecc0f6dd47cd592",
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
     "events.valid.json": "9ebd3de90accfa08c4c64951c40faa776a4ffe0405d45e45bb8f9b248e1bf2a6",
-    "methods.invalid.json": "5cb2dfb9dbcfea9cacbebe058cfe7850d5a2c346c0e4dedb000bf07a3275ccd0",
-    "methods.valid.json": "97a8ada77471dbcfcffae44f7d9737ddc7b6129ccbcbbe91736d4abceacdb382",
+    "methods.invalid.json": "9c23ee879019f3da90ca87c8e4f5efb39b5a00302d1894e0b85f431d5d221559",
+    "methods.valid.json": "76629a9ce5ebd8a738e57d53e3c9d616aeb442e122f9f50c0aa3d647c010ace7",
     "results.failures.json": "f9f79a3a1cc5f92a65f871877baced63dc4454b635b5e4120031059d39af1f6e"
   },
   "fixture_version": 1,
@@ -78,6 +78,6 @@
     "operation.cancel",
     "shutdown"
   ],
-  "product_version": "1.1.0",
+  "product_version": "1.1.1",
   "protocol_version": 1
 }
