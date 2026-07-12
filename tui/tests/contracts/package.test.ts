@@ -21,8 +21,8 @@ describe("package identity", () => {
       "utf8",
     );
 
-    expect(repositoryVersion).toBe("1.1.0\n");
-    expect(PRODUCT_VERSION).toBe("1.1.0");
+    expect(repositoryVersion).toBe("1.1.1\n");
+    expect(PRODUCT_VERSION).toBe("1.1.1");
     expect(packageJson.version).toBe(PRODUCT_VERSION);
     expect(packageLock.version).toBe(PRODUCT_VERSION);
     expect(packageLock.packages[""]?.version).toBe(PRODUCT_VERSION);
