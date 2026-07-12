@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CoreSpawnError } from "../../src/core/errors.js";
 import { runCli, type CliDependencies } from "../../src/cli/main.js";
+import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
 
@@ -86,6 +87,7 @@ function harness(overrides: Partial<CliDependencies> = {}) {
     nodeVersion: "22.18.0",
     stdinIsTTY: true,
     stdoutIsTTY: true,
+    stdoutColorDepth: 24,
     coreExecutable: "awesome-core",
     writeStdout: (value) => stdout.push(value),
     writeStderr: (value) => stderr.push(value),
@@ -106,7 +108,7 @@ describe("runCli", () => {
   ])("prints only the product version for %s without starting Core", async (flag) => {
     const value = harness({ argv: [flag] });
     await expect(runCli(value.dependencies)).resolves.toBe(0);
-    expect(value.stdout.join("")).toBe("1.1.0\n");
+    expect(value.stdout.join("")).toBe("1.1.1\n");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 
@@ -175,6 +177,26 @@ describe("runCli", () => {
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 
+  it("passes observed stdout color capability to the renderer", async () => {
+    const renderApplication = vi.fn(
+      async () => ({ kind: "quit", exitCode: 0 }) as const,
+    );
+    const value = harness({
+      env: {},
+      stdoutIsTTY: true,
+      stdoutColorDepth: 24,
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stdoutIsTTY: true,
+        stdoutColorDepth: 24,
+      }),
+    );
+  });
+
   it("reports a missing Core safely with exit code 2", async () => {
     const value = harness({
       startSurface: vi.fn(async () => {
@@ -207,5 +229,37 @@ describe("runCli", () => {
     await expect(runCli(value.dependencies)).resolves.toBe(1);
     expect(value.stderr.join("")).toContain("terminal interface failed");
     expect(value.stderr.join("")).not.toContain("private render details");
+  });
+
+  it("renders a startup rejection through the fatal surface", async () => {
+    const renderApplication = vi.fn(
+      async () => ({ kind: "fatal", exitCode: 1 }) as const,
+    );
+    const value = harness({
+      startApplication: vi.fn(async () => {
+        throw new RpcProtocolError(-32603, "Internal error", {
+          diagnostic_code: "core_request_failed",
+        });
+      }),
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+    expect(renderApplication).toHaveBeenCalledOnce();
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: {
+          kind: "fatal",
+          fatal: {
+            kind: "protocol",
+            message: "Internal error",
+            diagnosticCode: "core_request_failed",
+          },
+        },
+      }),
+    );
+    expect(value.stderr.join("")).not.toContain(
+      "The terminal interface failed unexpectedly.",
+    );
   });
 });

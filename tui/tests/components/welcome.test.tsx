@@ -113,7 +113,12 @@ describe("Welcome", () => {
   it("integrates the Welcome into static scrollback above the composer", () => {
     const { width: _width, ...welcome } = { ...baseProps, width: 60 };
     const view = render(
-      <App store={createSurfaceStore()} width={60} welcome={welcome} />,
+      <App
+        store={createSurfaceStore()}
+        reportFatal={() => undefined}
+        width={60}
+        welcome={welcome}
+      />,
     );
     expect(view.frames.join("\n")).toContain(FULL_LOGO_ROWS[0]);
     expect(view.lastFrame()).toContain("Message");

@@ -50,3 +50,28 @@ Cancellation disables input only while its RPC is unresolved. Terminal events
 restore Composer mode. Approval and Auth failures remain visible and
 retryable; a Core exit is fatal, renders a dedicated screen, and disables
 normal input rather than pretending the operation recovered.
+
+## Request and fatal boundaries
+
+Unexpected request exceptions are logged only to bounded Core stderr with the
+RPC method, request identity, exception type, and sanitized source locations;
+params and exception messages are never logged. The wire receives a generic
+internal error with a stable diagnostic code. Ink treats that explicit
+request-scoped diagnostic as retryable transcript feedback and reserves Fatal
+for transport loss, protocol desynchronization, version incompatibility, Core
+exit, or unexpected UI exceptions.
+
+All keyboard-triggered asynchronous actions pass through one rejection guard.
+It restores the owning Composer, Auth, or Approval state before showing safe
+feedback. Initialization failures are represented separately from successful
+startup state and render through the Fatal surface instead of being collapsed
+into a one-line process error.
+
+## Terminal color boundary
+
+Ink components consume semantic roles rather than terminal color names.
+Aurora Mist is the TrueColor brand palette; light mode uses contrast-adjusted
+equivalents. Capability detection uses stdout depth and terminal signals, then
+degrades explicitly through ANSI256, ANSI16, and no-color output. Status roles
+remain separate from brand roles so success, warning, and failure retain their
+operational meaning.

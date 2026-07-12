@@ -62,4 +62,56 @@ describe("Ink scrollback boundaries", () => {
     expect(source).not.toMatch(/duration_ms\s*:\s*0\b/u);
     expect(files.some((file) => /HelpOverlay/iu.test(file.path))).toBe(false);
   });
+
+  it("keeps Aurora brand colors in the semantic theme boundary", async () => {
+    const files = await sourceFiles(
+      fileURLToPath(new URL("../../src", import.meta.url)),
+    );
+    const ownedDirectories = [
+      "components/",
+      "app/",
+      "transcript/",
+      "markdown/",
+    ];
+    const localBrandColor = /#[0-9A-F]{6}|\b(?:greenBright|cyanBright)\b/iu;
+    const offenders = files
+      .filter((file) =>
+        ownedDirectories.some((directory) => file.path.startsWith(directory)),
+      )
+      .filter((file) => localBrandColor.test(file.source))
+      .map((file) => file.path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("routes major terminal surfaces through stable semantic roles", async () => {
+    const files = await sourceFiles(
+      fileURLToPath(new URL("../../src", import.meta.url)),
+    );
+    const source = new Map(files.map((file) => [file.path, file.source]));
+    const expectedRoles = new Map<string, readonly string[]>([
+      [
+        "components/Welcome.tsx",
+        ["theme.primary", "theme.secondary", "theme.muted"],
+      ],
+      [
+        "components/Composer.tsx",
+        ["theme.border", "theme.primary", "theme.secondary"],
+      ],
+      [
+        "components/TrustPrompt.tsx",
+        ["theme.brand", "theme.muted", "theme.danger"],
+      ],
+      ["components/SecretInput.tsx", ["theme.primary", "theme.warning"]],
+      [
+        "components/transcript/blocks/BlockView.tsx",
+        ["theme.user", "theme.assistant", "theme.tool", "theme.muted"],
+      ],
+    ]);
+
+    for (const [path, roles] of expectedRoles) {
+      const component = source.get(path) ?? "";
+      for (const role of roles) expect(component).toContain(role);
+    }
+  });
 });

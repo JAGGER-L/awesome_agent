@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from tests.fixtures.application_schema_v5 import (
+    create_v10_schema_v5,
+    create_v11_schema_v5,
+)
 
 import awesome_agent.storage.database as database
 from awesome_agent.config import BudgetConfig
@@ -113,7 +118,7 @@ def test_application_migrations_create_only_product_state_tables(
             ).fetchall()
         }
 
-    assert version == APPLICATION_SCHEMA_VERSION == 5
+    assert version == APPLICATION_SCHEMA_VERSION == 6
     assert {
         "trusted_workspaces",
         "change_sets",
@@ -168,6 +173,81 @@ def test_migration_three_rolls_back_the_entire_script_on_failure(
 
     assert version == 2
     assert partial is None
+
+
+@pytest.mark.parametrize(
+    ("builder", "expected_identity"),
+    [
+        (create_v10_schema_v5, "client_legacy_entry_user"),
+        (create_v11_schema_v5, "client_existing"),
+    ],
+)
+def test_public_schema_five_variants_upgrade_without_data_loss(
+    tmp_path: Path,
+    builder: Callable[[Path], None],
+    expected_identity: str,
+) -> None:
+    path = tmp_path / "application.db"
+    builder(path)
+
+    initialize_application_database(path)
+    repositories = SQLiteConversationRepositories(path)
+    view = repositories.read_thread("thread_existing")
+
+    assert [entry.client_message_id for entry in view.entries] == [
+        expected_identity,
+        None,
+    ]
+    assert [turn.id for turn in view.turns] == ["turn_existing"]
+    with application_connection(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_schema_six_accepts_new_identity_and_rejects_duplicate(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "application.db"
+    create_v10_schema_v5(path)
+    repositories = SQLiteConversationRepositories(path)
+
+    repositories.entries.append(
+        _entry("entry_new", thread_id="thread_existing", sequence=3)
+    )
+
+    with pytest.raises(ConversationConflict):
+        repositories.entries.append(
+            _entry(
+                "entry_duplicate",
+                thread_id="thread_existing",
+                sequence=4,
+            ).model_copy(update={"client_message_id": "client_entry_new"})
+        )
+
+
+def test_callable_migration_rolls_back_without_advancing_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "application.db"
+    create_v10_schema_v5(path)
+
+    def broken(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "ALTER TABLE thread_entries ADD COLUMN client_message_id TEXT"
+        )
+        raise sqlite3.OperationalError("forced migration failure")
+
+    monkeypatch.setitem(database._MIGRATIONS, 6, broken)
+    with pytest.raises(sqlite3.OperationalError, match="forced migration failure"):
+        initialize_application_database(path)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(thread_entries)")
+        }
+    assert "client_message_id" not in columns
 
 
 def test_repositories_persist_and_reopen_ordered_thread_state(tmp_path: Path) -> None:

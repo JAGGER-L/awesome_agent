@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+import traceback
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
@@ -22,6 +25,8 @@ from awesome_agent.version import PRODUCT_VERSION
 
 JSONRPC_VERSION = "2.0"
 PROTOCOL_VERSION = 1
+
+logger = logging.getLogger(__name__)
 
 type JsonObject = dict[str, Any]
 type MethodHandler = Callable[[Mapping[str, object]], Awaitable[object]]
@@ -126,9 +131,19 @@ class JsonRpcDispatcher:
                 if has_id
                 else None
             )
-        except Exception:
+        except Exception as error:
+            _log_unexpected_request_failure(
+                error,
+                method=method,
+                request_id=request_id,
+            )
             return (
-                jsonrpc_error(-32603, "Internal error", request_id=request_id)
+                jsonrpc_error(
+                    -32603,
+                    "Internal error",
+                    request_id=request_id,
+                    data={"diagnostic_code": "core_request_failed"},
+                )
                 if has_id
                 else None
             )
@@ -226,12 +241,35 @@ def jsonrpc_error(
     message: str,
     *,
     request_id: str | int | None = None,
+    data: JsonObject | None = None,
 ) -> JsonObject:
+    error: JsonObject = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
     return {
         "jsonrpc": JSONRPC_VERSION,
         "id": request_id,
-        "error": {"code": code, "message": message},
+        "error": error,
     }
+
+
+def _log_unexpected_request_failure(
+    error: Exception,
+    *,
+    method: str,
+    request_id: str | int | None,
+) -> None:
+    frames = traceback.extract_tb(error.__traceback__)
+    stack = " > ".join(
+        f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}" for frame in frames
+    )
+    logger.error(
+        "Unhandled JSON-RPC request method=%s request_id=%r exception_type=%s stack=%s",
+        method,
+        request_id,
+        type(error).__name__,
+        stack or "unavailable",
+    )
 
 
 def _request(

@@ -74,12 +74,18 @@ export type CliRenderOutcome =
   | { readonly kind: "trust_denied"; readonly exitCode: 0 }
   | { readonly kind: "fatal"; readonly exitCode: 1 | 2 };
 
+export type StartupRenderState =
+  | { readonly kind: "startup"; readonly startup: StartupResult }
+  | { readonly kind: "fatal"; readonly fatal: FatalState };
+
 export interface CliRenderRequest {
   readonly surface: ConnectedSurface;
   readonly intent: LaunchIntent;
-  readonly startup: StartupResult;
+  readonly state: StartupRenderState;
   readonly cwd: string;
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly stdoutIsTTY: boolean;
+  readonly stdoutColorDepth: number | undefined;
   readonly clipboard: ClipboardAdapter;
 }
 
@@ -90,6 +96,7 @@ export interface CliDependencies {
   readonly nodeVersion: string;
   readonly stdinIsTTY: boolean;
   readonly stdoutIsTTY: boolean;
+  readonly stdoutColorDepth: number | undefined;
   readonly coreExecutable: string;
   readonly writeStdout: (value: string) => void;
   readonly writeStderr: (value: string) => void;
@@ -155,14 +162,31 @@ export async function runCli(
     return 1;
   }
 
+  let state: StartupRenderState;
   try {
-    const startup = await dependencies.startApplication(surface, intent);
+    state = {
+      kind: "startup",
+      startup: await dependencies.startApplication(surface, intent),
+    };
+  } catch (error) {
+    const classified = toFatalState(error, surface.session);
+    state = {
+      kind: "fatal",
+      fatal: classified ?? {
+        kind: "render",
+        message: "The terminal interface failed unexpectedly.",
+      },
+    };
+  }
+  try {
     const outcome = await dependencies.renderApplication({
       surface,
       intent,
-      startup,
+      state,
       cwd,
       env: dependencies.env,
+      stdoutIsTTY: dependencies.stdoutIsTTY,
+      stdoutColorDepth: dependencies.stdoutColorDepth,
       clipboard: createClipboardAdapter(),
     });
     return outcome.exitCode;
@@ -181,6 +205,10 @@ function productionDependencies(): CliDependencies {
     nodeVersion: process.versions.node,
     stdinIsTTY: process.stdin.isTTY === true,
     stdoutIsTTY: process.stdout.isTTY === true,
+    stdoutColorDepth:
+      typeof process.stdout.getColorDepth === "function"
+        ? process.stdout.getColorDepth()
+        : undefined,
     coreExecutable: resolveCoreExecutable(process.env),
     writeStdout: (value) => process.stdout.write(value),
     writeStderr: (value) => process.stderr.write(value),
@@ -220,23 +248,90 @@ async function renderInkApplication(
   });
 }
 
-function CliApplication({
+type CliApplicationProps = CliRenderRequest & {
+  readonly awesomeHome: string;
+  readonly initialTheme: ThemePreference;
+  readonly preferenceWarning?: string;
+  readonly onFinish: (outcome: CliRenderOutcome) => void;
+  readonly unmount: () => void;
+};
+
+function CliApplication(props: CliApplicationProps) {
+  if (props.state.kind === "fatal") {
+    return <StartupFatalApplication {...props} state={props.state} />;
+  }
+  return <RunningCliApplication {...props} state={props.state} />;
+}
+
+function StartupFatalApplication({
+  surface,
+  state,
+  env,
+  stdoutIsTTY,
+  stdoutColorDepth,
+  initialTheme,
+  onFinish,
+}: CliApplicationProps & {
+  readonly state: Extract<StartupRenderState, { kind: "fatal" }>;
+}) {
+  const initial = initialTerminalUiState();
+  const terminal = useTerminalUi({
+    ...initial,
+    mode: { kind: "fatal", selected: 0 },
+  });
+  const theme = resolveTheme(
+    initialTheme,
+    detectColorCapability(env, stdoutIsTTY, stdoutColorDepth),
+  );
+  const quit = useCallback(() => {
+    void surface
+      .close()
+      .catch(() => undefined)
+      .then(() => onFinish({ kind: "fatal", exitCode: 1 }));
+  }, [onFinish, surface]);
+  const handleInput = useCallback(
+    (input: string, key: TerminalKey) => {
+      const routed = routeTerminalKey(terminal.current.current, input, key);
+      if (!routed) return;
+      if (routed.type === "selection.confirm") {
+        quit();
+        return;
+      }
+      if (routed.type === "lifecycle.evaluate") quit();
+    },
+    [quit, terminal.current],
+  );
+  return (
+    <ThemeProvider value={theme}>
+      <TerminalInput onInput={handleInput} />
+      <FatalScreen
+        fatal={state.fatal}
+        selected={
+          terminal.state.mode.kind === "fatal"
+            ? terminal.state.mode.selected
+            : 0
+        }
+        startup
+      />
+    </ThemeProvider>
+  );
+}
+
+function RunningCliApplication({
   surface,
   intent,
-  startup: initialStartup,
+  state: { startup: initialStartup },
   env,
+  stdoutIsTTY,
+  stdoutColorDepth,
   clipboard,
   awesomeHome,
   initialTheme,
   preferenceWarning,
   onFinish,
   unmount,
-}: CliRenderRequest & {
-  readonly awesomeHome: string;
-  readonly initialTheme: ThemePreference;
-  readonly preferenceWarning?: string;
-  readonly onFinish: (outcome: CliRenderOutcome) => void;
-  readonly unmount: () => void;
+}: CliApplicationProps & {
+  readonly state: Extract<StartupRenderState, { kind: "startup" }>;
 }) {
   const [startup, setStartup] = useState(initialStartup);
   const terminal = useTerminalUi(initialStartupUi(initialStartup));
@@ -252,7 +347,7 @@ function CliApplication({
   );
   const theme = resolveTheme(
     themePreference,
-    detectColorCapability(env, process.stdout.isTTY === true),
+    detectColorCapability(env, stdoutIsTTY, stdoutColorDepth),
   );
   const cancellation = useMemo(
     () =>
@@ -470,6 +565,10 @@ function CliApplication({
           <App
             store={surface.store}
             controller={commandController}
+            reportFatal={(error) => {
+              const classified = toFatalState(error, surface.session);
+              if (classified) setFatal(classified);
+            }}
             localCommands={localCommands}
             cancellation={cancellationSnapshot}
             lifecycle={{
