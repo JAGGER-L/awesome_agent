@@ -125,11 +125,7 @@ async def test_search_normalizes_and_enforces_remote_scope_and_limit() -> None:
                     {
                         "AND": [
                             {"metadata": {"scope": "workspace"}},
-                            {
-                                "metadata": {
-                                    "workspace_key": IDENTITY.workspace_key
-                                }
-                            },
+                            {"metadata": {"workspace_key": IDENTITY.workspace_key}},
                         ]
                     },
                 ]
