@@ -12,6 +12,7 @@ from awesome_agent.agent import (
     compile_agent_graph,
     new_agent_state,
 )
+from awesome_agent.context import CODING_AGENT_PRODUCT_INSTRUCTIONS
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
@@ -38,6 +39,14 @@ class Gateway:
         self.requests.append(request)
         for event in self.scripts.pop(0):
             yield event
+
+
+def test_product_instructions_define_minimal_action() -> None:
+    instructions = CODING_AGENT_PRODUCT_INSTRUCTIONS
+    assert instructions.startswith("You are Awesome")
+    assert "smallest set of actions" in instructions
+    assert "explicitly requested verification or testing" in instructions
+    assert "Never invoke a tool as a ritual" in instructions
 
 
 class Compressor:

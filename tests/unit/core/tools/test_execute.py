@@ -67,7 +67,13 @@ def execute_fixture(
     runner: ShellExecutionBackend,
     *,
     origin: ToolExecutionOrigin = ToolExecutionOrigin.AGENT,
-) -> tuple[ToolExecutor, ToolExecutionContext, ChangeJournal, Path]:
+) -> tuple[
+    ToolExecutor,
+    ToolExecutionContext,
+    ChangeJournal,
+    Path,
+    CollectingEventSink,
+]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     identity = resolve_workspace(workspace)
@@ -83,6 +89,7 @@ def execute_fixture(
     )
     registry = ToolRegistry()
     register_modifying_tools(registry, journal, runner)
+    sink = CollectingEventSink()
     context = ToolExecutionContext(
         workspace=identity,
         thread_id="thread_1",
@@ -92,7 +99,7 @@ def execute_fixture(
         emitter=EventEmitter(
             session_id="session_1",
             workspace_key=identity.key,
-            sink=CollectingEventSink(),
+            sink=sink,
         ),
         activity_writer=Mock(),
         monotonic=monotonic,
@@ -105,7 +112,7 @@ def execute_fixture(
             )
         ),
     )
-    return ToolExecutor(registry), context, journal, workspace
+    return ToolExecutor(registry), context, journal, workspace, sink
 
 
 def test_command_policy_denies_host_destructive_commands(tmp_path: Path) -> None:
@@ -116,9 +123,7 @@ def test_command_policy_denies_host_destructive_commands(tmp_path: Path) -> None
         decision = evaluate_command(command, workspace)
         assert decision.action is CommandPolicyAction.DENY
 
-    assert (
-        evaluate_command("pytest", workspace).action is CommandPolicyAction.ALLOW
-    )
+    assert evaluate_command("pytest", workspace).action is CommandPolicyAction.ALLOW
 
 
 @pytest.mark.parametrize(
@@ -162,7 +167,7 @@ async def test_agent_execute_requires_allow_once_for_simple_command(
     tmp_path: Path,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, _ = execute_fixture(tmp_path, runner)
+    executor, context, _, _, sink = execute_fixture(tmp_path, runner)
 
     approvals: list[ToolApprovalRequest] = []
 
@@ -181,6 +186,11 @@ async def test_agent_execute_requires_allow_once_for_simple_command(
     )
 
     assert result.status is ToolStatus.SUCCESS
+    assert result.presentation is not None
+    assert result.presentation.verb == "Run"
+    assert result.presentation.target == "pytest"
+    assert result.presentation.summary == "Exit code 0"
+    assert sink.events[-1].payload.duration_ms is not None  # type: ignore[union-attr]
     assert len(runner.calls) == 1
     assert approvals[0].operation == "run"
     assert approvals[0].target == "pytest"
@@ -191,7 +201,7 @@ async def test_direct_execute_is_already_explicit_user_authority(
     tmp_path: Path,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, _ = execute_fixture(
+    executor, context, _, _, _ = execute_fixture(
         tmp_path,
         runner,
         origin=ToolExecutionOrigin.DIRECT,
@@ -219,7 +229,9 @@ async def test_execute_strips_secrets_redacts_and_records_observation(
     monkeypatch.setenv("OPENAI_API_KEY", "secret-api-key")
     monkeypatch.setenv("SERVICE_TOKEN", "secret-token")
     monkeypatch.setenv("DB_PASSWORD", "secret-password")
-    executor, context, journal, workspace = execute_fixture(tmp_path, ProcessRunner())
+    executor, context, journal, workspace, _ = execute_fixture(
+        tmp_path, ProcessRunner()
+    )
     subdirectory = workspace / "subdirectory"
     subdirectory.mkdir()
     script = (
@@ -262,7 +274,7 @@ async def test_execute_strips_secrets_redacts_and_records_observation(
 @pytest.mark.asyncio
 async def test_execute_hard_denial_never_starts_process(tmp_path: Path) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, _ = execute_fixture(tmp_path, runner)
+    executor, context, _, _, _ = execute_fixture(tmp_path, runner)
 
     result = await executor.execute(
         ToolRequest(
@@ -287,7 +299,7 @@ async def test_execute_outside_path_requires_matching_allow_once_scope(
     tmp_path: Path,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, _workspace = execute_fixture(tmp_path, runner)
+    executor, context, _, _workspace, _ = execute_fixture(tmp_path, runner)
     outside = tmp_path / "outside.txt"
     command = f"echo {outside}"
     request = ToolRequest(

@@ -6,7 +6,11 @@ from typing import cast
 from pydantic import BaseModel, Field, JsonValue
 
 from awesome_agent.core.tools.context import ToolExecutionContext
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolOutput,
+    ToolPresentation,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure
 from awesome_agent.core.tools.policy import resolve_workspace_path
 
@@ -78,4 +82,11 @@ async def list_directory(
             "entries": cast(JsonValue, bounded),
             "truncated": truncated,
         },
+        presentation=ToolPresentation(
+            verb="List",
+            target=safe.relative.as_posix() or ".",
+            outcome="Listed",
+            summary=f"{len(bounded)} entries",
+            detail=content[:4_000] or None,
+        ),
     )

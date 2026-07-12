@@ -33,8 +33,10 @@ const blocks: TranscriptBlock[] = [
       {
         call_id: "call_1",
         name: "execute",
+        verb: "Run",
         outcome: "error",
         summary: "failed safely",
+        detail: "full bounded output",
         duration_ms: 12,
         error_code: "exit_1",
       },
@@ -85,6 +87,45 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).not.toContain("must disappear");
   });
 
+  it("folds tool detail by default and expands it through one prop", () => {
+    const collapsed = render(<Transcript blocks={blocks} width={80} />);
+    expect(collapsed.lastFrame()).not.toContain("full bounded output");
+    const expanded = render(
+      <Transcript blocks={blocks} width={80} toolDetailsExpanded />,
+    );
+    expect(expanded.lastFrame()).toContain("full bounded output");
+  });
+
+  it("renders structured tool facts and measured duration", () => {
+    const frame =
+      render(
+        <Transcript
+          width={80}
+          blocks={[
+            {
+              key: "write",
+              kind: "tools",
+              items: [
+                {
+                  call_id: "call_write",
+                  name: "write_file",
+                  verb: "Write",
+                  target: "circle_area.py",
+                  outcome: "success",
+                  presentation_outcome: "Created",
+                  summary: "21 lines",
+                  duration_ms: 18,
+                },
+              ],
+            },
+          ]}
+        />,
+      ).lastFrame() ?? "";
+
+    expect(frame).toContain("● Write circle_area.py");
+    expect(frame).toContain("└ Created · 21 lines · 18ms");
+  });
+
   it("keeps incomplete streaming Markdown readable without completed parsing", () => {
     const live: LiveTranscriptProjection = {
       reasoning_text: "",
@@ -115,11 +156,15 @@ describe("scrollback transcript components", () => {
           id: "turn_1",
           status: "active",
           started_at: "2026-07-12T00:00:00Z",
-          assistant_text: "streaming answer",
           reasoning_text: "",
-          reasoning_seen: false,
-          tools: {},
-          tool_order: [],
+          thinking_sequence: 0,
+          timeline: [
+            {
+              kind: "assistant",
+              id: "assistant:turn_1",
+              text: "streaming answer",
+            },
+          ],
         },
       },
     });

@@ -11,6 +11,7 @@ from awesome_agent.core.events import (
     EventLifecycleError,
     EventType,
     OperationLifecyclePayload,
+    ToolResultPayload,
     ToolStartedPayload,
     TurnLifecyclePayload,
 )
@@ -26,7 +27,12 @@ async def test_emitter_assigns_complete_identity_and_monotonic_sequence() -> Non
     )
 
     first = await emitter.emit(
-        ToolStartedPayload(call_id="call_1", tool_name="ls"),
+        ToolStartedPayload(
+            call_id="call_1",
+            tool_name="ls",
+            verb="List",
+            target=".",
+        ),
         thread_id="thread_1",
         turn_id="turn_1",
         operation_id="operation_1",
@@ -89,13 +95,13 @@ async def test_lifecycle_events_require_identity_and_one_terminal() -> None:
         turn_id="turn_1",
     )
     await emitter.emit(
-        TurnLifecyclePayload(kind=EventType.TURN_CANCELLED),
+        TurnLifecyclePayload(kind=EventType.TURN_CANCELLED, duration_ms=1),
         thread_id="thread_1",
         turn_id="turn_1",
     )
     with pytest.raises(EventLifecycleError, match="terminal"):
         await emitter.emit(
-            TurnLifecyclePayload(kind=EventType.TURN_COMPLETED),
+            TurnLifecyclePayload(kind=EventType.TURN_COMPLETED, duration_ms=2),
             thread_id="thread_1",
             turn_id="turn_1",
         )
@@ -110,3 +116,20 @@ def test_payloads_reject_unbounded_or_unknown_metadata() -> None:
             tool_name="ls",
             traceback="secret",  # type: ignore[call-arg]
         )
+
+
+def test_tool_terminal_presentation_requires_measured_facts() -> None:
+    payload = ToolResultPayload(
+        kind=EventType.TOOL_COMPLETED,
+        call_id="call_1",
+        tool_name="write_file",
+        verb="Write",
+        target="circle_area.py",
+        outcome="Created",
+        summary="21 lines",
+        detail=None,
+        duration_ms=18,
+    )
+
+    assert payload.duration_ms == 18
+    assert payload.outcome == "Created"

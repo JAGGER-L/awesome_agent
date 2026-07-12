@@ -135,9 +135,7 @@ async def test_executor_asks_before_write_and_executes_handler_only_once(
         permission_session=PermissionSession(),
         approval_resolver=approve,
     )
-    executor = ToolExecutor(
-        echo_registry(write_handler, capability="workspace.write")
-    )
+    executor = ToolExecutor(echo_registry(write_handler, capability="workspace.write"))
 
     result = await executor.execute(
         ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "ok"}),
@@ -167,9 +165,7 @@ async def test_denied_write_never_executes_handler(tmp_path: Path) -> None:
 
     context, _, _ = execution_context(tmp_path)
     context = replace(context, approval_resolver=deny)
-    executor = ToolExecutor(
-        echo_registry(write_handler, capability="workspace.write")
-    )
+    executor = ToolExecutor(echo_registry(write_handler, capability="workspace.write"))
 
     result = await executor.execute(
         ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "ok"}),
@@ -329,7 +325,13 @@ async def test_executor_emits_success_events(tmp_path: Path) -> None:
     assert activity.duration_ms == 125
     assert activity.change_set_id is None
     assert activity.input_summary == "arguments: text"
-    assert activity.result_summary == "Tool execution completed."
+    assert activity.result_summary == "Completed"
+    started, completed = sink.events
+    assert started.payload.verb == "Echo"  # type: ignore[union-attr]
+    assert started.payload.target is None  # type: ignore[union-attr]
+    assert completed.payload.outcome == "Completed"  # type: ignore[union-attr]
+    assert completed.payload.summary == "Completed"  # type: ignore[union-attr]
+    assert completed.payload.duration_ms == 125  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio

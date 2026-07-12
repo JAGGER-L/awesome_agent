@@ -19,6 +19,7 @@ const live: LiveTranscriptProjection = {
         {
           call_id: "call_1",
           name: "read_file",
+          verb: "Read",
           outcome: "success",
           summary: "live",
           duration_ms: 0,

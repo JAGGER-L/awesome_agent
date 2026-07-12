@@ -76,6 +76,7 @@
       "event_id": "event_006",
       "event_type": "turn.completed",
       "payload": {
+        "duration_ms": 1250,
         "kind": "turn.completed"
       },
       "sequence": 6,
@@ -91,6 +92,7 @@
       "event_id": "event_007",
       "event_type": "turn.failed",
       "payload": {
+        "duration_ms": 1250,
         "kind": "turn.failed"
       },
       "sequence": 7,
@@ -106,6 +108,7 @@
       "event_id": "event_008",
       "event_type": "turn.cancelled",
       "payload": {
+        "duration_ms": 1250,
         "kind": "turn.cancelled"
       },
       "sequence": 8,
@@ -164,7 +167,9 @@
       "payload": {
         "call_id": "call_1",
         "kind": "tool.started",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 12,
       "session_id": "session_11111111111111111111111111111111",
@@ -177,9 +182,14 @@
       "event_type": "tool.completed",
       "payload": {
         "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
         "kind": "tool.completed",
+        "outcome": "Read",
         "summary": "Safe tool summary.",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 13,
       "session_id": "session_11111111111111111111111111111111",
@@ -192,9 +202,14 @@
       "event_type": "tool.failed",
       "payload": {
         "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
         "kind": "tool.failed",
+        "outcome": "Failed",
         "summary": "Safe tool summary.",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 14,
       "session_id": "session_11111111111111111111111111111111",
@@ -207,9 +222,14 @@
       "event_type": "tool.cancelled",
       "payload": {
         "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
         "kind": "tool.cancelled",
+        "outcome": "Failed",
         "summary": "Safe tool summary.",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 15,
       "session_id": "session_11111111111111111111111111111111",

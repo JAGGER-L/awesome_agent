@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from time import monotonic
 from typing import Literal
 
 from awesome_agent.core.events import (
@@ -45,18 +47,22 @@ class ApplicationEventProjector:
         turn_id: str,
         operation_id: str,
         client_message_id: str,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._emitter = emitter
         self._thread_id = thread_id
         self._turn_id = turn_id
         self._operation_id = operation_id
         self._client_message_id = client_message_id
+        self._clock = clock
+        self._started_at: float | None = None
         self._started = False
         self._terminal = False
 
     async def turn_started(self) -> None:
         if self._started:
             raise RuntimeError("Turn lifecycle was already started.")
+        self._started_at = self._clock()
         await self._emit(TurnLifecyclePayload(kind=EventType.TURN_STARTED))
         self._started = True
 
@@ -78,7 +84,15 @@ class ApplicationEventProjector:
             raise RuntimeError("Turn terminal requires a started Turn.")
         if self._terminal:
             raise RuntimeError("Turn already has a terminal event.")
-        await self._emit(TurnLifecyclePayload(kind=event_type, reason=reason))
+        assert self._started_at is not None
+        duration_ms = max(0, round((self._clock() - self._started_at) * 1_000))
+        await self._emit(
+            TurnLifecyclePayload(
+                kind=event_type,
+                reason=reason,
+                duration_ms=duration_ms,
+            )
+        )
         self._terminal = True
 
     async def project_gateway(self, event: GatewayEvent) -> None:
@@ -115,13 +129,21 @@ class ApplicationEventProjector:
             )
 
     async def project_tool(self, result: ToolResult) -> None:
+        presentation = result.presentation
+        if presentation is None or presentation.duration_ms is None:
+            raise RuntimeError("ToolResult is missing measured presentation facts.")
         if result.status is ToolStatus.SUCCESS:
             await self._emit(
                 ToolResultPayload(
                     kind=EventType.TOOL_COMPLETED,
                     call_id=result.call_id,
                     tool_name=result.tool_name,
-                    summary="Tool execution completed.",
+                    verb=presentation.verb,
+                    target=presentation.target,
+                    outcome=presentation.outcome or "Completed",
+                    summary=presentation.summary,
+                    detail=presentation.detail,
+                    duration_ms=presentation.duration_ms,
                 )
             )
             return
@@ -131,7 +153,12 @@ class ApplicationEventProjector:
                 kind=EventType.TOOL_FAILED,
                 call_id=result.call_id,
                 tool_name=result.tool_name,
-                summary=result.error.message,
+                verb=presentation.verb,
+                target=presentation.target,
+                outcome=presentation.outcome or "Failed",
+                summary=presentation.summary,
+                detail=presentation.detail,
+                duration_ms=presentation.duration_ms,
                 error_code=result.error.code.value,
             )
         )

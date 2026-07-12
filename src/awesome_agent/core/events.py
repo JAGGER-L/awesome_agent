@@ -58,6 +58,15 @@ class TurnLifecyclePayload(BaseModel):
         EventType.TURN_CANCELLED,
     ]
     reason: str | None = Field(default=None, max_length=200)
+    duration_ms: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_duration(self) -> TurnLifecyclePayload:
+        if self.kind is EventType.TURN_STARTED and self.duration_ms is not None:
+            raise ValueError("turn.started cannot include duration_ms")
+        if self.kind is not EventType.TURN_STARTED and self.duration_ms is None:
+            raise ValueError("Turn terminal requires duration_ms")
+        return self
 
 
 class AssistantTextDeltaPayload(BaseModel):
@@ -92,6 +101,8 @@ class ToolStartedPayload(BaseModel):
     kind: Literal[EventType.TOOL_STARTED] = EventType.TOOL_STARTED
     call_id: str = Field(min_length=1, max_length=128)
     tool_name: str = Field(min_length=1, max_length=200)
+    verb: str = Field(min_length=1, max_length=64)
+    target: str | None = Field(default=None, max_length=2_000)
 
 
 class ToolResultPayload(BaseModel):
@@ -104,7 +115,12 @@ class ToolResultPayload(BaseModel):
     ]
     call_id: str = Field(min_length=1, max_length=128)
     tool_name: str = Field(min_length=1, max_length=200)
+    verb: str = Field(min_length=1, max_length=64)
+    target: str | None = Field(default=None, max_length=2_000)
+    outcome: str = Field(min_length=1, max_length=128)
     summary: str = Field(default="", max_length=2_000)
+    detail: str | None = Field(default=None, max_length=4_000)
+    duration_ms: int = Field(ge=0)
     error_code: str | None = Field(default=None, max_length=128)
 
 

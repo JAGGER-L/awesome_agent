@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field, JsonValue
 
 from awesome_agent.core.tools.builtins.read_file import MAX_FILE_BYTES
 from awesome_agent.core.tools.context import ToolExecutionContext
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolOutput,
+    ToolPresentation,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure
 from awesome_agent.core.tools.policy import SafeWorkspacePath, resolve_workspace_path
 
@@ -130,9 +134,17 @@ async def glob_files(
                 break
     truncated = len(matches) > options.max_results
     bounded = matches[: options.max_results]
+    content = "\n".join(bounded)
     return ToolOutput(
-        content="\n".join(bounded),
+        content=content,
         metadata={"matches": cast(JsonValue, bounded), "truncated": truncated},
+        presentation=ToolPresentation(
+            verb="Glob",
+            target=options.pattern,
+            outcome="Found",
+            summary=f"{len(bounded)} matches",
+            detail=content[:4_000] or None,
+        ),
     )
 
 
@@ -189,4 +201,11 @@ async def grep_files(
     return ToolOutput(
         content=content,
         metadata={"matches": cast(JsonValue, bounded), "truncated": truncated},
+        presentation=ToolPresentation(
+            verb="Grep",
+            target=options.pattern,
+            outcome="Found",
+            summary=f"{len(bounded)} matches",
+            detail=content[:4_000] or None,
+        ),
     )

@@ -18,6 +18,7 @@ from awesome_agent.core.tools.context import (
 from awesome_agent.core.tools.contracts import (
     ToolErrorCode,
     ToolOutput,
+    ToolPresentation,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
 from awesome_agent.core.tools.policy import resolve_workspace_path
@@ -117,6 +118,16 @@ def create_execute_handler(
         content = stdout.text
         if stderr.text:
             content = f"{content}\n[stderr]\n{stderr.text}" if content else stderr.text
-        return ToolOutput(content=content, metadata=metadata)
+        return ToolOutput(
+            content=content,
+            metadata=metadata,
+            presentation=ToolPresentation(
+                verb="Run",
+                target=options.command,
+                outcome="Completed" if result.exit_code == 0 else "Failed",
+                summary=f"Exit code {result.exit_code}",
+                detail=content[:4_000] or None,
+            ),
+        )
 
     return execute

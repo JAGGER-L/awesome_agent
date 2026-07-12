@@ -16,23 +16,45 @@ export interface SurfaceWarning {
 }
 
 export interface ToolProjection {
+  readonly kind: "tool";
   readonly call_id: string;
   readonly tool_name: string;
   readonly status: "running" | "completed" | "failed" | "cancelled";
+  readonly verb: string;
+  readonly target?: string;
+  readonly outcome?: string;
   readonly summary: string;
+  readonly detail?: string;
+  readonly duration_ms?: number;
   readonly error_code?: string;
 }
+
+export interface ThinkingProjection {
+  readonly kind: "thinking";
+  readonly id: string;
+  readonly started_at: string;
+  readonly duration_ms?: number;
+}
+
+export interface AssistantProjection {
+  readonly kind: "assistant";
+  readonly id: string;
+  readonly text: string;
+}
+
+export type TimelineProjection =
+  | ThinkingProjection
+  | ToolProjection
+  | AssistantProjection;
 
 export interface TurnProjection {
   readonly id: string;
   readonly status: "active" | "completed" | "failed" | "cancelled";
   readonly started_at: string;
-  readonly assistant_text: string;
   readonly reasoning_text: string;
-  readonly reasoning_seen: boolean;
-  readonly reasoning_marker?: string;
-  readonly tools: Readonly<Record<string, ToolProjection>>;
-  readonly tool_order: readonly string[];
+  readonly timeline: readonly TimelineProjection[];
+  readonly thinking_sequence: number;
+  readonly duration_ms?: number;
 }
 
 export interface OperationProjection {

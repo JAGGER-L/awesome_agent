@@ -32,6 +32,7 @@ export type TerminalIntent =
   | { readonly type: "secret.submit" }
   | { readonly type: "composer.edit"; readonly action: ComposerAction }
   | { readonly type: "composer.submit" }
+  | { readonly type: "tool_details.toggle" }
   | { readonly type: "lifecycle.evaluate"; readonly input: string };
 
 export function emptyTerminalKey(): TerminalKey {
@@ -131,6 +132,7 @@ export function routeTerminalKey(
 
   if (intent) return intent;
   const control = key.ctrl ? input.toLowerCase() : "";
+  if (control === "o") return { type: "tool_details.toggle" };
   return control === "c" || control === "d"
     ? { type: "lifecycle.evaluate", input }
     : undefined;

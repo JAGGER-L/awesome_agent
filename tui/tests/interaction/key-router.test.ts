@@ -113,6 +113,15 @@ describe("routeTerminalKey", () => {
     ).toEqual({ type: "lifecycle.evaluate", input: "c" });
   });
 
+  it("routes Ctrl+O to the root tool-detail toggle", () => {
+    expect(
+      routeTerminalKey(initialTerminalUiState(), "o", {
+        ...emptyTerminalKey(),
+        ctrl: true,
+      }),
+    ).toEqual({ type: "tool_details.toggle" });
+  });
+
   it("moves picker selection and respects blocking Escape", () => {
     const picker = stateWithMode({
       kind: "picker",

@@ -373,7 +373,10 @@ def _payload(event_type: EventType) -> EventPayload:
     if event_type.value.startswith("operation."):
         return OperationLifecyclePayload(kind=cast(Any, event_type))
     if event_type.value.startswith("turn."):
-        return TurnLifecyclePayload(kind=cast(Any, event_type))
+        return TurnLifecyclePayload(
+            kind=cast(Any, event_type),
+            duration_ms=(None if event_type is EventType.TURN_STARTED else 1_250),
+        )
     if event_type is EventType.ASSISTANT_TEXT_DELTA:
         return AssistantTextDeltaPayload(text="answer")
     if event_type is EventType.ASSISTANT_REASONING_DELTA:
@@ -386,7 +389,12 @@ def _payload(event_type: EventType) -> EventPayload:
             error_code="provider_unavailable",
         )
     if event_type is EventType.TOOL_STARTED:
-        return ToolStartedPayload(call_id="call_1", tool_name="read_file")
+        return ToolStartedPayload(
+            call_id="call_1",
+            tool_name="read_file",
+            verb="Read",
+            target="src/example.py",
+        )
     if event_type in {
         EventType.TOOL_COMPLETED,
         EventType.TOOL_FAILED,
@@ -396,7 +404,12 @@ def _payload(event_type: EventType) -> EventPayload:
             kind=cast(Any, event_type),
             call_id="call_1",
             tool_name="read_file",
+            verb="Read",
+            target="src/example.py",
+            outcome=("Read" if event_type is EventType.TOOL_COMPLETED else "Failed"),
             summary="Safe tool summary.",
+            detail="Safe bounded detail.",
+            duration_ms=18,
         )
     if event_type in {EventType.CONTEXT_PREPARED, EventType.CONTEXT_COMPRESSED}:
         return ContextPayload(

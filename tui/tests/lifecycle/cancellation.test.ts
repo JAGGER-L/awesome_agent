@@ -29,11 +29,9 @@ function state(operation: "turn" | "direct" | "none" = "turn"): SurfaceState {
                     id: "turn_1",
                     status: "active" as const,
                     started_at: "2026-07-11T00:00:00Z",
-                    assistant_text: "",
                     reasoning_text: "",
-                    reasoning_seen: false,
-                    tools: {},
-                    tool_order: [],
+                    timeline: [],
+                    thinking_sequence: 0,
                   },
                 }
               : {}),

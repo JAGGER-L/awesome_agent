@@ -1,4 +1,5 @@
 from awesome_agent.context.builder import (
+    CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
     ContextOverflow,
     Mem0ContextResult,
@@ -39,6 +40,7 @@ from awesome_agent.context.tokens import (
 )
 
 __all__ = [
+    "CODING_AGENT_PRODUCT_INSTRUCTIONS",
     "COMPRESSION_THRESHOLD_FRACTION",
     "OUTPUT_RESERVE_TOKENS",
     "SAFETY_RESERVE_FRACTION",
