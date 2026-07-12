@@ -21,7 +21,7 @@ export function MarkdownBlock({
           key={entry.key}
           node={entry.value}
           width={width}
-          accent={theme.accent}
+          accent={theme.primary}
           muted={theme.muted}
         />
       ))}

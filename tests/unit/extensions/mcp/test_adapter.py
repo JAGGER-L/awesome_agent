@@ -5,8 +5,12 @@ from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
+    PermissionMode,
+    PermissionSession,
     ToolActivityDraft,
     ToolActivityWriter,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
     ToolErrorCode,
     ToolExecutionContext,
     ToolExecutionOrigin,
@@ -45,6 +49,10 @@ class FakeManager:
         return self.result
 
 
+async def approve(_: ToolApprovalRequest) -> ToolApprovalDecision:
+    return ToolApprovalDecision.ALLOW_ONCE
+
+
 def context(tmp_path: Path) -> ToolExecutionContext:
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
@@ -63,6 +71,8 @@ def context(tmp_path: Path) -> ToolExecutionContext:
         ),
         activity_writer=ActivityWriter(),
         monotonic=lambda: next(ticks),
+        permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
+        approval_resolver=approve,
     )
 
 

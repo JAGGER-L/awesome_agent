@@ -484,7 +484,6 @@ function CliApplication({
             providerSetupRequired={startup.readiness === "diagnostics_ready"}
             welcome={{
               workspacePath: startup.application.workspace.display_path,
-              branch: startup.application.workspace.branch,
               thread:
                 intent.kind === "new"
                   ? { kind: "new" }
@@ -504,6 +503,7 @@ function CliApplication({
                 startup.application.memory_status,
                 "mem0",
               ),
+              permissionMode: startup.application.permission_mode,
               theme,
             }}
           />

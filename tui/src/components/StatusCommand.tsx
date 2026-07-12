@@ -46,7 +46,7 @@ export function StatusCommand({
   ] as const;
   return (
     <Box flexDirection="column">
-      <Text color={theme.accent}>Status</Text>
+      <Text color={theme.primary}>Status</Text>
       <Text> </Text>
       {rows.map(([label, value]) => (
         <Text key={label}>

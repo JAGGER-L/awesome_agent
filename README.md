@@ -24,6 +24,7 @@ change, and helps verify the result.
 - implement, debug, refactor, and test code;
 - show controlled file changes with `/diff`, `/undo`, and `/redo`;
 - continue the latest Thread or resume one by ID;
+- choose between per-operation approval and Thread-scoped Full access;
 - extend tasks with Skills, MCP tools, local Memory, and Mem0 Cloud;
 - work with DeepSeek and Kimi models.
 
@@ -62,7 +63,8 @@ awesome
 
 The first time Awesome opens a directory, it shows the path and asks whether
 you trust it. Choose Yes only for projects you are comfortable allowing Awesome
-to read and work in.
+to read and work in. Awesome starts in Request approval mode; use
+`/permissions` to review or change the active Thread's mode.
 
 If no model Provider is configured, press Enter or run `/model`. Choose
 DeepSeek or Kimi, paste the API key into the masked input, then select a model.
@@ -101,6 +103,7 @@ Analyze this project's structure and tell me where I should start reading.
 ## Security
 
 Only trust projects you understand. Review `/diff` before keeping changes, and
-enter credentials only through Awesome's masked `/model` or `/auth` flow.
+enter credentials only through Awesome's masked `/model` or `/auth` flow. Full
+access is Thread-scoped and does not disable hard safety denials.
 Process-environment variables and `<AWESOME_HOME>/.env` remain advanced
 configuration options; never put credentials in project files.

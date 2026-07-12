@@ -19,7 +19,7 @@ export function CommandMenu({
         const selected = command.name === selectedCommand;
         return (
           <Text key={command.name}>
-            <Text color={selected ? theme.accent : theme.muted}>
+            <Text color={selected ? theme.primary : theme.muted}>
               {selected ? "› " : "  "}
               {command.usage}
             </Text>

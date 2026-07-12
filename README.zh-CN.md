@@ -22,6 +22,7 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 实现功能、调试问题、重构代码和运行测试；
 - 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
 - 继续最近的 Thread，或通过 ID 恢复指定 Thread；
+- 在逐项审批和 Thread 范围的 Full access 之间切换；
 - 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
 - 使用 DeepSeek 和 Kimi 模型。
 
@@ -57,7 +58,8 @@ awesome
 ```
 
 首次进入一个目录时，Awesome 会显示完整路径并询问是否信任。只有在你了解该项目、
-并愿意让 Awesome 读取和操作其中内容时才选择 Yes。
+并愿意让 Awesome 读取和操作其中内容时才选择 Yes。Awesome 默认使用 Request
+approval 模式；可通过 `/permissions` 查看或切换当前 Thread 的权限模式。
 
 尚未配置模型 Provider 时，按 Enter 或运行 `/model`。选择 DeepSeek 或 Kimi，
 在遮罩输入框中粘贴 API Key，再选择模型。之后可使用 `/auth` 添加、替换或删除凭据。
@@ -95,5 +97,6 @@ awesome --help
 ## 安全
 
 只信任你了解的项目，保留修改前先检查 `/diff`。只通过 Awesome 的
-`/model` 或 `/auth` 遮罩输入流程输入凭据。进程环境变量和 `<AWESOME_HOME>/.env`
+`/model` 或 `/auth` 遮罩输入流程输入凭据。Full access 仅对当前 Thread 有效，
+且不会绕过硬性安全拒绝。进程环境变量和 `<AWESOME_HOME>/.env`
 仍是高级配置方式；不要把凭据写入项目文件。

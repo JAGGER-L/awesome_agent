@@ -59,6 +59,7 @@ from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
+    ToolPresentation,
     ToolRequest,
     ToolResult,
     ToolStatus,
@@ -1121,19 +1122,39 @@ class LocalApplication:
         code: ToolErrorCode,
         message: str,
     ) -> ToolResult:
+        assert self._registry is not None
+        registered = self._registry.resolve(request.tool_name)
+        configured_verb = (
+            registered.spec.display_metadata.get("verb") if registered else None
+        )
+        verb = (
+            configured_verb
+            if isinstance(configured_verb, str) and configured_verb
+            else request.tool_name
+        )
+        presentation = ToolPresentation(
+            verb=verb,
+            outcome="Failed",
+            summary=message,
+            duration_ms=0,
+        )
         result = ToolResult(
             call_id=request.call_id,
             tool_name=request.tool_name,
             status=ToolStatus.ERROR,
             content=message,
             error=ToolError(code=code, message=message),
+            presentation=presentation,
         )
         await self._emitter.emit(
             ToolResultPayload(
                 kind=EventType.TOOL_FAILED,
                 call_id=request.call_id,
                 tool_name=request.tool_name,
+                verb=presentation.verb,
+                outcome=presentation.outcome or "Failed",
                 summary=message,
+                duration_ms=0,
                 error_code=code.value,
             ),
             turn_id=turn_id,

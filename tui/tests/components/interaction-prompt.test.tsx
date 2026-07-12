@@ -98,4 +98,54 @@ describe("InteractionPrompt", () => {
     expect(view.lastFrame()).toContain("Do you want to run pytest?");
     expect(view.lastFrame()).not.toContain("Message");
   });
+
+  it("shows an RPC failure, permits retry, and restores Composer after resolution", async () => {
+    const store = createSurfaceStore({
+      connection: "ready",
+      thread_generation: 0,
+      event_sequence: 1,
+      warnings: [],
+      pending_interaction: interaction,
+    });
+    let attempts = 0;
+    const respond = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Approval request failed.");
+    });
+    const view = render(
+      <App store={store} interactionResponder={{ respond }} width={60} />,
+    );
+
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Approval request failed."),
+    );
+    view.stdin.write("\r");
+    await eventually(() => expect(respond).toHaveBeenCalledTimes(2));
+
+    store.dispatch({
+      type: "event.received",
+      generation: 0,
+      event: {
+        version: 1,
+        event_id: "event_2",
+        sequence: 2,
+        session_id: "session_1",
+        workspace_key: "workspace_1",
+        thread_id: "thread_1",
+        turn_id: undefined,
+        operation_id: "operation_1",
+        client_message_id: undefined,
+        event_type: "interaction.resolved",
+        timestamp: "2026-07-12T00:00:01Z",
+        payload: {
+          kind: "interaction.resolved",
+          interaction_id: "interaction_1",
+          decision: "allow_once",
+        },
+      },
+    });
+    await eventually(() => expect(view.lastFrame()).toContain("Message"));
+    expect(view.lastFrame()).not.toContain("Do you want to run pytest?");
+  });
 });
