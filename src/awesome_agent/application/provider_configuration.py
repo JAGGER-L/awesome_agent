@@ -21,6 +21,8 @@ from awesome_agent.application.contracts import (
 from awesome_agent.config import (
     SUPPORTED_MODEL_IDS,
     CredentialSource,
+    CredentialValidation,
+    CredentialValidationStatus,
     KimiRegion,
     LoadedConfigSources,
     ProviderCredentialStatus,
@@ -30,10 +32,6 @@ from awesome_agent.config import (
     provider_environment_variable,
 )
 from awesome_agent.conversation import ConversationService, ThreadNotFound
-from awesome_agent.providers import (
-    CredentialValidation,
-    CredentialValidationStatus,
-)
 
 _PROVIDER_LABELS: dict[ProviderName, str] = {
     "deepseek": "DeepSeek",

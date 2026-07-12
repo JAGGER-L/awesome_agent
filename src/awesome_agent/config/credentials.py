@@ -22,6 +22,19 @@ _LOCKS_GUARD = threading.Lock()
 _LOCKS: dict[Path, threading.RLock] = {}
 
 
+class CredentialValidationStatus(StrEnum):
+    VALID = "valid"
+    INVALID = "invalid"
+    UNVERIFIED = "unverified"
+
+
+class CredentialValidation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: CredentialValidationStatus
+    code: str
+
+
 class CredentialSource(StrEnum):
     MISSING = "missing"
     USER_ENV_FILE = "user_env_file"

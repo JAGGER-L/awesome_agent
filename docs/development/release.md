@@ -11,7 +11,8 @@ Awesome 1.0.0 is published as a manual GitHub Release.
    workflow, close Awesome, and rerun the installer.
 5. With credentials kept outside the repository, run one small DeepSeek Turn,
    one small Kimi Turn, and one Mem0 Cloud add/recall/remove check. Record only
-   redacted pass/fail evidence.
+   redacted pass/fail evidence using the explicit live-service command in the
+   [testing guide](testing.md#release-gate).
 6. Confirm the release directory contains only `install.sh`, `install.ps1`,
    `awesome-1.0.0.zip`, and `SHA256SUMS`, with no credentials, caches, tests,
    sources, or local paths.

@@ -86,6 +86,35 @@ def _tui_dist_files(root: Path) -> tuple[Path, ...]:
     return files
 
 
+def _installer_assets(root: Path, version: str) -> dict[str, bytes]:
+    expected = {
+        "install.sh": re.compile(
+            rf'^VERSION="{re.escape(version)}"\r?$',
+            re.MULTILINE,
+        ),
+        "install.ps1": re.compile(
+            rf'^\$Version = "{re.escape(version)}"\r?$',
+            re.MULTILINE,
+        ),
+    }
+    assets: dict[str, bytes] = {}
+    for name, pattern in expected.items():
+        path = root / name
+        try:
+            content = path.read_bytes()
+            rendered = content.decode("utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise BundleError(
+                f"release installer is missing or invalid: {name}"
+            ) from error
+        if pattern.search(rendered) is None:
+            raise BundleError(
+                f"release installer version does not match VERSION: {name}"
+            )
+        assets[name] = content
+    return assets
+
+
 def _write_member(archive: ZipFile, name: str, content: bytes) -> None:
     info = ZipInfo(name, date_time=_ZIP_TIME)
     info.compress_type = ZIP_DEFLATED
@@ -96,6 +125,7 @@ def _write_member(archive: ZipFile, name: str, content: bytes) -> None:
 
 def assemble_bundle(root: Path, version: str) -> BundleResult:
     validate_version_files(root, version)
+    installers = _installer_assets(root, version)
     wheel = root / "dist" / f"awesome_agent-{version}-py3-none-any.whl"
     _validate_wheel(wheel, version)
     tui_dist = _tui_dist_files(root)
@@ -108,6 +138,8 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
     if release.exists():
         shutil.rmtree(release)
     release.mkdir(parents=True)
+    for name, content in installers.items():
+        (release / name).write_bytes(content)
     archive_path = release / f"awesome-{version}.zip"
     prefix = f"awesome-{version}"
     members: dict[str, bytes] = {

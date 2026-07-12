@@ -16,12 +16,18 @@ MODELING_MODULES = {
 }
 PROVIDER_MODULES = {
     "__init__.py",
+    "credential_validation.py",
     "deepseek.py",
     "errors.py",
     "factory.py",
     "kimi.py",
 }
-SDK_PROVIDER_FILES = {"deepseek.py", "errors.py", "kimi.py"}
+SDK_PROVIDER_FILES = {
+    "credential_validation.py",
+    "deepseek.py",
+    "errors.py",
+    "kimi.py",
+}
 
 
 def _imports(path: Path) -> set[str]:

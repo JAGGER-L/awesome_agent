@@ -18,6 +18,8 @@ from awesome_agent.application.provider_configuration import (
 )
 from awesome_agent.config import (
     CredentialSource,
+    CredentialValidation,
+    CredentialValidationStatus,
     LoadedConfigSources,
     UserConfigWriter,
     UserSecretStore,
@@ -25,10 +27,6 @@ from awesome_agent.config import (
 )
 from awesome_agent.conversation import ConversationService
 from awesome_agent.paths import AwesomePaths
-from awesome_agent.providers import (
-    CredentialValidation,
-    CredentialValidationStatus,
-)
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 

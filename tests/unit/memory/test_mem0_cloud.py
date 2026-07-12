@@ -113,18 +113,19 @@ async def test_search_normalizes_and_enforces_remote_scope_and_limit() -> None:
         "workspace_key": None,
     }
     [call] = client.search_calls
-    assert call["user_id"] == IDENTITY.user_id
+    assert "user_id" not in call
     assert call["limit"] == 8
     assert call["filters"] == {
         "AND": [
-            {"app_id": "awesome-agent"},
+            {"user_id": IDENTITY.user_id},
+            {"metadata": {"app_id": "awesome-agent"}},
             {
                 "OR": [
-                    {"scope": "user"},
+                    {"metadata": {"scope": "user"}},
                     {
                         "AND": [
-                            {"scope": "workspace"},
-                            {"workspace_key": IDENTITY.workspace_key},
+                            {"metadata": {"scope": "workspace"}},
+                            {"metadata": {"workspace_key": IDENTITY.workspace_key}},
                         ]
                     },
                 ]
@@ -252,11 +253,13 @@ async def test_fact_hash_check_is_remote_and_scope_exact() -> None:
 
     assert exists is True
     [call] = client.search_calls
+    assert "user_id" not in call
     assert call["filters"] == {
         "AND": [
-            {"app_id": "awesome-agent"},
-            {"scope": "user"},
-            {"fact_hash": "b" * 64},
+            {"user_id": IDENTITY.user_id},
+            {"metadata": {"app_id": "awesome-agent"}},
+            {"metadata": {"scope": "user"}},
+            {"metadata": {"fact_hash": "b" * 64}},
         ]
     }
 

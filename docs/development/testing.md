@@ -51,5 +51,19 @@ npm pack ./tui --dry-run
 Live DeepSeek, Kimi, Mem0 Cloud, network, and installation checks are explicit
 release evidence. Normal deterministic tests do not require credentials.
 
+Run the live service release checks only in a temporary process environment:
+
+```powershell
+$env:AWESOME_RUN_EXTERNAL = "1"
+uv run --extra memory pytest -q tests/external/test_release_services.py
+Remove-Item Env:AWESOME_RUN_EXTERNAL, Env:DEEPSEEK_API_KEY, `
+  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY -ErrorAction SilentlyContinue
+```
+
+Set `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`, and `MEM0_API_KEY` outside the
+repository before running the command. Record only test status, duration, and
+redacted diagnostic codes. Never write credential values into project files or
+release evidence.
+
 Record exact commands and outcomes. When an environmental gate is unavailable,
 state the reason and remaining risk rather than reporting it as passing.

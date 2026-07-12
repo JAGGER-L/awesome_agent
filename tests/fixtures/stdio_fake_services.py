@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from awesome_agent.application.composition import compose_local_application
+from awesome_agent.config import CredentialValidation, CredentialValidationStatus
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
@@ -23,10 +24,6 @@ from awesome_agent.protocol.stdio import (
     JsonLineWriter,
     ProtocolEventSink,
     serve_stdio,
-)
-from awesome_agent.providers import (
-    CredentialValidation,
-    CredentialValidationStatus,
 )
 
 
