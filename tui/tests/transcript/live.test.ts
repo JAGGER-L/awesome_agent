@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SurfaceState } from "../../src/state/index.js";
 import { projectLiveTurn } from "../../src/transcript/live.js";
-import { formatStreamingMarkdown } from "../../src/markdown/streaming.js";
+import { stableStreamingSource } from "../../src/markdown/streaming.js";
 
 function state(): SurfaceState {
   return {
@@ -71,12 +71,9 @@ function state(): SurfaceState {
 }
 
 describe("projectLiveTurn", () => {
-  it("formats incomplete Markdown without invoking the completed parser", () => {
-    expect(formatStreamingMarkdown("# Heading\n\n- item\n\n**partial")).toBe(
-      "Heading\n\n• item\n\n**partial",
-    );
-    expect(formatStreamingMarkdown("**done** and `code`")).toBe(
-      "done and code",
+  it("keeps streaming source intact for the shared parser", () => {
+    expect(stableStreamingSource("# Heading\n\n- item\n\n**partial")).toBe(
+      "# Heading\n\n- item\n\n**partial",
     );
   });
 

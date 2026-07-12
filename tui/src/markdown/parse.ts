@@ -3,7 +3,12 @@ import { marked, type Token, type Tokens } from "marked";
 import type { MarkdownInline, MarkdownNode } from "./model.js";
 
 export function parseTerminalMarkdown(source: string): readonly MarkdownNode[] {
-  return parseBlocks(marked.lexer(source, { gfm: true }));
+  const nodes: MarkdownNode[] = [];
+  for (const part of splitBlockMath(source)) {
+    if (part.kind === "math") nodes.push(part);
+    else nodes.push(...parseBlocks(marked.lexer(part.text, { gfm: true })));
+  }
+  return nodes;
 }
 
 function parseBlocks(tokens: readonly Token[]): MarkdownNode[] {
@@ -64,6 +69,18 @@ function parseBlocks(tokens: readonly Token[]): MarkdownNode[] {
         });
         break;
       }
+      case "table": {
+        const table = token as Tokens.Table;
+        nodes.push({
+          kind: "table",
+          header: table.header.map((cell) => parseInline(cell.tokens)),
+          rows: table.rows.map((row) =>
+            row.map((cell) => parseInline(cell.tokens)),
+          ),
+          align: table.align,
+        });
+        break;
+      }
       case "hr":
         nodes.push({ kind: "rule" });
         break;
@@ -108,15 +125,9 @@ function parseInline(tokens: readonly Token[]): MarkdownInline[] {
       case "text":
       case "escape":
       case "html":
-        return [
-          {
-            kind: "text",
-            text:
-              token.type === "html"
-                ? token.raw
-                : (token as Tokens.Text | Tokens.Escape).text,
-          },
-        ];
+        return token.type === "html"
+          ? [{ kind: "text", text: token.raw }]
+          : splitInlineMath((token as Tokens.Text | Tokens.Escape).text);
       case "strong":
         return [
           {
@@ -166,4 +177,42 @@ function parseInline(tokens: readonly Token[]): MarkdownInline[] {
         return [{ kind: "text", text: token.raw }];
     }
   });
+}
+
+function splitInlineMath(text: string): readonly MarkdownInline[] {
+  const result: MarkdownInline[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(/\$([^$\n]+)\$/gu)) {
+    const index = match.index;
+    if (index > cursor)
+      result.push({ kind: "text", text: text.slice(cursor, index) });
+    result.push({ kind: "math", text: match[1] ?? "" });
+    cursor = index + match[0].length;
+  }
+  if (cursor < text.length)
+    result.push({ kind: "text", text: text.slice(cursor) });
+  return result.length > 0 ? result : [{ kind: "text", text }];
+}
+
+function splitBlockMath(
+  source: string,
+): readonly (
+  | { kind: "text"; text: string }
+  | { kind: "math"; text: string }
+)[] {
+  const parts: (
+    | { kind: "text"; text: string }
+    | { kind: "math"; text: string }
+  )[] = [];
+  let cursor = 0;
+  const expression = /^\s*\$\$\s*\r?\n([\s\S]*?)\r?\n\s*\$\$\s*$/gmu;
+  for (const match of source.matchAll(expression)) {
+    if (match.index > cursor)
+      parts.push({ kind: "text", text: source.slice(cursor, match.index) });
+    parts.push({ kind: "math", text: match[1] ?? "" });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < source.length)
+    parts.push({ kind: "text", text: source.slice(cursor) });
+  return parts.length > 0 ? parts : [{ kind: "text", text: source }];
 }

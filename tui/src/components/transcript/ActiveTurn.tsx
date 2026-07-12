@@ -1,6 +1,6 @@
 import { Box, Text } from "ink";
 
-import { formatStreamingMarkdown } from "../../markdown/streaming.js";
+import { MarkdownBlock } from "../../markdown/MarkdownBlock.js";
 import type { LiveTranscriptProjection } from "../../transcript/model.js";
 import { useTheme } from "../theme.js";
 import { BlockView } from "./blocks/BlockView.js";
@@ -23,7 +23,12 @@ export function ActiveTurn({
         block.kind === "assistant" ? (
           <Box key={block.key} width={width}>
             <Text color={theme.assistant}>● </Text>
-            <Text wrap="wrap">{formatStreamingMarkdown(block.text)}</Text>
+            <Box width={Math.max(1, width - 2)}>
+              <MarkdownBlock
+                source={block.text}
+                width={Math.max(1, width - 2)}
+              />
+            </Box>
           </Box>
         ) : (
           <BlockView
