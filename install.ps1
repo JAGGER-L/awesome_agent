@@ -2,6 +2,8 @@ $ErrorActionPreference = "Stop"
 $Version = "1.0.0"
 $UvVersion = "0.11.28"
 $NodeVersion = "22.23.1"
+$UvSha256 = "0a23463216d09c6a72ff80ef5dc5a795f07dc1575cb84d24596c2f124a441b7b"
+$NodeSha256 = "7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29"
 $AssetBase = "https://github.com/JAGGER-L/awesome_agent/releases/latest/download"
 
 if ($args.Count -ne 0) {
@@ -28,6 +30,17 @@ function Assert-NativeSuccess([string]$Operation) {
     }
 }
 
+function Assert-FileSha256(
+    [string]$Path,
+    [string]$Expected,
+    [string]$Description
+) {
+    $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    if ($Actual.ToLowerInvariant() -ne $Expected.ToLowerInvariant()) {
+        throw "$Description checksum does not match."
+    }
+}
+
 New-Item -ItemType Directory -Path $Stage | Out-Null
 try {
     $UvDir = Join-Path $Stage "uv"
@@ -37,12 +50,13 @@ try {
     New-Item -ItemType Directory -Force -Path $UvDir, $Downloads, $PythonRuntime |
         Out-Null
 
-    $UvInstaller = Join-Path $Stage "uv-install.ps1"
-    Invoke-RestMethod -Uri "https://astral.sh/uv/$UvVersion/install.ps1" `
-        -OutFile $UvInstaller
-    $env:UV_UNMANAGED_INSTALL = $UvDir
-    $env:UV_NO_MODIFY_PATH = "1"
-    & $UvInstaller
+    $UvArchiveName = "uv-x86_64-pc-windows-msvc.zip"
+    $UvArchive = Join-Path $Downloads $UvArchiveName
+    Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://releases.astral.sh/github/uv/releases/download/$UvVersion/$UvArchiveName" `
+        -OutFile $UvArchive
+    Assert-FileSha256 $UvArchive $UvSha256 "uv"
+    Expand-Archive -LiteralPath $UvArchive -DestinationPath $UvDir
     $Uv = Join-Path $UvDir "uv.exe"
     if (-not (Test-Path -LiteralPath $Uv -PathType Leaf)) {
         throw "uv bootstrap did not produce uv.exe."
@@ -100,6 +114,7 @@ try {
     Invoke-WebRequest -UseBasicParsing `
         -Uri "https://nodejs.org/dist/v$NodeVersion/$NodeArchiveName" `
         -OutFile $NodeArchive
+    Assert-FileSha256 $NodeArchive $NodeSha256 "Node"
     $NodeExtracted = Join-Path $Stage "node"
     Expand-Archive -LiteralPath $NodeArchive -DestinationPath $NodeExtracted
     $NodeSource = Join-Path $NodeExtracted "node-v$NodeVersion-win-x64"
