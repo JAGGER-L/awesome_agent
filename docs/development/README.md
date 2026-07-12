@@ -5,12 +5,19 @@ starts from the root [README](../../README.md).
 
 ## Setup
 
-Contributor prerequisites are Python 3.12, uv, Node.js 22, npm, and Git.
+Contributor prerequisites are uv, Node.js 22 with npm, and Git. uv provisions
+the repository's Python 3.12 runtime, so a separate Python installation is not
+required.
 
 ```powershell
-uv sync --extra memory --dev
-npm --prefix tui ci
+uv sync --locked --extra memory
+npm ci --prefix tui
+uv run awesome-dev
 ```
+
+Use `uv run awesome-dev --workspace <project-path>` to open another project.
+The complete source startup flow and troubleshooting steps are in the
+[Quickstart](../getting-started/quickstart.md#develop-from-source).
 
 ## Repository Loop
 

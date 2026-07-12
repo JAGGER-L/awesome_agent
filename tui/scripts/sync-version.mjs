@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 const check = process.argv.slice(2);
 if (check.length > 1 || (check.length === 1 && check[0] !== "--check")) {
@@ -44,6 +45,17 @@ if (check[0] === "--check") {
   }
 } else {
   await Promise.all(
-    [...expected].map(([url, content]) => writeFile(url, content, "utf8")),
+    [...expected].map(([url, content]) => atomicWrite(url, content)),
   );
+}
+
+async function atomicWrite(url, content) {
+  const destination = fileURLToPath(url);
+  const temporary = `${destination}.${process.pid}.tmp`;
+  try {
+    await writeFile(temporary, content, "utf8");
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }

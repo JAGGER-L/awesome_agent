@@ -128,6 +128,7 @@ function enabledValue(value: unknown): string {
 
 function emptyMessage(command: CommandName): string {
   if (command === "diff") return "No workspace changes";
+  if (command === "usage") return "No usage recorded yet";
   return "No information available";
 }
 

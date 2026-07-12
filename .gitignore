@@ -30,6 +30,7 @@ build/
 .codex/
 .claude/
 .worktrees/
+.awesome-dev/
 # OS
 .DS_Store
 Thumbs.db

@@ -100,6 +100,10 @@ Analyze this project's structure and tell me where I should start reading.
 - [Development](docs/development/README.md)
 - [Roadmap](docs/roadmap.md)
 
+Contributors can run the current checkout with `uv run awesome-dev`; see
+[Develop from Source](docs/getting-started/quickstart.md#develop-from-source)
+for the complete setup and troubleshooting flow.
+
 ## Security
 
 Only trust projects you understand. Review `/diff` before keeping changes, and

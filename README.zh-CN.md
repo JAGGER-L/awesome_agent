@@ -94,6 +94,9 @@ awesome --help
 - [开发](docs/development/README.md)
 - [Roadmap](docs/roadmap.md)
 
+开发者可以通过 `uv run awesome-dev` 运行当前源码；完整的环境准备、启动和故障排查流程请参阅
+[从源码开发](docs/getting-started/quickstart.md#develop-from-source)。
+
 ## 安全
 
 只信任你了解的项目，保留修改前先检查 `/diff`。只通过 Awesome 的

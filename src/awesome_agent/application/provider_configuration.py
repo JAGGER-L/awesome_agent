@@ -39,15 +39,13 @@ _PROVIDER_LABELS: dict[ProviderName, str] = {
     "kimi": "Kimi",
 }
 _SERVICE_LABELS: dict[CredentialService, str] = {
-    **_PROVIDER_LABELS,
+    "deepseek": "DeepSeek",
+    "kimi": "Kimi",
     "mem0": "Mem0 Cloud",
 }
-_PROVIDER_HELP_URLS: dict[ProviderName, str] = {
+_SERVICE_HELP_URLS: dict[CredentialService, str] = {
     "deepseek": "https://platform.deepseek.com/api_keys",
     "kimi": "https://platform.moonshot.cn/console/api-keys",
-}
-_SERVICE_HELP_URLS: dict[CredentialService, str] = {
-    **_PROVIDER_HELP_URLS,
     "mem0": "https://app.mem0.ai/dashboard/api-keys",
 }
 

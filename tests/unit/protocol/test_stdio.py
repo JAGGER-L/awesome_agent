@@ -146,7 +146,7 @@ class Facade:
             ProviderCredentialSetResult(
                 provider=request.provider,
                 status=ProviderCredentialSetStatus.CONFIGURED,
-                source=CredentialSource.USER_ENV_FILE,
+                source=CredentialSource.AWESOME,
                 code="credential_saved",
             )
         )

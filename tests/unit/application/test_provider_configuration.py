@@ -265,8 +265,9 @@ async def test_auth_exposes_both_sources_and_persists_explicit_selection(
         sources().provider_credentials.deepseek.selected_source
         is CredentialSource.AWESOME
     )
-    assert sources().secrets.deepseek_api_key is not None
-    assert sources().secrets.deepseek_api_key.get_secret_value() == "awesome-secret"
+    key = sources().secrets.deepseek_api_key
+    assert key is not None
+    assert key.get_secret_value() == "awesome-secret"
 
 
 @pytest.mark.asyncio
