@@ -1,6 +1,6 @@
-# Release 1.0.0
+# Release 1.1.0
 
-Awesome 1.0.0 is published as a manual GitHub Release.
+Awesome 1.1.0 is published as a manual GitHub Release.
 
 1. Confirm the release branch is clean and contains the intended changes.
 2. Run the complete [Release Gate](testing.md#release-gate).
@@ -15,9 +15,9 @@ Awesome 1.0.0 is published as a manual GitHub Release.
    redacted pass/fail evidence using the explicit live-service command in the
    [testing guide](testing.md#release-gate).
 6. Confirm the release directory contains only `install.sh`, `install.ps1`,
-   `awesome-1.0.0.zip`, and `SHA256SUMS`, with no credentials, caches, tests,
+   `awesome-1.1.0.zip`, and `SHA256SUMS`, with no credentials, caches, tests,
    sources, or local paths.
-7. Merge the approved release changes, tag `v1.0.0`, create the GitHub Release,
+7. Merge the approved release changes, tag `v1.1.0`, create the GitHub Release,
    and upload the four assets.
 
 Users upgrade by closing Awesome and running the same installation command

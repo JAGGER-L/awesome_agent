@@ -94,7 +94,7 @@ permission grants.
 
 `/status` renders:
 
-- `Version`: one numeric value such as `1.0.0`;
+- `Version`: one numeric value such as `1.1.0`;
 - `Workspace`: the workspace path, without trust or Git-branch suffixes;
 - `Thread` and resumable `Thread ID`;
 - `Model`: the full Provider/model ID and configured state;
