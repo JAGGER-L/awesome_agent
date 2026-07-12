@@ -59,7 +59,11 @@ def test_event_type_must_match_payload_kind() -> None:
             workspace_key="workspace_1",
             sequence=1,
             event_type=EventType.OPERATION_COMPLETED,
-            payload=ToolStartedPayload(call_id="call_1", tool_name="ls"),
+            payload=ToolStartedPayload(
+                call_id="call_1",
+                tool_name="ls",
+                verb="List",
+            ),
         )
 
 

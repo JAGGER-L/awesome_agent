@@ -5,16 +5,21 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import StateSnapshot
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
+    AgentState,
     CloudPostAnswerMemory,
     MemoryFinalizationResult,
+    PostAnswerMemory,
     PreparedAgentContext,
     TurnBudget,
     compile_agent_graph,
     new_agent_state,
+    validate_agent_state,
 )
 from awesome_agent.core.tools import ToolExecutionContext, ToolResult
 from awesome_agent.memory import (
@@ -94,9 +99,27 @@ class Finalizer:
         self.cancel = cancel
         self.calls: list[dict[str, object]] = []
 
-    async def finalize(self, **kwargs: object) -> MemoryFinalizationResult:
-        self.calls.append(kwargs)
-        assert kwargs["final_answer"] == "final answer"
+    async def finalize(
+        self,
+        *,
+        user_text: str,
+        final_answer: str,
+        selected_model: SelectedModel,
+        remaining_model_calls: int,
+        remaining_provider_retries: int,
+        workspace_key: str,
+    ) -> MemoryFinalizationResult:
+        self.calls.append(
+            {
+                "user_text": user_text,
+                "final_answer": final_answer,
+                "selected_model": selected_model,
+                "remaining_model_calls": remaining_model_calls,
+                "remaining_provider_retries": remaining_provider_retries,
+                "workspace_key": workspace_key,
+            }
+        )
+        assert final_answer == "final answer"
         if self.cancel:
             raise asyncio.CancelledError
         return MemoryFinalizationResult(
@@ -108,8 +131,8 @@ class Finalizer:
 
 
 async def _run(
-    finalizer: object,
-) -> tuple[dict[str, object], object, Projector]:
+    finalizer: PostAnswerMemory,
+) -> tuple[AgentState, StateSnapshot, Projector]:
     saver = InMemorySaver()
     graph = compile_agent_graph(saver)
     projector = Projector()
@@ -131,23 +154,25 @@ async def _run(
         budget=TurnBudget(),
         monotonic=lambda: 1.0,
         current_user_text="current user text",
-        post_answer_memory=cast(Any, finalizer),
+        post_answer_memory=finalizer,
     )
-    config = {"configurable": {"thread_id": "turn_1"}}
-    result = await graph.ainvoke(
-        new_agent_state(
-            thread_id="thread_1",
-            turn_id="turn_1",
-            workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            provider="deepseek",
-            model="deepseek/deepseek-v4-flash",
-            thinking_enabled=False,
-        ),
-        config=config,
-        context=runtime,
+    config: RunnableConfig = {"configurable": {"thread_id": "turn_1"}}
+    result = validate_agent_state(
+        await graph.ainvoke(
+            new_agent_state(
+                thread_id="thread_1",
+                turn_id="turn_1",
+                workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                provider="deepseek",
+                model="deepseek/deepseek-v4-flash",
+                thinking_enabled=False,
+            ),
+            config=config,
+            context=runtime,
+        )
     )
     snapshot = await graph.aget_state(config)
-    return cast(dict[str, object], result), snapshot, projector
+    return result, snapshot, projector
 
 
 @pytest.mark.asyncio
@@ -160,7 +185,7 @@ async def test_memory_finalization_is_checkpointed_and_charged() -> None:
     assert result["termination_reason"] == "completed"
     assert result["model_calls"] == 3
     assert result["provider_retries"] == 1
-    assert cast(dict[str, int], result["usage"])["input_tokens"] == 9
+    assert result["usage"]["input_tokens"] == 9
     assert snapshot.values["model_calls"] == 3
     assert projector.memory_statuses == ["completed"]
 
@@ -224,19 +249,26 @@ async def test_replay_after_remote_write_uses_fact_hash_deduplication() -> None:
             workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ),
     )
-    arguments = {
-        "user_text": "remember concise answers",
-        "final_answer": "done",
-        "selected_model": SelectedModel(
-            provider="deepseek",
-            model="deepseek/deepseek-v4-flash",
-        ),
-        "remaining_model_calls": 10,
-        "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    }
-
-    first = await finalizer.finalize(**arguments)
-    second = await finalizer.finalize(**arguments)
+    selected_model = SelectedModel(
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+    )
+    first = await finalizer.finalize(
+        user_text="remember concise answers",
+        final_answer="done",
+        selected_model=selected_model,
+        remaining_model_calls=10,
+        remaining_provider_retries=6,
+        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+    second = await finalizer.finalize(
+        user_text="remember concise answers",
+        final_answer="done",
+        selected_model=selected_model,
+        remaining_model_calls=10,
+        remaining_provider_retries=6,
+        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
 
     assert first.status == "completed"
     assert second.status == "completed"

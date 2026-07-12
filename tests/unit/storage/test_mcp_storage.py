@@ -8,7 +8,9 @@ from awesome_agent.storage import (
 )
 
 
-def _workspace_config(*, args: tuple[str, ...], env: tuple[str, ...]):
+def _workspace_config(
+    *, args: tuple[str, ...], env: tuple[str, ...]
+) -> McpServerConfig:
     return McpServerConfig(
         id="project",
         command="python",

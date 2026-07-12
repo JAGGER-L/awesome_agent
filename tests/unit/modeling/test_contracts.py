@@ -10,6 +10,7 @@ from awesome_agent.modeling import (
     ContinuationState,
     ModelErrorInfo,
     ModelMessage,
+    ModelProviderError,
     ModelRequest,
     ModelStreamEvent,
     ModelTurn,
@@ -86,7 +87,7 @@ def test_assistant_and_tool_history_round_trip_with_multiple_calls() -> None:
 
 def test_request_requires_explicit_boolean_thinking_and_supports_no_tools() -> None:
     with pytest.raises(ValidationError):
-        ModelRequest(messages=(UserMessage(content="inspect"),))
+        ModelRequest.model_validate({"messages": (UserMessage(content="inspect"),)})
     with pytest.raises(ValidationError):
         _request(thinking_enabled="on")
 
@@ -187,7 +188,7 @@ def test_stream_union_preserves_visible_and_terminal_events() -> None:
     ],
 )
 def test_model_errors_serialize_safely_and_restore_typed_exceptions(
-    error_type: type[Exception],
+    error_type: type[ModelProviderError],
     code: str,
     retryable: bool,
 ) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -52,7 +53,8 @@ async def test_checkpoint_store_reads_valid_state_rejects_corrupt_and_deletes(
         model="deepseek/deepseek-v4-flash",
         thinking_enabled=False,
     )
-    valid["channel_values"] = state
+    channel_values: dict[str, Any] = dict(state)
+    valid["channel_values"] = channel_values
     corrupt = empty_checkpoint()
     corrupt["channel_values"] = {"unexpected": True}
 

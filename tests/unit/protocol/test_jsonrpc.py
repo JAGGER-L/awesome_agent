@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.application.commands import CommandResult
+from awesome_agent.application.commands import CommandIntent, CommandResult
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
@@ -25,12 +25,12 @@ from awesome_agent.application.contracts import (
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
+    ThreadReadResult,
     WorkspacePresentation,
 )
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
 from awesome_agent.protocol.jsonrpc import (
-    PROTOCOL_VERSION,
     JsonRpcDispatcher,
     event_notification,
     jsonrpc_error,
@@ -53,7 +53,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=PROTOCOL_VERSION,
+                protocol_version=1,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -82,7 +82,9 @@ class Facade:
         self.calls.append(("list", query))
         return ApplicationResult.success(ThreadListResult())
 
-    async def read_thread(self, query: ThreadReadQuery) -> object:
+    async def read_thread(
+        self, query: ThreadReadQuery
+    ) -> ApplicationResult[ThreadReadResult]:
         self.calls.append(("read", query))
         raise RuntimeError("private database traceback")
 
@@ -109,7 +111,9 @@ class Facade:
             OperationAccepted(operation_id="operation_2", thread_id=thread_id)
         )
 
-    async def execute_command(self, intent: object) -> ApplicationResult[CommandResult]:
+    async def execute_command(
+        self, intent: CommandIntent
+    ) -> ApplicationResult[CommandResult]:
         self.calls.append(("command", intent))
         return ApplicationResult.failure(
             ProductError(
@@ -411,6 +415,8 @@ async def test_product_error_is_result_and_internal_error_is_redacted() -> None:
         }
     )
 
+    assert product is not None
+    assert internal is not None
     assert product["result"]["ok"] is False
     assert product["result"]["error"]["code"] == "invalid_arguments"
     assert "error" not in product

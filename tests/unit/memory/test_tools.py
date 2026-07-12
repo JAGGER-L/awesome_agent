@@ -36,7 +36,9 @@ class ActivityWriter(ToolActivityWriter):
         self.items.append(activity)
 
 
-def _service(tmp_path: Path, workspace_key: str, *, enabled: bool):
+def _service(
+    tmp_path: Path, workspace_key: str, *, enabled: bool
+) -> LocalMemoryService:
     ids = iter(
         (
             "memory_11111111111111111111111111111111",

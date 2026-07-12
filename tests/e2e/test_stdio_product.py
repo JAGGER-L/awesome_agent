@@ -14,8 +14,11 @@ from awesome_agent.version import PRODUCT_VERSION
 
 def _value(frame: dict[str, Any]) -> dict[str, Any]:
     result = frame["result"]
+    assert isinstance(result, dict)
     assert result["ok"] is True
-    return result["value"]
+    value = result["value"]
+    assert isinstance(value, dict)
+    return value
 
 
 class Client:
@@ -79,7 +82,8 @@ class Client:
         assert self.process.stdout is not None
         raw = await asyncio.wait_for(self.process.stdout.readline(), timeout=10)
         assert raw, await self.stderr()
-        frame = json.loads(raw)
+        frame: object = json.loads(raw)
+        assert isinstance(frame, dict)
         self.stdout_frames.append(frame)
         return frame
 

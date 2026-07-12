@@ -13,6 +13,7 @@ from awesome_agent.core.tools import (
     ToolActivityDraft,
     ToolExecutionContext,
     ToolExecutionOrigin,
+    ToolRequest,
     ToolResult,
     ToolStatus,
 )
@@ -32,11 +33,11 @@ class Executor:
     def __init__(self, output: str, *, gate: asyncio.Event | None = None) -> None:
         self.output = output
         self.gate = gate
-        self.requests: list[object] = []
+        self.requests: list[ToolRequest] = []
 
     async def execute(
         self,
-        request: object,
+        request: ToolRequest,
         *,
         context: ToolExecutionContext,
     ) -> ToolResult:

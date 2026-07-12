@@ -14,13 +14,23 @@ from awesome_agent.application.commands import (
     COMMAND_OWNERS,
     CommandIntent,
     CommandName,
+    CommandResult,
 )
 from awesome_agent.application.contracts import (
     ApplicationResult,
+    ApplicationState,
+    CancelResult,
+    InitializeResult,
+    InteractionResult,
+    OperationAccepted,
     ProductErrorCode,
     ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
+    ShutdownResult,
     ThreadListQuery,
+    ThreadListResult,
     ThreadReadQuery,
+    ThreadReadResult,
 )
 from awesome_agent.core.events import EventEnvelope, EventType
 from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
@@ -30,8 +40,10 @@ ROOT = Path(__file__).parents[3]
 FIXTURES = ROOT / "protocol" / "fixtures" / "v1"
 
 
-def _load(name: str) -> object:
-    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+def _load(name: str) -> dict[str, Any]:
+    loaded: object = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
 
 
 def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
@@ -81,62 +93,64 @@ class _FixtureFacade:
     def __init__(self, result: dict[str, object]) -> None:
         self._result = ApplicationResult[dict[str, object]].model_validate(result)
 
-    async def initialize(self) -> ApplicationResult[dict[str, object]]:
-        return self._result
+    async def initialize(self) -> ApplicationResult[InitializeResult]:
+        return ApplicationResult[InitializeResult].model_validate(self._result)
 
-    async def get_state(self) -> ApplicationResult[dict[str, object]]:
-        return self._result
+    async def get_state(self) -> ApplicationResult[ApplicationState]:
+        return ApplicationResult[ApplicationState].model_validate(self._result)
 
     async def list_threads(
         self, query: ThreadListQuery
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[ThreadListResult]:
         del query
-        return self._result
+        return ApplicationResult[ThreadListResult].model_validate(self._result)
 
     async def read_thread(
         self, query: ThreadReadQuery
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[ThreadReadResult]:
         del query
-        return self._result
+        return ApplicationResult[ThreadReadResult].model_validate(self._result)
 
     async def submit_turn(
         self, thread_id: str, content: str, client_message_id: str
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[OperationAccepted]:
         del thread_id, content, client_message_id
-        return self._result
+        return ApplicationResult[OperationAccepted].model_validate(self._result)
 
     async def execute_direct(
         self, thread_id: str, command: str
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[OperationAccepted]:
         del thread_id, command
-        return self._result
+        return ApplicationResult[OperationAccepted].model_validate(self._result)
 
     async def execute_command(
         self, intent: CommandIntent
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[CommandResult]:
         del intent
-        return self._result
+        return ApplicationResult[CommandResult].model_validate(self._result)
 
     async def set_provider_credential(
         self, request: ProviderCredentialSetRequest
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[ProviderCredentialSetResult]:
         del request
-        return self._result
+        return ApplicationResult[ProviderCredentialSetResult].model_validate(
+            self._result
+        )
 
     async def respond_interaction(
         self, interaction_id: str, decision: str
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[InteractionResult]:
         del interaction_id, decision
-        return self._result
+        return ApplicationResult[InteractionResult].model_validate(self._result)
 
     async def cancel_operation(
         self, operation_id: str
-    ) -> ApplicationResult[dict[str, object]]:
+    ) -> ApplicationResult[CancelResult]:
         del operation_id
-        return self._result
+        return ApplicationResult[CancelResult].model_validate(self._result)
 
-    async def shutdown(self) -> ApplicationResult[dict[str, object]]:
-        return self._result
+    async def shutdown(self) -> ApplicationResult[ShutdownResult]:
+        return ApplicationResult[ShutdownResult].model_validate(self._result)
 
 
 def _cases(name: str) -> list[dict[str, Any]]:
@@ -153,7 +167,7 @@ async def test_every_valid_method_fixture_round_trips_through_dispatcher() -> No
     for index, case in enumerate(_cases("methods.valid.json"), start=1):
         expected = case["result"]
         assert isinstance(expected, dict)
-        dispatcher = JsonRpcDispatcher(_FixtureFacade(expected))  # type: ignore[arg-type]
+        dispatcher = JsonRpcDispatcher(_FixtureFacade(expected))
 
         response = await dispatcher.dispatch(
             {
@@ -174,7 +188,7 @@ async def test_every_valid_method_fixture_round_trips_through_dispatcher() -> No
 async def test_every_invalid_method_fixture_fails_at_declared_boundary() -> None:
     success = {"ok": True, "value": {}}
     for index, case in enumerate(_cases("methods.invalid.json"), start=1):
-        dispatcher = JsonRpcDispatcher(_FixtureFacade(success))  # type: ignore[arg-type]
+        dispatcher = JsonRpcDispatcher(_FixtureFacade(success))
         response = await dispatcher.dispatch(
             {
                 "jsonrpc": "2.0",
