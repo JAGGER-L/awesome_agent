@@ -243,6 +243,11 @@ class EventEnvelope(BaseModel):
     thread_id: str | None = Field(default=None, max_length=128)
     turn_id: str | None = Field(default=None, max_length=128)
     operation_id: str | None = Field(default=None, max_length=128)
+    client_message_id: str | None = Field(
+        default=None,
+        pattern=r"^client_[A-Za-z0-9_-]+$",
+        max_length=128,
+    )
     event_type: EventType
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     payload: EventPayload
@@ -307,6 +312,7 @@ class EventEmitter:
         thread_id: str | None = None,
         turn_id: str | None = None,
         operation_id: str | None = None,
+        client_message_id: str | None = None,
     ) -> EventEnvelope:
         event_type = EventType(payload.kind)
         async with self._lock:
@@ -320,6 +326,7 @@ class EventEmitter:
                 thread_id=thread_id,
                 turn_id=turn_id,
                 operation_id=operation_id,
+                client_message_id=client_message_id,
                 event_type=event_type,
                 timestamp=self._clock(),
                 payload=payload,

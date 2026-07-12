@@ -84,6 +84,7 @@ describe("Python-compatible Unicode limits", () => {
     thread_id: "thread_1",
     sequence: 1,
     kind: "user_message",
+    client_message_id: "client_1",
     content,
     metadata: {},
     created_at: "2026-07-11T08:00:00Z",

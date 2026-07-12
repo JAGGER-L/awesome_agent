@@ -10,6 +10,7 @@ import {
 import { CommandMenu } from "../../src/components/CommandMenu.js";
 import { Composer } from "../../src/components/Composer.js";
 import { createSurfaceStore } from "../../src/state/store.js";
+import { initialSurfaceState } from "../../src/state/reducer.js";
 
 async function eventually(assertion: () => void): Promise<void> {
   let last: unknown;
@@ -98,11 +99,88 @@ describe("CommandMenu", () => {
 });
 
 describe("App composer integration", () => {
-  it("routes pasted input and Enter through the root terminal owner", async () => {
-    const controller = controllerReturning({
-      kind: "accepted",
-      operation: { operation_id: "operation_1", thread_id: "thread_1" },
+  it("projects user input before turn submission resolves", async () => {
+    let resolveSubmission:
+      | ((value: {
+          kind: "accepted";
+          operation: {
+            operation_id: string;
+            thread_id: string;
+            client_message_id: string;
+          };
+        }) => void)
+      | undefined;
+    const pending = new Promise<{
+      kind: "accepted";
+      operation: {
+        operation_id: string;
+        thread_id: string;
+        client_message_id: string;
+      };
+    }>((resolve) => {
+      resolveSubmission = resolve;
     });
+    const controller = {
+      submit: vi.fn(async () => await pending),
+    } as unknown as CommandController;
+    const store = createSurfaceStore({
+      ...initialSurfaceState(),
+      application: { current_thread_id: "thread_1" } as never,
+    });
+    const view = render(
+      <App store={store} controller={controller} width={40} />,
+    );
+
+    view.stdin.write("inspect");
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(store.getState().committed_transcript).toEqual([
+        expect.objectContaining({
+          kind: "user",
+          text: "inspect",
+          status: "pending",
+        }),
+      ]),
+    );
+    const block = store.getState().committed_transcript?.[0];
+    if (block?.kind !== "user") {
+      throw new Error("Expected an optimistic user block.");
+    }
+    const clientMessageId = block.client_message_id;
+    expect(clientMessageId).toMatch(/^client_[a-f0-9]{32}$/);
+
+    resolveSubmission?.({
+      kind: "accepted",
+      operation: {
+        operation_id: "operation_1",
+        thread_id: "thread_1",
+        client_message_id: clientMessageId,
+      },
+    });
+    await eventually(() =>
+      expect(store.getState().committed_transcript).toEqual([
+        expect.objectContaining({ status: "accepted" }),
+      ]),
+    );
+  });
+
+  it("routes pasted input and Enter through the root terminal owner", async () => {
+    const controller = {
+      submit: vi.fn(
+        async (
+          _routed: unknown,
+          _threadId: unknown,
+          clientMessageId: string,
+        ) => ({
+          kind: "accepted",
+          operation: {
+            operation_id: "operation_1",
+            thread_id: "thread_1",
+            client_message_id: clientMessageId,
+          },
+        }),
+      ),
+    } as unknown as CommandController;
     const view = render(
       <App store={createSurfaceStore()} controller={controller} width={40} />,
     );
@@ -110,7 +188,9 @@ describe("App composer integration", () => {
     await eventually(() => expect(view.lastFrame()).toContain("hello"));
     view.stdin.write("\r");
     await eventually(() => expect(controller.submit).toHaveBeenCalledOnce());
-    await eventually(() => expect(view.lastFrame()).not.toContain("hello"));
+    await eventually(() =>
+      expect(view.lastFrame()?.match(/hello/gu)).toHaveLength(1),
+    );
   });
 
   it("retains a retryable draft after an immediate product error", async () => {

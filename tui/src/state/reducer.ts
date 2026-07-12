@@ -1,5 +1,6 @@
 import type { EventEnvelope } from "../protocol/index.js";
 import { mergeTranscriptBlocks } from "../transcript/merge.js";
+import type { TranscriptBlock } from "../transcript/model.js";
 import {
   appendReasoningTail,
   reasoningElapsedMarker,
@@ -352,6 +353,37 @@ export function surfaceReducer(
           [action.block],
         ),
       };
+    case "transcript.user.pending":
+      if (action.generation !== state.thread_generation) return state;
+      return {
+        ...state,
+        committed_transcript: mergeTranscriptBlocks(
+          state.committed_transcript ?? [],
+          [
+            {
+              key: `user:${action.client_message_id}`,
+              kind: "user",
+              client_message_id: action.client_message_id,
+              status: "pending",
+              text: action.text,
+            },
+          ],
+        ),
+        transcript_persisted: false,
+      };
+    case "transcript.user.accepted":
+      if (action.generation !== state.thread_generation) return state;
+      return updateUserMessage(state, action.client_message_id, (block) => ({
+        ...block,
+        status: "accepted",
+      }));
+    case "transcript.user.failed":
+      if (action.generation !== state.thread_generation) return state;
+      return updateUserMessage(state, action.client_message_id, (block) => ({
+        ...block,
+        status: "failed",
+        error_message: action.message,
+      }));
     case "protocol.fatal":
       return fatal(state, action.code, action.message);
     case "core.exited":
@@ -364,4 +396,23 @@ export function surfaceReducer(
     case "surface.closed":
       return { ...state, connection: "closed" };
   }
+}
+
+function updateUserMessage(
+  state: SurfaceState,
+  clientMessageId: string,
+  update: (
+    block: Extract<TranscriptBlock, { kind: "user" }>,
+  ) => Extract<TranscriptBlock, { kind: "user" }>,
+): SurfaceState {
+  const blocks = state.committed_transcript ?? [];
+  let matched = false;
+  const committed = blocks.map((block) => {
+    if (block.kind !== "user" || block.client_message_id !== clientMessageId) {
+      return block;
+    }
+    matched = true;
+    return update(block);
+  });
+  return matched ? { ...state, committed_transcript: committed } : state;
 }

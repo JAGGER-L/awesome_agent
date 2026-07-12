@@ -166,9 +166,7 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
     first_id = str(first.data["thread_id"])
 
     picker = _unwrap(
-        await application.execute_command(
-            CommandIntent(name=CommandName.PERMISSIONS)
-        )
+        await application.execute_command(CommandIntent(name=CommandName.PERMISSIONS))
     )
     assert picker.selection is not None
     assert _unwrap(await application.get_state()).permission_mode == "request_approval"
@@ -254,7 +252,9 @@ async def test_composed_agent_execute_waits_for_application_decision(
     )
     thread_id = str(created.data["thread_id"])
 
-    _unwrap(await application.submit_turn(thread_id, "run the command"))
+    _unwrap(
+        await application.submit_turn(thread_id, "run the command", "client_command")
+    )
     interaction_id = await _wait_for_interaction(application)
     assert not marker.exists()
     blocked = _unwrap(
@@ -342,7 +342,9 @@ async def test_fresh_home_trust_turn_direct_and_restart(
         )
     )
     assert model_result.status is CommandStatus.SUCCESS
-    accepted = _unwrap(await application.submit_turn(thread_id, "inspect workspace"))
+    accepted = _unwrap(
+        await application.submit_turn(thread_id, "inspect workspace", "client_inspect")
+    )
     assert accepted.turn_id is not None
     turn_view = await _wait_for_thread(application, thread_id, entries=2)
     assert turn_view.entries[-1].content == "done"

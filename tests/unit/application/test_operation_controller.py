@@ -107,6 +107,7 @@ async def test_projector_normalizes_gateway_tool_and_turn_events() -> None:
         thread_id="thread_1",
         turn_id="turn_1",
         operation_id="operation_1",
+        client_message_id="client_1",
     )
 
     await projector.turn_started()
@@ -167,6 +168,7 @@ async def test_projector_rejects_second_turn_terminal() -> None:
         thread_id="thread_1",
         turn_id="turn_1",
         operation_id="operation_1",
+        client_message_id="client_1",
     )
     await projector.turn_started()
     await projector.turn_completed()

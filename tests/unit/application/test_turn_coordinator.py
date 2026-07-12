@@ -158,10 +158,15 @@ async def test_submit_turn_freezes_config_commits_then_emits_and_cleans_checkpoi
         _coordinator(tmp_path, graph)
     )
 
-    accepted = await coordinator.submit_turn(thread_id, "inspect")
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_1",
+    )
     assert accepted.thread_id == thread_id
     assert accepted.turn_id is not None
     assert accepted.operation_id
+    assert accepted.client_message_id == "client_1"
     assert coordinator.active_operation_id == accepted.operation_id
 
     view = conversation.read_thread(thread_id)
@@ -179,6 +184,8 @@ async def test_submit_turn_freezes_config_commits_then_emits_and_cleans_checkpoi
     completed = conversation.read_thread(thread_id)
     assert completed.turns[0].status is TurnStatus.COMPLETED
     assert completed.entries[-1].content == "done"
+    assert completed.entries[0].client_message_id == "client_1"
+    assert {event.client_message_id for event in sink.events} == {"client_1"}
     assert graph.inputs[0]["provider"] == "deepseek"
     assert graph.inputs[0]["thinking_enabled"] is False
     assert graph.configs[0]["configurable"]["thread_id"] == accepted.turn_id
@@ -200,7 +207,9 @@ async def test_model_failure_persists_failed_turn_and_failed_operation(
         tmp_path, graph
     )
 
-    accepted = await coordinator.submit_turn(thread_id, "inspect")
+    accepted = await coordinator.submit_turn(
+        thread_id, "inspect", client_message_id="client_1"
+    )
     with pytest.raises(TurnExecutionFailed, match="model_authentication"):
         await coordinator.wait(accepted.operation_id)
 
@@ -223,7 +232,9 @@ async def test_cancel_persists_cancelled_turn_before_operation_terminal(
     coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
         tmp_path, graph
     )
-    accepted = await coordinator.submit_turn(thread_id, "inspect")
+    accepted = await coordinator.submit_turn(
+        thread_id, "inspect", client_message_id="client_1"
+    )
 
     assert await coordinator.cancel_operation(accepted.operation_id) is True
     with pytest.raises(asyncio.CancelledError):
@@ -246,7 +257,9 @@ async def test_resume_uses_official_checkpoint_position_without_new_user_entry(
     coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
         tmp_path, graph
     )
-    turn = conversation.begin_turn(thread_id, "inspect", _config())
+    turn = conversation.begin_turn(
+        thread_id, "inspect", _config(), client_message_id="client_1"
+    )
     checkpoints.state = _result(final_answer=None, reason="waiting")
 
     accepted = await coordinator.resume_unfinished(thread_id)

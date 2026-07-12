@@ -59,9 +59,9 @@
   "files": {
     "commands.json": "bb31de5367b1660304f69eb4257e4735e1f8e46104f61df89ecc0f6dd47cd592",
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
-    "events.valid.json": "75f1aeee2e42dcaa482ec7bb308f5a3a90a2f91ff104d784ad60d91844f3ddf9",
-    "methods.invalid.json": "967aacbc8630e270fd752799094a68c1295101fe58153d2675aedf3c856a4134",
-    "methods.valid.json": "18da9d6fc359e47409f3f23c1c0021f8bf4324c59d1325392188727cbbdd6916",
+    "events.valid.json": "e6cd50d88429b58debbb67e95d4f5700d8ff21f5f836104cef69fdd89f6d12b4",
+    "methods.invalid.json": "5334d06a703d249dbfdd3acbb4c9744ee905fd360a606d6147d7536e09cb1708",
+    "methods.valid.json": "c4bb4763308a213c8a0a0ba593dac85c0fb9d5df67adeacab3cec329cac81eaa",
     "results.failures.json": "f9f79a3a1cc5f92a65f871877baced63dc4454b635b5e4120031059d39af1f6e"
   },
   "fixture_version": 1,

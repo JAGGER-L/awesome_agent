@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 
+import { MarkdownBlock } from "../../../markdown/MarkdownBlock.js";
 import type { TranscriptBlock } from "../../../transcript/model.js";
 import { useTheme } from "../../theme.js";
 
@@ -13,9 +14,25 @@ export function BlockView({
   const theme = useTheme();
   switch (block.kind) {
     case "user":
-      return <Text color={theme.user}>You › {block.text}</Text>;
+      return (
+        <Box flexDirection="column">
+          <Text color={theme.user}>❯ {block.text}</Text>
+          {block.status === "failed" ? (
+            <Text color={theme.error}>
+              Failed · {block.error_message ?? "Turn was not accepted."}
+            </Text>
+          ) : null}
+        </Box>
+      );
     case "assistant":
-      return <Text color={theme.assistant}>Assistant › {block.text}</Text>;
+      return (
+        <Box width={width}>
+          <Text color={theme.assistant}>● </Text>
+          <Box width={Math.max(1, width - 2)}>
+            <MarkdownBlock source={block.text} width={Math.max(1, width - 2)} />
+          </Box>
+        </Box>
+      );
     case "direct_command":
       return <Text color={theme.accent}>$ {block.command}</Text>;
     case "tools":

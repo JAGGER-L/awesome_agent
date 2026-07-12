@@ -64,8 +64,14 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     register_read_tools(registry)
     catalog = SkillCatalog((), ())
 
-    async def submit_turn(thread_id: str, content: str) -> object:
-        return {"thread_id": thread_id, "content": content}
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        return {
+            "thread_id": thread_id,
+            "content": content,
+            "client_message_id": client_message_id,
+        }
 
     extensions = ApplicationExtensionService(
         conversation=conversation,
@@ -119,7 +125,12 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     )
     assert listed.data["entries"][0]["content"] == "Prefer concise answers."
 
-    turn = conversation.begin_turn(thread.id, "remember editor preference", _config())
+    turn = conversation.begin_turn(
+        thread.id,
+        "remember editor preference",
+        _config(),
+        client_message_id="client_memory",
+    )
     observed = memory.snapshot(MemoryScope.USER)
     tool_result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -206,7 +217,9 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     assert any(item["kind"] == "user_memory" for item in frozen.manifest)
     conversation.complete_turn(turn.id, "done", UsageSummary(), "completed")
 
-    next_turn = conversation.begin_turn(thread.id, "next", _config())
+    next_turn = conversation.begin_turn(
+        thread.id, "next", _config(), client_message_id="client_next"
+    )
     context_service.prepare_turn(next_turn, "next")
     next_context = await context_service.build(
         new_agent_state(
@@ -245,8 +258,14 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
     thread = conversation.create_thread(workspace.key)
     catalog = SkillCatalog((), ())
 
-    async def submit_turn(thread_id: str, content: str) -> object:
-        return {"thread_id": thread_id, "content": content}
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        return {
+            "thread_id": thread_id,
+            "content": content,
+            "client_message_id": client_message_id,
+        }
 
     service = ApplicationExtensionService(
         conversation=conversation,

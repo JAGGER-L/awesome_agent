@@ -68,9 +68,15 @@ CREATE TABLE thread_entries (
         kind IN ('user_message', 'assistant_message', 'direct_command')
     ),
     content TEXT NOT NULL,
+    client_message_id TEXT,
     metadata_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    UNIQUE (thread_id, entry_id)
+    CHECK (
+        (kind = 'user_message' AND client_message_id IS NOT NULL)
+        OR (kind <> 'user_message' AND client_message_id IS NULL)
+    ),
+    UNIQUE (thread_id, entry_id),
+    UNIQUE (thread_id, client_message_id)
 );
 CREATE UNIQUE INDEX idx_thread_entries_sequence
 ON thread_entries (thread_id, sequence);

@@ -209,6 +209,7 @@ export const eventEnvelopeSchema = z
     thread_id: nullableIdentifier,
     turn_id: nullableIdentifier,
     operation_id: nullableIdentifier,
+    client_message_id: nullableIdentifier,
     event_type: eventTypeSchema,
     timestamp: utcTimestampSchema,
     payload: eventPayloadSchema,

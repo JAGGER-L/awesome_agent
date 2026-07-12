@@ -298,3 +298,18 @@ class OperationAccepted(BaseModel):
     operation_id: str = Field(min_length=1, max_length=128)
     thread_id: str | None = Field(default=None, max_length=128)
     turn_id: str | None = Field(default=None, max_length=128)
+    client_message_id: str | None = Field(
+        default=None,
+        pattern=r"^client_[A-Za-z0-9_-]+$",
+        max_length=128,
+    )
+
+    @model_validator(mode="after")
+    def validate_turn_identity(self) -> OperationAccepted:
+        if self.turn_id is not None and (
+            self.thread_id is None or self.client_message_id is None
+        ):
+            raise ValueError("Turn acceptance requires thread_id and client_message_id")
+        if self.client_message_id is not None and self.turn_id is None:
+            raise ValueError("client_message_id requires turn_id")
+        return self

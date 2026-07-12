@@ -64,6 +64,7 @@ WORKSPACE_KEY = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 THREAD_ID = "thread_11111111111111111111111111111111"
 TURN_ID = "turn_22222222222222222222222222222222"
 OPERATION_ID = "operation_33333333333333333333333333333333"
+CLIENT_MESSAGE_ID = "client_44444444444444444444444444444444"
 
 METHODS = (
     "initialize",
@@ -172,12 +173,17 @@ def _valid_methods() -> dict[str, object]:
         (
             "turn.submit",
             "turn.submit",
-            {"thread_id": THREAD_ID, "content": "Inspect the repository."},
+            {
+                "thread_id": THREAD_ID,
+                "content": "Inspect the repository.",
+                "client_message_id": CLIENT_MESSAGE_ID,
+            },
             _success(
                 OperationAccepted(
                     operation_id=OPERATION_ID,
                     thread_id=THREAD_ID,
                     turn_id=TURN_ID,
+                    client_message_id=CLIENT_MESSAGE_ID,
                 )
             ),
         ),
@@ -284,9 +290,19 @@ def _invalid_methods() -> dict[str, object]:
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
+                "name": "turn.submit.client_message_id_missing",
+                "method": "turn.submit",
+                "params": {"thread_id": THREAD_ID, "content": "Inspect."},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
                 "name": "turn.submit.empty",
                 "method": "turn.submit",
-                "params": {"thread_id": THREAD_ID, "content": ""},
+                "params": {
+                    "thread_id": THREAD_ID,
+                    "content": "",
+                    "client_message_id": CLIENT_MESSAGE_ID,
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -433,6 +449,7 @@ def _event(event_type: EventType, sequence: int) -> EventEnvelope:
         thread_id=thread_id,
         turn_id=turn_id,
         operation_id=operation_id,
+        client_message_id=CLIENT_MESSAGE_ID if turn_id is not None else None,
         event_type=event_type,
         timestamp=FIXED_TIME,
         payload=_payload(event_type),

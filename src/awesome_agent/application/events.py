@@ -44,11 +44,13 @@ class ApplicationEventProjector:
         thread_id: str,
         turn_id: str,
         operation_id: str,
+        client_message_id: str,
     ) -> None:
         self._emitter = emitter
         self._thread_id = thread_id
         self._turn_id = turn_id
         self._operation_id = operation_id
+        self._client_message_id = client_message_id
         self._started = False
         self._terminal = False
 
@@ -177,4 +179,5 @@ class ApplicationEventProjector:
             thread_id=self._thread_id,
             turn_id=self._turn_id,
             operation_id=self._operation_id,
+            client_message_id=self._client_message_id,
         )

@@ -47,6 +47,23 @@ export type SurfaceAction =
       readonly generation: number;
     }
   | {
+      readonly type: "transcript.user.pending";
+      readonly client_message_id: string;
+      readonly text: string;
+      readonly generation: number;
+    }
+  | {
+      readonly type: "transcript.user.accepted";
+      readonly client_message_id: string;
+      readonly generation: number;
+    }
+  | {
+      readonly type: "transcript.user.failed";
+      readonly client_message_id: string;
+      readonly message: string;
+      readonly generation: number;
+    }
+  | {
       readonly type: "protocol.fatal";
       readonly code: string;
       readonly message: string;

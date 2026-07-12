@@ -189,6 +189,7 @@ def test_surface_neutral_application_contracts_hide_secret_values() -> None:
         operation_id="operation_1",
         thread_id="thread_1",
         turn_id="turn_1",
+        client_message_id="client_1",
     )
     error = ProductError(
         code=ProductErrorCode.OPERATION_BUSY,

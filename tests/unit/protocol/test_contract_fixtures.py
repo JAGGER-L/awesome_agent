@@ -100,9 +100,9 @@ class _FixtureFacade:
         return self._result
 
     async def submit_turn(
-        self, thread_id: str, content: str
+        self, thread_id: str, content: str, client_message_id: str
     ) -> ApplicationResult[dict[str, object]]:
-        del thread_id, content
+        del thread_id, content, client_message_id
         return self._result
 
     async def execute_direct(

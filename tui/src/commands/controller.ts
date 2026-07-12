@@ -10,6 +10,7 @@ import type {
   LocalCommandIntent,
   RoutedInput,
 } from "./parser.js";
+import { createClientMessageId } from "../transcript/identity.js";
 
 interface CommandRpc {
   request<Method extends MethodName>(
@@ -21,7 +22,9 @@ interface CommandRpc {
   >;
 }
 
-type OperationAccepted = MethodValue["turn.submit"];
+type OperationAccepted =
+  | MethodValue["turn.submit"]
+  | MethodValue["direct.execute"];
 type CommandResult = MethodValue["command.execute"];
 type CommandSelection = NonNullable<CommandResult["selection"]>;
 type CommandSecretPrompt = NonNullable<CommandResult["secret_prompt"]>;
@@ -61,6 +64,7 @@ export class CommandController {
   async submit(
     routed: RoutedInput,
     threadId: string | undefined,
+    clientMessageId?: string,
   ): Promise<CommandDispatchOutcome> {
     if (routed.kind === "local") {
       return { kind: "local", intent: routed.intent };
@@ -72,6 +76,7 @@ export class CommandController {
           ? await this.rpc.request("turn.submit", {
               thread_id: threadId,
               content: routed.content,
+              client_message_id: clientMessageId ?? createClientMessageId(),
             })
           : await this.rpc.request("direct.execute", {
               thread_id: threadId,

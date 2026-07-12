@@ -5,7 +5,10 @@ export interface BlockBase {
 
 export interface UserBlock extends BlockBase {
   readonly kind: "user";
+  readonly client_message_id: string;
+  readonly status: "pending" | "accepted" | "persisted" | "failed";
   readonly text: string;
+  readonly error_message?: string;
 }
 export interface AssistantBlock extends BlockBase {
   readonly kind: "assistant";

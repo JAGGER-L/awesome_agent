@@ -87,11 +87,16 @@ class Facade:
         raise RuntimeError("private database traceback")
 
     async def submit_turn(
-        self, thread_id: str, content: str
+        self, thread_id: str, content: str, client_message_id: str
     ) -> ApplicationResult[OperationAccepted]:
-        self.calls.append(("turn", (thread_id, content)))
+        self.calls.append(("turn", (thread_id, content, client_message_id)))
         return ApplicationResult.success(
-            OperationAccepted(operation_id="operation_1", thread_id=thread_id)
+            OperationAccepted(
+                operation_id="operation_1",
+                thread_id=thread_id,
+                turn_id="turn_1",
+                client_message_id=client_message_id,
+            )
         )
 
     async def execute_direct(
@@ -174,7 +179,11 @@ def test_dispatcher_exposes_exact_protocol_v1_method_table() -> None:
         ("thread.list", {}, "list"),
         (
             "turn.submit",
-            {"thread_id": "thread_1", "content": "inspect"},
+            {
+                "thread_id": "thread_1",
+                "content": "inspect",
+                "client_message_id": "client_1",
+            },
             "turn",
         ),
         (

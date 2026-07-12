@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SurfaceState } from "../../src/state/index.js";
 import { projectLiveTurn } from "../../src/transcript/live.js";
+import { formatStreamingMarkdown } from "../../src/markdown/streaming.js";
 
 function state(): SurfaceState {
   return {
@@ -47,6 +48,15 @@ function state(): SurfaceState {
 }
 
 describe("projectLiveTurn", () => {
+  it("formats incomplete Markdown without invoking the completed parser", () => {
+    expect(formatStreamingMarkdown("# Heading\n\n- item\n\n**partial")).toBe(
+      "Heading\n\n• item\n\n**partial",
+    );
+    expect(formatStreamingMarkdown("**done** and `code`")).toBe(
+      "done and code",
+    );
+  });
+
   it("projects Balanced safe summaries with stable tool order", () => {
     const live = projectLiveTurn(state());
     expect(live.blocks.map((block) => block.kind)).toEqual([

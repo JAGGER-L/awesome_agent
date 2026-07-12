@@ -15,6 +15,9 @@ const nonNegativeIntegerSchema = safeIntegerSchema.min(0);
 const positiveIntegerSchema = safeIntegerSchema.min(1);
 const emptyParamsSchema = z.strictObject({});
 const identifierSchema = boundedText(1, 128);
+const clientMessageIdentifierSchema = identifierSchema.regex(
+  /^client_[A-Za-z0-9_-]+$/,
+);
 
 export const workspacePresentationSchema = z.strictObject({
   display_path: boundedText(1, 4_096),
@@ -99,10 +102,17 @@ export const threadEntrySchema = z
     sequence: positiveIntegerSchema,
     kind: z.enum(["user_message", "assistant_message", "direct_command"]),
     content: boundedText(0, 200_000),
+    client_message_id: clientMessageIdentifierSchema.optional(),
     metadata: z.record(z.string(), jsonValueSchema),
     created_at: utcTimestampSchema,
   })
-  .superRefine(({ kind, content }, context) => {
+  .superRefine(({ kind, content, client_message_id }, context) => {
+    if ((kind === "user_message") !== (client_message_id !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "User message identity and entry kind disagree",
+      });
+    }
     if (kind === "direct_command" && Array.from(content).length > 30_000) {
       context.addIssue({
         code: "custom",
@@ -275,6 +285,12 @@ const operationAcceptedSchema = z.strictObject({
   operation_id: identifierSchema,
   thread_id: identifierSchema.optional(),
   turn_id: identifierSchema.optional(),
+  client_message_id: clientMessageIdentifierSchema.optional(),
+});
+const turnOperationAcceptedSchema = operationAcceptedSchema.extend({
+  thread_id: identifierSchema,
+  turn_id: identifierSchema,
+  client_message_id: clientMessageIdentifierSchema,
 });
 const interactionResultSchema = z.strictObject({
   accepted: z.boolean(),
@@ -324,9 +340,10 @@ export const methodSchemas = {
     params: z.strictObject({
       thread_id: identifierSchema,
       content: boundedText(1, 200_000),
+      client_message_id: clientMessageIdentifierSchema,
     }),
-    value: operationAcceptedSchema,
-    result: applicationResultSchema(operationAcceptedSchema),
+    value: turnOperationAcceptedSchema,
+    result: applicationResultSchema(turnOperationAcceptedSchema),
   },
   "direct.execute": {
     params: z.strictObject({

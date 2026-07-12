@@ -223,7 +223,9 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
             seal_changes=seal_changes,
         )
 
-        accepted = await coordinator.submit_turn(thread.id, "inspect")
+        accepted = await coordinator.submit_turn(
+            thread.id, "inspect", client_message_id="client_inspect"
+        )
         await coordinator.wait(accepted.operation_id)
 
         assert accepted.turn_id is not None
@@ -308,7 +310,9 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
             seal_changes=lambda turn_id: None,
         )
 
-        accepted = await coordinator.submit_turn(thread.id, "wait")
+        accepted = await coordinator.submit_turn(
+            thread.id, "wait", client_message_id="client_wait"
+        )
         assert await coordinator.cancel_operation(accepted.operation_id) is True
         with pytest.raises(asyncio.CancelledError):
             await coordinator.wait(accepted.operation_id)

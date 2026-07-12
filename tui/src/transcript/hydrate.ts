@@ -32,9 +32,14 @@ export function hydrateThreadPage(page: ThreadPage): TranscriptProjection {
     (left, right) => left.sequence - right.sequence,
   )) {
     if (entry.kind === "user_message") {
+      if (!entry.client_message_id) {
+        throw new Error("Durable user message has no client identity.");
+      }
       blocks.push({
-        key: `entry:${entry.id}`,
+        key: `user:${entry.client_message_id}`,
         kind: "user",
+        client_message_id: entry.client_message_id,
+        status: "persisted",
         text: entry.content,
       });
     } else if (entry.kind === "assistant_message") {

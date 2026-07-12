@@ -137,6 +137,8 @@ class ConversationService:
         thread_id: str,
         user_content: str,
         config: TurnConfig,
+        *,
+        client_message_id: str,
     ) -> Turn:
         if not user_content.strip():
             raise ValueError("User message cannot be empty.")
@@ -148,6 +150,7 @@ class ConversationService:
             sequence=_next_sequence(view),
             kind=ThreadEntryKind.USER_MESSAGE,
             content=user_content,
+            client_message_id=client_message_id,
             created_at=now,
         )
         turn_id = self._id_factory("turn")

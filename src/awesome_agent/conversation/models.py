@@ -99,11 +99,21 @@ class ThreadEntry(BaseModel):
     sequence: int = Field(ge=1)
     kind: ThreadEntryKind
     content: str = Field(max_length=200_000)
+    client_message_id: str | None = Field(
+        default=None,
+        pattern=r"^client_[A-Za-z0-9_-]+$",
+        max_length=128,
+    )
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime
 
     @model_validator(mode="after")
     def validate_direct_command_bound(self) -> Self:
+        if self.kind is ThreadEntryKind.USER_MESSAGE:
+            if self.client_message_id is None:
+                raise ValueError("user_message requires client_message_id")
+        elif self.client_message_id is not None:
+            raise ValueError("client_message_id is only valid for user_message")
         if self.kind is ThreadEntryKind.DIRECT_COMMAND and len(self.content) > 30_000:
             raise ValueError("direct_command content exceeds 30000 characters")
         return self

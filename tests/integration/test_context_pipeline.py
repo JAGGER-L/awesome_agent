@@ -61,7 +61,12 @@ def _complete_turns(
     count: int,
 ) -> None:
     for index in range(count):
-        turn = conversation.begin_turn(thread_id, f"question {index}", _config())
+        turn = conversation.begin_turn(
+            thread_id,
+            f"question {index}",
+            _config(),
+            client_message_id=f"client_{index}",
+        )
         conversation.complete_turn(
             turn.id,
             f"answer {index}",
@@ -117,6 +122,7 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         thread.id,
         "inspect @note.txt @dir",
         _config(),
+        client_message_id="client_context",
     )
     context_service.prepare_turn(turn, "inspect @note.txt @dir")
     state = new_agent_state(
@@ -247,7 +253,11 @@ async def test_invalid_explicit_path_fails_turn_before_graph_or_model(
         turn_input_preparer=context_service.prepare_turn,
     )
 
-    accepted = await coordinator.submit_turn(thread.id, "inspect @missing.txt")
+    accepted = await coordinator.submit_turn(
+        thread.id,
+        "inspect @missing.txt",
+        client_message_id="client_missing",
+    )
     with pytest.raises(TurnInputInvalid):
         await coordinator.wait(accepted.operation_id)
 

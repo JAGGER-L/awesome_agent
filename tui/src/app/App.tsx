@@ -54,6 +54,7 @@ import {
 } from "../protocol/commands.js";
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
+import { createClientMessageId } from "../transcript/identity.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 
@@ -394,10 +395,49 @@ export function App({
         };
       }
       const generation = store.getState().thread_generation;
-      const outcome = await controller.submit(
-        routed,
-        state.application?.current_thread_id,
-      );
+      const threadId = state.application?.current_thread_id;
+      const optimisticMessage =
+        routed.kind === "turn"
+          ? { id: createClientMessageId(), text: routed.content }
+          : undefined;
+      if (optimisticMessage) {
+        store.dispatch({
+          type: "transcript.user.pending",
+          client_message_id: optimisticMessage.id,
+          text: optimisticMessage.text,
+          generation,
+        });
+      }
+      const outcome = optimisticMessage
+        ? await controller.submit(routed, threadId, optimisticMessage.id)
+        : await controller.submit(routed, threadId);
+      if (
+        optimisticMessage &&
+        store.getState().thread_generation === generation
+      ) {
+        if (
+          outcome.kind === "accepted" &&
+          outcome.operation.client_message_id === optimisticMessage.id
+        ) {
+          store.dispatch({
+            type: "transcript.user.accepted",
+            client_message_id: optimisticMessage.id,
+            generation,
+          });
+        } else {
+          store.dispatch({
+            type: "transcript.user.failed",
+            client_message_id: optimisticMessage.id,
+            message:
+              outcome.kind === "error"
+                ? "error" in outcome
+                  ? outcome.error.message
+                  : outcome.code
+                : "Turn acceptance identity did not match the submitted message.",
+            generation,
+          });
+        }
+      }
       return await applyCommandOutcome(
         outcome,
         routed.kind === "command" ? routed.intent : undefined,
