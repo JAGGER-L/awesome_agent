@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import sqlite3
 import tomllib
 from datetime import UTC, datetime
 from importlib.metadata import version as installed_version
@@ -356,6 +358,55 @@ def test_product_version_matches_distribution_and_repository_metadata() -> None:
     assert metadata["project"]["dynamic"] == ["version"]
     assert "version" not in metadata["project"]
     assert (root / "VERSION").read_text(encoding="utf-8") == f"{PRODUCT_VERSION}\n"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_request_failure_is_logged_without_params_and_isolated(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FailingFacade(Facade):
+        async def submit_turn(
+            self,
+            thread_id: str,
+            content: str,
+            client_message_id: str,
+        ) -> ApplicationResult[OperationAccepted]:
+            del thread_id, client_message_id
+            raise sqlite3.OperationalError(f"broken storage for {content}")
+
+    dispatcher = JsonRpcDispatcher(FailingFacade())
+    secret = "private-prompt-never-log"
+
+    with caplog.at_level(logging.ERROR):
+        failed = await dispatcher.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "turn.submit",
+                "params": {
+                    "thread_id": "thread_1",
+                    "content": secret,
+                    "client_message_id": "client_1",
+                },
+            }
+        )
+    healthy = await dispatcher.dispatch(
+        {"jsonrpc": "2.0", "id": 2, "method": "application.getState", "params": {}}
+    )
+
+    assert failed == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+            "code": -32603,
+            "message": "Internal error",
+            "data": {"diagnostic_code": "core_request_failed"},
+        },
+    }
+    assert healthy is not None and "result" in healthy
+    assert "turn.submit" in caplog.text
+    assert "request_id=1" in caplog.text
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio

@@ -168,7 +168,10 @@ describe("scrollback transcript components", () => {
         },
       },
     });
-    const frame = render(<App store={store} width={80} />).lastFrame() ?? "";
+    const frame =
+      render(
+        <App store={store} reportFatal={() => undefined} width={80} />,
+      ).lastFrame() ?? "";
 
     expect(frame.indexOf("streaming answer")).toBeLessThan(
       frame.indexOf("Message"),

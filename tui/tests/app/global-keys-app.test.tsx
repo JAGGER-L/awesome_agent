@@ -32,7 +32,12 @@ function lifecycle() {
 describe("App global keys", () => {
   it("clears non-empty idle Composer input with Ctrl+C", async () => {
     const view = render(
-      <App store={createSurfaceStore()} lifecycle={lifecycle()} width={60} />,
+      <App
+        store={createSurfaceStore()}
+        lifecycle={lifecycle()}
+        reportFatal={() => undefined}
+        width={60}
+      />,
     );
     view.stdin.write("draft");
     await eventually(() => expect(view.lastFrame()).toContain("draft"));
@@ -44,7 +49,12 @@ describe("App global keys", () => {
   it("exits on the second empty Ctrl+C within the window", async () => {
     const actions = lifecycle();
     const view = render(
-      <App store={createSurfaceStore()} lifecycle={actions} width={60} />,
+      <App
+        store={createSurfaceStore()}
+        lifecycle={actions}
+        reportFatal={() => undefined}
+        width={60}
+      />,
     );
     view.stdin.write("\x03");
     await eventually(() =>
@@ -59,7 +69,12 @@ describe("App global keys", () => {
   it("exits on Ctrl+D only with empty input", async () => {
     const actions = lifecycle();
     const view = render(
-      <App store={createSurfaceStore()} lifecycle={actions} width={60} />,
+      <App
+        store={createSurfaceStore()}
+        lifecycle={actions}
+        reportFatal={() => undefined}
+        width={60}
+      />,
     );
     view.stdin.write("\x04");
     await eventually(() =>

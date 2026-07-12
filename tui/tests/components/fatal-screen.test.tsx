@@ -37,4 +37,25 @@ describe("FatalScreen", () => {
     expect(runtime).toContain("awesome-core");
     expect(runtime).toContain("Exit code 2");
   });
+
+  it("renders actionable startup diagnostics without raw failure text", () => {
+    const frame =
+      render(
+        <FatalScreen
+          fatal={{
+            kind: "protocol",
+            message: "private startup details",
+            diagnosticCode: "core_request_failed",
+          }}
+          startup
+        />,
+      ).lastFrame() ?? "";
+
+    expect(frame).toContain("Awesome could not initialize this workspace.");
+    expect(frame).toContain("Diagnostic: core_request_failed");
+    expect(frame).toContain("Run `awesome` again");
+    expect(frame).not.toContain("private startup details");
+    expect(frame).toContain("Quit");
+    expect(frame).not.toContain("Reconnect");
+  });
 });

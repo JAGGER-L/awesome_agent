@@ -8,16 +8,30 @@ export function FatalScreen({
   fatal,
   selected = 0,
   disabled = false,
+  startup = false,
 }: {
   readonly fatal: FatalState;
   readonly selected?: number;
   readonly disabled?: boolean;
+  readonly startup?: boolean;
 }) {
   const theme = useTheme();
   const summary = fatalSummary(fatal);
   return (
     <Box flexDirection="column">
-      <Text color={theme.danger}>{summary}</Text>
+      {startup ? (
+        <>
+          <Text color={theme.danger}>
+            Awesome could not initialize this workspace.
+          </Text>
+          <Text>Diagnostic: {startupDiagnosticCode(fatal)}</Text>
+          <Text>
+            Run `awesome` again after resolving the reported state issue.
+          </Text>
+        </>
+      ) : (
+        <Text color={theme.danger}>{summary}</Text>
+      )}
       {fatal.kind === "core_exit" ? (
         <>
           <Text>
@@ -35,17 +49,29 @@ export function FatalScreen({
         <Text>Exit code {fatalExitCode(fatal)}</Text>
       ) : null}
       <Picker
-        selected={selected}
+        selected={startup ? 0 : selected}
         selection={{
-          prompt: disabled ? "Reconnecting…" : "Choose recovery action",
-          options: [
-            { value: "reconnect", label: "Reconnect", selected: true },
-            { value: "quit", label: "Quit", selected: false },
-          ],
+          prompt: startup
+            ? "Exit and run Awesome again"
+            : disabled
+              ? "Reconnecting…"
+              : "Choose recovery action",
+          options: startup
+            ? [{ value: "quit", label: "Quit", selected: true }]
+            : [
+                { value: "reconnect", label: "Reconnect", selected: true },
+                { value: "quit", label: "Quit", selected: false },
+              ],
         }}
       />
     </Box>
   );
+}
+
+function startupDiagnosticCode(fatal: FatalState): string {
+  return fatal.kind === "protocol" && fatal.diagnosticCode
+    ? fatal.diagnosticCode
+    : "startup_failed";
 }
 
 function keyedLines(
