@@ -52,8 +52,9 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).toContain("question");
     expect(view.lastFrame()).toContain("durable answer");
     expect(view.lastFrame()).toContain("git status");
-    expect(view.lastFrame()).toContain("failed safely");
-    expect(view.lastFrame()).toContain("exit_1");
+    expect(view.lastFrame()).toContain("1 tool call · 12ms · Ctrl+O to expand");
+    expect(view.lastFrame()).not.toContain("failed safely");
+    expect(view.lastFrame()).not.toContain("exit_1");
     expect(view.lastFrame()).not.toContain("You");
     expect(view.lastFrame()).not.toContain("Assistant");
   });
@@ -101,6 +102,7 @@ describe("scrollback transcript components", () => {
       render(
         <Transcript
           width={80}
+          toolDetailsExpanded
           blocks={[
             {
               key: "write",

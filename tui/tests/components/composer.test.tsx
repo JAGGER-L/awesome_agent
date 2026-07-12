@@ -365,7 +365,9 @@ describe("App composer integration", () => {
     expect(store.getState()).toMatchObject({
       application: { current_thread_id: "thread_new" },
       thread: { view: { thread: { id: "thread_new" } } },
-      committed_transcript: [],
+      committed_transcript: [
+        expect.objectContaining({ message: "New conversation started" }),
+      ],
     });
     expect(JSON.stringify(store.getState())).not.toContain("old transcript");
     expect(resetThreadScope).toHaveBeenCalledOnce();

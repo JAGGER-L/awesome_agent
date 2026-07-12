@@ -84,24 +84,23 @@ describe("projectLiveTurn", () => {
     const live = projectLiveTurn(state());
     expect(live.blocks.map((block) => block.kind)).toEqual([
       "reasoning_marker",
-      "tools",
       "reasoning_marker",
       "tools",
       "assistant",
       "change",
       "warning",
     ]);
-    expect(live.blocks[1]).toMatchObject({
-      items: [{ verb: "Read", target: "config.py", summary: "Read config" }],
-    });
-    expect(live.blocks[3]).toMatchObject({
-      items: [{ verb: "Run", outcome: "error", error_code: "exit_1" }],
+    expect(live.blocks[2]).toMatchObject({
+      items: [
+        { verb: "Read", target: "config.py", summary: "Read config" },
+        { verb: "Run", outcome: "error", error_code: "exit_1" },
+      ],
     });
     expect(live.reasoning_text).toBe("private live thought");
     expect(live.usage).toEqual({ input_tokens: 12, output_tokens: 4 });
   });
 
-  it("keeps timeline order without grouping non-adjacent tools", () => {
+  it("keeps reasoning inside one assistant-bounded tool sequence", () => {
     const value = state();
     const operation = value.active_operation;
     if (!operation?.turn) throw new Error("fixture requires an active Turn");
@@ -118,7 +117,7 @@ describe("projectLiveTurn", () => {
       },
     });
     expect(live.blocks.filter((block) => block.kind === "tools")).toHaveLength(
-      2,
+      1,
     );
   });
 

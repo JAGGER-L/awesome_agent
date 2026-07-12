@@ -30,7 +30,7 @@ import { ProviderSetupNotice } from "../components/ProviderSetupNotice.js";
 import { SecretInput } from "../components/SecretInput.js";
 import { StatusCommand } from "../components/StatusCommand.js";
 import { StatusLine } from "../components/StatusLine.js";
-import type { WelcomeProps } from "../components/Welcome.js";
+import { Welcome, type WelcomeProps } from "../components/Welcome.js";
 import { ActiveTurn } from "../components/transcript/ActiveTurn.js";
 import { Transcript } from "../components/transcript/Transcript.js";
 import { classifyTerminalActionError } from "../interaction/action-errors.js";
@@ -65,6 +65,7 @@ import {
   isAuthPicker,
   unavailableSelectionMessage,
 } from "./use-interaction-flow.js";
+import { threadViewportKey } from "./use-thread-viewport.js";
 
 interface ComposerSubmitResult {
   readonly accepted: boolean;
@@ -324,7 +325,16 @@ export function App({
             );
             return { accepted: true };
           }
-          const transcript = hydrateThreadPage(replacement.thread).blocks;
+          const transcript =
+            intent.name === "new"
+              ? [
+                  {
+                    key: `thread:${threadId}:started`,
+                    kind: "status" as const,
+                    message: "New conversation started",
+                  },
+                ]
+              : hydrateThreadPage(replacement.thread).blocks;
           if (store.getState().thread_generation !== generation) {
             return { accepted: true };
           }
@@ -905,10 +915,11 @@ export function App({
   return (
     <Box flexDirection="column">
       <TerminalInput active={!cancelling} onInput={handleTerminalInput} />
+      {welcome ? <Welcome {...welcome} width={columns} /> : null}
       <Transcript
+        key={threadViewportKey(state)}
         blocks={historic}
         width={columns}
-        welcome={welcome}
         toolDetailsExpanded={ui.toolDetailsExpanded}
       />
       <ActiveTurn

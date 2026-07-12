@@ -84,7 +84,7 @@ function projectDelta(
             ...timeline,
             {
               kind: "assistant",
-              id: `assistant:${turn.id}`,
+              id: `assistant:${turn.id}:${timeline.filter((item) => item.kind === "assistant").length + 1}`,
               text: delta.text,
             },
           ],

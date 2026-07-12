@@ -39,6 +39,18 @@ export function BlockView({
     case "direct_command":
       return <Text color={theme.secondary}>$ {block.command}</Text>;
     case "tools":
+      if (!toolDetailsExpanded) {
+        return (
+          <Text color={theme.tool}>
+            ● {block.items.length} tool{" "}
+            {block.items.length === 1 ? "call" : "calls"} ·{" "}
+            {block.items.some((item) => item.outcome === "running")
+              ? "Running..."
+              : `${block.items.reduce((total, item) => total + (item.duration_ms ?? 0), 0)}ms`}{" "}
+            · Ctrl+O to expand
+          </Text>
+        );
+      }
       return (
         <Box flexDirection="column">
           {block.items.map((item) => (
