@@ -14,12 +14,16 @@ from awesome_agent.agent import (
     new_agent_state,
     validate_agent_state,
 )
-from awesome_agent.context import CODING_AGENT_PRODUCT_INSTRUCTIONS
+from awesome_agent.context import (
+    CODING_AGENT_PRODUCT_INSTRUCTIONS,
+    model_identity_context_source,
+)
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
     ModelErrorCode,
     ModelErrorInfo,
+    ModelIdentitySnapshot,
     ModelRequest,
     ModelTurn,
     StopReason,
@@ -49,6 +53,23 @@ def test_product_instructions_define_minimal_action() -> None:
     assert "smallest set of actions" in instructions
     assert "explicitly requested verification or testing" in instructions
     assert "Never invoke a tool as a ritual" in instructions
+
+
+def test_runtime_identity_source_is_authoritative_and_workspace_scoped() -> None:
+    source = model_identity_context_source(
+        ModelIdentitySnapshot.from_models(
+            configured_model="deepseek/deepseek-v4-pro",
+            effective_model="deepseek/deepseek-v4-pro",
+        ),
+        workspace_path="E:/project",
+    )
+
+    assert "Runtime: Awesome Agent" in source.content
+    assert "Provider: deepseek" in source.content
+    assert "Effective model: deepseek/deepseek-v4-pro" in source.content
+    assert "Fallback active: no" in source.content
+    assert "Workspace: E:/project" in source.content
+    assert "Never claim to be Claude" in source.content
 
 
 class Compressor:

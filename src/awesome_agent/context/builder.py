@@ -164,6 +164,8 @@ class ContextBuilder:
 
 def model_identity_context_source(
     identity: ModelIdentitySnapshot,
+    *,
+    workspace_path: str,
 ) -> ContextSource:
     fallback = (
         f"yes, from {identity.fallback_from}" if identity.fallback_active else "no"
@@ -180,8 +182,10 @@ def model_identity_context_source(
             f"- Configured model: {identity.configured_model}\n"
             f"- Effective model: {identity.effective_model}\n"
             f"- Fallback active: {fallback}\n"
+            f"- Workspace: {workspace_path}\n"
             "When asked about your identity, report these facts and do not infer "
-            "a different model or runtime."
+            "a different model or runtime. Never claim to be Claude, ChatGPT, "
+            "or another host unless those facts explicitly say so."
         ),
     )
 

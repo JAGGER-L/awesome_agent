@@ -66,14 +66,29 @@ function projectDelta(
   turn: TurnProjection,
   delta: CoalescedDelta,
 ): TurnProjection {
-  const timeline = closeThinking(turn.timeline, delta.first_timestamp);
   if (delta.delta_kind === "reasoning") {
+    const hasActiveThinking = turn.timeline.some(
+      (item) => item.kind === "thinking" && item.duration_ms === undefined,
+    );
     return {
       ...turn,
-      timeline,
+      timeline: hasActiveThinking
+        ? turn.timeline
+        : [
+            ...turn.timeline,
+            {
+              kind: "thinking",
+              id: `thinking:${turn.thinking_sequence}`,
+              started_at: delta.first_timestamp,
+            },
+          ],
       reasoning_text: appendReasoningTail(turn.reasoning_text, delta.text),
+      thinking_sequence: hasActiveThinking
+        ? turn.thinking_sequence
+        : turn.thinking_sequence + 1,
     };
   }
+  const timeline = closeThinking(turn.timeline, delta.first_timestamp);
   const last = timeline.at(-1);
   return {
     ...turn,
@@ -155,14 +170,8 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             status: "active",
             started_at: event.timestamp,
             reasoning_text: "",
-            timeline: [
-              {
-                kind: "thinking",
-                id: "thinking:0",
-                started_at: event.timestamp,
-              },
-            ],
-            thinking_sequence: 1,
+            timeline: [],
+            thinking_sequence: 0,
           },
         },
       };
@@ -266,21 +275,7 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           };
         });
         if (!matched) return turn;
-        if (payload.kind === "tool.cancelled") {
-          return { ...turn, timeline };
-        }
-        return {
-          ...turn,
-          timeline: [
-            ...timeline,
-            {
-              kind: "thinking",
-              id: `thinking:${turn.thinking_sequence}`,
-              started_at: event.timestamp,
-            },
-          ],
-          thinking_sequence: turn.thinking_sequence + 1,
-        };
+        return { ...turn, timeline };
       });
     }
     case "usage.updated":

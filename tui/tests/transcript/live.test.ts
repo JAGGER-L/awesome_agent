@@ -130,4 +130,27 @@ describe("projectLiveTurn", () => {
       }).terminal,
     ).toBe(true);
   });
+
+  it("does not present Thought timing when no reasoning interval exists", () => {
+    const value = state();
+    const operation = value.active_operation;
+    if (!operation?.turn) throw new Error("fixture requires an active Turn");
+    const live = projectLiveTurn({
+      ...value,
+      active_operation: {
+        ...operation,
+        turn: {
+          ...operation.turn,
+          reasoning_text: "",
+          timeline: operation.turn.timeline.filter(
+            (item) => item.kind !== "thinking",
+          ),
+        },
+      },
+    });
+
+    expect(live.blocks.some((block) => block.kind === "reasoning_marker")).toBe(
+      false,
+    );
+  });
 });
