@@ -4,6 +4,7 @@ export type MarkdownInline =
   | { readonly kind: "emphasis"; readonly children: readonly MarkdownInline[] }
   | { readonly kind: "deleted"; readonly children: readonly MarkdownInline[] }
   | { readonly kind: "inline_code"; readonly text: string }
+  | { readonly kind: "math"; readonly text: string }
   | {
       readonly kind: "link";
       readonly href: string;
@@ -33,4 +34,11 @@ export type MarkdownNode =
       readonly text: string;
       readonly language?: string;
     }
-  | { readonly kind: "rule" };
+  | { readonly kind: "rule" }
+  | {
+      readonly kind: "table";
+      readonly header: readonly (readonly MarkdownInline[])[];
+      readonly rows: readonly (readonly (readonly MarkdownInline[])[])[];
+      readonly align: readonly ("left" | "center" | "right" | null)[];
+    }
+  | { readonly kind: "math"; readonly text: string };
