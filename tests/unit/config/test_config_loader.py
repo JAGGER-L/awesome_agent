@@ -33,6 +33,7 @@ def test_config_sources_are_exact_and_missing_files_are_not_created(
     assert loaded.user.model_dump(mode="json") == {
         "version": 1,
         "providers": {"default_model": None, "kimi_region": "cn"},
+        "credentials": {"deepseek": None, "kimi": None, "mem0": None},
         "budgets": {
             "model_calls": 32,
             "tool_calls": 64,
@@ -171,14 +172,23 @@ def test_process_environment_overrides_user_dotenv_without_leaking_values(
         "deepseek": {
             "provider": "deepseek",
             "environment_variable": "DEEPSEEK_API_KEY",
-            "source": "process_environment",
-            "mutable": False,
+            "environment_configured": True,
+            "awesome_configured": True,
+            "selected_source": "environment",
         },
         "kimi": {
             "provider": "kimi",
             "environment_variable": "MOONSHOT_API_KEY",
-            "source": "user_env_file",
-            "mutable": True,
+            "environment_configured": False,
+            "awesome_configured": True,
+            "selected_source": "awesome",
+        },
+        "mem0": {
+            "provider": "mem0",
+            "environment_variable": "MEM0_API_KEY",
+            "environment_configured": False,
+            "awesome_configured": True,
+            "selected_source": "awesome",
         },
     }
 
@@ -191,10 +201,12 @@ def test_missing_provider_credentials_report_missing_source(tmp_path: Path) -> N
         environ={},
     )
 
-    assert loaded.provider_credentials.deepseek.source == "missing"
-    assert loaded.provider_credentials.deepseek.mutable is True
-    assert loaded.provider_credentials.kimi.source == "missing"
-    assert loaded.provider_credentials.kimi.mutable is True
+    assert loaded.provider_credentials.deepseek.environment_configured is False
+    assert loaded.provider_credentials.deepseek.awesome_configured is False
+    assert loaded.provider_credentials.deepseek.selected_source is None
+    assert loaded.provider_credentials.kimi.environment_configured is False
+    assert loaded.provider_credentials.kimi.awesome_configured is False
+    assert loaded.provider_credentials.kimi.selected_source is None
 
 
 def test_workspace_dotenv_is_never_loaded(tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ memory = [
 
 [project.scripts]
 awesome-core = "awesome_agent.protocol.stdio:main"
+awesome-dev = "awesome_agent.development.launcher:main"
 
 [dependency-groups]
 dev = [
