@@ -11,6 +11,16 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
   const operation = state.active_operation;
   const turn = operation?.turn;
   if (turn) {
+    let pendingTools: ToolItem[] = [];
+    const flushTools = () => {
+      if (pendingTools.length === 0) return;
+      blocks.push({
+        key: `live:${turn.id}:tools:${pendingTools[0]?.call_id ?? "sequence"}`,
+        kind: "tools",
+        items: pendingTools,
+      });
+      pendingTools = [];
+    };
     for (const item of turn.timeline) {
       if (item.kind === "thinking" && item.duration_ms !== undefined) {
         blocks.push({
@@ -19,6 +29,7 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
           label: reasoningElapsedMarker(item.duration_ms),
         });
       } else if (item.kind === "assistant") {
+        flushTools();
         blocks.push({
           key: `live:${turn.id}:${item.id}`,
           kind: "assistant",
@@ -50,13 +61,10 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
             ? {}
             : { error_code: item.error_code }),
         };
-        blocks.push({
-          key: `live:${turn.id}:tool:${item.call_id}`,
-          kind: "tools",
-          items: [tool],
-        });
+        pendingTools.push(tool);
       }
     }
+    flushTools();
     if (turn.duration_ms !== undefined) {
       blocks.push({
         key: `live:${turn.id}:duration`,

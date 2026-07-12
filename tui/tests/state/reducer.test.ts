@@ -219,6 +219,61 @@ describe("surfaceReducer", () => {
     expect(state.event_sequence).toBe(4);
   });
 
+  it("assigns stable unique identities to assistant segments separated by tools", () => {
+    let state = surfaceReducer(initialSurfaceState(), {
+      type: "event.received",
+      generation: 0,
+      event: lifecycle(1, "operation.started"),
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: lifecycle(2, "turn.started"),
+    });
+    const text = (sequence: number, value: string) => ({
+      type: "delta.received" as const,
+      generation: 0,
+      delta: {
+        kind: "coalesced_delta" as const,
+        session_id: "session_1",
+        thread_id: "thread_1",
+        turn_id: "turn_1",
+        operation_id: "operation_1",
+        delta_kind: "text" as const,
+        text: value,
+        first_timestamp: "2026-07-11T08:00:01Z",
+        last_timestamp: "2026-07-11T08:00:01Z",
+        first_sequence: sequence,
+        last_sequence: sequence,
+      },
+    });
+    state = surfaceReducer(state, text(3, "before"));
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: {
+        ...lifecycle(4, "warning"),
+        event_type: "tool.started",
+        payload: {
+          kind: "tool.started",
+          call_id: "call_1",
+          tool_name: "read_file",
+          verb: "Read",
+        },
+      } as EventEnvelope,
+    });
+    state = surfaceReducer(state, text(5, "after"));
+
+    const assistants = state.active_operation?.turn?.timeline.filter(
+      (item) => item.kind === "assistant",
+    );
+    expect(assistants?.map((item) => item.id)).toEqual([
+      "assistant:turn_1:1",
+      "assistant:turn_1:2",
+    ]);
+    expect(new Set(assistants?.map((item) => item.id)).size).toBe(2);
+  });
+
   it("preserves thinking, tool, thinking, and answer order with independent durations", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "event.received",
