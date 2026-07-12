@@ -22,8 +22,10 @@ export interface TerminalKey {
 export type TerminalIntent =
   | { readonly type: "mode.cancel" }
   | { readonly type: "selection.move"; readonly delta: -1 | 1 }
+  | { readonly type: "selection.set"; readonly selected: number }
   | { readonly type: "selection.confirm" }
   | { readonly type: "approval.deny" }
+  | { readonly type: "trust.deny" }
   | { readonly type: "command.complete" }
   | { readonly type: "secret.insert"; readonly text: string }
   | { readonly type: "secret.backspace" }
@@ -66,7 +68,15 @@ export function routeTerminalKey(
   let intent: TerminalIntent | undefined;
   switch (mode.kind) {
     case "workspace_trust":
-      if (!mode.submitting) intent = routeSelectionKey(key, true);
+      if (!mode.submitting) {
+        if (!key.ctrl && !key.meta && (input === "1" || input === "2")) {
+          intent = { type: "selection.set", selected: Number(input) - 1 };
+        } else if (key.escape) {
+          intent = { type: "trust.deny" };
+        } else {
+          intent = routeSelectionKey(key, true);
+        }
+      }
       break;
     case "fatal":
       intent = routeSelectionKey(key, true);

@@ -337,12 +337,46 @@ function CliApplication({
     }
   }, [dispatchTerminal, renderFailure, startup, terminalUi.mode]);
 
+  const submitStartupTrust = useCallback(
+    (decision: "trust" | "deny") => {
+      if (startup.kind !== "trust_required") return;
+      dispatchTerminal({ type: "mode.trust.submitting", submitting: true });
+      void respondStartupTrust(surface, intent, startup.interactionId, decision)
+        .then((result) => {
+          if (result.kind === "denied") {
+            void requestExit("trust_denied");
+          } else {
+            setStartup(result);
+          }
+        })
+        .catch((error: unknown) => {
+          dispatchTerminal({
+            type: "mode.trust.submitting",
+            submitting: false,
+          });
+          dispatchTerminal({
+            type: "mode.trust.message",
+            message: error instanceof Error ? error.message : "Trust failed.",
+          });
+        });
+    },
+    [dispatchTerminal, intent, requestExit, startup, surface],
+  );
+
   const handleStartupInput = useCallback(
     (input: string, key: TerminalKey) => {
       const routed = routeTerminalKey(terminalUiRef.current, input, key);
       if (!routed) return;
       if (routed.type === "selection.move") {
         dispatchTerminal({ type: "mode.select", delta: routed.delta });
+        return;
+      }
+      if (routed.type === "selection.set") {
+        dispatchTerminal({ type: "mode.set", selected: routed.selected });
+        return;
+      }
+      if (routed.type === "trust.deny") {
+        submitStartupTrust("deny");
         return;
       }
       if (routed.type !== "selection.confirm") return;
@@ -356,31 +390,7 @@ function CliApplication({
         mode.kind === "workspace_trust" &&
         startup.kind === "trust_required"
       ) {
-        const decision = mode.selected === 0 ? "trust" : "deny";
-        dispatchTerminal({ type: "mode.trust.submitting", submitting: true });
-        void respondStartupTrust(
-          surface,
-          intent,
-          startup.interactionId,
-          decision,
-        )
-          .then((result) => {
-            if (result.kind === "denied") {
-              void requestExit("trust_denied");
-            } else {
-              setStartup(result);
-            }
-          })
-          .catch((error: unknown) => {
-            dispatchTerminal({
-              type: "mode.trust.submitting",
-              submitting: false,
-            });
-            dispatchTerminal({
-              type: "mode.trust.message",
-              message: error instanceof Error ? error.message : "Trust failed.",
-            });
-          });
+        submitStartupTrust(mode.selected === 0 ? "trust" : "deny");
         return;
       }
       if (
@@ -396,7 +406,14 @@ function CliApplication({
         );
       }
     },
-    [dispatchTerminal, intent, requestExit, startup, surface, terminalUiRef],
+    [
+      dispatchTerminal,
+      requestExit,
+      startup,
+      submitStartupTrust,
+      surface,
+      terminalUiRef,
+    ],
   );
 
   const startupInputActive =
@@ -431,6 +448,15 @@ function CliApplication({
                 ? terminalUi.mode.selected
                 : 0
             }
+            submitting={
+              terminalUi.mode.kind === "workspace_trust"
+                ? terminalUi.mode.submitting
+                : false
+            }
+            {...(terminalUi.mode.kind === "workspace_trust" &&
+            terminalUi.mode.message !== undefined
+              ? { message: terminalUi.mode.message }
+              : {})}
           />
         ) : startup.kind === "denied" ? null : startup.thread.kind ===
           "selection_required" ? (

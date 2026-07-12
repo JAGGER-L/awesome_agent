@@ -649,11 +649,16 @@ function handleTerminalIntent(
     case "selection.move":
       handlers.dispatch({ type: "mode.select", delta: intent.delta });
       break;
+    case "selection.set":
+      handlers.dispatch({ type: "mode.set", selected: intent.selected });
+      break;
     case "selection.confirm":
       handlers.onSelect();
       break;
     case "approval.deny":
       handlers.onDeny();
+      break;
+    case "trust.deny":
       break;
     case "command.complete":
       break;

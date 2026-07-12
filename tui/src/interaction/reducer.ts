@@ -21,6 +21,8 @@ export function terminalUiReducer(
       return { ...state, mode: { kind: "composer" } };
     case "mode.select":
       return { ...state, mode: moveSelection(state.mode, action.delta) };
+    case "mode.set":
+      return { ...state, mode: setSelection(state.mode, action.selected) };
     case "mode.secret.insert":
       return updateSecret(state, (mode) => ({
         ...mode,
@@ -97,6 +99,28 @@ function moveSelection(
             : 0;
   if (size === 0 || !("selected" in mode)) return mode;
   return { ...mode, selected: (mode.selected + delta + size) % size };
+}
+
+function setSelection(
+  mode: TerminalUiState["mode"],
+  selected: number,
+): TerminalUiState["mode"] {
+  const size = selectionSize(mode);
+  if (size === 0 || !("selected" in mode)) return mode;
+  return { ...mode, selected: Math.max(0, Math.min(size - 1, selected)) };
+}
+
+function selectionSize(mode: TerminalUiState["mode"]): number {
+  if (mode.kind === "picker") return mode.selection.options.length;
+  if (mode.kind === "approval") return mode.interaction.choices.length;
+  if (
+    mode.kind === "workspace_trust" ||
+    mode.kind === "fatal" ||
+    mode.kind === "permission_confirmation"
+  ) {
+    return 2;
+  }
+  return 0;
 }
 
 function updateSecret(

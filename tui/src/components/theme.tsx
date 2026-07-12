@@ -2,6 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 
 export interface ThemeRoles {
   readonly accent: string;
+  readonly brand: string;
   readonly assistant: string;
   readonly error: string;
   readonly muted: string;
@@ -11,6 +12,7 @@ export interface ThemeRoles {
 
 const defaultTheme: ThemeRoles = {
   accent: "cyan",
+  brand: "greenBright",
   assistant: "white",
   error: "red",
   muted: "gray",

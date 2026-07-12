@@ -107,4 +107,35 @@ describe("routeTerminalKey", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("routes workspace Trust numbers, arrows, Enter, and Escape", () => {
+    const trust = stateWithMode({
+      kind: "workspace_trust",
+      workspacePath: "E:\\workspace",
+      selected: 0,
+      submitting: false,
+    });
+    expect(routeTerminalKey(trust, "2", emptyTerminalKey())).toEqual({
+      type: "selection.set",
+      selected: 1,
+    });
+    expect(
+      routeTerminalKey(trust, "", {
+        ...emptyTerminalKey(),
+        downArrow: true,
+      }),
+    ).toEqual({ type: "selection.move", delta: 1 });
+    expect(
+      routeTerminalKey(trust, "", {
+        ...emptyTerminalKey(),
+        return: true,
+      }),
+    ).toEqual({ type: "selection.confirm" });
+    expect(
+      routeTerminalKey(trust, "", {
+        ...emptyTerminalKey(),
+        escape: true,
+      }),
+    ).toEqual({ type: "trust.deny" });
+  });
 });
