@@ -12,15 +12,16 @@ import type {
   CommandController,
   CommandDispatchOutcome,
 } from "../commands/controller.js";
+import { findCommand } from "../commands/catalog.js";
 import type {
   LocalCommandResult,
   LocalCommandService,
 } from "../commands/local.js";
 import type { CommandIntent } from "../commands/parser.js";
 import { parseInput } from "../commands/parser.js";
+import { searchCommands } from "../commands/search.js";
 import { CommandMenu } from "../components/CommandMenu.js";
 import { Composer } from "../components/Composer.js";
-import { Help } from "../components/Help.js";
 import { InteractionPrompt } from "../components/InteractionPrompt.js";
 import { Picker } from "../components/Picker.js";
 import { ProviderSetupNotice } from "../components/ProviderSetupNotice.js";
@@ -65,6 +66,7 @@ interface ComposerSubmitResult {
 export interface AppLifecycle {
   cancelActiveOperation(): Promise<void>;
   requestExit(reason: ExitReason): Promise<unknown>;
+  resetThreadScope?(): void;
 }
 
 export function App({
@@ -102,6 +104,7 @@ export function App({
   const uiRef = terminal.current;
   const dispatch = terminal.dispatch;
   const [status, setStatus] = useState<StatusSnapshot>();
+  const commandResultSequence = useRef(0);
   const globalKeys = useRef(new GlobalKeyController()).current;
   const historic =
     state.committed_transcript ??
@@ -146,19 +149,42 @@ export function App({
     }
   }, [dispatch, exceptionalInteraction, ui.mode]);
 
+  const appendCommandResult = useCallback(
+    (
+      command: string,
+      tone: "info" | "warning" | "error",
+      content: string,
+      generation: number,
+    ) => {
+      commandResultSequence.current += 1;
+      store.dispatch({
+        type: "transcript.command_result",
+        generation,
+        block: {
+          key: `command_result_${commandResultSequence.current}`,
+          kind: "command_result",
+          command,
+          tone,
+          content,
+        },
+      });
+    },
+    [store],
+  );
+
   const applyLocalResult = useCallback(
-    (result: LocalCommandResult): ComposerSubmitResult => {
+    (result: LocalCommandResult, generation: number): ComposerSubmitResult => {
+      if (store.getState().thread_generation !== generation) {
+        return { accepted: true };
+      }
       switch (result.kind) {
-        case "help":
-          dispatch({
-            type: "mode.open",
-            mode: {
-              kind: "help",
-              ...(result.command === undefined
-                ? {}
-                : { command: result.command }),
-            },
-          });
+        case "result":
+          appendCommandResult(
+            result.command,
+            result.tone,
+            result.content,
+            generation,
+          );
           return { accepted: true };
         case "picker":
           dispatch({
@@ -166,23 +192,23 @@ export function App({
             mode: pickerMode({ kind: "local_theme" }, result.selection, false),
           });
           return { accepted: true };
-        case "notice":
-        case "warning":
-          dispatch({ type: "notice.set", message: result.message });
-          return { accepted: true };
         case "shutdown":
           void lifecycle?.requestExit("quit_command");
           return { accepted: true };
       }
     },
-    [dispatch, lifecycle],
+    [appendCommandResult, dispatch, lifecycle, store],
   );
 
   const applyCommandOutcome = useCallback(
     async (
       outcome: CommandDispatchOutcome,
       intent?: CommandIntent,
+      generation = store.getState().thread_generation,
     ): Promise<ComposerSubmitResult> => {
+      if (store.getState().thread_generation !== generation) {
+        return { accepted: true };
+      }
       if (outcome.kind === "picker") {
         dispatch({
           type: "mode.open",
@@ -202,6 +228,12 @@ export function App({
         return { accepted: true };
       }
       if (outcome.kind === "error") {
+        if (intent) {
+          const message =
+            "error" in outcome ? outcome.error.message : outcome.code;
+          appendCommandResult(intent.name, "error", message, generation);
+          return { accepted: true };
+        }
         return {
           accepted: false,
           retryable: "error" in outcome ? outcome.error.retryable : true,
@@ -216,10 +248,22 @@ export function App({
             message: "local_commands_unavailable",
           };
         }
-        return applyLocalResult(await localCommands.execute(outcome.intent));
+        return applyLocalResult(
+          await localCommands.execute(outcome.intent),
+          generation,
+        );
       }
       if (outcome.kind === "result") {
         if (outcome.result.status === "error") {
+          if (intent) {
+            appendCommandResult(
+              intent.name,
+              "error",
+              outcome.result.content || "Command failed.",
+              generation,
+            );
+            return { accepted: true };
+          }
           return {
             accepted: false,
             retryable: true,
@@ -236,6 +280,56 @@ export function App({
             };
           }
           setStatus(snapshot.data);
+        } else if (
+          (intent?.name === "new" || intent?.name === "resume") &&
+          controller
+        ) {
+          const threadId = outcome.result.data.thread_id;
+          if (typeof threadId !== "string") {
+            appendCommandResult(
+              intent.name,
+              "error",
+              "Thread command returned no thread identity.",
+              generation,
+            );
+            return { accepted: true };
+          }
+          const replacement = await controller.loadThreadReplacement(threadId);
+          if (replacement.kind === "error") {
+            appendCommandResult(
+              intent.name,
+              "error",
+              replacement.error.message,
+              generation,
+            );
+            return { accepted: true };
+          }
+          const transcript = hydrateThreadPage(replacement.thread).blocks;
+          if (store.getState().thread_generation !== generation) {
+            return { accepted: true };
+          }
+          store.dispatch({
+            type: "thread.replaced",
+            application: replacement.application,
+            thread: replacement.thread,
+            transcript,
+          });
+          lifecycle?.resetThreadScope?.();
+          setStatus(undefined);
+        } else if (intent?.name === "usage") {
+          appendCommandResult(
+            "usage",
+            "info",
+            formatUsage(outcome.result.data),
+            generation,
+          );
+        } else if (intent && outcome.result.content) {
+          appendCommandResult(
+            intent.name,
+            "info",
+            outcome.result.content,
+            generation,
+          );
         }
         if (
           intent?.name === "permissions" &&
@@ -243,7 +337,10 @@ export function App({
           controller
         ) {
           const refreshed = await controller.refreshApplication();
-          if (refreshed.ok) {
+          if (
+            refreshed.ok &&
+            store.getState().thread_generation === generation
+          ) {
             store.dispatch({
               type: "hydrate.application",
               application: refreshed.value,
@@ -261,10 +358,12 @@ export function App({
     },
     [
       applyLocalResult,
+      appendCommandResult,
       blockingSelection,
       controller,
       dispatch,
       localCommands,
+      lifecycle,
       store,
     ],
   );
@@ -276,6 +375,15 @@ export function App({
       const routed = parseInput(value);
       if (!routed) return { accepted: true };
       if (routed.kind === "invalid") {
+        if (value.trimStart().startsWith("/")) {
+          appendCommandResult(
+            value.trimStart().slice(1).split(/\s/u, 1)[0] || "command",
+            "error",
+            routed.code,
+            store.getState().thread_generation,
+          );
+          return { accepted: true };
+        }
         return { accepted: false, retryable: true, message: routed.code };
       }
       if (!controller) {
@@ -285,6 +393,7 @@ export function App({
           message: "surface_not_connected",
         };
       }
+      const generation = store.getState().thread_generation;
       const outcome = await controller.submit(
         routed,
         state.application?.current_thread_id,
@@ -292,13 +401,16 @@ export function App({
       return await applyCommandOutcome(
         outcome,
         routed.kind === "command" ? routed.intent : undefined,
+        generation,
       );
     },
     [
       applyCommandOutcome,
+      appendCommandResult,
       controller,
       dispatch,
       state.application?.current_thread_id,
+      store,
     ],
   );
 
@@ -308,11 +420,12 @@ export function App({
       if (providerSetupVisible) {
         const intent: CommandIntent = { name: "model" };
         if (controller) {
+          const generation = store.getState().thread_generation;
           const outcome = await controller.submit(
             { kind: "command", intent },
             state.application?.current_thread_id,
           );
-          await applyCommandOutcome(outcome, intent);
+          await applyCommandOutcome(outcome, intent, generation);
         }
       }
       return;
@@ -341,6 +454,7 @@ export function App({
     dispatch,
     providerSetupVisible,
     state.application?.current_thread_id,
+    store,
     submit,
     uiRef,
   ]);
@@ -450,6 +564,20 @@ export function App({
 
   const selectCurrent = useCallback(async () => {
     const mode = uiRef.current.mode;
+    if (mode.kind === "command_menu") {
+      const command = mode.selectedCommand
+        ? findCommand(mode.selectedCommand)
+        : undefined;
+      if (command) {
+        dispatch({
+          type: "composer.edit",
+          action: { type: "replace", value: `/${command.name}` },
+        });
+      }
+      dispatch({ type: "mode.cancel" });
+      await submitComposer();
+      return;
+    }
     if (mode.kind === "approval") {
       const choice = mode.interaction.choices[mode.selected];
       if (!choice) return;
@@ -461,6 +589,7 @@ export function App({
     if (!option) return;
     const owner = mode.owner;
     if (owner.kind === "local_theme") {
+      const generation = store.getState().thread_generation;
       dispatch({ type: "mode.cancel" });
       if (localCommands) {
         applyLocalResult(
@@ -468,11 +597,13 @@ export function App({
             name: "theme",
             arguments: [option.value],
           }),
+          generation,
         );
       }
       return;
     }
     if (owner.kind === "command") {
+      const generation = store.getState().thread_generation;
       dispatch({ type: "mode.cancel" });
       if (controller) {
         const outcome = await controller.select(
@@ -480,7 +611,7 @@ export function App({
           option.value,
           state.application?.current_thread_id,
         );
-        await applyCommandOutcome(outcome, owner.intent);
+        await applyCommandOutcome(outcome, owner.intent, generation);
       }
       return;
     }
@@ -501,10 +632,24 @@ export function App({
     dispatch,
     localCommands,
     state.application?.current_thread_id,
+    store,
     submitCredential,
     respondApproval,
+    submitComposer,
     uiRef,
   ]);
+
+  const completeCommand = useCallback(() => {
+    const mode = uiRef.current.mode;
+    if (mode.kind !== "command_menu" || !mode.selectedCommand) return;
+    const command = findCommand(mode.selectedCommand);
+    if (!command) return;
+    dispatch({
+      type: "composer.edit",
+      action: { type: "replace", value: command.usage },
+    });
+    dispatch({ type: "mode.cancel" });
+  }, [dispatch, uiRef]);
 
   const handleLifecycle = useCallback(
     (input: string, key: TerminalKey) => {
@@ -549,6 +694,7 @@ export function App({
         dispatch,
         onSubmit: () => void submitComposer(),
         onSelect: () => void selectCurrent(),
+        onCommandComplete: completeCommand,
         onDeny: () => {
           const mode = uiRef.current.mode;
           if (mode.kind !== "approval") return;
@@ -564,6 +710,7 @@ export function App({
     },
     [
       handleLifecycle,
+      completeCommand,
       dispatch,
       respondApproval,
       selectCurrent,
@@ -583,8 +730,13 @@ export function App({
       {providerSetupVisible && ui.mode.kind !== "secret" ? (
         <ProviderSetupNotice />
       ) : null}
-      {!cancelling && ui.mode.kind === "composer" ? (
-        <CommandMenu query={ui.composer.value} />
+      {!cancelling && ui.mode.kind === "command_menu" ? (
+        <CommandMenu
+          commands={searchCommands(ui.mode.query)}
+          {...(ui.mode.selectedCommand === undefined
+            ? {}
+            : { selectedCommand: ui.mode.selectedCommand })}
+        />
       ) : null}
       {cancelling ? null : ui.mode.kind === "approval" ? (
         <InteractionPrompt
@@ -606,12 +758,6 @@ export function App({
         />
       ) : ui.mode.kind === "picker" ? (
         <Picker selection={ui.mode.selection} selected={ui.mode.selected} />
-      ) : ui.mode.kind === "help" ? (
-        <Help
-          {...(ui.mode.command === undefined
-            ? {}
-            : { command: ui.mode.command })}
-        />
       ) : (
         <Composer
           state={ui.composer}
@@ -666,6 +812,7 @@ function handleTerminalIntent(
     readonly dispatch: Dispatch<TerminalUiAction>;
     readonly onSubmit: () => void;
     readonly onSelect: () => void;
+    readonly onCommandComplete: () => void;
     readonly onDeny: () => void;
     readonly onSecretSubmit: () => void;
     readonly onLifecycle: (input: string, key: TerminalKey) => void;
@@ -690,6 +837,7 @@ function handleTerminalIntent(
     case "trust.deny":
       break;
     case "command.complete":
+      handlers.onCommandComplete();
       break;
     case "secret.insert":
       handlers.dispatch({ type: "mode.secret.insert", text: intent.text });
@@ -711,6 +859,17 @@ function handleTerminalIntent(
       handlers.onLifecycle(input, key);
       break;
   }
+}
+
+function formatUsage(data: Readonly<Record<string, unknown>>): string {
+  const entries = Object.entries(data).filter(
+    (entry): entry is [string, number] =>
+      typeof entry[1] === "number" && entry[1] > 0,
+  );
+  if (entries.length === 0) return "No usage recorded yet.";
+  return entries
+    .map(([name, value]) => `${name.replaceAll("_", " ")}: ${value}`)
+    .join("\n");
 }
 
 function initialRuntimeUi(

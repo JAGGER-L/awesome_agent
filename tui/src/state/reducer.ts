@@ -1,4 +1,5 @@
 import type { EventEnvelope } from "../protocol/index.js";
+import { mergeTranscriptBlocks } from "../transcript/merge.js";
 import {
   appendReasoningTail,
   reasoningElapsedMarker,
@@ -7,7 +8,12 @@ import type { SurfaceAction } from "./actions.js";
 import type { SurfaceState, ToolProjection, TurnProjection } from "./model.js";
 
 export function initialSurfaceState(): SurfaceState {
-  return { connection: "idle", event_sequence: 0, warnings: [] };
+  return {
+    connection: "idle",
+    thread_generation: 0,
+    event_sequence: 0,
+    warnings: [],
+  };
 }
 
 function fatal(
@@ -269,9 +275,37 @@ export function surfaceReducer(
       return { ...state, application: action.application };
     case "hydrate.thread":
       return { ...state, thread: action.thread };
+    case "thread.replaced":
+      return {
+        connection: state.connection,
+        event_sequence: state.event_sequence,
+        thread_generation: state.thread_generation + 1,
+        application: action.application,
+        thread: action.thread,
+        warnings: [],
+        committed_transcript: action.transcript,
+        transcript_persisted: true,
+      };
     case "event.received":
-      return reduceEvent(state, action.event);
+      return action.generation === state.thread_generation
+        ? reduceEvent(state, action.event)
+        : {
+            ...state,
+            event_sequence: Math.max(
+              state.event_sequence,
+              action.event.sequence,
+            ),
+          };
     case "delta.received":
+      if (action.generation !== state.thread_generation) {
+        return {
+          ...state,
+          event_sequence: Math.max(
+            state.event_sequence,
+            action.delta.last_sequence,
+          ),
+        };
+      }
       if (
         state.active_operation?.status !== "active" ||
         state.active_operation.id !== action.delta.operation_id ||
@@ -303,10 +337,20 @@ export function surfaceReducer(
         }),
       );
     case "transcript.reconciled":
+      if (action.generation !== state.thread_generation) return state;
       return {
         ...state,
         committed_transcript: action.result.blocks,
         transcript_persisted: action.result.persisted,
+      };
+    case "transcript.command_result":
+      if (action.generation !== state.thread_generation) return state;
+      return {
+        ...state,
+        committed_transcript: mergeTranscriptBlocks(
+          state.committed_transcript ?? [],
+          [action.block],
+        ),
       };
     case "protocol.fatal":
       return fatal(state, action.code, action.message);

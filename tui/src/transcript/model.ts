@@ -47,6 +47,12 @@ export interface StatusBlock extends BlockBase {
   readonly kind: "status";
   readonly message: string;
 }
+export interface CommandResultBlock extends BlockBase {
+  readonly kind: "command_result";
+  readonly command: string;
+  readonly tone: "info" | "warning" | "error";
+  readonly content: string;
+}
 export interface ErrorBlock extends BlockBase {
   readonly kind: "error";
   readonly code: string;
@@ -65,6 +71,7 @@ export type TranscriptBlock =
   | ChangeSummaryBlock
   | ReasoningMarkerBlock
   | StatusBlock
+  | CommandResultBlock
   | WarningBlock
   | ErrorBlock
   | OmittedHistoryBlock;

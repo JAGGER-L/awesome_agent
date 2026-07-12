@@ -14,6 +14,7 @@ function deferred<T>() {
 function pendingState(): SurfaceState {
   return {
     connection: "ready",
+    thread_generation: 0,
     event_sequence: 1,
     warnings: [],
     pending_interaction: {

@@ -1,5 +1,5 @@
 import { render } from "ink-testing-library";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app/App.js";
 import { CommandController } from "../../src/commands/controller.js";
@@ -114,9 +114,11 @@ describe("Provider setup flow", () => {
         providerSetupRequired
       />,
     );
+    const submit = vi.spyOn(controller, "submit");
 
     view.stdin.write("/model");
     view.stdin.write("\r");
+    await eventually(() => expect(submit).toHaveBeenCalledOnce());
     await eventually(() =>
       expect(view.lastFrame()).toContain("Select Provider"),
     );

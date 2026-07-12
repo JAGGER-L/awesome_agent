@@ -1,5 +1,6 @@
 import { composerReducer, initialComposerState } from "../composer/reducer.js";
 import { graphemes } from "../composer/graphemes.js";
+import { searchCommands } from "../commands/search.js";
 import type { TerminalUiAction, TerminalUiState } from "./model.js";
 
 export function initialTerminalUiState(): TerminalUiState {
@@ -65,11 +66,14 @@ export function terminalUiReducer(
         ...mode,
         message: action.message,
       }));
-    case "composer.edit":
+    case "composer.edit": {
+      const composer = composerReducer(state.composer, action.action);
       return {
         ...state,
-        composer: composerReducer(state.composer, action.action),
+        composer,
+        mode: commandMenuMode(state.mode, composer.value),
       };
+    }
     case "composer.submitting":
       return { ...state, composerSubmitting: action.submitting };
     case "composer.message":
@@ -87,6 +91,17 @@ function moveSelection(
   mode: TerminalUiState["mode"],
   delta: -1 | 1,
 ): TerminalUiState["mode"] {
+  if (mode.kind === "command_menu") {
+    const matches = searchCommands(mode.query);
+    if (matches.length === 0) return mode;
+    const current = matches.findIndex(
+      (command) => command.name === mode.selectedCommand,
+    );
+    const index =
+      (Math.max(current, 0) + delta + matches.length) % matches.length;
+    const selected = matches[index];
+    return selected ? { ...mode, selectedCommand: selected.name } : mode;
+  }
   const size =
     mode.kind === "picker"
       ? mode.selection.options.length
@@ -97,6 +112,30 @@ function moveSelection(
           : 0;
   if (size === 0 || !("selected" in mode)) return mode;
   return { ...mode, selected: (mode.selected + delta + size) % size };
+}
+
+function commandMenuMode(
+  current: TerminalUiState["mode"],
+  value: string,
+): TerminalUiState["mode"] {
+  if (current.kind !== "composer" && current.kind !== "command_menu") {
+    return current;
+  }
+  const classified = value.trimStart();
+  if (!classified.startsWith("/") || /\s/u.test(classified)) {
+    return current.kind === "command_menu" ? { kind: "composer" } : current;
+  }
+  const matches = searchCommands(classified);
+  const previous =
+    current.kind === "command_menu" ? current.selectedCommand : undefined;
+  const selectedCommand = matches.some((command) => command.name === previous)
+    ? previous
+    : matches[0]?.name;
+  return {
+    kind: "command_menu",
+    query: classified,
+    ...(selectedCommand === undefined ? {} : { selectedCommand }),
+  };
 }
 
 function setSelection(

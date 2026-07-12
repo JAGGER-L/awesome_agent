@@ -129,4 +129,40 @@ describe("connectSurface", () => {
     expect(stderr.match(/thread-read/g)).toHaveLength(1);
     await connected.close();
   });
+
+  it("drops a delayed reconciliation after an atomic thread replacement", async () => {
+    const connected = await connectSurface(
+      await options({
+        AWESOME_FAKE_CORE_TERMINAL: "1",
+        AWESOME_FAKE_CORE_THREAD_READ_DELAY_MS: "100",
+      }),
+    );
+    await connected.request("operation.cancel", {
+      operation_id: "operation_terminal",
+    });
+    for (
+      let attempt = 0;
+      attempt < 100 &&
+      !new TextDecoder()
+        .decode(connected.session.stderrTail())
+        .includes("thread-read");
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2));
+    }
+
+    connected.store.dispatch({
+      type: "thread.replaced",
+      application: { current_thread_id: "thread_new" } as never,
+      thread: { view: { thread: { id: "thread_new" } } } as never,
+      transcript: [],
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+
+    expect(connected.store.getState().thread_generation).toBe(1);
+    expect(JSON.stringify(connected.store.getState())).not.toContain(
+      "durable answer",
+    );
+    await connected.close();
+  });
 });

@@ -46,6 +46,7 @@ describe("InteractionPrompt", () => {
     const respond = vi.fn(async () => undefined);
     const seed: SurfaceState = {
       connection: "ready",
+      thread_generation: 0,
       event_sequence: 1,
       warnings: [],
       pending_interaction: interaction,
@@ -67,6 +68,7 @@ describe("InteractionPrompt", () => {
     const respond = vi.fn(async () => await new Promise<void>(() => undefined));
     const seed: SurfaceState = {
       connection: "ready",
+      thread_generation: 0,
       event_sequence: 1,
       warnings: [],
       pending_interaction: interaction,
@@ -87,6 +89,7 @@ describe("InteractionPrompt", () => {
   it("removes Composer input while interaction is active", () => {
     const seed: SurfaceState = {
       connection: "ready",
+      thread_generation: 0,
       event_sequence: 1,
       warnings: [],
       pending_interaction: interaction,

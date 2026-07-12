@@ -474,6 +474,10 @@ function CliApplication({
             cancellation={cancellationSnapshot}
             lifecycle={{
               cancelActiveOperation: () => cancellation.cancelActiveOperation(),
+              resetThreadScope: () => {
+                cancellation.reset();
+                interactions.reset();
+              },
               requestExit,
             }}
             interactionResponder={interactions}
