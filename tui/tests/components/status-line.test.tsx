@@ -27,6 +27,7 @@ describe("StatusLine cancellation", () => {
       <App
         store={createSurfaceStore()}
         cancellation={cancellation}
+        reportFatal={() => undefined}
         width={60}
       />,
     );
@@ -44,6 +45,7 @@ describe("StatusLine cancellation", () => {
       <App
         store={createSurfaceStore()}
         cancellation={cancellation}
+        reportFatal={() => undefined}
         width={60}
       />,
     );

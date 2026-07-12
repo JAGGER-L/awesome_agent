@@ -86,6 +86,7 @@ describe("App local command wiring", () => {
         store={createSurfaceStore()}
         controller={controller()}
         localCommands={localService()}
+        reportFatal={() => undefined}
         width={60}
       />,
     );
@@ -102,6 +103,7 @@ describe("App local command wiring", () => {
         store={createSurfaceStore()}
         controller={controller()}
         localCommands={localService()}
+        reportFatal={() => undefined}
         width={60}
       />,
     );
@@ -119,6 +121,7 @@ describe("App local command wiring", () => {
         store={createSurfaceStore()}
         controller={controller()}
         localCommands={localService()}
+        reportFatal={() => undefined}
         width={60}
       />,
     );
@@ -139,6 +142,7 @@ describe("App local command wiring", () => {
         store={createSurfaceStore()}
         controller={controller()}
         localCommands={localService()}
+        reportFatal={() => undefined}
         lifecycle={{
           cancelActiveOperation: async () => undefined,
           requestExit,

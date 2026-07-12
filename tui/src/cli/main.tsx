@@ -470,6 +470,10 @@ function CliApplication({
           <App
             store={surface.store}
             controller={commandController}
+            reportFatal={(error) => {
+              const classified = toFatalState(error, surface.session);
+              if (classified) setFatal(classified);
+            }}
             localCommands={localCommands}
             cancellation={cancellationSnapshot}
             lifecycle={{

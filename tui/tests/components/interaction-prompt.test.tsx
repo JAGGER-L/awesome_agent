@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app/App.js";
 import { InteractionPrompt } from "../../src/components/InteractionPrompt.js";
+import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { SurfaceState } from "../../src/state/model.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
@@ -55,6 +56,7 @@ describe("InteractionPrompt", () => {
       <App
         store={createSurfaceStore(seed)}
         interactionResponder={{ respond }}
+        reportFatal={() => undefined}
         width={60}
       />,
     );
@@ -77,6 +79,7 @@ describe("InteractionPrompt", () => {
       <App
         store={createSurfaceStore(seed)}
         interactionResponder={{ respond }}
+        reportFatal={() => undefined}
         width={60}
       />,
     );
@@ -94,7 +97,13 @@ describe("InteractionPrompt", () => {
       warnings: [],
       pending_interaction: interaction,
     };
-    const view = render(<App store={createSurfaceStore(seed)} width={60} />);
+    const view = render(
+      <App
+        store={createSurfaceStore(seed)}
+        reportFatal={() => undefined}
+        width={60}
+      />,
+    );
     expect(view.lastFrame()).toContain("Do you want to run pytest?");
     expect(view.lastFrame()).not.toContain("Message");
   });
@@ -110,15 +119,26 @@ describe("InteractionPrompt", () => {
     let attempts = 0;
     const respond = vi.fn(async () => {
       attempts += 1;
-      if (attempts === 1) throw new Error("Approval request failed.");
+      if (attempts === 1) {
+        throw new RpcProtocolError(-32603, "Internal error", {
+          diagnostic_code: "core_request_failed",
+        });
+      }
     });
     const view = render(
-      <App store={store} interactionResponder={{ respond }} width={60} />,
+      <App
+        store={store}
+        interactionResponder={{ respond }}
+        reportFatal={() => undefined}
+        width={60}
+      />,
     );
 
     view.stdin.write("\r");
     await eventually(() =>
-      expect(view.lastFrame()).toContain("Approval request failed."),
+      expect(view.lastFrame()).toContain(
+        "Awesome could not complete this request. You can retry.",
+      ),
     );
     view.stdin.write("\r");
     await eventually(() => expect(respond).toHaveBeenCalledTimes(2));

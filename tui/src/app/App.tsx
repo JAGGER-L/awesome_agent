@@ -31,6 +31,7 @@ import { StatusLine } from "../components/StatusLine.js";
 import type { WelcomeProps } from "../components/Welcome.js";
 import { ActiveTurn } from "../components/transcript/ActiveTurn.js";
 import { Transcript } from "../components/transcript/Transcript.js";
+import { classifyTerminalActionError } from "../interaction/action-errors.js";
 import {
   routeTerminalKey,
   type TerminalIntent,
@@ -80,6 +81,7 @@ export function App({
   cancellation = { status: "idle" },
   lifecycle,
   interactionResponder,
+  reportFatal,
   providerSetupRequired = false,
 }: {
   store: SurfaceStore;
@@ -91,6 +93,7 @@ export function App({
   cancellation?: CancellationSnapshot;
   lifecycle?: AppLifecycle;
   interactionResponder?: { respond(decision: string): Promise<void> };
+  reportFatal: (error: unknown) => void;
   providerSetupRequired?: boolean;
 }) {
   const state = useSyncExternalStore(
@@ -116,6 +119,32 @@ export function App({
     providerSetupRequired &&
     state.application?.provider_credentials.deepseek.source === "missing" &&
     state.application.provider_credentials.kimi.source === "missing";
+
+  const runTerminalAction = useCallback(
+    (action: () => Promise<void>) => {
+      void action().catch((error: unknown) => {
+        const failure = classifyTerminalActionError(error);
+        if (failure.kind === "fatal") {
+          reportFatal(failure.error);
+          return;
+        }
+        const mode = uiRef.current.mode;
+        if (mode.kind === "secret") {
+          dispatch({ type: "mode.secret.submitting", submitting: false });
+          dispatch({ type: "mode.secret.message", message: failure.message });
+          return;
+        }
+        if (mode.kind === "approval") {
+          dispatch({ type: "mode.approval.submitting", submitting: false });
+          dispatch({ type: "mode.approval.message", message: failure.message });
+          return;
+        }
+        dispatch({ type: "composer.submitting", submitting: false });
+        dispatch({ type: "notice.set", message: failure.message });
+      });
+    },
+    [dispatch, reportFatal, uiRef],
+  );
   const exceptionalInteraction =
     state.pending_interaction?.interaction_kind === "workspace_trust"
       ? undefined
@@ -194,11 +223,13 @@ export function App({
           });
           return { accepted: true };
         case "shutdown":
-          void lifecycle?.requestExit("quit_command");
+          runTerminalAction(async () => {
+            await lifecycle?.requestExit("quit_command");
+          });
           return { accepted: true };
       }
     },
-    [appendCommandResult, dispatch, lifecycle, store],
+    [appendCommandResult, dispatch, lifecycle, runTerminalAction, store],
   );
 
   const applyCommandOutcome = useCallback(
@@ -408,9 +439,32 @@ export function App({
           generation,
         });
       }
-      const outcome = optimisticMessage
-        ? await controller.submit(routed, threadId, optimisticMessage.id)
-        : await controller.submit(routed, threadId);
+      let outcome: CommandDispatchOutcome;
+      try {
+        outcome = optimisticMessage
+          ? await controller.submit(routed, threadId, optimisticMessage.id)
+          : await controller.submit(routed, threadId);
+      } catch (error) {
+        const failure = classifyTerminalActionError(error);
+        if (
+          failure.kind === "request" &&
+          optimisticMessage &&
+          store.getState().thread_generation === generation
+        ) {
+          store.dispatch({
+            type: "transcript.user.failed",
+            client_message_id: optimisticMessage.id,
+            message: failure.message,
+            generation,
+          });
+          return {
+            accepted: false,
+            retryable: true,
+            message: failure.message,
+          };
+        }
+        throw failure.kind === "fatal" ? failure.error : error;
+      }
       if (
         optimisticMessage &&
         store.getState().thread_generation === generation
@@ -639,27 +693,15 @@ export function App({
   const respondApproval = useCallback(
     async (decision: string) => {
       dispatch({ type: "mode.approval.submitting", submitting: true });
-      try {
-        await interactionResponder?.respond(decision);
-        if (controller) {
-          const refreshed = await controller.refreshApplication();
-          if (refreshed.ok) {
-            store.dispatch({
-              type: "hydrate.application",
-              application: refreshed.value,
-            });
-          }
+      await interactionResponder?.respond(decision);
+      if (controller) {
+        const refreshed = await controller.refreshApplication();
+        if (refreshed.ok) {
+          store.dispatch({
+            type: "hydrate.application",
+            application: refreshed.value,
+          });
         }
-      } catch (error) {
-        dispatch({
-          type: "mode.approval.submitting",
-          submitting: false,
-        });
-        dispatch({
-          type: "mode.approval.message",
-          message:
-            error instanceof Error ? error.message : "Interaction failed.",
-        });
       }
     },
     [controller, dispatch, interactionResponder, store],
@@ -780,7 +822,9 @@ export function App({
       if (!action) return;
       switch (action.kind) {
         case "cancel":
-          void lifecycle?.cancelActiveOperation();
+          runTerminalAction(async () => {
+            await lifecycle?.cancelActiveOperation();
+          });
           break;
         case "clear_composer":
           dispatch({
@@ -797,11 +841,20 @@ export function App({
           });
           break;
         case "exit":
-          void lifecycle?.requestExit(action.reason);
+          runTerminalAction(async () => {
+            await lifecycle?.requestExit(action.reason);
+          });
           break;
       }
     },
-    [dispatch, globalKeys, lifecycle, state.active_operation?.status, uiRef],
+    [
+      dispatch,
+      globalKeys,
+      lifecycle,
+      runTerminalAction,
+      state.active_operation?.status,
+      uiRef,
+    ],
   );
 
   const handleTerminalInput = useCallback(
@@ -810,24 +863,28 @@ export function App({
       if (!routed) return;
       handleTerminalIntent(routed, input, key, {
         dispatch,
-        onSubmit: () => void submitComposer(),
-        onSelect: () => void selectCurrent(),
+        onSubmit: () => runTerminalAction(submitComposer),
+        onSelect: () => runTerminalAction(selectCurrent),
         onCommandComplete: completeCommand,
         onDeny: () => {
           const mode = uiRef.current.mode;
           if (mode.kind !== "approval") return;
-          void respondApproval("deny");
+          runTerminalAction(async () => {
+            await respondApproval("deny");
+          });
         },
         onSecretSubmit: () => {
           if (uiRef.current.mode.kind !== "secret") return;
           const { intent, prompt, value } = uiRef.current.mode;
-          void mutateCredential(
-            intent,
-            prompt.provider,
-            prompt.action,
-            value,
-            prompt,
-          );
+          runTerminalAction(async () => {
+            await mutateCredential(
+              intent,
+              prompt.provider,
+              prompt.action,
+              value,
+              prompt,
+            );
+          });
         },
         onLifecycle: handleLifecycle,
       });
@@ -840,6 +897,7 @@ export function App({
       selectCurrent,
       submitComposer,
       mutateCredential,
+      runTerminalAction,
       uiRef,
     ],
   );

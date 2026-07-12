@@ -131,7 +131,12 @@ describe("App composer integration", () => {
       application: { current_thread_id: "thread_1" } as never,
     });
     const view = render(
-      <App store={store} controller={controller} width={40} />,
+      <App
+        store={store}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={40}
+      />,
     );
 
     view.stdin.write("inspect");
@@ -185,7 +190,12 @@ describe("App composer integration", () => {
       ),
     } as unknown as CommandController;
     const view = render(
-      <App store={createSurfaceStore()} controller={controller} width={40} />,
+      <App
+        store={createSurfaceStore()}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={40}
+      />,
     );
     view.stdin.write("hello\nworld");
     await eventually(() => expect(view.lastFrame()).toContain("hello"));
@@ -202,7 +212,12 @@ describe("App composer integration", () => {
       error: { code: "operation_busy", message: "busy", retryable: true },
     });
     const view = render(
-      <App store={createSurfaceStore()} controller={controller} width={40} />,
+      <App
+        store={createSurfaceStore()}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={40}
+      />,
     );
     view.stdin.write("retry me");
     view.stdin.write("\r");
@@ -216,7 +231,12 @@ describe("App composer integration", () => {
       result: { status: "success", content: "status ok", data: {} },
     });
     const view = render(
-      <App store={createSurfaceStore()} controller={controller} width={60} />,
+      <App
+        store={createSurfaceStore()}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={60}
+      />,
     );
 
     view.stdin.write("/s");
@@ -235,7 +255,12 @@ describe("App composer integration", () => {
   it("completes with Tab without execution and Esc keeps the draft", async () => {
     const controller = controllerReturning({ kind: "result" });
     const view = render(
-      <App store={createSurfaceStore()} controller={controller} width={60} />,
+      <App
+        store={createSurfaceStore()}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={60}
+      />,
     );
 
     view.stdin.write("/th");
@@ -253,7 +278,12 @@ describe("App composer integration", () => {
   it("shows feedback for an unmatched slash command", async () => {
     const controller = controllerReturning({ kind: "result" });
     const view = render(
-      <App store={createSurfaceStore()} controller={controller} width={60} />,
+      <App
+        store={createSurfaceStore()}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={60}
+      />,
     );
 
     view.stdin.write("/definitely-not-a-command");
@@ -315,6 +345,7 @@ describe("App composer integration", () => {
       <App
         store={store}
         controller={controller}
+        reportFatal={() => undefined}
         lifecycle={{
           cancelActiveOperation: async () => undefined,
           requestExit: async () => undefined,

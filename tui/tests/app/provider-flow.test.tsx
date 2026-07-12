@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app/App.js";
 import { CommandController } from "../../src/commands/controller.js";
+import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { MethodName, MethodParams } from "../../src/protocol/methods.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
@@ -110,6 +111,7 @@ describe("Provider setup flow", () => {
       <App
         store={store}
         controller={controller}
+        reportFatal={() => undefined}
         width={80}
         providerSetupRequired
       />,
@@ -155,6 +157,117 @@ describe("Provider setup flow", () => {
     expect(credentialAttempts).toBe(3);
     expect(view.frames.join("\n")).not.toContain(secret);
     expect(JSON.stringify(store.getState())).not.toContain(secret);
+  });
+
+  it("contains a credential RPC failure and permits a second submission", async () => {
+    let configured = false;
+    let credentialAttempts = 0;
+    const secret = "retry-secret-never-render";
+    const request = vi.fn(
+      async <Method extends MethodName>(
+        method: Method,
+        params: MethodParams[Method],
+      ) => {
+        if (method === "provider.credential.set") {
+          credentialAttempts += 1;
+          if (credentialAttempts === 1) {
+            throw new RpcProtocolError(-32603, "Internal error", {
+              diagnostic_code: "core_request_failed",
+            });
+          }
+          configured = true;
+          return {
+            ok: true,
+            value: {
+              provider: "deepseek",
+              status: "configured",
+              source: "user_env_file",
+              code: "credential_saved",
+            },
+          } as never;
+        }
+        if (method === "application.getState") {
+          return { ok: true, value: applicationState(configured) } as never;
+        }
+        if (method === "command.execute") {
+          const arguments_ =
+            "arguments" in params ? (params.arguments ?? []) : [];
+          return {
+            ok: true,
+            value:
+              arguments_.length === 0
+                ? {
+                    status: "success",
+                    content: "",
+                    data: {},
+                    selection: providerSelection("Select Provider"),
+                  }
+                : configured
+                  ? {
+                      status: "success",
+                      content: "",
+                      data: {},
+                      selection: {
+                        prompt: "Select DeepSeek Model",
+                        options: [
+                          {
+                            value: "deepseek/deepseek-v4-flash",
+                            label: "deepseek/deepseek-v4-flash",
+                            selected: true,
+                          },
+                        ],
+                      },
+                    }
+                  : {
+                      status: "success",
+                      content: "",
+                      data: {},
+                      secret_prompt: secretPrompt("add"),
+                    },
+          } as never;
+        }
+        throw new Error(`Unexpected method ${method}`);
+      },
+    );
+    const reportFatal = vi.fn();
+    const store = createSurfaceStore();
+    store.dispatch({
+      type: "hydrate.application",
+      application: applicationState(false),
+    });
+    const view = render(
+      <App
+        store={store}
+        controller={new CommandController({ request })}
+        reportFatal={reportFatal}
+        width={80}
+      />,
+    );
+
+    view.stdin.write("/model");
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Select Provider"),
+    );
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("DeepSeek API Key"),
+    );
+    view.stdin.write(secret);
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain(
+        "Awesome could not complete this request. You can retry.",
+      ),
+    );
+    expect(view.frames.join("\n")).not.toContain(secret);
+    expect(reportFatal).not.toHaveBeenCalled();
+
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Select DeepSeek Model"),
+    );
+    expect(credentialAttempts).toBe(2);
   });
 
   it("replaces and deletes a user-managed credential through one RPC contract", async () => {
@@ -238,7 +351,12 @@ describe("Provider setup flow", () => {
       application: applicationState(true),
     });
     const view = render(
-      <App store={store} controller={controller} width={80} />,
+      <App
+        store={store}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={80}
+      />,
     );
 
     await openAuthProvider(view);
@@ -285,7 +403,12 @@ describe("Provider setup flow", () => {
       application: applicationState(false),
     });
     const view = render(
-      <App store={store} controller={controller} width={80} />,
+      <App
+        store={store}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={80}
+      />,
     );
 
     view.stdin.write("/model");
