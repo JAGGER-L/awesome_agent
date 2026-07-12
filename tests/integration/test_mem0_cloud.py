@@ -38,7 +38,7 @@ class FakeMem0Client:
 
     async def search(self, query: str, **kwargs: object) -> object:
         self.calls.append("search")
-        user_id = kwargs["user_id"]
+        user_id = _filter_value(kwargs["filters"], "user_id")
         expected_hash = _filter_value(kwargs["filters"], "fact_hash")
         results = []
         for record in self.records.values():

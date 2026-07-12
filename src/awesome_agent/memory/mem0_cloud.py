@@ -66,12 +66,11 @@ class Mem0CloudAdapter:
         limit: int = MEM0_MAX_RESULTS,
     ) -> tuple[CloudMemory, ...]:
         bounded_limit = max(1, min(limit, MEM0_MAX_RESULTS))
-        filters = _recall_filters(workspace_key)
+        filters = _recall_filters(user_id, workspace_key)
         payload = await self._call(
             "search",
             self._client.search(
                 query,
-                user_id=user_id,
                 filters=filters,
                 limit=bounded_limit,
             ),
@@ -91,20 +90,20 @@ class Mem0CloudAdapter:
         scope: MemoryScope,
         workspace_key: str | None,
     ) -> bool:
-        filters: list[dict[str, str]] = [
-            {"app_id": "awesome-agent"},
-            {"scope": scope.value},
-            {"fact_hash": fact_hash},
+        filters: list[dict[str, object]] = [
+            {"user_id": user_id},
+            _metadata_filter("app_id", "awesome-agent"),
+            _metadata_filter("scope", scope.value),
+            _metadata_filter("fact_hash", fact_hash),
         ]
         if scope is MemoryScope.WORKSPACE:
             if workspace_key is None:
                 raise ValueError("workspace scope requires workspace_key")
-            filters.append({"workspace_key": workspace_key})
+            filters.append(_metadata_filter("workspace_key", workspace_key))
         payload = await self._call(
             "dedupe",
             self._client.search(
                 fact_hash,
-                user_id=user_id,
                 filters={"AND": filters},
                 limit=1,
             ),
@@ -219,23 +218,28 @@ class Mem0CloudAdapter:
             raise _error(_exception_code(error), operation) from error
 
 
-def _recall_filters(workspace_key: str) -> dict[str, object]:
+def _recall_filters(user_id: str, workspace_key: str) -> dict[str, object]:
     return {
         "AND": [
-            {"app_id": "awesome-agent"},
+            {"user_id": user_id},
+            _metadata_filter("app_id", "awesome-agent"),
             {
                 "OR": [
-                    {"scope": "user"},
+                    _metadata_filter("scope", "user"),
                     {
                         "AND": [
-                            {"scope": "workspace"},
-                            {"workspace_key": workspace_key},
+                            _metadata_filter("scope", "workspace"),
+                            _metadata_filter("workspace_key", workspace_key),
                         ]
                     },
                 ]
             },
         ]
     }
+
+
+def _metadata_filter(key: str, value: str) -> dict[str, object]:
+    return {"metadata": {key: value}}
 
 
 def _normalize_search(
