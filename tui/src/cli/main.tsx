@@ -642,6 +642,7 @@ function RunningCliApplication({
             interactionResponder={interactions}
             providerSetupRequired={startup.readiness === "diagnostics_ready"}
             welcome={{
+              version: PRODUCT_VERSION,
               workspacePath: startup.application.workspace.display_path,
               thread:
                 intent.kind === "new"

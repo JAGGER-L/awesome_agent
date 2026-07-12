@@ -11,6 +11,7 @@ import { resolveTheme } from "../../src/preferences/theme.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
 const baseProps = {
+  version: "1.1.1",
   workspacePath: "E:\\projects\\awesome",
   thread: { kind: "new" as const },
   model: "deepseek/deepseek-v4-flash",
@@ -59,16 +60,46 @@ describe("Welcome", () => {
     expect(narrow.lastFrame()).not.toContain("████");
   });
 
-  it("renders approved new-thread metadata without a tagline or version", () => {
+  it("renders approved Welcome C metadata without a tagline", () => {
     const view = render(<Welcome {...baseProps} width={80} />);
-    expect(view.lastFrame()).toContain("E:\\projects\\awesome · New thread");
+    expect(view.lastFrame()).toContain("Version      1.1.1");
+    expect(view.lastFrame()).toContain("Workspace    E:\\projects\\awesome");
+    expect(view.lastFrame()).toContain("Thread       New thread");
     expect(view.lastFrame()).toContain(
-      "deepseek/deepseek-v4-flash · Thinking off · Memory off · Permissions request approval",
+      "Model        deepseek/deepseek-v4-flash",
     );
+    expect(view.lastFrame()).toContain("Local memory Off");
+    expect(view.lastFrame()).toContain("Cloud memory Off");
+    expect(view.lastFrame()).toContain("Provider     Mem0 Cloud");
+    expect(view.lastFrame()).toContain("Permission   Request approval");
     expect(view.lastFrame()).toContain("/ commands · @ files · ! shell");
     expect(view.lastFrame()).not.toContain("feature/auth");
     expect(view.lastFrame()).not.toContain("Local-first coding agent");
-    expect(view.lastFrame()).not.toContain("0.1.0");
+    expect(view.lastFrame()).not.toContain("Local coding session ready");
+  });
+
+  it.each([
+    80, 100, 120,
+  ])("keeps the approved field order at %i columns", (width) => {
+    const frame =
+      render(<Welcome {...baseProps} width={width} />).lastFrame() ?? "";
+    const labels = [
+      "Version",
+      "Workspace",
+      "Thread",
+      "Model",
+      "Thinking",
+      "Local memory",
+      "Cloud memory",
+      "Provider",
+      "Permission",
+    ];
+    for (let index = 1; index < labels.length; index += 1) {
+      expect(frame.indexOf(labels[index - 1] ?? "")).toBeLessThan(
+        frame.indexOf(labels[index] ?? ""),
+      );
+    }
+    for (const row of FULL_LOGO_ROWS) expect(frame).toContain(row);
   });
 
   it("renders resumed, non-Git, and Kimi metadata", () => {
@@ -83,20 +114,18 @@ describe("Welcome", () => {
         mem0Enabled
       />,
     );
-    expect(view.lastFrame()).toContain(
-      "E:\\projects\\awesome · Resumed · Fix auth",
-    );
+    expect(view.lastFrame()).toContain("Thread       Resumed · Fix auth");
     expect(view.lastFrame()).not.toContain("feature/auth");
-    expect(view.lastFrame()).toContain(
-      "kimi/kimi-k2.6 · Thinking on · Memory local + Mem0 · Permissions request approval",
-    );
+    expect(view.lastFrame()).toContain("Thinking     On");
+    expect(view.lastFrame()).toContain("Local memory On");
+    expect(view.lastFrame()).toContain("Cloud memory On");
   });
 
   it("shows full access as an explicit welcome mode", () => {
     const view = render(
       <Welcome {...baseProps} width={80} permissionMode="full_access" />,
     );
-    expect(view.lastFrame()).toContain("Permissions full access");
+    expect(view.lastFrame()).toContain("Permission   Full access");
   });
 
   it("renders the same glyph without color support", () => {

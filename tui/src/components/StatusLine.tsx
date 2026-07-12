@@ -1,4 +1,4 @@
-import { Text } from "ink";
+import { Box, Text } from "ink";
 
 import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { SurfaceState } from "../state/index.js";
@@ -23,10 +23,15 @@ export function StatusLine({
     );
   }
   const operation = state.active_operation?.status ?? "idle";
+  const fullAccess = state.application?.permission_mode === "full_access";
   return (
-    <Text color={theme.muted}>
-      {state.connection} · {operation} ·{" "}
-      {state.application?.permission_mode ?? "request_approval"}
-    </Text>
+    <Box>
+      <Text color={theme.muted}>
+        {state.connection} · {operation} ·{" "}
+      </Text>
+      <Text bold color={fullAccess ? theme.warning : theme.secondary}>
+        {fullAccess ? "◆ Full access" : "◇ Request approval"}
+      </Text>
+    </Box>
   );
 }

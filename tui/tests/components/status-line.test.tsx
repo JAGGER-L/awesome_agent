@@ -7,6 +7,23 @@ import { initialSurfaceState } from "../../src/state/reducer.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
 describe("StatusLine cancellation", () => {
+  it("renders user-facing permission labels instead of internal enums", () => {
+    const request = render(
+      <StatusLine state={initialSurfaceState()} />,
+    ).lastFrame();
+    expect(request).toContain("◇ Request approval");
+    expect(request).not.toContain("request_approval");
+    const full = render(
+      <StatusLine
+        state={{
+          ...initialSurfaceState(),
+          application: { permission_mode: "full_access" } as never,
+        }}
+      />,
+    ).lastFrame();
+    expect(full).toContain("◆ Full access");
+    expect(full).not.toContain("full_access");
+  });
   it("renders one cancelling state while a request is pending", () => {
     const view = render(
       <StatusLine
