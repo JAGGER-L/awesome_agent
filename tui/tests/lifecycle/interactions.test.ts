@@ -11,14 +11,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function pendingState(): SurfaceState {
+function pendingState(interactionId = "interaction_1"): SurfaceState {
   return {
     connection: "ready",
     thread_generation: 0,
     event_sequence: 1,
     warnings: [],
     pending_interaction: {
-      interaction_id: "interaction_1",
+      interaction_id: interactionId,
       interaction_kind: "tool_approval",
       prompt: "Do you want to run pytest?",
       operation: "run",
@@ -98,10 +98,51 @@ describe("InteractionController", () => {
       },
     },
     { ok: true, value: { accepted: false, status: "rejected" } },
-  ])("records product or rejected response failure", async (response) => {
+  ])("reports product or rejected response failure to the caller", async (response) => {
     const value = harness(Promise.resolve(response));
-    await value.controller.respond("deny");
+    await expect(value.controller.respond("deny")).rejects.toThrow();
     expect(value.controller.snapshot().status).toBe("failed");
+  });
+
+  it("accepts a later interaction after the previous one resolves", async () => {
+    const responses = [
+      Promise.resolve({
+        ok: true,
+        value: { accepted: true, status: "resolved" },
+      }),
+      Promise.resolve({
+        ok: true,
+        value: { accepted: true, status: "resolved" },
+      }),
+    ];
+    let state = pendingState();
+    const listeners = new Set<() => void>();
+    const calls: unknown[] = [];
+    const controller = new InteractionController({
+      getState: () => state,
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      request(params) {
+        calls.push(params);
+        return responses.shift() as never;
+      },
+    });
+
+    await controller.respond("deny");
+    const { pending_interaction: _first, ...withoutFirst } = state;
+    void _first;
+    state = withoutFirst;
+    for (const listener of listeners) listener();
+    state = pendingState("interaction_2");
+    for (const listener of listeners) listener();
+    await controller.respond("deny");
+
+    expect(calls).toEqual([
+      { interaction_id: "interaction_1", decision: "deny" },
+      { interaction_id: "interaction_2", decision: "deny" },
+    ]);
   });
 
   it("fails when Core exits while a response is pending", () => {

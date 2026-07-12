@@ -184,10 +184,11 @@ Model ToolCall
 ```
 
 File-changing built-ins write through the Change Journal. `execute` runs on the
-host and is not a sandbox: every Agent-originated shell command requires an
-explicit `allow_once` decision. A command entered directly with `!` is already
-explicit user authority. Shell effects may escape the workspace and cannot be
-reversed by the journal.
+host and is not a sandbox. Request approval mode asks before edits, deletes,
+shell execution, and unknown extension capabilities; confirmed Full access
+allows ordinary operations for the current Thread. Hard denials always run
+first. A command entered directly with `!` is already explicit user authority.
+Shell effects may escape the workspace and cannot be reversed by the journal.
 
 ### Slash command
 
@@ -318,6 +319,13 @@ only external memory adapter currently supported.
 - **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
   `tui/src/core/process.ts`, `tui/src/app/App.tsx`.
 
+`TerminalInput.tsx` is the only keyboard subscriber. A single discriminated UI
+mode routes Enter, Escape, Tab, arrows, and global cancellation without
+competing component listeners. Optimistic user messages are keyed by
+`client_message_id`; Thread generations reject stale events after replacement.
+The active Turn is one ordered Thinking/tool/answer timeline, and completed
+answers use terminal Markdown rendering.
+
 ### Safety
 
 - **Responsibility:** workspace containment for file tools, sensitive-path
@@ -408,6 +416,9 @@ history stores bounded summaries.
 - Cancellation propagates through the foreground operation, model call, and
   tool execution. Application marks the Turn cancelled, seals known changes,
   and removes its checkpoint.
+- TUI cancellation and interaction controllers release completed request
+  identity before the next Operation or Interaction. Nonfatal failures remain
+  visible and retryable; Core exit is fatal and disables Composer input.
 - Graph checkpoints are keyed by Turn ID. Application product records reference
   the same key without copying graph channels.
 - Startup recovery acts only on evidence in product records and checkpoints.

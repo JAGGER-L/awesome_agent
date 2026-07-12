@@ -14,6 +14,10 @@ from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
+    PermissionMode,
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolRequest,
@@ -178,6 +182,10 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     assert manager.status("broken").state is McpConnectionState.ERROR
 
     sink = CollectingEventSink()
+
+    async def approve(_: ToolApprovalRequest) -> ToolApprovalDecision:
+        return ToolApprovalDecision.ALLOW_ONCE
+
     result = await ToolExecutor(registry).execute(
         ToolRequest(
             call_id="call_echo",
@@ -197,6 +205,8 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
             ),
             activity_writer=repositories.tool_activities,
             monotonic=time.monotonic,
+            permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
+            approval_resolver=approve,
         ),
     )
     assert result.status is ToolStatus.SUCCESS

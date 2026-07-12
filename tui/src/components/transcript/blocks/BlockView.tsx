@@ -20,7 +20,7 @@ export function BlockView({
         <Box flexDirection="column">
           <Text color={theme.user}>❯ {block.text}</Text>
           {block.status === "failed" ? (
-            <Text color={theme.error}>
+            <Text color={theme.danger}>
               Failed · {block.error_message ?? "Turn was not accepted."}
             </Text>
           ) : null}
@@ -36,20 +36,20 @@ export function BlockView({
         </Box>
       );
     case "direct_command":
-      return <Text color={theme.accent}>$ {block.command}</Text>;
+      return <Text color={theme.secondary}>$ {block.command}</Text>;
     case "tools":
       return (
         <Box flexDirection="column">
           {block.items.map((item) => (
             <Box key={item.call_id} flexDirection="column">
               <Text
-                color={item.outcome === "error" ? theme.error : theme.assistant}
+                color={item.outcome === "error" ? theme.danger : theme.tool}
               >
                 ● {item.verb}
                 {item.target ? ` ${item.target}` : ""}
               </Text>
               <Text
-                color={item.outcome === "error" ? theme.error : theme.muted}
+                color={item.outcome === "error" ? theme.danger : theme.muted}
               >
                 {"  └ "}
                 {item.outcome === "running"
@@ -74,7 +74,7 @@ export function BlockView({
       );
     case "change":
       return (
-        <Text color={theme.accent}>
+        <Text color={theme.secondary}>
           Changed {block.paths.join(", ")} · {block.reversibility}
         </Text>
       );
@@ -90,7 +90,7 @@ export function BlockView({
           <Text
             color={
               block.tone === "error"
-                ? theme.error
+                ? theme.danger
                 : block.tone === "warning"
                   ? theme.warning
                   : theme.muted
@@ -102,7 +102,7 @@ export function BlockView({
         </Box>
       );
     case "error":
-      return <Text color={theme.error}>Error · {block.message}</Text>;
+      return <Text color={theme.danger}>Error · {block.message}</Text>;
     case "omitted_history":
       return <Text dimColor>{block.message}</Text>;
   }

@@ -45,4 +45,21 @@ describe("Ink scrollback boundaries", () => {
       .join("\n");
     expect(transcript).not.toMatch(/useInput|viewport/iu);
   });
+
+  it("contains no superseded input, modal, role-label, or timing paths", async () => {
+    const files = await sourceFiles(
+      fileURLToPath(new URL("../../src", import.meta.url)),
+    );
+    const source = files.map((file) => file.source).join("\n");
+    const app = files.find((file) => file.path === "app/App.tsx")?.source ?? "";
+
+    expect(app).not.toMatch(
+      /commandInputBlocked|CredentialFlow|showHelp|helpOverlay|isModalOpen/u,
+    );
+    expect(source).not.toContain("execute_boundary");
+    expect(source).not.toMatch(/choices\??:\s*(?:readonly\s+)?string\[\]/u);
+    expect(source).not.toMatch(/<Text[^>]*>\s*(?:You|Assistant)\s*</u);
+    expect(source).not.toMatch(/duration_ms\s*:\s*0\b/u);
+    expect(files.some((file) => /HelpOverlay/iu.test(file.path))).toBe(false);
+  });
 });

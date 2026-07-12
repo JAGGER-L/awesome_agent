@@ -23,15 +23,27 @@ export function Composer({
 
   return (
     <Box flexDirection="column">
-      <Text color={theme.muted}>{submitting ? "Sending…" : "Message"}</Text>
-      {state.viewport.hiddenAbove ? <Text dimColor>↑ more</Text> : null}
-      <Text>
-        {beforeCursor}
-        <Text color={theme.accent}>▌</Text>
-        {afterCursor}
-      </Text>
-      {state.viewport.hiddenBelow ? <Text dimColor>↓ more</Text> : null}
-      {state.error ? <Text color={theme.error}>{state.error}</Text> : null}
+      <Box
+        borderStyle="round"
+        borderColor={theme.border}
+        paddingX={1}
+        flexDirection="column"
+      >
+        <Text color={theme.secondary}>
+          {submitting ? "Sending…" : "Message"}
+        </Text>
+        {state.viewport.hiddenAbove ? <Text dimColor>↑ more</Text> : null}
+        <Text>
+          <Text bold color={theme.primary}>
+            ❯{" "}
+          </Text>
+          {beforeCursor}
+          <Text color={theme.primary}>▌</Text>
+          {afterCursor}
+        </Text>
+        {state.viewport.hiddenBelow ? <Text dimColor>↓ more</Text> : null}
+      </Box>
+      {state.error ? <Text color={theme.danger}>{state.error}</Text> : null}
       {message ? <Text color={theme.warning}>{message}</Text> : null}
     </Box>
   );

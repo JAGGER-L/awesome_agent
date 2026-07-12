@@ -19,3 +19,34 @@ Presentation state such as scroll position, theme, composer history, expanded
 reasoning, and selection remains in the TUI. Any additional surface must adapt
 the same facade/event contracts rather than becoming another execution
 authority.
+
+## Input and mode ownership
+
+`TerminalInput.tsx` is the only Ink `useInput` subscriber. The root key router
+maps keys into one discriminated UI mode: Composer, command menu, picker,
+secret input, Approval, Trust, or Fatal. Exactly one mode owns Enter, Escape,
+Tab, and arrow keys. Components render state and never install competing input
+listeners.
+
+The stable layout order is committed transcript, active Turn, notices or the
+active interaction, Composer, then the one-line status. Welcome is committed
+once into Ink static output. The Composer remains the bottom interaction area
+and is removed only while another mode exclusively owns input.
+
+## Transcript and event ordering
+
+The TUI immediately projects a user message with a generated
+`client_message_id`, then reconciles that block with the accepted Turn and the
+durable transcript. Thread generation tags discard stale results after `/new`
+or `/resume` without replaying them into the new transcript.
+
+Within an active Turn, the reducer maintains one ordered timeline of locally
+measured Thinking intervals, structured tool facts, streaming assistant text,
+and the measured Turn duration. Tool output remains bounded and folded by
+default. Completed Markdown is parsed once; incomplete streaming Markdown uses
+a stable formatter to avoid reflowing the whole transcript on each delta.
+
+Cancellation disables input only while its RPC is unresolved. Terminal events
+restore Composer mode. Approval and Auth failures remain visible and
+retryable; a Core exit is fatal, renders a dedicated screen, and disables
+normal input rather than pretending the operation recovered.

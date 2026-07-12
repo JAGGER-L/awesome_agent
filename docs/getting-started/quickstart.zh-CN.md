@@ -38,6 +38,8 @@ awesome
 
 Awesome 会在使用项目指令或工具前显示 workspace 路径。只有在你认识并
 信任该项目时才选择 Yes；选择 No 会直接退出。
+信任后默认进入 Request approval 模式，编辑、删除和 shell 命令执行前会询问。
+可运行 `/permissions` 查看当前模式。
 
 ## 4. 配置模型
 

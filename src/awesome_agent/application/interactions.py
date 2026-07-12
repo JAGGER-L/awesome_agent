@@ -56,9 +56,7 @@ def workspace_trust_choices() -> tuple[InteractionChoice, ...]:
 
 
 def tool_approval_choices(capability: str) -> tuple[InteractionChoice, ...]:
-    choices = [
-        InteractionChoice(decision=InteractionDecision.ALLOW_ONCE, label="Yes")
-    ]
+    choices = [InteractionChoice(decision=InteractionDecision.ALLOW_ONCE, label="Yes")]
     if capability == "workspace.write":
         choices.append(
             InteractionChoice(

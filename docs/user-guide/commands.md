@@ -24,6 +24,7 @@ No other public launch flags are supported.
 | `/auth [deepseek\|kimi]` | Add, replace, or remove Provider credentials. |
 | `/model [deepseek\|kimi]` | Choose a Provider, then choose one of its models. |
 | `/thinking [on\|off]` | Show the current mode with a selector, or set it explicitly. |
+| `/permissions [request_approval\|full_access]` | Show or choose the active Thread's permission mode. |
 | `/workspace` | Show workspace identity and trust state. |
 | `/diff` | Show the latest or selected Change Journal change set. |
 | `/undo` | Undo the latest or selected reversible change set. |
@@ -71,6 +72,23 @@ create a second execution system.
 `@path` adds a workspace path reference to a message. `! command` runs the
 direct-shell interaction through the same Core execution policy; Ink never
 executes tools itself.
+
+## Keyboard behavior
+
+- Typing `/` opens command candidates. Up/Down changes the selection, Tab
+  completes it, Enter executes it, and Escape closes the candidates without
+  discarding the draft.
+- Pickers, Trust, Approval, and Auth exclusively own input while visible.
+  Up/Down selects, Enter confirms, and Escape cancels or denies according to
+  the prompt.
+- Ctrl+C cancels an active operation. Input returns after the terminal event;
+  a failed cancellation remains visible and can be retried.
+- Ctrl+O expands or folds bounded tool details. Tool details are folded by
+  default.
+
+`/help` is written into normal transcript history rather than opening a modal.
+`/new` atomically replaces the current transcript and resets Thread-scoped
+permission grants.
 
 ## `/status` fields
 

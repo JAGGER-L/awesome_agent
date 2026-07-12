@@ -17,7 +17,7 @@ export function FatalScreen({
   const summary = fatalSummary(fatal);
   return (
     <Box flexDirection="column">
-      <Text color={theme.error}>{summary}</Text>
+      <Text color={theme.danger}>{summary}</Text>
       {fatal.kind === "core_exit" ? (
         <>
           <Text>

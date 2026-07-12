@@ -49,6 +49,9 @@ describe("Composer", () => {
     expect(view.lastFrame()).toContain("first");
     expect(view.lastFrame()).toContain("second");
     expect(view.lastFrame()).toContain("▌");
+    expect(view.lastFrame()).toContain("╭");
+    expect(view.lastFrame()).toContain("╰");
+    expect(view.lastFrame()).toContain("❯");
   });
 
   it("renders the cursor at the controlled grapheme position", () => {

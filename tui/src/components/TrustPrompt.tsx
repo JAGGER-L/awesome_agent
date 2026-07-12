@@ -38,7 +38,7 @@ export function TrustPrompt({
       <Text color={theme.muted}>
         {submitting ? "Saving trust…" : "↑/↓ Select · Enter Confirm · Esc Exit"}
       </Text>
-      {message ? <Text color={theme.error}>{message}</Text> : null}
+      {message ? <Text color={theme.danger}>{message}</Text> : null}
     </Box>
   );
 }

@@ -44,9 +44,7 @@ def test_baseline_tools_exist_without_fixing_total_tool_count(tmp_path: Path) ->
         for name in baseline
         if next(spec for spec in specifications if spec.name == name).read_only
     } == {"glob", "grep", "ls", "read_file"}
-    assert {
-        spec.name: spec.capability for spec in specifications
-    } == {
+    assert {spec.name: spec.capability for spec in specifications} == {
         "delete": ToolCapability.WORKSPACE_DELETE,
         "edit_file": ToolCapability.WORKSPACE_WRITE,
         "execute": ToolCapability.SHELL_EXECUTE,

@@ -13,11 +13,11 @@ export function Picker({
   const theme = useTheme();
   return (
     <Box flexDirection="column">
-      <Text color={theme.accent}>{selection.prompt}</Text>
+      <Text color={theme.primary}>{selection.prompt}</Text>
       {selection.options.map((option, index) => (
         <Text
           key={option.value}
-          {...(index === selected ? { color: theme.accent } : {})}
+          {...(index === selected ? { color: theme.primary } : {})}
         >
           {index === selected ? "› " : "  "}
           {option.label}

@@ -19,7 +19,7 @@ export function SecretInput({
   const theme = useTheme();
   return (
     <Box flexDirection="column">
-      <Text color={theme.accent}>{label}</Text>
+      <Text color={theme.primary}>{label}</Text>
       <Text>{"•".repeat(graphemes(value).length)}</Text>
       <Text dimColor>
         {submitting ? "Saving…" : "Enter to save · Esc to cancel"}

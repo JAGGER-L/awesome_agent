@@ -55,6 +55,7 @@ CURRENT_COMMANDS = {
     "memory",
     "model",
     "new",
+    "permissions",
     "quit",
     "redo",
     "resume",
@@ -69,6 +70,16 @@ CURRENT_COMMANDS = {
     "undo",
     "usage",
     "workspace",
+}
+SUPERSEDED_PRODUCT_PACKAGES = {
+    "api",
+    "artifacts",
+    "persistence",
+    "runtime",
+    "sandbox",
+    "surfaces",
+    "tui",
+    "worker",
 }
 
 
@@ -93,6 +104,17 @@ def test_product_entrypoints_are_python_host_and_ink_cli() -> None:
     assert package["bin"] == {"awesome": "dist/cli/index.js"}
     assert (ROOT / "protocol" / "stdio.py").is_file()
     assert (TUI_ROOT / "src" / "cli" / "index.ts").is_file()
+
+
+def test_superseded_product_packages_cannot_reappear() -> None:
+    present = {
+        path.name
+        for path in ROOT.iterdir()
+        if path.is_dir() and not path.name.startswith("__")
+    }
+
+    assert present == CURRENT_PACKAGES
+    assert present.isdisjoint(SUPERSEDED_PRODUCT_PACKAGES)
 
 
 def test_langgraph_compilation_belongs_to_agent_graph() -> None:
@@ -188,7 +210,13 @@ def test_tui_is_one_minimal_node_22_package() -> None:
     assert package["files"] == ["dist", "README.md", "LICENSE"]
     assert package["license"] == "UNLICENSED"
     assert (TUI_ROOT / "package-lock.json").is_file()
-    assert set(package["dependencies"]) == {"clipboardy", "ink", "react", "zod"}
+    assert set(package["dependencies"]) == {
+        "clipboardy",
+        "ink",
+        "marked",
+        "react",
+        "zod",
+    }
     assert set(package["scripts"]) >= {
         "build",
         "format:check",
@@ -225,6 +253,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
         "src/core/process.ts": {"node:child_process"},
         "src/preferences/paths.ts": {"node:os", "node:path"},
         "src/preferences/store.ts": {"node:fs/promises", "node:path"},
+        "src/transcript/identity.ts": {"node:crypto"},
     }
 
     approved_node_imports = {
@@ -233,6 +262,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
     allowed_external_imports = {
         "clipboardy",
         "ink",
+        "marked",
         "react",
         "zod",
         *approved_node_imports,

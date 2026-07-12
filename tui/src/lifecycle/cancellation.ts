@@ -44,7 +44,9 @@ export class CancellationController {
   };
 
   cancelActiveOperation(): Promise<void> {
-    if (this.#requestPromise) return this.#requestPromise;
+    if (this.#requestPromise && this.#snapshot.status === "requested") {
+      return this.#requestPromise;
+    }
     const operation = this.source.getState().active_operation;
     if (operation?.status !== "active") return Promise.resolve();
 
@@ -57,6 +59,7 @@ export class CancellationController {
         if (generation !== this.#generation) return;
         if (this.#snapshot.status === "confirmed") return;
         if (!result.ok) {
+          this.#requestPromise = undefined;
           this.#setSnapshot({
             status: "failed",
             operationId,
@@ -68,6 +71,7 @@ export class CancellationController {
           !result.value.cancelled ||
           result.value.operation_id !== operationId
         ) {
+          this.#requestPromise = undefined;
           this.#setSnapshot({
             status: "failed",
             operationId,
@@ -77,6 +81,7 @@ export class CancellationController {
       })
       .catch((error: unknown) => {
         if (generation !== this.#generation) return;
+        this.#requestPromise = undefined;
         this.#setSnapshot({
           status: "failed",
           operationId,
@@ -102,6 +107,7 @@ export class CancellationController {
     if (this.#snapshot.status !== "requested") return;
     const state = this.source.getState();
     if (state.core_exit) {
+      this.#requestPromise = undefined;
       this.#setSnapshot({
         status: "failed",
         operationId: this.#snapshot.operationId,
@@ -113,6 +119,7 @@ export class CancellationController {
       state.active_operation?.id !== this.#snapshot.operationId ||
       state.active_operation.status !== "active"
     ) {
+      this.#requestPromise = undefined;
       this.#setSnapshot({
         status: "confirmed",
         operationId: this.#snapshot.operationId,
