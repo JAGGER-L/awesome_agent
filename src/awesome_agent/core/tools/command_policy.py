@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import shlex
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PureWindowsPath
 
-from awesome_agent.core.tools.errors import ToolControlFlow
-
 
 class CommandPolicyAction(StrEnum):
     ALLOW = "allow"
-    INTERACTION_REQUIRED = "interaction_required"
     DENY = "deny"
 
 
@@ -20,14 +16,6 @@ class CommandPolicyAction(StrEnum):
 class CommandPolicyDecision:
     action: CommandPolicyAction
     reason: str
-    scope: str | None = None
-
-
-class InteractionRequired(ToolControlFlow):
-    def __init__(self, *, scope: str, prompt: str) -> None:
-        super().__init__(prompt)
-        self.scope = scope
-        self.prompt = prompt
 
 
 _ELEVATION_COMMANDS = {"doas", "runas", "su", "sudo"}
@@ -122,14 +110,12 @@ def evaluate_command(command: str, workspace: Path) -> CommandPolicyDecision:
         if not resolved.is_relative_to(workspace):
             detected.append(resolved)
 
-    scope = f"execute_command_{hashlib.sha256(command.encode()).hexdigest()[:24]}"
     reason = (
         "Command references an absolute path outside the workspace."
         if detected
-        else "Agent shell commands require explicit approval."
+        else "Command passed hard safety checks."
     )
     return CommandPolicyDecision(
-        CommandPolicyAction.INTERACTION_REQUIRED,
+        CommandPolicyAction.ALLOW,
         reason,
-        scope=scope,
     )

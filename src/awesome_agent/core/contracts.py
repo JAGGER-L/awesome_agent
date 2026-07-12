@@ -8,6 +8,7 @@ type TurnId = str
 type OperationId = str
 type ToolCallId = str
 type ChangeSetId = str
+type ClientMessageId = str
 
 type IdentifierPrefix = Literal[
     "session",
@@ -15,6 +16,7 @@ type IdentifierPrefix = Literal[
     "operation",
     "call",
     "change",
+    "client",
 ]
 
 

@@ -29,6 +29,7 @@ from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
+from awesome_agent.core.tools.permissions import PermissionMode, PermissionSession
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.modeling import (
@@ -100,6 +101,14 @@ def _completed(
         (
             "edit_file",
             {"path": "note.txt", "old_string": "before", "new_string": "after"},
+            "success",
+        ),
+        (
+            "write_file",
+            {
+                "path": "circle_area.py",
+                "content": "def area(radius):\n    return 3.14 * radius**2\n",
+            },
             "success",
         ),
         ("read_file", {"path": "missing.txt"}, "error"),
@@ -193,6 +202,9 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                     activity_writer=repositories.tool_activities,
                     monotonic=time.monotonic,
                     change_set_id=change_set.id,
+                    permission_session=PermissionSession(
+                        mode=PermissionMode.FULL_ACCESS
+                    ),
                 ),
                 event_projector=projector,
                 context_builder=context_builder,
@@ -219,7 +231,9 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
             seal_changes=seal_changes,
         )
 
-        accepted = await coordinator.submit_turn(thread.id, "inspect")
+        accepted = await coordinator.submit_turn(
+            thread.id, "inspect", client_message_id="client_inspect"
+        )
         await coordinator.wait(accepted.operation_id)
 
         assert accepted.turn_id is not None
@@ -237,6 +251,11 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
     assert stored_change.lifecycle is ChangeLifecycle.APPLIED
     if tool_name == "edit_file":
         assert (workspace_path / "note.txt").read_text(encoding="utf-8") == "after"
+    if tool_name == "write_file":
+        assert (workspace_path / "circle_area.py").is_file()
+        assert [activity.tool_name for activity in view.tool_activities] == [
+            "write_file"
+        ]
     if expected_status == "error":
         observation = gateway.requests[1].messages[-1]
         assert observation.role == "tool"
@@ -304,7 +323,9 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
             seal_changes=lambda turn_id: None,
         )
 
-        accepted = await coordinator.submit_turn(thread.id, "wait")
+        accepted = await coordinator.submit_turn(
+            thread.id, "wait", client_message_id="client_wait"
+        )
         assert await coordinator.cancel_operation(accepted.operation_id) is True
         with pytest.raises(asyncio.CancelledError):
             await coordinator.wait(accepted.operation_id)

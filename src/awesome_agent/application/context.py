@@ -26,6 +26,7 @@ from awesome_agent.context import (
     ThreadCompressor,
     calculate_context_budget,
     local_memory_context_sources,
+    model_identity_context_source,
     parse_explicit_paths,
     snapshot_explicit_paths,
 )
@@ -40,13 +41,14 @@ from awesome_agent.conversation import (
 from awesome_agent.core.workspace import WorkspaceIdentity
 from awesome_agent.extensions.skills import SkillLoader
 from awesome_agent.memory import LocalMemoryService, MemoryScope
-from awesome_agent.modeling import ModelMessage, ProviderId
+from awesome_agent.modeling import ModelIdentitySnapshot, ModelMessage, ProviderId
 
 _MODEL_MESSAGE: TypeAdapter[ModelMessage] = TypeAdapter(ModelMessage)
 type Mem0Recall = Callable[
     [str, tuple[str, ...]],
     Awaitable[Mem0ContextResult],
 ]
+type ModelIdentityResolver = Callable[[Turn], ModelIdentitySnapshot]
 _FROZEN_KINDS = frozenset(
     {
         ContextSourceKind.PRODUCT_INSTRUCTIONS,
@@ -77,6 +79,7 @@ class ApplicationContextService:
         configured_total_tokens: int,
         model_context_limit: int,
         product_instructions: str,
+        model_identity: ModelIdentityResolver | None = None,
         workspace_instructions: str = "",
         skill_loader: SkillLoader | None = None,
         local_memory: LocalMemoryService | None = None,
@@ -89,6 +92,7 @@ class ApplicationContextService:
         self._configured_total_tokens = configured_total_tokens
         self._model_context_limit = model_context_limit
         self._product_instructions = product_instructions
+        self._model_identity = model_identity
         self._workspace_instructions = workspace_instructions
         self._skill_loader = skill_loader
         self._local_memory = local_memory
@@ -137,6 +141,8 @@ class ApplicationContextService:
                 mandatory=True,
             )
         ]
+        if self._model_identity is not None:
+            sources.append(model_identity_context_source(self._model_identity(turn)))
         if self._workspace_instructions:
             sources.append(
                 ContextSource(

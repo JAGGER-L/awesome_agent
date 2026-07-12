@@ -62,8 +62,9 @@ describe("protocol inventory", () => {
   });
 
   it("freezes command ownership and excludes removed commands", () => {
-    expect(applicationCommandNames).toHaveLength(20);
+    expect(applicationCommandNames).toHaveLength(21);
     expect(applicationCommandNames).toContain("auth");
+    expect(applicationCommandNames).toContain("permissions");
     expect(skillCommandNames).toEqual([
       "init",
       "review",
@@ -83,6 +84,7 @@ describe("Python-compatible Unicode limits", () => {
     thread_id: "thread_1",
     sequence: 1,
     kind: "user_message",
+    client_message_id: "client_1",
     content,
     metadata: {},
     created_at: "2026-07-11T08:00:00Z",

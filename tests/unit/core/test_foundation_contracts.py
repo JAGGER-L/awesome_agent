@@ -51,6 +51,7 @@ def test_tool_spec_exports_provider_neutral_schema() -> None:
         name="read_file",
         description="Read file contents.",
         input_schema={"type": "object", "properties": {"path": {"type": "string"}}},
+        capability="workspace.read",
         read_only=True,
     )
     assert spec.input_schema["type"] == "object"

@@ -24,6 +24,8 @@ from awesome_agent.config.credentials import (
 )
 from awesome_agent.config.models import SecretStatus
 from awesome_agent.conversation.models import Thread, ThreadView
+from awesome_agent.core.tools.permissions import PermissionMode
+from awesome_agent.modeling.catalog import ModelIdentitySnapshot
 
 
 class ProductErrorCode(StrEnum):
@@ -47,25 +49,40 @@ class ProductErrorCode(StrEnum):
 
 
 class ProviderCredentialSetStatus(StrEnum):
-    SAVED = "saved"
+    CONFIGURED = "configured"
+    DELETED = "deleted"
     INVALID = "invalid"
     CONFIRM_UNVERIFIED = "confirm_unverified"
+    ENVIRONMENT_MANAGED = "environment_managed"
 
 
 class ProviderCredentialSetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     provider: ProviderName
-    api_key: SecretStr
+    action: Literal["add", "replace", "delete"]
+    api_key: SecretStr | None = None
     allow_unverified: bool = False
 
     @field_validator("api_key")
     @classmethod
-    def validate_api_key(cls, value: SecretStr) -> SecretStr:
+    def validate_api_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
         raw = value.get_secret_value()
         if not raw.strip() or "\r" in raw or "\n" in raw:
             raise ValueError("Provider credential value is invalid.")
         return value
+
+    @model_validator(mode="after")
+    def validate_action_value(self) -> Self:
+        if self.action == "delete":
+            if self.api_key is not None or self.allow_unverified:
+                raise ValueError("Delete does not accept credential content.")
+            return self
+        if self.api_key is None:
+            raise ValueError("Credential content is required.")
+        return self
 
 
 class ProviderCredentialSetResult(BaseModel):
@@ -172,11 +189,12 @@ class ApplicationState(BaseModel):
     workspace: WorkspacePresentation
     workspace_trusted: bool
     current_thread_id: str | None = Field(default=None, max_length=128)
-    current_model: str | None = Field(default=None, max_length=200)
+    model_identity: ModelIdentitySnapshot | None = None
     thinking_enabled: bool = False
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
     active_operation_id: str | None = Field(default=None, max_length=128)
     pending_interaction_id: str | None = Field(default=None, max_length=128)
+    permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     configuration_valid: bool
     secret_status: SecretStatus
     provider_credentials: ProviderCredentialStatuses = Field(
@@ -232,7 +250,7 @@ class StatusSnapshot(BaseModel):
     thread_title: str = Field(min_length=1, max_length=500)
     thread_id: str = Field(min_length=1, max_length=128)
     thread_display_id: str = Field(min_length=1, max_length=128)
-    model_id: str = Field(min_length=1, max_length=200)
+    model_identity: ModelIdentitySnapshot
     model_status: Literal["configured", "not_configured"]
     thinking_enabled: bool
     skill_mode: str = Field(min_length=1, max_length=64)
@@ -244,6 +262,7 @@ class StatusSnapshot(BaseModel):
     operation_id: str | None = Field(default=None, max_length=128)
     configuration_valid: bool
     configuration_diagnostic_count: int = Field(ge=0)
+    permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
 
 
 def thread_display_id(
@@ -279,3 +298,18 @@ class OperationAccepted(BaseModel):
     operation_id: str = Field(min_length=1, max_length=128)
     thread_id: str | None = Field(default=None, max_length=128)
     turn_id: str | None = Field(default=None, max_length=128)
+    client_message_id: str | None = Field(
+        default=None,
+        pattern=r"^client_[A-Za-z0-9_-]+$",
+        max_length=128,
+    )
+
+    @model_validator(mode="after")
+    def validate_turn_identity(self) -> OperationAccepted:
+        if self.turn_id is not None and (
+            self.thread_id is None or self.client_message_id is None
+        ):
+            raise ValueError("Turn acceptance requires thread_id and client_message_id")
+        if self.client_message_id is not None and self.turn_id is None:
+            raise ValueError("client_message_id requires turn_id")
+        return self

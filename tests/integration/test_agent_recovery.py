@@ -71,6 +71,7 @@ def _turn(conversation: ConversationService, thread_id: str) -> Turn:
             model="deepseek/deepseek-v4-flash",
             budgets=BudgetConfig(),
         ),
+        client_message_id="client_recovery",
     )
 
 
@@ -208,4 +209,7 @@ async def test_uncertain_execute_is_not_replayed_and_requests_interaction(
         EventType.INTERACTION_REQUIRED
     ]
     payload = sink.events[0].payload
-    assert payload.choices == ("retry", "abort")  # type: ignore[union-attr]
+    assert tuple(choice.decision for choice in payload.choices) == (  # type: ignore[union-attr]
+        "retry",
+        "abort",
+    )

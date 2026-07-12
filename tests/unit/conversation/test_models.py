@@ -137,6 +137,18 @@ def test_direct_thread_entry_is_bounded_to_30000_characters() -> None:
         )
 
 
+def test_user_thread_entry_requires_client_message_identity() -> None:
+    with pytest.raises(ValidationError, match="client_message_id"):
+        ThreadEntry(
+            id="entry_1",
+            thread_id="thread_1",
+            sequence=1,
+            kind=ThreadEntryKind.USER_MESSAGE,
+            content="inspect",
+            created_at=_now(),
+        )
+
+
 def test_agent_tool_activity_requires_turn_and_direct_forbids_turn() -> None:
     common = {
         "id": "activity_1",

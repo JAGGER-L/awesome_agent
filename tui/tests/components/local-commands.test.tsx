@@ -38,30 +38,41 @@ function controller() {
       _params: MethodParams[Method],
     ) => {
       if (method !== "command.execute") throw new Error("unexpected RPC");
+      const command = (_params as { name?: string }).name;
       return {
         ok: true,
         value: {
           status: "success",
           content: "",
-          data: {
-            version: "0.1.0",
-            workspace_path: "E:\\projects\\awesome",
-            thread_title: "Feature auth",
-            thread_id: "thread_3f8a1c2d111122223333444455556666",
-            thread_display_id: "thread_3f8a1c2d",
-            model_id: "deepseek/deepseek-v4-flash",
-            model_status: "configured",
-            thinking_enabled: false,
-            skill_mode: "auto",
-            local_memory_enabled: false,
-            mem0_enabled: false,
-            mcp_ready: 0,
-            mcp_degraded: 0,
-            operation_status: "idle",
-            operation_id: null,
-            configuration_valid: true,
-            configuration_diagnostic_count: 0,
-          },
+          data:
+            command === "usage"
+              ? {}
+              : {
+                  version: "0.1.0",
+                  workspace_path: "E:\\projects\\awesome",
+                  thread_title: "Feature auth",
+                  thread_id: "thread_3f8a1c2d111122223333444455556666",
+                  thread_display_id: "thread_3f8a1c2d",
+                  model_identity: {
+                    provider: "deepseek",
+                    configured_model: "deepseek/deepseek-v4-flash",
+                    effective_model: "deepseek/deepseek-v4-flash",
+                    runtime_name: "Awesome Agent",
+                    fallback_active: false,
+                  },
+                  model_status: "configured",
+                  thinking_enabled: false,
+                  skill_mode: "auto",
+                  local_memory_enabled: false,
+                  mem0_enabled: false,
+                  mcp_ready: 0,
+                  mcp_degraded: 0,
+                  operation_status: "idle",
+                  operation_id: null,
+                  configuration_valid: true,
+                  configuration_diagnostic_count: 0,
+                  permission_mode: "request_approval",
+                },
         },
       } as never;
     },
@@ -69,7 +80,7 @@ function controller() {
 }
 
 describe("App local command wiring", () => {
-  it("gives help priority over the composer and closes it with Esc", async () => {
+  it("renders help in transcript and immediately keeps Composer active", async () => {
     const view = render(
       <App
         store={createSurfaceStore()}
@@ -81,9 +92,25 @@ describe("App local command wiring", () => {
     view.stdin.write("/help");
     view.stdin.write("\r");
     await eventually(() => expect(view.lastFrame()).toContain("Commands"));
-    expect(view.lastFrame()).not.toContain("Message");
-    view.stdin.write("\u001b");
-    await eventually(() => expect(view.lastFrame()).toContain("Message"));
+    expect(view.lastFrame()).toContain("Message");
+    expect(view.lastFrame()).toContain("/new");
+  });
+
+  it("renders visible usage feedback when no usage exists", async () => {
+    const view = render(
+      <App
+        store={createSurfaceStore()}
+        controller={controller()}
+        localCommands={localService()}
+        width={60}
+      />,
+    );
+    view.stdin.write("/usage");
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("No usage recorded yet"),
+    );
+    expect(view.lastFrame()).toContain("Message");
   });
 
   it("renders typed Python status data", async () => {

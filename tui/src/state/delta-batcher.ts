@@ -12,6 +12,8 @@ export interface CoalescedDelta {
   readonly operation_id?: string;
   readonly delta_kind: "text" | "reasoning";
   readonly text: string;
+  readonly first_timestamp: string;
+  readonly last_timestamp: string;
   readonly first_sequence: number;
   readonly last_sequence: number;
 }
@@ -32,6 +34,7 @@ const defaultScheduler: DeltaScheduler = {
     return { cancel: () => clearTimeout(timer) };
   },
 };
+const MAX_BATCH_CHARACTERS = 8_192;
 
 export class DeltaBatcher {
   #pending: CoalescedDelta | undefined;
@@ -54,12 +57,19 @@ export class DeltaBatcher {
       return undefined;
     }
     if (this.#pending && this.#matches(this.#pending, delta)) {
-      this.#pending = {
-        ...this.#pending,
-        text: this.#pending.text + delta.text,
-        last_sequence: delta.last_sequence,
-      };
-      return undefined;
+      if (
+        this.#pending.text.length + delta.text.length <=
+        MAX_BATCH_CHARACTERS
+      ) {
+        this.#pending = {
+          ...this.#pending,
+          text: this.#pending.text + delta.text,
+          last_sequence: delta.last_sequence,
+          last_timestamp: delta.last_timestamp,
+        };
+        return undefined;
+      }
+      this.flush();
     }
     this.flush();
     this.#pending = delta;
@@ -101,6 +111,8 @@ export class DeltaBatcher {
       delta_kind:
         event.payload.kind === "assistant.text.delta" ? "text" : "reasoning",
       text: event.payload.text,
+      first_timestamp: event.timestamp,
+      last_timestamp: event.timestamp,
       first_sequence: event.sequence,
       last_sequence: event.sequence,
     };

@@ -75,6 +75,7 @@ class ToolSpec(BaseModel):
     name: str = Field(pattern=TOOL_NAME_PATTERN)
     description: str = Field(min_length=1, max_length=500)
     input_schema: dict[str, JsonValue]
+    capability: str = Field(pattern=r"^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$")
     read_only: bool
     display_metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -95,6 +96,17 @@ class ToolError(BaseModel):
     retryable: bool = False
 
 
+class ToolPresentation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verb: str = Field(min_length=1, max_length=64)
+    target: str | None = Field(default=None, max_length=2_000)
+    outcome: str | None = Field(default=None, max_length=128)
+    summary: str = Field(default="", max_length=2_000)
+    detail: str | None = Field(default=None, max_length=4_000)
+    duration_ms: int | None = Field(default=None, ge=0)
+
+
 class ToolResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -104,6 +116,7 @@ class ToolResult(BaseModel):
     content: str = Field(max_length=30_000)
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     error: ToolError | None = None
+    presentation: ToolPresentation | None = None
 
     @model_validator(mode="after")
     def error_matches_status(self) -> ToolResult:
@@ -117,3 +130,4 @@ class ToolOutput(BaseModel):
 
     content: str
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    presentation: ToolPresentation | None = None

@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field, JsonValue
 from awesome_agent.core.changes import ChangeJournal
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
-    InteractionRequired,
     evaluate_command,
 )
 from awesome_agent.core.tools.context import (
@@ -18,8 +17,8 @@ from awesome_agent.core.tools.context import (
 )
 from awesome_agent.core.tools.contracts import (
     ToolErrorCode,
-    ToolExecutionOrigin,
     ToolOutput,
+    ToolPresentation,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
 from awesome_agent.core.tools.policy import resolve_workspace_path
@@ -85,17 +84,6 @@ def create_execute_handler(
                 ToolErrorCode.PERMISSION_DENIED,
                 decision.reason,
             )
-        if (
-            context.origin is ToolExecutionOrigin.AGENT
-            and decision.action is CommandPolicyAction.INTERACTION_REQUIRED
-        ):
-            assert decision.scope is not None
-            if decision.scope not in context.allowed_interaction_scopes:
-                raise InteractionRequired(
-                    scope=decision.scope,
-                    prompt=decision.reason,
-                )
-
         environment = _sanitized_environment()
         if os.name == "nt":
             environment["AWESOME_EXEC_COMMAND"] = options.command
@@ -130,6 +118,16 @@ def create_execute_handler(
         content = stdout.text
         if stderr.text:
             content = f"{content}\n[stderr]\n{stderr.text}" if content else stderr.text
-        return ToolOutput(content=content, metadata=metadata)
+        return ToolOutput(
+            content=content,
+            metadata=metadata,
+            presentation=ToolPresentation(
+                verb="Run",
+                target=options.command,
+                outcome="Completed" if result.exit_code == 0 else "Failed",
+                summary=f"Exit code {result.exit_code}",
+                detail=content[:4_000] or None,
+            ),
+        )
 
     return execute

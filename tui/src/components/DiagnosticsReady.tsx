@@ -28,7 +28,7 @@ export function DiagnosticsReady({
         <Text>Set {environmentVariable} in the environment, then restart.</Text>
       ) : null}
       {diagnostics.map((diagnostic) => (
-        <Text key={diagnostic} color={theme.error}>
+        <Text key={diagnostic} color={theme.danger}>
           {diagnostic}
         </Text>
       ))}

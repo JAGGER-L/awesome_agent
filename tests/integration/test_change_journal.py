@@ -7,6 +7,8 @@ import pytest
 from awesome_agent.core.changes import ChangeJournal, ChangeOperations, FileNodeType
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
+    PermissionMode,
+    PermissionSession,
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
@@ -58,6 +60,7 @@ def delete_fixture(
         activity_writer=Mock(),
         monotonic=monotonic,
         change_set_id=change_set.id,
+        permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
     )
     return ToolExecutor(registry), context, journal, blobs, workspace
 

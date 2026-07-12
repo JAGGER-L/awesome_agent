@@ -1,22 +1,14 @@
 import { createContext, useContext, type ReactNode } from "react";
 
-export interface ThemeRoles {
-  readonly accent: string;
-  readonly assistant: string;
-  readonly error: string;
-  readonly muted: string;
-  readonly user: string;
-  readonly warning: string;
-}
+import {
+  resolveTheme,
+  type SemanticThemeRoles,
+  type Theme,
+} from "../preferences/theme.js";
 
-const defaultTheme: ThemeRoles = {
-  accent: "cyan",
-  assistant: "white",
-  error: "red",
-  muted: "gray",
-  user: "green",
-  warning: "yellow",
-};
+export type ThemeRoles = SemanticThemeRoles;
+
+const defaultTheme = resolveTheme("system", "ansi16");
 
 const ThemeContext = createContext(defaultTheme);
 
@@ -25,13 +17,13 @@ export function ThemeProvider({
   value = defaultTheme,
 }: {
   children: ReactNode;
-  value?: ThemeRoles;
+  value?: Theme;
 }) {
   return (
     <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
   );
 }
 
-export function useTheme(): ThemeRoles {
+export function useTheme(): Theme {
   return useContext(ThemeContext);
 }

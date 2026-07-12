@@ -14,8 +14,11 @@ from awesome_agent.version import PRODUCT_VERSION
 
 def _value(frame: dict[str, Any]) -> dict[str, Any]:
     result = frame["result"]
+    assert isinstance(result, dict)
     assert result["ok"] is True
-    return result["value"]
+    value = result["value"]
+    assert isinstance(value, dict)
+    return value
 
 
 class Client:
@@ -79,7 +82,8 @@ class Client:
         assert self.process.stdout is not None
         raw = await asyncio.wait_for(self.process.stdout.readline(), timeout=10)
         assert raw, await self.stderr()
-        frame = json.loads(raw)
+        frame: object = json.loads(raw)
+        assert isinstance(frame, dict)
         self.stdout_frames.append(frame)
         return frame
 
@@ -170,7 +174,11 @@ async def test_stdio_full_flow_and_restart(
     assert _value(model_selected)["data"]["model"] == model
     submitted = await client.request(
         "turn.submit",
-        {"thread_id": thread_id, "content": "use tool to inspect @sample.txt"},
+        {
+            "thread_id": thread_id,
+            "content": "use tool to inspect @sample.txt",
+            "client_message_id": "client_e2e_inspect",
+        },
     )
     operation_id = _value(submitted)["operation_id"]
     turn_events = await client.wait_operation(operation_id)
@@ -189,7 +197,11 @@ async def test_stdio_full_flow_and_restart(
 
     waiting = await client.request(
         "turn.submit",
-        {"thread_id": thread_id, "content": "wait forever"},
+        {
+            "thread_id": thread_id,
+            "content": "wait forever",
+            "client_message_id": "client_e2e_wait",
+        },
     )
     cancelled = await client.request(
         "operation.cancel",

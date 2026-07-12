@@ -14,6 +14,7 @@ function deferred<T>() {
 function state(operation: "turn" | "direct" | "none" = "turn"): SurfaceState {
   return {
     connection: "ready",
+    thread_generation: 0,
     event_sequence: 0,
     warnings: [],
     ...(operation === "none"
@@ -28,11 +29,9 @@ function state(operation: "turn" | "direct" | "none" = "turn"): SurfaceState {
                     id: "turn_1",
                     status: "active" as const,
                     started_at: "2026-07-11T00:00:00Z",
-                    assistant_text: "",
                     reasoning_text: "",
-                    reasoning_seen: false,
-                    tools: {},
-                    tool_order: [],
+                    timeline: [],
+                    thinking_sequence: 0,
                   },
                 }
               : {}),
@@ -107,7 +106,7 @@ describe("CancellationController", () => {
     return first;
   });
 
-  it("records product failure without a second request", async () => {
+  it("records product failure and allows an explicit retry", async () => {
     const { calls, controller } = harness(
       state(),
       Promise.resolve({
@@ -126,7 +125,7 @@ describe("CancellationController", () => {
       message: "busy",
     });
     await controller.cancelActiveOperation();
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
   });
 
   it("records a false cancel response as failed", async () => {
@@ -161,6 +160,30 @@ describe("CancellationController", () => {
     });
     await request;
     expect(controller.snapshot().status).toBe("confirmed");
+  });
+
+  it("can cancel the next Operation after a previous cancellation completed", async () => {
+    const { calls, controller, setState } = harness(state());
+    const first = controller.cancelActiveOperation();
+    const terminal = state();
+    if (!terminal.active_operation) throw new Error("expected operation");
+    setState({
+      ...terminal,
+      active_operation: { ...terminal.active_operation, status: "cancelled" },
+    });
+    await first;
+
+    const next = state();
+    if (!next.active_operation) throw new Error("expected operation");
+    setState({
+      ...next,
+      active_operation: { ...next.active_operation, id: "operation_2" },
+    });
+    await controller.cancelActiveOperation();
+    expect(calls).toEqual([
+      { operation_id: "operation_1" },
+      { operation_id: "operation_2" },
+    ]);
   });
 
   it("fails pending cancellation on Core exit and resets for reconnect", () => {

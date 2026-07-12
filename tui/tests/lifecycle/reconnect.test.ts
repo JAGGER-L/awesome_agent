@@ -22,9 +22,16 @@ function ready(title = "Feature auth"): StartupResult {
       workspace: { display_path: "/workspace" },
       workspace_trusted: true,
       current_thread_id: "thread_full",
-      current_model: "deepseek/deepseek-v4-flash",
+      model_identity: {
+        provider: "deepseek",
+        configured_model: "deepseek/deepseek-v4-flash",
+        effective_model: "deepseek/deepseek-v4-flash",
+        runtime_name: "Awesome Agent",
+        fallback_active: false,
+      },
       thinking_enabled: false,
       skill_mode: "auto",
+      permission_mode: "request_approval",
       configuration_valid: true,
       secret_status: {
         deepseek_api_key: true,

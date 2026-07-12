@@ -22,7 +22,9 @@ from awesome_agent.agent import (
 from awesome_agent.application.commands import (
     CommandIntent,
     CommandName,
+    CommandOption,
     CommandResult,
+    CommandSelection,
     CommandStatus,
 )
 from awesome_agent.application.context import ApplicationContextService
@@ -59,17 +61,18 @@ from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
+    full_access_confirmation_choices,
+    tool_approval_choices,
+    workspace_trust_choices,
 )
 from awesome_agent.application.operations import OperationBusy, OperationController
 from awesome_agent.application.provider_configuration import (
     CredentialValidator,
     ProviderConfigurationService,
-    ProviderCredentialManagedExternally,
 )
 from awesome_agent.application.turns import TurnCoordinator
 from awesome_agent.config import (
     ApplicationConfig,
-    ConfigurationResolutionError,
     LoadedConfigSources,
     ThreadConfigState,
     TurnConfig,
@@ -80,6 +83,7 @@ from awesome_agent.config import (
     resolve_turn_config,
 )
 from awesome_agent.context import (
+    CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
     Mem0ContextResult,
     ThreadCompressor,
@@ -104,7 +108,9 @@ from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
     EventSink,
+    InteractionChoicePayload,
     InteractionRequiredPayload,
+    InteractionResolvedPayload,
 )
 from awesome_agent.core.tools import (
     ToolExecutionContext,
@@ -114,6 +120,12 @@ from awesome_agent.core.tools import (
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
+)
+from awesome_agent.core.tools.permissions import (
+    PermissionMode,
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
 )
 from awesome_agent.core.tools.process import ProcessRunner
 from awesome_agent.core.tools.registry import ToolRegistry
@@ -149,6 +161,7 @@ from awesome_agent.memory.mem0_cloud import Mem0Client
 from awesome_agent.modeling import (
     GatewayEvent,
     ModelGateway,
+    ModelIdentitySnapshot,
     ModelProvider,
     ModelRequest,
     ModelTurn,
@@ -392,6 +405,7 @@ class _LocalApplicationBackend:
         self._change_store: SQLiteChangeSetStore | None = None
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
+        self._permission_session = PermissionSession()
 
     async def initialize_application(self) -> InitializeResult:
         if self._initialized:
@@ -409,15 +423,27 @@ class _LocalApplicationBackend:
                 pending = self._interactions.create(
                     kind=InteractionKind.WORKSPACE_TRUST,
                     prompt="Trust this workspace?",
-                    choices=(InteractionDecision.TRUST, InteractionDecision.DENY),
-                    scope=None,
+                    operation="trust",
+                    target=str(self._workspace.display_path),
+                    capability=None,
+                    choices=workspace_trust_choices(),
                 )
                 await self._emitter.emit(
                     InteractionRequiredPayload(
                         interaction_id=pending.id,
                         interaction_kind="workspace_trust",
                         prompt=pending.prompt,
-                        choices=tuple(item.value for item in pending.choices),
+                        operation=pending.operation,
+                        target=pending.target,
+                        capability=pending.capability,
+                        choices=tuple(
+                            InteractionChoicePayload(
+                                decision=item.decision.value,
+                                label=item.label,
+                                description=item.description,
+                            )
+                            for item in pending.choices
+                        ),
                     )
                 )
             return InitializeResult(
@@ -457,13 +483,14 @@ class _LocalApplicationBackend:
                 self._trust.status(self._workspace) is TrustStatus.TRUSTED
             ),
             current_thread_id=current_id,
-            current_model=current.current_model if current else None,
+            model_identity=self._model_identity(current) if current else None,
             thinking_enabled=current.thinking_enabled if current else False,
             skill_mode=current.skill_mode if current else "auto",
             active_operation_id=self._operations.active_operation_id,
             pending_interaction_id=(
                 self._interactions.pending.id if self._interactions.pending else None
             ),
+            permission_mode=self._permission_session.mode,
             configuration_valid=True,
             secret_status=self._sources.secret_status,
             provider_credentials=self._sources.provider_credentials,
@@ -562,7 +589,12 @@ class _LocalApplicationBackend:
                 )
             limit = max(1, limit // 2)
 
-    async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
+    async def start_turn(
+        self,
+        thread_id: str,
+        content: str,
+        client_message_id: str,
+    ) -> OperationAccepted:
         self._require_active()
         assert self._turns is not None
         if not content.strip():
@@ -574,7 +606,11 @@ class _LocalApplicationBackend:
             thread = self._conversation.read_thread(thread_id).thread
             config = self._turn_config(thread)
             self._require_provider_configured(config.provider)
-            return await self._turns.submit_turn(thread_id, content)
+            return await self._turns.submit_turn(
+                thread_id,
+                content,
+                client_message_id=client_message_id,
+            )
         except ApplicationFailure:
             raise
         except OperationBusy as error:
@@ -650,13 +686,7 @@ class _LocalApplicationBackend:
     ) -> ProviderCredentialSetResult:
         self._require_active()
         assert self._provider_configuration is not None
-        try:
-            return await self._provider_configuration.set_credential(request)
-        except ProviderCredentialManagedExternally as error:
-            raise _application_failure(
-                ProductErrorCode.CREDENTIAL_MANAGED_EXTERNALLY,
-                "Provider credential is managed by the process environment.",
-            ) from error
+        return await self._provider_configuration.set_credential(request)
 
     async def resolve_interaction(
         self,
@@ -668,16 +698,28 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="not_found")
         try:
             parsed = InteractionDecision(decision)
-        except ConfigurationResolutionError:
+        except ValueError:
             return InteractionResult(accepted=False, status="invalid_decision")
         if not self._interactions.resolve(interaction_id, parsed):
             return InteractionResult(accepted=False, status="rejected")
         resolved = await self._interactions.wait(interaction_id)
+        await self._emitter.emit(
+            InteractionResolvedPayload(
+                interaction_id=interaction_id,
+                decision=resolved.value,
+            ),
+        )
         if pending.kind is InteractionKind.WORKSPACE_TRUST:
             if resolved is not InteractionDecision.TRUST:
                 return InteractionResult(accepted=True, status="denied")
             self._trust.accept(self._workspace)
             await self._activate()
+        elif pending.kind is InteractionKind.FULL_ACCESS_CONFIRMATION:
+            if resolved is InteractionDecision.ENABLE_FULL_ACCESS:
+                self._permission_session.mode = PermissionMode.FULL_ACCESS
+                self._permission_session.granted_capabilities.clear()
+            else:
+                return InteractionResult(accepted=True, status="denied")
         return InteractionResult(accepted=True, status="resolved")
 
     async def cancel_foreground(self, operation_id: str) -> CancelResult:
@@ -778,8 +820,10 @@ class _LocalApplicationBackend:
             compressor=ThreadCompressor(gateway_router),
             configured_total_tokens=self._application_config.budgets.total_context_tokens,
             model_context_limit=self._application_config.budgets.total_context_tokens,
-            product_instructions=(
-                "You are a local-first coding agent. Use tools when evidence is needed."
+            product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
+            model_identity=lambda turn: ModelIdentitySnapshot.from_models(
+                configured_model=turn.model,
+                effective_model=turn.model,
             ),
             skill_loader=skill_loader,
             local_memory=self._local_memory,
@@ -797,29 +841,40 @@ class _LocalApplicationBackend:
             turn_id = turn.id
             budgets = turn.budgets
 
-            async def resolve_tool_interaction(scope: str, prompt: str) -> bool:
+            async def resolve_tool_interaction(
+                request: ToolApprovalRequest,
+            ) -> ToolApprovalDecision:
                 pending = self._interactions.create(
-                    kind=InteractionKind.EXECUTE_BOUNDARY,
-                    prompt=prompt,
-                    choices=(
-                        InteractionDecision.ALLOW_ONCE,
-                        InteractionDecision.DENY,
-                    ),
-                    scope=scope,
+                    kind=InteractionKind.TOOL_APPROVAL,
+                    prompt=request.prompt,
+                    operation=request.operation,
+                    target=request.target,
+                    capability=request.capability,
+                    choices=tool_approval_choices(request.capability),
                 )
                 await self._emitter.emit(
                     InteractionRequiredPayload(
                         interaction_id=pending.id,
-                        interaction_kind="execute_boundary",
+                        interaction_kind="tool_approval",
                         prompt=pending.prompt,
-                        choices=tuple(choice.value for choice in pending.choices),
+                        operation=pending.operation,
+                        target=pending.target,
+                        capability=pending.capability,
+                        choices=tuple(
+                            InteractionChoicePayload(
+                                decision=choice.decision.value,
+                                label=choice.label,
+                                description=choice.description,
+                            )
+                            for choice in pending.choices
+                        ),
                     ),
                     thread_id=turn.thread_id,
                     turn_id=turn_id,
                     operation_id=operation_id,
                 )
                 decision = await self._interactions.wait(pending.id)
-                return decision is InteractionDecision.ALLOW_ONCE
+                return ToolApprovalDecision(decision.value)
 
             def tool_context(state: object) -> ToolExecutionContext:
                 assert self._change_scope is not None
@@ -836,7 +891,8 @@ class _LocalApplicationBackend:
                         turn_id,
                         turn_id=turn_id,
                     ),
-                    interaction_resolver=resolve_tool_interaction,
+                    permission_session=self._permission_session,
+                    approval_resolver=resolve_tool_interaction,
                 )
 
             post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
@@ -903,6 +959,7 @@ class _LocalApplicationBackend:
                     operation_id,
                     turn_id=None,
                 ),
+                permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
             )
 
         self._direct = DirectCommandService(
@@ -937,6 +994,7 @@ class _LocalApplicationBackend:
             workspace_key=self._workspace.key,
             delegate=self._delegate_command,
             default_model=self._initial_thread_model,
+            on_thread_selected=self._permission_session.reset,
         )
         self._provider_configuration = ProviderConfigurationService(
             conversation=self._conversation,
@@ -1001,6 +1059,16 @@ class _LocalApplicationBackend:
             environ={},
         )
 
+    def _model_identity(self, thread: Thread) -> ModelIdentitySnapshot | None:
+        try:
+            model = self._turn_config(thread).model
+        except ValueError:
+            return None
+        return ModelIdentitySnapshot.from_models(
+            configured_model=model,
+            effective_model=model,
+        )
+
     def _initial_thread_model(self) -> str | None:
         selected = self._environ.get("AWESOME_MODEL")
         if selected is not None:
@@ -1058,6 +1126,8 @@ class _LocalApplicationBackend:
                     "trust": self._trust.status(self._workspace).value,
                 },
             )
+        if intent.name is CommandName.PERMISSIONS:
+            return await self._permissions_command(intent)
         if intent.name is CommandName.TOOLS:
             assert self._registry is not None
             return CommandResult(
@@ -1088,6 +1158,8 @@ class _LocalApplicationBackend:
                 self._mem0_session.enabled if self._mem0_session is not None else False
             )
             active_operation_id = self._operations.active_operation_id
+            model_identity = self._model_identity(thread)
+            assert model_identity is not None
             snapshot = StatusSnapshot(
                 version=PRODUCT_VERSION,
                 workspace_path=str(self._workspace.display_path),
@@ -1097,7 +1169,7 @@ class _LocalApplicationBackend:
                     thread.id,
                     candidate_ids=(item.id for item in display_candidates),
                 ),
-                model_id=config.model,
+                model_identity=model_identity,
                 model_status=(
                     "configured"
                     if self._provider_is_configured(config.provider)
@@ -1125,6 +1197,7 @@ class _LocalApplicationBackend:
                     )
                     else 0
                 ),
+                permission_mode=self._permission_session.mode,
             )
             return CommandResult(
                 status=CommandStatus.SUCCESS,
@@ -1161,6 +1234,107 @@ class _LocalApplicationBackend:
         if intent.name in {CommandName.DIFF, CommandName.UNDO, CommandName.REDO}:
             return self._change_command(intent)
         return _error("command_not_available", "Command is not available.")
+
+    async def _permissions_command(self, intent: CommandIntent) -> CommandResult:
+        if not intent.arguments:
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                data={"permission_mode": self._permission_session.mode.value},
+                selection=CommandSelection(
+                    prompt="Permission mode",
+                    options=(
+                        CommandOption(
+                            value=PermissionMode.REQUEST_APPROVAL.value,
+                            label="Request approval",
+                            description=(
+                                "Ask before edits, deletes, and shell commands."
+                            ),
+                            selected=(
+                                self._permission_session.mode
+                                is PermissionMode.REQUEST_APPROVAL
+                            ),
+                        ),
+                        CommandOption(
+                            value=PermissionMode.FULL_ACCESS.value,
+                            label="Full access",
+                            description=(
+                                "Allow edits and shell commands for this thread."
+                            ),
+                            selected=(
+                                self._permission_session.mode
+                                is PermissionMode.FULL_ACCESS
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        if len(intent.arguments) != 1:
+            return _error(
+                "invalid_arguments",
+                "Usage: /permissions [request_approval|full_access]",
+            )
+        try:
+            requested = PermissionMode(intent.arguments[0])
+        except ValueError:
+            return _error(
+                "invalid_arguments",
+                "Usage: /permissions [request_approval|full_access]",
+            )
+        if self._operations.active_operation_id is not None:
+            return _error(
+                "operation_busy",
+                "Permission mode cannot change during an active operation.",
+            )
+        if self._interactions.pending is not None:
+            return _error(
+                "interaction_busy",
+                "Resolve the pending interaction before changing permission mode.",
+            )
+        if requested is PermissionMode.REQUEST_APPROVAL:
+            self._permission_session.reset()
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                content="Permission mode changed to Request approval.",
+                data={"permission_mode": requested.value},
+            )
+        if self._permission_session.mode is PermissionMode.FULL_ACCESS:
+            return CommandResult(
+                status=CommandStatus.SUCCESS,
+                content="Full access is already enabled for this thread.",
+                data={"permission_mode": requested.value},
+            )
+        pending = self._interactions.create(
+            kind=InteractionKind.FULL_ACCESS_CONFIRMATION,
+            prompt="Enable Full access for this thread?",
+            operation="enable",
+            target="full access",
+            capability=None,
+            choices=full_access_confirmation_choices(),
+        )
+        await self._emitter.emit(
+            InteractionRequiredPayload(
+                interaction_id=pending.id,
+                interaction_kind="full_access_confirmation",
+                prompt=pending.prompt,
+                operation=pending.operation,
+                target=pending.target,
+                capability=pending.capability,
+                choices=tuple(
+                    InteractionChoicePayload(
+                        decision=choice.decision.value,
+                        label=choice.label,
+                        description=choice.description,
+                    )
+                    for choice in pending.choices
+                ),
+            ),
+            thread_id=(self._commands.current_thread_id if self._commands else None),
+        )
+        return CommandResult(
+            status=CommandStatus.INTERACTION_REQUIRED,
+            content="Confirm Full access to continue.",
+            data={"interaction_id": pending.id},
+        )
 
     def _change_command(self, intent: CommandIntent) -> CommandResult:
         assert self._change_operations is not None

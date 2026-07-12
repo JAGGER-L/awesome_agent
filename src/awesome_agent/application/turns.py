@@ -20,11 +20,16 @@ from awesome_agent.context import ExplicitPathError
 from awesome_agent.conversation import (
     ConversationService,
     Thread,
+    ThreadView,
     Turn,
     TurnStatus,
     UsageSummary,
 )
-from awesome_agent.core.events import EventEmitter, InteractionRequiredPayload
+from awesome_agent.core.events import (
+    EventEmitter,
+    InteractionChoicePayload,
+    InteractionRequiredPayload,
+)
 from awesome_agent.storage.checkpoints import CheckpointCorrupt, TurnCheckpointStore
 
 
@@ -110,12 +115,23 @@ class TurnCoordinator:
     def active_operation_id(self) -> str | None:
         return self._operations.active_operation_id
 
-    async def submit_turn(self, thread_id: str, content: str) -> OperationAccepted:
+    async def submit_turn(
+        self,
+        thread_id: str,
+        content: str,
+        *,
+        client_message_id: str,
+    ) -> OperationAccepted:
         if self._operations.active_operation_id is not None:
             raise OperationBusy("Another operation is active.")
         thread = self._conversation.read_thread(thread_id).thread
         config = self._config_resolver(thread)
-        turn = self._conversation.begin_turn(thread_id, content, config)
+        turn = self._conversation.begin_turn(
+            thread_id,
+            content,
+            config,
+            client_message_id=client_message_id,
+        )
 
         async def execute(operation_id: str) -> None:
             projector = ApplicationEventProjector(
@@ -123,6 +139,7 @@ class TurnCoordinator:
                 thread_id=turn.thread_id,
                 turn_id=turn.id,
                 operation_id=operation_id,
+                client_message_id=client_message_id,
             )
             await projector.turn_started()
             try:
@@ -139,6 +156,7 @@ class TurnCoordinator:
                 execute,
                 thread_id=turn.thread_id,
                 turn_id=turn.id,
+                client_message_id=client_message_id,
             )
         except BaseException:
             self._conversation.fail_turn(turn.id, "operation_start_failed")
@@ -149,6 +167,7 @@ class TurnCoordinator:
             operation_id=handle.operation_id,
             thread_id=thread_id,
             turn_id=turn.id,
+            client_message_id=client_message_id,
         )
 
     async def wait(self, operation_id: str) -> None:
@@ -174,6 +193,7 @@ class TurnCoordinator:
         state = await self._checkpoints.latest_state(turn.id)
         if state is None:
             raise TurnExecutionFailed("checkpoint_missing")
+        client_message_id = _client_message_id(view, turn)
 
         async def execute(operation_id: str) -> None:
             projector = ApplicationEventProjector(
@@ -181,6 +201,7 @@ class TurnCoordinator:
                 thread_id=turn.thread_id,
                 turn_id=turn.id,
                 operation_id=operation_id,
+                client_message_id=client_message_id,
             )
             await projector.turn_started()
             await self._execute_turn(turn, operation_id, projector, resume=True)
@@ -189,6 +210,7 @@ class TurnCoordinator:
             execute,
             thread_id=turn.thread_id,
             turn_id=turn.id,
+            client_message_id=client_message_id,
         )
         self._tasks[handle.operation_id] = handle.task
         handle.task.add_done_callback(lambda _: self._trim_tasks())
@@ -196,6 +218,7 @@ class TurnCoordinator:
             operation_id=handle.operation_id,
             thread_id=thread_id,
             turn_id=turn.id,
+            client_message_id=client_message_id,
         )
 
     async def reconcile_startup(self) -> tuple[RecoveryResult, ...]:
@@ -290,10 +313,23 @@ class TurnCoordinator:
                             interaction_id=f"interaction_recovery_{turn.id}",
                             interaction_kind="recovery_decision",
                             prompt="A tool may have produced external side effects.",
-                            choices=("retry", "abort"),
+                            operation="recover",
+                            target="uncertain external tool call",
+                            capability=None,
+                            choices=(
+                                InteractionChoicePayload(
+                                    decision="retry",
+                                    label="Retry",
+                                ),
+                                InteractionChoicePayload(
+                                    decision="abort",
+                                    label="Abort",
+                                ),
+                            ),
                         ),
                         thread_id=turn.thread_id,
                         turn_id=turn.id,
+                        client_message_id=_client_message_id(view, turn),
                     )
                     results.append(
                         RecoveryResult(
@@ -398,11 +434,13 @@ class TurnCoordinator:
         await self._checkpoints.delete(turn.id)
 
     def _recovery_projector(self, turn: Turn) -> ApplicationEventProjector:
+        view = self._conversation.read_thread(turn.thread_id)
         return ApplicationEventProjector(
             emitter=self._emitter,
             thread_id=turn.thread_id,
             turn_id=turn.id,
             operation_id=f"operation_recovery_{turn.id}",
+            client_message_id=_client_message_id(view, turn),
         )
 
 
@@ -420,6 +458,12 @@ def _usage_summary(state: AgentState) -> UsageSummary:
         compressions=state["compressions"],
         active_execution_seconds=state["active_execution_seconds"],
     )
+
+
+def _client_message_id(view: ThreadView, turn: Turn) -> str:
+    entry = next(item for item in view.entries if item.id == turn.user_entry_id)
+    assert entry.client_message_id is not None
+    return entry.client_message_id
 
 
 def _uncertain_tool_call(state: AgentState) -> bool:

@@ -13,7 +13,13 @@ const snapshot: StatusSnapshot = {
   thread_title: "Feature auth",
   thread_id: "thread_3f8a1c2d111122223333444455556666",
   thread_display_id: "thread_3f8a1c2d",
-  model_id: "deepseek/deepseek-v4-flash",
+  model_identity: {
+    provider: "deepseek",
+    configured_model: "deepseek/deepseek-v4-flash",
+    effective_model: "deepseek/deepseek-v4-flash",
+    runtime_name: "Awesome Agent",
+    fallback_active: false,
+  },
   model_status: "configured",
   thinking_enabled: false,
   skill_mode: "auto",
@@ -25,6 +31,7 @@ const snapshot: StatusSnapshot = {
   operation_id: null,
   configuration_valid: true,
   configuration_diagnostic_count: 0,
+  permission_mode: "request_approval",
 };
 
 describe("StatusCommand", () => {

@@ -6,20 +6,18 @@ import { useTheme } from "./theme.js";
 
 export function FatalScreen({
   fatal,
-  onReconnect,
-  onQuit,
+  selected = 0,
   disabled = false,
 }: {
   readonly fatal: FatalState;
-  readonly onReconnect: () => void;
-  readonly onQuit: () => void;
+  readonly selected?: number;
   readonly disabled?: boolean;
 }) {
   const theme = useTheme();
   const summary = fatalSummary(fatal);
   return (
     <Box flexDirection="column">
-      <Text color={theme.error}>{summary}</Text>
+      <Text color={theme.danger}>{summary}</Text>
       {fatal.kind === "core_exit" ? (
         <>
           <Text>
@@ -37,8 +35,7 @@ export function FatalScreen({
         <Text>Exit code {fatalExitCode(fatal)}</Text>
       ) : null}
       <Picker
-        active={!disabled}
-        blocking
+        selected={selected}
         selection={{
           prompt: disabled ? "Reconnecting…" : "Choose recovery action",
           options: [
@@ -46,8 +43,6 @@ export function FatalScreen({
             { value: "quit", label: "Quit", selected: false },
           ],
         }}
-        onSelect={(value) => (value === "reconnect" ? onReconnect() : onQuit())}
-        onClose={() => {}}
       />
     </Box>
   );

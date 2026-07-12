@@ -41,6 +41,7 @@ from awesome_agent.core.events import (
     EventEnvelope,
     EventPayload,
     EventType,
+    InteractionChoicePayload,
     InteractionRequiredPayload,
     InteractionResolvedPayload,
     MemoryStatusPayload,
@@ -53,6 +54,7 @@ from awesome_agent.core.events import (
     WarningPayload,
     WorkspaceChangedPayload,
 )
+from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +64,7 @@ WORKSPACE_KEY = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 THREAD_ID = "thread_11111111111111111111111111111111"
 TURN_ID = "turn_22222222222222222222222222222222"
 OPERATION_ID = "operation_33333333333333333333333333333333"
+CLIENT_MESSAGE_ID = "client_44444444444444444444444444444444"
 
 METHODS = (
     "initialize",
@@ -146,7 +149,10 @@ def _valid_methods() -> dict[str, object]:
                     workspace=workspace,
                     workspace_trusted=True,
                     current_thread_id=THREAD_ID,
-                    current_model="deepseek/deepseek-v4-flash",
+                    model_identity=ModelIdentitySnapshot.from_models(
+                        configured_model="deepseek/deepseek-v4-flash",
+                        effective_model="deepseek/deepseek-v4-flash",
+                    ),
                     configuration_valid=True,
                     secret_status=SecretStatus(deepseek_api_key=True),
                 )
@@ -167,12 +173,17 @@ def _valid_methods() -> dict[str, object]:
         (
             "turn.submit",
             "turn.submit",
-            {"thread_id": THREAD_ID, "content": "Inspect the repository."},
+            {
+                "thread_id": THREAD_ID,
+                "content": "Inspect the repository.",
+                "client_message_id": CLIENT_MESSAGE_ID,
+            },
             _success(
                 OperationAccepted(
                     operation_id=OPERATION_ID,
                     thread_id=THREAD_ID,
                     turn_id=TURN_ID,
+                    client_message_id=CLIENT_MESSAGE_ID,
                 )
             ),
         ),
@@ -198,13 +209,14 @@ def _valid_methods() -> dict[str, object]:
             "provider.credential.set",
             {
                 "provider": "deepseek",
+                "action": "add",
                 "api_key": "fixture-request-secret",
                 "allow_unverified": False,
             },
             _success(
                 ProviderCredentialSetResult(
                     provider="deepseek",
-                    status=ProviderCredentialSetStatus.SAVED,
+                    status=ProviderCredentialSetStatus.CONFIGURED,
                     source=CredentialSource.USER_ENV_FILE,
                     code="credential_saved",
                 )
@@ -278,9 +290,19 @@ def _invalid_methods() -> dict[str, object]:
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
+                "name": "turn.submit.client_message_id_missing",
+                "method": "turn.submit",
+                "params": {"thread_id": THREAD_ID, "content": "Inspect."},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
                 "name": "turn.submit.empty",
                 "method": "turn.submit",
-                "params": {"thread_id": THREAD_ID, "content": ""},
+                "params": {
+                    "thread_id": THREAD_ID,
+                    "content": "",
+                    "client_message_id": CLIENT_MESSAGE_ID,
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -351,7 +373,10 @@ def _payload(event_type: EventType) -> EventPayload:
     if event_type.value.startswith("operation."):
         return OperationLifecyclePayload(kind=cast(Any, event_type))
     if event_type.value.startswith("turn."):
-        return TurnLifecyclePayload(kind=cast(Any, event_type))
+        return TurnLifecyclePayload(
+            kind=cast(Any, event_type),
+            duration_ms=(None if event_type is EventType.TURN_STARTED else 1_250),
+        )
     if event_type is EventType.ASSISTANT_TEXT_DELTA:
         return AssistantTextDeltaPayload(text="answer")
     if event_type is EventType.ASSISTANT_REASONING_DELTA:
@@ -364,7 +389,12 @@ def _payload(event_type: EventType) -> EventPayload:
             error_code="provider_unavailable",
         )
     if event_type is EventType.TOOL_STARTED:
-        return ToolStartedPayload(call_id="call_1", tool_name="read_file")
+        return ToolStartedPayload(
+            call_id="call_1",
+            tool_name="read_file",
+            verb="Read",
+            target="src/example.py",
+        )
     if event_type in {
         EventType.TOOL_COMPLETED,
         EventType.TOOL_FAILED,
@@ -374,7 +404,12 @@ def _payload(event_type: EventType) -> EventPayload:
             kind=cast(Any, event_type),
             call_id="call_1",
             tool_name="read_file",
+            verb="Read",
+            target="src/example.py",
+            outcome=("Read" if event_type is EventType.TOOL_COMPLETED else "Failed"),
             summary="Safe tool summary.",
+            detail="Safe bounded detail.",
+            duration_ms=18,
         )
     if event_type in {EventType.CONTEXT_PREPARED, EventType.CONTEXT_COMPRESSED}:
         return ContextPayload(
@@ -397,7 +432,13 @@ def _payload(event_type: EventType) -> EventPayload:
             interaction_id="interaction_1",
             interaction_kind="workspace_trust",
             prompt="Trust this workspace?",
-            choices=("trust", "deny"),
+            operation="trust",
+            target="C:\\workspace",
+            capability=None,
+            choices=(
+                InteractionChoicePayload(decision="trust", label="Yes"),
+                InteractionChoicePayload(decision="deny", label="No"),
+            ),
         )
     if event_type is EventType.INTERACTION_RESOLVED:
         return InteractionResolvedPayload(
@@ -421,6 +462,7 @@ def _event(event_type: EventType, sequence: int) -> EventEnvelope:
         thread_id=thread_id,
         turn_id=turn_id,
         operation_id=operation_id,
+        client_message_id=CLIENT_MESSAGE_ID if turn_id is not None else None,
         event_type=event_type,
         timestamp=FIXED_TIME,
         payload=_payload(event_type),

@@ -11,7 +11,11 @@ from awesome_agent.core.changes.models import FileChangeKind, FileNodeType
 from awesome_agent.core.tools.builtins.read_file import MAX_FILE_BYTES
 from awesome_agent.core.tools.builtins.write_file import _atomic_write
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolOutput,
+    ToolPresentation,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
 from awesome_agent.core.tools.policy import resolve_workspace_path
 
@@ -98,6 +102,15 @@ def create_edit_file_handler(journal: ChangeJournal) -> ToolHandler:
                 "replacements": occurrences if options.replace_all else 1,
                 "change_set_id": context.change_set_id,
             },
+            presentation=ToolPresentation(
+                verb="Edit",
+                target=change.path,
+                outcome="Updated",
+                summary=(
+                    f"{occurrences if options.replace_all else 1} "
+                    f"{'replacement' if occurrences == 1 else 'replacements'}"
+                ),
+            ),
         )
 
     return edit_file

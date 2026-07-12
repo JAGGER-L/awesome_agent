@@ -5,7 +5,13 @@ import pytest
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.operations import OperationBusy, OperationController
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
-from awesome_agent.core.tools import ToolError, ToolErrorCode, ToolResult, ToolStatus
+from awesome_agent.core.tools import (
+    ToolError,
+    ToolErrorCode,
+    ToolPresentation,
+    ToolResult,
+    ToolStatus,
+)
 from awesome_agent.modeling import (
     ModelErrorCode,
     ModelErrorInfo,
@@ -107,6 +113,7 @@ async def test_projector_normalizes_gateway_tool_and_turn_events() -> None:
         thread_id="thread_1",
         turn_id="turn_1",
         operation_id="operation_1",
+        client_message_id="client_1",
     )
 
     await projector.turn_started()
@@ -129,6 +136,14 @@ async def test_projector_normalizes_gateway_tool_and_turn_events() -> None:
             error=ToolError(
                 code=ToolErrorCode.NOT_FOUND,
                 message="File was not found.",
+            ),
+            presentation=ToolPresentation(
+                verb="Read",
+                target="missing.py",
+                outcome="Failed",
+                summary="not_found",
+                detail="File was not found.",
+                duration_ms=7,
             ),
         )
     )
@@ -155,6 +170,8 @@ async def test_projector_normalizes_gateway_tool_and_turn_events() -> None:
     ]
     tool_payload = sink.events[4].payload
     assert "raw file body" not in tool_payload.model_dump_json()
+    assert tool_payload.duration_ms == 7  # type: ignore[union-attr]
+    assert sink.events[-1].payload.duration_ms is not None  # type: ignore[union-attr]
     assert all(event.thread_id == "thread_1" for event in sink.events)
     assert all(event.turn_id == "turn_1" for event in sink.events)
     assert all(event.operation_id == "operation_1" for event in sink.events)
@@ -167,6 +184,7 @@ async def test_projector_rejects_second_turn_terminal() -> None:
         thread_id="thread_1",
         turn_id="turn_1",
         operation_id="operation_1",
+        client_message_id="client_1",
     )
     await projector.turn_started()
     await projector.turn_completed()

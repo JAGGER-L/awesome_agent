@@ -5,7 +5,7 @@
       "name": "initialize.ready",
       "params": {
         "client_name": "awesome",
-        "client_version": "1.0.0",
+        "client_version": "1.1.0",
         "protocol_version": 1
       },
       "result": {
@@ -16,7 +16,7 @@
             "turns",
             "commands"
           ],
-          "product_version": "1.0.0",
+          "product_version": "1.1.0",
           "protocol_version": 1,
           "session_id": "session_11111111111111111111111111111111",
           "status": "ready",
@@ -36,11 +36,18 @@
         "value": {
           "configuration_diagnostics": [],
           "configuration_valid": true,
-          "current_model": "deepseek/deepseek-v4-flash",
           "current_thread_id": "thread_11111111111111111111111111111111",
           "initialized": true,
           "mcp_status": [],
           "memory_status": {},
+          "model_identity": {
+            "configured_model": "deepseek/deepseek-v4-flash",
+            "effective_model": "deepseek/deepseek-v4-flash",
+            "fallback_active": false,
+            "provider": "deepseek",
+            "runtime_name": "Awesome Agent"
+          },
+          "permission_mode": "request_approval",
           "provider_credentials": {
             "deepseek": {
               "environment_variable": "DEEPSEEK_API_KEY",
@@ -132,12 +139,14 @@
       "method": "turn.submit",
       "name": "turn.submit",
       "params": {
+        "client_message_id": "client_44444444444444444444444444444444",
         "content": "Inspect the repository.",
         "thread_id": "thread_11111111111111111111111111111111"
       },
       "result": {
         "ok": true,
         "value": {
+          "client_message_id": "client_44444444444444444444444444444444",
           "operation_id": "operation_33333333333333333333333333333333",
           "thread_id": "thread_11111111111111111111111111111111",
           "turn_id": "turn_22222222222222222222222222222222"
@@ -179,6 +188,7 @@
       "method": "provider.credential.set",
       "name": "provider.credential.set",
       "params": {
+        "action": "add",
         "allow_unverified": false,
         "api_key": "fixture-request-secret",
         "provider": "deepseek"
@@ -189,7 +199,7 @@
           "code": "credential_saved",
           "provider": "deepseek",
           "source": "user_env_file",
-          "status": "saved"
+          "status": "configured"
         }
       }
     },

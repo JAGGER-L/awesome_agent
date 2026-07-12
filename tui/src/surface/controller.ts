@@ -37,11 +37,15 @@ export interface ConnectedSurface {
   close(): Promise<void>;
 }
 
-function dispatchBatched(store: SurfaceStore, value: BatchedEvent): void {
+function dispatchBatched(
+  store: SurfaceStore,
+  value: BatchedEvent,
+  generation: number,
+): void {
   if ("event_type" in value) {
-    store.dispatch({ type: "event.received", event: value });
+    store.dispatch({ type: "event.received", event: value, generation });
   } else {
-    store.dispatch({ type: "delta.received", delta: value });
+    store.dispatch({ type: "delta.received", delta: value, generation });
   }
 }
 
@@ -52,8 +56,20 @@ export async function connectSurface(
   store.dispatch({ type: "connection.start" });
   const session = await (options.startSession ?? startCore)(options);
   const guard = new EventStreamGuard();
+  const operationGenerations = new Map<string, number>();
+  const eventGeneration = (value: BatchedEvent): number => {
+    const current = store.getState().thread_generation;
+    if ("event_type" in value && value.event_type === "operation.started") {
+      if (value.operation_id)
+        operationGenerations.set(value.operation_id, current);
+      return current;
+    }
+    return value.operation_id
+      ? (operationGenerations.get(value.operation_id) ?? current)
+      : current;
+  };
   const batcher = new DeltaBatcher(guard, (value) =>
-    dispatchBatched(store, value),
+    dispatchBatched(store, value, eventGeneration(value)),
   );
   let closed = false;
   let closePromise: Promise<void> | undefined;
@@ -63,6 +79,7 @@ export async function connectSurface(
   const reconcileTerminal = async (
     threadId: string,
     key: string,
+    generation: number,
   ): Promise<void> => {
     if (reconciledTerminals.has(key)) return;
     reconciledTerminals.add(key);
@@ -87,6 +104,7 @@ export async function connectSurface(
         };
     store.dispatch({
       type: "transcript.reconciled",
+      generation,
       result: {
         ...result,
         blocks: mergeTranscriptBlocks(
@@ -117,9 +135,13 @@ export async function connectSurface(
         const threadId =
           event.thread_id ?? store.getState().application?.current_thread_id;
         if (threadId && event.operation_id) {
+          const generation =
+            operationGenerations.get(event.operation_id) ??
+            store.getState().thread_generation;
           const task = reconcileTerminal(
             threadId,
             `operation:${event.operation_id}`,
+            generation,
           ).finally(() => reconciliationTasks.delete(task));
           reconciliationTasks.add(task);
         }

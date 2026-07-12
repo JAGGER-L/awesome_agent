@@ -89,9 +89,19 @@ class Backend:
         self.calls.append(("read", query))
         raise LookupError(query.thread_id)
 
-    async def start_turn(self, thread_id: str, content: str) -> OperationAccepted:
-        self.calls.append(("turn", (thread_id, content)))
-        return OperationAccepted(operation_id="operation_1", thread_id=thread_id)
+    async def start_turn(
+        self,
+        thread_id: str,
+        content: str,
+        client_message_id: str,
+    ) -> OperationAccepted:
+        self.calls.append(("turn", (thread_id, content, client_message_id)))
+        return OperationAccepted(
+            operation_id="operation_1",
+            thread_id=thread_id,
+            turn_id="turn_1",
+            client_message_id=client_message_id,
+        )
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
         self.calls.append(("direct", (thread_id, command)))
@@ -107,7 +117,7 @@ class Backend:
         self.calls.append(("credential", request))
         return ProviderCredentialSetResult(
             provider=request.provider,
-            status=ProviderCredentialSetStatus.SAVED,
+            status=ProviderCredentialSetStatus.CONFIGURED,
             source=CredentialSource.USER_ENV_FILE,
             code="credential_saved",
         )
@@ -177,8 +187,11 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
 
     assert _unwrap(await facade.get_state()).workspace_trusted is True
     assert _unwrap(await facade.list_threads(ThreadListQuery())).threads == ()
-    assert _unwrap(await facade.submit_turn("thread_1", "inspect")).operation_id == (
-        "operation_1"
+    assert (
+        _unwrap(
+            await facade.submit_turn("thread_1", "inspect", "client_1")
+        ).operation_id
+        == "operation_1"
     )
     assert (
         _unwrap(await facade.execute_direct("thread_1", "git status")).operation_id
@@ -186,10 +199,12 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     )
     assert _unwrap(await facade.execute_command(intent)).status is CommandStatus.SUCCESS
     credential = ProviderCredentialSetRequest(
-        provider="deepseek", api_key=SecretStr("never-render-this")
+        provider="deepseek",
+        action="add",
+        api_key=SecretStr("never-render-this"),
     )
     saved = _unwrap(await facade.set_provider_credential(credential))
-    assert saved.status is ProviderCredentialSetStatus.SAVED
+    assert saved.status is ProviderCredentialSetStatus.CONFIGURED
     assert "never-render-this" not in repr(backend.calls)
     assert (
         _unwrap(await facade.respond_interaction("interaction_1", "trust")).accepted
@@ -289,6 +304,35 @@ async def test_resume_is_workspace_scoped_and_ink_commands_are_surface_owned(
     assert selected.data["thread_id"] == own.id
     assert surface.data["error_code"] == "surface_command"
     assert invalid.data["error_code"] == "thread_not_found"
+
+
+@pytest.mark.asyncio
+async def test_new_and_resume_replace_thread_scoped_permission_state(
+    tmp_path: Path,
+) -> None:
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(tmp_path / "application.db")
+    )
+    existing = conversation.create_thread("workspace_1")
+    resets: list[str] = []
+
+    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
+        del intent, thread_id
+        return CommandResult(status=CommandStatus.SUCCESS)
+
+    commands = ConversationCommandService(
+        conversation=conversation,
+        workspace_key="workspace_1",
+        delegate=delegate,
+        on_thread_selected=lambda: resets.append("reset"),
+    )
+
+    await commands.handle(CommandIntent(name=CommandName.NEW))
+    await commands.handle(
+        CommandIntent(name=CommandName.RESUME, arguments=(existing.id,))
+    )
+
+    assert resets == ["reset", "reset"]
 
 
 @pytest.mark.asyncio

@@ -58,6 +58,15 @@ class TurnLifecyclePayload(BaseModel):
         EventType.TURN_CANCELLED,
     ]
     reason: str | None = Field(default=None, max_length=200)
+    duration_ms: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_duration(self) -> TurnLifecyclePayload:
+        if self.kind is EventType.TURN_STARTED and self.duration_ms is not None:
+            raise ValueError("turn.started cannot include duration_ms")
+        if self.kind is not EventType.TURN_STARTED and self.duration_ms is None:
+            raise ValueError("Turn terminal requires duration_ms")
+        return self
 
 
 class AssistantTextDeltaPayload(BaseModel):
@@ -92,6 +101,8 @@ class ToolStartedPayload(BaseModel):
     kind: Literal[EventType.TOOL_STARTED] = EventType.TOOL_STARTED
     call_id: str = Field(min_length=1, max_length=128)
     tool_name: str = Field(min_length=1, max_length=200)
+    verb: str = Field(min_length=1, max_length=64)
+    target: str | None = Field(default=None, max_length=2_000)
 
 
 class ToolResultPayload(BaseModel):
@@ -104,7 +115,12 @@ class ToolResultPayload(BaseModel):
     ]
     call_id: str = Field(min_length=1, max_length=128)
     tool_name: str = Field(min_length=1, max_length=200)
+    verb: str = Field(min_length=1, max_length=64)
+    target: str | None = Field(default=None, max_length=2_000)
+    outcome: str = Field(min_length=1, max_length=128)
     summary: str = Field(default="", max_length=2_000)
+    detail: str | None = Field(default=None, max_length=4_000)
+    duration_ms: int = Field(ge=0)
     error_code: str | None = Field(default=None, max_length=128)
 
 
@@ -148,6 +164,14 @@ class MemoryStatusPayload(BaseModel):
     status: str = Field(min_length=1, max_length=128)
 
 
+class InteractionChoicePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=1_000)
+
+
 class InteractionRequiredPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -155,11 +179,18 @@ class InteractionRequiredPayload(BaseModel):
     interaction_id: str = Field(min_length=1, max_length=128)
     interaction_kind: Literal[
         "workspace_trust",
-        "execute_boundary",
+        "tool_approval",
+        "full_access_confirmation",
         "recovery_decision",
     ]
     prompt: str = Field(min_length=1, max_length=2_000)
-    choices: tuple[str, ...] = Field(min_length=1, max_length=16)
+    operation: str = Field(min_length=1, max_length=128)
+    target: str = Field(min_length=1, max_length=8_000)
+    capability: str | None = Field(default=None, max_length=200)
+    choices: tuple[InteractionChoicePayload, ...] = Field(
+        min_length=1,
+        max_length=16,
+    )
 
 
 class InteractionResolvedPayload(BaseModel):
@@ -228,6 +259,11 @@ class EventEnvelope(BaseModel):
     thread_id: str | None = Field(default=None, max_length=128)
     turn_id: str | None = Field(default=None, max_length=128)
     operation_id: str | None = Field(default=None, max_length=128)
+    client_message_id: str | None = Field(
+        default=None,
+        pattern=r"^client_[A-Za-z0-9_-]+$",
+        max_length=128,
+    )
     event_type: EventType
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     payload: EventPayload
@@ -292,6 +328,7 @@ class EventEmitter:
         thread_id: str | None = None,
         turn_id: str | None = None,
         operation_id: str | None = None,
+        client_message_id: str | None = None,
     ) -> EventEnvelope:
         event_type = EventType(payload.kind)
         async with self._lock:
@@ -305,6 +342,7 @@ class EventEmitter:
                 thread_id=thread_id,
                 turn_id=turn_id,
                 operation_id=operation_id,
+                client_message_id=client_message_id,
                 event_type=event_type,
                 timestamp=self._clock(),
                 payload=payload,

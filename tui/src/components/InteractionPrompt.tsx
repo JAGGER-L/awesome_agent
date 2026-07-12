@@ -1,36 +1,30 @@
-import { useRef } from "react";
-
-import type { SurfaceState } from "../state/model.js";
+import type { PendingInteraction } from "../interaction/model.js";
 import { Picker } from "./Picker.js";
-
-type PendingInteraction = NonNullable<SurfaceState["pending_interaction"]>;
 
 export function InteractionPrompt({
   interaction,
-  onRespond,
+  selected,
+  submitting = false,
+  message,
 }: {
   readonly interaction: PendingInteraction;
-  readonly onRespond: (decision: string) => void;
+  readonly selected: number;
+  readonly submitting?: boolean;
+  readonly message?: string;
 }) {
-  const responded = useRef(false);
-  const respond = (decision: string) => {
-    if (responded.current) return;
-    responded.current = true;
-    onRespond(decision);
-  };
   return (
     <Picker
+      selected={selected}
       selection={{
-        prompt: interaction.prompt,
+        prompt: message ?? (submitting ? "Submitting…" : interaction.prompt),
         options: interaction.choices.map((choice, index) => ({
-          value: choice,
-          label: choice,
+          value: choice.decision,
+          label: choice.label,
+          ...(choice.description === undefined
+            ? {}
+            : { description: choice.description }),
           selected: index === 0,
         })),
-      }}
-      onSelect={respond}
-      onClose={() => {
-        if (interaction.choices.includes("deny")) respond("deny");
       }}
     />
   );

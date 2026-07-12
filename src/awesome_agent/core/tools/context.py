@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
@@ -11,9 +11,16 @@ from awesome_agent.core.tools.contracts import (
     ToolExecutionOrigin,
     ToolOutput,
 )
+from awesome_agent.core.tools.permissions import (
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
+)
 from awesome_agent.core.workspace import WorkspaceIdentity
 
-type ToolInteractionResolver = Callable[[str, str], Awaitable[bool]]
+type ToolApprovalResolver = Callable[
+    [ToolApprovalRequest], Awaitable[ToolApprovalDecision]
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +34,8 @@ class ToolExecutionContext:
     activity_writer: ToolActivityWriter
     monotonic: Callable[[], float]
     change_set_id: str | None = None
-    allowed_interaction_scopes: frozenset[str] = frozenset()
-    interaction_resolver: ToolInteractionResolver | None = None
+    permission_session: PermissionSession = field(default_factory=PermissionSession)
+    approval_resolver: ToolApprovalResolver | None = None
     turn_active: bool = True
 
     def __post_init__(self) -> None:

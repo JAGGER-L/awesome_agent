@@ -47,6 +47,10 @@ class _ThreadParams(BaseModel):
 
 class _TurnParams(_ThreadParams):
     content: str = Field(min_length=1, max_length=200_000)
+    client_message_id: str = Field(
+        pattern=r"^client_[A-Za-z0-9_-]+$",
+        max_length=128,
+    )
 
 
 class _DirectParams(_ThreadParams):
@@ -70,7 +74,8 @@ class _ProviderCredentialParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     provider: Literal["deepseek", "kimi"]
-    api_key: str = Field(min_length=1, max_length=20_000)
+    action: Literal["add", "replace", "delete"]
+    api_key: str | None = Field(default=None, min_length=1, max_length=20_000)
     allow_unverified: bool = False
 
 
@@ -168,7 +173,11 @@ class JsonRpcDispatcher:
 
     async def _submit_turn(self, params: Mapping[str, object]) -> object:
         parsed = _TurnParams.model_validate(params)
-        return await self._facade.submit_turn(parsed.thread_id, parsed.content)
+        return await self._facade.submit_turn(
+            parsed.thread_id,
+            parsed.content,
+            parsed.client_message_id,
+        )
 
     async def _execute_direct(self, params: Mapping[str, object]) -> object:
         parsed = _DirectParams.model_validate(params)
@@ -182,7 +191,8 @@ class JsonRpcDispatcher:
         parsed = _ProviderCredentialParams.model_validate(params)
         request = ProviderCredentialSetRequest(
             provider=parsed.provider,
-            api_key=SecretStr(parsed.api_key),
+            action=parsed.action,
+            api_key=SecretStr(parsed.api_key) if parsed.api_key is not None else None,
             allow_unverified=parsed.allow_unverified,
         )
         return await self._facade.set_provider_credential(request)

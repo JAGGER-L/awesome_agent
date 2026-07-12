@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 
 import { ActiveTurn } from "../../src/components/transcript/ActiveTurn.js";
 import { Transcript } from "../../src/components/transcript/Transcript.js";
+import { App } from "../../src/app/App.js";
+import { initialSurfaceState } from "../../src/state/reducer.js";
+import { createSurfaceStore } from "../../src/state/store.js";
 import type {
   LiveTranscriptProjection,
   TranscriptBlock,
@@ -14,7 +17,13 @@ const blocks: TranscriptBlock[] = [
     kind: "omitted_history",
     message: "Earlier transcript omitted",
   },
-  { key: "user", kind: "user", text: "question" },
+  {
+    key: "user:client_1",
+    kind: "user",
+    client_message_id: "client_1",
+    status: "persisted",
+    text: "question",
+  },
   { key: "assistant", kind: "assistant", text: "durable answer" },
   { key: "direct", kind: "direct_command", command: "git status" },
   {
@@ -24,8 +33,10 @@ const blocks: TranscriptBlock[] = [
       {
         call_id: "call_1",
         name: "execute",
+        verb: "Run",
         outcome: "error",
         summary: "failed safely",
+        detail: "full bounded output",
         duration_ms: 12,
         error_code: "exit_1",
       },
@@ -43,6 +54,8 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).toContain("git status");
     expect(view.lastFrame()).toContain("failed safely");
     expect(view.lastFrame()).toContain("exit_1");
+    expect(view.lastFrame()).not.toContain("You");
+    expect(view.lastFrame()).not.toContain("Assistant");
   });
 
   it("updates only the active projection and hides reasoning when terminal", () => {
@@ -72,6 +85,94 @@ describe("scrollback transcript components", () => {
       />,
     );
     expect(view.lastFrame()).not.toContain("must disappear");
+  });
+
+  it("folds tool detail by default and expands it through one prop", () => {
+    const collapsed = render(<Transcript blocks={blocks} width={80} />);
+    expect(collapsed.lastFrame()).not.toContain("full bounded output");
+    const expanded = render(
+      <Transcript blocks={blocks} width={80} toolDetailsExpanded />,
+    );
+    expect(expanded.lastFrame()).toContain("full bounded output");
+  });
+
+  it("renders structured tool facts and measured duration", () => {
+    const frame =
+      render(
+        <Transcript
+          width={80}
+          blocks={[
+            {
+              key: "write",
+              kind: "tools",
+              items: [
+                {
+                  call_id: "call_write",
+                  name: "write_file",
+                  verb: "Write",
+                  target: "circle_area.py",
+                  outcome: "success",
+                  presentation_outcome: "Created",
+                  summary: "21 lines",
+                  duration_ms: 18,
+                },
+              ],
+            },
+          ]}
+        />,
+      ).lastFrame() ?? "";
+
+    expect(frame).toContain("● Write circle_area.py");
+    expect(frame).toContain("└ Created · 21 lines · 18ms");
+  });
+
+  it("keeps incomplete streaming Markdown readable without completed parsing", () => {
+    const live: LiveTranscriptProjection = {
+      reasoning_text: "",
+      terminal: false,
+      blocks: [
+        {
+          key: "live",
+          kind: "assistant",
+          text: "# Heading\n\n- item\n\n**partial",
+        },
+      ],
+    };
+    const frame =
+      render(<ActiveTurn live={live} width={80} />).lastFrame() ?? "";
+    expect(frame).toContain("Heading");
+    expect(frame).toContain("• item");
+    expect(frame).toContain("**partial");
+    expect(frame).not.toContain("# Heading");
+  });
+
+  it("keeps the composer after the active turn projection", () => {
+    const store = createSurfaceStore({
+      ...initialSurfaceState(),
+      active_operation: {
+        id: "operation_1",
+        status: "active",
+        turn: {
+          id: "turn_1",
+          status: "active",
+          started_at: "2026-07-12T00:00:00Z",
+          reasoning_text: "",
+          thinking_sequence: 0,
+          timeline: [
+            {
+              kind: "assistant",
+              id: "assistant:turn_1",
+              text: "streaming answer",
+            },
+          ],
+        },
+      },
+    });
+    const frame = render(<App store={store} width={80} />).lastFrame() ?? "";
+
+    expect(frame.indexOf("streaming answer")).toBeLessThan(
+      frame.indexOf("Message"),
+    );
   });
 
   it("hides token annotations at 40 columns", () => {

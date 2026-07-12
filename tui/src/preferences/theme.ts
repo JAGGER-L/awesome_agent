@@ -1,16 +1,24 @@
 export type ThemePreference = "system" | "dark" | "light";
 export type ColorCapability = "none" | "ansi16" | "ansi256" | "truecolor";
 
-export interface Theme {
+export interface SemanticThemeRoles {
+  readonly brand: string;
+  readonly primary: string;
+  readonly secondary: string;
+  readonly muted: string;
+  readonly success: string;
+  readonly warning: string;
+  readonly danger: string;
+  readonly border: string;
+  readonly user: string;
+  readonly assistant: string;
+  readonly tool: string;
+}
+
+export interface Theme extends SemanticThemeRoles {
   readonly preference: ThemePreference;
   readonly colorEnabled: boolean;
   readonly logoRows: readonly (string | undefined)[];
-  readonly accent: string;
-  readonly assistant: string;
-  readonly error: string;
-  readonly muted: string;
-  readonly user: string;
-  readonly warning: string;
 }
 
 const darkMint = [
@@ -82,12 +90,20 @@ export function resolveTheme(
     preference,
     colorEnabled: capability !== "none",
     logoRows,
-    accent: light ? "cyan" : "cyanBright",
-    assistant: light ? "black" : "white",
-    error: "red",
+    brand:
+      capability === "none"
+        ? "white"
+        : (logoRows[1] ?? (light ? "green" : "greenBright")),
+    primary: light ? "green" : "greenBright",
+    secondary: light ? "cyan" : "cyanBright",
     muted: "gray",
-    user: "green",
+    success: "green",
     warning: "yellow",
+    danger: "red",
+    border: light ? "green" : "greenBright",
+    user: light ? "green" : "greenBright",
+    assistant: light ? "black" : "white",
+    tool: light ? "cyan" : "cyanBright",
   };
 }
 

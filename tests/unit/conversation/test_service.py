@@ -76,7 +76,12 @@ def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -
     thread = service.create_thread("workspace_1", "Thread")
     config = _turn_config()
 
-    turn = service.begin_turn(thread.id, "Inspect repository", config)
+    turn = service.begin_turn(
+        thread.id,
+        "Inspect repository",
+        config,
+        client_message_id="client_1",
+    )
     view = service.read_thread(thread.id)
 
     assert turn.checkpoint_key == turn.id
@@ -89,6 +94,7 @@ def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -
     assert view.turns[0].budgets == config.budgets
     assert view.entries[0].kind is ThreadEntryKind.USER_MESSAGE
     assert view.entries[0].content == "Inspect repository"
+    assert view.entries[0].client_message_id == "client_1"
     assert view.turns == (turn,)
 
 
@@ -98,19 +104,30 @@ def test_one_in_progress_turn_per_thread_but_other_threads_are_independent(
     service = _service(tmp_path / "application.db")
     first = service.create_thread("workspace_1", "First")
     second = service.create_thread("workspace_1", "Second")
-    service.begin_turn(first.id, "first", _turn_config())
+    service.begin_turn(
+        first.id, "first", _turn_config(), client_message_id="client_first"
+    )
 
     with pytest.raises(TurnBusy):
-        service.begin_turn(first.id, "duplicate", _turn_config())
+        service.begin_turn(
+            first.id,
+            "duplicate",
+            _turn_config(),
+            client_message_id="client_duplicate",
+        )
 
-    other = service.begin_turn(second.id, "second", _turn_config())
+    other = service.begin_turn(
+        second.id, "second", _turn_config(), client_message_id="client_second"
+    )
     assert other.thread_id == second.id
 
 
 def test_completion_appends_assistant_and_is_idempotent(tmp_path: Path) -> None:
     service = _service(tmp_path / "application.db")
     thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(thread.id, "question", _turn_config())
+    turn = service.begin_turn(
+        thread.id, "question", _turn_config(), client_message_id="client_1"
+    )
     usage = UsageSummary(input_tokens=10, output_tokens=4, model_calls=1)
 
     completed = service.complete_turn(turn.id, "answer", usage, "completed")
@@ -141,7 +158,9 @@ def test_failure_and_cancellation_are_idempotent_terminal_updates(
 ) -> None:
     service = _service(tmp_path / f"{terminal}.db")
     thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(thread.id, "question", _turn_config())
+    turn = service.begin_turn(
+        thread.id, "question", _turn_config(), client_message_id="client_1"
+    )
 
     if terminal is TurnStatus.FAILED:
         result = service.fail_turn(turn.id, code or "model_failed")
@@ -159,7 +178,9 @@ def test_failure_and_cancellation_are_idempotent_terminal_updates(
 def test_append_direct_command_uses_next_durable_sequence(tmp_path: Path) -> None:
     service = _service(tmp_path / "application.db")
     thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(thread.id, "question", _turn_config())
+    turn = service.begin_turn(
+        thread.id, "question", _turn_config(), client_message_id="client_1"
+    )
     service.complete_turn(turn.id, "answer", UsageSummary(), "completed")
 
     direct = service.append_direct_command(
@@ -179,7 +200,9 @@ def test_empty_user_message_is_rejected_without_durable_rows(tmp_path: Path) -> 
     thread = service.create_thread("workspace_1", "Thread")
 
     with pytest.raises(ValueError, match="empty"):
-        service.begin_turn(thread.id, "   ", _turn_config())
+        service.begin_turn(
+            thread.id, "   ", _turn_config(), client_message_id="client_1"
+        )
 
     view = service.read_thread(thread.id)
     assert view.entries == ()
@@ -190,7 +213,9 @@ def test_service_exposes_bounded_thread_and_entry_pages(tmp_path: Path) -> None:
     service = _service(tmp_path / "application.db")
     first = service.create_thread("workspace_1", "First")
     service.create_thread("workspace_1", "Second")
-    service.begin_turn(first.id, "question", _turn_config())
+    service.begin_turn(
+        first.id, "question", _turn_config(), client_message_id="client_1"
+    )
 
     threads = service.list_thread_page("workspace_1", cursor=None, limit=1)
     entries = service.read_thread_page(

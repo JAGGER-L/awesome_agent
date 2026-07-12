@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { boundedText, jsonValueSchema, safeIntegerSchema } from "./base.js";
+import { modelIdentitySchema } from "./identity.js";
 
 export const applicationCommandNames = [
   "new",
@@ -23,6 +24,7 @@ export const applicationCommandNames = [
   "usage",
   "doctor",
   "config",
+  "permissions",
 ] as const;
 
 export const skillCommandNames = [
@@ -53,7 +55,7 @@ export const statusSnapshotSchema = z.strictObject({
   thread_title: boundedText(1, 500),
   thread_id: boundedText(1, 128),
   thread_display_id: boundedText(1, 128),
-  model_id: boundedText(1, 200),
+  model_identity: modelIdentitySchema,
   model_status: z.enum(["configured", "not_configured"]),
   thinking_enabled: z.boolean(),
   skill_mode: boundedText(1, 64),
@@ -65,6 +67,7 @@ export const statusSnapshotSchema = z.strictObject({
   operation_id: boundedText(1, 128).nullable(),
   configuration_valid: z.boolean(),
   configuration_diagnostic_count: safeIntegerSchema.min(0),
+  permission_mode: z.enum(["request_approval", "full_access"]),
 });
 
 export type StatusSnapshot = z.infer<typeof statusSnapshotSchema>;
@@ -90,6 +93,7 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   usage: "application",
   doctor: "application",
   config: "application",
+  permissions: "application",
   init: "skill",
   review: "skill",
   debug: "skill",

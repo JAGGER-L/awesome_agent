@@ -10,6 +10,22 @@ MCP declarations. Declining exits before those sources or tools are loaded.
 Trust grants normal coding access inside that workspace; it is not an
 operating-system sandbox and does not grant access to every path on the host.
 
+## Permission modes and approval
+
+Trust answers whether project-controlled content may influence Awesome.
+Permission mode separately decides whether an already trusted operation needs
+confirmation. `/permissions` exposes two Thread-scoped modes:
+
+- **Request approval** is the default. Reads are allowed; edits, deletes,
+  shell commands, and unknown extension capabilities ask first.
+- **Full access** allows ordinary workspace edits, deletes, and shell commands
+  for the current Thread after a warning confirmation. `/new` and process exit
+  reset it.
+
+An edit approval offers Yes, Yes for all edits during this session, and No.
+The session edit grant covers later ordinary writes only. Shell commands and
+other capabilities keep their own policy. Escape denies the current request.
+
 ## Initial default tools
 
 | Tool | Contract |
@@ -36,9 +52,15 @@ and sensitive paths such as secret files and private keys.
 
 `execute` runs on the local host in the workspace. Privilege elevation,
 shutdown, disk formatting, destructive filesystem-root/workspace-root commands
-are denied. An absolute path outside the workspace requires an explicit
-allow-once interaction. There is no Docker sandbox today; a future Docker
+are denied in both permission modes. File tools never accept an absolute path
+or workspace escape. There is no Docker sandbox today; a future Docker
 execution backend is deferred until real demand.
+
+Tool activity is rendered in the order it happens: locally measured Thinking,
+the tool operation, its bounded result and duration, the next Thinking period,
+and the final answer. Ctrl+O expands or folds bounded tool details. Markdown is
+rendered for completed answers; streaming output uses a stable partial renderer
+and is finalized once at completion.
 
 ## Change Journal
 

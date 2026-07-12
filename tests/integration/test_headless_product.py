@@ -17,12 +17,16 @@ from awesome_agent.application.contracts import (
     ThreadListQuery,
     ThreadReadQuery,
 )
+from awesome_agent.application.facade import LocalApplication
+from awesome_agent.conversation import ThreadView
 from awesome_agent.core.events import CollectingEventSink, EventType
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
+    ModelGateway,
     ModelRequest,
     ModelTurn,
+    ProviderId,
     SelectedModel,
     StopReason,
     TextDelta,
@@ -116,11 +120,11 @@ def _unwrap[T](result: ApplicationResult[T]) -> T:
 
 
 async def _wait_for_thread(
-    application: object,
+    application: LocalApplication,
     thread_id: str,
     *,
     entries: int,
-) -> object:
+) -> ThreadView:
     for _ in range(200):
         view = _unwrap(
             await application.read_thread(ThreadReadQuery(thread_id=thread_id))
@@ -132,13 +136,81 @@ async def _wait_for_thread(
     raise AssertionError("foreground operation did not complete")
 
 
-async def _wait_for_interaction(application: object) -> str:
+async def _wait_for_interaction(application: LocalApplication) -> str:
     for _ in range(200):
         state = _unwrap(await application.get_state())
         if state.pending_interaction_id is not None:
             return state.pending_interaction_id
         await asyncio.sleep(0.01)
     raise AssertionError("execute interaction was not requested")
+
+
+@pytest.mark.asyncio
+async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=lambda provider, model: cast(
+            ModelGateway, FakeGateway(provider, model)
+        ),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    first = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    first_id = str(first.data["thread_id"])
+
+    picker = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.PERMISSIONS))
+    )
+    assert picker.selection is not None
+    assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+
+    confirmation = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert confirmation.status is CommandStatus.INTERACTION_REQUIRED
+    interaction_id = str(confirmation.data["interaction_id"])
+    blocked = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("request_approval",),
+            )
+        )
+    )
+    assert blocked.status is CommandStatus.ERROR
+    assert blocked.data["error_code"] == "interaction_busy"
+    _unwrap(
+        await application.respond_interaction(
+            interaction_id,
+            "enable_full_access",
+        )
+    )
+    assert _unwrap(await application.get_state()).permission_mode == "full_access"
+
+    _unwrap(await application.execute_command(CommandIntent(name=CommandName.NEW)))
+    assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+    _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.RESUME, arguments=(first_id,))
+        )
+    )
+    assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+    await application.shutdown()
 
 
 @pytest.mark.asyncio
@@ -164,8 +236,8 @@ async def test_composed_agent_execute_waits_for_application_decision(
         "Path('agent-executed.txt').write_text('ran', encoding='utf-8')\""
     )
 
-    def gateway_factory(provider: str, model: str) -> object:
-        return cast(object, ExecuteGateway(provider, model, command))
+    def gateway_factory(provider: ProviderId, model: str) -> ModelGateway:
+        return cast(ModelGateway, ExecuteGateway(provider, model, command))
 
     sink = CollectingEventSink()
     application = await compose_local_application(
@@ -173,7 +245,7 @@ async def test_composed_agent_execute_waits_for_application_decision(
         workspace=workspace,
         event_sink=sink,
         environ={"DEEPSEEK_API_KEY": "fake-key"},
-        gateway_factory=cast(object, gateway_factory),
+        gateway_factory=gateway_factory,
     )
     initialized = _unwrap(await application.initialize())
     assert initialized.interaction_id is not None
@@ -183,9 +255,21 @@ async def test_composed_agent_execute_waits_for_application_decision(
     )
     thread_id = str(created.data["thread_id"])
 
-    _unwrap(await application.submit_turn(thread_id, "run the command"))
+    _unwrap(
+        await application.submit_turn(thread_id, "run the command", "client_command")
+    )
     interaction_id = await _wait_for_interaction(application)
     assert not marker.exists()
+    blocked = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert blocked.status is CommandStatus.ERROR
+    assert blocked.data["error_code"] == "operation_busy"
 
     resolved = _unwrap(await application.respond_interaction(interaction_id, decision))
     assert resolved.accepted
@@ -195,6 +279,9 @@ async def test_composed_agent_execute_waits_for_application_decision(
     assert view.entries[-1].content == "done"
     assert any(
         event.event_type is EventType.INTERACTION_REQUIRED for event in sink.events
+    )
+    assert any(
+        event.event_type is EventType.INTERACTION_RESOLVED for event in sink.events
     )
     event_types = [event.event_type for event in sink.events]
     assert event_types.count(EventType.TOOL_STARTED) == 1
@@ -221,10 +308,12 @@ async def test_fresh_home_trust_turn_direct_and_restart(
     workspace.mkdir()
     gateways: list[FakeGateway] = []
 
-    def gateway_factory(selected_provider: str, selected_model: str) -> object:
+    def gateway_factory(
+        selected_provider: ProviderId, selected_model: str
+    ) -> ModelGateway:
         gateway = FakeGateway(selected_provider, selected_model)
         gateways.append(gateway)
-        return cast(object, gateway)
+        return cast(ModelGateway, gateway)
 
     sink = CollectingEventSink()
     application = await compose_local_application(
@@ -232,7 +321,7 @@ async def test_fresh_home_trust_turn_direct_and_restart(
         workspace=workspace,
         event_sink=sink,
         environ={secret: "fake-key"},
-        gateway_factory=cast(object, gateway_factory),
+        gateway_factory=gateway_factory,
     )
 
     pending = _unwrap(await application.initialize())
@@ -258,7 +347,9 @@ async def test_fresh_home_trust_turn_direct_and_restart(
         )
     )
     assert model_result.status is CommandStatus.SUCCESS
-    accepted = _unwrap(await application.submit_turn(thread_id, "inspect workspace"))
+    accepted = _unwrap(
+        await application.submit_turn(thread_id, "inspect workspace", "client_inspect")
+    )
     assert accepted.turn_id is not None
     turn_view = await _wait_for_thread(application, thread_id, entries=2)
     assert turn_view.entries[-1].content == "done"
@@ -275,7 +366,14 @@ async def test_fresh_home_trust_turn_direct_and_restart(
     tools = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.TOOLS))
     )
-    names = {item["name"] for item in tools.data["tools"]}
+    tool_items = tools.data["tools"]
+    assert isinstance(tool_items, list)
+    names: set[str] = set()
+    for item in tool_items:
+        assert isinstance(item, dict)
+        name = item["name"]
+        assert isinstance(name, str)
+        names.add(name)
     assert {
         "ls",
         "read_file",
@@ -294,7 +392,7 @@ async def test_fresh_home_trust_turn_direct_and_restart(
         workspace=workspace,
         event_sink=restart_sink,
         environ={secret: "fake-key"},
-        gateway_factory=cast(object, gateway_factory),
+        gateway_factory=gateway_factory,
     )
     ready = _unwrap(await restarted.initialize())
     assert ready.status is InitializeStatus.READY

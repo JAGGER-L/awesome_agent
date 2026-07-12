@@ -14,9 +14,16 @@ const ready: StartupResult = {
     workspace_key: "workspace_1",
     workspace: { display_path: "E:\\workspace" },
     workspace_trusted: true,
-    current_model: "deepseek/deepseek-v4-flash",
+    model_identity: {
+      provider: "deepseek",
+      configured_model: "deepseek/deepseek-v4-flash",
+      effective_model: "deepseek/deepseek-v4-flash",
+      runtime_name: "Awesome Agent",
+      fallback_active: false,
+    },
     thinking_enabled: false,
     skill_mode: "auto",
+    permission_mode: "request_approval",
     configuration_valid: true,
     secret_status: {
       deepseek_api_key: true,
@@ -99,7 +106,7 @@ describe("runCli", () => {
   ])("prints only the product version for %s without starting Core", async (flag) => {
     const value = harness({ argv: [flag] });
     await expect(runCli(value.dependencies)).resolves.toBe(0);
-    expect(value.stdout.join("")).toBe("1.0.0\n");
+    expect(value.stdout.join("")).toBe("1.1.0\n");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 

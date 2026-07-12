@@ -7,11 +7,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from awesome_agent.agent import (
     AgentCompressionResult,
     AgentRuntimeContext,
+    AgentState,
     PreparedAgentContext,
     TurnBudget,
     compile_agent_graph,
     new_agent_state,
+    validate_agent_state,
 )
+from awesome_agent.context import CODING_AGENT_PRODUCT_INSTRUCTIONS
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
@@ -38,6 +41,14 @@ class Gateway:
         self.requests.append(request)
         for event in self.scripts.pop(0):
             yield event
+
+
+def test_product_instructions_define_minimal_action() -> None:
+    instructions = CODING_AGENT_PRODUCT_INSTRUCTIONS
+    assert instructions.startswith("You are Awesome")
+    assert "smallest set of actions" in instructions
+    assert "explicitly requested verification or testing" in instructions
+    assert "Never invoke a tool as a ritual" in instructions
 
 
 class Compressor:
@@ -99,8 +110,8 @@ async def _invoke(
     compressor: Compressor,
     prepared: PreparedAgentContext,
     projector: Projector,
-) -> dict[str, object]:
-    async def builder(state: object) -> PreparedAgentContext:
+) -> AgentState:
+    async def builder(state: AgentState) -> PreparedAgentContext:
         del state
         return prepared
 
@@ -116,17 +127,19 @@ async def _invoke(
         monotonic=lambda: 1.0,
     )
     graph = compile_agent_graph(InMemorySaver())
-    return await graph.ainvoke(
-        new_agent_state(
-            thread_id="thread_1",
-            turn_id="turn_1",
-            workspace_key="workspace_1",
-            provider="deepseek",
-            model="deepseek/deepseek-v4-flash",
-            thinking_enabled=False,
-        ),
-        config={"configurable": {"thread_id": "turn_1"}},
-        context=runtime,
+    return validate_agent_state(
+        await graph.ainvoke(
+            new_agent_state(
+                thread_id="thread_1",
+                turn_id="turn_1",
+                workspace_key="workspace_1",
+                provider="deepseek",
+                model="deepseek/deepseek-v4-flash",
+                thinking_enabled=False,
+            ),
+            config={"configurable": {"thread_id": "turn_1"}},
+            context=runtime,
+        )
     )
 
 

@@ -36,10 +36,12 @@ export class InteractionController {
   snapshot = (): InteractionSnapshot => this.#snapshot;
 
   respond(decision: string): Promise<void> {
-    if (this.#responsePromise) return this.#responsePromise;
+    if (this.#responsePromise && this.#snapshot.status === "responding") {
+      return this.#responsePromise;
+    }
     const pending = this.source.getState().pending_interaction;
     if (!pending) return Promise.resolve();
-    if (!pending.choices.includes(decision)) {
+    if (!pending.choices.some((choice) => choice.decision === decision)) {
       return Promise.reject(
         new Error(`Interaction choice ${decision} is not available.`),
       );
@@ -51,27 +53,38 @@ export class InteractionController {
       .then((result) => {
         if (this.#snapshot.status !== "responding") return;
         if (!result.ok) {
+          const error = new Error(result.error.message);
           this.#snapshot = {
             status: "failed",
             interactionId,
-            message: result.error.message,
+            message: error.message,
           };
+          this.#responsePromise = undefined;
+          throw error;
         } else if (!result.value.accepted) {
+          const error = new Error(
+            result.value.error?.message ?? "Interaction was rejected.",
+          );
           this.#snapshot = {
             status: "failed",
             interactionId,
-            message: result.value.error?.message ?? "Interaction was rejected.",
+            message: error.message,
           };
+          this.#responsePromise = undefined;
+          throw error;
         }
       })
       .catch((error: unknown) => {
-        if (this.#snapshot.status !== "responding") return;
-        this.#snapshot = {
-          status: "failed",
-          interactionId,
-          message:
-            error instanceof Error ? error.message : "Interaction failed.",
-        };
+        if (this.#snapshot.status === "responding") {
+          this.#snapshot = {
+            status: "failed",
+            interactionId,
+            message:
+              error instanceof Error ? error.message : "Interaction failed.",
+          };
+        }
+        this.#responsePromise = undefined;
+        throw error;
       });
     return this.#responsePromise;
   }
@@ -89,6 +102,7 @@ export class InteractionController {
     if (this.#snapshot.status !== "responding") return;
     const state = this.source.getState();
     if (state.core_exit) {
+      this.#responsePromise = undefined;
       this.#snapshot = {
         status: "failed",
         interactionId: this.#snapshot.interactionId,
@@ -97,6 +111,7 @@ export class InteractionController {
     } else if (
       state.pending_interaction?.interaction_id !== this.#snapshot.interactionId
     ) {
+      this.#responsePromise = undefined;
       this.#snapshot = {
         status: "resolved",
         interactionId: this.#snapshot.interactionId,

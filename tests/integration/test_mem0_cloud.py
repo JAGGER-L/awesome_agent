@@ -141,8 +141,14 @@ def _extensions(
     catalog = SkillCatalog((), ())
     enablements = SQLiteMcpEnablementStore(paths.application_db)
 
-    async def submit_turn(thread_id: str, content: str) -> object:
-        return {"thread_id": thread_id, "content": content}
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        return {
+            "thread_id": thread_id,
+            "content": content,
+            "client_message_id": client_message_id,
+        }
 
     adapter = Mem0CloudAdapter(client)
     current_config = read_user_config_document(paths.config_file)
@@ -198,7 +204,9 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
     )
     document = read_user_config_document(config_path)
     assert enabled.status is CommandStatus.SUCCESS
-    assert enabled.data["mem0"]["enabled"] is True
+    enabled_mem0 = enabled.data["mem0"]
+    assert isinstance(enabled_mem0, dict)
+    assert enabled_mem0["enabled"] is True
     assert document.memory.mem0_cloud is True
     assert document.memory.mem0_user_id is not None
     assert state_changes and state_changes[-1][0] is True
@@ -277,7 +285,12 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
         thread_id=restarted_thread,
     )
     assert searched.status is CommandStatus.SUCCESS
-    memory_id = cast(str, searched.data["memories"][0]["id"])
+    memories = searched.data["memories"]
+    assert isinstance(memories, list)
+    first_memory = memories[0]
+    assert isinstance(first_memory, dict)
+    memory_id = first_memory["id"]
+    assert isinstance(memory_id, str)
 
     client.records["foreign"] = {
         "id": "foreign",
@@ -319,7 +332,9 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
         ),
         thread_id=restarted_thread,
     )
-    assert disabled.data["mem0"]["enabled"] is False
+    disabled_mem0 = disabled.data["mem0"]
+    assert isinstance(disabled_mem0, dict)
+    assert disabled_mem0["enabled"] is False
     assert state_changes[-1][0] is False
     assert (
         read_user_config_document(config_path).memory.mem0_user_id == identity.user_id

@@ -30,6 +30,27 @@ describe("detectColorCapability", () => {
 });
 
 describe("resolveTheme", () => {
+  it("exposes one complete semantic color contract", () => {
+    expect(Object.keys(resolveTheme("dark", "truecolor")).sort()).toEqual(
+      [
+        "assistant",
+        "border",
+        "brand",
+        "colorEnabled",
+        "danger",
+        "logoRows",
+        "muted",
+        "preference",
+        "primary",
+        "secondary",
+        "success",
+        "tool",
+        "user",
+        "warning",
+      ].sort(),
+    );
+  });
+
   it("uses the accepted exact dark Mint rows in TrueColor", () => {
     expect(resolveTheme("dark", "truecolor").logoRows).toEqual([
       "#A7F3D0",

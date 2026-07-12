@@ -12,12 +12,12 @@ import { createSurfaceStore } from "../../src/state/store.js";
 
 const baseProps = {
   workspacePath: "E:\\projects\\awesome",
-  branch: "feature/auth",
   thread: { kind: "new" as const },
   model: "deepseek/deepseek-v4-flash",
   thinkingEnabled: false,
   localMemoryEnabled: false,
   mem0Enabled: false,
+  permissionMode: "request_approval" as const,
   credentialMissing: false,
   theme: resolveTheme("dark", "truecolor"),
 };
@@ -61,15 +61,12 @@ describe("Welcome", () => {
 
   it("renders approved new-thread metadata without a tagline or version", () => {
     const view = render(<Welcome {...baseProps} width={80} />);
+    expect(view.lastFrame()).toContain("E:\\projects\\awesome · New thread");
     expect(view.lastFrame()).toContain(
-      "E:\\projects\\awesome · feature/auth · new thread",
+      "deepseek/deepseek-v4-flash · Thinking off · Memory off · Permissions request approval",
     );
-    expect(view.lastFrame()).toContain(
-      "deepseek/deepseek-v4-flash · thinking off · local memory off · mem0 off",
-    );
-    expect(view.lastFrame()).toContain(
-      "/ commands · @path context · ! direct shell",
-    );
+    expect(view.lastFrame()).toContain("/ commands · @ files · ! shell");
+    expect(view.lastFrame()).not.toContain("feature/auth");
     expect(view.lastFrame()).not.toContain("Local-first coding agent");
     expect(view.lastFrame()).not.toContain("0.1.0");
   });
@@ -79,7 +76,6 @@ describe("Welcome", () => {
       <Welcome
         {...baseProps}
         width={80}
-        branch={undefined}
         thread={{ kind: "resumed", title: "Fix auth" }}
         model="kimi/kimi-k2.6"
         thinkingEnabled
@@ -88,12 +84,19 @@ describe("Welcome", () => {
       />,
     );
     expect(view.lastFrame()).toContain(
-      "E:\\projects\\awesome · resumed · Fix auth",
+      "E:\\projects\\awesome · Resumed · Fix auth",
     );
     expect(view.lastFrame()).not.toContain("feature/auth");
     expect(view.lastFrame()).toContain(
-      "kimi/kimi-k2.6 · thinking on · local memory on · mem0 on",
+      "kimi/kimi-k2.6 · Thinking on · Memory local + Mem0 · Permissions request approval",
     );
+  });
+
+  it("shows full access as an explicit welcome mode", () => {
+    const view = render(
+      <Welcome {...baseProps} width={80} permissionMode="full_access" />,
+    );
+    expect(view.lastFrame()).toContain("Permissions full access");
   });
 
   it("renders the same glyph without color support", () => {

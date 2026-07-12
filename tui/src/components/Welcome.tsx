@@ -6,7 +6,6 @@ import { COMPACT_LOGO_ROWS, FULL_LOGO_ROWS } from "./welcome-logo.js";
 export interface WelcomeProps {
   readonly width: number;
   readonly workspacePath: string;
-  readonly branch?: string | undefined;
   readonly thread:
     | { readonly kind: "new" }
     | { readonly kind: "resumed"; readonly title: string };
@@ -14,6 +13,7 @@ export interface WelcomeProps {
   readonly thinkingEnabled: boolean;
   readonly localMemoryEnabled: boolean;
   readonly mem0Enabled: boolean;
+  readonly permissionMode: "request_approval" | "full_access";
   readonly theme: Theme;
 }
 
@@ -24,16 +24,23 @@ export function Welcome(props: WelcomeProps) {
   const rows = props.width >= 44 ? FULL_LOGO_ROWS : COMPACT_LOGO_ROWS;
   const context = [
     props.workspacePath,
-    ...(props.branch ? [props.branch] : []),
     props.thread.kind === "new"
-      ? "new thread"
-      : `resumed · ${props.thread.title}`,
+      ? "New thread"
+      : `Resumed · ${props.thread.title}`,
   ].join(" · ");
+  const memory =
+    props.localMemoryEnabled && props.mem0Enabled
+      ? "local + Mem0"
+      : props.localMemoryEnabled
+        ? "local"
+        : props.mem0Enabled
+          ? "Mem0"
+          : "off";
   const modes = [
     props.model,
-    `thinking ${props.thinkingEnabled ? "on" : "off"}`,
-    `local memory ${props.localMemoryEnabled ? "on" : "off"}`,
-    `mem0 ${props.mem0Enabled ? "on" : "off"}`,
+    `Thinking ${props.thinkingEnabled ? "on" : "off"}`,
+    `Memory ${memory}`,
+    `Permissions ${props.permissionMode.replaceAll("_", " ")}`,
   ].join(" · ");
 
   return (
@@ -48,10 +55,11 @@ export function Welcome(props: WelcomeProps) {
           {row}
         </Text>
       ))}
-      <Text>{context}</Text>
-      <Text>{modes}</Text>
       <Text> </Text>
-      <Text>/ commands · @path context · ! direct shell</Text>
+      <Text color={props.theme.primary}>{context}</Text>
+      <Text color={props.theme.secondary}>{modes}</Text>
+      <Text color={props.theme.muted}>/ commands · @ files · ! shell</Text>
+      <Text> </Text>
     </Box>
   );
 }

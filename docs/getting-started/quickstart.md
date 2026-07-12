@@ -39,6 +39,8 @@ The directory where you launch Awesome becomes the workspace.
 
 Awesome shows the workspace path before using project instructions or tools.
 Choose Yes only when you recognize and trust the project. Choose No to exit.
+After trust, Awesome starts in Request approval mode and asks before edits,
+deletes, and shell commands. Run `/permissions` if you want to review the mode.
 
 ## 4. Configure a Model
 

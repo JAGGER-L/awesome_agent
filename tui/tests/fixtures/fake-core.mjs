@@ -81,9 +81,16 @@ const handleLine = (line) => {
         workspace: { display_path: process.cwd(), branch: "fake" },
         workspace_trusted: mode !== "trust-required",
         ...(thread ? { current_thread_id: thread } : {}),
-        current_model: "deepseek/deepseek-v4-flash",
+        model_identity: {
+          provider: "deepseek",
+          configured_model: "deepseek/deepseek-v4-flash",
+          effective_model: "deepseek/deepseek-v4-flash",
+          runtime_name: "Awesome Agent",
+          fallback_active: false,
+        },
         thinking_enabled: false,
         skill_mode: "auto",
+        permission_mode: "request_approval",
         configuration_valid: true,
         secret_status: {
           deepseek_api_key: true,
@@ -114,7 +121,7 @@ const handleLine = (line) => {
     const now = "2026-07-11T08:00:00Z";
     const terminal = process.env.AWESOME_FAKE_CORE_TERMINAL === "1";
     if (terminal) process.stderr.write("thread-read\n");
-    output({
+    const response = {
       jsonrpc: "2.0",
       id: request.id,
       result: application({
@@ -136,6 +143,7 @@ const handleLine = (line) => {
                   thread_id: request.params.thread_id,
                   sequence: 1,
                   kind: "user_message",
+                  client_message_id: "client_fake",
                   content: "question",
                   metadata: {},
                   created_at: now,
@@ -197,7 +205,12 @@ const handleLine = (line) => {
         change_sets: [],
         has_more: false,
       }),
-    });
+    };
+    const delay = Number(
+      process.env.AWESOME_FAKE_CORE_THREAD_READ_DELAY_MS ?? 0,
+    );
+    if (delay > 0) setTimeout(() => output(response), delay);
+    else output(response);
   } else if (request.method === "command.execute") {
     const threadId = request.params.arguments?.[0] ?? "thread_fake";
     output({
@@ -257,7 +270,7 @@ const handleLine = (line) => {
         envelope(
           4,
           "turn.completed",
-          { kind: "turn.completed" },
+          { kind: "turn.completed", duration_ms: 1000 },
           { turn_id: "turn_terminal" },
         ),
       );

@@ -123,5 +123,9 @@ async def test_both_configured_providers_share_one_networkless_gateway(
     assert tuple(providers) == ("deepseek", "kimi")
     assert deepseek_turn.assistant.content == "deepseek"
     assert kimi_turn.assistant.content == "kimi"
-    assert deepseek_create.await_args.kwargs["model"] == "deepseek-v4-pro"
-    assert kimi_create.await_args.kwargs["model"] == "kimi-k2.5"
+    deepseek_call = deepseek_create.await_args
+    kimi_call = kimi_create.await_args
+    assert deepseek_call is not None
+    assert kimi_call is not None
+    assert deepseek_call.kwargs["model"] == "deepseek-v4-pro"
+    assert kimi_call.kwargs["model"] == "kimi-k2.5"

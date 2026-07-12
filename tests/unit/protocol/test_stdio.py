@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.application.commands import CommandResult, CommandStatus
+from awesome_agent.application.commands import (
+    CommandIntent,
+    CommandResult,
+    CommandStatus,
+)
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
@@ -17,13 +21,17 @@ from awesome_agent.application.contracts import (
     InitializeStatus,
     InteractionResult,
     OperationAccepted,
+    ProviderCredentialSetRequest,
+    ProviderCredentialSetResult,
+    ProviderCredentialSetStatus,
     ShutdownResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
+    ThreadReadResult,
     WorkspacePresentation,
 )
-from awesome_agent.config import SecretStatus
+from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
 from awesome_agent.protocol import stdio
 from awesome_agent.protocol.stdio import (
@@ -86,11 +94,13 @@ class Facade:
         del query
         return ApplicationResult.success(ThreadListResult())
 
-    async def read_thread(self, query: ThreadReadQuery) -> object:
+    async def read_thread(
+        self, query: ThreadReadQuery
+    ) -> ApplicationResult[ThreadReadResult]:
         raise LookupError(query.thread_id)
 
     async def submit_turn(
-        self, thread_id: str, content: str
+        self, thread_id: str, content: str, client_message_id: str
     ) -> ApplicationResult[OperationAccepted]:
         del content
         if self.event_sink is not None:
@@ -107,7 +117,12 @@ class Facade:
                 )
             )
         return ApplicationResult.success(
-            OperationAccepted(operation_id="operation_1", thread_id=thread_id)
+            OperationAccepted(
+                operation_id="operation_1",
+                thread_id=thread_id,
+                turn_id="turn_1",
+                client_message_id=client_message_id,
+            )
         )
 
     async def execute_direct(
@@ -118,9 +133,23 @@ class Facade:
             OperationAccepted(operation_id="operation_2", thread_id=thread_id)
         )
 
-    async def execute_command(self, intent: object) -> ApplicationResult[CommandResult]:
+    async def execute_command(
+        self, intent: CommandIntent
+    ) -> ApplicationResult[CommandResult]:
         del intent
         return ApplicationResult.success(CommandResult(status=CommandStatus.SUCCESS))
+
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ApplicationResult[ProviderCredentialSetResult]:
+        return ApplicationResult.success(
+            ProviderCredentialSetResult(
+                provider=request.provider,
+                status=ProviderCredentialSetStatus.CONFIGURED,
+                source=CredentialSource.USER_ENV_FILE,
+                code="credential_saved",
+            )
+        )
 
     async def respond_interaction(
         self, interaction_id: str, decision: str
@@ -184,7 +213,11 @@ async def test_event_and_response_share_one_serialized_protocol_writer() -> None
     request = _request(
         1,
         "turn.submit",
-        {"thread_id": "thread_1", "content": "inspect"},
+        {
+            "thread_id": "thread_1",
+            "content": "inspect",
+            "client_message_id": "client_1",
+        },
     )
     output = Output()
     writer = JsonLineWriter(output)

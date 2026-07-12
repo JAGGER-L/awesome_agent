@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -43,6 +43,52 @@ class SelectedModel(BaseModel):
         ):
             raise ValueError("Selected model does not belong to its Provider.")
         return self
+
+
+class ModelIdentitySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: ProviderId
+    configured_model: str = Field(min_length=1, max_length=200)
+    effective_model: str = Field(min_length=1, max_length=200)
+    runtime_name: Literal["Awesome Agent"] = "Awesome Agent"
+    fallback_active: bool
+    fallback_from: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> Self:
+        if self.configured_model not in _EXPECTED_MODELS:
+            raise ValueError("Configured model is not in the curated catalog.")
+        if self.effective_model not in _EXPECTED_MODELS:
+            raise ValueError("Effective model is not in the curated catalog.")
+        if not self.effective_model.startswith(f"{self.provider}/"):
+            raise ValueError("Effective model does not belong to its Provider.")
+        expected_fallback = self.configured_model != self.effective_model
+        if self.fallback_active is not expected_fallback:
+            raise ValueError("Fallback state does not match model identity.")
+        expected_from = self.configured_model if expected_fallback else None
+        if self.fallback_from != expected_from:
+            raise ValueError("Fallback source does not match configured model.")
+        return self
+
+    @classmethod
+    def from_models(
+        cls,
+        *,
+        configured_model: str,
+        effective_model: str,
+    ) -> ModelIdentitySnapshot:
+        provider_name, separator, _ = effective_model.partition("/")
+        if separator != "/" or provider_name not in {"deepseek", "kimi"}:
+            raise ValueError("Effective model has no supported Provider.")
+        fallback_active = configured_model != effective_model
+        return cls(
+            provider=cast(ProviderId, provider_name),
+            configured_model=configured_model,
+            effective_model=effective_model,
+            fallback_active=fallback_active,
+            fallback_from=configured_model if fallback_active else None,
+        )
 
 
 class ModelProfile(BaseModel):

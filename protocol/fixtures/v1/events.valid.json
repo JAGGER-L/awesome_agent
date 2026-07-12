@@ -57,6 +57,7 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_005",
       "event_type": "turn.started",
       "payload": {
@@ -71,9 +72,11 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_006",
       "event_type": "turn.completed",
       "payload": {
+        "duration_ms": 1250,
         "kind": "turn.completed"
       },
       "sequence": 6,
@@ -85,9 +88,11 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_007",
       "event_type": "turn.failed",
       "payload": {
+        "duration_ms": 1250,
         "kind": "turn.failed"
       },
       "sequence": 7,
@@ -99,9 +104,11 @@
       "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
     {
+      "client_message_id": "client_44444444444444444444444444444444",
       "event_id": "event_008",
       "event_type": "turn.cancelled",
       "payload": {
+        "duration_ms": 1250,
         "kind": "turn.cancelled"
       },
       "sequence": 8,
@@ -160,7 +167,9 @@
       "payload": {
         "call_id": "call_1",
         "kind": "tool.started",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 12,
       "session_id": "session_11111111111111111111111111111111",
@@ -173,9 +182,14 @@
       "event_type": "tool.completed",
       "payload": {
         "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
         "kind": "tool.completed",
+        "outcome": "Read",
         "summary": "Safe tool summary.",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 13,
       "session_id": "session_11111111111111111111111111111111",
@@ -188,9 +202,14 @@
       "event_type": "tool.failed",
       "payload": {
         "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
         "kind": "tool.failed",
+        "outcome": "Failed",
         "summary": "Safe tool summary.",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 14,
       "session_id": "session_11111111111111111111111111111111",
@@ -203,9 +222,14 @@
       "event_type": "tool.cancelled",
       "payload": {
         "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
         "kind": "tool.cancelled",
+        "outcome": "Failed",
         "summary": "Safe tool summary.",
-        "tool_name": "read_file"
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
       },
       "sequence": 15,
       "session_id": "session_11111111111111111111111111111111",
@@ -295,13 +319,21 @@
       "event_type": "interaction.required",
       "payload": {
         "choices": [
-          "trust",
-          "deny"
+          {
+            "decision": "trust",
+            "label": "Yes"
+          },
+          {
+            "decision": "deny",
+            "label": "No"
+          }
         ],
         "interaction_id": "interaction_1",
         "interaction_kind": "workspace_trust",
         "kind": "interaction.required",
-        "prompt": "Trust this workspace?"
+        "operation": "trust",
+        "prompt": "Trust this workspace?",
+        "target": "C:\\workspace"
       },
       "sequence": 21,
       "session_id": "session_11111111111111111111111111111111",

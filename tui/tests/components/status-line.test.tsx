@@ -33,4 +33,22 @@ describe("StatusLine cancellation", () => {
     expect(view.lastFrame()).toContain("Cancelling…");
     expect(view.lastFrame()).not.toContain("Message");
   });
+
+  it("shows cancellation failure while restoring the composer", () => {
+    const cancellation = {
+      status: "failed" as const,
+      operationId: "operation_1",
+      message: "Core did not accept cancellation.",
+    };
+    const view = render(
+      <App
+        store={createSurfaceStore()}
+        cancellation={cancellation}
+        width={60}
+      />,
+    );
+    expect(view.lastFrame()).toContain("Cancellation failed");
+    expect(view.lastFrame()).toContain("Core did not accept cancellation.");
+    expect(view.lastFrame()).toContain("Message");
+  });
 });

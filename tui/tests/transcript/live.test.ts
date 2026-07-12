@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { SurfaceState } from "../../src/state/index.js";
 import { projectLiveTurn } from "../../src/transcript/live.js";
+import { formatStreamingMarkdown } from "../../src/markdown/streaming.js";
 
 function state(): SurfaceState {
   return {
     connection: "ready",
+    thread_generation: 0,
     event_sequence: 8,
     warnings: [{ code: "retry", message: "Provider retrying." }],
     usage: { input_tokens: 12, output_tokens: 4 },
@@ -21,50 +23,85 @@ function state(): SurfaceState {
         id: "turn_1",
         status: "active",
         started_at: "2026-07-11T08:00:00Z",
-        assistant_text: "Working",
         reasoning_text: "private live thought",
-        reasoning_seen: true,
-        tool_order: ["call_1", "call_2"],
-        tools: {
-          call_1: {
+        thinking_sequence: 2,
+        timeline: [
+          {
+            kind: "thinking",
+            id: "thinking:0",
+            started_at: "2026-07-11T08:00:00Z",
+            duration_ms: 2000,
+          },
+          {
+            kind: "tool",
             call_id: "call_1",
             tool_name: "read_file",
             status: "completed",
+            verb: "Read",
+            target: "config.py",
+            outcome: "Read",
             summary: "Read config",
           },
-          call_2: {
+          {
+            kind: "thinking",
+            id: "thinking:1",
+            started_at: "2026-07-11T08:00:02Z",
+            duration_ms: 1000,
+          },
+          {
+            kind: "tool",
             call_id: "call_2",
             tool_name: "execute",
             status: "failed",
+            verb: "Run",
+            target: "pytest",
+            outcome: "Failed",
             summary: "Tests failed",
             error_code: "exit_1",
           },
-        },
+          {
+            kind: "assistant",
+            id: "assistant:turn_1",
+            text: "Working",
+          },
+        ],
       },
     },
   };
 }
 
 describe("projectLiveTurn", () => {
+  it("formats incomplete Markdown without invoking the completed parser", () => {
+    expect(formatStreamingMarkdown("# Heading\n\n- item\n\n**partial")).toBe(
+      "Heading\n\n• item\n\n**partial",
+    );
+    expect(formatStreamingMarkdown("**done** and `code`")).toBe(
+      "done and code",
+    );
+  });
+
   it("projects Balanced safe summaries with stable tool order", () => {
     const live = projectLiveTurn(state());
     expect(live.blocks.map((block) => block.kind)).toEqual([
-      "assistant",
+      "reasoning_marker",
       "tools",
+      "reasoning_marker",
+      "tools",
+      "assistant",
       "change",
       "warning",
     ]);
     expect(live.blocks[1]).toMatchObject({
-      items: [
-        { name: "read_file", summary: "Read config" },
-        { name: "execute", outcome: "error", error_code: "exit_1" },
-      ],
+      items: [{ verb: "Read", target: "config.py", summary: "Read config" }],
+    });
+    expect(live.blocks[3]).toMatchObject({
+      items: [{ verb: "Run", outcome: "error", error_code: "exit_1" }],
     });
     expect(live.reasoning_text).toBe("private live thought");
     expect(live.usage).toEqual({ input_tokens: 12, output_tokens: 4 });
   });
 
-  it("replaces tool updates by call ID without duplicating order", () => {
+  it("keeps timeline order without grouping non-adjacent tools", () => {
     const value = state();
     const operation = value.active_operation;
     if (!operation?.turn) throw new Error("fixture requires an active Turn");
@@ -74,11 +111,15 @@ describe("projectLiveTurn", () => {
         ...operation,
         turn: {
           ...operation.turn,
-          tool_order: ["call_1", "call_1"],
+          timeline: operation.turn.timeline.filter(
+            (item) => item.kind !== "assistant",
+          ),
         },
       },
     });
-    expect(live.blocks[1]).toMatchObject({ items: [{ call_id: "call_1" }] });
+    expect(live.blocks.filter((block) => block.kind === "tools")).toHaveLength(
+      2,
+    );
   });
 
   it("marks only terminal operations terminal", () => {

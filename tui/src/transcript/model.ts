@@ -5,7 +5,10 @@ export interface BlockBase {
 
 export interface UserBlock extends BlockBase {
   readonly kind: "user";
+  readonly client_message_id: string;
+  readonly status: "pending" | "accepted" | "persisted" | "failed";
   readonly text: string;
+  readonly error_message?: string;
 }
 export interface AssistantBlock extends BlockBase {
   readonly kind: "assistant";
@@ -18,9 +21,13 @@ export interface DirectCommandBlock extends BlockBase {
 export interface ToolItem {
   readonly call_id: string;
   readonly name: string;
+  readonly verb: string;
+  readonly target?: string;
   readonly outcome: "running" | "success" | "error" | "cancelled";
+  readonly presentation_outcome?: string;
   readonly summary: string;
-  readonly duration_ms: number;
+  readonly detail?: string;
+  readonly duration_ms?: number;
   readonly error_code?: string;
 }
 export interface ToolGroupBlock extends BlockBase {
@@ -47,6 +54,12 @@ export interface StatusBlock extends BlockBase {
   readonly kind: "status";
   readonly message: string;
 }
+export interface CommandResultBlock extends BlockBase {
+  readonly kind: "command_result";
+  readonly command: string;
+  readonly tone: "info" | "warning" | "error";
+  readonly content: string;
+}
 export interface ErrorBlock extends BlockBase {
   readonly kind: "error";
   readonly code: string;
@@ -65,6 +78,7 @@ export type TranscriptBlock =
   | ChangeSummaryBlock
   | ReasoningMarkerBlock
   | StatusBlock
+  | CommandResultBlock
   | WarningBlock
   | ErrorBlock
   | OmittedHistoryBlock;

@@ -21,6 +21,11 @@ from awesome_agent.core.tools import (
 )
 from awesome_agent.core.tools.errors import ToolInvariantError
 from awesome_agent.core.tools.executor import ToolExecutor
+from awesome_agent.core.tools.permissions import (
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
+)
 from awesome_agent.core.tools.registry import (
     DuplicateToolName,
     RegisteredTool,
@@ -77,7 +82,11 @@ class CollectingActivityWriter(ToolActivityWriter):
         self.activities.setdefault((activity.operation_id, activity.call_id), activity)
 
 
-def echo_registry(handler_override: ToolHandler | None = None) -> ToolRegistry:
+def echo_registry(
+    handler_override: ToolHandler | None = None,
+    *,
+    capability: str = "workspace.read",
+) -> ToolRegistry:
     async def echo(
         arguments: BaseModel,
         context: ToolExecutionContext,
@@ -91,12 +100,110 @@ def echo_registry(handler_override: ToolHandler | None = None) -> ToolRegistry:
             name="echo",
             description="Echo text",
             input_schema=EchoArguments.model_json_schema(),
+            capability=capability,
             read_only=True,
         ),
         input_model=EchoArguments,
         handler=echo if handler_override is None else handler_override,
     )
     return registry
+
+
+@pytest.mark.asyncio
+async def test_executor_asks_before_write_and_executes_handler_only_once(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    approvals: list[ToolApprovalRequest] = []
+
+    async def write_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal calls
+        calls += 1
+        return ToolOutput(content="written")
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        assert calls == 0
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    context, _, _ = execution_context(tmp_path)
+    context = replace(
+        context,
+        permission_session=PermissionSession(),
+        approval_resolver=approve,
+    )
+    executor = ToolExecutor(echo_registry(write_handler, capability="workspace.write"))
+
+    result = await executor.execute(
+        ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "ok"}),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert calls == 1
+    assert len(approvals) == 1
+    assert approvals[0].capability == "workspace.write"
+
+
+@pytest.mark.asyncio
+async def test_denied_write_never_executes_handler(tmp_path: Path) -> None:
+    calls = 0
+
+    async def write_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal calls
+        calls += 1
+        return ToolOutput(content="unreachable")
+
+    async def deny(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        return ToolApprovalDecision.DENY
+
+    context, _, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=deny)
+    executor = ToolExecutor(echo_registry(write_handler, capability="workspace.write"))
+
+    result = await executor.execute(
+        ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "ok"}),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.PERMISSION_DENIED
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_thread_write_grant_suppresses_later_write_approval(
+    tmp_path: Path,
+) -> None:
+    approvals: list[ToolApprovalRequest] = []
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_THREAD_WRITES
+
+    context, _, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=approve)
+    executor = ToolExecutor(echo_registry(capability="workspace.write"))
+
+    for call_id in ("call_1", "call_2"):
+        result = await executor.execute(
+            ToolRequest(
+                call_id=call_id,
+                tool_name="echo",
+                arguments={"text": "ok"},
+            ),
+            context=context,
+        )
+        assert result.status is ToolStatus.SUCCESS
+
+    assert len(approvals) == 1
 
 
 def test_registry_rejects_duplicates_and_lists_sorted_specs() -> None:
@@ -107,6 +214,7 @@ def test_registry_rejects_duplicates_and_lists_sorted_specs() -> None:
                 name=name,
                 description=name,
                 input_schema=EmptyArguments.model_json_schema(),
+                capability="workspace.read",
                 read_only=True,
             ),
             input_model=EmptyArguments,
@@ -135,6 +243,7 @@ def test_tool_names_allow_only_baseline_and_reserved_namespaces() -> None:
                 name=name,
                 description=name,
                 input_schema={},
+                capability="workspace.read",
                 read_only=True,
             ).name
             == name
@@ -152,6 +261,7 @@ def test_tool_names_allow_only_baseline_and_reserved_namespaces() -> None:
                 name=name,
                 description=name,
                 input_schema={},
+                capability="workspace.read",
                 read_only=True,
             )
 
@@ -165,6 +275,7 @@ def test_registry_replaces_one_namespace_atomically() -> None:
                 name=name,
                 description=name,
                 input_schema={},
+                capability="workspace.write",
                 read_only=False,
             ),
             EmptyArguments,
@@ -214,7 +325,13 @@ async def test_executor_emits_success_events(tmp_path: Path) -> None:
     assert activity.duration_ms == 125
     assert activity.change_set_id is None
     assert activity.input_summary == "arguments: text"
-    assert activity.result_summary == "Tool execution completed."
+    assert activity.result_summary == "Completed"
+    started, completed = sink.events
+    assert started.payload.verb == "Echo"  # type: ignore[union-attr]
+    assert started.payload.target is None  # type: ignore[union-attr]
+    assert completed.payload.outcome == "Completed"  # type: ignore[union-attr]
+    assert completed.payload.summary == "Completed"  # type: ignore[union-attr]
+    assert completed.payload.duration_ms == 125  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio

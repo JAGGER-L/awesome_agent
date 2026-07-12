@@ -1,32 +1,54 @@
 import { Box, Text } from "ink";
 
-import { Picker } from "./Picker.js";
 import { useTheme } from "./theme.js";
 
 export function TrustPrompt({
   workspacePath,
-  onDecision,
+  selected,
+  submitting = false,
+  message,
 }: {
   readonly workspacePath: string;
-  readonly onDecision: (decision: "trust" | "deny") => void;
+  readonly selected: number;
+  readonly submitting?: boolean;
+  readonly message?: string;
 }) {
   const theme = useTheme();
   return (
     <Box flexDirection="column">
-      <Text color={theme.warning}>Trust this workspace?</Text>
-      <Text>{workspacePath}</Text>
-      <Picker
-        blocking
-        selection={{
-          prompt: "Choose explicitly",
-          options: [
-            { value: "trust", label: "Trust workspace", selected: true },
-            { value: "deny", label: "Deny and exit", selected: false },
-          ],
-        }}
-        onSelect={(value) => onDecision(value === "trust" ? "trust" : "deny")}
-        onClose={() => {}}
+      <Text bold color={theme.brand}>
+        Trust this workspace?
+      </Text>
+      <Text> </Text>
+      <Text color={theme.brand}>{workspacePath}</Text>
+      <Text> </Text>
+      <Text>Is this a project you created or trust?</Text>
+      <Text color={theme.muted}>
+        Awesome can read files in this workspace. File changes and shell
+        commands
+      </Text>
+      <Text color={theme.muted}>follow your current permission mode.</Text>
+      <Text> </Text>
+      <TrustChoice
+        active={selected === 0}
+        label="1. Yes, I trust this folder"
       />
+      <TrustChoice active={selected === 1} label="2. No, exit" />
+      <Text> </Text>
+      <Text color={theme.muted}>
+        {submitting ? "Saving trust…" : "↑/↓ Select · Enter Confirm · Esc Exit"}
+      </Text>
+      {message ? <Text color={theme.danger}>{message}</Text> : null}
     </Box>
+  );
+}
+
+function TrustChoice({ active, label }: { active: boolean; label: string }) {
+  const theme = useTheme();
+  return (
+    <Text {...(active ? { color: theme.brand } : {})}>
+      {active ? "❯ " : "  "}
+      {label}
+    </Text>
   );
 }

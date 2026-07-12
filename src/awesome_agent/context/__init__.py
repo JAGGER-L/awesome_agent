@@ -1,9 +1,11 @@
 from awesome_agent.context.builder import (
+    CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
     ContextOverflow,
     Mem0ContextResult,
     local_memory_context_sources,
     mem0_context_source,
+    model_identity_context_source,
 )
 from awesome_agent.context.compression import (
     CompressionPlan,
@@ -38,6 +40,7 @@ from awesome_agent.context.tokens import (
 )
 
 __all__ = [
+    "CODING_AGENT_PRODUCT_INSTRUCTIONS",
     "COMPRESSION_THRESHOLD_FRACTION",
     "OUTPUT_RESERVE_TOKENS",
     "SAFETY_RESERVE_FRACTION",
@@ -63,6 +66,7 @@ __all__ = [
     "estimate_text",
     "local_memory_context_sources",
     "mem0_context_source",
+    "model_identity_context_source",
     "parse_explicit_paths",
     "plan_compression",
     "snapshot_explicit_paths",

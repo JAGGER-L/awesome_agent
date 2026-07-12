@@ -12,7 +12,11 @@ from awesome_agent.core.changes import ChangeJournal
 from awesome_agent.core.changes.errors import ChangeCapacityExceeded
 from awesome_agent.core.changes.models import FileChangeKind, FileNodeType
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolOutput,
+    ToolPresentation,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
 from awesome_agent.core.tools.policy import (
     is_sensitive_workspace_path,
@@ -144,6 +148,12 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
                 "deleted_nodes": len(nodes),
                 "change_set_id": context.change_set_id,
             },
+            presentation=ToolPresentation(
+                verb="Delete",
+                target=relative.as_posix(),
+                outcome="Deleted",
+                summary=f"{len(nodes)} {'node' if len(nodes) == 1 else 'nodes'}",
+            ),
         )
 
     return delete

@@ -20,7 +20,12 @@ from awesome_agent.context import ContextBuilder, ThreadCompressor
 from awesome_agent.conversation import ConversationService, UsageSummary
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.workspace import resolve_workspace
-from awesome_agent.modeling import AssistantMessage, ModelTurn, StopReason
+from awesome_agent.modeling import (
+    AssistantMessage,
+    ModelIdentitySnapshot,
+    ModelTurn,
+    StopReason,
+)
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 
@@ -56,7 +61,12 @@ def _complete_turns(
     count: int,
 ) -> None:
     for index in range(count):
-        turn = conversation.begin_turn(thread_id, f"question {index}", _config())
+        turn = conversation.begin_turn(
+            thread_id,
+            f"question {index}",
+            _config(),
+            client_message_id=f"client_{index}",
+        )
         conversation.complete_turn(
             turn.id,
             f"answer {index}",
@@ -93,6 +103,10 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         configured_total_tokens=262_144,
         model_context_limit=262_144,
         product_instructions="product policy",
+        model_identity=lambda _turn: ModelIdentitySnapshot.from_models(
+            configured_model="deepseek/deepseek-v4-flash",
+            effective_model="deepseek/deepseek-v4-flash",
+        ),
     )
 
     compacted = await context_service.compact_thread(
@@ -108,6 +122,7 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         thread.id,
         "inspect @note.txt @dir",
         _config(),
+        client_message_id="client_context",
     )
     context_service.prepare_turn(turn, "inspect @note.txt @dir")
     state = new_agent_state(
@@ -123,13 +138,14 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
     assert "before" in frozen_json
     assert "child.txt" in frozen_json
     assert "pytest: passed" in frozen_json
+    assert "Awesome Agent" in frozen_json
+    assert "deepseek/deepseek-v4-flash" in frozen_json
     assert "question 4" in frozen_json
     assert "question 0" not in frozen_json
 
     (workspace_path / "note.txt").write_text("after", encoding="utf-8")
     state["messages"] = [
-        cast(dict[str, Any], message.model_dump(mode="json"))
-        for message in prepared.messages
+        message.model_dump(mode="json") for message in prepared.messages
     ]
     state["context_manifest"] = list(prepared.manifest)
     assert "after" not in "\n".join(str(message) for message in state["messages"])
@@ -236,7 +252,11 @@ async def test_invalid_explicit_path_fails_turn_before_graph_or_model(
         turn_input_preparer=context_service.prepare_turn,
     )
 
-    accepted = await coordinator.submit_turn(thread.id, "inspect @missing.txt")
+    accepted = await coordinator.submit_turn(
+        thread.id,
+        "inspect @missing.txt",
+        client_message_id="client_missing",
+    )
     with pytest.raises(TurnInputInvalid):
         await coordinator.wait(accepted.operation_id)
 

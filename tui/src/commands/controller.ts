@@ -10,6 +10,7 @@ import type {
   LocalCommandIntent,
   RoutedInput,
 } from "./parser.js";
+import { createClientMessageId } from "../transcript/identity.js";
 
 interface CommandRpc {
   request<Method extends MethodName>(
@@ -21,7 +22,9 @@ interface CommandRpc {
   >;
 }
 
-type OperationAccepted = MethodValue["turn.submit"];
+type OperationAccepted =
+  | MethodValue["turn.submit"]
+  | MethodValue["direct.execute"];
 type CommandResult = MethodValue["command.execute"];
 type CommandSelection = NonNullable<CommandResult["selection"]>;
 type CommandSecretPrompt = NonNullable<CommandResult["secret_prompt"]>;
@@ -47,12 +50,21 @@ export type CommandDispatchOutcome =
       readonly code: "thread_required" | "unknown_command";
     };
 
+export type ThreadReplacementOutcome =
+  | {
+      readonly kind: "replacement";
+      readonly application: MethodValue["application.getState"];
+      readonly thread: MethodValue["thread.read"];
+    }
+  | { readonly kind: "error"; readonly error: ProductError };
+
 export class CommandController {
   constructor(private readonly rpc: CommandRpc) {}
 
   async submit(
     routed: RoutedInput,
     threadId: string | undefined,
+    clientMessageId?: string,
   ): Promise<CommandDispatchOutcome> {
     if (routed.kind === "local") {
       return { kind: "local", intent: routed.intent };
@@ -64,6 +76,7 @@ export class CommandController {
           ? await this.rpc.request("turn.submit", {
               thread_id: threadId,
               content: routed.content,
+              client_message_id: clientMessageId ?? createClientMessageId(),
             })
           : await this.rpc.request("direct.execute", {
               thread_id: threadId,
@@ -103,7 +116,8 @@ export class CommandController {
 
   async setCredential(
     provider: "deepseek" | "kimi",
-    apiKey: string,
+    action: "add" | "replace" | "delete",
+    apiKey: string | undefined,
     allowUnverified: boolean,
   ): Promise<
     | {
@@ -114,8 +128,9 @@ export class CommandController {
   > {
     const result = await this.rpc.request("provider.credential.set", {
       provider,
-      api_key: apiKey,
-      allow_unverified: allowUnverified,
+      action,
+      ...(apiKey === undefined ? {} : { api_key: apiKey }),
+      ...(action === "delete" ? {} : { allow_unverified: allowUnverified }),
     });
     return result.ok
       ? { kind: "credential", result: result.value }
@@ -124,6 +139,24 @@ export class CommandController {
 
   async refreshApplication() {
     return await this.rpc.request("application.getState", {});
+  }
+
+  async loadThreadReplacement(
+    threadId: string,
+  ): Promise<ThreadReplacementOutcome> {
+    const application = await this.rpc.request("application.getState", {});
+    if (!application.ok) return { kind: "error", error: application.error };
+    const thread = await this.rpc.request("thread.read", {
+      thread_id: threadId,
+      limit: 100,
+    });
+    return thread.ok
+      ? {
+          kind: "replacement",
+          application: application.value,
+          thread: thread.value,
+        }
+      : { kind: "error", error: thread.error };
   }
 
   async select(

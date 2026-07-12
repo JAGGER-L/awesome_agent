@@ -23,11 +23,48 @@ function harness(result: unknown = { ok: true, value: {} }) {
 }
 
 describe("CommandController", () => {
+  it("loads application and thread projections for one atomic replacement", async () => {
+    const calls: Call[] = [];
+    const controller = new CommandController({
+      request: async <Method extends MethodName>(
+        method: Method,
+        params: MethodParams[Method],
+      ) => {
+        calls.push({ method, params } as Call);
+        return {
+          ok: true,
+          value:
+            method === "application.getState"
+              ? { current_thread_id: "thread_new" }
+              : { view: { thread: { id: "thread_new" } } },
+        } as never;
+      },
+    });
+
+    await expect(
+      controller.loadThreadReplacement("thread_new"),
+    ).resolves.toMatchObject({
+      kind: "replacement",
+      application: { current_thread_id: "thread_new" },
+      thread: { view: { thread: { id: "thread_new" } } },
+    });
+    expect(calls).toEqual([
+      { method: "application.getState", params: {} },
+      {
+        method: "thread.read",
+        params: { thread_id: "thread_new", limit: 100 },
+      },
+    ]);
+  });
   it.each([
     [
       { kind: "turn", content: "hello" },
       "turn.submit",
-      { thread_id: "thread_1", content: "hello" },
+      {
+        thread_id: "thread_1",
+        content: "hello",
+        client_message_id: "client_1",
+      },
     ],
     [
       { kind: "direct", command: "pwd" },
@@ -52,7 +89,7 @@ describe("CommandController", () => {
           ? { status: "success", content: "ok", data: {} }
           : { operation_id: "operation_1", thread_id: "thread_1" },
     });
-    await controller.submit(routed as RoutedInput, "thread_1");
+    await controller.submit(routed as RoutedInput, "thread_1", "client_1");
     expect(calls).toEqual([{ method, params }]);
   });
 
@@ -141,17 +178,23 @@ describe("CommandController", () => {
       ok: true,
       value: {
         provider: "deepseek",
-        status: "saved",
+        status: "configured",
         source: "user_env_file",
         code: "credential_saved",
       },
     });
-    await credential.controller.setCredential("deepseek", "private", false);
+    await credential.controller.setCredential(
+      "deepseek",
+      "add",
+      "private",
+      false,
+    );
     expect(credential.calls).toEqual([
       {
         method: "provider.credential.set",
         params: {
           provider: "deepseek",
+          action: "add",
           api_key: "private",
           allow_unverified: false,
         },

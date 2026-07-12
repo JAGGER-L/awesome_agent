@@ -17,11 +17,22 @@ export function StatusCommand({
     ["Workspace", snapshot.workspace_path],
     ["Thread", snapshot.thread_title],
     ["Thread ID", snapshot.thread_display_id],
-    ["Model", `${snapshot.model_id} · ${snapshot.model_status}`],
+    ["Provider", snapshot.model_identity.provider],
+    [
+      "Model",
+      `${snapshot.model_identity.effective_model} · ${snapshot.model_status}`,
+    ],
+    [
+      "Fallback",
+      snapshot.model_identity.fallback_active
+        ? `active · from ${snapshot.model_identity.fallback_from}`
+        : "off",
+    ],
     [
       "Modes",
       `thinking ${snapshot.thinking_enabled ? "on" : "off"} · skill ${snapshot.skill_mode}`,
     ],
+    ["Permissions", snapshot.permission_mode.replace("_", " ")],
     [
       "Memory",
       `local ${snapshot.local_memory_enabled ? "on" : "off"} · mem0 ${snapshot.mem0_enabled ? "on" : "off"}`,
@@ -35,7 +46,7 @@ export function StatusCommand({
   ] as const;
   return (
     <Box flexDirection="column">
-      <Text color={theme.accent}>Status</Text>
+      <Text color={theme.primary}>Status</Text>
       <Text> </Text>
       {rows.map(([label, value]) => (
         <Text key={label}>

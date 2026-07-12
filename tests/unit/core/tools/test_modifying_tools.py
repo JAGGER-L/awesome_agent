@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 from unittest.mock import Mock
@@ -17,6 +18,12 @@ from awesome_agent.core.tools import (
     ToolStatus,
 )
 from awesome_agent.core.tools.builtins import register_modifying_tools
+from awesome_agent.core.tools.permissions import (
+    PermissionMode,
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
+)
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
@@ -26,7 +33,13 @@ def modifying_fixture(
     tmp_path: Path,
     *,
     with_change_set: bool = True,
-) -> tuple[ToolExecutor, ToolExecutionContext, ChangeJournal, Path]:
+) -> tuple[
+    ToolExecutor,
+    ToolExecutionContext,
+    ChangeJournal,
+    Path,
+    CollectingEventSink,
+]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     identity = resolve_workspace(workspace)
@@ -44,6 +57,7 @@ def modifying_fixture(
             turn_id="turn_1",
             workspace=identity,
         ).id
+    sink = CollectingEventSink()
     context = ToolExecutionContext(
         workspace=identity,
         thread_id="thread_1",
@@ -53,18 +67,54 @@ def modifying_fixture(
         emitter=EventEmitter(
             session_id="session_1",
             workspace_key=identity.key,
-            sink=CollectingEventSink(),
+            sink=sink,
         ),
         activity_writer=Mock(),
         monotonic=monotonic,
         change_set_id=change_set_id,
+        permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
     )
-    return ToolExecutor(registry), context, journal, workspace
+    return ToolExecutor(registry), context, journal, workspace, sink
+
+
+@pytest.mark.asyncio
+async def test_write_file_approval_describes_the_real_target(tmp_path: Path) -> None:
+    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
+    approvals: list[ToolApprovalRequest] = []
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        assert not (workspace / "circle_area.py").exists()
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    context = replace(
+        context,
+        permission_session=PermissionSession(),
+        approval_resolver=approve,
+    )
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_write",
+            tool_name="write_file",
+            arguments={"path": "circle_area.py", "content": "pass\n"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert approvals == [
+        ToolApprovalRequest(
+            capability="workspace.write",
+            operation="create",
+            target="circle_area.py",
+            prompt="Do you want to create circle_area.py?",
+        )
+    ]
 
 
 @pytest.mark.asyncio
 async def test_write_file_creates_and_overwrites_utf8_content(tmp_path: Path) -> None:
-    executor, context, journal, workspace = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, sink = modifying_fixture(tmp_path)
 
     created = await executor.execute(
         ToolRequest(
@@ -83,6 +133,18 @@ async def test_write_file_creates_and_overwrites_utf8_content(tmp_path: Path) ->
         context=context,
     )
 
+    assert created.presentation is not None
+    assert created.presentation.model_dump() == {
+        "verb": "Write",
+        "target": "notes.txt",
+        "outcome": "Created",
+        "summary": "1 line",
+        "detail": None,
+        "duration_ms": sink.events[1].payload.duration_ms,  # type: ignore[union-attr]
+    }
+    assert overwritten.presentation is not None
+    assert overwritten.presentation.outcome == "Updated"
+
     assert created.status is ToolStatus.SUCCESS
     assert overwritten.status is ToolStatus.SUCCESS
     assert (workspace / "notes.txt").read_text(encoding="utf-8") == "second"
@@ -92,7 +154,7 @@ async def test_write_file_creates_and_overwrites_utf8_content(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_edit_file_replaces_one_exact_occurrence(tmp_path: Path) -> None:
-    executor, context, journal, workspace = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
     path = workspace / "app.py"
     path.write_text("before\n", encoding="utf-8")
 
@@ -117,7 +179,7 @@ async def test_edit_file_replaces_one_exact_occurrence(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_edit_file_rejects_ambiguous_replacement(tmp_path: Path) -> None:
-    executor, context, _, workspace = modifying_fixture(tmp_path)
+    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
     path = workspace / "app.py"
     path.write_text("same same", encoding="utf-8")
 
@@ -144,7 +206,7 @@ async def test_edit_file_rejects_ambiguous_replacement(tmp_path: Path) -> None:
 async def test_missing_change_set_is_invariant_failure_before_write(
     tmp_path: Path,
 ) -> None:
-    executor, context, _, workspace = modifying_fixture(
+    executor, context, _, workspace, _ = modifying_fixture(
         tmp_path,
         with_change_set=False,
     )
@@ -168,7 +230,7 @@ async def test_delete_rejects_root_git_and_sensitive_targets(
     tmp_path: Path,
     target: str,
 ) -> None:
-    executor, context, _, workspace = modifying_fixture(tmp_path)
+    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
     (workspace / ".git").mkdir()
     (workspace / ".env").write_text("SECRET=value", encoding="utf-8")
 
@@ -194,7 +256,7 @@ async def test_delete_capacity_fails_before_removing_any_node(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executor, context, _, workspace = modifying_fixture(tmp_path)
+    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
     target = workspace / "target"
     target.mkdir()
     (target / "one.txt").write_text("one", encoding="utf-8")

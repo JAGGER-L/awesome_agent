@@ -19,6 +19,7 @@ const live: LiveTranscriptProjection = {
         {
           call_id: "call_1",
           name: "read_file",
+          verb: "Read",
           outcome: "success",
           summary: "live",
           duration_ms: 0,
@@ -48,6 +49,7 @@ function page(): MethodValue["thread.read"] {
           sequence: 1,
           kind: "user_message",
           content: "question",
+          client_message_id: "client_1",
           metadata: {},
           created_at: now,
         },

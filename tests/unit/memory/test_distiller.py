@@ -8,6 +8,7 @@ from awesome_agent.memory.models import MemoryScope
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
+    ModelRequest,
     ModelTurn,
     ModelUsage,
     SelectedModel,
@@ -25,12 +26,12 @@ class FakeGateway:
     def __init__(self, content: str, *, fail: bool = False) -> None:
         self.content = content
         self.fail = fail
-        self.calls: list[tuple[SelectedModel, object]] = []
+        self.calls: list[tuple[SelectedModel, ModelRequest]] = []
 
     async def stream(
         self,
         selected: SelectedModel,
-        request: object,
+        request: ModelRequest,
     ) -> AsyncIterator[GatewayEvent]:
         self.calls.append((selected, request))
         if self.fail:

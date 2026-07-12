@@ -81,6 +81,10 @@
       "owner": "application"
     },
     {
+      "name": "permissions",
+      "owner": "application"
+    },
+    {
       "name": "init",
       "owner": "skill"
     },

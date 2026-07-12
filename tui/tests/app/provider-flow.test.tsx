@@ -1,5 +1,5 @@
 import { render } from "ink-testing-library";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app/App.js";
 import { CommandController } from "../../src/commands/controller.js";
@@ -19,8 +19,9 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("Provider setup flow", () => {
-  it("resumes from a saved credential into the model picker without rendering it", async () => {
+  it("validates a masked key and resumes /model after explicit unverified confirmation", async () => {
     let configured = false;
+    let credentialAttempts = 0;
     const secret = "deepseek-secret-never-render";
     const controller = new CommandController({
       request: async <Method extends MethodName>(
@@ -28,14 +29,25 @@ describe("Provider setup flow", () => {
         params: MethodParams[Method],
       ) => {
         if (method === "provider.credential.set") {
-          configured = true;
+          credentialAttempts += 1;
+          const allowUnverified =
+            "allow_unverified" in params && params.allow_unverified === true;
+          if (allowUnverified) configured = true;
           return {
             ok: true,
             value: {
               provider: "deepseek",
-              status: "saved",
-              source: "user_env_file",
-              code: "credential_saved",
+              status: allowUnverified
+                ? "configured"
+                : credentialAttempts === 1
+                  ? "invalid"
+                  : "confirm_unverified",
+              source: allowUnverified ? "user_env_file" : "missing",
+              code: allowUnverified
+                ? "credential_saved_unverified"
+                : credentialAttempts === 1
+                  ? "credential_invalid"
+                  : "credential_validation_unavailable",
             },
           } as never;
         }
@@ -44,21 +56,15 @@ describe("Provider setup flow", () => {
         }
         if (method === "command.execute") {
           const arguments_ =
-            "arguments" in params ? params.arguments : undefined;
-          if (!arguments_?.length) {
+            "arguments" in params ? (params.arguments ?? []) : [];
+          if (arguments_.length === 0) {
             return {
               ok: true,
               value: {
                 status: "success",
                 content: "",
                 data: {},
-                selection: {
-                  prompt: "Select Provider",
-                  options: [
-                    { value: "deepseek", label: "DeepSeek", selected: true },
-                    { value: "kimi", label: "Kimi", selected: false },
-                  ],
-                },
+                selection: providerSelection("Select Provider"),
               },
             } as never;
           }
@@ -69,13 +75,7 @@ describe("Provider setup flow", () => {
                 status: "success",
                 content: "",
                 data: {},
-                secret_prompt: {
-                  provider: "deepseek",
-                  action: "add",
-                  label: "DeepSeek API Key",
-                  environment_variable: "DEEPSEEK_API_KEY",
-                  help_url: "https://example.com",
-                },
+                secret_prompt: secretPrompt("add"),
               },
             } as never;
           }
@@ -89,8 +89,8 @@ describe("Provider setup flow", () => {
                 prompt: "Select DeepSeek Model",
                 options: [
                   {
-                    value: "deepseek/deepseek-chat",
-                    label: "deepseek/deepseek-chat",
+                    value: "deepseek/deepseek-v4-flash",
+                    label: "deepseek/deepseek-v4-flash",
                     selected: true,
                   },
                 ],
@@ -114,6 +114,179 @@ describe("Provider setup flow", () => {
         providerSetupRequired
       />,
     );
+    const submit = vi.spyOn(controller, "submit");
+
+    view.stdin.write("/model");
+    view.stdin.write("\r");
+    await eventually(() => expect(submit).toHaveBeenCalledOnce());
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Select Provider"),
+    );
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("DeepSeek API Key"),
+    );
+
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("API key is required"),
+    );
+    expect(credentialAttempts).toBe(0);
+
+    view.stdin.write(secret);
+    await eventually(() => expect(view.lastFrame()).toContain("•"));
+    expect(view.lastFrame()).not.toContain(secret);
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("API key was rejected"),
+    );
+
+    view.stdin.write(secret);
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Save this key anyway?"),
+    );
+    view.stdin.write("\u001b[B");
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Select DeepSeek Model"),
+    );
+
+    expect(credentialAttempts).toBe(3);
+    expect(view.frames.join("\n")).not.toContain(secret);
+    expect(JSON.stringify(store.getState())).not.toContain(secret);
+  });
+
+  it("replaces and deletes a user-managed credential through one RPC contract", async () => {
+    let configured = true;
+    const secret = "replacement-secret-never-render";
+    const credentialRequests: unknown[] = [];
+    const controller = new CommandController({
+      request: async <Method extends MethodName>(
+        method: Method,
+        params: MethodParams[Method],
+      ) => {
+        if (method === "application.getState") {
+          return { ok: true, value: applicationState(configured) } as never;
+        }
+        if (method === "provider.credential.set") {
+          credentialRequests.push(params);
+          const action = "action" in params ? params.action : undefined;
+          configured = action !== "delete";
+          return {
+            ok: true,
+            value: {
+              provider: "deepseek",
+              status: action === "delete" ? "deleted" : "configured",
+              source: action === "delete" ? "missing" : "user_env_file",
+              code:
+                action === "delete" ? "credential_deleted" : "credential_saved",
+            },
+          } as never;
+        }
+        if (method === "command.execute") {
+          const arguments_ =
+            "arguments" in params ? (params.arguments ?? []) : [];
+          const selection =
+            arguments_.length === 0
+              ? providerSelection("Provider Authentication")
+              : arguments_.length === 1
+                ? {
+                    prompt: "DeepSeek Authentication",
+                    options: [
+                      {
+                        value: "replace",
+                        label: "Replace API key",
+                        selected: true,
+                      },
+                      {
+                        value: "delete",
+                        label: "Delete API key",
+                        selected: false,
+                      },
+                      { value: "back", label: "Back", selected: false },
+                    ],
+                  }
+                : arguments_[1] === "replace"
+                  ? undefined
+                  : {
+                      prompt: "Delete DeepSeek API key?",
+                      options: [
+                        { value: "back", label: "Cancel", selected: true },
+                        { value: "confirm", label: "Delete", selected: false },
+                      ],
+                    };
+          return {
+            ok: true,
+            value:
+              arguments_[1] === "replace"
+                ? {
+                    status: "success",
+                    content: "",
+                    data: {},
+                    secret_prompt: secretPrompt("replace"),
+                  }
+                : { status: "success", content: "", data: {}, selection },
+          } as never;
+        }
+        throw new Error(`Unexpected method ${method}`);
+      },
+    });
+    const store = createSurfaceStore();
+    store.dispatch({
+      type: "hydrate.application",
+      application: applicationState(true),
+    });
+    const view = render(
+      <App store={store} controller={controller} width={80} />,
+    );
+
+    await openAuthProvider(view);
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("DeepSeek API Key"),
+    );
+    view.stdin.write(secret);
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("DeepSeek credential configured"),
+    );
+    expect(view.frames.join("\n")).not.toContain(secret);
+
+    await openAuthProvider(view);
+    view.stdin.write("\u001b[B");
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Delete DeepSeek API key?"),
+    );
+    view.stdin.write("\u001b[B");
+    view.stdin.write("\r");
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("DeepSeek credential deleted"),
+    );
+
+    expect(credentialRequests).toEqual([
+      {
+        provider: "deepseek",
+        action: "replace",
+        api_key: secret,
+        allow_unverified: false,
+      },
+      { provider: "deepseek", action: "delete" },
+    ]);
+    expect(view.lastFrame()).toContain("Message");
+  });
+
+  it("cancels secret entry with Esc and restores the Composer", async () => {
+    const controller = modelControllerWithoutCredential();
+    const store = createSurfaceStore();
+    store.dispatch({
+      type: "hydrate.application",
+      application: applicationState(false),
+    });
+    const view = render(
+      <App store={store} controller={controller} width={80} />,
+    );
 
     view.stdin.write("/model");
     view.stdin.write("\r");
@@ -124,17 +297,77 @@ describe("Provider setup flow", () => {
     await eventually(() =>
       expect(view.lastFrame()).toContain("DeepSeek API Key"),
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    view.stdin.write(secret);
-    await eventually(() => expect(view.lastFrame()).toContain("•"));
-    expect(view.lastFrame()).not.toContain(secret);
-    view.stdin.write("\r");
-    await eventually(() =>
-      expect(view.lastFrame()).toContain("Select DeepSeek Model"),
-    );
-    expect(view.frames.join("\n")).not.toContain(secret);
+    view.stdin.write("\u001b");
+
+    await eventually(() => expect(view.lastFrame()).toContain("Message"));
+    expect(view.lastFrame()).not.toContain("DeepSeek API Key");
   });
 });
+
+async function openAuthProvider(
+  view: ReturnType<typeof render>,
+): Promise<void> {
+  view.stdin.write("/auth");
+  view.stdin.write("\r");
+  await eventually(() =>
+    expect(view.lastFrame()).toContain("Provider Authentication"),
+  );
+  view.stdin.write("\r");
+  await eventually(() =>
+    expect(view.lastFrame()).toContain("DeepSeek Authentication"),
+  );
+}
+
+function providerSelection(prompt: string) {
+  return {
+    prompt,
+    options: [
+      { value: "deepseek", label: "DeepSeek", selected: true },
+      { value: "kimi", label: "Kimi", selected: false },
+    ],
+  };
+}
+
+function secretPrompt(action: "add" | "replace") {
+  return {
+    provider: "deepseek" as const,
+    action,
+    label: "DeepSeek API Key",
+    environment_variable: "DEEPSEEK_API_KEY",
+    help_url: "https://example.com",
+  };
+}
+
+function modelControllerWithoutCredential(): CommandController {
+  return new CommandController({
+    request: async <Method extends MethodName>(
+      method: Method,
+      params: MethodParams[Method],
+    ) => {
+      if (method !== "command.execute") {
+        throw new Error(`Unexpected method ${method}`);
+      }
+      const arguments_ = "arguments" in params ? (params.arguments ?? []) : [];
+      return {
+        ok: true,
+        value:
+          arguments_.length === 0
+            ? {
+                status: "success",
+                content: "",
+                data: {},
+                selection: providerSelection("Select Provider"),
+              }
+            : {
+                status: "success",
+                content: "",
+                data: {},
+                secret_prompt: secretPrompt("add"),
+              },
+      } as never;
+    },
+  });
+}
 
 function applicationState(configured: boolean) {
   return {
@@ -144,9 +377,16 @@ function applicationState(configured: boolean) {
     workspace: { display_path: "E:\\workspace" },
     workspace_trusted: true,
     current_thread_id: "thread_1",
-    current_model: "deepseek/deepseek-chat",
+    model_identity: {
+      provider: "deepseek" as const,
+      configured_model: "deepseek/deepseek-v4-flash",
+      effective_model: "deepseek/deepseek-v4-flash",
+      runtime_name: "Awesome Agent" as const,
+      fallback_active: false,
+    },
     thinking_enabled: false,
     skill_mode: "auto",
+    permission_mode: "request_approval" as const,
     configuration_valid: true,
     secret_status: {
       deepseek_api_key: configured,

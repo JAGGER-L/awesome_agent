@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.application.commands import CommandResult
+from awesome_agent.application.commands import CommandIntent, CommandResult
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
@@ -25,12 +25,12 @@ from awesome_agent.application.contracts import (
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
+    ThreadReadResult,
     WorkspacePresentation,
 )
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
 from awesome_agent.protocol.jsonrpc import (
-    PROTOCOL_VERSION,
     JsonRpcDispatcher,
     event_notification,
     jsonrpc_error,
@@ -53,7 +53,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=PROTOCOL_VERSION,
+                protocol_version=1,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -82,16 +82,23 @@ class Facade:
         self.calls.append(("list", query))
         return ApplicationResult.success(ThreadListResult())
 
-    async def read_thread(self, query: ThreadReadQuery) -> object:
+    async def read_thread(
+        self, query: ThreadReadQuery
+    ) -> ApplicationResult[ThreadReadResult]:
         self.calls.append(("read", query))
         raise RuntimeError("private database traceback")
 
     async def submit_turn(
-        self, thread_id: str, content: str
+        self, thread_id: str, content: str, client_message_id: str
     ) -> ApplicationResult[OperationAccepted]:
-        self.calls.append(("turn", (thread_id, content)))
+        self.calls.append(("turn", (thread_id, content, client_message_id)))
         return ApplicationResult.success(
-            OperationAccepted(operation_id="operation_1", thread_id=thread_id)
+            OperationAccepted(
+                operation_id="operation_1",
+                thread_id=thread_id,
+                turn_id="turn_1",
+                client_message_id=client_message_id,
+            )
         )
 
     async def execute_direct(
@@ -104,7 +111,9 @@ class Facade:
             OperationAccepted(operation_id="operation_2", thread_id=thread_id)
         )
 
-    async def execute_command(self, intent: object) -> ApplicationResult[CommandResult]:
+    async def execute_command(
+        self, intent: CommandIntent
+    ) -> ApplicationResult[CommandResult]:
         self.calls.append(("command", intent))
         return ApplicationResult.failure(
             ProductError(
@@ -120,7 +129,7 @@ class Facade:
         return ApplicationResult.success(
             ProviderCredentialSetResult(
                 provider=request.provider,
-                status=ProviderCredentialSetStatus.SAVED,
+                status=ProviderCredentialSetStatus.CONFIGURED,
                 source=CredentialSource.USER_ENV_FILE,
                 code="credential_saved",
             )
@@ -174,7 +183,11 @@ def test_dispatcher_exposes_exact_protocol_v1_method_table() -> None:
         ("thread.list", {}, "list"),
         (
             "turn.submit",
-            {"thread_id": "thread_1", "content": "inspect"},
+            {
+                "thread_id": "thread_1",
+                "content": "inspect",
+                "client_message_id": "client_1",
+            },
             "turn",
         ),
         (
@@ -191,6 +204,7 @@ def test_dispatcher_exposes_exact_protocol_v1_method_table() -> None:
             "provider.credential.set",
             {
                 "provider": "deepseek",
+                "action": "add",
                 "api_key": "never-render-this",
                 "allow_unverified": False,
             },
@@ -240,7 +254,7 @@ async def test_credential_rpc_is_strict_and_never_echoes_secret() -> None:
             "jsonrpc": "2.0",
             "id": 1,
             "method": "provider.credential.set",
-            "params": {"provider": "kimi", "api_key": secret},
+            "params": {"provider": "kimi", "action": "add", "api_key": secret},
         }
     )
     invalid = await dispatcher.dispatch(
@@ -248,11 +262,18 @@ async def test_credential_rpc_is_strict_and_never_echoes_secret() -> None:
             "jsonrpc": "2.0",
             "id": 2,
             "method": "provider.credential.set",
-            "params": {"provider": "kimi", "api_key": secret, "extra": True},
+            "params": {
+                "provider": "kimi",
+                "action": "add",
+                "api_key": secret,
+                "extra": True,
+            },
         }
     )
 
-    assert response is not None and response["result"]["value"]["status"] == "saved"
+    assert (
+        response is not None and response["result"]["value"]["status"] == "configured"
+    )
     assert secret not in str(response)
     assert secret not in repr(facade.calls)
     assert invalid is not None and invalid["error"]["code"] == -32602
@@ -394,6 +415,8 @@ async def test_product_error_is_result_and_internal_error_is_redacted() -> None:
         }
     )
 
+    assert product is not None
+    assert internal is not None
     assert product["result"]["ok"] is False
     assert product["result"]["error"]["code"] == "invalid_arguments"
     assert "error" not in product

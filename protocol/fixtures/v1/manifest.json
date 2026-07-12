@@ -15,6 +15,7 @@
     "memory": "application",
     "model": "application",
     "new": "application",
+    "permissions": "application",
     "quit": "ink",
     "redo": "application",
     "resume": "application",
@@ -56,11 +57,11 @@
     "warning"
   ],
   "files": {
-    "commands.json": "678456929a056682b1c83e8246582ad204f951d66ecbb19b350190042cdc569e",
+    "commands.json": "bb31de5367b1660304f69eb4257e4735e1f8e46104f61df89ecc0f6dd47cd592",
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
-    "events.valid.json": "520ec219ae2f12875af2ca9729116f48927b554b57e1ef5c3c70dad73c5f9133",
-    "methods.invalid.json": "967aacbc8630e270fd752799094a68c1295101fe58153d2675aedf3c856a4134",
-    "methods.valid.json": "a386fb2c6473b59f96549b3d3cf137119a69bc78c78a9e49db6f6b92a85a2024",
+    "events.valid.json": "9ebd3de90accfa08c4c64951c40faa776a4ffe0405d45e45bb8f9b248e1bf2a6",
+    "methods.invalid.json": "5cb2dfb9dbcfea9cacbebe058cfe7850d5a2c346c0e4dedb000bf07a3275ccd0",
+    "methods.valid.json": "97a8ada77471dbcfcffae44f7d9737ddc7b6129ccbcbbe91736d4abceacdb382",
     "results.failures.json": "f9f79a3a1cc5f92a65f871877baced63dc4454b635b5e4120031059d39af1f6e"
   },
   "fixture_version": 1,
@@ -77,6 +78,6 @@
     "operation.cancel",
     "shutdown"
   ],
-  "product_version": "1.0.0",
+  "product_version": "1.1.0",
   "protocol_version": 1
 }

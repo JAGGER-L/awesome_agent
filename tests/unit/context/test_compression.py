@@ -21,8 +21,10 @@ from awesome_agent.conversation import (
 )
 from awesome_agent.modeling import (
     AssistantMessage,
+    ModelRequest,
     ModelTurn,
     ModelUsage,
+    SelectedModel,
     StopReason,
 )
 
@@ -46,6 +48,7 @@ def _view(turn_count: int, summary: ThreadSummary | None = None) -> ThreadView:
             sequence=sequence,
             kind=ThreadEntryKind.USER_MESSAGE,
             content=f"question {index}",
+            client_message_id=f"client_{index}",
             created_at=now,
         )
         assistant = ThreadEntry(
@@ -116,9 +119,11 @@ def test_second_plan_uses_previous_summary_and_only_new_entries() -> None:
 class FakeGateway:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
-        self.requests: list[object] = []
+        self.requests: list[ModelRequest] = []
 
-    async def complete(self, selected: object, request: object) -> ModelTurn:
+    async def complete(
+        self, selected: SelectedModel, request: ModelRequest
+    ) -> ModelTurn:
         del selected
         self.requests.append(request)
         if self.fail:
@@ -150,7 +155,7 @@ async def test_compressor_uses_tools_disabled_and_returns_usage() -> None:
     assert result.summary.covered_turn_count == 1
     assert result.usage.input_tokens == 20
     request = gateway.requests[0]
-    assert request.tools == ()  # type: ignore[union-attr]
+    assert request.tools == ()
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,10 @@ from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
+    PermissionMode,
+    PermissionSession,
+    ToolApprovalDecision,
+    ToolApprovalRequest,
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolRequest,
@@ -102,8 +106,14 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     registry = ToolRegistry()
     register_read_tools(registry)
 
-    async def submit_turn(thread_id: str, content: str) -> object:
-        return {"thread_id": thread_id, "content": content}
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        return {
+            "thread_id": thread_id,
+            "content": content,
+            "client_message_id": client_message_id,
+        }
 
     extensions = ApplicationExtensionService(
         conversation=conversation,
@@ -132,6 +142,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
             skill_mode=configured_thread.skill_mode,
             budgets=BudgetConfig(),
         ),
+        client_message_id="client_skills",
     )
     context_service = ApplicationContextService(
         conversation=conversation,
@@ -171,6 +182,10 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     assert manager.status("broken").state is McpConnectionState.ERROR
 
     sink = CollectingEventSink()
+
+    async def approve(_: ToolApprovalRequest) -> ToolApprovalDecision:
+        return ToolApprovalDecision.ALLOW_ONCE
+
     result = await ToolExecutor(registry).execute(
         ToolRequest(
             call_id="call_echo",
@@ -190,6 +205,8 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
             ),
             activity_writer=repositories.tool_activities,
             monotonic=time.monotonic,
+            permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
+            approval_resolver=approve,
         ),
     )
     assert result.status is ToolStatus.SUCCESS
@@ -229,7 +246,11 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         CommandIntent(name=CommandName.MCP, arguments=("status", "fixture")),
         thread_id=thread.id,
     )
-    assert status_result.data["servers"][0]["state"] == "connected"
+    servers = status_result.data["servers"]
+    assert isinstance(servers, list)
+    first_server = servers[0]
+    assert isinstance(first_server, dict)
+    assert first_server["state"] == "connected"
     disabled = await restarted_extensions.handle(
         CommandIntent(name=CommandName.MCP, arguments=("disable", "fixture")),
         thread_id=thread.id,
@@ -284,7 +305,10 @@ async def test_skill_commands_select_one_skill_and_submit_a_normal_turn(
     thread = conversation.create_thread("workspace")
     submitted: list[tuple[str, str]] = []
 
-    async def submit_turn(thread_id: str, content: str) -> object:
+    async def submit_turn(
+        thread_id: str, content: str, client_message_id: str
+    ) -> object:
+        del client_message_id
         submitted.append((thread_id, content))
         return {"operation_id": "operation"}
 
@@ -317,7 +341,9 @@ async def test_skill_commands_select_one_skill_and_submit_a_normal_turn(
         thread_id=thread.id,
     )
 
-    assert len(listed.data["effective"]) == 5
+    effective = listed.data["effective"]
+    assert isinstance(effective, list)
+    assert len(effective) == 5
     assert picker.selection is not None
     assert {option.value for option in picker.selection.options} == {
         "auto",

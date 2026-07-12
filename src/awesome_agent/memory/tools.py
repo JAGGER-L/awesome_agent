@@ -67,6 +67,7 @@ def refresh_local_memory_tools(
             name="memory_list",
             description="List visible local memory entries and their current hash.",
             input_schema=MemoryListArguments.model_json_schema(),
+            capability="memory.read",
             read_only=True,
             display_metadata={"category": "agent_core"},
         ),
@@ -81,6 +82,7 @@ def refresh_local_memory_tools(
                 "to remember it. Requires the last observed hash."
             ),
             input_schema=MemoryAddArguments.model_json_schema(),
+            capability="memory.write",
             read_only=False,
             display_metadata={"category": "agent_core"},
         ),
@@ -95,6 +97,7 @@ def refresh_local_memory_tools(
                 "request. Requires its ID and last observed hash."
             ),
             input_schema=MemoryReplaceArguments.model_json_schema(),
+            capability="memory.write",
             read_only=False,
             display_metadata={"category": "agent_core"},
         ),
@@ -109,6 +112,7 @@ def refresh_local_memory_tools(
                 "request. Requires its ID and last observed hash."
             ),
             input_schema=MemoryRemoveArguments.model_json_schema(),
+            capability="memory.write",
             read_only=False,
             display_metadata={"category": "agent_core"},
         ),

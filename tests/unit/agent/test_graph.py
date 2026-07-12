@@ -5,15 +5,18 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError, NodeCancelledError
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
+    AgentState,
     PreparedAgentContext,
     TurnBudget,
     compile_agent_graph,
     new_agent_state,
+    validate_agent_state,
 )
 from awesome_agent.core.tools import (
     ToolError,
@@ -105,6 +108,9 @@ class FakeProjector:
     async def project_warning(self, *, code: str, message: str) -> None:
         del code, message
 
+    async def project_memory_status(self, *, enabled: bool, status: str) -> None:
+        del enabled, status
+
 
 def _completed(
     content: str,
@@ -144,12 +150,14 @@ def _runtime(
                 name="read_file",
                 description="Read a file",
                 input_schema={"type": "object"},
+                capability="workspace.read",
                 read_only=True,
             ),
             ToolSpec(
                 name="edit_file",
                 description="Edit a file",
                 input_schema={"type": "object"},
+                capability="workspace.write",
                 read_only=False,
             ),
         ),
@@ -170,33 +178,34 @@ class _Monotonic:
         return self._value
 
 
-def _state() -> dict[str, object]:
-    return dict(
-        new_agent_state(
-            thread_id="thread_1",
-            turn_id="turn_1",
-            workspace_key="workspace_1",
-            provider="deepseek",
-            model="deepseek/deepseek-v4-flash",
-            thinking_enabled=False,
-        )
+def _state() -> AgentState:
+    return new_agent_state(
+        thread_id="thread_1",
+        turn_id="turn_1",
+        workspace_key="workspace_1",
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+        thinking_enabled=False,
     )
 
 
 async def _invoke(
     runtime: AgentRuntimeContext,
     *,
-    state: dict[str, object] | None = None,
+    state: AgentState | None = None,
     recursion_limit: int = 2_048,
-) -> dict[str, object]:
+) -> AgentState:
     graph = compile_agent_graph(InMemorySaver())
-    return await graph.ainvoke(
-        state or _state(),
-        config={
-            "configurable": {"thread_id": "turn_1"},
-            "recursion_limit": recursion_limit,
-        },
-        context=runtime,
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "turn_1"},
+        "recursion_limit": recursion_limit,
+    }
+    return validate_agent_state(
+        await graph.ainvoke(
+            state or _state(),
+            config=config,
+            context=runtime,
+        )
     )
 
 
@@ -237,6 +246,73 @@ async def test_three_tools_execute_in_provider_order_one_per_node() -> None:
         "call_1",
         "call_2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_create_only_executes_the_requested_write_then_stops() -> None:
+    write = ToolCall(
+        call_id="call_write",
+        name="write_file",
+        arguments_json='{"path":"circle_area.py","content":"pass\\n"}',
+    )
+    gateway = FakeGateway(
+        ((_completed("", tool_calls=(write,)),), (_completed("Created the file."),))
+    )
+    executor = FakeExecutor()
+
+    result = await _invoke(_runtime(gateway, executor))
+
+    assert [request.tool_name for request in executor.requests] == ["write_file"]
+    assert len(gateway.requests) == 2
+    assert result["final_answer"] == "Created the file."
+
+
+@pytest.mark.asyncio
+async def test_tool_failure_is_observed_before_one_corrected_tool_call() -> None:
+    first = ToolCall(
+        call_id="call_read",
+        name="read_file",
+        arguments_json="{}",
+    )
+    corrected = ToolCall(
+        call_id="call_edit",
+        name="edit_file",
+        arguments_json="{}",
+    )
+    failure = ToolResult(
+        call_id="call_read",
+        tool_name="read_file",
+        status=ToolStatus.ERROR,
+        content="not found",
+        error=ToolError(code=ToolErrorCode.NOT_FOUND, message="not found"),
+    )
+    success = ToolResult(
+        call_id="call_edit",
+        tool_name="edit_file",
+        status=ToolStatus.SUCCESS,
+        content="edited",
+    )
+    gateway = FakeGateway(
+        (
+            (_completed("", tool_calls=(first,)),),
+            (_completed("", tool_calls=(corrected,)),),
+            (_completed("done"),),
+        )
+    )
+
+    executor = FakeExecutor((failure, success))
+    await _invoke(_runtime(gateway, executor))
+
+    assert [request.call_id for request in executor.requests] == [
+        "call_read",
+        "call_edit",
+    ]
+    first_observation = gateway.requests[1].messages[-1]
+    corrected_observation = gateway.requests[2].messages[-1]
+    assert first_observation.role == "tool"
+    assert corrected_observation.role == "tool"
+    assert first_observation.call_id == "call_read"
+    assert corrected_observation.call_id == "call_edit"
 
 
 @pytest.mark.asyncio
@@ -354,7 +430,7 @@ async def test_zero_retry_and_compression_budgets_still_allow_normal_calls() -> 
 
 @pytest.mark.asyncio
 async def test_graph_does_not_mutate_caller_owned_state_lists() -> None:
-    initial = cast(dict[str, object], _state())
+    initial = _state()
     original_messages = list(cast(list[object], initial["messages"]))
 
     await _invoke(_runtime(FakeGateway(((_completed("done"),),))), state=initial)

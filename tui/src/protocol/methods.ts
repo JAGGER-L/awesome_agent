@@ -9,11 +9,15 @@ import {
   utcTimestampSchema,
 } from "./base.js";
 import { commandIntentSchema, commandResultSchema } from "./commands.js";
+import { modelIdentitySchema } from "./identity.js";
 
 const nonNegativeIntegerSchema = safeIntegerSchema.min(0);
 const positiveIntegerSchema = safeIntegerSchema.min(1);
 const emptyParamsSchema = z.strictObject({});
 const identifierSchema = boundedText(1, 128);
+const clientMessageIdentifierSchema = identifierSchema.regex(
+  /^client_[A-Za-z0-9_-]+$/,
+);
 
 export const workspacePresentationSchema = z.strictObject({
   display_path: boundedText(1, 4_096),
@@ -65,11 +69,12 @@ export const applicationStateSchema = z.strictObject({
   workspace: workspacePresentationSchema,
   workspace_trusted: z.boolean(),
   current_thread_id: identifierSchema.optional(),
-  current_model: boundedText(0, 200).optional(),
+  model_identity: modelIdentitySchema.optional(),
   thinking_enabled: z.boolean(),
   skill_mode: boundedText(1, 64),
   active_operation_id: identifierSchema.optional(),
   pending_interaction_id: identifierSchema.optional(),
+  permission_mode: z.enum(["request_approval", "full_access"]),
   configuration_valid: z.boolean(),
   secret_status: secretStatusSchema,
   provider_credentials: providerCredentialStatusesSchema,
@@ -97,10 +102,17 @@ export const threadEntrySchema = z
     sequence: positiveIntegerSchema,
     kind: z.enum(["user_message", "assistant_message", "direct_command"]),
     content: boundedText(0, 200_000),
+    client_message_id: clientMessageIdentifierSchema.optional(),
     metadata: z.record(z.string(), jsonValueSchema),
     created_at: utcTimestampSchema,
   })
-  .superRefine(({ kind, content }, context) => {
+  .superRefine(({ kind, content, client_message_id }, context) => {
+    if ((kind === "user_message") !== (client_message_id !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "User message identity and entry kind disagree",
+      });
+    }
     if (kind === "direct_command" && Array.from(content).length > 30_000) {
       context.addIssue({
         code: "custom",
@@ -273,6 +285,12 @@ const operationAcceptedSchema = z.strictObject({
   operation_id: identifierSchema,
   thread_id: identifierSchema.optional(),
   turn_id: identifierSchema.optional(),
+  client_message_id: clientMessageIdentifierSchema.optional(),
+});
+const turnOperationAcceptedSchema = operationAcceptedSchema.extend({
+  thread_id: identifierSchema,
+  turn_id: identifierSchema,
+  client_message_id: clientMessageIdentifierSchema,
 });
 const interactionResultSchema = z.strictObject({
   accepted: z.boolean(),
@@ -286,7 +304,13 @@ const cancelResultSchema = z.strictObject({
 const shutdownResultSchema = z.strictObject({ stopped: z.literal(true) });
 export const providerCredentialSetResultSchema = z.strictObject({
   provider: z.enum(["deepseek", "kimi"]),
-  status: z.enum(["saved", "invalid", "confirm_unverified"]),
+  status: z.enum([
+    "configured",
+    "deleted",
+    "invalid",
+    "confirm_unverified",
+    "environment_managed",
+  ]),
   source: credentialSourceSchema,
   code: boundedText(1, 128),
 });
@@ -316,9 +340,10 @@ export const methodSchemas = {
     params: z.strictObject({
       thread_id: identifierSchema,
       content: boundedText(1, 200_000),
+      client_message_id: clientMessageIdentifierSchema,
     }),
-    value: operationAcceptedSchema,
-    result: applicationResultSchema(operationAcceptedSchema),
+    value: turnOperationAcceptedSchema,
+    result: applicationResultSchema(turnOperationAcceptedSchema),
   },
   "direct.execute": {
     params: z.strictObject({
@@ -334,11 +359,26 @@ export const methodSchemas = {
     result: applicationResultSchema(commandResultSchema),
   },
   "provider.credential.set": {
-    params: z.strictObject({
-      provider: z.enum(["deepseek", "kimi"]),
-      api_key: boundedText(1, 20_000),
-      allow_unverified: z.boolean().optional(),
-    }),
+    params: z
+      .strictObject({
+        provider: z.enum(["deepseek", "kimi"]),
+        action: z.enum(["add", "replace", "delete"]),
+        api_key: boundedText(1, 20_000).optional(),
+        allow_unverified: z.boolean().optional(),
+      })
+      .superRefine(({ action, api_key, allow_unverified }, context) => {
+        if (action === "delete" && (api_key || allow_unverified)) {
+          context.addIssue({
+            code: "custom",
+            message: "Delete does not accept credential content",
+          });
+        } else if (action !== "delete" && !api_key) {
+          context.addIssue({
+            code: "custom",
+            message: "Credential content is required",
+          });
+        }
+      }),
     value: providerCredentialSetResultSchema,
     result: applicationResultSchema(providerCredentialSetResultSchema),
   },
