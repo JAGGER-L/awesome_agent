@@ -109,6 +109,21 @@ describe("resolveTheme", () => {
     expect(light).toMatchObject(lightAurora);
   });
 
+  it("keeps every light text role at WCAG AA contrast on white", () => {
+    for (const value of [
+      lightAurora.brand,
+      lightAurora.primary,
+      lightAurora.secondary,
+      lightAurora.border,
+      lightAurora.user,
+      lightAurora.tool,
+      lightAurora.assistant,
+      lightAurora.muted,
+    ]) {
+      expect(contrastOnWhite(value)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it("maps Aurora Mist into xterm cube and 16-color roles", () => {
     expect(resolveTheme("dark", "ansi256").logoRows).toEqual([
       "#D7FFD7",
@@ -144,3 +159,20 @@ describe("resolveTheme", () => {
     ]);
   });
 });
+
+function contrastOnWhite(value: string): number {
+  const channels = [1, 3, 5].map((offset) =>
+    Number.parseInt(value.slice(offset, offset + 2), 16),
+  );
+  const luminance = channels
+    .map((channel) => channel / 255)
+    .map((channel) =>
+      channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+    )
+    .reduce(
+      (sum, channel, index) =>
+        sum + channel * ([0.2126, 0.7152, 0.0722][index] ?? 0),
+      0,
+    );
+  return 1.05 / (luminance + 0.05);
+}
