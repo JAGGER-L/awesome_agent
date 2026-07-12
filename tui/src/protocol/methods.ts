@@ -80,7 +80,7 @@ export const applicationStateSchema = z.strictObject({
   provider_credentials: providerCredentialStatusesSchema,
   memory_status: z.record(z.string(), jsonValueSchema),
   mcp_status: z.array(z.record(z.string(), jsonValueSchema)),
-  usage: z.record(z.string(), nonNegativeIntegerSchema),
+  usage: z.record(z.string(), z.number().finite().min(0)),
   configuration_diagnostics: z.array(z.string()),
 });
 

@@ -28,6 +28,10 @@ import {
   type FatalState,
   RenderFailure,
 } from "../lifecycle/fatal.js";
+import {
+  ReconnectController,
+  type ReconnectContext,
+} from "../lifecycle/reconnect.js";
 import { InteractionController } from "../lifecycle/interactions.js";
 import {
   routeTerminalKey,
@@ -80,6 +84,7 @@ export type StartupRenderState =
 
 export interface CliRenderRequest {
   readonly surface: ConnectedSurface;
+  readonly coreExecutable: string;
   readonly intent: LaunchIntent;
   readonly state: StartupRenderState;
   readonly cwd: string;
@@ -181,6 +186,7 @@ export async function runCli(
   try {
     const outcome = await dependencies.renderApplication({
       surface,
+      coreExecutable: dependencies.coreExecutable,
       intent,
       state,
       cwd,
@@ -318,9 +324,11 @@ function StartupFatalApplication({
 }
 
 function RunningCliApplication({
-  surface,
+  surface: initialSurface,
+  coreExecutable,
   intent,
   state: { startup: initialStartup },
+  cwd,
   env,
   stdoutIsTTY,
   stdoutColorDepth,
@@ -333,6 +341,7 @@ function RunningCliApplication({
 }: CliApplicationProps & {
   readonly state: Extract<StartupRenderState, { kind: "startup" }>;
 }) {
+  const [surface, setSurface] = useState(initialSurface);
   const [startup, setStartup] = useState(initialStartup);
   const terminal = useTerminalUi(initialStartupUi(initialStartup));
   const terminalUi = terminal.state;
@@ -340,6 +349,7 @@ function RunningCliApplication({
   const dispatchTerminal = terminal.dispatch;
   const [themePreference, setThemePreference] = useState(initialTheme);
   const [fatal, setFatal] = useState<FatalState>();
+  const [reconnecting, setReconnecting] = useState(false);
   const state = useSyncExternalStore(
     surface.store.subscribe,
     surface.store.getState,
@@ -410,6 +420,16 @@ function RunningCliApplication({
       }),
     [awesomeHome, clipboard, surface, themePreference],
   );
+  const reconnectController = useMemo(
+    () =>
+      new ReconnectController({
+        executable: coreExecutable,
+        env,
+        committedBlocks: () =>
+          surface.store.getState().committed_transcript ?? [],
+      }),
+    [coreExecutable, env, surface],
+  );
 
   if (!fatal && state.core_exit) {
     const classified = toFatalState(
@@ -458,6 +478,40 @@ function RunningCliApplication({
     [dispatchTerminal, intent, requestExit, startup, surface],
   );
 
+  const reconnectSurface = useCallback(async () => {
+    if (reconnecting) return;
+    const threadId = surface.store.getState().application?.current_thread_id;
+    if (!threadId) {
+      setFatal({
+        kind: "protocol",
+        message: "Reconnect requires an active Thread.",
+        diagnosticCode: "thread_not_selected",
+      });
+      return;
+    }
+    setReconnecting(true);
+    try {
+      await reconnectAndReplaceSurface(
+        surface,
+        reconnectController,
+        { cwd, threadId },
+        setSurface,
+      );
+      setFatal(undefined);
+      dispatchTerminal({ type: "mode.cancel" });
+    } catch (error) {
+      const classified = toFatalState(error, surface.session);
+      setFatal(
+        classified ?? {
+          kind: "render",
+          message: "Reconnect failed unexpectedly.",
+        },
+      );
+    } finally {
+      setReconnecting(false);
+    }
+  }, [cwd, dispatchTerminal, reconnectController, reconnecting, surface]);
+
   const handleStartupInput = useCallback(
     (input: string, key: TerminalKey) => {
       const routed = routeTerminalKey(terminalUiRef.current, input, key);
@@ -477,8 +531,12 @@ function RunningCliApplication({
       if (routed.type !== "selection.confirm") return;
       const mode = terminalUiRef.current.mode;
       if (mode.kind === "fatal") {
-        if (mode.selected === 0) return;
-        void requestExit("quit_command");
+        void executeFatalRecoverySelection(mode.selected, {
+          reconnect: reconnectSurface,
+          quit: async () => {
+            await requestExit("quit_command");
+          },
+        });
         return;
       }
       if (
@@ -504,6 +562,7 @@ function RunningCliApplication({
     [
       dispatchTerminal,
       requestExit,
+      reconnectSurface,
       startup,
       submitStartupTrust,
       surface,
@@ -531,6 +590,7 @@ function RunningCliApplication({
         {renderFailure ? (
           <FatalScreen
             fatal={renderFailure}
+            disabled={reconnecting}
             selected={
               terminalUi.mode.kind === "fatal" ? terminalUi.mode.selected : 0
             }
@@ -611,6 +671,37 @@ function RunningCliApplication({
       </AppErrorBoundary>
     </ThemeProvider>
   );
+}
+
+export async function executeFatalRecoverySelection(
+  selected: number,
+  actions: {
+    readonly reconnect: () => Promise<void>;
+    readonly quit: () => Promise<void>;
+  },
+): Promise<void> {
+  if (selected === 0) {
+    await actions.reconnect();
+    return;
+  }
+  await actions.quit();
+}
+
+export async function reconnectAndReplaceSurface(
+  current: Pick<ConnectedSurface, "close">,
+  recovery: Pick<ReconnectController, "reconnect">,
+  context: ReconnectContext,
+  replace: (surface: ConnectedSurface) => void,
+): Promise<ConnectedSurface> {
+  const connected = await recovery.reconnect(context);
+  try {
+    await current.close();
+  } catch (error) {
+    await connected.close();
+    throw error;
+  }
+  replace(connected);
+  return connected;
 }
 
 function memoryEnabled(

@@ -43,6 +43,7 @@ def test_status_snapshot_is_exact_and_resume_friendly() -> None:
     )
 
     assert snapshot.thread_display_id == "thread_3f8a1c2d"
+    assert snapshot.model_dump(mode="json")["model_identity"]["fallback_from"] is None
     assert set(snapshot.model_dump(mode="json")) == {
         "version",
         "workspace_path",
