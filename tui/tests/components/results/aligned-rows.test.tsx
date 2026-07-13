@@ -11,6 +11,7 @@ describe("aligned result rows", () => {
       render(
         <AlignedRows
           width={width}
+          valueAlignment="end"
           rows={[
             { label: "A", value: "1" },
             { label: "Long label", value: "22" },
@@ -34,6 +35,7 @@ describe("aligned result rows", () => {
       render(
         <AlignedRows
           width={80}
+          valueAlignment="start"
           rows={[
             { label: "Check", value: "OK" },
             { label: "Check", value: "Missing" },
@@ -48,14 +50,31 @@ describe("aligned result rows", () => {
       render(
         <AlignedRows
           width={30}
+          valueAlignment="start"
           rows={[
             { label: "Workspace", value: "E:/projects/an-important-workspace" },
           ]}
         />,
       ).lastFrame() ?? "";
     expect(frame).toContain("Workspace");
-    expect(frame.replaceAll("\n", "")).toContain(
+    expect(frame.replace(/\s/gu, "")).toContain(
       "E:/projects/an-important-workspace",
     );
+  });
+
+  it("starts descriptive values in one stable column", () => {
+    const lines = (
+      render(
+        <AlignedRows
+          width={80}
+          valueAlignment="start"
+          rows={[
+            { label: "Model", value: "deepseek/deepseek-v4-flash" },
+            { label: "Workspace", value: "E:/projects/awesome" },
+          ]}
+        />,
+      ).lastFrame() ?? ""
+    ).split("\n");
+    expect(lines[0]?.indexOf("deepseek")).toBe(lines[1]?.indexOf("E:/"));
   });
 });

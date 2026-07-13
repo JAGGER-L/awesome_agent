@@ -7,11 +7,14 @@ export interface PresentationRow {
   readonly status?: "normal" | "success" | "warning" | "danger";
 }
 
+export type ValueAlignment = "start" | "end";
+
 export type CommandPresentation =
   | {
       readonly kind: "panel";
       readonly title: string;
       readonly rows: readonly PresentationRow[];
+      readonly valueAlignment: ValueAlignment;
       readonly tone: "info" | "success" | "warning" | "danger";
     }
   | {
@@ -65,6 +68,7 @@ export function presentHelpResult(result: HelpResult): CommandPresentation {
       label: row.usage,
       value: row.description,
     })),
+    "start",
   );
 }
 
@@ -86,19 +90,23 @@ export function presentCommandPayload(
         tone: "success",
       };
     case "context":
-      return panel(title, [
-        ...(["instructions", "conversation", "files", "memory"] as const).map(
-          (name) => ({
-            label: humanize(name),
-            value: formatTokenCount(
-              payload.categories.find((category) => category.name === name)
-                ?.estimated_tokens ?? 0,
-            ),
-          }),
-        ),
-        { label: "Total", value: formatTokenCount(payload.total_tokens) },
-        { label: "Budget", value: formatTokenCount(payload.budget_tokens) },
-      ]);
+      return panel(
+        title,
+        [
+          ...(["instructions", "conversation", "files", "memory"] as const).map(
+            (name) => ({
+              label: humanize(name),
+              value: formatTokenCount(
+                payload.categories.find((category) => category.name === name)
+                  ?.estimated_tokens ?? 0,
+              ),
+            }),
+          ),
+          { label: "Total", value: formatTokenCount(payload.total_tokens) },
+          { label: "Budget", value: formatTokenCount(payload.budget_tokens) },
+        ],
+        "end",
+      );
     case "compact":
       return {
         kind: "progress",
@@ -149,20 +157,25 @@ export function presentCommandPayload(
               value: tool.approval_required ? "Approval required" : "Enabled",
               status: tool.approval_required ? "warning" : "success",
             })),
+            "end",
           );
     case "skills":
-      return panel(title, [
-        { label: "Active", value: payload.active_mode },
-        ...payload.skills.map((skill) => ({
-          label: skill.name,
-          value: skill.description,
-        })),
-        ...payload.diagnostics.map((diagnostic) => ({
-          label: diagnostic.name ?? diagnostic.code,
-          value: diagnostic.message,
-          status: "warning" as const,
-        })),
-      ]);
+      return panel(
+        title,
+        [
+          { label: "Active", value: payload.active_mode },
+          ...payload.skills.map((skill) => ({
+            label: skill.name,
+            value: skill.description,
+          })),
+          ...payload.diagnostics.map((diagnostic) => ({
+            label: diagnostic.name ?? diagnostic.code,
+            value: diagnostic.message,
+            status: "warning" as const,
+          })),
+        ],
+        "start",
+      );
     case "mcp":
       return payload.servers.length === 0
         ? { kind: "empty", title, message: "No MCP servers configured" }
@@ -173,15 +186,20 @@ export function presentCommandPayload(
               value: server.detail ?? humanize(server.state),
               status: server.state === "error" ? "danger" : "normal",
             })),
+            "start",
           );
     case "memory_status":
-      return panel(title, [
-        { label: "Local", value: payload.local_enabled ? "On" : "Off" },
-        {
-          label: "Cloud · Mem0",
-          value: payload.cloud_enabled ? "On" : "Off",
-        },
-      ]);
+      return panel(
+        title,
+        [
+          { label: "Local", value: payload.local_enabled ? "On" : "Off" },
+          {
+            label: "Cloud · Mem0",
+            value: payload.cloud_enabled ? "On" : "Off",
+          },
+        ],
+        "end",
+      );
     case "memory_document":
       return payload.entries.length === 0
         ? { kind: "empty", title, message: "No memories" }
@@ -191,6 +209,7 @@ export function presentCommandPayload(
               label: entry.id,
               value: entry.content,
             })),
+            "start",
           );
     case "memory_search":
       return payload.memories.length === 0
@@ -201,88 +220,104 @@ export function presentCommandPayload(
               label: memory.scope,
               value: memory.content,
             })),
+            "start",
           );
     case "memory_mutation":
-      return panel(title, [
-        { label: "Provider", value: humanize(payload.provider) },
-        { label: "Status", value: humanize(payload.status) },
-      ]);
+      return panel(
+        title,
+        [
+          { label: "Provider", value: humanize(payload.provider) },
+          { label: "Status", value: humanize(payload.status) },
+        ],
+        "start",
+      );
     case "status": {
       const snapshot = payload.snapshot;
-      return panel(title, [
-        { label: "Version", value: snapshot.version },
-        { label: "Workspace", value: snapshot.workspace_path },
-        {
-          label: "Thread",
-          value: `${snapshot.thread_title} · ${snapshot.thread_display_id}`,
-        },
-        { label: "Model", value: snapshot.model_identity.effective_model },
-        { label: "Credentials", value: statusCredential(snapshot) },
-        { label: "Permissions", value: humanize(snapshot.permission_mode) },
-        {
-          label: "Context",
-          value: `${formatTokenCount(snapshot.context_used_tokens)} / ${formatTokenCount(snapshot.context_budget_tokens)}`,
-        },
-        { label: "Thinking", value: snapshot.thinking_enabled ? "On" : "Off" },
-        { label: "Skill", value: humanize(snapshot.skill_mode) },
-        {
-          label: "Memory",
-          value: `Local ${snapshot.local_memory_enabled ? "On" : "Off"} · Cloud Mem0 ${snapshot.mem0_enabled ? "On" : "Off"}`,
-        },
-        {
-          label: "MCP",
-          value: `${snapshot.mcp_ready} ready · ${snapshot.mcp_degraded} degraded`,
-        },
-        {
-          label: "Operation",
-          value:
-            snapshot.operation_status === "idle"
-              ? "Idle"
-              : `Active · ${snapshot.operation_id ?? "Unknown"}`,
-        },
-        {
-          label: "Changes",
-          value:
-            snapshot.changed_file_count === 0
-              ? "None"
-              : `${snapshot.changed_file_count} ${snapshot.changed_file_count === 1 ? "file" : "files"} modified`,
-        },
-      ]);
+      return panel(
+        title,
+        [
+          { label: "Version", value: snapshot.version },
+          { label: "Workspace", value: snapshot.workspace_path },
+          {
+            label: "Thread",
+            value: `${snapshot.thread_title} · ${snapshot.thread_display_id}`,
+          },
+          { label: "Model", value: snapshot.model_identity.effective_model },
+          { label: "Credentials", value: statusCredential(snapshot) },
+          { label: "Permissions", value: humanize(snapshot.permission_mode) },
+          {
+            label: "Context",
+            value: `${formatTokenCount(snapshot.context_used_tokens)} / ${formatTokenCount(snapshot.context_budget_tokens)}`,
+          },
+          {
+            label: "Thinking",
+            value: snapshot.thinking_enabled ? "On" : "Off",
+          },
+          { label: "Skill", value: humanize(snapshot.skill_mode) },
+          {
+            label: "Memory",
+            value: `Local ${snapshot.local_memory_enabled ? "On" : "Off"} · Cloud Mem0 ${snapshot.mem0_enabled ? "On" : "Off"}`,
+          },
+          {
+            label: "MCP",
+            value: `${snapshot.mcp_ready} ready · ${snapshot.mcp_degraded} degraded`,
+          },
+          {
+            label: "Operation",
+            value:
+              snapshot.operation_status === "idle"
+                ? "Idle"
+                : `Active · ${snapshot.operation_id ?? "Unknown"}`,
+          },
+          {
+            label: "Changes",
+            value:
+              snapshot.changed_file_count === 0
+                ? "None"
+                : `${snapshot.changed_file_count} ${snapshot.changed_file_count === 1 ? "file" : "files"} modified`,
+          },
+        ],
+        "start",
+      );
     }
     case "usage":
-      return panel(title, [
-        {
-          label: "Input tokens",
-          value: formatTokenCount(payload.usage.input_tokens),
-        },
-        {
-          label: "Output tokens",
-          value: formatTokenCount(payload.usage.output_tokens),
-        },
-        {
-          label: "Reasoning tokens",
-          value: formatTokenCount(payload.usage.reasoning_tokens),
-        },
-        {
-          label: "Cache read tokens",
-          value: formatTokenCount(payload.usage.cache_read_tokens),
-        },
-        {
-          label: "Cache write tokens",
-          value: formatTokenCount(payload.usage.cache_write_tokens),
-        },
-        { label: "Model calls", value: `${payload.usage.model_calls}` },
-        { label: "Tool calls", value: `${payload.usage.tool_calls}` },
-        {
-          label: "Provider retries",
-          value: `${payload.usage.provider_retries}`,
-        },
-        { label: "Compressions", value: `${payload.usage.compressions}` },
-        {
-          label: "Active execution",
-          value: formatDuration(payload.usage.active_execution_seconds),
-        },
-      ]);
+      return panel(
+        title,
+        [
+          {
+            label: "Input tokens",
+            value: formatTokenCount(payload.usage.input_tokens),
+          },
+          {
+            label: "Output tokens",
+            value: formatTokenCount(payload.usage.output_tokens),
+          },
+          {
+            label: "Reasoning tokens",
+            value: formatTokenCount(payload.usage.reasoning_tokens),
+          },
+          {
+            label: "Cache read tokens",
+            value: formatTokenCount(payload.usage.cache_read_tokens),
+          },
+          {
+            label: "Cache write tokens",
+            value: formatTokenCount(payload.usage.cache_write_tokens),
+          },
+          { label: "Model calls", value: `${payload.usage.model_calls}` },
+          { label: "Tool calls", value: `${payload.usage.tool_calls}` },
+          {
+            label: "Provider retries",
+            value: `${payload.usage.provider_retries}`,
+          },
+          { label: "Compressions", value: `${payload.usage.compressions}` },
+          {
+            label: "Active execution",
+            value: formatDuration(payload.usage.active_execution_seconds),
+          },
+        ],
+        "end",
+      );
     case "doctor":
       return panel(
         title,
@@ -294,17 +329,25 @@ export function presentCommandPayload(
               ? "danger"
               : "normal",
         })),
+        "end",
       );
     case "config":
-      return panel(title, [
-        { label: "Sources", value: payload.sources.join(" → ") || "Defaults" },
-        {
-          label: "DeepSeek",
-          value: credentialState(payload.credentials.deepseek),
-        },
-        { label: "Kimi", value: credentialState(payload.credentials.kimi) },
-        { label: "Mem0", value: credentialState(payload.credentials.mem0) },
-      ]);
+      return panel(
+        title,
+        [
+          {
+            label: "Sources",
+            value: payload.sources.join(" → ") || "Defaults",
+          },
+          {
+            label: "DeepSeek",
+            value: credentialState(payload.credentials.deepseek),
+          },
+          { label: "Kimi", value: credentialState(payload.credentials.kimi) },
+          { label: "Mem0", value: credentialState(payload.credentials.mem0) },
+        ],
+        "start",
+      );
     case "permissions":
       return {
         kind: "notice",
@@ -327,9 +370,10 @@ export function presentCommandError(
 function panel(
   title: string,
   rows: readonly PresentationRow[],
+  valueAlignment: ValueAlignment,
   tone: "info" | "success" | "warning" | "danger" = "info",
 ): CommandPresentation {
-  return { kind: "panel", title, rows, tone };
+  return { kind: "panel", title, rows, valueAlignment, tone };
 }
 
 function statusCredential(

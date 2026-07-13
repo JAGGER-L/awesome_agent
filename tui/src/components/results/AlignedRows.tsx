@@ -1,19 +1,22 @@
 import { Box, Text } from "ink";
 
 import type { PresentationRow } from "../../commands/presenters.js";
+import { terminalDisplayWidth } from "../../layout/width.js";
 import { useTheme } from "../theme.js";
 
 export function AlignedRows({
   rows,
   width,
+  valueAlignment,
 }: {
   readonly rows: readonly PresentationRow[];
   readonly width: number;
+  readonly valueAlignment: "start" | "end";
 }) {
   const theme = useTheme();
   const availableWidth = Math.max(1, width - 4);
   const labelWidth = Math.min(
-    Math.max(0, ...rows.map((row) => row.label.length)),
+    Math.max(0, ...rows.map((row) => terminalDisplayWidth(row.label))),
     Math.max(1, Math.floor(availableWidth * 0.45)),
   );
   const occurrences = new Map<string, number>();
@@ -24,7 +27,13 @@ export function AlignedRows({
         const occurrence = occurrences.get(identity) ?? 0;
         occurrences.set(identity, occurrence + 1);
         const key = `${identity}\u0000${occurrence}`;
-        const wraps = row.label.length + row.value.length + 2 > availableWidth;
+        const gap = valueAlignment === "start" ? 3 : 2;
+        const valueColumn = labelWidth + gap;
+        const wraps =
+          terminalDisplayWidth(row.label) +
+            terminalDisplayWidth(row.value) +
+            gap >
+          availableWidth;
         const valueColor =
           row.status === "success"
             ? theme.success
@@ -36,7 +45,13 @@ export function AlignedRows({
         return wraps ? (
           <Box flexDirection="column" key={key}>
             <Text>{row.label}</Text>
-            <Box justifyContent="flex-end" width={availableWidth}>
+            <Box
+              marginLeft={Math.min(valueColumn, availableWidth - 1)}
+              width={Math.max(1, availableWidth - valueColumn)}
+              justifyContent={
+                valueAlignment === "end" ? "flex-end" : "flex-start"
+              }
+            >
               {valueColor ? (
                 <Text color={valueColor}>{row.value}</Text>
               ) : (
@@ -46,10 +61,15 @@ export function AlignedRows({
           </Box>
         ) : (
           <Box key={key} width={availableWidth}>
-            <Box width={labelWidth + 2}>
+            <Box width={valueColumn}>
               <Text>{row.label}</Text>
             </Box>
-            <Box flexGrow={1} justifyContent="flex-end">
+            <Box
+              flexGrow={1}
+              justifyContent={
+                valueAlignment === "end" ? "flex-end" : "flex-start"
+              }
+            >
               {valueColor ? (
                 <Text color={valueColor}>{row.value}</Text>
               ) : (
