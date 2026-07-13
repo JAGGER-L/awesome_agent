@@ -236,14 +236,14 @@ Every payload is `extra="forbid"`, frozen, and discriminated by `kind`:
 | `WorkspaceCommandPayload` | `workspace` | `path` |
 | `DiffCommandPayload` | `diff` | `change_set_id`, `content` |
 | `ChangeCommandPayload` | `change` | `action: undo|redo`, `change_set_id`, `lifecycle`, `restored_paths`, `warning` |
-| `ToolCatalogCommandPayload` | `tools` | `tools: tuple[ToolCommandItem, ...]` |
+| `ToolCatalogCommandPayload` | `tools` | `permission_mode: PermissionMode`, `tools: tuple[ToolCommandItem, ...]` |
 | `SkillCatalogCommandPayload` | `skills` | `active_mode`, `skills`, `diagnostics` |
 | `McpCommandPayload` | `mcp` | `servers: tuple[McpCommandItem, ...]` |
 | `MemoryStatusCommandPayload` | `memory_status` | `local_available`, `local_enabled`, `cloud_provider: Literal["mem0"]`, `cloud_available`, `cloud_enabled`, `cloud_error_code` |
 | `MemoryDocumentCommandPayload` | `memory_document` | `scope`, `content_hash`, `entries` |
 | `MemorySearchCommandPayload` | `memory_search` | `provider: Literal["mem0"]`, `memories` |
 | `MemoryMutationCommandPayload` | `memory_mutation` | `provider: local|mem0`, `status`, `scope`, `entry_id`, `memory_id`, `error_code` |
-| `StatusCommandPayload` | `status` | `snapshot: StatusSnapshot` |
+| `StatusCommandPayload` | `status` | `snapshot: StatusSnapshot` expanded with credential source availability, Context use/budget, and changed-file count |
 | `UsageCommandPayload` | `usage` | `usage: UsageSummary` |
 | `DoctorCommandPayload` | `doctor` | `checks: tuple[DoctorCheck, ...]` |
 | `ConfigCommandPayload` | `config` | `sources`, `credentials: ProviderCredentialStatuses` |
@@ -263,6 +263,7 @@ class ToolCommandItem(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     description: str = Field(min_length=1, max_length=1_000)
     read_only: bool
+    approval_required: bool
 
 
 class SkillCommandItem(BaseModel):
@@ -314,6 +315,23 @@ class DoctorCheck(BaseModel):
     status: Literal["ok", "missing", "valid", "invalid", "unverified", "off", "error"]
     detail: str | None = Field(default=None, max_length=2_000)
 ```
+
+PR1 extends the existing strict `StatusSnapshot` with these semantic facts so
+later TUI work never reconstructs them from unrelated Application fields:
+
+```python
+credential_source: CredentialSource | None = None
+credential_source_available: bool = False
+context_used_tokens: int = Field(ge=0)
+context_budget_tokens: int = Field(ge=1)
+changed_file_count: int = Field(ge=0)
+```
+
+`credential_source` is the explicitly selected source for the active model
+Provider. `credential_source_available` reports whether that exact source is
+currently usable; it does not select a fallback. `context_used_tokens` is the
+sum of the latest validated Context manifest estimates, and
+`context_budget_tokens` is the configured effective budget.
 
 `CommandPayload` is an `Annotated` union of exactly the payload classes in the table. Do not add a generic mapping, `unknown`, `Any`, or catch-all payload.
 
@@ -724,7 +742,7 @@ assert (await changes.undo(CommandIntent(name=CommandName.UNDO))).kind == "error
 assert (await permissions.permissions(CommandIntent(name=CommandName.PERMISSIONS))).kind == "interaction"
 ```
 
-Also assert Tool items remain dynamic, Status wraps `StatusSnapshot`, Usage wraps `UsageSummary`, Doctor emits explicit checks, Config contains `ProviderCredentialStatuses`, Diff has an explicit empty error, and every Change exception maps to its exact code.
+Also assert Tool items remain dynamic and carry `approval_required` computed by the current Tool policy and permission mode; Status wraps the expanded `StatusSnapshot`; Usage wraps `UsageSummary`; Doctor emits explicit checks; Config contains `ProviderCredentialStatuses`; Diff has an explicit empty error; and every Change exception maps to its exact code.
 
 - [ ] **Step 2: Run new service tests and verify missing modules**
 
