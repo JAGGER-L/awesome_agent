@@ -73,4 +73,46 @@ describe("submitted slash command history", () => {
       text: "/unknown argument",
     });
   });
+
+  it("renders status through the normal command transcript path", async () => {
+    const controller = {
+      submit: vi.fn(async () => ({
+        kind: "result",
+        payload: {
+          kind: "status",
+          snapshot: {
+            version: "1.1.1",
+            workspace_path: "E:\\workspace",
+            thread_display_id: "thread_12345678",
+            model_identity: { effective_model: "deepseek/deepseek-v4-flash" },
+            permission_mode: "request_approval",
+            context_used_tokens: 1024,
+            context_budget_tokens: 262144,
+          },
+        },
+      })),
+    } as unknown as CommandController;
+    const store = createSurfaceStore({
+      ...initialSurfaceState(),
+      application: { current_thread_id: "thread_1" } as never,
+    });
+    const view = render(
+      <App
+        store={store}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={80}
+      />,
+    );
+
+    view.stdin.write("/status");
+    view.stdin.write("\r");
+
+    await eventually(() =>
+      expect(
+        store.getState().committed_transcript?.map((block) => block.kind),
+      ).toEqual(["command_input", "command_result"]),
+    );
+    expect(view.lastFrame()).toContain("deepseek/deepseek-v4-flash");
+  });
 });

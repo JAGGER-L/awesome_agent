@@ -4,7 +4,6 @@ import {
   type Dispatch,
   useEffect,
   useRef,
-  useState,
   useSyncExternalStore,
 } from "react";
 
@@ -28,7 +27,6 @@ import { InteractionPrompt } from "../components/InteractionPrompt.js";
 import { Picker } from "../components/Picker.js";
 import { ProviderSetupNotice } from "../components/ProviderSetupNotice.js";
 import { SecretInput } from "../components/SecretInput.js";
-import { StatusCommand } from "../components/StatusCommand.js";
 import { StatusLine } from "../components/StatusLine.js";
 import { Welcome, type WelcomeProps } from "../components/Welcome.js";
 import { ActiveTurn } from "../components/transcript/ActiveTurn.js";
@@ -51,7 +49,6 @@ import { TerminalInput } from "../interaction/TerminalInput.js";
 import { useTerminalUi } from "../interaction/use-terminal-ui.js";
 import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { ExitReason } from "../lifecycle/exit.js";
-import type { StatusSnapshot } from "../protocol/commands.js";
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
 import {
@@ -119,7 +116,6 @@ export function App({
   const ui = terminal.state;
   const uiRef = terminal.current;
   const dispatch = terminal.dispatch;
-  const [status, setStatus] = useState<StatusSnapshot>();
   const {
     appendPresentation,
     appendTextResult: appendCommandResult,
@@ -319,16 +315,13 @@ export function App({
           );
         case "result": {
           const payload = outcome.payload;
-          if (payload.kind === "status") {
-            setStatus(payload.snapshot);
-          } else if (payload.kind === "thread") {
+          if (payload.kind === "thread") {
             try {
               await replaceThread({
                 threadId: payload.thread_id,
                 expectedGeneration: generation,
                 reason: payload.action === "created" ? "new" : "resume",
               });
-              setStatus(undefined);
             } catch (error) {
               if (!(error instanceof ThreadReplacementError)) throw error;
               appendCommandResult(
@@ -380,7 +373,6 @@ export function App({
   );
   const submit = useCallback(
     async (value: string): Promise<ComposerSubmitResult> => {
-      setStatus(undefined);
       dispatch({ type: "notice.clear" });
       const submitted = value.trimStart();
       if (submitted.startsWith("/")) {
@@ -932,7 +924,6 @@ export function App({
         width={columns}
         toolDetailsExpanded={ui.toolDetailsExpanded}
       />
-      {status ? <StatusCommand snapshot={status} /> : null}
       {ui.notice ? <Text>{ui.notice}</Text> : null}
       {providerSetupVisible && ui.mode.kind !== "secret" ? (
         <ProviderSetupNotice />
