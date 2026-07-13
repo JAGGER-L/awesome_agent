@@ -62,6 +62,20 @@ export type CommandDispatchOutcome =
       readonly code: "thread_required" | "unknown_command";
     };
 
+export function isOperationBusyOutcome(
+  outcome: CommandDispatchOutcome,
+): boolean {
+  if (outcome.kind === "command_error") {
+    return outcome.code === "operation_busy" || outcome.code === "turn_busy";
+  }
+  return (
+    outcome.kind === "error" &&
+    "error" in outcome &&
+    (outcome.error.code === "operation_busy" ||
+      outcome.error.code === "turn_busy")
+  );
+}
+
 export class CommandController {
   constructor(private readonly rpc: CommandRpc) {}
 

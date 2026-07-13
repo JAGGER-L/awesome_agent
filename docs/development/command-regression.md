@@ -37,3 +37,9 @@ Tab completion inserts only the executable bare command. Argument placeholders
 appear only in Help usage. Unknown and removed commands produce an explicit
 error and never silently no-op. Slash commands never use a hidden prompt to
 submit an Agent Turn.
+
+During a foreground Operation, every command in this table enters the same
+session-only queue as natural input and `! shell`. Promotion remains FIFO;
+empty-Composer recall remains LIFO. Commands that open a Picker or Approval
+pause promotion, Thread transitions bind the following item to the new Thread,
+and `/quit` is an ordered terminal barrier.

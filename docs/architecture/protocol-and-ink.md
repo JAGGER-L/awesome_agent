@@ -65,15 +65,30 @@ Tab, and arrow keys. Components render state and never install competing input
 listeners.
 
 `TerminalSurfaceLayout` renders one natural terminal flow in this order:
-Welcome, committed transcript, active Turn, notices, Command Menu, Composer or
-exclusive interaction, and status. The current Thread is dynamic React state;
-it is not permanent terminal output. Command Menu is a Composer accessory, so
-the draft remains visible while candidates are open. Trust, Approval, Auth,
-Picker, and Fatal remain exclusive interactions.
+Welcome, committed transcript, active Turn, pending inputs, notices, Command
+Menu, Composer or exclusive interaction, and status. The current Thread is
+dynamic React state; it is not permanent terminal output. Command Menu is a
+Composer accessory, so the draft remains visible while candidates are open.
+Trust, Approval, Auth, Picker, and Fatal remain exclusive interactions.
+
+While Core owns one foreground Operation, the TUI keeps at most three pending
+terminal inputs in session memory. Natural language, every Slash Command, and
+`! shell` share the same FIFO. Pending input is not sent to Core, parsed, bound
+to a Thread, or added to transcript history until it reaches the head. An empty
+Composer uses Up to recall the newest pending input into the draft, so recall
+is LIFO without changing execution order. Approval, Trust, Auth, and Picker
+continue to own their keys and pause promotion.
+
+`/new` and `/resume` execute at their ordered positions. Their authoritative
+Thread transition completes before the next pending input is parsed, so that
+input binds to the selected Thread. `/quit` is a terminal barrier: once queued,
+later input remains in the Composer until `/quit` is recalled or executed. A
+typed Operation-busy race returns the same pending identity to the queue head
+without writing a failed transcript block.
 
 ## Transcript and event ordering
 
-The TUI immediately projects a user message with a generated
+For immediate input, the TUI projects a user message with a generated
 `client_message_id`, then reconciles that block with the accepted Turn and the
 durable transcript. Thread generation tags discard stale results after `/new`
 or `/resume` without replaying them into the new transcript.
@@ -147,9 +162,10 @@ is parsed once; incomplete streaming Markdown uses a stable formatter to avoid
 reflowing the whole transcript on each delta.
 
 Cancellation disables input only while its RPC is unresolved. Terminal events
-restore Composer mode. Approval and Auth failures remain visible and
-retryable; a Core exit is fatal, renders a dedicated screen, and disables
-normal input rather than pretending the operation recovered.
+restore Composer mode and allow the next pending input to advance. Approval and
+Auth failures remain visible and retryable; a Core exit is fatal, renders a
+dedicated screen, and disables normal input rather than pretending the
+operation recovered.
 
 ## Request and fatal boundaries
 

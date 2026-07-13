@@ -106,6 +106,71 @@ describe("routeTerminalKey", () => {
     ).toEqual({ type: "composer.submit" });
   });
 
+  it("recalls the queue tail before Composer history only when empty", () => {
+    expect(
+      routeTerminalKey(
+        initialTerminalUiState(),
+        "",
+        { ...emptyTerminalKey(), upArrow: true },
+        2,
+      ),
+    ).toEqual({ type: "queue.recall" });
+
+    const nonEmpty = {
+      ...initialTerminalUiState(),
+      composer: {
+        ...initialTerminalUiState().composer,
+        value: "draft",
+      },
+    };
+    expect(
+      routeTerminalKey(
+        nonEmpty,
+        "",
+        { ...emptyTerminalKey(), upArrow: true },
+        2,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps command menus and exclusive interactions above queue recall", () => {
+    const key = { ...emptyTerminalKey(), upArrow: true };
+    expect(
+      routeTerminalKey(
+        stateWithMode({
+          kind: "command_menu",
+          query: "/",
+          selectedCommand: "new",
+          viewportStart: 0,
+        }),
+        "",
+        key,
+        2,
+      ),
+    ).toEqual({ type: "selection.move", delta: -1 });
+
+    expect(
+      routeTerminalKey(
+        stateWithMode({
+          kind: "approval",
+          interaction: {
+            interaction_id: "interaction_1",
+            interaction_kind: "tool_approval",
+            prompt: "Run command?",
+            operation: "run",
+            target: "pytest",
+            choices: [{ decision: "deny", label: "No" }],
+          },
+          selected: 0,
+          submitting: false,
+        }),
+        "",
+        key,
+        2,
+      ),
+    ).toEqual({ type: "selection.move", delta: -1 });
+  });
+
   it("falls through unconsumed control keys to lifecycle handling", () => {
     expect(
       routeTerminalKey(initialTerminalUiState(), "c", {

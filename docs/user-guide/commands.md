@@ -63,8 +63,8 @@ Removing a local credential does not revoke it at the Provider.
 | `/quit` | Shut down Core and exit. |
 
 `@path` adds a workspace path reference to a message. `! command` runs the
-direct-shell interaction through the same Core execution policy; Ink never
-executes tools itself.
+command directly through Awesome's normal Core shell policy, without asking the
+model to decide how to run it. Ink never executes tools itself.
 
 ## Keyboard behavior
 
@@ -80,15 +80,25 @@ executes tools itself.
   a failed cancellation remains visible and can be retried.
 - Ctrl+O expands or folds bounded details globally, including Tool sequences,
   Thinking, and Undo/Redo paths. Details are folded by default.
+- While a task is running, Awesome queues up to three inputs. Natural-language
+  messages, Slash Commands, and `! shell` run in submission order. Pending
+  inputs appear between the active task and the Composer.
+- With an empty Composer, Up recalls the newest pending input back into the
+  draft. Repeated recall therefore moves from newest to oldest, one draft at a
+  time. A non-empty draft, Command Menu, Picker, Approval, Trust, or Auth keeps
+  ownership of Up instead.
+- A queued `/quit` prevents additional queue entries. Recall it before adding
+  more input, or let it exit at its ordered position.
 
 `/help` is written into normal transcript history rather than opening a modal.
 It renders one command per aligned row with usage and description. Use
 `/help <command>` for one focused row; internal command ownership is not shown.
 `/new` starts a clean conversation and redraws Awesome from the Welcome panel.
 The previous conversation remains available through `/resume`. `/resume`
-redraws Awesome with only the selected conversation's saved messages. Stop the
-current task before starting or resuming another conversation. A new Thread
-also resets Thread-scoped permission grants.
+redraws Awesome with only the selected conversation's saved messages. When
+queued behind a running task, either command completes its Thread switch before
+the next queued input starts. A new Thread also resets Thread-scoped permission
+grants.
 
 ## Context and change lifecycles
 
@@ -121,4 +131,5 @@ lifecycles remain distinct errors.
 - `Changes`: the number of modified files, when present.
 
 Context details and token/operation usage are intentionally separate in
-`/context` and `/usage`.
+`/context` and `/usage`. `/context` shows the latest meaningful active Context;
+`/usage` shows cumulative observed Usage for the current Thread.

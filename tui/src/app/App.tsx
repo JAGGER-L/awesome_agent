@@ -4,6 +4,7 @@ import {
   type Dispatch,
   useEffect,
   useRef,
+  useState,
   useSyncExternalStore,
 } from "react";
 
@@ -11,6 +12,7 @@ import type {
   CommandController,
   CommandDispatchOutcome,
 } from "../commands/controller.js";
+import { isOperationBusyOutcome } from "../commands/controller.js";
 import { findCommand } from "../commands/catalog.js";
 import {
   presentCommandPayload,
@@ -28,6 +30,7 @@ import { AuthPicker } from "../components/AuthPicker.js";
 import { Composer } from "../components/Composer.js";
 import { InteractionPrompt } from "../components/InteractionPrompt.js";
 import { Picker } from "../components/Picker.js";
+import { PendingInputList } from "../components/PendingInputList.js";
 import { ProviderSetupNotice } from "../components/ProviderSetupNotice.js";
 import { SecretInput } from "../components/SecretInput.js";
 import { StatusLine } from "../components/StatusLine.js";
@@ -50,6 +53,11 @@ import { TerminalInput } from "../interaction/TerminalInput.js";
 import { useTerminalUi } from "../interaction/use-terminal-ui.js";
 import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { ExitReason } from "../lifecycle/exit.js";
+import type { PendingInput } from "../pending-input/model.js";
+import {
+  usePendingInputDrain,
+  usePendingInputQueue,
+} from "../pending-input/use-pending-input-queue.js";
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
 import {
@@ -74,6 +82,8 @@ interface ComposerSubmitResult {
   readonly accepted: boolean;
   readonly retryable?: boolean;
   readonly message?: string;
+  readonly operationBusy?: boolean;
+  readonly operationId?: string;
 }
 
 export interface AppLifecycle {
@@ -120,6 +130,8 @@ export function App({
   const ui = terminal.state;
   const uiRef = terminal.current;
   const dispatch = terminal.dispatch;
+  const pendingInputs = usePendingInputQueue();
+  const [awaitingOperationId, setAwaitingOperationId] = useState<string>();
   const applyOutcomeRef = useRef<
     (
       outcome: CommandDispatchOutcome,
@@ -233,6 +245,15 @@ export function App({
       dispatch({ type: "mode.cancel" });
     }
   }, [dispatch, exceptionalInteraction, ui.mode]);
+
+  useEffect(() => {
+    if (
+      awaitingOperationId &&
+      state.active_operation?.id === awaitingOperationId
+    ) {
+      setAwaitingOperationId(undefined);
+    }
+  }, [awaitingOperationId, state.active_operation?.id]);
 
   const applyLocalResult = useCallback(
     (result: LocalCommandResult, generation: number): ComposerSubmitResult => {
@@ -378,7 +399,10 @@ export function App({
           };
         }
         case "accepted":
-          return { accepted: true };
+          return {
+            accepted: true,
+            operationId: outcome.operation.operation_id,
+          };
       }
     },
     [
@@ -395,10 +419,13 @@ export function App({
   );
   applyOutcomeRef.current = applyCommandOutcome;
   const submit = useCallback(
-    async (value: string): Promise<ComposerSubmitResult> => {
+    async (
+      value: string,
+      pendingInput?: PendingInput,
+    ): Promise<ComposerSubmitResult> => {
       dispatch({ type: "notice.clear" });
       const submitted = value.trimStart();
-      if (submitted.startsWith("/")) {
+      if (submitted.startsWith("/") && pendingInput === undefined) {
         store.dispatch({
           type: "transcript.command.submitted",
           submission_id: createCommandSubmissionId(),
@@ -428,12 +455,15 @@ export function App({
         };
       }
       const generation = store.getState().thread_generation;
-      const threadId = state.application?.current_thread_id;
+      const threadId = store.getState().application?.current_thread_id;
       const optimisticMessage =
         routed.kind === "turn"
-          ? { id: createClientMessageId(), text: routed.content }
+          ? {
+              id: pendingInput?.clientMessageId ?? createClientMessageId(),
+              text: routed.content,
+            }
           : undefined;
-      if (optimisticMessage) {
+      if (optimisticMessage && pendingInput === undefined) {
         store.dispatch({
           type: "transcript.user.pending",
           client_message_id: optimisticMessage.id,
@@ -442,8 +472,10 @@ export function App({
         });
       }
       let outcome: CommandDispatchOutcome;
-      const finishProgress =
-        routed.kind === "command" && routed.intent.name === "compact"
+      const compact =
+        routed.kind === "command" && routed.intent.name === "compact";
+      let finishProgress =
+        compact && pendingInput === undefined
           ? beginProgress("compact", "Compressing context...", generation)
           : undefined;
       try {
@@ -475,6 +507,36 @@ export function App({
           };
         }
         throw failure.kind === "fatal" ? failure.error : error;
+      }
+      if (pendingInput && isOperationBusyOutcome(outcome)) {
+        return {
+          accepted: false,
+          retryable: true,
+          operationBusy: true,
+        };
+      }
+      if (pendingInput && submitted.startsWith("/")) {
+        store.dispatch({
+          type: "transcript.command.submitted",
+          submission_id: createCommandSubmissionId(),
+          text: submitted,
+          generation,
+        });
+      }
+      if (pendingInput && optimisticMessage) {
+        store.dispatch({
+          type: "transcript.user.pending",
+          client_message_id: optimisticMessage.id,
+          text: optimisticMessage.text,
+          generation,
+        });
+      }
+      if (compact && pendingInput) {
+        finishProgress = beginProgress(
+          "compact",
+          "Compressing context...",
+          generation,
+        );
       }
       if (finishProgress) {
         if (outcome.kind === "result") {
@@ -536,10 +598,56 @@ export function App({
       beginProgress,
       controller,
       dispatch,
-      state.application?.current_thread_id,
       store,
     ],
   );
+
+  const promotePendingInput = useCallback(
+    async (item: PendingInput) => {
+      const routed = parseInput(item.raw);
+      const promoted =
+        routed?.kind === "turn" && item.clientMessageId === undefined
+          ? { ...item, clientMessageId: createClientMessageId() }
+          : item;
+      const result = await submit(promoted.raw, promoted);
+      if (result.operationBusy) {
+        return { kind: "requeue" as const, item: promoted };
+      }
+      dispatch({
+        type: "composer.edit",
+        action: { type: "submit_history", value: promoted.raw },
+      });
+      if (result.operationId) setAwaitingOperationId(result.operationId);
+      if (!result.accepted && result.message) {
+        if (!routed || routed.kind === "invalid" || routed.kind === "direct") {
+          appendCommandResult(
+            routed?.kind === "direct" ? "shell" : "input",
+            "error",
+            result.message,
+            store.getState().thread_generation,
+          );
+        }
+      }
+      return { kind: "consumed" as const };
+    },
+    [appendCommandResult, dispatch, store, submit],
+  );
+  const reportDrainError = useCallback(
+    (error: unknown) => reportFatal(error),
+    [reportFatal],
+  );
+  const drainingInput = usePendingInputDrain({
+    queue: pendingInputs,
+    blocked:
+      state.active_operation?.status === "active" ||
+      state.pending_interaction !== undefined ||
+      ui.mode.kind !== "composer" ||
+      ui.composerSubmitting ||
+      cancelling ||
+      awaitingOperationId !== undefined,
+    promote: promotePendingInput,
+    onError: reportDrainError,
+  });
 
   const submitValue = useCallback(
     async (value: string) => {
@@ -565,6 +673,52 @@ export function App({
     [dispatch, submit],
   );
 
+  const submitOrQueue = useCallback(
+    async (value: string) => {
+      const operationActive =
+        store.getState().active_operation?.status === "active";
+      const queueingRequired =
+        operationActive ||
+        drainingInput !== undefined ||
+        awaitingOperationId !== undefined ||
+        pendingInputs.current.current.length > 0;
+      if (queueingRequired) {
+        const queued = pendingInputs.enqueue(value, {
+          reserved: drainingInput ? 1 : 0,
+          ...(drainingInput === undefined
+            ? {}
+            : { terminalBarrierInFlight: drainingInput.terminalBarrier }),
+        });
+        if (!queued.accepted) {
+          dispatch({
+            type: "notice.set",
+            message:
+              queued.reason === "full"
+                ? "Pending input queue is full (3 of 3)."
+                : "Quit is already queued. Recall it before adding more input.",
+          });
+          return;
+        }
+        dispatch({ type: "notice.clear" });
+        dispatch({ type: "composer.message" });
+        dispatch({
+          type: "composer.edit",
+          action: { type: "replace", value: "" },
+        });
+        return;
+      }
+      await submitValue(value);
+    },
+    [
+      awaitingOperationId,
+      dispatch,
+      drainingInput,
+      pendingInputs,
+      store,
+      submitValue,
+    ],
+  );
+
   const submitComposer = useCallback(async () => {
     const value = uiRef.current.composer.value;
     if (value.trim().length === 0) {
@@ -581,14 +735,14 @@ export function App({
       }
       return;
     }
-    await submitValue(value);
+    await submitOrQueue(value);
   }, [
     applyCommandOutcome,
     controller,
     providerSetupVisible,
     state.application?.current_thread_id,
     store,
-    submitValue,
+    submitOrQueue,
     uiRef,
   ]);
 
@@ -600,16 +754,16 @@ export function App({
         : undefined;
       if (command) {
         dispatch({ type: "mode.cancel" });
-        await submitValue(command.completion);
+        await submitOrQueue(command.completion);
         return;
       }
       const value = uiRef.current.composer.value;
       dispatch({ type: "mode.cancel" });
-      await submitValue(value);
+      await submitOrQueue(value);
       return;
     }
     await interactions.confirmSelection();
-  }, [dispatch, interactions, submitValue, uiRef]);
+  }, [dispatch, interactions, submitOrQueue, uiRef]);
   const completeCommand = useCallback(() => {
     const mode = uiRef.current.mode;
     if (mode.kind !== "command_menu" || !mode.selectedCommand) return;
@@ -670,13 +824,27 @@ export function App({
 
   const handleTerminalInput = useCallback(
     (input: string, key: TerminalKey) => {
-      const routed = routeTerminalKey(uiRef.current, input, key);
+      const routed = routeTerminalKey(
+        uiRef.current,
+        input,
+        key,
+        pendingInputs.current.current.length,
+      );
       if (!routed) return;
       handleTerminalIntent(routed, input, key, {
         dispatch,
         onSubmit: () => runTerminalAction(submitComposer),
         onSelect: () => runTerminalAction(selectCurrent),
         onCommandComplete: completeCommand,
+        onQueueRecall: () => {
+          const recalled = pendingInputs.recallTail();
+          if (!recalled) return;
+          dispatch({
+            type: "composer.edit",
+            action: { type: "replace", value: recalled.raw },
+          });
+          dispatch({ type: "notice.clear" });
+        },
         onDeny: () => {
           const mode = uiRef.current.mode;
           if (mode.kind !== "approval") return;
@@ -698,6 +866,7 @@ export function App({
       completeCommand,
       dispatch,
       interactions,
+      pendingInputs,
       selectCurrent,
       submitComposer,
       runTerminalAction,
@@ -759,6 +928,7 @@ export function App({
             detailsExpanded={ui.detailsExpanded}
           />
         }
+        pendingInputs={<PendingInputList items={pendingInputs.items} />}
         notices={
           <>
             {ui.notice ? <Text>{ui.notice}</Text> : null}
@@ -823,6 +993,7 @@ function handleTerminalIntent(
     readonly onSubmit: () => void;
     readonly onSelect: () => void;
     readonly onCommandComplete: () => void;
+    readonly onQueueRecall: () => void;
     readonly onDeny: () => void;
     readonly onSecretSubmit: () => void;
     readonly onLifecycle: (input: string, key: TerminalKey) => void;
@@ -864,6 +1035,9 @@ function handleTerminalIntent(
       break;
     case "composer.submit":
       handlers.onSubmit();
+      break;
+    case "queue.recall":
+      handlers.onQueueRecall();
       break;
     case "details.toggle":
       handlers.dispatch({ type: "details.toggle" });

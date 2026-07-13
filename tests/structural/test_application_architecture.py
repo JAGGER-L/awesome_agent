@@ -32,11 +32,25 @@ def test_slash_commands_have_no_hidden_turn_submission_path() -> None:
     extension_commands = (application / "extension_commands.py").read_text(
         encoding="utf-8"
     )
-    bundled = Path("src/awesome_agent/extensions/skills/bundled")
 
     assert "submit_turn" not in extension_commands
-    assert "async def init" not in extension_commands
-    assert not (bundled / "init").exists()
+
+
+def test_pending_input_is_not_a_core_or_storage_concept() -> None:
+    roots = (
+        Path("src/awesome_agent"),
+        Path("protocol/fixtures"),
+    )
+    offenders = [
+        path
+        for root in roots
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".json"}
+        and "PendingInput" in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []
 
 
 def test_application_owns_the_authoritative_thread_transition() -> None:

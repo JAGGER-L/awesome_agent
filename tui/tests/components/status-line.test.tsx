@@ -13,6 +13,7 @@ describe("StatusLine cancellation", () => {
     ).lastFrame();
     expect(request).toContain("◇ Request approval");
     expect(request).not.toContain("request_approval");
+    expect(request).not.toMatch(/ready|idle|active/u);
     const full = render(
       <StatusLine
         state={{
@@ -23,6 +24,7 @@ describe("StatusLine cancellation", () => {
     ).lastFrame();
     expect(full).toContain("◆ Full access");
     expect(full).not.toContain("full_access");
+    expect(full).not.toMatch(/ready|idle|active/u);
   });
   it("renders one cancelling state while a request is pending", () => {
     const view = render(

@@ -46,6 +46,7 @@ describe("Ink terminal ownership boundaries", () => {
       "props.welcome",
       "props.transcript",
       "props.activeTurn",
+      "props.pendingInputs",
       "props.notices",
       "props.commandMenu",
       "props.input",
@@ -57,6 +58,26 @@ describe("Ink terminal ownership boundaries", () => {
       );
     }
     expect(layout).toContain('<Box flexDirection="column">');
+  });
+
+  it("keeps pending input session-local and outside protocol and Surface state", async () => {
+    const files = await sourceFiles(
+      fileURLToPath(new URL("../../src", import.meta.url)),
+    );
+    const pendingFiles = files.filter((file) =>
+      file.path.startsWith("pending-input/"),
+    );
+
+    expect(pendingFiles.map((file) => file.path).toSorted()).toEqual([
+      "pending-input/model.ts",
+      "pending-input/reducer.ts",
+      "pending-input/use-pending-input-queue.ts",
+    ]);
+    for (const file of pendingFiles) {
+      expect(file.source).not.toContain("../protocol/");
+      expect(file.source).not.toContain("../state/");
+      expect(file.source).not.toContain("SQLite");
+    }
   });
 
   it("keeps the Ink frame effect in the CLI host", async () => {

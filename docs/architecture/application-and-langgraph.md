@@ -41,6 +41,12 @@ is the only path that starts an Agent Turn.
 belongs to the Surface pending lifecycle and is not persisted as another
 operation state machine.
 
+Application serializes exactly one foreground Core Operation. Ink may retain a
+bounded, session-only input queue for terminal convenience, but it cannot start
+a second Operation, persist queued input, or pre-bind queued input to a Thread.
+Each item re-enters the ordinary parser and controller only after the foreground
+Operation and any exclusive interaction have ended.
+
 Synchronous command progress uses one replaceable transcript block. For
 example, `/compact` creates a pending presentation before its RPC and replaces
 that same block identity on success or failure; neither Core nor LangGraph gains
@@ -65,3 +71,13 @@ Recovery reconciles one local product Turn with its checkpoint. A finished
 state is finalized, an unfinished state can resume, missing or corrupt state
 fails with a stable code, and uncertain external side effects require a user
 decision.
+
+Thread Usage is derived from persisted Turn Usage and means the cumulative
+usage of the current Thread. Current Context means the latest meaningful
+Context manifest and is not a cumulative token total. Cancellation and failure
+preserve reliably observed terminal facts before checkpoint cleanup.
+
+Glob enumerates path metadata without reading file contents; Grep applies path
+filters before bounded text reads. Both use the shared safe enumerator, default
+pruning, worker-thread execution, and cooperative cancellation so a scan cannot
+block the Application event loop.

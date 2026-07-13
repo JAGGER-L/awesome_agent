@@ -32,6 +32,7 @@ export type TerminalIntent =
   | { readonly type: "secret.submit" }
   | { readonly type: "composer.edit"; readonly action: ComposerAction }
   | { readonly type: "composer.submit" }
+  | { readonly type: "queue.recall" }
   | { readonly type: "details.toggle" }
   | { readonly type: "lifecycle.evaluate"; readonly input: string };
 
@@ -64,6 +65,7 @@ export function routeTerminalKey(
   state: TerminalUiState,
   input: string,
   key: TerminalKey,
+  pendingInputCount = 0,
 ): TerminalIntent | undefined {
   const { mode } = state;
   let intent: TerminalIntent | undefined;
@@ -124,6 +126,14 @@ export function routeTerminalKey(
       break;
     case "composer": {
       if (state.composerSubmitting) break;
+      if (
+        key.upArrow &&
+        state.composer.value.length === 0 &&
+        pendingInputCount > 0
+      ) {
+        intent = { type: "queue.recall" };
+        break;
+      }
       const mapped = mapComposerKey(
         input,
         key,

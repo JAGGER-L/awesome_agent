@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { CommandController } from "../../src/commands/controller.js";
+import {
+  CommandController,
+  isOperationBusyOutcome,
+} from "../../src/commands/controller.js";
 import type { RoutedInput } from "../../src/commands/parser.js";
 import type { MethodName, MethodParams } from "../../src/protocol/methods.js";
 
@@ -151,5 +154,33 @@ describe("CommandController", () => {
       ),
     ).resolves.toEqual({ kind: "result", payload });
     expect(calls.map((call) => call.method)).toEqual(["command.execute"]);
+  });
+
+  it("classifies only typed operation races as queue-retryable", () => {
+    expect(
+      isOperationBusyOutcome({
+        kind: "command_error",
+        code: "operation_busy",
+        message: "busy",
+      }),
+    ).toBe(true);
+    expect(
+      isOperationBusyOutcome({
+        kind: "error",
+        error: {
+          code: "turn_busy",
+          message: "busy",
+          retryable: true,
+          data: {},
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isOperationBusyOutcome({
+        kind: "command_error",
+        code: "invalid_arguments",
+        message: "bad input",
+      }),
+    ).toBe(false);
   });
 });
