@@ -283,6 +283,69 @@ async def test_auth_exposes_both_sources_and_persists_explicit_selection(
 
 
 @pytest.mark.asyncio
+async def test_environment_only_keeps_awesome_available_for_configuration(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+
+    picker = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("deepseek",))
+    )
+    prompt = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("deepseek", "awesome"))
+    )
+
+    assert isinstance(picker, CommandInteractionResult)
+    assert picker.interaction.kind == "selection"
+    assert [
+        (option.value, option.selected, option.disabled)
+        for option in picker.interaction.options
+    ] == [
+        ("environment", True, False),
+        ("awesome", False, False),
+    ]
+    assert isinstance(prompt, CommandInteractionResult)
+    assert prompt.interaction.kind == "secret"
+
+
+@pytest.mark.asyncio
+async def test_deleting_selected_awesome_key_never_falls_back_to_environment(
+    tmp_path: Path,
+) -> None:
+    service, _, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+    await service.set_credential(
+        ProviderCredentialSetRequest(
+            provider="deepseek",
+            action="add",
+            api_key=SecretStr("awesome-secret"),
+        )
+    )
+
+    deleted = await service.set_credential(
+        ProviderCredentialSetRequest(provider="deepseek", action="delete")
+    )
+    status = sources().provider_credentials.deepseek
+    top = await service.auth_command(CommandIntent(name=CommandName.AUTH))
+
+    assert deleted.status is ProviderCredentialSetStatus.DELETED
+    assert deleted.source is CredentialSource.AWESOME
+    assert status.selected_source is CredentialSource.AWESOME
+    assert status.source_available is False
+    assert status.environment_configured is True
+    assert isinstance(top, CommandInteractionResult)
+    assert top.interaction.kind == "selection"
+    assert top.interaction.options[0].description == ("Active · awesome · Unavailable")
+
+
+@pytest.mark.asyncio
 async def test_selected_unavailable_source_fails_without_fallback(
     tmp_path: Path,
 ) -> None:
