@@ -80,6 +80,7 @@ describe("CommandMenu", () => {
       {
         name: "thinking" as const,
         owner: "application" as const,
+        completion: "/thinking" as const,
         usage: "/thinking [on|off]",
         description: "Show or choose thinking mode",
         examples: ["/thinking [on|off]"],
@@ -87,6 +88,7 @@ describe("CommandMenu", () => {
       {
         name: "theme" as const,
         owner: "ink" as const,
+        completion: "/theme" as const,
         usage: "/theme [system|dark|light]",
         description: "Show or choose the color theme",
         examples: ["/theme [system|dark|light]"],

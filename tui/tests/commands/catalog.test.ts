@@ -29,9 +29,14 @@ describe("COMMAND_CATALOG", () => {
     );
     expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(25);
     for (const command of COMMAND_CATALOG) {
+      expect(command.completion).toBe(`/${command.name}`);
+      expect(command.completion).not.toMatch(/[\[\]]/u);
       expect(command.description.length).toBeGreaterThan(0);
       expect(command.usage).toMatch(new RegExp(`^/${command.name}(?: |$)`));
     }
+    expect(
+      COMMAND_CATALOG.find(({ name }) => name === "workspace")?.description,
+    ).toBe("Show the current workspace path");
   });
 
   it.each([
