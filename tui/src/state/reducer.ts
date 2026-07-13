@@ -78,7 +78,7 @@ function projectDelta(
             ...turn.timeline,
             {
               kind: "thinking",
-              id: `thinking:${turn.thinking_sequence}`,
+              id: `thinking:${turn.id}:${turn.thinking_sequence + 1}`,
               started_at: delta.first_timestamp,
             },
           ],
@@ -364,7 +364,7 @@ export function surfaceReducer(
         thread: action.thread,
         warnings: [],
         committed_transcript: action.transcript,
-        transcript_persisted: true,
+        transcript_persisted: action.transcript_persisted,
       };
     case "event.received":
       return action.generation === state.thread_generation
@@ -425,6 +425,23 @@ export function surfaceReducer(
         committed_transcript: (state.committed_transcript ?? []).map((block) =>
           block.key === action.block.key ? action.block : block,
         ),
+      };
+    case "transcript.command.submitted":
+      if (action.generation !== state.thread_generation) return state;
+      return {
+        ...state,
+        committed_transcript: mergeTranscriptBlocks(
+          state.committed_transcript ?? [],
+          [
+            {
+              key: `command:${action.submission_id}`,
+              kind: "command_input",
+              submission_id: action.submission_id,
+              text: action.text,
+            },
+          ],
+        ),
+        transcript_persisted: false,
       };
     case "transcript.user.pending":
       if (action.generation !== state.thread_generation) return state;

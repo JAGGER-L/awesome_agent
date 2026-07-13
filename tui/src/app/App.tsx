@@ -4,7 +4,6 @@ import {
   type Dispatch,
   useEffect,
   useRef,
-  useState,
   useSyncExternalStore,
 } from "react";
 
@@ -28,7 +27,6 @@ import { InteractionPrompt } from "../components/InteractionPrompt.js";
 import { Picker } from "../components/Picker.js";
 import { ProviderSetupNotice } from "../components/ProviderSetupNotice.js";
 import { SecretInput } from "../components/SecretInput.js";
-import { StatusCommand } from "../components/StatusCommand.js";
 import { StatusLine } from "../components/StatusLine.js";
 import { Welcome, type WelcomeProps } from "../components/Welcome.js";
 import { ActiveTurn } from "../components/transcript/ActiveTurn.js";
@@ -51,13 +49,19 @@ import { TerminalInput } from "../interaction/TerminalInput.js";
 import { useTerminalUi } from "../interaction/use-terminal-ui.js";
 import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { ExitReason } from "../lifecycle/exit.js";
-import type { StatusSnapshot } from "../protocol/commands.js";
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
-import { createClientMessageId } from "../transcript/identity.js";
+import {
+  createClientMessageId,
+  createCommandSubmissionId,
+} from "../transcript/identity.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 import { useCommandExecution } from "./use-command-execution.js";
+import {
+  ThreadReplacementError,
+  useThreadReplacement,
+} from "./use-thread-replacement.js";
 import {
   isAuthPicker,
   unavailableSelectionMessage,
@@ -112,13 +116,17 @@ export function App({
   const ui = terminal.state;
   const uiRef = terminal.current;
   const dispatch = terminal.dispatch;
-  const [status, setStatus] = useState<StatusSnapshot>();
   const {
     appendPresentation,
     appendTextResult: appendCommandResult,
     beginProgress,
   } = useCommandExecution(store);
   const globalKeys = useRef(new GlobalKeyController()).current;
+  const replaceThread = useThreadReplacement({
+    store,
+    controller,
+    resetThreadScope: lifecycle?.resetThreadScope,
+  });
   const historic =
     state.committed_transcript ??
     (state.thread ? hydrateThreadPage(state.thread).blocks : []);
@@ -307,42 +315,22 @@ export function App({
           );
         case "result": {
           const payload = outcome.payload;
-          if (payload.kind === "status") {
-            setStatus(payload.snapshot);
-          } else if (payload.kind === "thread" && controller) {
-            const replacement = await controller.loadThreadReplacement(
-              payload.thread_id,
-            );
-            if (replacement.kind === "error") {
+          if (payload.kind === "thread") {
+            try {
+              await replaceThread({
+                threadId: payload.thread_id,
+                expectedGeneration: generation,
+                reason: payload.action === "created" ? "new" : "resume",
+              });
+            } catch (error) {
+              if (!(error instanceof ThreadReplacementError)) throw error;
               appendCommandResult(
                 intent?.name ?? "resume",
                 "error",
-                replacement.error.message,
+                error.message,
                 generation,
               );
-              return { accepted: true };
             }
-            const transcript =
-              payload.action === "created"
-                ? [
-                    {
-                      key: `thread:${payload.thread_id}:started`,
-                      kind: "status" as const,
-                      message: "New conversation started",
-                    },
-                  ]
-                : hydrateThreadPage(replacement.thread).blocks;
-            if (store.getState().thread_generation !== generation) {
-              return { accepted: true };
-            }
-            store.dispatch({
-              type: "thread.replaced",
-              application: replacement.application,
-              thread: replacement.thread,
-              transcript,
-            });
-            lifecycle?.resetThreadScope?.();
-            setStatus(undefined);
           } else if (intent) {
             appendPresentation(
               intent.name,
@@ -379,14 +367,22 @@ export function App({
       controller,
       dispatch,
       localCommands,
-      lifecycle,
+      replaceThread,
       store,
     ],
   );
   const submit = useCallback(
     async (value: string): Promise<ComposerSubmitResult> => {
-      setStatus(undefined);
       dispatch({ type: "notice.clear" });
+      const submitted = value.trimStart();
+      if (submitted.startsWith("/")) {
+        store.dispatch({
+          type: "transcript.command.submitted",
+          submission_id: createCommandSubmissionId(),
+          text: submitted,
+          generation: store.getState().thread_generation,
+        });
+      }
       const routed = parseInput(value);
       if (!routed) return { accepted: true };
       if (routed.kind === "invalid") {
@@ -928,7 +924,6 @@ export function App({
         width={columns}
         toolDetailsExpanded={ui.toolDetailsExpanded}
       />
-      {status ? <StatusCommand snapshot={status} /> : null}
       {ui.notice ? <Text>{ui.notice}</Text> : null}
       {providerSetupVisible && ui.mode.kind !== "secret" ? (
         <ProviderSetupNotice />

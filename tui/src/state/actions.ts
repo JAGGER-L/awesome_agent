@@ -25,6 +25,7 @@ export type SurfaceAction =
       readonly application: MethodValue["application.getState"];
       readonly thread: MethodValue["thread.read"];
       readonly transcript: readonly TranscriptBlock[];
+      readonly transcript_persisted: boolean;
     }
   | {
       readonly type: "event.received";
@@ -44,6 +45,12 @@ export type SurfaceAction =
   | {
       readonly type: "transcript.command_result";
       readonly block: CommandResultBlock;
+      readonly generation: number;
+    }
+  | {
+      readonly type: "transcript.command.submitted";
+      readonly submission_id: string;
+      readonly text: string;
       readonly generation: number;
     }
   | {

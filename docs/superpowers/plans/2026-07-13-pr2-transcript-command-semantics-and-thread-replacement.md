@@ -507,3 +507,23 @@ Merge only after required checks pass.
 - Every transcript block key is stable and unique; the duplicate assistant key warning cannot recur.
 - No `Static`, legacy Status component, or command-title-only history path remains.
 - PR2 is merged before PR3 is executed.
+
+## Execution Evidence — 2026-07-13
+
+Implemented Tasks 0–5 and Task 6 Steps 1–3 on
+`codex/pr2-transcript-thread-replacement`.
+
+- `npm --prefix tui run format:check` — passed, 177 files checked.
+- `npm --prefix tui run lint` — passed, 177 files checked.
+- `npm --prefix tui run typecheck` — passed.
+- `npm --prefix tui run build` — passed.
+- PR2 application, command, component, state, Surface, and transcript suite —
+  passed, 219 tests in 40 files.
+- `npm --prefix tui test -- --run tests/e2e/stdio-purity.test.ts` — passed,
+  2 tests.
+- Legacy command fixtures discovered by the broad test run were removed and
+  rewritten to exact Protocol v2 outcomes; no production compatibility parser
+  was added.
+
+Push, GitHub checks, PR merge, and integration-branch refresh remain the Task 6
+Step 5 integration gate and are recorded in the PR and merge history.

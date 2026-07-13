@@ -27,6 +27,8 @@ export function BlockView({
           ) : null}
         </Box>
       );
+    case "command_input":
+      return <Text color={theme.user}>鉂?{block.text}</Text>;
     case "assistant":
       return (
         <Box width={width}>

@@ -1,9 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
+
 import type { TranscriptBlock } from "./model.js";
+
+export class TranscriptIdentityError extends Error {}
 
 export function mergeTranscriptBlocks(
   ...groups: readonly (readonly TranscriptBlock[])[]
 ): readonly TranscriptBlock[] {
-  const seen = new Set<string>();
+  const positions = new Map<string, number>();
   const userPositions = new Map<string, number>();
   const merged: TranscriptBlock[] = [];
   for (const blocks of groups) {
@@ -22,8 +26,14 @@ export function mergeTranscriptBlocks(
         }
         userPositions.set(block.client_message_id, merged.length);
       }
-      if (seen.has(block.key)) continue;
-      seen.add(block.key);
+      const existingPosition = positions.get(block.key);
+      if (existingPosition !== undefined) {
+        if (isDeepStrictEqual(merged[existingPosition], block)) continue;
+        throw new TranscriptIdentityError(
+          `Transcript key ${block.key} identifies different blocks.`,
+        );
+      }
+      positions.set(block.key, merged.length);
       merged.push(block);
     }
   }
