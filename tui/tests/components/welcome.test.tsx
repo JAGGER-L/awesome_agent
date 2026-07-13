@@ -120,21 +120,25 @@ describe("Welcome", () => {
     expect(top99.match(/╭/gu)).toHaveLength(1);
   });
 
-  it("centers the Logo inside its wide panel", () => {
+  it.each([
+    100, 120,
+  ])("centers one fixed-width Logo container at %i columns", (width) => {
     const frame =
-      render(<Welcome {...baseProps} width={100} />).lastFrame() ?? "";
-    for (const row of FULL_LOGO_ROWS) {
-      const line = frame
-        .split("\n")
-        .find((candidate) => candidate.includes(row));
-      expect(line).toBeDefined();
-      const start = line?.indexOf(row) ?? 0;
-      const leftPadding = terminalDisplayWidth((line ?? "").slice(1, start));
-      const rightPadding = terminalDisplayWidth(
-        (line ?? "").slice(start + row.length, 65),
-      );
-      expect(Math.abs(leftPadding - rightPadding)).toBeLessThanOrEqual(1);
-    }
+      render(<Welcome {...baseProps} width={width} />).lastFrame() ?? "";
+    const lines = FULL_LOGO_ROWS.map((row) =>
+      frame.split("\n").find((candidate) => candidate.includes(row)),
+    );
+    expect(lines.every((line) => line !== undefined)).toBe(true);
+    const starts = lines.map((line, index) =>
+      (line ?? "").indexOf(FULL_LOGO_ROWS[index] ?? ""),
+    );
+    expect(new Set(starts).size).toBe(1);
+    const logoWidth = Math.max(...FULL_LOGO_ROWS.map(terminalDisplayWidth));
+    const panelWidth = Math.floor((width * 2) / 3);
+    const wrapperStart = starts[0] ?? 0;
+    const leftPadding = wrapperStart - 1;
+    const rightPadding = panelWidth - 1 - (wrapperStart + logoWidth);
+    expect(Math.abs(leftPadding - rightPadding)).toBeLessThanOrEqual(1);
   });
 
   it("renders resumed, non-Git, and Kimi metadata", () => {

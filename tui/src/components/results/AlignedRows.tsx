@@ -7,11 +7,9 @@ import { useTheme } from "../theme.js";
 export function AlignedRows({
   rows,
   width,
-  valueAlignment,
 }: {
   readonly rows: readonly PresentationRow[];
   readonly width: number;
-  readonly valueAlignment: "start" | "end";
 }) {
   const theme = useTheme();
   const availableWidth = Math.max(1, width - 4);
@@ -27,7 +25,7 @@ export function AlignedRows({
         const occurrence = occurrences.get(identity) ?? 0;
         occurrences.set(identity, occurrence + 1);
         const key = `${identity}\u0000${occurrence}`;
-        const gap = valueAlignment === "start" ? 3 : 2;
+        const gap = 3;
         const valueColumn = labelWidth + gap;
         const wraps =
           terminalDisplayWidth(row.label) +
@@ -48,9 +46,7 @@ export function AlignedRows({
             <Box
               marginLeft={Math.min(valueColumn, availableWidth - 1)}
               width={Math.max(1, availableWidth - valueColumn)}
-              justifyContent={
-                valueAlignment === "end" ? "flex-end" : "flex-start"
-              }
+              justifyContent="flex-start"
             >
               {valueColor ? (
                 <Text color={valueColor}>{row.value}</Text>
@@ -64,12 +60,7 @@ export function AlignedRows({
             <Box width={valueColumn}>
               <Text>{row.label}</Text>
             </Box>
-            <Box
-              flexGrow={1}
-              justifyContent={
-                valueAlignment === "end" ? "flex-end" : "flex-start"
-              }
-            >
+            <Box flexGrow={1} justifyContent="flex-start">
               {valueColor ? (
                 <Text color={valueColor}>{row.value}</Text>
               ) : (

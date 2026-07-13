@@ -27,11 +27,7 @@ export function CommandResultView({
           tone={presentation.tone}
           width={width}
         >
-          <AlignedRows
-            rows={presentation.rows}
-            width={width}
-            valueAlignment={presentation.valueAlignment}
-          />
+          <AlignedRows rows={presentation.rows} width={width} />
         </ResultPanel>
       );
     case "notice":
@@ -97,7 +93,6 @@ export function CommandResultView({
           >
             <AlignedRows
               width={width}
-              valueAlignment="start"
               rows={[
                 { label: "Change set", value: presentation.changeSetId },
                 { label: "Lifecycle", value: presentation.lifecycle },

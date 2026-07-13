@@ -48,7 +48,7 @@ describe("workspace, status, and doctor presenters", () => {
     });
     expect(result.kind).toBe("panel");
     if (result.kind !== "panel") return;
-    expect(result.valueAlignment).toBe("start");
+    expect("valueAlignment" in result).toBe(false);
     expect(result.rows.map((row) => row.label)).toEqual([
       "Version",
       "Workspace",
@@ -90,7 +90,6 @@ describe("workspace, status, and doctor presenters", () => {
     });
     expect(result).toMatchObject({
       kind: "panel",
-      valueAlignment: "end",
       rows: [
         { label: "Python", value: "OK" },
         { label: "DeepSeek", value: "Missing" },
