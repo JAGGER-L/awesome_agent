@@ -10,7 +10,6 @@ from awesome_agent.application.command_results import (
     CommandInteractionResult,
     CommandResult,
     McpCommandPayload,
-    NoticeCommandPayload,
     SkillCatalogCommandPayload,
 )
 from awesome_agent.application.commands import CommandIntent, CommandName
@@ -117,24 +116,13 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     registry = ToolRegistry()
     register_read_tools(registry)
 
-    async def submit_turn(
-        thread_id: str, content: str, client_message_id: str
-    ) -> object:
-        return {
-            "thread_id": thread_id,
-            "content": content,
-            "client_message_id": client_message_id,
-        }
-
     extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
-        loader=loader,
         manager=manager,
         enablements=enablements,
         workspace_key=workspace.key,
         registry=registry,
-        submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
     )
@@ -246,12 +234,10 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     restarted_extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
-        loader=loader,
         manager=restarted,
         enablements=enablements,
         workspace_key=workspace.key,
         registry=restarted_registry,
-        submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
     )
@@ -289,12 +275,10 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     invalidated_extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
-        loader=loader,
         manager=invalidated,
         enablements=enablements,
         workspace_key=workspace.key,
         registry=invalidated_registry,
-        submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
     )
@@ -304,11 +288,11 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skills_select_mode_and_init_submits_a_normal_turn(
+async def test_skills_select_mode_without_submitting_a_hidden_turn(
     tmp_path: Path,
 ) -> None:
     skill_root = tmp_path / "skills"
-    for name in ("init", "review", "debug", "test", "git-workflow"):
+    for name in ("review", "debug", "test", "git-workflow"):
         _skill(skill_root, name)
     catalog = discover_skills(
         bundled_root=skill_root,
@@ -319,19 +303,9 @@ async def test_skills_select_mode_and_init_submits_a_normal_turn(
     database = tmp_path / "application.db"
     conversation = ConversationService(store=SQLiteConversationRepositories(database))
     thread = conversation.create_thread("workspace")
-    submitted: list[tuple[str, str]] = []
-
-    async def submit_turn(
-        thread_id: str, content: str, client_message_id: str
-    ) -> object:
-        del client_message_id
-        submitted.append((thread_id, content))
-        return {"operation_id": "operation"}
-
     service = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
-        loader=SkillLoader(catalog),
         manager=McpManager(
             configs=(),
             workspace_key="workspace",
@@ -341,7 +315,6 @@ async def test_skills_select_mode_and_init_submits_a_normal_turn(
         enablements=SQLiteMcpEnablementStore(database),
         workspace_key="workspace",
         registry=ToolRegistry(),
-        submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
     )
@@ -352,27 +325,16 @@ async def test_skills_select_mode_and_init_submits_a_normal_turn(
     picker = await service.skills(
         CommandIntent(name=CommandName.SKILLS),
     )
-    initialized = await service.init(
-        CommandIntent(name=CommandName.INIT, arguments=("carefully",)),
-    )
-
     assert isinstance(listed, CommandInteractionResult)
     assert isinstance(listed.context, SkillCatalogCommandPayload)
-    assert len(listed.context.skills) == 5
+    assert len(listed.context.skills) == 4
     assert isinstance(picker, CommandInteractionResult)
     assert picker.interaction.kind == "selection"
     assert {option.value for option in picker.interaction.options} == {
         "auto",
         "off",
-        "init",
         "review",
         "debug",
         "test",
         "git-workflow",
     }
-    assert isinstance(initialized, CommandResult)
-    assert isinstance(initialized.payload, NoticeCommandPayload)
-    assert conversation.read_thread(thread.id).thread.skill_mode == "init"
-    assert submitted == [
-        (thread.id, "Initialize durable workspace guidance. carefully")
-    ]

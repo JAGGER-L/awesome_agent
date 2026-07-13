@@ -21,13 +21,10 @@ describe("COMMAND_CATALOG", () => {
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "application"),
     ).toHaveLength(20);
-    expect(
-      COMMAND_CATALOG.filter(({ owner }) => owner === "skill"),
-    ).toHaveLength(1);
     expect(COMMAND_CATALOG.filter(({ owner }) => owner === "ink")).toHaveLength(
       4,
     );
-    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(25);
+    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(24);
     for (const command of COMMAND_CATALOG) {
       expect(command.completion).toBe(`/${command.name}`);
       expect(command.completion).not.toContain("[");
@@ -52,6 +49,7 @@ describe("COMMAND_CATALOG", () => {
     "test",
     "commit",
     "workplace",
+    "init",
   ])("does not restore /%s", (name) => {
     expect(COMMAND_CATALOG.some((command) => command.name === name)).toBe(
       false,

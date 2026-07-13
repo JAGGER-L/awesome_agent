@@ -11,7 +11,6 @@ import {
   methodNames,
   methodSchemas,
   requestIdSchema,
-  skillCommandNames,
   threadEntrySchema,
   threadTransitionSnapshotSchema,
 } from "../../src/protocol/index.js";
@@ -98,8 +97,8 @@ describe("protocol inventory", () => {
     expect(applicationCommandNames).toHaveLength(20);
     expect(applicationCommandNames).toContain("auth");
     expect(applicationCommandNames).toContain("permissions");
-    expect(skillCommandNames).toEqual(["init"]);
     expect(inkCommandNames).toEqual(["help", "theme", "copy", "quit"]);
+    expect(commandNameSchema.safeParse("init").success).toBe(false);
     expect(commandNameSchema.safeParse("editor").success).toBe(false);
     expect(commandNameSchema.safeParse("details").success).toBe(false);
     for (const removed of [

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 
 from awesome_agent.application.command_results import (
     CommandOption,
@@ -14,7 +14,6 @@ from awesome_agent.application.command_results import (
     MemorySearchCommandPayload,
     MemorySearchItem,
     MemoryStatusCommandPayload,
-    NoticeCommandPayload,
     SkillCatalogCommandPayload,
     SkillCommandDiagnostic,
     SkillCommandItem,
@@ -29,7 +28,6 @@ from awesome_agent.config import (
     UserConfigWriter,
 )
 from awesome_agent.conversation import ConversationService
-from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.extensions.mcp import (
     McpConnectionState,
@@ -40,7 +38,7 @@ from awesome_agent.extensions.mcp import (
 )
 from awesome_agent.extensions.mcp.adapter import McpToolAdapter
 from awesome_agent.extensions.mcp.models import mcp_config_hash
-from awesome_agent.extensions.skills import SkillCatalog, SkillLoader, SkillNotFound
+from awesome_agent.extensions.skills import SkillCatalog, SkillNotFound
 from awesome_agent.memory import (
     CloudDeleteStatus,
     LocalMemoryService,
@@ -56,7 +54,6 @@ from awesome_agent.memory import (
 )
 from awesome_agent.storage.mcp import SQLiteMcpEnablementStore
 
-type TurnSubmitter = Callable[[str, str, str], Awaitable[object]]
 type Mem0StateChanged = Callable[[bool, Mem0Identity | None], None]
 
 
@@ -68,12 +65,10 @@ class ApplicationExtensionService:
         *,
         conversation: ConversationService,
         catalog: SkillCatalog,
-        loader: SkillLoader,
         manager: McpManager,
         enablements: SQLiteMcpEnablementStore,
         workspace_key: str,
         registry: ToolRegistry,
-        submit_turn: TurnSubmitter,
         current_thread_id: Callable[[], str | None],
         credential_statuses: Callable[[], ProviderCredentialStatuses],
         local_memory: LocalMemoryService | None = None,
@@ -87,12 +82,10 @@ class ApplicationExtensionService:
     ) -> None:
         self._conversation = conversation
         self._catalog = catalog
-        self._loader = loader
         self._manager = manager
         self._enablements = enablements
         self._workspace_key = workspace_key
         self._registry = registry
-        self._submit_turn = submit_turn
         self._current_thread_id = current_thread_id
         self._credential_statuses = credential_statuses
         self._local_memory = local_memory
@@ -147,21 +140,6 @@ class ApplicationExtensionService:
             ),
             context=payload,
         )
-
-    async def init(self, intent: CommandIntent) -> CommandOutcome:
-        thread_id = self._current_thread_id()
-        if thread_id is None:
-            return error("thread_not_found", "Select a Thread first.")
-        try:
-            self._catalog.resolve("init")
-        except SkillNotFound:
-            return error("skill_not_found", "Bundled Skill is unavailable.")
-        self._conversation.set_skill_mode(thread_id, "init")
-        content = " ".join(
-            ("Initialize durable workspace guidance.", *intent.arguments)
-        ).strip()
-        await self._submit_turn(thread_id, content, new_identifier("client"))
-        return result(NoticeCommandPayload(message="Agent Turn submitted."))
 
     async def mcp(self, intent: CommandIntent) -> CommandOutcome:
         arguments = intent.arguments

@@ -53,7 +53,6 @@ const metadata: Readonly<
     "/permissions",
     "Show or choose permission mode",
   ),
-  init: entry("init", "/init", "Initialize repository instructions"),
   help: entry("help", "/help [command]", "Show command help"),
   theme: entry(
     "theme",

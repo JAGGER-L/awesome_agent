@@ -165,7 +165,6 @@ class ApplicationContextService:
             sources.append(
                 model_identity_context_source(
                     self._model_identity(turn),
-                    workspace_path=str(self._workspace.canonical_path),
                 )
             )
         if self._workspace_instructions:

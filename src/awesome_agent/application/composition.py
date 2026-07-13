@@ -977,12 +977,10 @@ class _LocalApplicationBackend:
         self._extensions = ApplicationExtensionService(
             conversation=self._conversation,
             catalog=catalog,
-            loader=skill_loader,
             manager=self._mcp,
             enablements=enablements,
             workspace_key=self._workspace.key,
             registry=registry,
-            submit_turn=self.start_turn,
             current_thread_id=lambda: (
                 self._commands.current_thread_id if self._commands is not None else None
             ),
@@ -1052,7 +1050,6 @@ class _LocalApplicationBackend:
                 CommandName.DOCTOR: self._diagnostic_commands.doctor,
                 CommandName.CONFIG: self._diagnostic_commands.config,
                 CommandName.PERMISSIONS: self._permission_commands.permissions,
-                CommandName.INIT: self._extensions.init,
             }
         )
         await self._turns.reconcile_startup()

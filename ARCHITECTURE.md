@@ -212,11 +212,12 @@ Ink command controller
     -> current transcript path
 ```
 
-The immutable dispatcher owns every Core command, including Skill-owned
-`/init`. Ink-owned commands remain local presentation actions and never enter
-Core RPC. Composition only wires command services; it contains no command
-semantics and constructs no command results. Commands do not become model
-prompts unless their defined behavior explicitly starts an Agent Turn.
+The immutable dispatcher owns every Core command. Ink-owned commands remain
+local presentation actions and never enter Core RPC. Composition only wires
+command services; it contains no command semantics and constructs no command
+results. Slash commands are deterministic product operations and never submit
+hidden model prompts; natural-language input is the only path that starts an
+Agent Turn.
 
 `LocalApplication` is the only surface-facing Application host. Python produces Protocol v2
 discriminated outcomes that TypeScript validates and presents exhaustively.

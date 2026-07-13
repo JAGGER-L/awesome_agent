@@ -55,21 +55,31 @@ def test_product_instructions_define_minimal_action() -> None:
     assert "Never invoke a tool as a ritual" in instructions
 
 
-def test_runtime_identity_source_is_authoritative_and_workspace_scoped() -> None:
+def test_runtime_identity_source_is_authoritative_and_concise() -> None:
     source = model_identity_context_source(
         ModelIdentitySnapshot.from_models(
             configured_model="deepseek/deepseek-v4-pro",
-            effective_model="deepseek/deepseek-v4-pro",
+            effective_model="deepseek/deepseek-v4-flash",
         ),
-        workspace_path="E:/project",
     )
 
     assert "Runtime: Awesome Agent" in source.content
-    assert "Provider: deepseek" in source.content
-    assert "Effective model: deepseek/deepseek-v4-pro" in source.content
-    assert "Fallback active: no" in source.content
-    assert "Workspace: E:/project" in source.content
-    assert "Never claim to be Claude" in source.content
+    assert "Effective model: deepseek/deepseek-v4-flash" in source.content
+    assert "deepseek/deepseek-v4-pro" not in source.content
+    assert "one concise sentence" in source.content
+    assert "never claim to be Claude" in source.content
+    for omitted in (
+        "Provider:",
+        "Configured model:",
+        "Fallback active:",
+        "Workspace:",
+        "Credential:",
+        "Permission:",
+        "Memory:",
+        "MCP:",
+        "Thinking:",
+    ):
+        assert omitted not in source.content
 
 
 class Compressor:

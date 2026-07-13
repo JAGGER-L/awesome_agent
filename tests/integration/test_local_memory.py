@@ -37,7 +37,7 @@ from awesome_agent.core.tools.executor import ToolExecutor
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.extensions.mcp import McpManager
-from awesome_agent.extensions.skills import SkillCatalog, SkillLoader
+from awesome_agent.extensions.skills import SkillCatalog
 from awesome_agent.memory import (
     LocalMemoryService,
     MemoryMutationStatus,
@@ -77,19 +77,9 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     register_read_tools(registry)
     catalog = SkillCatalog((), ())
 
-    async def submit_turn(
-        thread_id: str, content: str, client_message_id: str
-    ) -> object:
-        return {
-            "thread_id": thread_id,
-            "content": content,
-            "client_message_id": client_message_id,
-        }
-
     extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
-        loader=SkillLoader(catalog),
         manager=McpManager(
             configs=(),
             workspace_key=workspace.key,
@@ -99,7 +89,6 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         enablements=SQLiteMcpEnablementStore(paths.application_db),
         workspace_key=workspace.key,
         registry=registry,
-        submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
         local_memory=memory,
@@ -283,19 +272,9 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
     thread = conversation.create_thread(workspace.key)
     catalog = SkillCatalog((), ())
 
-    async def submit_turn(
-        thread_id: str, content: str, client_message_id: str
-    ) -> object:
-        return {
-            "thread_id": thread_id,
-            "content": content,
-            "client_message_id": client_message_id,
-        }
-
     service = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
-        loader=SkillLoader(catalog),
         manager=McpManager(
             configs=(),
             workspace_key=workspace.key,
@@ -305,7 +284,6 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
         enablements=SQLiteMcpEnablementStore(paths.application_db),
         workspace_key=workspace.key,
         registry=ToolRegistry(),
-        submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
         local_memory=LocalMemoryService(paths=paths, workspace_key=workspace.key),

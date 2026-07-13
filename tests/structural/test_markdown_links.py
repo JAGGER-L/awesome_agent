@@ -235,7 +235,6 @@ def test_public_command_and_configuration_contract_is_documented() -> None:
         "doctor",
         "config",
         "permissions",
-        "init",
         "help",
         "theme",
         "copy",
