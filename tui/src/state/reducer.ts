@@ -391,7 +391,6 @@ export function surfaceReducer(
         thread: action.thread,
         warnings: [],
         committed_transcript: action.transcript,
-        transcript_persisted: action.transcript_persisted,
       };
     case "event.received":
       return action.generation === state.thread_generation
@@ -434,7 +433,6 @@ export function surfaceReducer(
       return {
         ...state,
         committed_transcript: action.result.blocks,
-        transcript_persisted: action.result.persisted,
       };
     case "transcript.command_result":
       if (action.generation !== state.thread_generation) return state;
@@ -468,7 +466,6 @@ export function surfaceReducer(
             },
           ],
         ),
-        transcript_persisted: false,
       };
     case "transcript.user.pending":
       if (action.generation !== state.thread_generation) return state;
@@ -486,7 +483,6 @@ export function surfaceReducer(
             },
           ],
         ),
-        transcript_persisted: false,
       };
     case "transcript.user.accepted":
       if (action.generation !== state.thread_generation) return state;

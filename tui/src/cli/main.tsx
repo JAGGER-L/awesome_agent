@@ -248,6 +248,7 @@ async function renderInkApplication(
           : {})}
         onFinish={finish}
         unmount={() => instance?.unmount()}
+        resetCurrentFrame={() => clearCurrentInkFrame(instance)}
       />,
       { exitOnCtrlC: false },
     );
@@ -260,6 +261,7 @@ type CliApplicationProps = CliRenderRequest & {
   readonly preferenceWarning?: string;
   readonly onFinish: (outcome: CliRenderOutcome) => void;
   readonly unmount: () => void;
+  readonly resetCurrentFrame: () => void;
 };
 
 function CliApplication(props: CliApplicationProps) {
@@ -338,6 +340,7 @@ function RunningCliApplication({
   preferenceWarning,
   onFinish,
   unmount,
+  resetCurrentFrame,
 }: CliApplicationProps & {
   readonly state: Extract<StartupRenderState, { kind: "startup" }>;
 }) {
@@ -641,6 +644,7 @@ function RunningCliApplication({
             }}
             interactionResponder={interactions}
             providerSetupRequired={startup.readiness === "diagnostics_ready"}
+            resetCurrentFrame={resetCurrentFrame}
             welcome={{
               version: PRODUCT_VERSION,
               workspacePath: startup.application.workspace.display_path,
@@ -672,6 +676,12 @@ function RunningCliApplication({
       </AppErrorBoundary>
     </ThemeProvider>
   );
+}
+
+export function clearCurrentInkFrame(
+  instance: Pick<Instance, "clear"> | undefined,
+): void {
+  instance?.clear();
 }
 
 export async function executeFatalRecoverySelection(

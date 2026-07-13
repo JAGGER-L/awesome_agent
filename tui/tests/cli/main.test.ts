@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CoreSpawnError } from "../../src/core/errors.js";
 import {
+  clearCurrentInkFrame,
   executeFatalRecoverySelection,
   reconnectAndReplaceSurface,
   runCli,
@@ -124,6 +125,13 @@ function harness(overrides: Partial<CliDependencies> = {}) {
 }
 
 describe("runCli", () => {
+  it("clears only the current Ink frame through the render host", () => {
+    const clear = vi.fn();
+
+    clearCurrentInkFrame({ clear });
+
+    expect(clear).toHaveBeenCalledOnce();
+  });
   it.each([
     ["--version"],
     ["-V"],

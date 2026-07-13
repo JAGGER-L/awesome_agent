@@ -125,7 +125,6 @@ describe("connectSurface", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 5));
     }
     expect(connected.store.getState()).toMatchObject({
-      transcript_persisted: true,
       committed_transcript: expect.arrayContaining([
         expect.objectContaining({ kind: "assistant", text: "durable answer" }),
       ]),
@@ -161,7 +160,6 @@ describe("connectSurface", () => {
       application: { current_thread_id: "thread_new" } as never,
       thread: { view: { thread: { id: "thread_new" } } } as never,
       transcript: [],
-      transcript_persisted: true,
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 150));
 

@@ -23,7 +23,6 @@ describe("slash command transcript input", () => {
         text: "/resume thread_abcd",
       },
     ]);
-    expect(state.transcript_persisted).toBe(false);
   });
 
   it("ignores submissions from an older thread generation", () => {
