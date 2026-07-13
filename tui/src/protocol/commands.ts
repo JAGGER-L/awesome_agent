@@ -32,18 +32,15 @@ export const applicationCommandNames = [
   "permissions",
 ] as const;
 
-export const skillCommandNames = ["init"] as const;
-
 export const inkCommandNames = ["help", "theme", "copy", "quit"] as const;
 
 export const commandNames = [
   ...applicationCommandNames,
-  ...skillCommandNames,
   ...inkCommandNames,
 ] as const;
 
 export const commandNameSchema = z.enum(commandNames);
-export const commandOwnerSchema = z.enum(["application", "skill", "ink"]);
+export const commandOwnerSchema = z.enum(["application", "ink"]);
 
 export type CommandName = z.infer<typeof commandNameSchema>;
 export type CommandOwner = z.infer<typeof commandOwnerSchema>;
@@ -97,7 +94,6 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   doctor: "application",
   config: "application",
   permissions: "application",
-  init: "skill",
   help: "ink",
   theme: "ink",
   copy: "ink",

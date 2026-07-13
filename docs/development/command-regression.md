@@ -28,7 +28,6 @@ runtime registry.
 | `/doctor` | Application | Aligned diagnostic rows | Each check has a typed status | `status-doctor-presenters` |
 | `/config` | Application | Effective sources and credential presence | Never renders secret values | `catalog-presenters` |
 | `/permissions` | Application | Permission picker/result | Full access uses warning confirmation | `controller`, interaction tests |
-| `/init` | Skill | Submits the bundled initialization Skill | Missing Skill is a visible error | `local`, `controller` |
 | `/help` | Ink | Bare catalog or focused command | Ordinary transcript result; unknown name explains failure | `help` |
 | `/theme` | Ink | Theme picker or explicit value | Escape returns to Composer | `local` |
 | `/copy` | Ink | Copies the latest assistant response | Empty transcript and clipboard errors are visible | `local` |
@@ -36,4 +35,5 @@ runtime registry.
 
 Tab completion inserts only the executable bare command. Argument placeholders
 appear only in Help usage. Unknown and removed commands produce an explicit
-error and never silently no-op.
+error and never silently no-op. Slash commands never use a hidden prompt to
+submit an Agent Turn.

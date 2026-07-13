@@ -34,7 +34,7 @@ No other public launch flags are supported.
 | `/mcp` | Show MCP server status. |
 | `/memory` | Choose Local or Cloud Memory, then switch it On or Off. |
 | `/status` | Show the current product and thread status. |
-| `/usage` | Show token and operation usage from the latest turn. |
+| `/usage` | Show cumulative token and operation usage for the current thread. |
 | `/doctor` | Check configuration, embedded state, checkpoints, and Provider readiness. |
 | `/config` | Show effective source and credential-presence diagnostics, never secret values. |
 
@@ -52,12 +52,6 @@ Run `/auth`, `/auth deepseek`, or `/auth kimi` to manage credentials. Keys are
 never accepted as command arguments. A rejected key is not saved. When the
 Provider cannot be reached, Awesome asks whether to save the key unverified.
 Removing a local credential does not revoke it at the Provider.
-
-## Skill-backed commands
-
-`/init` selects the bundled initialization Skill and submits the remaining text
-as a normal Agent task. Other workflows are selected through `/skills` or
-requested naturally; none create a second execution system.
 
 ## Ink-local commands
 

@@ -44,8 +44,8 @@ produce diagnostics rather than silently changing behavior.
 `/skills` opens the catalog and selects `auto`, `off`, or one named Skill for
 the thread. You can also select directly with `/skills <name>`. Skill bodies
 and resources are loaded on demand; they are not injected into every turn.
-`/init` remains a shortcut for repository initialization. Other workflows use
-`/skills` or a natural-language request.
+Repository initialization and other workflows use `/skills` or a
+natural-language request; selecting a Skill never submits a hidden Agent Turn.
 
 ## MCP
 

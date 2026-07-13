@@ -28,7 +28,7 @@ from awesome_agent.conversation import ConversationService
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.extensions.mcp import McpManager
-from awesome_agent.extensions.skills import SkillCatalog, SkillLoader
+from awesome_agent.extensions.skills import SkillCatalog
 from awesome_agent.memory import (
     DistillationResult,
     DistillationStatus,
@@ -169,22 +169,12 @@ def _extensions(
     catalog = SkillCatalog((), ())
     enablements = SQLiteMcpEnablementStore(paths.application_db)
 
-    async def submit_turn(
-        thread_id: str, content: str, client_message_id: str
-    ) -> object:
-        return {
-            "thread_id": thread_id,
-            "content": content,
-            "client_message_id": client_message_id,
-        }
-
     adapter = Mem0CloudAdapter(client)
     current_config = read_user_config_document(paths.config_file)
     return (
         ApplicationExtensionService(
             conversation=conversation,
             catalog=catalog,
-            loader=SkillLoader(catalog),
             manager=McpManager(
                 configs=(),
                 workspace_key=workspace.key,
@@ -194,7 +184,6 @@ def _extensions(
             enablements=enablements,
             workspace_key=workspace.key,
             registry=ToolRegistry(),
-            submit_turn=submit_turn,
             current_thread_id=lambda: thread.id,
             credential_statuses=_credential_statuses,
             config_writer=UserConfigWriter(paths.config_file),

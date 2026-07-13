@@ -81,10 +81,6 @@
       "owner": "application"
     },
     {
-      "name": "init",
-      "owner": "skill"
-    },
-    {
       "name": "help",
       "owner": "ink"
     },

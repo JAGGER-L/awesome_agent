@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict
 
 class CommandOwner(StrEnum):
     APPLICATION = "application"
-    SKILL = "skill"
     INK = "ink"
 
 
@@ -32,7 +31,6 @@ class CommandName(StrEnum):
     DOCTOR = "doctor"
     CONFIG = "config"
     PERMISSIONS = "permissions"
-    INIT = "init"
     HELP = "help"
     THEME = "theme"
     COPY = "copy"
@@ -65,7 +63,6 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.PERMISSIONS,
         )
     },
-    CommandName.INIT: CommandOwner.SKILL,
     **{
         name: CommandOwner.INK
         for name in (

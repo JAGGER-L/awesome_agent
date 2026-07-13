@@ -32,9 +32,10 @@ Ink command controller
 `CommandDispatcher` owns the complete immutable inventory. Focused services own
 conversation, context, provider configuration, changes, extensions,
 diagnostics, and permission semantics. `composition.py` injects those services
-but does not branch on command names or construct outcomes. Skill-owned
-`/init` uses the same dispatcher and may deliberately start an Agent Turn;
-Ink-owned presentation commands never enter Core RPC.
+but does not branch on command names or construct outcomes. Slash commands are
+deterministic product operations and never submit hidden model prompts.
+Ink-owned presentation commands never enter Core RPC; natural-language input
+is the only path that starts an Agent Turn.
 
 `LocalApplication` is the only surface-facing Application API. Command progress
 belongs to the Surface pending lifecycle and is not persisted as another
