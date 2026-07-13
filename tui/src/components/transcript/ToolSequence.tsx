@@ -54,17 +54,12 @@ export function ToolSequence({
               ? ` · ${item.error_code}`
               : ""}
           </Text>
-          {item.detail
-            ? item.detail.split("\n").map((line, index) => (
-                <Text
-                  key={`${item.call_id}:detail:${index}`}
-                  color={theme.muted}
-                >
-                  {"    "}
-                  {line}
-                </Text>
-              ))
-            : null}
+          {item.detail ? (
+            <Text color={theme.muted}>
+              {"    "}
+              {item.detail.replace(/\n/gu, "\n    ")}
+            </Text>
+          ) : null}
           {item.detail_truncated_count ? (
             <Text color={theme.muted}>
               {"    "}… +{item.detail_truncated_count} entries
