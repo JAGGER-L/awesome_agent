@@ -21,6 +21,61 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("submitted slash command history", () => {
+  it("Tab completes canonically without executing placeholders", async () => {
+    const controller = { submit: vi.fn() } as unknown as CommandController;
+    const store = createSurfaceStore();
+    const view = render(
+      <App
+        store={store}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={80}
+      />,
+    );
+
+    view.stdin.write("/res");
+    view.stdin.write("\t");
+
+    await eventually(() => expect(view.lastFrame()).toContain("/resume"));
+    expect(view.lastFrame()).not.toContain("[thread_id]");
+    expect(controller.submit).not.toHaveBeenCalled();
+    expect(store.getState().committed_transcript).toBeUndefined();
+  });
+
+  it("Enter executes the selected canonical command once", async () => {
+    const controller = {
+      submit: vi.fn(async () => ({
+        kind: "selection",
+        intent: { name: "resume" },
+        selection: {
+          kind: "selection",
+          prompt: "Resume a Thread",
+          options: [{ value: "thread_1", label: "Thread 1", selected: true }],
+        },
+      })),
+    } as unknown as CommandController;
+    const store = createSurfaceStore();
+    const view = render(
+      <App
+        store={store}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={80}
+      />,
+    );
+
+    view.stdin.write("/res");
+    view.stdin.write("\r");
+
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Resume a Thread"),
+    );
+    expect(controller.submit).toHaveBeenCalledOnce();
+    expect(store.getState().committed_transcript).toEqual([
+      expect.objectContaining({ kind: "command_input", text: "/resume" }),
+    ]);
+  });
+
   it("records the exact command before the Core request resolves", async () => {
     let resolveRequest: ((value: never) => void) | undefined;
     const pending = new Promise<never>((resolve) => {

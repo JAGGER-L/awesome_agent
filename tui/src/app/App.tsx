@@ -520,6 +520,30 @@ export function App({
     ],
   );
 
+  const submitValue = useCallback(
+    async (value: string) => {
+      dispatch({ type: "composer.submitting", submitting: true });
+      dispatch({ type: "composer.message" });
+      try {
+        const result = await submit(value);
+        if (result.accepted) {
+          dispatch({
+            type: "composer.edit",
+            action: { type: "submit_history", value },
+          });
+          dispatch({
+            type: "composer.edit",
+            action: { type: "replace", value: "" },
+          });
+        }
+        dispatch({ type: "composer.message", message: result.message });
+      } finally {
+        dispatch({ type: "composer.submitting", submitting: false });
+      }
+    },
+    [dispatch, submit],
+  );
+
   const submitComposer = useCallback(async () => {
     const value = uiRef.current.composer.value;
     if (value.trim().length === 0) {
@@ -536,24 +560,7 @@ export function App({
       }
       return;
     }
-    dispatch({ type: "composer.submitting", submitting: true });
-    dispatch({ type: "composer.message" });
-    try {
-      const result = await submit(value);
-      if (result.accepted) {
-        dispatch({
-          type: "composer.edit",
-          action: { type: "submit_history", value },
-        });
-        dispatch({
-          type: "composer.edit",
-          action: { type: "replace", value: "" },
-        });
-      }
-      dispatch({ type: "composer.message", message: result.message });
-    } finally {
-      dispatch({ type: "composer.submitting", submitting: false });
-    }
+    await submitValue(value);
   }, [
     applyCommandOutcome,
     controller,
@@ -561,7 +568,7 @@ export function App({
     providerSetupVisible,
     state.application?.current_thread_id,
     store,
-    submit,
+    submitValue,
     uiRef,
   ]);
 
@@ -716,13 +723,11 @@ export function App({
         ? findCommand(mode.selectedCommand)
         : undefined;
       if (command) {
-        dispatch({
-          type: "composer.edit",
-          action: { type: "replace", value: `/${command.name}` },
-        });
+        dispatch({ type: "mode.cancel" });
+        await submitValue(command.completion);
+        return;
       }
       dispatch({ type: "mode.cancel" });
-      await submitComposer();
       return;
     }
     if (mode.kind === "approval") {
@@ -802,7 +807,7 @@ export function App({
     store,
     mutateCredential,
     respondApproval,
-    submitComposer,
+    submitValue,
     uiRef,
   ]);
 
@@ -813,7 +818,7 @@ export function App({
     if (!command) return;
     dispatch({
       type: "composer.edit",
-      action: { type: "replace", value: command.usage },
+      action: { type: "replace", value: command.completion },
     });
     dispatch({ type: "mode.cancel" });
   }, [dispatch, uiRef]);
