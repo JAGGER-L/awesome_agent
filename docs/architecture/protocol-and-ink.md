@@ -58,6 +58,29 @@ The TUI immediately projects a user message with a generated
 durable transcript. Thread generation tags discard stale results after `/new`
 or `/resume` without replaying them into the new transcript.
 
+A submitted slash command is also projected immediately, using one
+`command_submission_id` generated before parsing or RPC execution. It is
+session-only terminal history: it never becomes a model message or SQLite
+conversation entry. Command input and command result remain separate blocks so
+failed, invalid, cancelled, Picker, and Secret flows preserve what the user
+actually submitted.
+
+Thread replacement is one generation-guarded Surface transition. The TUI reads
+the authoritative Application and selected Thread projections, verifies both
+Thread identities, hydrates durable history for resume, and dispatches one
+replacement action. `/new` installs only a session notice for the new empty
+Thread; `/resume` installs only the selected Thread's durable transcript. The
+transition clears prior operation, interaction, warning, usage, change, and
+transcript state. Events, deltas, reconciliation, or command outcomes carrying
+an older generation cannot enter the replacement Surface.
+
+Stable block identities come from their semantic owners: client message ID for
+user Turns, command submission ID for slash input, durable entry ID for stored
+messages, deterministic Turn segment ordinals for assistant and Thinking
+segments, protocol call ID for tools, and ChangeSet ID for changes. Reusing one
+key for different blocks is an invariant violation rather than a silent
+deduplication.
+
 Within an active Turn, the reducer maintains one ordered timeline of locally
 measured Thinking intervals, structured tool facts, streaming assistant text,
 and the measured Turn duration. Tool output remains bounded and folded by
