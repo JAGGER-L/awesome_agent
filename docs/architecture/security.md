@@ -42,8 +42,10 @@ itself.
 
 Memory, Skills, repository instructions, and MCP output are untrusted context.
 They cannot expand permissions. Secrets come only from the process environment
-or user-owned `.env`, are redacted from events, and are never supplied by
-workspace configuration.
+or user-owned `.env`; `/auth` persists the explicitly selected source. If that
+source becomes unavailable, Core reports it and never falls back silently.
+Secret values are redacted from events and never supplied by workspace
+configuration.
 
 There is no Docker sandbox today. If added later, it belongs below the Tool
 Executor as an optional execution backend; workspace trust and tool policy

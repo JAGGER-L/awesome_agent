@@ -37,7 +37,7 @@ export type PickerOwner =
       readonly provider: "deepseek" | "kimi" | "mem0";
     }
   | {
-      readonly kind: "credential_confirm";
+      readonly kind: "credential_unverified";
       readonly intent: CommandIntent;
       readonly prompt: SecretPrompt;
       readonly secret: string;
@@ -65,6 +65,7 @@ export type UiMode =
       readonly selection: PickerSelection;
       readonly selected: number;
       readonly blocking: boolean;
+      readonly submitting?: boolean;
     }
   | {
       readonly kind: "secret";

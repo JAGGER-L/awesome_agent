@@ -15,7 +15,13 @@ from awesome_agent.application.command_results import (
 )
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.extension_commands import ApplicationExtensionService
-from awesome_agent.config import UserConfigWriter
+from awesome_agent.config import (
+    CredentialSource,
+    ProviderCredentialStatus,
+    ProviderCredentialStatuses,
+    UserConfigWriter,
+    missing_provider_credential_statuses,
+)
 from awesome_agent.config.loader import read_user_config_document
 from awesome_agent.context import mem0_context_source
 from awesome_agent.conversation import ConversationService
@@ -90,6 +96,21 @@ class FakeMem0Client:
         self.calls.append("delete")
         self.records.pop(memory_id, None)
         return {"status": "deleted"}
+
+
+def _credential_statuses() -> ProviderCredentialStatuses:
+    statuses = missing_provider_credential_statuses()
+    return statuses.model_copy(
+        update={
+            "mem0": ProviderCredentialStatus(
+                provider="mem0",
+                environment_variable="MEM0_API_KEY",
+                environment_configured=False,
+                awesome_configured=True,
+                selected_source=CredentialSource.AWESOME,
+            )
+        }
+    )
 
 
 def _workspace_filter(filters: object) -> object:
@@ -175,6 +196,7 @@ def _extensions(
             registry=ToolRegistry(),
             submit_turn=submit_turn,
             current_thread_id=lambda: thread.id,
+            credential_statuses=_credential_statuses,
             config_writer=UserConfigWriter(paths.config_file),
             mem0_cloud=adapter,
             mem0_enabled=mem0_enabled,

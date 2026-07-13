@@ -23,7 +23,7 @@ describe("TrustPrompt", () => {
       <TrustPrompt workspacePath="/workspace" selected={1} />,
     );
     view.stdin.write("\u001b[A\r");
-    expect(view.lastFrame()).toContain("❯ 2. No, exit");
+    expect(view.lastFrame()).toContain("› 2. No, exit");
   });
 
   it("renders submitting and recoverable error feedback", () => {
@@ -36,7 +36,7 @@ describe("TrustPrompt", () => {
           message="Unable to save trust."
         />,
       ).lastFrame() ?? "";
-    expect(frame).toContain("Saving trust…");
+    expect(frame).toContain("Submitting…");
     expect(frame).toContain("Unable to save trust.");
   });
 });

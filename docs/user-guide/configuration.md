@@ -76,18 +76,23 @@ Configuration cannot exceed these hard limits:
 
 The model's actual context limit may reduce the effective context budget.
 
-## Environment and precedence
+## Credentials and source selection
 
 Secrets are `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`, and `MEM0_API_KEY`. A
-process environment value wins over the same name in `<AWESOME_HOME>/.env`.
-Secrets are never read from a workspace `.env` or printed by `/config`.
+process environment value and the Awesome-managed value in
+`<AWESOME_HOME>/.env` are separate available sources. When no preference has
+ever been selected, Awesome initially chooses Environment when detected and
+otherwise chooses an available Awesome value. An explicit `/auth` selection is
+then authoritative. Secrets are never read from a workspace `.env` or printed
+by `/config`.
 
 Use the masked `/auth` flow to manage DeepSeek, Kimi, and Mem0 Cloud
 credentials. Each service shows Environment and Awesome API key independently.
 Environment is read-only and selectable only when detected. Awesome API keys
 can be added, replaced, or deleted. The selected source is stored in user
-configuration; if it later becomes unavailable, Awesome reports that condition
-and does not silently switch to the other source.
+configuration; if it later becomes unavailable, Awesome reports `Unavailable`
+and requires a new selection. Deleting a selected Awesome key does not silently
+switch to Environment even when the variable is detected.
 
 Startup checks only whether a credential is present and performs no Provider
 network request. Saving through the TUI performs one short validation request.

@@ -16,7 +16,11 @@ from awesome_agent.application.command_results import (
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.extension_commands import ApplicationExtensionService
-from awesome_agent.config import BudgetConfig, TurnConfig
+from awesome_agent.config import (
+    BudgetConfig,
+    TurnConfig,
+    missing_provider_credential_statuses,
+)
 from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
@@ -132,6 +136,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         registry=registry,
         submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
     )
     selected = await extensions.skills(
         CommandIntent(name=CommandName.SKILLS, arguments=("workspace-review",)),
@@ -248,6 +253,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         registry=restarted_registry,
         submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
     )
     assert restarted.status("fixture").state is McpConnectionState.CONFIGURED
     assert restarted_registry.resolve("mcp.fixture.echo") is None
@@ -290,6 +296,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         registry=invalidated_registry,
         submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
     )
     await invalidated_extensions.prepare_turn_extensions()
     assert invalidated_registry.resolve("mcp.fixture.echo") is None
@@ -336,6 +343,7 @@ async def test_skills_select_mode_and_init_submits_a_normal_turn(
         registry=ToolRegistry(),
         submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
     )
 
     listed = await service.skills(

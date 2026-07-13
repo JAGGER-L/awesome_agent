@@ -99,7 +99,15 @@ export function routeTerminalKey(
       }
       break;
     case "picker":
-      intent = routeSelectionKey(key, mode.blocking);
+      if (!mode.submitting) {
+        intent = routeSelectionKey(key, mode.blocking);
+        if (
+          intent?.type === "selection.confirm" &&
+          mode.selection.options[mode.selected]?.disabled
+        ) {
+          intent = undefined;
+        }
+      }
       break;
     case "command_menu":
       if (key.upArrow) intent = { type: "selection.move", delta: -1 };

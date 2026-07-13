@@ -337,18 +337,18 @@ class ProviderConfigurationService:
         options: list[CommandOption] = []
         for service in ("deepseek", "kimi", "mem0"):
             status = _status(sources, service)
-            active = (
-                status.selected_source.value
-                if status.selected_source
-                else "Not configured"
-            )
+            active = status.selected_source.value if status.selected_source else None
             options.append(
                 CommandOption(
                     value=service,
                     label=_SERVICE_LABELS[service],
-                    description=f"Active · {active}"
-                    if status.configured
-                    else "Not configured",
+                    description=(
+                        "Not configured"
+                        if active is None
+                        else f"Active · {active}"
+                        if status.source_available
+                        else f"Active · {active} · Unavailable"
+                    ),
                 )
             )
         return tuple(options)

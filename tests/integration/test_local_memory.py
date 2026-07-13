@@ -7,6 +7,7 @@ import pytest
 from awesome_agent.agent import new_agent_state
 from awesome_agent.application.command_results import (
     CommandError,
+    CommandInteractionResult,
     CommandResult,
     MemoryDocumentCommandPayload,
     MemoryMutationCommandPayload,
@@ -15,7 +16,12 @@ from awesome_agent.application.command_results import (
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.extension_commands import ApplicationExtensionService
-from awesome_agent.config import BudgetConfig, TurnConfig, UserConfigWriter
+from awesome_agent.config import (
+    BudgetConfig,
+    TurnConfig,
+    UserConfigWriter,
+    missing_provider_credential_statuses,
+)
 from awesome_agent.config.loader import read_user_config_document
 from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService, UsageSummary
@@ -95,6 +101,7 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         registry=registry,
         submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
         local_memory=memory,
         config_writer=UserConfigWriter(paths.config_file),
     )
@@ -102,11 +109,21 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     initial = await extensions.memory(
         CommandIntent(name=CommandName.MEMORY),
     )
-    assert isinstance(initial, CommandResult)
-    assert isinstance(initial.payload, MemoryStatusCommandPayload)
-    assert initial.payload.local_enabled is False
-    assert initial.payload.cloud_available is False
-    assert initial.payload.cloud_enabled is False
+    assert isinstance(initial, CommandInteractionResult)
+    assert initial.interaction.kind == "selection"
+    assert [option.value for option in initial.interaction.options] == [
+        "local",
+        "mem0",
+    ]
+    assert isinstance(initial.context, MemoryStatusCommandPayload)
+    assert initial.context.local_enabled is False
+    local = await extensions.memory(
+        CommandIntent(name=CommandName.MEMORY, arguments=("local",)),
+    )
+    assert isinstance(local, CommandInteractionResult)
+    assert local.interaction.kind == "selection"
+    assert [option.value for option in local.interaction.options] == ["off", "on"]
+    assert local.interaction.options[0].selected is True
 
     enabled = await extensions.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("local", "on")),
@@ -290,6 +307,7 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
         registry=ToolRegistry(),
         submit_turn=submit_turn,
         current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
         local_memory=LocalMemoryService(paths=paths, workspace_key=workspace.key),
         config_writer=UserConfigWriter(paths.config_file),
     )
@@ -326,7 +344,9 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
         ),
     )
 
-    assert isinstance(mem0, CommandError) and mem0.code == "mem0_unavailable"
+    assert isinstance(mem0, CommandError) and mem0.code == "mem0_credential_unavailable"
+    assert "/auth" in mem0.message
+    assert read_user_config_document(paths.config_file).memory.mem0_cloud is False
     assert isinstance(invalid, CommandError) and invalid.code == "invalid_arguments"
     assert isinstance(replaced, CommandResult)
     assert isinstance(replaced.payload, MemoryMutationCommandPayload)
