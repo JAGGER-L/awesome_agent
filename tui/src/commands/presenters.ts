@@ -1,4 +1,4 @@
-import type { CommandName, CommandResult } from "../protocol/commands.js";
+import type { CommandPayload } from "../protocol/commands.js";
 
 export interface PresentationRow {
   readonly label: string;
@@ -33,109 +33,206 @@ export function formatTokenCount(value: number): string {
   return `${value}`;
 }
 
-export function presentCommandResult(
-  command: CommandName,
-  result: CommandResult,
+export function presentCommandPayload(
+  payload: CommandPayload,
 ): CommandPresentation {
-  if (result.status === "error") {
-    return {
-      kind: "error",
-      title: `/${command}`,
-      message: result.content || errorMessage(result.data),
-    };
+  const title = `/${commandFor(payload.kind)}`;
+  switch (payload.kind) {
+    case "notice":
+      return lines(title, [{ label: "", value: payload.message }]);
+    case "thread":
+      return lines(title, [
+        { label: "Thread", value: payload.thread_id },
+        { label: "Title", value: payload.title },
+      ]);
+    case "context":
+      return lines(title, [
+        ...payload.categories.map((category) => ({
+          label: humanize(category.name),
+          value: formatTokenCount(category.estimated_tokens),
+        })),
+        { label: "Total", value: formatTokenCount(payload.total_tokens) },
+        { label: "Budget", value: formatTokenCount(payload.budget_tokens) },
+      ]);
+    case "compact":
+      return {
+        kind: "progress",
+        title,
+        message: "Context compressed",
+        tone: "info",
+      };
+    case "model":
+      return lines(title, [{ label: "Model", value: payload.model }]);
+    case "thinking":
+      return lines(title, [
+        { label: "Thinking", value: payload.enabled ? "On" : "Off" },
+      ]);
+    case "workspace":
+      return lines(title, [{ label: "Workspace", value: payload.path }]);
+    case "diff":
+      return lines(title, [
+        {
+          label: payload.change_set_id ? "Change set" : "",
+          value: payload.content || "No workspace changes",
+        },
+      ]);
+    case "change":
+      return lines(title, [
+        { label: "Change set", value: payload.change_set_id },
+        { label: "State", value: payload.lifecycle },
+        { label: "Files", value: `${payload.restored_paths.length}` },
+        ...(payload.warning
+          ? [{ label: "Warning", value: payload.warning }]
+          : []),
+      ]);
+    case "tools":
+      return lines(
+        title,
+        payload.tools.length
+          ? payload.tools.map((tool) => ({
+              label: tool.name,
+              value: tool.approval_required ? "Approval required" : "Enabled",
+            }))
+          : [{ label: "", value: "No tools available" }],
+      );
+    case "skills":
+      return lines(title, [
+        { label: "Active", value: payload.active_mode },
+        ...payload.skills.map((skill) => ({
+          label: skill.name,
+          value: skill.description,
+        })),
+      ]);
+    case "mcp":
+      return lines(
+        title,
+        payload.servers.length
+          ? payload.servers.map((server) => ({
+              label: server.server_id,
+              value: server.detail ?? humanize(server.state),
+            }))
+          : [{ label: "", value: "No MCP servers configured" }],
+      );
+    case "memory_status":
+      return lines(title, [
+        {
+          label: "Local memory",
+          value: payload.local_enabled ? "On" : "Off",
+        },
+        {
+          label: "Cloud memory · Mem0",
+          value: payload.cloud_enabled ? "On" : "Off",
+        },
+      ]);
+    case "memory_document":
+      return lines(
+        title,
+        payload.entries.length
+          ? payload.entries.map((entry) => ({
+              label: entry.id,
+              value: entry.content,
+            }))
+          : [{ label: "", value: "No memories" }],
+      );
+    case "memory_search":
+      return lines(
+        title,
+        payload.memories.length
+          ? payload.memories.map((memory) => ({
+              label: memory.scope,
+              value: memory.content,
+            }))
+          : [{ label: "", value: "No memories found" }],
+      );
+    case "memory_mutation":
+      return lines(title, [
+        { label: "Provider", value: payload.provider },
+        { label: "Status", value: humanize(payload.status) },
+      ]);
+    case "status": {
+      const snapshot = payload.snapshot;
+      return lines(title, [
+        { label: "Version", value: snapshot.version },
+        { label: "Workspace", value: snapshot.workspace_path },
+        { label: "Thread", value: snapshot.thread_display_id },
+        { label: "Model", value: snapshot.model_identity.effective_model },
+        { label: "Permissions", value: humanize(snapshot.permission_mode) },
+        {
+          label: "Context",
+          value: `${formatTokenCount(snapshot.context_used_tokens)} / ${formatTokenCount(snapshot.context_budget_tokens)}`,
+        },
+      ]);
+    }
+    case "usage":
+      return lines(title, [
+        {
+          label: "Input tokens",
+          value: formatTokenCount(payload.usage.input_tokens),
+        },
+        {
+          label: "Output tokens",
+          value: formatTokenCount(payload.usage.output_tokens),
+        },
+        {
+          label: "Reasoning tokens",
+          value: formatTokenCount(payload.usage.reasoning_tokens),
+        },
+        { label: "Model calls", value: `${payload.usage.model_calls}` },
+        { label: "Tool calls", value: `${payload.usage.tool_calls}` },
+        {
+          label: "Active time",
+          value: `${payload.usage.active_execution_seconds}s`,
+        },
+      ]);
+    case "doctor":
+      return lines(
+        title,
+        payload.checks.map((check) => ({
+          label: check.name,
+          value: check.detail ?? humanize(check.status),
+        })),
+      );
+    case "config":
+      return lines(title, [
+        {
+          label: "DeepSeek",
+          value: credentialState(payload.credentials.deepseek),
+        },
+        { label: "Kimi", value: credentialState(payload.credentials.kimi) },
+        { label: "Mem0", value: credentialState(payload.credentials.mem0) },
+      ]);
+    case "permissions":
+      return lines(title, [
+        { label: "Permissions", value: humanize(payload.mode) },
+      ]);
+    default:
+      return assertNever(payload);
   }
-  if (result.secret_prompt) return { kind: "secret", title: `/${command}` };
-  if (result.selection) return { kind: "picker", title: `/${command}` };
-  if (command === "compact") {
-    return {
-      kind: "progress",
-      title: "/compact",
-      message: result.content || "Context compressed",
-      tone: "info",
-    };
-  }
-  return {
-    kind: "lines",
-    title: `/${command}`,
-    rows: rowsFor(command, result),
-    tone: result.status === "interaction_required" ? "warning" : "info",
-  };
 }
 
-function rowsFor(
-  command: CommandName,
-  result: CommandResult,
-): readonly PresentationRow[] {
-  if (result.content) return [{ label: "", value: result.content }];
-  const data = result.data;
-  if (command === "tools") return objectList(data.tools, "name", "description");
-  if (command === "skills")
-    return objectList(data.effective, "name", "description");
-  if (command === "mcp") return objectList(data.servers, "server_id", "state");
-  if (command === "memory") {
-    return [
-      { label: "Local memory", value: enabledValue(data.local) },
-      { label: "Cloud memory · Mem0", value: enabledValue(data.mem0) },
-    ];
-  }
-  const entries = Object.entries(data);
-  if (entries.length === 0)
-    return [{ label: "", value: emptyMessage(command) }];
-  return entries.map(([label, value]) => ({
-    label: humanize(label),
-    value: numericValue(command, label, value),
-  }));
+function commandFor(kind: CommandPayload["kind"]): string {
+  if (kind === "thread") return "new";
+  if (kind.startsWith("memory_")) return "memory";
+  if (kind === "change") return "undo";
+  if (kind === "notice") return "command";
+  return kind;
 }
 
-function objectList(
-  value: unknown,
-  labelKey: string,
-  valueKey: string,
-): readonly PresentationRow[] {
-  if (!Array.isArray(value) || value.length === 0)
-    return [{ label: "", value: "None configured" }];
-  return value.map((item) => {
-    const record = isRecord(item) ? item : {};
-    return {
-      label: String(record[labelKey] ?? "Unknown"),
-      value: String(record[valueKey] ?? ""),
-    };
-  });
+function lines(
+  title: string,
+  rows: readonly PresentationRow[],
+): CommandPresentation {
+  return { kind: "lines", title, rows, tone: "info" };
 }
 
-function numericValue(
-  command: CommandName,
-  label: string,
-  value: unknown,
-): string {
-  if (
-    typeof value === "number" &&
-    (command === "context" || command === "usage") &&
-    label.includes("token")
-  ) {
-    return formatTokenCount(value);
-  }
-  if (typeof value === "boolean") return value ? "On" : "Off";
-  if (value === null) return "—";
-  if (Array.isArray(value)) return value.join(", ");
-  if (isRecord(value)) return JSON.stringify(value);
-  return String(value);
-}
-
-function enabledValue(value: unknown): string {
-  return isRecord(value) && value.enabled === true ? "On" : "Off";
-}
-
-function emptyMessage(command: CommandName): string {
-  if (command === "diff") return "No workspace changes";
-  if (command === "usage") return "No usage recorded yet";
-  return "No information available";
-}
-
-function errorMessage(data: Readonly<Record<string, unknown>>): string {
-  return typeof data.error_code === "string"
-    ? humanize(data.error_code)
-    : "Command failed";
+function credentialState(credential: {
+  readonly selected_source?: "environment" | "awesome" | null | undefined;
+  readonly environment_configured: boolean;
+  readonly awesome_configured: boolean;
+}): string {
+  if (credential.selected_source === "environment") return "Environment";
+  if (credential.selected_source === "awesome") return "Awesome API key";
+  return "Not configured";
 }
 
 function humanize(value: string): string {
@@ -147,6 +244,6 @@ function formatUnit(value: number): string {
   return Number.isInteger(value) ? `${value}` : value.toFixed(1);
 }
 
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function assertNever(value: never): never {
+  throw new Error(`Unhandled command payload: ${String(value)}`);
 }

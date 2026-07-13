@@ -14,6 +14,7 @@ import type {
   MethodParams,
   MethodValue,
 } from "../../src/protocol/methods.js";
+import type { CommandSelection } from "../../src/protocol/commands.js";
 
 type Call = { method: MethodName; params: MethodParams[MethodName] };
 
@@ -45,7 +46,7 @@ function harness({
   commandFailure,
 }: {
   recent?: MethodValue["thread.list"]["threads"];
-  resumeSelection?: MethodValue["command.execute"]["selection"];
+  resumeSelection?: CommandSelection;
   commandFailure?: boolean;
 } = {}) {
   const calls: Call[] = [];
@@ -86,10 +87,8 @@ function harness({
             return {
               ok: true,
               value: {
-                status: "success",
-                content: "",
-                data: {},
-                selection: resumeSelection,
+                kind: "interaction",
+                interaction: resumeSelection,
               },
             } as never;
           }
@@ -100,9 +99,13 @@ function harness({
           return {
             ok: true,
             value: {
-              status: "success",
-              content: "",
-              data: { thread_id: id, title: `Title ${id}` },
+              kind: "result",
+              payload: {
+                kind: "thread",
+                action: intent.name === "new" ? "created" : "resumed",
+                thread_id: id,
+                title: `Title ${id}`,
+              },
             },
           } as never;
         }
@@ -183,10 +186,11 @@ describe("runStartup", () => {
 
   it("returns an ambiguous resume selection without hydrating arbitrarily", async () => {
     const selection = {
+      kind: "selection" as const,
       prompt: "Select",
       options: [
-        { value: "thread_a", label: "A", selected: false },
-        { value: "thread_b", label: "B", selected: false },
+        { value: "thread_a", label: "A", selected: false, disabled: false },
+        { value: "thread_b", label: "B", selected: false, disabled: false },
       ],
     };
     const { calls, surface } = harness({ resumeSelection: selection });
@@ -198,8 +202,16 @@ describe("runStartup", () => {
 
   it("opens the recent picker and creates one thread when it is empty", async () => {
     const selection = {
+      kind: "selection" as const,
       prompt: "Select",
-      options: [{ value: "thread_a", label: "A", selected: false }],
+      options: [
+        {
+          value: "thread_a",
+          label: "A",
+          selected: false,
+          disabled: false,
+        },
+      ],
     };
     const picker = harness({ resumeSelection: selection });
     await expect(
@@ -215,16 +227,24 @@ describe("runStartup", () => {
       ) {
         return {
           ok: true,
-          value: { status: "success", content: "", data: { threads: [] } },
+          value: {
+            kind: "error",
+            code: "thread_not_found",
+            message: "No Threads are available.",
+          },
         } as never;
       }
       if (method === "command.execute") {
         return {
           ok: true,
           value: {
-            status: "success",
-            content: "",
-            data: { thread_id: "thread_new" },
+            kind: "result",
+            payload: {
+              kind: "thread",
+              action: "created",
+              thread_id: "thread_new",
+              title: "New thread",
+            },
           },
         } as never;
       }
@@ -351,7 +371,7 @@ function startupHarness({
             ok: true,
             value: {
               product_version: "0.1.0",
-              protocol_version: 1,
+              protocol_version: 2,
               status: trusted ? "ready" : "trust_required",
               session_id: "session_1",
               ...(trusted ? {} : { interaction_id: "interaction_response" }),
@@ -388,9 +408,13 @@ function startupHarness({
           return {
             ok: true,
             value: {
-              status: "success",
-              content: "",
-              data: { thread_id: "thread_new" },
+              kind: "result",
+              payload: {
+                kind: "thread",
+                action: "created",
+                thread_id: "thread_new",
+                title: "New thread",
+              },
             },
           } as never;
         }

@@ -8,7 +8,13 @@ import {
   safeIntegerSchema,
   utcTimestampSchema,
 } from "./base.js";
-import { commandIntentSchema, commandResultSchema } from "./commands.js";
+import {
+  commandIntentSchema,
+  commandOutcomeSchema,
+  credentialSourceSchema,
+  providerCredentialStatusesSchema,
+  usageSummarySchema,
+} from "./commands.js";
 import { modelIdentitySchema } from "./identity.js";
 
 const nonNegativeIntegerSchema = safeIntegerSchema.min(0);
@@ -32,7 +38,7 @@ export const initializeParamsSchema = z.strictObject({
 
 export const initializeResultSchema = z.strictObject({
   product_version: boundedText(1, 64),
-  protocol_version: z.literal(1),
+  protocol_version: z.literal(2),
   status: z.enum(["ready", "trust_required"]),
   session_id: identifierSchema,
   interaction_id: identifierSchema.optional(),
@@ -44,20 +50,6 @@ const secretStatusSchema = z.strictObject({
   deepseek_api_key: z.boolean(),
   moonshot_api_key: z.boolean(),
   mem0_api_key: z.boolean(),
-});
-
-export const credentialSourceSchema = z.enum(["environment", "awesome"]);
-export const providerCredentialStatusSchema = z.strictObject({
-  provider: z.enum(["deepseek", "kimi", "mem0"]),
-  environment_variable: boundedText(1, 128),
-  environment_configured: z.boolean(),
-  awesome_configured: z.boolean(),
-  selected_source: credentialSourceSchema.nullable().optional(),
-});
-export const providerCredentialStatusesSchema = z.strictObject({
-  deepseek: providerCredentialStatusSchema,
-  kimi: providerCredentialStatusSchema,
-  mem0: providerCredentialStatusSchema,
 });
 
 export const applicationStateSchema = z.strictObject({
@@ -126,19 +118,6 @@ export const budgetSchema = z.strictObject({
   compressions: nonNegativeIntegerSchema.max(10),
   active_execution_seconds: positiveIntegerSchema.max(21_600),
   total_context_tokens: positiveIntegerSchema,
-});
-
-export const usageSummarySchema = z.strictObject({
-  input_tokens: nonNegativeIntegerSchema,
-  output_tokens: nonNegativeIntegerSchema,
-  reasoning_tokens: nonNegativeIntegerSchema,
-  cache_read_tokens: nonNegativeIntegerSchema,
-  cache_write_tokens: nonNegativeIntegerSchema,
-  model_calls: nonNegativeIntegerSchema,
-  tool_calls: nonNegativeIntegerSchema,
-  provider_retries: nonNegativeIntegerSchema,
-  compressions: nonNegativeIntegerSchema,
-  active_execution_seconds: z.number().finite().min(0),
 });
 
 export const turnSchema = z
@@ -347,8 +326,8 @@ export const methodSchemas = {
   },
   "command.execute": {
     params: commandIntentSchema,
-    value: commandResultSchema,
-    result: applicationResultSchema(commandResultSchema),
+    value: commandOutcomeSchema,
+    result: applicationResultSchema(commandOutcomeSchema),
   },
   "provider.credential.set": {
     params: z

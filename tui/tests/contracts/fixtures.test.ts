@@ -87,10 +87,10 @@ describe("shared Python fixture corpus", () => {
     ).toBe(true);
 
     const status = methods.find((fixture) => fixture.name === "command.execute")
-      ?.result as { value?: { data?: unknown } } | undefined;
-    expect(statusSnapshotSchema.safeParse(status?.value?.data).success).toBe(
-      true,
-    );
+      ?.result as { value?: { payload?: { snapshot?: unknown } } } | undefined;
+    expect(
+      statusSnapshotSchema.safeParse(status?.value?.payload?.snapshot).success,
+    ).toBe(true);
   });
 
   it("distinguishes invalid params, unknown methods, and product failures", async () => {
@@ -156,6 +156,8 @@ async function copyFixtureCorpus(target: string): Promise<URL> {
   for (const fileName of [
     "manifest.json",
     "commands.json",
+    "command-results.invalid.json",
+    "command-results.valid.json",
     "events.invalid.json",
     "events.valid.json",
     "methods.invalid.json",

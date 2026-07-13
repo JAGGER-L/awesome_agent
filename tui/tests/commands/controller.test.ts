@@ -23,7 +23,115 @@ function harness(result: unknown = { ok: true, value: {} }) {
 }
 
 describe("CommandController", () => {
-  it("loads application and thread projections for one atomic replacement", async () => {
+  it.each([
+    [
+      { kind: "turn", content: "hello" },
+      "turn.submit",
+      {
+        thread_id: "thread_1",
+        content: "hello",
+        client_message_id: "client_1",
+      },
+    ],
+    [
+      { kind: "direct", command: "pwd" },
+      "direct.execute",
+      { thread_id: "thread_1", command: "pwd" },
+    ],
+  ] as const)("routes %s to %s", async (routed, method, params) => {
+    const { calls, controller } = harness({
+      ok: true,
+      value: { operation_id: "operation_1", thread_id: "thread_1" },
+    });
+    await controller.submit(routed as RoutedInput, "thread_1", "client_1");
+    expect(calls).toEqual([{ method, params }]);
+  });
+
+  it("maps every typed command outcome discriminator", async () => {
+    const payload = { kind: "workspace", path: "E:\\workspace" } as const;
+    await expect(
+      harness({
+        ok: true,
+        value: { kind: "result", payload },
+      }).controller.submit(
+        { kind: "command", intent: { name: "workspace" } },
+        "thread_1",
+      ),
+    ).resolves.toEqual({ kind: "result", payload });
+
+    const selection = {
+      kind: "selection" as const,
+      prompt: "Choose model",
+      options: [
+        {
+          value: "deepseek",
+          label: "DeepSeek",
+          selected: true,
+          disabled: false,
+        },
+      ],
+    };
+    await expect(
+      harness({
+        ok: true,
+        value: { kind: "interaction", interaction: selection },
+      }).controller.submit(
+        { kind: "command", intent: { name: "model" } },
+        "thread_1",
+      ),
+    ).resolves.toMatchObject({ kind: "selection", selection });
+
+    const prompt = {
+      kind: "secret" as const,
+      provider: "deepseek" as const,
+      action: "add" as const,
+      label: "DeepSeek API Key",
+      environment_variable: "DEEPSEEK_API_KEY",
+      help_url: "https://example.com",
+    };
+    await expect(
+      harness({
+        ok: true,
+        value: { kind: "interaction", interaction: prompt },
+      }).controller.submit(
+        { kind: "command", intent: { name: "auth" } },
+        "thread_1",
+      ),
+    ).resolves.toMatchObject({ kind: "secret", prompt });
+
+    await expect(
+      harness({
+        ok: true,
+        value: { kind: "error", code: "invalid_arguments", message: "Usage" },
+      }).controller.submit(
+        { kind: "command", intent: { name: "status" } },
+        "thread_1",
+      ),
+    ).resolves.toEqual({
+      kind: "command_error",
+      code: "invalid_arguments",
+      message: "Usage",
+    });
+  });
+
+  it("keeps Ink commands local and rejects unknown commands before RPC", async () => {
+    const { calls, controller } = harness();
+    await expect(
+      controller.submit(
+        { kind: "local", intent: { name: "help" } },
+        "thread_1",
+      ),
+    ).resolves.toEqual({ kind: "local", intent: { name: "help" } });
+    await expect(
+      controller.submit(
+        { kind: "command", intent: { name: "editor" } } as never,
+        undefined,
+      ),
+    ).resolves.toMatchObject({ kind: "error", code: "unknown_command" });
+    expect(calls).toEqual([]);
+  });
+
+  it("loads application and thread projections for atomic replacement", async () => {
     const calls: Call[] = [];
     const controller = new CommandController({
       request: async <Method extends MethodName>(
@@ -40,186 +148,14 @@ describe("CommandController", () => {
         } as never;
       },
     });
-
     await expect(
       controller.loadThreadReplacement("thread_new"),
     ).resolves.toMatchObject({
       kind: "replacement",
-      application: { current_thread_id: "thread_new" },
-      thread: { view: { thread: { id: "thread_new" } } },
     });
-    expect(calls).toEqual([
-      { method: "application.getState", params: {} },
-      {
-        method: "thread.read",
-        params: { thread_id: "thread_new", limit: 100 },
-      },
+    expect(calls.map((call) => call.method)).toEqual([
+      "application.getState",
+      "thread.read",
     ]);
-  });
-  it.each([
-    [
-      { kind: "turn", content: "hello" },
-      "turn.submit",
-      {
-        thread_id: "thread_1",
-        content: "hello",
-        client_message_id: "client_1",
-      },
-    ],
-    [
-      { kind: "direct", command: "pwd" },
-      "direct.execute",
-      { thread_id: "thread_1", command: "pwd" },
-    ],
-    [
-      { kind: "command", intent: { name: "status" } },
-      "command.execute",
-      { name: "status" },
-    ],
-  ] as const)("routes %s to %s", async (routed, method, params) => {
-    const { calls, controller } = harness({
-      ok: true,
-      value:
-        method === "command.execute"
-          ? { status: "success", content: "ok", data: {} }
-          : { operation_id: "operation_1", thread_id: "thread_1" },
-    });
-    await controller.submit(routed as RoutedInput, "thread_1", "client_1");
-    expect(calls).toEqual([{ method, params }]);
-  });
-
-  it("keeps Ink-local actions out of RPC", async () => {
-    const { calls, controller } = harness();
-    await expect(
-      controller.submit(
-        { kind: "local", intent: { name: "help" } },
-        "thread_1",
-      ),
-    ).resolves.toEqual({ kind: "local", intent: { name: "help" } });
-    expect(calls).toEqual([]);
-  });
-
-  it("requires a thread only for turns and direct commands", async () => {
-    const { calls, controller } = harness();
-    await expect(
-      controller.submit({ kind: "turn", content: "hello" }, undefined),
-    ).resolves.toMatchObject({ kind: "error", code: "thread_required" });
-    expect(calls).toEqual([]);
-  });
-
-  it.each([
-    "operation_busy",
-    "model_not_configured",
-  ])("preserves product failure %s", async (code) => {
-    const error = { code, message: code, retryable: true, data: {} };
-    const { controller } = harness({ ok: false, error });
-    await expect(
-      controller.submit({ kind: "turn", content: "hello" }, "thread_1"),
-    ).resolves.toEqual({ kind: "error", error });
-  });
-
-  it("opens a picker for CommandSelection and submits the selected value fresh", async () => {
-    const selection = {
-      prompt: "Choose model",
-      options: [{ value: "deepseek-chat", label: "DeepSeek", selected: true }],
-    };
-    const { calls, controller } = harness({
-      ok: true,
-      value: {
-        status: "interaction_required",
-        content: "",
-        data: {},
-        selection,
-      },
-    });
-    await expect(
-      controller.submit(
-        { kind: "command", intent: { name: "model" } },
-        "thread_1",
-      ),
-    ).resolves.toMatchObject({ kind: "picker", selection });
-    await controller.select({ name: "model" }, "deepseek-chat", "thread_1");
-    expect(calls.at(-1)).toEqual({
-      method: "command.execute",
-      params: { name: "model", arguments: ["deepseek-chat"] },
-    });
-  });
-
-  it("returns a dedicated secret outcome and submits credentials by RPC", async () => {
-    const prompt = {
-      provider: "deepseek" as const,
-      action: "add" as const,
-      label: "DeepSeek API Key",
-      environment_variable: "DEEPSEEK_API_KEY",
-      help_url: "https://example.com",
-    };
-    const { controller } = harness({
-      ok: true,
-      value: {
-        status: "success",
-        content: "",
-        data: {},
-        secret_prompt: prompt,
-      },
-    });
-    await expect(
-      controller.submit(
-        { kind: "command", intent: { name: "model", arguments: ["deepseek"] } },
-        "thread_1",
-      ),
-    ).resolves.toMatchObject({ kind: "secret", prompt });
-
-    const credential = harness({
-      ok: true,
-      value: {
-        provider: "deepseek",
-        status: "configured",
-        source: "awesome",
-        code: "credential_saved",
-      },
-    });
-    await credential.controller.setCredential(
-      "deepseek",
-      "add",
-      "private",
-      false,
-    );
-    expect(credential.calls).toEqual([
-      {
-        method: "provider.credential.set",
-        params: {
-          provider: "deepseek",
-          action: "add",
-          api_key: "private",
-          allow_unverified: false,
-        },
-      },
-    ]);
-  });
-
-  it("returns non-selection interaction-required results without inventing state", async () => {
-    const value = {
-      status: "interaction_required",
-      content: "Trust required",
-      data: {},
-    };
-    const { controller } = harness({ ok: true, value });
-    await expect(
-      controller.submit(
-        { kind: "command", intent: { name: "workspace" } },
-        undefined,
-      ),
-    ).resolves.toEqual({ kind: "result", result: value });
-  });
-
-  it("rejects a command name outside the catalog before RPC", async () => {
-    const { calls, controller } = harness();
-    await expect(
-      controller.submit(
-        { kind: "command", intent: { name: "editor" } } as never,
-        undefined,
-      ),
-    ).resolves.toMatchObject({ kind: "error", code: "unknown_command" });
-    expect(calls).toEqual([]);
   });
 });

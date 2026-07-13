@@ -13,7 +13,7 @@ import type {
   CommandDispatchOutcome,
 } from "../commands/controller.js";
 import { findCommand } from "../commands/catalog.js";
-import { presentCommandResult } from "../commands/presenters.js";
+import { presentCommandPayload } from "../commands/presenters.js";
 import type {
   LocalCommandResult,
   LocalCommandService,
@@ -51,10 +51,7 @@ import { TerminalInput } from "../interaction/TerminalInput.js";
 import { useTerminalUi } from "../interaction/use-terminal-ui.js";
 import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { ExitReason } from "../lifecycle/exit.js";
-import {
-  statusSnapshotSchema,
-  type StatusSnapshot,
-} from "../protocol/commands.js";
+import type { StatusSnapshot } from "../protocol/commands.js";
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
 import { createClientMessageId } from "../transcript/identity.js";
@@ -253,153 +250,126 @@ export function App({
       if (store.getState().thread_generation !== generation) {
         return { accepted: true };
       }
-      if (outcome.kind === "picker") {
-        dispatch({
-          type: "mode.open",
-          mode: pickerMode(
-            commandPickerOwner(outcome.intent),
-            outcome.selection,
-            blockingSelection,
-          ),
-        });
-        return { accepted: true };
-      }
-      if (outcome.kind === "secret") {
-        dispatch({
-          type: "mode.open",
-          mode: secretMode(outcome.intent, outcome.prompt),
-        });
-        return { accepted: true };
-      }
-      if (outcome.kind === "error") {
-        if (intent) {
-          const message =
-            "error" in outcome ? outcome.error.message : outcome.code;
-          appendCommandResult(intent.name, "error", message, generation);
+      switch (outcome.kind) {
+        case "selection":
+          dispatch({
+            type: "mode.open",
+            mode: pickerMode(
+              commandPickerOwner(outcome.intent),
+              outcome.selection,
+              blockingSelection,
+            ),
+          });
           return { accepted: true };
-        }
-        return {
-          accepted: false,
-          retryable: "error" in outcome ? outcome.error.retryable : true,
-          message: "error" in outcome ? outcome.error.message : outcome.code,
-        };
-      }
-      if (outcome.kind === "local") {
-        if (!localCommands) {
-          return {
-            accepted: false,
-            retryable: true,
-            message: "local_commands_unavailable",
-          };
-        }
-        return applyLocalResult(
-          await localCommands.execute(outcome.intent),
-          generation,
-        );
-      }
-      if (outcome.kind === "result") {
-        if (outcome.result.status === "error") {
+        case "secret":
+          dispatch({
+            type: "mode.open",
+            mode: secretMode(outcome.intent, outcome.prompt),
+          });
+          return { accepted: true };
+        case "application_interaction":
+          return { accepted: true };
+        case "command_error":
           if (intent) {
             appendCommandResult(
               intent.name,
               "error",
-              outcome.result.content || "Command failed.",
+              outcome.message,
               generation,
             );
+            return { accepted: true };
+          }
+          return { accepted: false, retryable: true, message: outcome.message };
+        case "error": {
+          const message =
+            "error" in outcome ? outcome.error.message : outcome.code;
+          if (intent) {
+            appendCommandResult(intent.name, "error", message, generation);
             return { accepted: true };
           }
           return {
             accepted: false,
-            retryable: true,
-            message: outcome.result.content || "command_failed",
+            retryable: "error" in outcome ? outcome.error.retryable : true,
+            message,
           };
         }
-        if (intent?.name === "status") {
-          const snapshot = statusSnapshotSchema.safeParse(outcome.result.data);
-          if (!snapshot.success) {
+        case "local":
+          if (!localCommands) {
             return {
               accepted: false,
               retryable: true,
-              message: "invalid_status_snapshot",
+              message: "local_commands_unavailable",
             };
           }
-          setStatus(snapshot.data);
-        } else if (
-          (intent?.name === "new" || intent?.name === "resume") &&
-          controller
-        ) {
-          const threadId = outcome.result.data.thread_id;
-          if (typeof threadId !== "string") {
-            appendCommandResult(
-              intent.name,
-              "error",
-              "Thread command returned no thread identity.",
-              generation,
-            );
-            return { accepted: true };
-          }
-          const replacement = await controller.loadThreadReplacement(threadId);
-          if (replacement.kind === "error") {
-            appendCommandResult(
-              intent.name,
-              "error",
-              replacement.error.message,
-              generation,
-            );
-            return { accepted: true };
-          }
-          const transcript =
-            intent.name === "new"
-              ? [
-                  {
-                    key: `thread:${threadId}:started`,
-                    kind: "status" as const,
-                    message: "New conversation started",
-                  },
-                ]
-              : hydrateThreadPage(replacement.thread).blocks;
-          if (store.getState().thread_generation !== generation) {
-            return { accepted: true };
-          }
-          store.dispatch({
-            type: "thread.replaced",
-            application: replacement.application,
-            thread: replacement.thread,
-            transcript,
-          });
-          lifecycle?.resetThreadScope?.();
-          setStatus(undefined);
-        } else if (intent) {
-          appendPresentation(
-            intent.name,
-            presentCommandResult(intent.name, outcome.result),
+          return applyLocalResult(
+            await localCommands.execute(outcome.intent),
             generation,
           );
-        }
-        if (
-          intent?.name === "permissions" &&
-          outcome.result.status === "success" &&
-          controller
-        ) {
-          const refreshed = await controller.refreshApplication();
-          if (
-            refreshed.ok &&
-            store.getState().thread_generation === generation
-          ) {
+        case "result": {
+          const payload = outcome.payload;
+          if (payload.kind === "status") {
+            setStatus(payload.snapshot);
+          } else if (payload.kind === "thread" && controller) {
+            const replacement = await controller.loadThreadReplacement(
+              payload.thread_id,
+            );
+            if (replacement.kind === "error") {
+              appendCommandResult(
+                intent?.name ?? "resume",
+                "error",
+                replacement.error.message,
+                generation,
+              );
+              return { accepted: true };
+            }
+            const transcript =
+              payload.action === "created"
+                ? [
+                    {
+                      key: `thread:${payload.thread_id}:started`,
+                      kind: "status" as const,
+                      message: "New conversation started",
+                    },
+                  ]
+                : hydrateThreadPage(replacement.thread).blocks;
+            if (store.getState().thread_generation !== generation) {
+              return { accepted: true };
+            }
             store.dispatch({
-              type: "hydrate.application",
-              application: refreshed.value,
+              type: "thread.replaced",
+              application: replacement.application,
+              thread: replacement.thread,
+              transcript,
             });
+            lifecycle?.resetThreadScope?.();
+            setStatus(undefined);
+          } else if (intent) {
+            appendPresentation(
+              intent.name,
+              presentCommandPayload(payload),
+              generation,
+            );
           }
+          if (payload.kind === "permissions" && controller) {
+            const refreshed = await controller.refreshApplication();
+            if (
+              refreshed.ok &&
+              store.getState().thread_generation === generation
+            ) {
+              store.dispatch({
+                type: "hydrate.application",
+                application: refreshed.value,
+              });
+            }
+          }
+          return {
+            accepted: true,
+            ...(payload.kind === "notice" ? { message: payload.message } : {}),
+          };
         }
-        return {
-          accepted: true,
-          ...(outcome.result.content
-            ? { message: outcome.result.content }
-            : {}),
-        };
+        case "accepted":
+          return { accepted: true };
       }
-      return { accepted: true };
     },
     [
       applyLocalResult,
@@ -413,7 +383,6 @@ export function App({
       store,
     ],
   );
-
   const submit = useCallback(
     async (value: string): Promise<ComposerSubmitResult> => {
       setStatus(undefined);
@@ -491,12 +460,21 @@ export function App({
       }
       if (finishProgress) {
         if (outcome.kind === "result") {
-          finishProgress(presentCommandResult("compact", outcome.result));
-        } else if (outcome.kind === "error") {
+          finishProgress(presentCommandPayload(outcome.payload));
+        } else if (
+          outcome.kind === "error" ||
+          outcome.kind === "command_error"
+        ) {
+          const message =
+            outcome.kind === "command_error"
+              ? outcome.message
+              : "error" in outcome
+                ? outcome.error.message
+                : outcome.code;
           finishProgress({
             kind: "progress",
             title: "/compact",
-            message: `Context compression failed · ${"error" in outcome ? outcome.error.message : outcome.code}`,
+            message: `Context compression failed · ${message}`,
             tone: "error",
           });
         }
