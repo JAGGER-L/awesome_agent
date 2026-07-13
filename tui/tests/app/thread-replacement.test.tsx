@@ -4,13 +4,12 @@ import {
   replaceThreadSurface,
   ThreadReplacementError,
 } from "../../src/app/use-thread-replacement.js";
-import type { CommandController } from "../../src/commands/controller.js";
 import { initialSurfaceState } from "../../src/state/reducer.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
-function replacement(threadId: string) {
+function transition(threadId: string, reason: "new" | "resume" = "new") {
   return {
-    kind: "replacement" as const,
+    reason,
     application: { current_thread_id: threadId } as never,
     thread: {
       has_more: false,
@@ -32,18 +31,12 @@ describe("replaceThreadSurface", () => {
       committed_transcript: [{ key: "old", kind: "status", message: "old" }],
     });
     const reset = vi.fn();
-    const controller = {
-      loadThreadReplacement: vi.fn(async () => replacement("thread_new")),
-    } as unknown as CommandController;
-
     await expect(
       replaceThreadSurface({
         store,
-        controller,
         request: {
-          threadId: "thread_new",
+          transition: transition("thread_new"),
           expectedGeneration: 0,
-          reason: "new",
         },
         resetThreadScope: reset,
       }),
@@ -60,24 +53,8 @@ describe("replaceThreadSurface", () => {
     expect(reset).toHaveBeenCalledOnce();
   });
 
-  it("rejects a delayed read after another generation wins", async () => {
-    let resolve: ((value: ReturnType<typeof replacement>) => void) | undefined;
-    const pending = new Promise<ReturnType<typeof replacement>>((accept) => {
-      resolve = accept;
-    });
+  it("rejects a stale transition after another generation wins", async () => {
     const store = createSurfaceStore();
-    const controller = {
-      loadThreadReplacement: vi.fn(async () => await pending),
-    } as unknown as CommandController;
-    const request = replaceThreadSurface({
-      store,
-      controller,
-      request: {
-        threadId: "thread_old",
-        expectedGeneration: 0,
-        reason: "resume",
-      },
-    });
     store.dispatch({
       type: "thread.replaced",
       application: { current_thread_id: "thread_new" } as never,
@@ -85,29 +62,31 @@ describe("replaceThreadSurface", () => {
       transcript: [],
       transcript_persisted: true,
     });
-    resolve?.(replacement("thread_old"));
-
-    await expect(request).resolves.toEqual({ kind: "stale" });
+    await expect(
+      replaceThreadSurface({
+        store,
+        request: {
+          transition: transition("thread_old", "resume"),
+          expectedGeneration: 0,
+        },
+      }),
+    ).resolves.toEqual({ kind: "stale" });
     expect(store.getState().application?.current_thread_id).toBe("thread_new");
   });
 
   it("rejects mismatched application and thread identities", async () => {
     const store = createSurfaceStore();
-    const controller = {
-      loadThreadReplacement: vi.fn(async () => ({
-        ...replacement("thread_other"),
-        application: { current_thread_id: "thread_expected" },
-      })),
-    } as unknown as CommandController;
+    const invalid = {
+      ...transition("thread_other", "resume"),
+      application: { current_thread_id: "thread_expected" },
+    } as never;
 
     await expect(
       replaceThreadSurface({
         store,
-        controller,
         request: {
-          threadId: "thread_expected",
+          transition: invalid,
           expectedGeneration: 0,
-          reason: "resume",
         },
       }),
     ).rejects.toBeInstanceOf(ThreadReplacementError);

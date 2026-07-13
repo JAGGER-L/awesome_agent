@@ -131,31 +131,25 @@ describe("CommandController", () => {
     expect(calls).toEqual([]);
   });
 
-  it("loads application and thread projections for atomic replacement", async () => {
-    const calls: Call[] = [];
-    const controller = new CommandController({
-      request: async <Method extends MethodName>(
-        method: Method,
-        params: MethodParams[Method],
-      ) => {
-        calls.push({ method, params } as Call);
-        return {
-          ok: true,
-          value:
-            method === "application.getState"
-              ? { current_thread_id: "thread_new" }
-              : { view: { thread: { id: "thread_new" } } },
-        } as never;
+  it("returns the authoritative Thread transition without follow-up reads", async () => {
+    const payload = {
+      kind: "thread_transition" as const,
+      transition: {
+        reason: "new" as const,
+        application: { current_thread_id: "thread_new" },
+        thread: { view: { thread: { id: "thread_new" } } },
       },
+    } as never;
+    const { calls, controller } = harness({
+      ok: true,
+      value: { kind: "result", payload },
     });
     await expect(
-      controller.loadThreadReplacement("thread_new"),
-    ).resolves.toMatchObject({
-      kind: "replacement",
-    });
-    expect(calls.map((call) => call.method)).toEqual([
-      "application.getState",
-      "thread.read",
-    ]);
+      controller.submit(
+        { kind: "command", intent: { name: "new" } },
+        "thread_old",
+      ),
+    ).resolves.toEqual({ kind: "result", payload });
+    expect(calls.map((call) => call.method)).toEqual(["command.execute"]);
   });
 });

@@ -76,11 +76,15 @@ export function presentCommandPayload(
   switch (payload.kind) {
     case "notice":
       return { kind: "notice", message: payload.message, tone: "info" };
-    case "thread":
-      return panel(title, [
-        { label: "Thread", value: payload.thread_id },
-        { label: "Title", value: payload.title },
-      ]);
+    case "thread_transition":
+      return {
+        kind: "notice",
+        message:
+          payload.transition.reason === "new"
+            ? "New conversation started"
+            : `Resumed · ${payload.transition.thread.view.thread.title}`,
+        tone: "success",
+      };
     case "context":
       return panel(title, [
         ...(["instructions", "conversation", "files", "memory"] as const).map(

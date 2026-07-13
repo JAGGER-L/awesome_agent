@@ -258,7 +258,7 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
         if case["outcome"]["kind"] == "result"
     } == {
         "notice",
-        "thread",
+        "thread_transition",
         "context",
         "compact",
         "model",

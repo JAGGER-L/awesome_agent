@@ -961,6 +961,11 @@ class _LocalApplicationBackend:
         self._commands = ConversationCommandService(
             conversation=self._conversation,
             workspace_key=self._workspace.key,
+            application_snapshot=self.application_state,
+            thread_snapshot=self.thread_state,
+            has_active_operation=lambda: (
+                self._operations.active_operation_id is not None
+            ),
             default_model=self._initial_thread_model,
             on_thread_selected=self._permission_session.reset,
         )

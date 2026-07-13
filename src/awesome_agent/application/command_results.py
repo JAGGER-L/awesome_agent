@@ -4,7 +4,11 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from awesome_agent.application.contracts import StatusSnapshot
+from awesome_agent.application.contracts import (
+    ApplicationState,
+    StatusSnapshot,
+    ThreadReadResult,
+)
 from awesome_agent.config.credentials import ProviderCredentialStatuses
 from awesome_agent.conversation.models import UsageSummary
 from awesome_agent.core.tools.permissions import PermissionMode
@@ -62,11 +66,21 @@ class NoticeCommandPayload(_CommandModel):
     message: str = Field(min_length=1, max_length=30_000)
 
 
-class ThreadCommandPayload(_CommandModel):
-    kind: Literal["thread"] = "thread"
-    action: Literal["created", "resumed"]
-    thread_id: str = Field(min_length=1, max_length=128)
-    title: str = Field(min_length=1, max_length=500)
+class ThreadTransitionSnapshot(_CommandModel):
+    reason: Literal["new", "resume"]
+    application: ApplicationState
+    thread: ThreadReadResult
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> Self:
+        if self.application.current_thread_id != self.thread.view.thread.id:
+            raise ValueError("Thread transition identities must match.")
+        return self
+
+
+class ThreadTransitionCommandPayload(_CommandModel):
+    kind: Literal["thread_transition"] = "thread_transition"
+    transition: ThreadTransitionSnapshot
 
 
 class ContextCategory(_CommandModel):
@@ -249,7 +263,7 @@ class PermissionCommandPayload(_CommandModel):
 
 CommandPayload = Annotated[
     NoticeCommandPayload
-    | ThreadCommandPayload
+    | ThreadTransitionCommandPayload
     | ContextCommandPayload
     | CompactCommandPayload
     | ModelCommandPayload

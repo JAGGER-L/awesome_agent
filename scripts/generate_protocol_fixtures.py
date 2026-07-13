@@ -563,20 +563,31 @@ def _commands() -> dict[str, object]:
 
 
 def _valid_command_results() -> dict[str, object]:
+    methods = _valid_methods()["cases"]
     status = next(
         case["result"]["value"]["payload"]["snapshot"]
-        for case in _valid_methods()["cases"]
+        for case in methods
         if case["name"] == "command.execute"
+    )
+    application = next(
+        case["result"]["value"]
+        for case in methods
+        if case["name"] == "application.get_state"
+    )
+    thread = next(
+        case["result"]["value"] for case in methods if case["name"] == "thread.read"
     )
     credentials = _model(missing_provider_credential_statuses())
     usage = _model(UsageSummary(active_execution_seconds=0.5))
     payloads: list[dict[str, object]] = [
         {"kind": "notice", "message": "Ready"},
         {
-            "kind": "thread",
-            "action": "created",
-            "thread_id": THREAD_ID,
-            "title": "Fixture Thread",
+            "kind": "thread_transition",
+            "transition": {
+                "reason": "new",
+                "application": application,
+                "thread": thread,
+            },
         },
         {
             "kind": "context",
@@ -755,6 +766,15 @@ def _valid_command_results() -> dict[str, object]:
 
 
 def _invalid_command_results() -> dict[str, object]:
+    methods = _valid_methods()["cases"]
+    application = next(
+        case["result"]["value"]
+        for case in methods
+        if case["name"] == "application.get_state"
+    )
+    thread = next(
+        case["result"]["value"] for case in methods if case["name"] == "thread.read"
+    )
     return {
         "cases": [
             {
@@ -764,6 +784,25 @@ def _invalid_command_results() -> dict[str, object]:
             {
                 "name": "unknown_payload",
                 "outcome": {"kind": "result", "payload": {"kind": "unknown"}},
+            },
+            {
+                "name": "thread_transition_identity_mismatch",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_transition",
+                        "transition": {
+                            "reason": "resume",
+                            "application": {
+                                **application,
+                                "current_thread_id": (
+                                    "thread_22222222222222222222222222222222"
+                                ),
+                            },
+                            "thread": thread,
+                        },
+                    },
+                },
             },
             {
                 "name": "secret_value",

@@ -14,7 +14,7 @@ from awesome_agent.application.command_results import (
     CommandInteractionResult,
     CommandResult,
     ModelCommandPayload,
-    ThreadCommandPayload,
+    ThreadTransitionCommandPayload,
     ToolCatalogCommandPayload,
 )
 from awesome_agent.application.commands import CommandIntent, CommandName
@@ -175,8 +175,8 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
         await application.execute_command(CommandIntent(name=CommandName.NEW))
     )
     assert isinstance(first, CommandResult)
-    assert isinstance(first.payload, ThreadCommandPayload)
-    first_id = first.payload.thread_id
+    assert isinstance(first.payload, ThreadTransitionCommandPayload)
+    first_id = first.payload.transition.thread.view.thread.id
 
     picker = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.PERMISSIONS))
@@ -266,8 +266,8 @@ async def test_composed_agent_execute_waits_for_application_decision(
         await application.execute_command(CommandIntent(name=CommandName.NEW))
     )
     assert isinstance(created, CommandResult)
-    assert isinstance(created.payload, ThreadCommandPayload)
-    thread_id = created.payload.thread_id
+    assert isinstance(created.payload, ThreadTransitionCommandPayload)
+    thread_id = created.payload.transition.thread.view.thread.id
 
     _unwrap(
         await application.submit_turn(thread_id, "run the command", "client_command")
@@ -354,8 +354,8 @@ async def test_fresh_home_trust_turn_direct_and_restart(
         await application.execute_command(CommandIntent(name=CommandName.NEW))
     )
     assert isinstance(created, CommandResult)
-    assert isinstance(created.payload, ThreadCommandPayload)
-    thread_id = created.payload.thread_id
+    assert isinstance(created.payload, ThreadTransitionCommandPayload)
+    thread_id = created.payload.transition.thread.view.thread.id
 
     model_result = _unwrap(
         await application.execute_command(

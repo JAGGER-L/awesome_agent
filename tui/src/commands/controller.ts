@@ -62,14 +62,6 @@ export type CommandDispatchOutcome =
       readonly code: "thread_required" | "unknown_command";
     };
 
-export type ThreadReplacementOutcome =
-  | {
-      readonly kind: "replacement";
-      readonly application: MethodValue["application.getState"];
-      readonly thread: MethodValue["thread.read"];
-    }
-  | { readonly kind: "error"; readonly error: ProductError };
-
 export class CommandController {
   constructor(private readonly rpc: CommandRpc) {}
 
@@ -167,24 +159,6 @@ export class CommandController {
 
   async refreshApplication() {
     return await this.rpc.request("application.getState", {});
-  }
-
-  async loadThreadReplacement(
-    threadId: string,
-  ): Promise<ThreadReplacementOutcome> {
-    const application = await this.rpc.request("application.getState", {});
-    if (!application.ok) return { kind: "error", error: application.error };
-    const thread = await this.rpc.request("thread.read", {
-      thread_id: threadId,
-      limit: 100,
-    });
-    return thread.ok
-      ? {
-          kind: "replacement",
-          application: application.value,
-          thread: thread.value,
-        }
-      : { kind: "error", error: thread.error };
   }
 
   async select(

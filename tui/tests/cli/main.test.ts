@@ -11,61 +11,69 @@ import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
 
+type ReadyApplication = Extract<
+  StartupResult,
+  { readonly kind: "ready" }
+>["application"];
+
+const readyApplication: ReadyApplication = {
+  initialized: true,
+  session_id: "session_1",
+  workspace_key: "workspace_1",
+  workspace: { display_path: "E:\\workspace" },
+  workspace_trusted: true,
+  model_identity: {
+    provider: "deepseek",
+    configured_model: "deepseek/deepseek-v4-flash",
+    effective_model: "deepseek/deepseek-v4-flash",
+    runtime_name: "Awesome Agent",
+    fallback_active: false,
+  },
+  thinking_enabled: false,
+  skill_mode: "auto",
+  permission_mode: "request_approval",
+  configuration_valid: true,
+  secret_status: {
+    deepseek_api_key: true,
+    moonshot_api_key: true,
+    mem0_api_key: false,
+  },
+  provider_credentials: {
+    deepseek: {
+      provider: "deepseek",
+      environment_variable: "DEEPSEEK_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+    kimi: {
+      provider: "kimi",
+      environment_variable: "MOONSHOT_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+    mem0: {
+      provider: "mem0",
+      environment_variable: "MEM0_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+  },
+  memory_status: {},
+  mcp_status: [],
+  usage: {},
+  configuration_diagnostics: [],
+};
+
 const ready: StartupResult = {
   kind: "ready",
   readiness: "agent_ready",
-  application: {
-    initialized: true,
-    session_id: "session_1",
-    workspace_key: "workspace_1",
-    workspace: { display_path: "E:\\workspace" },
-    workspace_trusted: true,
-    model_identity: {
-      provider: "deepseek",
-      configured_model: "deepseek/deepseek-v4-flash",
-      effective_model: "deepseek/deepseek-v4-flash",
-      runtime_name: "Awesome Agent",
-      fallback_active: false,
-    },
-    thinking_enabled: false,
-    skill_mode: "auto",
-    permission_mode: "request_approval",
-    configuration_valid: true,
-    secret_status: {
-      deepseek_api_key: true,
-      moonshot_api_key: true,
-      mem0_api_key: false,
-    },
-    provider_credentials: {
-      deepseek: {
-        provider: "deepseek",
-        environment_variable: "DEEPSEEK_API_KEY",
-        environment_configured: false,
-        awesome_configured: false,
-        selected_source: null,
-      },
-      kimi: {
-        provider: "kimi",
-        environment_variable: "MOONSHOT_API_KEY",
-        environment_configured: false,
-        awesome_configured: false,
-        selected_source: null,
-      },
-      mem0: {
-        provider: "mem0",
-        environment_variable: "MEM0_API_KEY",
-        environment_configured: false,
-        awesome_configured: false,
-        selected_source: null,
-      },
-    },
-    memory_status: {},
-    mcp_status: [],
-    usage: {},
-    configuration_diagnostics: [],
-  },
+  application: readyApplication,
   thread: {
     kind: "ready",
+    application: readyApplication,
     thread: {
       view: {
         thread: {
