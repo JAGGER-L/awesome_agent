@@ -9,7 +9,7 @@ import { CommandResultView } from "../../src/components/CommandResultView.js";
 
 describe("command presenters", () => {
   it("renders typed context categories without object coercion", () => {
-    const presentation = presentCommandPayload({
+    const presentation = presentCommandPayload("context", {
       kind: "context",
       categories: [
         { name: "instructions", estimated_tokens: 1_024 },
@@ -30,7 +30,7 @@ describe("command presenters", () => {
   });
 
   it("renders one typed tool per row and an explicit empty diff", () => {
-    const tools = presentCommandPayload({
+    const tools = presentCommandPayload("tools", {
       kind: "tools",
       permission_mode: "request_approval",
       tools: [
@@ -55,8 +55,11 @@ describe("command presenters", () => {
     expect(frame).toContain("Enabled");
     expect(frame).toContain("execute");
     expect(frame).toContain("Approval required");
-    expect(presentCommandPayload({ kind: "diff", content: "" })).toMatchObject({
-      rows: [{ value: "No workspace changes" }],
+    expect(
+      presentCommandPayload("diff", { kind: "diff", content: "" }),
+    ).toMatchObject({
+      kind: "empty",
+      message: "No workspace changes",
     });
   });
 

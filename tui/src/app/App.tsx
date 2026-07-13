@@ -347,7 +347,7 @@ export function App({
           } else if (intent) {
             appendPresentation(
               intent.name,
-              presentCommandPayload(payload),
+              presentCommandPayload(intent.name, payload),
               generation,
             );
           }
@@ -444,9 +444,8 @@ export function App({
         const failure = classifyTerminalActionError(error);
         finishProgress?.({
           kind: "progress",
-          title: "/compact",
           message: `Context compression failed · ${failure.kind === "request" ? failure.message : "Protocol failure"}`,
-          tone: "error",
+          tone: "danger",
         });
         if (
           failure.kind === "request" &&
@@ -469,7 +468,7 @@ export function App({
       }
       if (finishProgress) {
         if (outcome.kind === "result") {
-          finishProgress(presentCommandPayload(outcome.payload));
+          finishProgress(presentCommandPayload("compact", outcome.payload));
         } else if (
           outcome.kind === "error" ||
           outcome.kind === "command_error"
@@ -482,9 +481,8 @@ export function App({
                 : outcome.code;
           finishProgress({
             kind: "progress",
-            title: "/compact",
             message: `Context compression failed · ${message}`,
-            tone: "error",
+            tone: "danger",
           });
         }
         return { accepted: true };

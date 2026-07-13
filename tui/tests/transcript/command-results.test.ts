@@ -10,9 +10,8 @@ describe("command result transcript blocks", () => {
       kind: "command_result",
       command: "usage",
       presentation: {
-        kind: "lines",
-        title: "/usage",
-        rows: [{ label: "", value: "No usage recorded yet." }],
+        kind: "notice",
+        message: "No usage recorded yet.",
         tone: "info",
       },
     };

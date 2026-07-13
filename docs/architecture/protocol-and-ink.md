@@ -17,6 +17,25 @@ the command controller routes only their discriminators. An exhaustive
 Presenter converts typed semantic payloads into terminal blocks; it has no
 generic JSON or object-stringification fallback.
 
+The presentation path has four deliberately small layers:
+
+```text
+Core semantic facts
+  -> Protocol v2 CommandPayload
+  -> exhaustive presentCommandPayload()
+  -> CommandPresentation
+  -> ResultPanel / AlignedRows / ResultNotice / EmptyResult
+  -> Ink transcript rendering
+```
+
+Core owns facts such as credential availability, permission requirements,
+Context budgets, and diagnostic states. The Presenter maps each typed payload
+explicitly into user-facing rows or notices. The shared Ink components own only
+terminal borders, alignment, wrapping, symbols, and semantic colors. There is
+no arbitrary-record renderer, JSON formatter, or legacy presentation shape;
+adding a payload or presentation variant must make the corresponding exhaustive
+switch fail type checking until it is handled.
+
 ```text
 Ink command controller
   -> Protocol v2 command.execute
