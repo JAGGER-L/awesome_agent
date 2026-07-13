@@ -4,7 +4,7 @@ import pytest
 
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
-    ApplicationSchemaTooNew,
+    ApplicationSchemaMismatch,
     application_connection,
     initialize_application_database,
 )
@@ -23,17 +23,17 @@ def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None:
         table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'trusted_workspaces'"
         ).fetchone()
-    assert version == APPLICATION_SCHEMA_VERSION == 6
+    assert version == APPLICATION_SCHEMA_VERSION == 1
     assert str(journal_mode).lower() == "wal"
     assert foreign_keys == 1
     assert table is not None
 
 
-def test_newer_schema_is_rejected(tmp_path: Path) -> None:
+def test_noncurrent_schema_is_rejected(tmp_path: Path) -> None:
     path = tmp_path / "application.db"
     initialize_application_database(path)
     with application_connection(path) as connection:
         connection.execute("PRAGMA user_version = 99")
 
-    with pytest.raises(ApplicationSchemaTooNew):
+    with pytest.raises(ApplicationSchemaMismatch):
         initialize_application_database(path)

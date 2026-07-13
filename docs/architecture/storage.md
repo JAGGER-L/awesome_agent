@@ -28,11 +28,7 @@ credentials are not product history. Tool activity stores bounded summaries;
 tool observations required for recovery remain in the unfinished Turn's
 LangGraph checkpoint.
 
-Schema changes move forward from the current embedded schemas. Tests create
-isolated state instead of depending on developer data.
-
-Published application migrations are immutable and advance through
-`PRAGMA user_version`. Upgrade tests retain the exact schema shapes produced by
-released versions, including multiple historical shapes that reported the same
-version. Startup migrates state transactionally and verifies foreign keys
-before exposing the Application facade.
+The Application database has one current schema bootstrap. This development
+line does not carry historical schema migrations or data adapters: a database
+whose `PRAGMA user_version` differs from the current schema is rejected. Tests
+always create isolated current state instead of depending on developer data.
