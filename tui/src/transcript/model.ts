@@ -10,6 +10,11 @@ export interface UserBlock extends BlockBase {
   readonly text: string;
   readonly error_message?: string;
 }
+export interface CommandInputBlock extends BlockBase {
+  readonly kind: "command_input";
+  readonly submission_id: string;
+  readonly text: string;
+}
 export interface AssistantBlock extends BlockBase {
   readonly kind: "assistant";
   readonly text: string;
@@ -71,6 +76,7 @@ export interface OmittedHistoryBlock extends BlockBase {
 
 export type TranscriptBlock =
   | UserBlock
+  | CommandInputBlock
   | AssistantBlock
   | DirectCommandBlock
   | ToolGroupBlock

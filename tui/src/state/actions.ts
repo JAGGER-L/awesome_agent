@@ -47,6 +47,12 @@ export type SurfaceAction =
       readonly generation: number;
     }
   | {
+      readonly type: "transcript.command.submitted";
+      readonly submission_id: string;
+      readonly text: string;
+      readonly generation: number;
+    }
+  | {
       readonly type: "transcript.command_result.replace";
       readonly block: CommandResultBlock;
       readonly generation: number;

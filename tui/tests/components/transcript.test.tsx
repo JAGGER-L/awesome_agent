@@ -24,6 +24,12 @@ const blocks: TranscriptBlock[] = [
     status: "persisted",
     text: "question",
   },
+  {
+    key: "command:command_1",
+    kind: "command_input",
+    submission_id: "command_1",
+    text: "/status",
+  },
   { key: "assistant", kind: "assistant", text: "durable answer" },
   { key: "direct", kind: "direct_command", command: "git status" },
   {
@@ -50,6 +56,7 @@ describe("scrollback transcript components", () => {
   ])("preserves essential content at %i columns", (width) => {
     const view = render(<Transcript blocks={blocks} width={width} />);
     expect(view.lastFrame()).toContain("question");
+    expect(view.lastFrame()).toContain("/status");
     expect(view.lastFrame()).toContain("durable answer");
     expect(view.lastFrame()).toContain("git status");
     expect(view.lastFrame()).toContain("1 tool call · 12ms · Ctrl+O to expand");
