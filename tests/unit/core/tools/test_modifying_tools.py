@@ -140,6 +140,7 @@ async def test_write_file_creates_and_overwrites_utf8_content(tmp_path: Path) ->
         "outcome": "Created",
         "summary": "1 line",
         "detail": None,
+        "detail_truncated_count": None,
         "duration_ms": sink.events[1].payload.duration_ms,  # type: ignore[union-attr]
     }
     assert overwritten.presentation is not None

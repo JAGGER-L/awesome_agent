@@ -75,6 +75,7 @@ async def list_directory(
 
     truncated = len(entries) > options.max_entries
     bounded = entries[: options.max_entries]
+    truncated_count = len(entries) - len(bounded)
     content = "\n".join(f"{entry['type']}\t{entry['path']}" for entry in bounded)
     return ToolOutput(
         content=content,
@@ -88,5 +89,6 @@ async def list_directory(
             outcome="Listed",
             summary=f"{len(bounded)} entries",
             detail=content[:4_000] or None,
+            detail_truncated_count=truncated_count or None,
         ),
     )
