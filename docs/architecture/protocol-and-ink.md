@@ -102,9 +102,29 @@ deduplication.
 
 Within an active Turn, the reducer maintains one ordered timeline of locally
 measured Thinking intervals, structured tool facts, streaming assistant text,
-and the measured Turn duration. Tool output remains bounded and folded by
-default. Completed Markdown is parsed once; incomplete streaming Markdown uses
-a stable formatter to avoid reflowing the whole transcript on each delta.
+and the measured Turn duration. Each Thinking interval owns its bounded text;
+there is no parallel Turn-level reasoning field. Completed intervals fold to a
+locally measured duration and Ctrl+O reveals their current-session text. Raw
+reasoning is never written to conversation storage.
+
+All Tool calls between two assistant segments form one Tool Sequence even when
+Thinking intervals occur between those calls. The sequence occupies exactly
+one row while folded. Ctrl+O reveals each Tool's verb, target, durable outcome
+and summary, local duration, safe bounded presentation detail, and an exact
+omitted-entry count when Core knows it. Reconciliation matches Tools by
+`call_id`: durable status and summary remain authoritative while safe live
+presentation details enrich the current session. A resumed Thread deliberately
+hydrates durable summaries only; it does not invent unavailable detail,
+Thinking, or Worked blocks.
+
+Worked reports the locally measured terminal Turn duration, never Provider
+reasoning time, and has a dedicated status treatment. Runtime warnings with the
+same stable code and normalized message are counted in one session-only block;
+different messages or codes remain separate. React development warnings are
+not product events, and identity collisions must still fail their invariant
+tests rather than being hidden by diagnostic aggregation. Completed Markdown
+is parsed once; incomplete streaming Markdown uses a stable formatter to avoid
+reflowing the whole transcript on each delta.
 
 Cancellation disables input only while its RPC is unresolved. Terminal events
 restore Composer mode. Approval and Auth failures remain visible and
