@@ -358,6 +358,7 @@ class ToolExecutor:
                 outcome=measured.outcome or outcome.title(),
                 summary=measured.summary,
                 detail=measured.detail,
+                detail_truncated_count=measured.detail_truncated_count,
                 duration_ms=duration_ms,
                 error_code=error_code,
             ),
