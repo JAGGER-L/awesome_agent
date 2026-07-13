@@ -20,7 +20,7 @@ def _workspace_config(
     )
 
 
-def test_migration_four_stores_only_hash_bound_workspace_enablement(
+def test_store_uses_hash_bound_workspace_enablement(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "state.db"
