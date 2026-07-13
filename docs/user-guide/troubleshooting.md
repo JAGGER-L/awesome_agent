@@ -47,6 +47,14 @@ limits.
 Close every Awesome process and rerun the original one-line installer. It
 stages and validates the new application before replacing the installed files.
 
+## Input is shown as pending
+
+Awesome runs one foreground task at a time and keeps up to three later inputs
+in a session-only queue. Wait for the current task to finish, or cancel it with
+Ctrl+C; the next input then starts automatically. With an empty input box, press
+Up to recall the newest pending item into the draft. A full queue or a queued
+`/quit` keeps new text in the input box and explains why it was not queued.
+
 ## Mem0 Cloud or MCP is unavailable
 
 Use `/memory`, `/mcp`, `/config`, and `/doctor`. Confirm the required environment

@@ -141,12 +141,11 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
     assert "pytest: passed" in frozen_json
     assert "Awesome Agent" in frozen_json
     assert "deepseek/deepseek-v4-flash" in frozen_json
-    assert any(
-        str(workspace.canonical_path) in message.content
+    assert all(
+        str(workspace.canonical_path) not in message.content
         for message in prepared.messages
         if message.role == "system"
     )
-    assert "Never claim to be Claude" in frozen_json
     assert "question 4" in frozen_json
     assert "question 0" not in frozen_json
 

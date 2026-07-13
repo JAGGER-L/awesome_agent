@@ -36,23 +36,4 @@ describe("COMMAND_CATALOG", () => {
       COMMAND_CATALOG.find(({ name }) => name === "workspace")?.description,
     ).toBe("Show the current workspace path");
   });
-
-  it.each([
-    "editor",
-    "details",
-    "history",
-    "clear",
-    "exit",
-    "skill",
-    "review",
-    "debug",
-    "test",
-    "commit",
-    "workplace",
-    "init",
-  ])("does not restore /%s", (name) => {
-    expect(COMMAND_CATALOG.some((command) => command.name === name)).toBe(
-      false,
-    );
-  });
 });

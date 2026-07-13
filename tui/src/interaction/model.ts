@@ -108,6 +108,7 @@ export type TerminalUiAction =
       readonly message?: string | undefined;
     }
   | { readonly type: "mode.approval.submitting"; readonly submitting: boolean }
+  | { readonly type: "mode.picker.submitting"; readonly submitting: boolean }
   | {
       readonly type: "mode.approval.message";
       readonly message?: string | undefined;

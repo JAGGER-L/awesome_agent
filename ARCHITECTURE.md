@@ -336,7 +336,7 @@ only external memory adapter currently supported.
 
 - **Responsibility:** versioned JSON-RPC requests, typed events, bounded NDJSON,
   terminal input, rendering, keyboard behavior, transcript projection, theme,
-  clipboard, and local presentation preferences.
+  clipboard, session-only pending input, and local presentation preferences.
 - **Does not own:** models, LangGraph, tools, storage, Memory, Skills, or MCP.
 - **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
   `tui/src/core/process.ts`, `tui/src/app/App.tsx`.
@@ -347,6 +347,13 @@ competing component listeners. Optimistic user messages are keyed by
 `client_message_id`; Thread generations reject stale events after replacement.
 The active Turn is one ordered Thinking/tool/answer timeline, and completed
 answers use terminal Markdown rendering.
+
+The TUI may queue at most three terminal inputs while the single Core Operation
+is active. The queue is session-only and outside Thread Surface state: it
+survives `/new` and `/resume`, parses each head only when promoted, executes
+FIFO, recalls the tail with Up when Composer is empty, and treats queued
+`/quit` as a terminal barrier. It never becomes a Runtime, protocol method,
+database record, or second execution authority.
 
 ### Safety
 
@@ -438,6 +445,8 @@ history stores bounded summaries.
 - Cancellation propagates through the foreground operation, model call, and
   tool execution. Application marks the Turn cancelled, seals known changes,
   and removes its checkpoint.
+- A terminal event permits the TUI to promote one pending input. Typed busy
+  races requeue the same identity at the head without duplicate failure text.
 - TUI cancellation and interaction controllers release completed request
   identity before the next Operation or Interaction. Nonfatal failures remain
   visible and retryable; Core exit is fatal and disables Composer input.

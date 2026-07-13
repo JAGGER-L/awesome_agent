@@ -231,28 +231,32 @@ export function useInteractionController(
     const owner = mode.owner;
     if (owner.kind === "local_theme") {
       const generation = options.store.getState().thread_generation;
-      options.dispatch({ type: "mode.cancel" });
+      options.dispatch({ type: "mode.picker.submitting", submitting: true });
       if (options.localCommands) {
-        options.applyLocalResult(
-          await options.localCommands.execute({
-            name: "theme",
-            arguments: [selected.value],
-          }),
-          generation,
-        );
+        const result = await options.localCommands.execute({
+          name: "theme",
+          arguments: [selected.value],
+        });
+        options.dispatch({ type: "mode.cancel" });
+        options.applyLocalResult(result, generation);
+      } else {
+        options.dispatch({ type: "mode.cancel" });
       }
       return;
     }
     if (owner.kind === "command") {
       const generation = options.store.getState().thread_generation;
-      options.dispatch({ type: "mode.cancel" });
+      options.dispatch({ type: "mode.picker.submitting", submitting: true });
       if (options.controller) {
         const outcome = await options.controller.select(
           owner.intent,
           selected.value,
           options.currentThreadId,
         );
+        options.dispatch({ type: "mode.cancel" });
         await options.applyOutcome(outcome, owner.intent, generation);
+      } else {
+        options.dispatch({ type: "mode.cancel" });
       }
       return;
     }

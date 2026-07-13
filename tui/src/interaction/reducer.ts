@@ -53,6 +53,11 @@ export function terminalUiReducer(
         ...mode,
         submitting: action.submitting,
       }));
+    case "mode.picker.submitting":
+      return updatePicker(state, (mode) => ({
+        ...mode,
+        submitting: action.submitting,
+      }));
     case "mode.approval.message":
       return updateApproval(state, (mode) => ({
         ...mode,
@@ -189,6 +194,17 @@ function updateApproval(
   ) => Extract<TerminalUiState["mode"], { kind: "approval" }>,
 ): TerminalUiState {
   return state.mode.kind === "approval"
+    ? { ...state, mode: update(state.mode) }
+    : state;
+}
+
+function updatePicker(
+  state: TerminalUiState,
+  update: (
+    mode: Extract<TerminalUiState["mode"], { kind: "picker" }>,
+  ) => Extract<TerminalUiState["mode"], { kind: "picker" }>,
+): TerminalUiState {
+  return state.mode.kind === "picker"
     ? { ...state, mode: update(state.mode) }
     : state;
 }
