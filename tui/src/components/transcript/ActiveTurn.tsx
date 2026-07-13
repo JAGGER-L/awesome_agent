@@ -15,10 +15,8 @@ export function ActiveTurn({
   detailsExpanded?: boolean;
 }) {
   const theme = useTheme();
-  if (live.terminal) return null;
   return (
     <Box flexDirection="column">
-      {live.reasoning_text ? <Text dimColor>{live.reasoning_text}</Text> : null}
       {live.blocks.map((block) =>
         block.kind === "assistant" ? (
           <Box key={block.key} width={width}>

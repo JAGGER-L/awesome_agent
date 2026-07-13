@@ -442,7 +442,7 @@ describe("surfaceReducer", () => {
     expect(state.connection).toBe("fatal");
   });
 
-  it("bounds live reasoning and discards it at Turn completion", () => {
+  it("bounds reasoning per interval and retains it at Turn completion", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "event.received",
       generation: 0,
@@ -470,18 +470,21 @@ describe("surfaceReducer", () => {
         last_sequence: 3,
       },
     });
+    const interval = state.active_operation?.turn?.timeline.find(
+      (item) => item.kind === "thinking",
+    );
     expect(
-      state.active_operation?.turn?.reasoning_text.length,
+      interval?.kind === "thinking" ? interval.text.length : 0,
     ).toBeLessThanOrEqual(32_000);
     state = surfaceReducer(state, {
       type: "event.received",
       generation: 0,
       event: lifecycle(4, "turn.completed"),
     });
-    expect(state.active_operation?.turn).toMatchObject({
-      reasoning_text: "",
-      duration_ms: 1_000,
-    });
+    expect(state.active_operation?.turn).toMatchObject({ duration_ms: 1_000 });
+    expect(state.active_operation?.turn?.timeline).toContainEqual(
+      expect.objectContaining({ kind: "thinking", duration_ms: 0 }),
+    );
   });
 
   it("deduplicates warnings and preserves live projection during hydration", () => {

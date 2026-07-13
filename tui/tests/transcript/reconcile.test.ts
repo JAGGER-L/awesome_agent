@@ -8,7 +8,6 @@ const now = "2026-07-11T08:00:00Z";
 const live: LiveTranscriptProjection = {
   operation_id: "operation_1",
   turn_id: "turn_1",
-  reasoning_text: "",
   terminal: true,
   blocks: [
     { key: "live:assistant", kind: "assistant", text: "coalesced" },

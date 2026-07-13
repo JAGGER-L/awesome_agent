@@ -21,7 +21,6 @@ function assistantToolAssistant(lastText = "done"): SurfaceState {
         id: "turn_1",
         status: "active",
         started_at: "2026-07-13T00:00:00Z",
-        reasoning_text: "",
         thinking_sequence: 0,
         timeline: [
           { kind: "assistant", id: "assistant:turn_1:1", text: "checking" },

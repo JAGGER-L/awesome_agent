@@ -4,6 +4,7 @@ import { MarkdownBlock } from "../../../markdown/MarkdownBlock.js";
 import type { TranscriptBlock } from "../../../transcript/model.js";
 import { CommandResultView } from "../../CommandResultView.js";
 import { useTheme } from "../../theme.js";
+import { formatDuration } from "../../../transcript/reasoning.js";
 
 export function BlockView({
   block,
@@ -93,8 +94,28 @@ export function BlockView({
           Changed {block.paths.join(", ")} · {block.reversibility}
         </Text>
       );
-    case "reasoning_marker":
-      return <Text dimColor>{block.label}</Text>;
+    case "thinking":
+      if (block.duration_ms === undefined)
+        return (
+          <Box flexDirection="column">
+            <Text dimColor>Thinking...</Text>
+            <Text dimColor>{block.text}</Text>
+          </Box>
+        );
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>
+            Thought for {formatDuration(block.duration_ms)} · Ctrl+O to expand
+          </Text>
+          {detailsExpanded ? <Text dimColor>{block.text}</Text> : null}
+        </Box>
+      );
+    case "worked":
+      return (
+        <Text color={theme.muted}>
+          Worked for {formatDuration(block.duration_ms)}
+        </Text>
+      );
     case "warning":
       return <Text color={theme.warning}>Warning · {block.message}</Text>;
     case "status":

@@ -32,6 +32,7 @@ export interface ToolItem {
   readonly presentation_outcome?: string;
   readonly summary: string;
   readonly detail?: string;
+  readonly detail_truncated_count?: number;
   readonly duration_ms?: number;
   readonly error_code?: string;
 }
@@ -46,14 +47,20 @@ export interface ChangeSummaryBlock extends BlockBase {
   readonly lifecycle: string;
   readonly reversibility: string;
 }
-export interface ReasoningMarkerBlock extends BlockBase {
-  readonly kind: "reasoning_marker";
-  readonly label: string;
+export interface ThinkingBlock extends BlockBase {
+  readonly kind: "thinking";
+  readonly text: string;
+  readonly duration_ms?: number;
+}
+export interface WorkedBlock extends BlockBase {
+  readonly kind: "worked";
+  readonly duration_ms: number;
 }
 export interface WarningBlock extends BlockBase {
   readonly kind: "warning";
   readonly code: string;
   readonly message: string;
+  readonly count: number;
 }
 export interface StatusBlock extends BlockBase {
   readonly kind: "status";
@@ -81,7 +88,8 @@ export type TranscriptBlock =
   | DirectCommandBlock
   | ToolGroupBlock
   | ChangeSummaryBlock
-  | ReasoningMarkerBlock
+  | ThinkingBlock
+  | WorkedBlock
   | StatusBlock
   | CommandResultBlock
   | WarningBlock
@@ -98,7 +106,6 @@ export interface LiveTranscriptProjection {
   readonly blocks: readonly TranscriptBlock[];
   readonly operation_id?: string;
   readonly turn_id?: string;
-  readonly reasoning_text: string;
   readonly usage?: Readonly<Record<string, number>>;
   readonly terminal: boolean;
 }

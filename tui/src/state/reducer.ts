@@ -73,16 +73,20 @@ function projectDelta(
     return {
       ...turn,
       timeline: hasActiveThinking
-        ? turn.timeline
+        ? turn.timeline.map((item) =>
+            item.kind === "thinking" && item.duration_ms === undefined
+              ? { ...item, text: appendReasoningTail(item.text, delta.text) }
+              : item,
+          )
         : [
             ...turn.timeline,
             {
               kind: "thinking",
               id: `thinking:${turn.id}:${turn.thinking_sequence + 1}`,
               started_at: delta.first_timestamp,
+              text: appendReasoningTail("", delta.text),
             },
           ],
-      reasoning_text: appendReasoningTail(turn.reasoning_text, delta.text),
       thinking_sequence: hasActiveThinking
         ? turn.thinking_sequence
         : turn.thinking_sequence + 1,
@@ -169,7 +173,6 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             id: event.turn_id ?? "",
             status: "active",
             started_at: event.timestamp,
-            reasoning_text: "",
             timeline: [],
             thinking_sequence: 0,
           },
@@ -197,7 +200,6 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
               : payload.kind === "turn.failed"
                 ? "failed"
                 : "cancelled",
-          reasoning_text: "",
           timeline: closeThinking(turn.timeline, event.timestamp),
           duration_ms: payload.duration_ms,
         };
@@ -268,6 +270,9 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             outcome: payload.outcome,
             summary: payload.summary,
             ...(payload.detail === undefined ? {} : { detail: payload.detail }),
+            ...(payload.detail_truncated_count === undefined
+              ? {}
+              : { detail_truncated_count: payload.detail_truncated_count }),
             duration_ms: payload.duration_ms,
             ...(payload.error_code === undefined
               ? {}

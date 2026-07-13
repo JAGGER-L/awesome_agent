@@ -35,7 +35,7 @@ describe("ReasoningBuffer", () => {
     expect(buffer.snapshot().length).toBeLessThanOrEqual(MAX_REASONING_UNITS);
   });
 
-  it("completes to one elapsed marker and discards live text", () => {
+  it("formats one elapsed marker while the owner retains interval text", () => {
     const buffer = new ReasoningBuffer();
     expect(buffer.complete(100)).toBeUndefined();
     buffer.append("private");

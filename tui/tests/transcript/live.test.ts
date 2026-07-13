@@ -23,13 +23,13 @@ function state(): SurfaceState {
         id: "turn_1",
         status: "active",
         started_at: "2026-07-11T08:00:00Z",
-        reasoning_text: "private live thought",
         thinking_sequence: 2,
         timeline: [
           {
             kind: "thinking",
             id: "thinking:0",
             started_at: "2026-07-11T08:00:00Z",
+            text: "first thought",
             duration_ms: 2000,
           },
           {
@@ -46,6 +46,7 @@ function state(): SurfaceState {
             kind: "thinking",
             id: "thinking:1",
             started_at: "2026-07-11T08:00:02Z",
+            text: "second thought",
             duration_ms: 1000,
           },
           {
@@ -80,8 +81,8 @@ describe("projectLiveTurn", () => {
   it("projects Balanced safe summaries with stable tool order", () => {
     const live = projectLiveTurn(state());
     expect(live.blocks.map((block) => block.kind)).toEqual([
-      "reasoning_marker",
-      "reasoning_marker",
+      "thinking",
+      "thinking",
       "tools",
       "assistant",
       "change",
@@ -93,7 +94,11 @@ describe("projectLiveTurn", () => {
         { verb: "Run", outcome: "error", error_code: "exit_1" },
       ],
     });
-    expect(live.reasoning_text).toBe("private live thought");
+    expect(live.blocks[0]).toMatchObject({
+      kind: "thinking",
+      text: "first thought",
+      duration_ms: 2000,
+    });
     expect(live.usage).toEqual({ input_tokens: 12, output_tokens: 4 });
   });
 
@@ -141,7 +146,6 @@ describe("projectLiveTurn", () => {
         ...operation,
         turn: {
           ...operation.turn,
-          reasoning_text: "",
           timeline: operation.turn.timeline.filter(
             (item) => item.kind !== "thinking",
           ),
@@ -149,8 +153,6 @@ describe("projectLiveTurn", () => {
       },
     });
 
-    expect(live.blocks.some((block) => block.kind === "reasoning_marker")).toBe(
-      false,
-    );
+    expect(live.blocks.some((block) => block.kind === "thinking")).toBe(false);
   });
 });

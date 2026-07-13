@@ -4,7 +4,6 @@ import type {
   ToolItem,
   TranscriptBlock,
 } from "./model.js";
-import { formatDuration, reasoningElapsedMarker } from "./reasoning.js";
 
 export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
   const blocks: TranscriptBlock[] = [];
@@ -22,11 +21,14 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
       pendingTools = [];
     };
     for (const item of turn.timeline) {
-      if (item.kind === "thinking" && item.duration_ms !== undefined) {
+      if (item.kind === "thinking") {
         blocks.push({
           key: `live:${item.id}`,
-          kind: "reasoning_marker",
-          label: reasoningElapsedMarker(item.duration_ms),
+          kind: "thinking",
+          text: item.text,
+          ...(item.duration_ms === undefined
+            ? {}
+            : { duration_ms: item.duration_ms }),
         });
       } else if (item.kind === "assistant") {
         flushTools();
@@ -54,6 +56,9 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
             : { presentation_outcome: item.outcome }),
           summary: item.status === "running" ? "Running…" : item.summary,
           ...(item.detail === undefined ? {} : { detail: item.detail }),
+          ...(item.detail_truncated_count === undefined
+            ? {}
+            : { detail_truncated_count: item.detail_truncated_count }),
           ...(item.duration_ms === undefined
             ? {}
             : { duration_ms: item.duration_ms }),
@@ -65,13 +70,12 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
       }
     }
     flushTools();
-    if (turn.duration_ms !== undefined) {
+    if (turn.duration_ms !== undefined)
       blocks.push({
-        key: `live:${turn.id}:duration`,
-        kind: "status",
-        message: `Worked for ${formatDuration(turn.duration_ms)}`,
+        key: `live:${turn.id}:worked`,
+        kind: "worked",
+        duration_ms: turn.duration_ms,
       });
-    }
   }
   if (state.latest_change) {
     blocks.push({
@@ -89,13 +93,13 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
       kind: "warning",
       code: warning.code,
       message: warning.message,
+      count: 1,
     });
   }
   return {
     blocks,
     ...(operation === undefined ? {} : { operation_id: operation.id }),
     ...(turn === undefined ? {} : { turn_id: turn.id }),
-    reasoning_text: turn?.reasoning_text ?? "",
     ...(state.usage === undefined ? {} : { usage: state.usage }),
     terminal: operation !== undefined && operation.status !== "active",
   };

@@ -66,13 +66,15 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).not.toContain("Assistant");
   });
 
-  it("updates only the active projection and hides reasoning when terminal", () => {
+  it("updates the active projection and retains completed thinking until reconciliation", () => {
     const live: LiveTranscriptProjection = {
       operation_id: "operation_1",
       turn_id: "turn_1",
-      reasoning_text: "live reasoning",
       terminal: false,
-      blocks: [{ key: "live", kind: "assistant", text: "first" }],
+      blocks: [
+        { key: "thought", kind: "thinking", text: "live reasoning" },
+        { key: "live", kind: "assistant", text: "first" },
+      ],
     };
     const view = render(<ActiveTurn live={live} width={80} />);
     expect(view.lastFrame()).toContain("live reasoning");
@@ -80,7 +82,10 @@ describe("scrollback transcript components", () => {
       <ActiveTurn
         live={{
           ...live,
-          blocks: [{ key: "live", kind: "assistant", text: "second" }],
+          blocks: [
+            { key: "thought", kind: "thinking", text: "live reasoning" },
+            { key: "live", kind: "assistant", text: "second" },
+          ],
         }}
         width={80}
       />,
@@ -88,11 +93,23 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).toContain("second");
     view.rerender(
       <ActiveTurn
-        live={{ ...live, terminal: true, reasoning_text: "must disappear" }}
+        live={{
+          ...live,
+          terminal: true,
+          blocks: [
+            {
+              key: "thought",
+              kind: "thinking",
+              text: "must remain",
+              duration_ms: 1200,
+            },
+          ],
+        }}
         width={80}
       />,
     );
-    expect(view.lastFrame()).not.toContain("must disappear");
+    expect(view.lastFrame()).toContain("Thought for 1.2 s");
+    expect(view.lastFrame()).not.toContain("must remain");
   });
 
   it("folds tool detail by default and expands it through one prop", () => {
@@ -137,7 +154,6 @@ describe("scrollback transcript components", () => {
 
   it("keeps incomplete streaming Markdown readable without completed parsing", () => {
     const live: LiveTranscriptProjection = {
-      reasoning_text: "",
       terminal: false,
       blocks: [
         {
@@ -165,7 +181,6 @@ describe("scrollback transcript components", () => {
           id: "turn_1",
           status: "active",
           started_at: "2026-07-12T00:00:00Z",
-          reasoning_text: "",
           thinking_sequence: 0,
           timeline: [
             {
@@ -189,7 +204,6 @@ describe("scrollback transcript components", () => {
 
   it("hides token annotations at 40 columns", () => {
     const live: LiveTranscriptProjection = {
-      reasoning_text: "",
       terminal: false,
       usage: { input_tokens: 10, output_tokens: 2 },
       blocks: [{ key: "live", kind: "assistant", text: "essential" }],
