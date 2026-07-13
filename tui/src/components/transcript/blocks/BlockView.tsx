@@ -7,6 +7,7 @@ import { useTheme } from "../../theme.js";
 import { formatDuration } from "../../../transcript/reasoning.js";
 import { ToolSequence } from "../ToolSequence.js";
 import { Worked } from "../Worked.js";
+import { UserLine } from "../UserLine.js";
 
 export function BlockView({
   block,
@@ -21,17 +22,15 @@ export function BlockView({
   switch (block.kind) {
     case "user":
       return (
-        <Box flexDirection="column">
-          <Text color={theme.user}>❯ {block.text}</Text>
-          {block.status === "failed" ? (
-            <Text color={theme.danger}>
-              Failed · {block.error_message ?? "Turn was not accepted."}
-            </Text>
-          ) : null}
-        </Box>
+        <UserLine
+          text={block.text}
+          {...(block.status === "failed"
+            ? { failure: block.error_message ?? "Turn was not accepted." }
+            : {})}
+        />
       );
     case "command_input":
-      return <Text color={theme.user}>鉂?{block.text}</Text>;
+      return <UserLine text={block.text} />;
     case "assistant":
       return (
         <Box width={width}>

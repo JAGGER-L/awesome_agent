@@ -21,6 +21,18 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("submitted slash command history", () => {
+  it("keeps the Composer visible while the command menu is open", async () => {
+    const store = createSurfaceStore();
+    const view = render(
+      <App store={store} reportFatal={() => undefined} width={80} />,
+    );
+
+    view.stdin.write("/");
+
+    await eventually(() => expect(view.lastFrame()).toContain("/new"));
+    expect(view.lastFrame()).toContain("❯ /▌");
+  });
+
   it("renders finalized Assistant and Worked blocks once after handoff", async () => {
     const store = createSurfaceStore({
       ...initialSurfaceState(),

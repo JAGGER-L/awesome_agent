@@ -106,8 +106,9 @@ describe("Ink scrollback boundaries", () => {
       ["components/SecretInput.tsx", ["theme.primary", "theme.warning"]],
       [
         "components/transcript/blocks/BlockView.tsx",
-        ["theme.user", "theme.assistant", "theme.muted"],
+        ["theme.assistant", "theme.muted"],
       ],
+      ["components/transcript/UserLine.tsx", ["theme.user", "theme.danger"]],
       ["components/transcript/ToolSequence.tsx", ["theme.tool", "theme.muted"]],
     ]);
 
