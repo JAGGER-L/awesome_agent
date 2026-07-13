@@ -1,7 +1,13 @@
-import { Box, Text } from "ink";
+import { Text } from "ink";
 
 import type { CommandPresentation } from "../commands/presenters.js";
-import { useTheme } from "./theme.js";
+import { MarkdownBlock } from "../markdown/MarkdownBlock.js";
+import {
+  AlignedRows,
+  EmptyResult,
+  ResultNotice,
+  ResultPanel,
+} from "./results/index.js";
 
 export function CommandResultView({
   presentation,
@@ -10,44 +16,54 @@ export function CommandResultView({
   readonly presentation: CommandPresentation;
   readonly width: number;
 }) {
-  const theme = useTheme();
-  const color =
-    presentation.kind === "error" ||
-    ("tone" in presentation && presentation.tone === "error")
-      ? theme.danger
-      : "tone" in presentation && presentation.tone === "warning"
-        ? theme.warning
-        : theme.muted;
-  if (presentation.kind === "error") {
-    return (
-      <Box flexDirection="column">
-        <Text color={color}>{presentation.title}</Text>
-        <Text color={theme.danger}>{presentation.message}</Text>
-      </Box>
-    );
+  switch (presentation.kind) {
+    case "panel":
+      return (
+        <ResultPanel
+          title={presentation.title}
+          tone={presentation.tone}
+          width={width}
+        >
+          <AlignedRows rows={presentation.rows} width={width} />
+        </ResultPanel>
+      );
+    case "notice":
+    case "progress":
+      return (
+        <ResultNotice message={presentation.message} tone={presentation.tone} />
+      );
+    case "empty":
+      return (
+        <EmptyResult
+          title={presentation.title}
+          message={presentation.message}
+          width={width}
+        />
+      );
+    case "markdown":
+      return (
+        <ResultPanel
+          title={presentation.title}
+          tone={presentation.tone}
+          width={width}
+        >
+          <MarkdownBlock
+            source={presentation.source}
+            width={Math.max(1, width - 4)}
+          />
+        </ResultPanel>
+      );
+    case "error":
+      return (
+        <ResultPanel title={presentation.title} tone="danger" width={width}>
+          <Text>{presentation.message}</Text>
+        </ResultPanel>
+      );
+    default:
+      return assertNever(presentation);
   }
-  if (presentation.kind === "progress") {
-    return <Text color={color}>{presentation.message}</Text>;
-  }
-  if (presentation.kind === "picker" || presentation.kind === "secret")
-    return null;
-  const labelWidth = Math.min(
-    28,
-    Math.max(0, ...presentation.rows.map((row) => row.label.length)),
-  );
-  return (
-    <Box flexDirection="column" width={width}>
-      <Text color={color}>{presentation.title}</Text>
-      {presentation.rows.map((row) => (
-        <Box key={`${row.label}\u0000${row.value}`}>
-          {labelWidth > 0 ? (
-            <Box width={labelWidth + 2}>
-              <Text>{row.label}</Text>
-            </Box>
-          ) : null}
-          <Text>{row.value}</Text>
-        </Box>
-      ))}
-    </Box>
-  );
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled command presentation: ${String(value)}`);
 }

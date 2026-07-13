@@ -149,9 +149,8 @@ describe("surfaceReducer", () => {
         kind: "command_result",
         command: "usage",
         presentation: {
-          kind: "lines",
-          title: "/usage",
-          rows: [{ label: "", value: "old command result" }],
+          kind: "notice",
+          message: "old command result",
           tone: "info",
         },
       },

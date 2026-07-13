@@ -310,9 +310,8 @@ describe("App composer integration", () => {
         kind: "command_result",
         command: "old",
         presentation: {
-          kind: "lines",
-          title: "/old",
-          rows: [{ label: "", value: "old transcript" }],
+          kind: "notice",
+          message: "old transcript",
           tone: "info",
         },
       },

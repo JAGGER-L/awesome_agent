@@ -1,26 +1,36 @@
-import type { CommandPayload } from "../protocol/commands.js";
+import type { CommandName, CommandPayload } from "../protocol/commands.js";
 import type { HelpResult } from "./help.js";
 
 export interface PresentationRow {
   readonly label: string;
   readonly value: string;
+  readonly status?: "normal" | "success" | "warning" | "danger";
 }
 
 export type CommandPresentation =
   | {
-      readonly kind: "lines";
+      readonly kind: "panel";
       readonly title: string;
       readonly rows: readonly PresentationRow[];
-      readonly tone: "info" | "warning" | "error";
+      readonly tone: "info" | "success" | "warning" | "danger";
     }
   | {
-      readonly kind: "progress";
-      readonly title: string;
+      readonly kind: "notice";
       readonly message: string;
-      readonly tone: "info" | "error";
+      readonly tone: "info" | "success" | "warning";
     }
-  | { readonly kind: "picker"; readonly title: string }
-  | { readonly kind: "secret"; readonly title: string }
+  | { readonly kind: "empty"; readonly title: string; readonly message: string }
+  | {
+      readonly kind: "progress";
+      readonly message: string;
+      readonly tone: "info" | "success" | "danger";
+    }
+  | {
+      readonly kind: "markdown";
+      readonly title: string;
+      readonly source: string;
+      readonly tone: "info" | "warning";
+    }
   | {
       readonly kind: "error";
       readonly title: string;
@@ -35,7 +45,7 @@ export function formatTokenCount(value: number): string {
 }
 
 export function presentHelpResult(result: HelpResult): CommandPresentation {
-  return lines(
+  return panel(
     "/help",
     result.rows.map((row) => ({
       label: row.usage,
@@ -45,137 +55,187 @@ export function presentHelpResult(result: HelpResult): CommandPresentation {
 }
 
 export function presentCommandPayload(
+  command: CommandName,
   payload: CommandPayload,
 ): CommandPresentation {
-  const title = `/${commandFor(payload.kind)}`;
+  const title = `/${command}`;
   switch (payload.kind) {
     case "notice":
-      return lines(title, [{ label: "", value: payload.message }]);
+      return { kind: "notice", message: payload.message, tone: "info" };
     case "thread":
-      return lines(title, [
+      return panel(title, [
         { label: "Thread", value: payload.thread_id },
         { label: "Title", value: payload.title },
       ]);
     case "context":
-      return lines(title, [
-        ...payload.categories.map((category) => ({
-          label: humanize(category.name),
-          value: formatTokenCount(category.estimated_tokens),
-        })),
+      return panel(title, [
+        ...(["instructions", "conversation", "files", "memory"] as const).map(
+          (name) => ({
+            label: humanize(name),
+            value: formatTokenCount(
+              payload.categories.find((category) => category.name === name)
+                ?.estimated_tokens ?? 0,
+            ),
+          }),
+        ),
         { label: "Total", value: formatTokenCount(payload.total_tokens) },
         { label: "Budget", value: formatTokenCount(payload.budget_tokens) },
       ]);
     case "compact":
       return {
         kind: "progress",
-        title,
         message: "Context compressed",
-        tone: "info",
+        tone: "success",
       };
     case "model":
-      return lines(title, [{ label: "Model", value: payload.model }]);
+      return {
+        kind: "notice",
+        message: `Model · ${payload.model}`,
+        tone: "success",
+      };
     case "thinking":
-      return lines(title, [
-        { label: "Thinking", value: payload.enabled ? "On" : "Off" },
-      ]);
+      return {
+        kind: "notice",
+        message: `Thinking · ${payload.enabled ? "On" : "Off"}`,
+        tone: "info",
+      };
     case "workspace":
-      return lines(title, [{ label: "Workspace", value: payload.path }]);
+      return { kind: "notice", message: payload.path, tone: "info" };
     case "diff":
-      return lines(title, [
-        {
-          label: payload.change_set_id ? "Change set" : "",
-          value: payload.content || "No workspace changes",
-        },
-      ]);
+      return payload.content
+        ? { kind: "markdown", title, source: payload.content, tone: "info" }
+        : { kind: "empty", title, message: "No workspace changes" };
     case "change":
-      return lines(title, [
-        { label: "Change set", value: payload.change_set_id },
-        { label: "State", value: payload.lifecycle },
-        { label: "Files", value: `${payload.restored_paths.length}` },
-        ...(payload.warning
-          ? [{ label: "Warning", value: payload.warning }]
-          : []),
-      ]);
-    case "tools":
-      return lines(
+      return panel(
         title,
-        payload.tools.length
-          ? payload.tools.map((tool) => ({
+        [
+          { label: "Change set", value: payload.change_set_id },
+          { label: "State", value: payload.lifecycle },
+          { label: "Files", value: `${payload.restored_paths.length}` },
+          ...(payload.warning
+            ? [
+                {
+                  label: "Warning",
+                  value: payload.warning,
+                  status: "warning" as const,
+                },
+              ]
+            : []),
+        ],
+        payload.warning ? "warning" : "success",
+      );
+    case "tools":
+      return payload.tools.length === 0
+        ? { kind: "empty", title, message: "No tools available" }
+        : panel(
+            title,
+            payload.tools.map((tool) => ({
               label: tool.name,
               value: tool.approval_required ? "Approval required" : "Enabled",
-            }))
-          : [{ label: "", value: "No tools available" }],
-      );
+              status: tool.approval_required ? "warning" : "success",
+            })),
+          );
     case "skills":
-      return lines(title, [
+      return panel(title, [
         { label: "Active", value: payload.active_mode },
         ...payload.skills.map((skill) => ({
           label: skill.name,
           value: skill.description,
         })),
+        ...payload.diagnostics.map((diagnostic) => ({
+          label: diagnostic.name ?? diagnostic.code,
+          value: diagnostic.message,
+          status: "warning" as const,
+        })),
       ]);
     case "mcp":
-      return lines(
-        title,
-        payload.servers.length
-          ? payload.servers.map((server) => ({
+      return payload.servers.length === 0
+        ? { kind: "empty", title, message: "No MCP servers configured" }
+        : panel(
+            title,
+            payload.servers.map((server) => ({
               label: server.server_id,
               value: server.detail ?? humanize(server.state),
-            }))
-          : [{ label: "", value: "No MCP servers configured" }],
-      );
+              status: server.state === "error" ? "danger" : "normal",
+            })),
+          );
     case "memory_status":
-      return lines(title, [
+      return panel(title, [
+        { label: "Local", value: payload.local_enabled ? "On" : "Off" },
         {
-          label: "Local memory",
-          value: payload.local_enabled ? "On" : "Off",
-        },
-        {
-          label: "Cloud memory · Mem0",
+          label: "Cloud · Mem0",
           value: payload.cloud_enabled ? "On" : "Off",
         },
       ]);
     case "memory_document":
-      return lines(
-        title,
-        payload.entries.length
-          ? payload.entries.map((entry) => ({
+      return payload.entries.length === 0
+        ? { kind: "empty", title, message: "No memories" }
+        : panel(
+            title,
+            payload.entries.map((entry) => ({
               label: entry.id,
               value: entry.content,
-            }))
-          : [{ label: "", value: "No memories" }],
-      );
+            })),
+          );
     case "memory_search":
-      return lines(
-        title,
-        payload.memories.length
-          ? payload.memories.map((memory) => ({
+      return payload.memories.length === 0
+        ? { kind: "empty", title, message: "No memories found" }
+        : panel(
+            title,
+            payload.memories.map((memory) => ({
               label: memory.scope,
               value: memory.content,
-            }))
-          : [{ label: "", value: "No memories found" }],
-      );
+            })),
+          );
     case "memory_mutation":
-      return lines(title, [
-        { label: "Provider", value: payload.provider },
+      return panel(title, [
+        { label: "Provider", value: humanize(payload.provider) },
         { label: "Status", value: humanize(payload.status) },
       ]);
     case "status": {
       const snapshot = payload.snapshot;
-      return lines(title, [
+      return panel(title, [
         { label: "Version", value: snapshot.version },
         { label: "Workspace", value: snapshot.workspace_path },
-        { label: "Thread", value: snapshot.thread_display_id },
+        {
+          label: "Thread",
+          value: `${snapshot.thread_title} · ${snapshot.thread_display_id}`,
+        },
         { label: "Model", value: snapshot.model_identity.effective_model },
+        { label: "Credentials", value: statusCredential(snapshot) },
         { label: "Permissions", value: humanize(snapshot.permission_mode) },
         {
           label: "Context",
           value: `${formatTokenCount(snapshot.context_used_tokens)} / ${formatTokenCount(snapshot.context_budget_tokens)}`,
         },
+        { label: "Thinking", value: snapshot.thinking_enabled ? "On" : "Off" },
+        { label: "Skill", value: humanize(snapshot.skill_mode) },
+        {
+          label: "Memory",
+          value: `Local ${snapshot.local_memory_enabled ? "On" : "Off"} · Cloud Mem0 ${snapshot.mem0_enabled ? "On" : "Off"}`,
+        },
+        {
+          label: "MCP",
+          value: `${snapshot.mcp_ready} ready · ${snapshot.mcp_degraded} degraded`,
+        },
+        {
+          label: "Operation",
+          value:
+            snapshot.operation_status === "idle"
+              ? "Idle"
+              : `Active · ${snapshot.operation_id ?? "Unknown"}`,
+        },
+        {
+          label: "Changes",
+          value:
+            snapshot.changed_file_count === 0
+              ? "None"
+              : `${snapshot.changed_file_count} ${snapshot.changed_file_count === 1 ? "file" : "files"} modified`,
+        },
       ]);
     }
     case "usage":
-      return lines(title, [
+      return panel(title, [
         {
           label: "Input tokens",
           value: formatTokenCount(payload.usage.input_tokens),
@@ -188,23 +248,41 @@ export function presentCommandPayload(
           label: "Reasoning tokens",
           value: formatTokenCount(payload.usage.reasoning_tokens),
         },
+        {
+          label: "Cache read tokens",
+          value: formatTokenCount(payload.usage.cache_read_tokens),
+        },
+        {
+          label: "Cache write tokens",
+          value: formatTokenCount(payload.usage.cache_write_tokens),
+        },
         { label: "Model calls", value: `${payload.usage.model_calls}` },
         { label: "Tool calls", value: `${payload.usage.tool_calls}` },
         {
-          label: "Active time",
-          value: `${payload.usage.active_execution_seconds}s`,
+          label: "Provider retries",
+          value: `${payload.usage.provider_retries}`,
+        },
+        { label: "Compressions", value: `${payload.usage.compressions}` },
+        {
+          label: "Active execution",
+          value: formatDuration(payload.usage.active_execution_seconds),
         },
       ]);
     case "doctor":
-      return lines(
+      return panel(
         title,
         payload.checks.map((check) => ({
           label: check.name,
-          value: check.detail ?? humanize(check.status),
+          value: doctorStatus(check.status),
+          status:
+            check.status === "error" || check.status === "invalid"
+              ? "danger"
+              : "normal",
         })),
       );
     case "config":
-      return lines(title, [
+      return panel(title, [
+        { label: "Sources", value: payload.sources.join(" → ") || "Defaults" },
         {
           label: "DeepSeek",
           value: credentialState(payload.credentials.deepseek),
@@ -213,27 +291,41 @@ export function presentCommandPayload(
         { label: "Mem0", value: credentialState(payload.credentials.mem0) },
       ]);
     case "permissions":
-      return lines(title, [
-        { label: "Permissions", value: humanize(payload.mode) },
-      ]);
+      return {
+        kind: "notice",
+        message: `Permissions · ${humanize(payload.mode)}`,
+        tone: "info",
+      };
     default:
       return assertNever(payload);
   }
 }
 
-function commandFor(kind: CommandPayload["kind"]): string {
-  if (kind === "thread") return "new";
-  if (kind.startsWith("memory_")) return "memory";
-  if (kind === "change") return "undo";
-  if (kind === "notice") return "command";
-  return kind;
+export function presentCommandError(
+  command: CommandName,
+  _code: string,
+  message: string,
+): CommandPresentation {
+  return { kind: "error", title: `/${command}`, message };
 }
 
-function lines(
+function panel(
   title: string,
   rows: readonly PresentationRow[],
+  tone: "info" | "success" | "warning" | "danger" = "info",
 ): CommandPresentation {
-  return { kind: "lines", title, rows, tone: "info" };
+  return { kind: "panel", title, rows, tone };
+}
+
+function statusCredential(
+  snapshot: Extract<CommandPayload, { kind: "status" }>["snapshot"],
+): string {
+  if (!snapshot.credential_source) return "Not configured";
+  const source =
+    snapshot.credential_source === "environment" ? "Environment" : "Awesome";
+  return snapshot.credential_source_available
+    ? source
+    : `${source} · Unavailable`;
 }
 
 function credentialState(credential: {
@@ -241,9 +333,19 @@ function credentialState(credential: {
   readonly environment_configured: boolean;
   readonly awesome_configured: boolean;
 }): string {
-  if (credential.selected_source === "environment") return "Environment";
-  if (credential.selected_source === "awesome") return "Awesome API key";
+  if (credential.selected_source === "environment") {
+    return credential.environment_configured
+      ? "Environment"
+      : "Environment · Unavailable";
+  }
+  if (credential.selected_source === "awesome") {
+    return credential.awesome_configured ? "Awesome" : "Awesome · Unavailable";
+  }
   return "Not configured";
+}
+
+function doctorStatus(status: string): string {
+  return status === "ok" ? "OK" : humanize(status);
 }
 
 function humanize(value: string): string {
@@ -255,6 +357,13 @@ function formatUnit(value: number): string {
   return Number.isInteger(value) ? `${value}` : value.toFixed(1);
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
+  if (seconds < 60) return `${formatUnit(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds - minutes * 60)}s`;
+}
+
 function assertNever(value: never): never {
-  throw new Error(`Unhandled command payload: ${String(value)}`);
+  throw new Error(`Unhandled command payload kind: ${String(value)}`);
 }

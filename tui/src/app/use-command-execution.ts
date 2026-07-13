@@ -39,9 +39,8 @@ export function useCommandExecution(store: SurfaceStore) {
         tone === "error"
           ? { kind: "error", title: `/${command}`, message: content }
           : {
-              kind: "lines",
-              title: `/${command}`,
-              rows: [{ label: "", value: content }],
+              kind: "notice",
+              message: content,
               tone,
             },
         generation,
@@ -63,7 +62,6 @@ export function useCommandExecution(store: SurfaceStore) {
           command,
           presentation: {
             kind: "progress",
-            title: `/${command}`,
             message,
             tone: "info",
           },

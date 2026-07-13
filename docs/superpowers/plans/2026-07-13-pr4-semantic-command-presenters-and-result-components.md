@@ -418,3 +418,16 @@ git pull --ff-only
 - Credential availability and Tool approval are rendered from Core facts, not inferred by TUI.
 - Result components remain readable at 80, 100, and 120 columns and without color.
 - PR4 is merged before PR5 is executed.
+
+## Execution Evidence
+
+- Implemented one exhaustive typed Presenter and removed the replaced
+  `lines`, `picker`, and `secret` presentation variants.
+- Added the four shared result primitives and exhaustive Ink rendering.
+- Added focused Presenter and component coverage for Context, Usage, Workspace,
+  Status, Doctor, Tools, Skills, MCP, Config, empty states, duplicate rows,
+  narrow wrapping, and 80/100/120-column inputs.
+- Verified with `npm --prefix tui run format:check`, `lint`, `typecheck`,
+  `build`, and the affected command/result/transcript Vitest suites.
+- Confirmed the Presenter/result source contains no `Object.entries`,
+  `JSON.stringify`, `isRecord`, `result.data`, or `[object Object]` fallback.
