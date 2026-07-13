@@ -1,4 +1,5 @@
 import type { CommandPayload } from "../protocol/commands.js";
+import type { HelpResult } from "./help.js";
 
 export interface PresentationRow {
   readonly label: string;
@@ -31,6 +32,16 @@ export function formatTokenCount(value: number): string {
   if (absolute >= 1024 ** 2) return `${formatUnit(value / 1024 ** 2)}M`;
   if (absolute >= 1024) return `${formatUnit(value / 1024)}K`;
   return `${value}`;
+}
+
+export function presentHelpResult(result: HelpResult): CommandPresentation {
+  return lines(
+    "/help",
+    result.rows.map((row) => ({
+      label: row.usage,
+      value: row.description,
+    })),
+  );
 }
 
 export function presentCommandPayload(

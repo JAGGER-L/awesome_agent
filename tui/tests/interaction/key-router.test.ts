@@ -17,6 +17,7 @@ describe("routeTerminalKey", () => {
       kind: "command_menu",
       query: "/th",
       selectedCommand: "thinking",
+      viewportStart: 0,
     });
 
     expect(
@@ -83,6 +84,7 @@ describe("routeTerminalKey", () => {
           kind: "command_menu",
           query: "/th",
           selectedCommand: "thinking",
+          viewportStart: 0,
         }),
         "",
         { ...emptyTerminalKey(), tab: true },

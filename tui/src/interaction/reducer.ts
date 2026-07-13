@@ -1,6 +1,7 @@
 import { composerReducer, initialComposerState } from "../composer/reducer.js";
 import { graphemes } from "../composer/graphemes.js";
 import { searchCommands } from "../commands/search.js";
+import { commandMenuWindow } from "../commands/menu-window.js";
 import type { TerminalUiAction, TerminalUiState } from "./model.js";
 
 export function initialTerminalUiState(): TerminalUiState {
@@ -103,7 +104,17 @@ function moveSelection(
     const index =
       (Math.max(current, 0) + delta + matches.length) % matches.length;
     const selected = matches[index];
-    return selected ? { ...mode, selectedCommand: selected.name } : mode;
+    if (!selected) return mode;
+    const window = commandMenuWindow(
+      matches,
+      selected.name,
+      mode.viewportStart,
+    );
+    return {
+      ...mode,
+      selectedCommand: selected.name,
+      viewportStart: window.start,
+    };
   }
   const size =
     mode.kind === "picker"
@@ -137,6 +148,7 @@ function commandMenuMode(
   return {
     kind: "command_menu",
     query: classified,
+    viewportStart: 0,
     ...(selectedCommand === undefined ? {} : { selectedCommand }),
   };
 }

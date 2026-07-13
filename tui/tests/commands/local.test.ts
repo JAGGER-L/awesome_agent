@@ -88,18 +88,16 @@ describe("LocalCommandService", () => {
   it("opens all-command or focused help without RPC", async () => {
     const { service } = harness();
     await expect(service.execute({ name: "help" })).resolves.toMatchObject({
-      kind: "result",
-      command: "help",
-      tone: "info",
-      content: expect.stringContaining("Commands"),
+      kind: "help",
+      rows: expect.arrayContaining([
+        expect.objectContaining({ usage: "/new" }),
+      ]),
     });
     await expect(
       service.execute({ name: "help", arguments: ["thinking"] }),
     ).resolves.toMatchObject({
-      kind: "result",
-      command: "help",
-      tone: "info",
-      content: expect.stringContaining("/thinking"),
+      kind: "help",
+      rows: [expect.objectContaining({ usage: "/thinking [on|off]" })],
     });
     await expect(
       service.execute({ name: "help", arguments: ["editor"] }),

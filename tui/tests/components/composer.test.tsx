@@ -80,6 +80,7 @@ describe("CommandMenu", () => {
       {
         name: "thinking" as const,
         owner: "application" as const,
+        completion: "/thinking" as const,
         usage: "/thinking [on|off]",
         description: "Show or choose thinking mode",
         examples: ["/thinking [on|off]"],
@@ -87,13 +88,18 @@ describe("CommandMenu", () => {
       {
         name: "theme" as const,
         owner: "ink" as const,
+        completion: "/theme" as const,
         usage: "/theme [system|dark|light]",
         description: "Show or choose the color theme",
         examples: ["/theme [system|dark|light]"],
       },
     ];
     const view = render(
-      <CommandMenu commands={commands} selectedCommand="theme" />,
+      <CommandMenu
+        commands={commands}
+        selectedCommand="theme"
+        viewportStart={0}
+      />,
     );
     expect(view.lastFrame()).toContain("/thinking");
     expect(view.lastFrame()).toContain("/theme");
