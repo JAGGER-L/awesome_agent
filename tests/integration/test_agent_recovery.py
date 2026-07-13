@@ -59,6 +59,7 @@ def _state(
     state["termination_reason"] = reason
     state["usage"] = {"input_tokens": 2, "output_tokens": 1}
     state["model_calls"] = 1
+    state["context_manifest"] = [{"kind": "history", "estimated_tokens": 3}]
     return state
 
 
@@ -157,6 +158,13 @@ async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftove
         TurnStatus.FAILED,
         "checkpoint_corrupt",
     )
+    finalized = conversation.read_thread(turns["final"].thread_id).turns[0]
+    assert finalized.usage == UsageSummary(
+        input_tokens=2,
+        output_tokens=1,
+        model_calls=1,
+    )
+    assert finalized.context_manifest == ({"kind": "history", "estimated_tokens": 3},)
     assert turns["resume"].id not in checkpoints.deleted
     assert {
         turns["final"].id,

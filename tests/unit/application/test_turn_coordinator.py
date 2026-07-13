@@ -54,6 +54,18 @@ class ResumeGraph(FakeGraph):
         return self.result
 
 
+class RaisingGraph(FakeGraph):
+    async def ainvoke(
+        self,
+        state: AgentState | None,
+        config: dict[str, Any],
+        *,
+        context: AgentRuntimeContext,
+    ) -> AgentState:
+        del state, config, context
+        raise RuntimeError("graph failed")
+
+
 class FakeCheckpoints:
     def __init__(self) -> None:
         self.deleted: list[str] = []
@@ -216,11 +228,40 @@ async def test_model_failure_persists_failed_turn_and_failed_operation(
     turn = conversation.read_thread(thread_id).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "model_authentication"
+    assert turn.usage.input_tokens == 10
+    assert turn.usage.output_tokens == 3
+    assert turn.usage.model_calls == 1
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
         EventType.TURN_FAILED,
         EventType.OPERATION_FAILED,
     ]
+
+
+@pytest.mark.asyncio
+async def test_graph_exception_persists_last_stable_checkpoint_facts(
+    tmp_path: Path,
+) -> None:
+    graph = RaisingGraph(_result(final_answer=None, reason="waiting"))
+    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+        tmp_path, graph
+    )
+    observed = _result(final_answer=None, reason="waiting")
+    observed["tool_calls"] = 2
+    observed["context_manifest"] = [{"kind": "tool_result", "estimated_tokens": 7}]
+    checkpoints.state = observed
+
+    accepted = await coordinator.submit_turn(
+        thread_id, "inspect", client_message_id="client_1"
+    )
+    with pytest.raises(RuntimeError, match="graph failed"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.FAILED
+    assert turn.error_code == "agent_execution_failed"
+    assert turn.usage.tool_calls == 2
+    assert turn.context_manifest == ({"kind": "tool_result", "estimated_tokens": 7},)
 
 
 @pytest.mark.asyncio
@@ -235,6 +276,9 @@ async def test_cancel_persists_cancelled_turn_before_operation_terminal(
     accepted = await coordinator.submit_turn(
         thread_id, "inspect", client_message_id="client_1"
     )
+    observed = _result(final_answer=None, reason="waiting")
+    observed["context_manifest"] = [{"kind": "history", "estimated_tokens": 13}]
+    checkpoints.state = observed
 
     assert await coordinator.cancel_operation(accepted.operation_id) is True
     with pytest.raises(asyncio.CancelledError):
@@ -242,6 +286,9 @@ async def test_cancel_persists_cancelled_turn_before_operation_terminal(
 
     turn = conversation.read_thread(thread_id).turns[0]
     assert turn.status is TurnStatus.CANCELLED
+    assert turn.usage.input_tokens == 10
+    assert turn.usage.output_tokens == 3
+    assert turn.context_manifest == ({"kind": "history", "estimated_tokens": 13},)
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
         EventType.TURN_CANCELLED,

@@ -15,6 +15,10 @@ from awesome_agent.agent import (
 from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.application.turn_facts import (
+    ObservedTurnFacts,
+    observed_turn_facts,
+)
 from awesome_agent.config import TurnConfig
 from awesome_agent.context import ExplicitPathError
 from awesome_agent.conversation import (
@@ -23,7 +27,6 @@ from awesome_agent.conversation import (
     ThreadView,
     Turn,
     TurnStatus,
-    UsageSummary,
 )
 from awesome_agent.core.events import (
     EventEmitter,
@@ -275,14 +278,15 @@ class TurnCoordinator:
                     )
                     continue
                 if state["final_answer"] is not None:
+                    facts = observed_turn_facts(state)
                     projector = self._recovery_projector(turn)
                     await projector.turn_started()
                     self._conversation.complete_turn(
                         turn.id,
                         state["final_answer"],
-                        _usage_summary(state),
+                        facts.usage,
                         state["termination_reason"] or "completed",
-                        tuple(state["context_manifest"]),
+                        facts.context_manifest,
                     )
                     await projector.turn_completed()
                     self._seal_changes(turn.id)
@@ -297,7 +301,11 @@ class TurnCoordinator:
                     continue
                 if state["termination_reason"] is not None:
                     reason = state["termination_reason"]
-                    await self._fail_recovery(turn, reason)
+                    await self._fail_recovery(
+                        turn,
+                        reason,
+                        facts=observed_turn_facts(state),
+                    )
                     results.append(
                         RecoveryResult(
                             thread_id=thread.id,
@@ -389,13 +397,24 @@ class TurnCoordinator:
             )
             result = await self._post_answer_memory(result)
         except asyncio.CancelledError:
-            self._conversation.cancel_turn(turn.id)
+            facts = await self._latest_observed_facts(turn.id)
+            self._conversation.cancel_turn(
+                turn.id,
+                usage=facts.usage,
+                context_manifest=facts.context_manifest,
+            )
             await projector.turn_cancelled("cancelled")
             self._seal_changes(turn.id)
             await self._checkpoints.delete(turn.id)
             raise
         except Exception:
-            self._conversation.fail_turn(turn.id, "agent_execution_failed")
+            facts = await self._latest_observed_facts(turn.id)
+            self._conversation.fail_turn(
+                turn.id,
+                "agent_execution_failed",
+                usage=facts.usage,
+                context_manifest=facts.context_manifest,
+            )
             await projector.turn_failed("agent_execution_failed")
             self._seal_changes(turn.id)
             await self._checkpoints.delete(turn.id)
@@ -403,8 +422,14 @@ class TurnCoordinator:
 
         reason = result["termination_reason"] or "completed"
         answer = result["final_answer"]
+        facts = observed_turn_facts(result)
         if answer is None:
-            self._conversation.fail_turn(turn.id, reason)
+            self._conversation.fail_turn(
+                turn.id,
+                reason,
+                usage=facts.usage,
+                context_manifest=facts.context_manifest,
+            )
             await projector.turn_failed(reason)
             self._seal_changes(turn.id)
             await self._checkpoints.delete(turn.id)
@@ -413,9 +438,9 @@ class TurnCoordinator:
         self._conversation.complete_turn(
             turn.id,
             answer,
-            _usage_summary(result),
+            facts.usage,
             reason,
-            tuple(result["context_manifest"]),
+            facts.context_manifest,
         )
         await projector.turn_completed()
         self._seal_changes(turn.id)
@@ -425,13 +450,32 @@ class TurnCoordinator:
         while len(self._tasks) > 64:
             self._tasks.pop(next(iter(self._tasks)))
 
-    async def _fail_recovery(self, turn: Turn, error_code: str) -> None:
+    async def _fail_recovery(
+        self,
+        turn: Turn,
+        error_code: str,
+        *,
+        facts: ObservedTurnFacts | None = None,
+    ) -> None:
         projector = self._recovery_projector(turn)
         await projector.turn_started()
-        self._conversation.fail_turn(turn.id, error_code)
+        observed = facts or ObservedTurnFacts()
+        self._conversation.fail_turn(
+            turn.id,
+            error_code,
+            usage=observed.usage,
+            context_manifest=observed.context_manifest,
+        )
         await projector.turn_failed(error_code)
         self._seal_changes(turn.id)
         await self._checkpoints.delete(turn.id)
+
+    async def _latest_observed_facts(self, turn_id: str) -> ObservedTurnFacts:
+        try:
+            state = await self._checkpoints.latest_state(turn_id)
+        except CheckpointCorrupt:
+            return ObservedTurnFacts()
+        return observed_turn_facts(state)
 
     def _recovery_projector(self, turn: Turn) -> ApplicationEventProjector:
         view = self._conversation.read_thread(turn.thread_id)
@@ -442,22 +486,6 @@ class TurnCoordinator:
             operation_id=f"operation_recovery_{turn.id}",
             client_message_id=_client_message_id(view, turn),
         )
-
-
-def _usage_summary(state: AgentState) -> UsageSummary:
-    usage = state["usage"]
-    return UsageSummary(
-        input_tokens=usage.get("input_tokens", 0),
-        output_tokens=usage.get("output_tokens", 0),
-        reasoning_tokens=usage.get("reasoning_tokens", 0),
-        cache_read_tokens=usage.get("cache_read_tokens", 0),
-        cache_write_tokens=usage.get("cache_write_tokens", 0),
-        model_calls=state["model_calls"],
-        tool_calls=state["tool_calls"],
-        provider_retries=state["provider_retries"],
-        compressions=state["compressions"],
-        active_execution_seconds=state["active_execution_seconds"],
-    )
 
 
 def _client_message_id(view: ThreadView, turn: Turn) -> str:
