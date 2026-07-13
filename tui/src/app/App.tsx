@@ -63,11 +63,11 @@ import {
   useInteractionController,
 } from "./use-interaction-controller.js";
 import {
-  ThreadReplacementError,
-  useThreadReplacement,
-} from "./use-thread-replacement.js";
+  ThreadTransitionError,
+  useThreadTransition,
+} from "./use-thread-transition.js";
 import { isAuthPicker } from "./use-interaction-flow.js";
-import { threadViewportKey } from "./use-thread-viewport.js";
+import { threadSurfaceKey } from "./thread-surface-key.js";
 
 interface ComposerSubmitResult {
   readonly accepted: boolean;
@@ -93,6 +93,7 @@ export function App({
   interactionResponder,
   reportFatal,
   providerSetupRequired = false,
+  resetCurrentFrame = () => undefined,
 }: {
   store: SurfaceStore;
   controller?: CommandController;
@@ -105,6 +106,7 @@ export function App({
   interactionResponder?: { respond(decision: string): Promise<void> };
   reportFatal: (error: unknown) => void;
   providerSetupRequired?: boolean;
+  resetCurrentFrame?: () => void;
 }) {
   const state = useSyncExternalStore(
     store.subscribe,
@@ -130,9 +132,14 @@ export function App({
     beginProgress,
   } = useCommandExecution(store);
   const globalKeys = useRef(new GlobalKeyController()).current;
-  const replaceThread = useThreadReplacement({
+  const applyThreadTransition = useThreadTransition({
     store,
-    resetThreadScope: lifecycle?.resetThreadScope,
+    effects: {
+      ...(lifecycle?.resetThreadScope
+        ? { resetThreadScope: lifecycle.resetThreadScope }
+        : {}),
+      resetCurrentFrame,
+    },
   });
   const historic =
     state.committed_transcript ??
@@ -335,12 +342,9 @@ export function App({
           const payload = outcome.payload;
           if (payload.kind === "thread_transition") {
             try {
-              await replaceThread({
-                transition: payload.transition,
-                expectedGeneration: generation,
-              });
+              applyThreadTransition(payload.transition, generation);
             } catch (error) {
-              if (!(error instanceof ThreadReplacementError)) throw error;
+              if (!(error instanceof ThreadTransitionError)) throw error;
               appendCommandResult(
                 intent?.name ?? "resume",
                 "error",
@@ -383,7 +387,7 @@ export function App({
       blockingSelection,
       controller,
       localCommands,
-      replaceThread,
+      applyThreadTransition,
       store,
       interactions,
     ],
@@ -705,7 +709,7 @@ export function App({
       <TerminalInput active={!cancelling} onInput={handleTerminalInput} />
       {liveWelcome ? <Welcome {...liveWelcome} width={columns} /> : null}
       <Transcript
-        key={threadViewportKey(state)}
+        key={threadSurfaceKey(state)}
         blocks={historic}
         width={columns}
         detailsExpanded={ui.detailsExpanded}

@@ -317,6 +317,7 @@ describe("App composer integration", () => {
       },
     });
     const resetThreadScope = vi.fn();
+    const resetCurrentFrame = vi.fn();
     const controller = {
       submit: vi.fn(async () => ({
         kind: "result",
@@ -357,6 +358,7 @@ describe("App composer integration", () => {
           requestExit: async () => undefined,
           resetThreadScope,
         }}
+        resetCurrentFrame={resetCurrentFrame}
         width={60}
       />,
     );
@@ -374,5 +376,8 @@ describe("App composer integration", () => {
     });
     expect(JSON.stringify(store.getState())).not.toContain("old transcript");
     expect(resetThreadScope).toHaveBeenCalledOnce();
+    expect(resetCurrentFrame).toHaveBeenCalledOnce();
+    expect(view.lastFrame()).toContain("New conversation started");
+    expect(view.lastFrame()).not.toContain("old transcript");
   });
 });

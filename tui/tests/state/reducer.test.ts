@@ -102,7 +102,6 @@ describe("surfaceReducer", () => {
       committed_transcript: [
         { key: "old", kind: "status" as const, message: "old" },
       ],
-      transcript_persisted: false,
     };
     const application = { current_thread_id: "thread_new" } as never;
     const thread = { view: { thread: { id: "thread_new" } } } as never;
@@ -112,7 +111,6 @@ describe("surfaceReducer", () => {
       application,
       thread,
       transcript: [],
-      transcript_persisted: false,
     });
 
     expect(replaced).toEqual({
@@ -123,7 +121,6 @@ describe("surfaceReducer", () => {
       thread,
       warnings: [],
       committed_transcript: [],
-      transcript_persisted: false,
     });
   });
 

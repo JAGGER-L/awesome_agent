@@ -25,7 +25,6 @@ export type SurfaceAction =
       readonly application: MethodValue["application.getState"];
       readonly thread: MethodValue["thread.read"];
       readonly transcript: readonly TranscriptBlock[];
-      readonly transcript_persisted: boolean;
     }
   | {
       readonly type: "event.received";

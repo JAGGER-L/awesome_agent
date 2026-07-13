@@ -103,7 +103,6 @@ export interface SurfaceState {
   };
   readonly warnings: readonly SurfaceWarning[];
   readonly committed_transcript?: readonly TranscriptBlock[];
-  readonly transcript_persisted?: boolean;
   readonly fatal?: FatalState;
   readonly core_exit?: {
     readonly code: number | null;
