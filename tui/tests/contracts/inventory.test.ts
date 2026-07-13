@@ -13,8 +13,10 @@ import {
   requestIdSchema,
   skillCommandNames,
   threadEntrySchema,
+  threadTransitionSnapshotSchema,
 } from "../../src/protocol/index.js";
 import { z } from "zod";
+import { loadFixtureCorpus } from "./fixture-loader.js";
 
 describe("protocol inventory", () => {
   it("contains the complete product method inventory", () => {
@@ -31,6 +33,37 @@ describe("protocol inventory", () => {
       "operation.cancel",
       "shutdown",
     ]);
+  });
+
+  it("validates one authoritative Application and Thread transition", async () => {
+    const corpus = await loadFixtureCorpus();
+    const fixtures = corpus.files["command-results.valid.json"] as {
+      cases: { outcome: unknown }[];
+    };
+    const result = fixtures.cases
+      .map((fixture) => fixture.outcome)
+      .find(
+        (candidate) =>
+          (candidate as { payload?: { kind?: string } }).payload?.kind ===
+          "thread_transition",
+      ) as {
+      payload: {
+        transition: {
+          application: { current_thread_id: string };
+          thread: { view: { thread: { id: string } } };
+        };
+      };
+    };
+    expect(
+      threadTransitionSnapshotSchema.safeParse(result.payload.transition)
+        .success,
+    ).toBe(true);
+
+    const mismatched = structuredClone(result.payload.transition);
+    mismatched.thread.view.thread.id = "thread_mismatch";
+    expect(threadTransitionSnapshotSchema.safeParse(mismatched).success).toBe(
+      false,
+    );
   });
 
   it("contains every merged event discriminator", () => {

@@ -2,12 +2,18 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { render } from "ink-testing-library";
+import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { App } from "../../src/app/App.js";
 import { CommandController } from "../../src/commands/controller.js";
 import { parseInput } from "../../src/commands/parser.js";
 import type { LaunchIntent } from "../../src/cli/args.js";
 import { runCli, type CliDependencies } from "../../src/cli/main.js";
+import { resolveTheme } from "../../src/preferences/theme.js";
+import { initialSurfaceState } from "../../src/state/reducer.js";
+import { createSurfaceStore } from "../../src/state/store.js";
 import {
   connectSurface,
   type ConnectedSurface,
@@ -30,6 +36,158 @@ afterEach(async () => {
 });
 
 describe("networkless candidate product flow", () => {
+  it("replaces and resumes complete terminal conversations without duplicate Turn output", async () => {
+    const oldThread = threadPage("thread_old", [
+      entry("entry_old_user", "thread_old", 1, "user_message", "old question"),
+      entry(
+        "entry_old_assistant",
+        "thread_old",
+        2,
+        "assistant_message",
+        "old answer",
+      ),
+    ]);
+    const newThread = threadPage("thread_new", []);
+    const controller = {
+      submit: vi.fn(async (routed: ReturnType<typeof parseInput>) => {
+        if (routed?.kind !== "command") {
+          throw new Error("expected command input");
+        }
+        const resumed = routed.intent.name === "resume";
+        return {
+          kind: "result",
+          payload: {
+            kind: "thread_transition",
+            transition: {
+              reason: resumed ? "resume" : "new",
+              application: applicationState(
+                resumed ? "thread_old" : "thread_new",
+              ),
+              thread: resumed ? oldThread : newThread,
+            },
+          },
+        };
+      }),
+    } as unknown as CommandController;
+    const store = createSurfaceStore({
+      ...initialSurfaceState(),
+      application: applicationState("thread_old"),
+      thread: oldThread,
+      committed_transcript: [
+        {
+          key: "user:client_old",
+          kind: "user",
+          client_message_id: "client_old",
+          status: "persisted",
+          text: "old question",
+        },
+      ],
+      active_operation: {
+        id: "operation_old",
+        status: "completed",
+        turn: {
+          id: "turn_old",
+          status: "completed",
+          started_at: "2026-07-13T00:00:00Z",
+          thinking_sequence: 0,
+          duration_ms: 1_200,
+          timeline: [
+            {
+              kind: "assistant",
+              id: "assistant:turn_old:1",
+              text: "old answer",
+            },
+          ],
+        },
+      },
+    });
+    const resetCurrentFrame = vi.fn();
+    const view = render(
+      createElement(App, {
+        store,
+        controller,
+        reportFatal: (error: unknown) => {
+          throw error;
+        },
+        resetCurrentFrame,
+        width: 80,
+        welcome: {
+          version: "1.1.1",
+          workspacePath: "E:/awesome",
+          thread: { kind: "new" },
+          model: "deepseek/deepseek-v4-flash",
+          thinkingEnabled: false,
+          localMemoryEnabled: false,
+          mem0Enabled: false,
+          permissionMode: "request_approval",
+          theme: resolveTheme("dark", "truecolor"),
+        },
+      }),
+    );
+
+    expect(view.lastFrame()?.match(/old answer/gu)).toHaveLength(1);
+    expect(view.lastFrame()?.match(/Worked for/gu)).toHaveLength(1);
+    store.dispatch({
+      type: "transcript.reconciled",
+      generation: 0,
+      operation_id: "operation_old",
+      blocks: [
+        {
+          key: "user:client_old",
+          kind: "user",
+          client_message_id: "client_old",
+          status: "persisted",
+          text: "old question",
+        },
+        {
+          key: "entry:entry_old_assistant",
+          kind: "assistant",
+          text: "old answer",
+        },
+        { key: "worked:turn_old", kind: "worked", duration_ms: 1_200 },
+      ],
+    });
+    await eventually(() => {
+      expect(view.lastFrame()?.match(/old answer/gu)).toHaveLength(1);
+      expect(view.lastFrame()?.match(/Worked for/gu)).toHaveLength(1);
+    });
+
+    view.stdin.write("/new");
+    view.stdin.write("\r");
+    await eventually(() => expect(resetCurrentFrame).toHaveBeenCalledTimes(1));
+    expect(view.lastFrame()).toContain("New conversation started");
+    expect(view.lastFrame()).not.toContain("old question");
+    expect(view.lastFrame()).not.toContain("old answer");
+
+    store.dispatch({
+      type: "transcript.reconciled",
+      generation: 1,
+      blocks: [
+        {
+          key: "user:client_new",
+          kind: "user",
+          client_message_id: "client_new",
+          status: "persisted",
+          text: "new question",
+        },
+        {
+          key: "entry:entry_new_assistant",
+          kind: "assistant",
+          text: "new answer",
+        },
+      ],
+    });
+    await eventually(() => expect(view.lastFrame()).toContain("new answer"));
+
+    view.stdin.write("/resume thread_old");
+    view.stdin.write("\r");
+    await eventually(() => expect(resetCurrentFrame).toHaveBeenCalledTimes(2));
+    expect(view.lastFrame()).toContain("old question");
+    expect(view.lastFrame()).toContain("old answer");
+    expect(view.lastFrame()).not.toContain("new question");
+    expect(view.lastFrame()).not.toContain("new answer");
+  });
+
   it("configures a clean home through the credential RPC without leaking the key", async () => {
     const root = await mkdtemp(join(tmpdir(), "awesome-credential-"));
     temporary.push(root);
@@ -309,6 +467,109 @@ describe("networkless candidate product flow", () => {
     60_000,
   );
 });
+
+async function eventually(assertion: () => void): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise<void>((resolvePromise) =>
+        setTimeout(resolvePromise, 5),
+      );
+    }
+  }
+  throw lastError;
+}
+
+function applicationState(threadId: string) {
+  const credential = (
+    provider: "deepseek" | "kimi" | "mem0",
+    variable: string,
+  ) => ({
+    provider,
+    environment_variable: variable,
+    environment_configured: false,
+    awesome_configured: true,
+    selected_source: "awesome" as const,
+  });
+  return {
+    initialized: true,
+    session_id: "session_test",
+    workspace_key: "workspace_test",
+    workspace: { display_path: "E:/awesome" },
+    workspace_trusted: true,
+    current_thread_id: threadId,
+    model_identity: {
+      provider: "deepseek",
+      configured_model: "deepseek/deepseek-v4-flash",
+      effective_model: "deepseek/deepseek-v4-flash",
+      runtime_name: "Awesome Agent",
+      fallback_active: false,
+    },
+    thinking_enabled: false,
+    skill_mode: "auto",
+    permission_mode: "request_approval" as const,
+    configuration_valid: true,
+    secret_status: {
+      deepseek_api_key: true,
+      moonshot_api_key: false,
+      mem0_api_key: false,
+    },
+    provider_credentials: {
+      deepseek: credential("deepseek", "DEEPSEEK_API_KEY"),
+      kimi: credential("kimi", "MOONSHOT_API_KEY"),
+      mem0: credential("mem0", "MEM0_API_KEY"),
+    },
+    memory_status: {},
+    mcp_status: [],
+    usage: {},
+    configuration_diagnostics: [],
+  } as never;
+}
+
+function threadPage(threadId: string, entries: readonly unknown[]) {
+  return {
+    has_more: false,
+    view: {
+      thread: {
+        id: threadId,
+        workspace_key: "workspace_test",
+        title:
+          threadId === "thread_old" ? "Old conversation" : "New conversation",
+        thinking_enabled: false,
+        skill_mode: "auto",
+        created_at: "2026-07-13T00:00:00Z",
+        updated_at: "2026-07-13T00:00:00Z",
+      },
+      entries,
+      turns: [],
+      tool_activities: [],
+    },
+    change_sets: [],
+  } as never;
+}
+
+function entry(
+  id: string,
+  threadId: string,
+  sequence: number,
+  kind: "user_message" | "assistant_message",
+  content: string,
+) {
+  return {
+    id,
+    thread_id: threadId,
+    sequence,
+    kind,
+    content,
+    ...(kind === "user_message" ? { client_message_id: "client_old" } : {}),
+    metadata: {},
+    created_at: "2026-07-13T00:00:00Z",
+  };
+}
 
 function requiredInput(value: string) {
   const routed = parseInput(value);

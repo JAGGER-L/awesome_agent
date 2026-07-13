@@ -90,8 +90,11 @@ executes tools itself.
 `/help` is written into normal transcript history rather than opening a modal.
 It renders one command per aligned row with usage and description. Use
 `/help <command>` for one focused row; internal command ownership is not shown.
-`/new` atomically replaces the current transcript and resets Thread-scoped
-permission grants.
+`/new` starts a clean conversation and redraws Awesome from the Welcome panel.
+The previous conversation remains available through `/resume`. `/resume`
+redraws Awesome with only the selected conversation's saved messages. Stop the
+current task before starting or resuming another conversation. A new Thread
+also resets Thread-scoped permission grants.
 
 ## Context and change lifecycles
 
@@ -112,12 +115,16 @@ lifecycles remain distinct errors.
 
 - `Version`: one numeric value such as `1.1.0`;
 - `Workspace`: the workspace path, without trust or Git-branch suffixes;
-- `Thread` and resumable `Thread ID`;
-- `Model`: the full Provider/model ID and configured state;
-- `Modes`: thinking and Skill mode;
+- `Thread`: the title and resumable Thread ID;
+- `Model`: the full Provider/model ID;
+- `Credentials`: the selected credential source and its availability;
+- `Permissions`: the current Thread permission mode;
+- `Context`: used Tokens and the active budget;
+- `Thinking` and `Skill`: their current modes;
 - `Memory`: Local memory and Mem0 Cloud on/off states;
-- MCP ready/degraded counts, active operation state, and configuration
-  diagnostic count.
+- `MCP`: ready and degraded server counts;
+- `Operation`: idle or the active operation ID;
+- `Changes`: the number of modified files, when present.
 
 Context details and token/operation usage are intentionally separate in
 `/context` and `/usage`.

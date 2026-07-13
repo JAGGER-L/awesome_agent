@@ -285,3 +285,25 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
     )
     assert "node:" not in reducer_source
     assert "react" not in reducer_source.casefold()
+
+
+def test_thread_transition_contract_has_one_projection_dependency_chain() -> None:
+    projections = (TUI_ROOT / "src" / "protocol" / "product-projections.ts").read_text(
+        encoding="utf-8"
+    )
+    commands = (TUI_ROOT / "src" / "protocol" / "commands.ts").read_text(
+        encoding="utf-8"
+    )
+    transition = (TUI_ROOT / "src" / "app" / "use-thread-transition.ts").read_text(
+        encoding="utf-8"
+    )
+
+    projection_imports = {
+        match for match in re.findall(r'from ["\']([^"\']+)["\']', projections)
+    }
+    assert projection_imports == {"zod", "./base.js", "./identity.js"}
+    assert "applicationStateSchema" in commands
+    assert "threadReadResultSchema" in commands
+    assert "threadTransitionSnapshotSchema" in commands
+    assert 'type: "thread.replaced"' in transition
+    assert "effects.resetCurrentFrame()" in transition

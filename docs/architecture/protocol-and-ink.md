@@ -51,10 +51,10 @@ Application to Ink. Request IDs, operation IDs, Thread/Turn IDs, event
 sequences, and typed interaction responses let Ink reconcile live output with
 durable transcript reads after reconnect or resume.
 
-Presentation state such as scroll position, theme, composer history, expanded
-reasoning, and selection remains in the TUI. Any additional surface must adapt
-the same facade/event contracts rather than becoming another execution
-authority.
+Presentation state such as theme, composer history, expanded reasoning, and
+selection remains in the TUI. The host terminal owns scrollback and mouse
+selection. Any additional surface must adapt the same facade/event contracts
+rather than becoming another execution authority.
 
 ## Input and mode ownership
 
@@ -64,10 +64,12 @@ secret input, Approval, Trust, or Fatal. Exactly one mode owns Enter, Escape,
 Tab, and arrow keys. Components render state and never install competing input
 listeners.
 
-The stable layout order is committed transcript, active Turn, notices or the
-active interaction, Composer, then the one-line status. Welcome is committed
-once into Ink static output. The Composer remains the bottom interaction area
-and is removed only while another mode exclusively owns input.
+`TerminalSurfaceLayout` renders one natural terminal flow in this order:
+Welcome, committed transcript, active Turn, notices, Command Menu, Composer or
+exclusive interaction, and status. The current Thread is dynamic React state;
+it is not permanent terminal output. Command Menu is a Composer accessory, so
+the draft remains visible while candidates are open. Trust, Approval, Auth,
+Picker, and Fatal remain exclusive interactions.
 
 ## Transcript and event ordering
 
@@ -83,14 +85,29 @@ conversation entry. Command input and command result remain separate blocks so
 failed, invalid, cancelled, Picker, and Secret flows preserve what the user
 actually submitted.
 
-Thread replacement is one generation-guarded Surface transition. The TUI reads
-the authoritative Application and selected Thread projections, verifies both
-Thread identities, hydrates durable history for resume, and dispatches one
-replacement action. `/new` installs only a session notice for the new empty
-Thread; `/resume` installs only the selected Thread's durable transcript. The
+Thread replacement is one generation-guarded Surface transition:
+
+```text
+/new or /resume
+  -> command.execute
+  -> Application Thread service
+  -> ThreadTransitionSnapshot
+  -> TUI Thread transition controller
+  -> one thread.replaced action
+  -> CLI-owned current Ink frame reset
+  -> Welcome + selected Thread redraw
+```
+
+The command result already contains the authoritative Application and selected
+Thread projections. Ink verifies their identities, hydrates durable history
+for resume, and dispatches one replacement action without a second state or
+Thread request. `/new` installs only a session notice for the new empty Thread;
+`/resume` installs only the selected Thread's durable transcript. The
 transition clears prior operation, interaction, warning, usage, change, and
-transcript state. Events, deltas, reconciliation, or command outcomes carrying
-an older generation cannot enter the replacement Surface.
+transcript state before the CLI host resets the current Ink frame exactly once.
+It never clears terminal-global scrollback. Events, deltas, reconciliation, or
+command outcomes carrying an older generation cannot enter the replacement
+Surface.
 
 Stable block identities come from their semantic owners: client message ID for
 user Turns, command submission ID for slash input, durable entry ID for stored
@@ -98,6 +115,10 @@ messages, deterministic Turn segment ordinals for assistant and Thinking
 segments, protocol call ID for tools, and ChangeSet ID for changes. Reusing one
 key for different blocks is an invariant violation rather than a silent
 deduplication.
+
+At any instant, a terminal Turn has one display owner: live projection or
+finalized transcript, never both. Reconciliation transfers the completed Turn
+to finalized blocks and releases the matching live operation exactly once.
 
 Within an active Turn, the reducer maintains one ordered timeline of locally
 measured Thinking intervals, structured tool facts, streaming assistant text,

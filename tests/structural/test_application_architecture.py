@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from awesome_agent.application.command_results import ThreadTransitionSnapshot
 from awesome_agent.application.commands import COMMAND_OWNERS, CommandOwner
 
 
@@ -24,3 +25,24 @@ def test_dispatcher_inventory_is_complete_and_composition_only_wires_it() -> Non
     assert "CommandResult(" not in composition
     assert "CommandInteractionResult(" not in composition
     assert "CommandError(" not in composition
+
+
+def test_application_owns_the_authoritative_thread_transition() -> None:
+    application = Path("src/awesome_agent/application")
+    conversation_commands = (application / "conversation_commands.py").read_text(
+        encoding="utf-8"
+    )
+    composition = (application / "composition.py").read_text(encoding="utf-8")
+
+    assert tuple(ThreadTransitionSnapshot.model_fields) == (
+        "reason",
+        "application",
+        "thread",
+    )
+    assert "ThreadTransitionSnapshot(" in conversation_commands
+    assert "application = await self._application_snapshot()" in conversation_commands
+    assert "page = await self._thread_snapshot(" in conversation_commands
+    assert "application=application" in conversation_commands
+    assert "thread=page" in conversation_commands
+    assert "application_snapshot=self.application_state" in composition
+    assert "thread_snapshot=self.thread_state" in composition
