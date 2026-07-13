@@ -304,7 +304,7 @@ describe("Provider setup flow", () => {
             value:
               arguments_[1] === "replace"
                 ? secretOutcome(secretPrompt("replace"))
-                : selectionOutcome(selection!),
+                : selectionOutcome(requireSelection(selection)),
           } as never;
         }
         throw new Error(`Unexpected method ${method}`);
@@ -438,6 +438,11 @@ function selectionOutcome(selection: {
     kind: "interaction" as const,
     interaction: { kind: "selection" as const, ...selection },
   };
+}
+
+function requireSelection<T>(selection: T | undefined): T {
+  if (selection === undefined) throw new Error("Selection is required.");
+  return selection;
 }
 
 function secretOutcome(prompt: ReturnType<typeof secretPrompt>) {
