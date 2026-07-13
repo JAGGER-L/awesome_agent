@@ -458,7 +458,12 @@ describe("surfaceReducer", () => {
       duration_ms: 5_000,
       timeline: [
         { kind: "thinking", duration_ms: 1_000 },
-        { kind: "tool", outcome: "Created", duration_ms: 18 },
+        {
+          kind: "tool",
+          started_at: "2026-07-11T08:00:02Z",
+          outcome: "Created",
+          duration_ms: 18,
+        },
         { kind: "assistant", text: "done" },
       ],
     });

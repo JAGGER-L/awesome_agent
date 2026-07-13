@@ -2,9 +2,9 @@ import { Box, Text } from "ink";
 
 import { MarkdownBlock } from "../../../markdown/MarkdownBlock.js";
 import type { TranscriptBlock } from "../../../transcript/model.js";
+import { ActivityLine } from "../../activity/ActivityLine.js";
 import { CommandResultView } from "../../CommandResultView.js";
 import { useTheme } from "../../theme.js";
-import { formatDuration } from "../../../transcript/reasoning.js";
 import { ToolSequence } from "../ToolSequence.js";
 import { Worked } from "../Worked.js";
 import { UserLine } from "../UserLine.js";
@@ -13,10 +13,12 @@ export function BlockView({
   block,
   width,
   detailsExpanded = false,
+  activityShimmer = false,
 }: {
   block: TranscriptBlock;
   width: number;
   detailsExpanded?: boolean;
+  activityShimmer?: boolean;
 }) {
   const theme = useTheme();
   switch (block.kind) {
@@ -48,6 +50,7 @@ export function BlockView({
           items={block.items}
           width={width}
           expanded={detailsExpanded}
+          activityShimmer={activityShimmer}
         />
       );
     case "change":
@@ -60,16 +63,31 @@ export function BlockView({
       if (block.duration_ms === undefined)
         return (
           <Box flexDirection="column">
-            <Text dimColor>Thinking...</Text>
-            <Text dimColor>{block.text}</Text>
+            <ActivityLine
+              state="active"
+              marker="✦"
+              text="Thinking for"
+              {...(block.started_at === undefined
+                ? {}
+                : { startedAt: block.started_at })}
+              shimmer={activityShimmer}
+            />
+            {block.text ? <Text color={theme.muted}>{block.text}</Text> : null}
           </Box>
         );
       return (
         <Box flexDirection="column">
-          <Text dimColor>
-            Thought for {formatDuration(block.duration_ms)} · Ctrl+O to expand
-          </Text>
-          {detailsExpanded ? <Text dimColor>{block.text}</Text> : null}
+          <ActivityLine
+            state="completed"
+            marker="◆"
+            text="Thought for"
+            durationMs={block.duration_ms}
+            shimmer={false}
+            hint={detailsExpanded ? "Ctrl+O to collapse" : "Ctrl+O to expand"}
+          />
+          {detailsExpanded ? (
+            <Text color={theme.muted}>{block.text}</Text>
+          ) : null}
         </Box>
       );
     case "worked":

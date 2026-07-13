@@ -29,6 +29,7 @@ function assistantToolAssistant(lastText = "done"): SurfaceState {
             call_id: "call_1",
             tool_name: "read_file",
             status: "completed",
+            started_at: "2026-07-11T08:00:01Z",
             verb: "Read",
             outcome: "Read",
             summary: "Read file",

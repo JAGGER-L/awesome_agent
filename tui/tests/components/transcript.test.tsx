@@ -59,7 +59,9 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).toContain("/status");
     expect(view.lastFrame()).toContain("durable answer");
     expect(view.lastFrame()).toContain("git status");
-    expect(view.lastFrame()).toContain("1 tool call · 12ms · Ctrl+O to expand");
+    expect(view.lastFrame()).toContain(
+      "1 tool call · <0.1 s · Ctrl+O to expand",
+    );
     expect(view.lastFrame()).not.toContain("failed safely");
     expect(view.lastFrame()).not.toContain("exit_1");
     expect(view.lastFrame()).not.toContain("You");
@@ -172,7 +174,7 @@ describe("scrollback transcript components", () => {
       ).lastFrame() ?? "";
 
     expect(frame).toContain("● Write circle_area.py");
-    expect(frame).toContain("└ Created · 21 lines · 18ms");
+    expect(frame).toContain("└ Created · 21 lines · <0.1 s");
   });
 
   it("keeps incomplete streaming Markdown readable without completed parsing", () => {

@@ -11,20 +11,24 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
   const turn = operation?.turn;
   if (turn) {
     let pendingTools: ToolItem[] = [];
+    let toolInsertionIndex: number | undefined;
     const flushTools = () => {
       if (pendingTools.length === 0) return;
-      blocks.push({
+      const block: TranscriptBlock = {
         key: `live:${turn.id}:tools:${pendingTools[0]?.call_id ?? "sequence"}`,
         kind: "tools",
         items: pendingTools,
-      });
+      };
+      blocks.splice(toolInsertionIndex ?? blocks.length, 0, block);
       pendingTools = [];
+      toolInsertionIndex = undefined;
     };
     for (const item of turn.timeline) {
       if (item.kind === "thinking") {
         blocks.push({
           key: `live:${item.id}`,
           kind: "thinking",
+          started_at: item.started_at,
           text: item.text,
           ...(item.duration_ms === undefined
             ? {}
@@ -38,6 +42,7 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
           text: item.text,
         });
       } else if (item.kind === "tool") {
+        toolInsertionIndex ??= blocks.length;
         const tool: ToolItem = {
           call_id: item.call_id,
           name: item.tool_name,
@@ -51,6 +56,7 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
                 : item.status === "cancelled"
                   ? "cancelled"
                   : "running",
+          started_at: item.started_at,
           ...(item.outcome === undefined
             ? {}
             : { presentation_outcome: item.outcome }),
@@ -100,6 +106,7 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
     blocks,
     ...(operation === undefined ? {} : { operation_id: operation.id }),
     ...(turn === undefined ? {} : { turn_id: turn.id }),
+    ...(turn === undefined ? {} : { started_at: turn.started_at }),
     ...(turn === undefined || state.usage === undefined
       ? {}
       : { usage: state.usage }),

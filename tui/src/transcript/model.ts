@@ -29,6 +29,7 @@ export interface ToolItem {
   readonly verb: string;
   readonly target?: string;
   readonly outcome: "running" | "success" | "error" | "cancelled";
+  readonly started_at?: string;
   readonly presentation_outcome?: string;
   readonly summary: string;
   readonly detail?: string;
@@ -49,6 +50,7 @@ export interface ChangeSummaryBlock extends BlockBase {
 }
 export interface ThinkingBlock extends BlockBase {
   readonly kind: "thinking";
+  readonly started_at?: string;
   readonly text: string;
   readonly duration_ms?: number;
 }
@@ -106,6 +108,7 @@ export interface LiveTranscriptProjection {
   readonly blocks: readonly TranscriptBlock[];
   readonly operation_id?: string;
   readonly turn_id?: string;
+  readonly started_at?: string;
   readonly usage?: Readonly<Record<string, number>>;
   readonly terminal: boolean;
 }

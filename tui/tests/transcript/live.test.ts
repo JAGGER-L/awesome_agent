@@ -44,6 +44,7 @@ function state(): SurfaceState {
             call_id: "call_1",
             tool_name: "read_file",
             status: "completed",
+            started_at: "2026-07-11T08:00:01Z",
             verb: "Read",
             target: "config.py",
             outcome: "Read",
@@ -61,6 +62,7 @@ function state(): SurfaceState {
             call_id: "call_2",
             tool_name: "execute",
             status: "failed",
+            started_at: "2026-07-11T08:00:03Z",
             verb: "Run",
             target: "pytest",
             outcome: "Failed",
@@ -89,13 +91,13 @@ describe("projectLiveTurn", () => {
     const live = projectLiveTurn(state());
     expect(live.blocks.map((block) => block.kind)).toEqual([
       "thinking",
-      "thinking",
       "tools",
+      "thinking",
       "assistant",
       "change",
       "warning",
     ]);
-    expect(live.blocks[2]).toMatchObject({
+    expect(live.blocks[1]).toMatchObject({
       items: [
         { verb: "Read", target: "config.py", summary: "Read config" },
         { verb: "Run", outcome: "error", error_code: "exit_1" },
@@ -127,6 +129,37 @@ describe("projectLiveTurn", () => {
     });
     expect(live.blocks.filter((block) => block.kind === "tools")).toHaveLength(
       1,
+    );
+  });
+
+  it("starts a new tool sequence after an assistant segment", () => {
+    const value = state();
+    const operation = value.active_operation;
+    if (!operation?.turn) throw new Error("fixture requires an active Turn");
+    const [firstThinking, firstTool, secondThinking, secondTool] =
+      operation.turn.timeline;
+    if (!firstThinking || !firstTool || !secondThinking || !secondTool) {
+      throw new Error("fixture requires four timeline items");
+    }
+    const live = projectLiveTurn({
+      ...value,
+      active_operation: {
+        ...operation,
+        turn: {
+          ...operation.turn,
+          timeline: [
+            firstThinking,
+            firstTool,
+            { kind: "assistant", id: "assistant:between", text: "interim" },
+            secondThinking,
+            secondTool,
+          ],
+        },
+      },
+    });
+
+    expect(live.blocks.filter((block) => block.kind === "tools")).toHaveLength(
+      2,
     );
   });
 
