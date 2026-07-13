@@ -234,7 +234,7 @@ Every payload is `extra="forbid"`, frozen, and discriminated by `kind`:
 | `ModelCommandPayload` | `model` | `model`, `default_model_updated` |
 | `ThinkingCommandPayload` | `thinking` | `enabled` |
 | `WorkspaceCommandPayload` | `workspace` | `path` |
-| `DiffCommandPayload` | `diff` | `change_set_id`, `content` |
+| `DiffCommandPayload` | `diff` | `change_set_id: str | None`, `content`; both are empty only when no ChangeSet exists |
 | `ChangeCommandPayload` | `change` | `action: undo|redo`, `change_set_id`, `lifecycle`, `restored_paths`, `warning` |
 | `ToolCatalogCommandPayload` | `tools` | `permission_mode: PermissionMode`, `tools: tuple[ToolCommandItem, ...]` |
 | `SkillCatalogCommandPayload` | `skills` | `active_mode`, `skills`, `diagnostics` |
@@ -742,7 +742,7 @@ assert (await changes.undo(CommandIntent(name=CommandName.UNDO))).kind == "error
 assert (await permissions.permissions(CommandIntent(name=CommandName.PERMISSIONS))).kind == "interaction"
 ```
 
-Also assert Tool items remain dynamic and carry `approval_required` computed by the current Tool policy and permission mode; Status wraps the expanded `StatusSnapshot`; Usage wraps `UsageSummary`; Doctor emits explicit checks; Config contains `ProviderCredentialStatuses`; Diff has an explicit empty error; and every Change exception maps to its exact code.
+Also assert Tool items remain dynamic and carry `approval_required` computed by the current Tool policy and permission mode; Status wraps the expanded `StatusSnapshot`; Usage wraps `UsageSummary`; Doctor emits explicit checks; Config contains `ProviderCredentialStatuses`; Diff with no ChangeSet returns a successful empty `DiffCommandPayload`, while an explicitly requested missing ID returns `change_set_not_found`; and every Change exception maps to its exact code.
 
 - [ ] **Step 2: Run new service tests and verify missing modules**
 
