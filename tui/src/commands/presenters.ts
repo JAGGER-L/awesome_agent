@@ -32,6 +32,12 @@ export type CommandPresentation =
       readonly tone: "info" | "warning";
     }
   | {
+      readonly kind: "diff";
+      readonly title: "Diff";
+      readonly changeSetId?: string;
+      readonly source: string;
+    }
+  | {
       readonly kind: "error";
       readonly title: string;
       readonly message: string;
@@ -111,7 +117,14 @@ export function presentCommandPayload(
       return { kind: "notice", message: payload.path, tone: "info" };
     case "diff":
       return payload.content
-        ? { kind: "markdown", title, source: payload.content, tone: "info" }
+        ? {
+            kind: "diff",
+            title: "Diff",
+            source: payload.content,
+            ...(payload.change_set_id
+              ? { changeSetId: payload.change_set_id }
+              : {}),
+          }
         : { kind: "empty", title, message: "No workspace changes" };
     case "change":
       return {

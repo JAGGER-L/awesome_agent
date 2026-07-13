@@ -56,6 +56,18 @@ export function CommandResultView({
           />
         </ResultPanel>
       );
+    case "diff":
+      return (
+        <ResultPanel title={presentation.title} tone="info" width={width}>
+          {presentation.changeSetId ? (
+            <Text>Change set · {presentation.changeSetId}</Text>
+          ) : null}
+          <MarkdownBlock
+            source={presentation.source}
+            width={Math.max(1, width - 4)}
+          />
+        </ResultPanel>
+      );
     case "error":
       return (
         <ResultPanel title={presentation.title} tone="danger" width={width}>
