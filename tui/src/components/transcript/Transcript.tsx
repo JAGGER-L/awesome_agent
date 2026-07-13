@@ -5,11 +5,11 @@ import { BlockView } from "./blocks/BlockView.js";
 export function Transcript({
   blocks,
   width,
-  toolDetailsExpanded = false,
+  detailsExpanded = false,
 }: {
   blocks: readonly TranscriptBlock[];
   width: number;
-  toolDetailsExpanded?: boolean;
+  detailsExpanded?: boolean;
 }) {
   return (
     <Box flexDirection="column">
@@ -18,7 +18,7 @@ export function Transcript({
           key={block.key}
           block={block}
           width={width}
-          toolDetailsExpanded={toolDetailsExpanded}
+          detailsExpanded={detailsExpanded}
         />
       ))}
     </Box>

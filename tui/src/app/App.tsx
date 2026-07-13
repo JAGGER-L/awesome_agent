@@ -710,12 +710,12 @@ export function App({
         key={threadViewportKey(state)}
         blocks={historic}
         width={columns}
-        toolDetailsExpanded={ui.toolDetailsExpanded}
+        detailsExpanded={ui.detailsExpanded}
       />
       <ActiveTurn
         live={live}
         width={columns}
-        toolDetailsExpanded={ui.toolDetailsExpanded}
+        detailsExpanded={ui.detailsExpanded}
       />
       {ui.notice ? <Text>{ui.notice}</Text> : null}
       {providerSetupVisible && ui.mode.kind !== "secret" ? (
@@ -850,8 +850,8 @@ function handleTerminalIntent(
     case "composer.submit":
       handlers.onSubmit();
       break;
-    case "tool_details.toggle":
-      handlers.dispatch({ type: "tool_details.toggle" });
+    case "details.toggle":
+      handlers.dispatch({ type: "details.toggle" });
       break;
     case "lifecycle.evaluate":
       handlers.onLifecycle(input, key);

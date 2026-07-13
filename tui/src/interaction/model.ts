@@ -87,7 +87,7 @@ export interface TerminalUiState {
   readonly mode: UiMode;
   readonly composer: ComposerState;
   readonly composerSubmitting: boolean;
-  readonly toolDetailsExpanded: boolean;
+  readonly detailsExpanded: boolean;
   readonly composerMessage?: string | undefined;
   readonly notice?: string;
 }
@@ -122,4 +122,4 @@ export type TerminalUiAction =
   | { readonly type: "composer.message"; readonly message?: string | undefined }
   | { readonly type: "notice.set"; readonly message: string }
   | { readonly type: "notice.clear" }
-  | { readonly type: "tool_details.toggle" };
+  | { readonly type: "details.toggle" };

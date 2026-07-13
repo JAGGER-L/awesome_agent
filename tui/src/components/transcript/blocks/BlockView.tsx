@@ -8,11 +8,11 @@ import { useTheme } from "../../theme.js";
 export function BlockView({
   block,
   width,
-  toolDetailsExpanded = false,
+  detailsExpanded = false,
 }: {
   block: TranscriptBlock;
   width: number;
-  toolDetailsExpanded?: boolean;
+  detailsExpanded?: boolean;
 }) {
   const theme = useTheme();
   switch (block.kind) {
@@ -41,7 +41,7 @@ export function BlockView({
     case "direct_command":
       return <Text color={theme.secondary}>$ {block.command}</Text>;
     case "tools":
-      if (!toolDetailsExpanded) {
+      if (!detailsExpanded) {
         return (
           <Text color={theme.tool}>
             ● {block.items.length} tool{" "}
@@ -77,7 +77,7 @@ export function BlockView({
                   ? ` · ${item.error_code}`
                   : ""}
               </Text>
-              {toolDetailsExpanded && item.detail ? (
+              {detailsExpanded && item.detail ? (
                 <Text color={theme.muted}>
                   {"    "}
                   {item.detail}
