@@ -103,23 +103,38 @@ describe("Welcome", () => {
     for (const row of FULL_LOGO_ROWS) expect(frame).toContain(row);
   });
 
-  it("keeps the wide Logo panel intrinsic while details receive spare width", () => {
-    const widestLogo = Math.max(
-      ...FULL_LOGO_ROWS.map((row) => terminalDisplayWidth(row)),
-    );
+  it("gives the Logo two thirds of a wide Welcome", () => {
     const frame100 =
       render(<Welcome {...baseProps} width={100} />).lastFrame() ?? "";
     const frame120 =
       render(<Welcome {...baseProps} width={120} />).lastFrame() ?? "";
+    const frame99 =
+      render(<Welcome {...baseProps} width={99} />).lastFrame() ?? "";
     const top100 = frame100.split("\n")[0] ?? "";
     const top120 = frame120.split("\n")[0] ?? "";
-    const firstPanel100 = top100.indexOf("╮") + 1;
-    const firstPanel120 = top120.indexOf("╮") + 1;
-    expect(firstPanel100).toBe(widestLogo + 4);
-    expect(firstPanel120).toBe(firstPanel100);
-    expect(terminalDisplayWidth(top120)).toBeGreaterThan(
-      terminalDisplayWidth(top100),
-    );
+    const top99 = frame99.split("\n")[0] ?? "";
+    expect(top100.indexOf("╮") + 1).toBe(66);
+    expect(top120.indexOf("╮") + 1).toBe(80);
+    expect(terminalDisplayWidth(top100)).toBe(100);
+    expect(terminalDisplayWidth(top99)).toBe(99);
+    expect(top99.match(/╭/gu)).toHaveLength(1);
+  });
+
+  it("centers the Logo inside its wide panel", () => {
+    const frame =
+      render(<Welcome {...baseProps} width={100} />).lastFrame() ?? "";
+    for (const row of FULL_LOGO_ROWS) {
+      const line = frame
+        .split("\n")
+        .find((candidate) => candidate.includes(row));
+      expect(line).toBeDefined();
+      const start = line?.indexOf(row) ?? 0;
+      const leftPadding = terminalDisplayWidth((line ?? "").slice(1, start));
+      const rightPadding = terminalDisplayWidth(
+        (line ?? "").slice(start + row.length, 65),
+      );
+      expect(Math.abs(leftPadding - rightPadding)).toBeLessThanOrEqual(1);
+    }
   });
 
   it("renders resumed, non-Git, and Kimi metadata", () => {
@@ -159,7 +174,7 @@ describe("Welcome", () => {
     for (const row of FULL_LOGO_ROWS) expect(view.lastFrame()).toContain(row);
   });
 
-  it("integrates the Welcome into static scrollback above the composer", () => {
+  it("integrates the Welcome into the natural flow above the composer", () => {
     const { width: _width, ...welcome } = { ...baseProps, width: 60 };
     const view = render(
       <App
