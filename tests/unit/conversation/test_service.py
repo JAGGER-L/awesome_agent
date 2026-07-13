@@ -175,6 +175,111 @@ def test_failure_and_cancellation_are_idempotent_terminal_updates(
         service.complete_turn(turn.id, "late", UsageSummary(), "completed")
 
 
+def test_terminal_turns_persist_facts_and_derive_thread_totals(tmp_path: Path) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    completed = service.begin_turn(
+        thread.id, "complete", _turn_config(), client_message_id="client_complete"
+    )
+    complete_usage = UsageSummary(input_tokens=10, output_tokens=4, model_calls=1)
+    failed_usage = UsageSummary(input_tokens=6, tool_calls=2)
+    cancelled_usage = UsageSummary(input_tokens=3, active_execution_seconds=0.5)
+    complete_manifest = ({"kind": "history", "estimated_tokens": 10},)
+    failed_manifest = ({"kind": "summary", "estimated_tokens": 6},)
+    cancelled_manifest = ({"kind": "path", "estimated_tokens": 3},)
+
+    service.complete_turn(
+        completed.id,
+        "done",
+        complete_usage,
+        "completed",
+        complete_manifest,
+    )
+    failed = service.begin_turn(
+        thread.id, "fail", _turn_config(), client_message_id="client_failed"
+    )
+    failed_result = service.fail_turn(
+        failed.id,
+        "model_failed",
+        usage=failed_usage,
+        context_manifest=failed_manifest,
+    )
+    cancelled = service.begin_turn(
+        thread.id, "cancel", _turn_config(), client_message_id="client_cancelled"
+    )
+    cancelled_result = service.cancel_turn(
+        cancelled.id,
+        usage=cancelled_usage,
+        context_manifest=cancelled_manifest,
+    )
+
+    assert failed_result.usage == failed_usage
+    assert failed_result.context_manifest == failed_manifest
+    assert cancelled_result.usage == cancelled_usage
+    assert cancelled_result.context_manifest == cancelled_manifest
+    assert service.thread_usage(thread.id) == (
+        complete_usage + failed_usage + cancelled_usage
+    )
+
+
+@pytest.mark.parametrize("terminal", [TurnStatus.FAILED, TurnStatus.CANCELLED])
+def test_terminal_fact_repetition_is_idempotent_and_conflicts_on_change(
+    tmp_path: Path,
+    terminal: TurnStatus,
+) -> None:
+    service = _service(tmp_path / f"{terminal}-facts.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    turn = service.begin_turn(
+        thread.id, "question", _turn_config(), client_message_id="client_1"
+    )
+    usage = UsageSummary(input_tokens=5, model_calls=1)
+    manifest = ({"kind": "history", "estimated_tokens": 5},)
+
+    if terminal is TurnStatus.FAILED:
+        result = service.fail_turn(
+            turn.id, "model_failed", usage=usage, context_manifest=manifest
+        )
+        repeated = service.fail_turn(
+            turn.id, "model_failed", usage=usage, context_manifest=manifest
+        )
+        with pytest.raises(ConversationConflict):
+            service.fail_turn(
+                turn.id,
+                "model_failed",
+                usage=UsageSummary(input_tokens=6),
+                context_manifest=manifest,
+            )
+    else:
+        result = service.cancel_turn(turn.id, usage=usage, context_manifest=manifest)
+        repeated = service.cancel_turn(turn.id, usage=usage, context_manifest=manifest)
+        with pytest.raises(ConversationConflict):
+            service.cancel_turn(
+                turn.id,
+                usage=UsageSummary(input_tokens=6),
+                context_manifest=manifest,
+            )
+
+    assert repeated == result
+
+
+def test_latest_context_manifest_skips_newest_empty_terminal_turn(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    first = service.begin_turn(
+        thread.id, "first", _turn_config(), client_message_id="client_first"
+    )
+    manifest = ({"kind": "history", "estimated_tokens": 11},)
+    service.complete_turn(first.id, "done", UsageSummary(), "completed", manifest)
+    latest = service.begin_turn(
+        thread.id, "latest", _turn_config(), client_message_id="client_latest"
+    )
+    service.cancel_turn(latest.id)
+
+    assert service.latest_context_manifest(thread.id) == manifest
+
+
 def test_append_direct_command_uses_next_durable_sequence(tmp_path: Path) -> None:
     service = _service(tmp_path / "application.db")
     thread = service.create_thread("workspace_1", "Thread")
