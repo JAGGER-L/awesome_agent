@@ -339,9 +339,9 @@ class ApplicationContextService:
 
     def inspect(self, thread_id: str) -> dict[str, object]:
         view = self._conversation.read_thread(thread_id)
-        latest = view.turns[-1] if view.turns else None
+        manifest = self._conversation.latest_context_manifest(thread_id)
         return {
-            "manifest": list(latest.context_manifest) if latest else [],
+            "manifest": list(manifest),
             "summary_covered_entry_sequence": (
                 view.summary.covered_entry_sequence if view.summary else 0
             ),
@@ -358,12 +358,11 @@ class ApplicationContextService:
     ) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /context")
-        view = self._conversation.read_thread(thread_id)
-        latest = view.turns[-1] if view.turns else None
+        manifest = self._conversation.latest_context_manifest(thread_id)
         totals = {
             name: 0 for name in ("instructions", "conversation", "files", "memory")
         }
-        for raw in latest.context_manifest if latest is not None else ():
+        for raw in manifest:
             item = ContextManifestItem.model_validate(raw)
             totals[_CONTEXT_CATEGORY[item.kind]] += item.estimated_tokens
         category_names: tuple[

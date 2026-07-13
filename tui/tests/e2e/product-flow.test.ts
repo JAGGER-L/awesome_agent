@@ -131,6 +131,7 @@ describe("networkless candidate product flow", () => {
       type: "transcript.reconciled",
       generation: 0,
       operation_id: "operation_old",
+      turn_id: "turn_old",
       blocks: [
         {
           key: "user:client_old",
@@ -162,6 +163,8 @@ describe("networkless candidate product flow", () => {
     store.dispatch({
       type: "transcript.reconciled",
       generation: 1,
+      operation_id: "operation_new",
+      turn_id: "turn_new",
       blocks: [
         {
           key: "user:client_new",

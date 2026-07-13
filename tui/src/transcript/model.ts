@@ -110,6 +110,8 @@ export interface LiveTranscriptProjection {
   readonly terminal: boolean;
 }
 
-export interface ReconciledTurn {
+export interface TerminalTurnReconciliation {
+  readonly operation_id: string;
+  readonly turn_id: string;
   readonly blocks: readonly TranscriptBlock[];
 }

@@ -4,11 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.application.command_results import StatusCommandPayload
+from awesome_agent.application.command_results import (
+    ContextCommandPayload,
+    StatusCommandPayload,
+    UsageCommandPayload,
+)
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.composition import compose_local_application
 from awesome_agent.application.contracts import StatusSnapshot, thread_display_id
-from awesome_agent.conversation import ConversationService
+from awesome_agent.config import BudgetConfig, TurnConfig
+from awesome_agent.conversation import ConversationService, UsageSummary
 from awesome_agent.core.events import CollectingEventSink
 from awesome_agent.core.workspace import WorkspaceTrustService, resolve_workspace
 from awesome_agent.modeling import ModelIdentitySnapshot
@@ -100,6 +105,55 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
         store=SQLiteConversationRepositories(paths.application_db)
     )
     thread = conversation.create_thread(identity.key, "Feature auth")
+    config = TurnConfig(
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+        budgets=BudgetConfig(),
+    )
+    completed = conversation.begin_turn(
+        thread.id, "completed", config, client_message_id="client_completed"
+    )
+    conversation.complete_turn(
+        completed.id,
+        "done",
+        UsageSummary(input_tokens=10, output_tokens=4, model_calls=1),
+        "completed",
+        (
+            {
+                "kind": "recent_turns",
+                "source_id": "recent",
+                "order": 0,
+                "estimated_tokens": 100,
+                "truncated": False,
+                "content_hash": "a" * 64,
+            },
+        ),
+    )
+    failed = conversation.begin_turn(
+        thread.id, "failed", config, client_message_id="client_failed"
+    )
+    conversation.fail_turn(
+        failed.id,
+        "model_failed",
+        usage=UsageSummary(input_tokens=5, tool_calls=1),
+        context_manifest=(
+            {
+                "kind": "thread_summary",
+                "source_id": "summary",
+                "order": 0,
+                "estimated_tokens": 50,
+                "truncated": False,
+                "content_hash": "b" * 64,
+            },
+        ),
+    )
+    cancelled = conversation.begin_turn(
+        thread.id, "cancelled", config, client_message_id="client_cancelled"
+    )
+    conversation.cancel_turn(
+        cancelled.id,
+        usage=UsageSummary(input_tokens=2, active_execution_seconds=0.5),
+    )
     application = await compose_local_application(
         home=home,
         workspace=workspace,
@@ -113,6 +167,8 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     )
     assert resumed.ok is True
     status = await application.execute_command(CommandIntent(name=CommandName.STATUS))
+    usage = await application.execute_command(CommandIntent(name=CommandName.USAGE))
+    context = await application.execute_command(CommandIntent(name=CommandName.CONTEXT))
     assert status.ok is True
     assert status.value is not None
     assert status.value.kind == "result"
@@ -136,5 +192,20 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     assert snapshot.mem0_enabled is False
     assert snapshot.configuration_valid is True
     assert snapshot.configuration_diagnostic_count == 0
+    assert snapshot.context_used_tokens == 50
+    assert usage.ok is True
+    assert usage.value is not None
+    assert isinstance(usage.value.payload, UsageCommandPayload)
+    assert usage.value.payload.usage == UsageSummary(
+        input_tokens=17,
+        output_tokens=4,
+        model_calls=1,
+        tool_calls=1,
+        active_execution_seconds=0.5,
+    )
+    assert context.ok is True
+    assert context.value is not None
+    assert isinstance(context.value.payload, ContextCommandPayload)
+    assert context.value.payload.total_tokens == snapshot.context_used_tokens
     assert "secret_status" not in status.value.model_dump(mode="json")
     await application.shutdown()

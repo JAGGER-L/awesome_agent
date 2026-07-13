@@ -1,8 +1,8 @@
 import type { MethodValue } from "../protocol/index.js";
-import { hydrateThreadPage } from "./hydrate.js";
 import type {
   LiveTranscriptProjection,
-  ReconciledTurn,
+  TerminalTurnReconciliation,
+  ToolItem,
   TranscriptBlock,
 } from "./model.js";
 
@@ -13,13 +13,20 @@ export class ReconciliationError extends Error {
   }
 }
 
-export function reconcileCompletedTurn(
+export function reconcileTerminalTurn(
   live: LiveTranscriptProjection,
   page: MethodValue["thread.read"],
-): ReconciledTurn {
+): TerminalTurnReconciliation {
+  if (!live.operation_id || !live.turn_id) {
+    throw new ReconciliationError(
+      "Terminal reconciliation requires Operation and Turn identities.",
+    );
+  }
   const failure = validateDurableTurn(live, page);
   if (failure) {
     return {
+      operation_id: live.operation_id,
+      turn_id: live.turn_id,
       blocks: [
         ...live.blocks,
         {
@@ -31,8 +38,6 @@ export function reconcileCompletedTurn(
       ],
     };
   }
-  const durable = hydrateThreadPage(page);
-  if (!live.turn_id) return durable;
   const turn = page.view.turns.find(
     (candidate) => candidate.id === live.turn_id,
   );
@@ -49,8 +54,9 @@ export function reconcileCompletedTurn(
     .map((block) => block.text)
     .join("");
   const retainAssistantSegments =
-    assistantEntry !== undefined &&
-    liveAssistantText === assistantEntry.content;
+    turn?.status !== "completed" ||
+    (assistantEntry !== undefined &&
+      liveAssistantText === assistantEntry.content);
   const activity: TranscriptBlock[] = [];
   for (const block of live.blocks) {
     if (
@@ -84,6 +90,18 @@ export function reconcileCompletedTurn(
       }),
     });
   }
+  if (
+    !activity.some((block) => block.kind === "tools") &&
+    durableTools.size > 0
+  ) {
+    activity.push({
+      key: `turn:${live.turn_id}:tools`,
+      kind: "tools",
+      items: [...durableTools.values()]
+        .sort((left, right) => left.sequence - right.sequence)
+        .map(durableToolItem),
+    });
+  }
   if (!retainAssistantSegments && assistantEntry) {
     activity.push({
       key: `entry:${assistantEntry.id}`,
@@ -91,24 +109,59 @@ export function reconcileCompletedTurn(
       text: assistantEntry.content,
     });
   }
-  const replacedKeys = new Set([
-    `turn:${live.turn_id}:tools`,
-    ...(assistantEntry ? [`entry:${assistantEntry.id}`] : []),
-  ]);
-  const firstActivityIndex = durable.blocks.findIndex((block) =>
-    replacedKeys.has(block.key),
-  );
-  const withoutActivity = durable.blocks.filter(
-    (block) => !replacedKeys.has(block.key),
-  );
-  const insertion = Math.max(0, firstActivityIndex);
+  if (turn?.status === "failed" || turn?.status === "cancelled") {
+    activity.push({
+      key: `turn:${live.turn_id}:error`,
+      kind: "error",
+      code: turn.error_code ?? turn.status,
+      message: turn.termination_reason ?? `Turn ${turn.status}`,
+    });
+  }
+  for (const change of page.change_sets.filter(
+    (item) => item.turn_id === live.turn_id,
+  )) {
+    activity.push({
+      key: `change:${change.change_set_id}`,
+      kind: "change",
+      change_set_id: change.change_set_id,
+      paths: change.changed_paths,
+      lifecycle: change.lifecycle,
+      reversibility: change.reversibility,
+    });
+  }
   return {
-    blocks: [
-      ...withoutActivity.slice(0, insertion),
-      ...activity,
-      ...withoutActivity.slice(insertion),
-    ],
+    operation_id: live.operation_id,
+    turn_id: live.turn_id,
+    blocks: activity,
   };
+}
+
+function durableToolItem(
+  tool: MethodValue["thread.read"]["view"]["tool_activities"][number],
+): ToolItem {
+  return {
+    call_id: tool.call_id,
+    name: tool.tool_name,
+    verb: toolVerb(tool.tool_name),
+    outcome: tool.outcome,
+    summary: tool.result_summary,
+    duration_ms: tool.duration_ms,
+    ...(tool.error_code === undefined ? {} : { error_code: tool.error_code }),
+  };
+}
+
+function toolVerb(name: string): string {
+  const known: Record<string, string> = {
+    delete: "Delete",
+    edit_file: "Edit",
+    execute: "Run",
+    glob: "Glob",
+    grep: "Grep",
+    ls: "List",
+    read_file: "Read",
+    write_file: "Write",
+  };
+  return known[name] ?? name;
 }
 
 function validateDurableTurn(
