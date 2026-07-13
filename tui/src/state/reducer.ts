@@ -378,29 +378,29 @@ function reconcileTranscript(
 ): SurfaceState {
   const operationId = action.operation_id;
   let base = state;
-  if (operationId !== undefined && state.active_operation?.id === operationId) {
+  if (
+    state.active_operation?.id === operationId &&
+    state.active_operation.turn?.id === action.turn_id
+  ) {
     const { active_operation: _activeOperation, ...withoutActiveOperation } =
       base;
     void _activeOperation;
     base = withoutActiveOperation;
   }
-  if (
-    operationId !== undefined &&
-    base.latest_change?.operation_id === operationId
-  ) {
+  if (base.latest_change?.operation_id === operationId) {
     const { latest_change: _latestChange, ...withoutLatestChange } = base;
     void _latestChange;
     base = withoutLatestChange;
   }
   return {
     ...base,
-    warnings:
-      operationId === undefined
-        ? base.warnings
-        : base.warnings.filter(
-            (warning) => warning.operation_id !== operationId,
-          ),
-    committed_transcript: action.blocks,
+    warnings: base.warnings.filter(
+      (warning) => warning.operation_id !== operationId,
+    ),
+    committed_transcript: mergeTranscriptBlocks(
+      base.committed_transcript ?? [],
+      action.blocks,
+    ),
   };
 }
 

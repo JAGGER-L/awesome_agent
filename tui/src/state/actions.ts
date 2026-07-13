@@ -38,7 +38,8 @@ export type SurfaceAction =
   | {
       readonly type: "transcript.reconciled";
       readonly generation: number;
-      readonly operation_id?: string;
+      readonly operation_id: string;
+      readonly turn_id: string;
       readonly blocks: readonly TranscriptBlock[];
     }
   | {

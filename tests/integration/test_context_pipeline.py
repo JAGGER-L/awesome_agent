@@ -178,13 +178,21 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         "completed",
         tuple(prepared.manifest),
     )
+    empty_cancelled = conversation.begin_turn(
+        thread.id,
+        "cancelled after context",
+        _config(),
+        client_message_id="client_empty_cancelled",
+    )
+    conversation.cancel_turn(empty_cancelled.id)
     inspected = context_service.inspect(thread.id)
     serialized = str(inspected)
     assert "before" not in serialized
     assert "child" not in serialized
     assert inspected["summary_covered_turn_count"] == 4
-    assert conversation.read_thread(thread.id).entries[-2].content == (
-        "inspect @note.txt @dir"
+    assert any(
+        entry.content == "inspect @note.txt @dir"
+        for entry in conversation.read_thread(thread.id).entries
     )
     command = await context_service.context_command(
         CommandIntent(name=CommandName.CONTEXT),

@@ -129,6 +129,8 @@ describe("surfaceReducer", () => {
     const result = surfaceReducer(state, {
       type: "transcript.reconciled",
       generation: 1,
+      operation_id: "operation_old",
+      turn_id: "turn_old",
       blocks: [{ key: "old", kind: "status", message: "old" }],
     });
 
@@ -142,6 +144,9 @@ describe("surfaceReducer", () => {
     ];
     const state = {
       ...initialSurfaceState(),
+      committed_transcript: [
+        { key: "entry:old", kind: "assistant" as const, text: "old answer" },
+      ],
       latest_change: {
         change_set_id: "change_1",
         paths: ["done.py"],
@@ -167,6 +172,13 @@ describe("surfaceReducer", () => {
       active_operation: {
         id: "operation_1",
         status: "completed" as const,
+        turn: {
+          id: "turn_1",
+          status: "completed" as const,
+          started_at: "2026-07-13T00:00:00Z",
+          thinking_sequence: 0,
+          timeline: [],
+        },
       },
     };
 
@@ -174,10 +186,19 @@ describe("surfaceReducer", () => {
       type: "transcript.reconciled",
       generation: 0,
       operation_id: "operation_1",
+      turn_id: "turn_1",
       blocks,
     });
 
-    expect(next.committed_transcript).toEqual(blocks);
+    expect(next.committed_transcript).toEqual([
+      { key: "entry:old", kind: "assistant", text: "old answer" },
+      ...blocks,
+    ]);
+    expect(
+      next.committed_transcript?.filter(
+        (block) => block.kind === "assistant" && block.text === "old answer",
+      ),
+    ).toHaveLength(1);
     expect(next.active_operation).toBeUndefined();
     expect(next.latest_change).toBeUndefined();
     expect(next.warnings).toEqual([
@@ -195,6 +216,7 @@ describe("surfaceReducer", () => {
       type: "transcript.reconciled",
       generation: 0,
       operation_id: "operation_1",
+      turn_id: "turn_1",
       blocks: [],
     });
 

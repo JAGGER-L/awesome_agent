@@ -19,8 +19,7 @@ import {
   createSurfaceStore,
 } from "../state/index.js";
 import { projectLiveTurn } from "../transcript/live.js";
-import { mergeTranscriptBlocks } from "../transcript/merge.js";
-import { reconcileCompletedTurn } from "../transcript/reconcile.js";
+import { reconcileTerminalTurn } from "../transcript/reconcile.js";
 
 export interface SurfaceConnectOptions extends CoreLaunchOptions {
   /** @internal Deterministic process seam for tests. */
@@ -81,6 +80,7 @@ export async function connectSurface(
     key: string,
     generation: number,
     operationId: string,
+    turnId: string,
   ): Promise<void> => {
     if (reconciledTerminals.has(key)) return;
     reconciledTerminals.add(key);
@@ -90,8 +90,10 @@ export async function connectSurface(
       limit: 50,
     });
     const result = page.ok
-      ? reconcileCompletedTurn(live, page.value)
+      ? reconcileTerminalTurn(live, page.value)
       : {
+          operation_id: operationId,
+          turn_id: turnId,
           blocks: [
             ...live.blocks,
             {
@@ -105,11 +107,9 @@ export async function connectSurface(
     store.dispatch({
       type: "transcript.reconciled",
       generation,
-      operation_id: operationId,
-      blocks: mergeTranscriptBlocks(
-        store.getState().committed_transcript ?? [],
-        result.blocks,
-      ),
+      operation_id: result.operation_id,
+      turn_id: result.turn_id,
+      blocks: result.blocks,
     });
   };
 
@@ -132,7 +132,9 @@ export async function connectSurface(
       ) {
         const threadId =
           event.thread_id ?? store.getState().application?.current_thread_id;
-        if (threadId && event.operation_id) {
+        const turnId =
+          event.turn_id ?? store.getState().active_operation?.turn?.id;
+        if (threadId && event.operation_id && turnId) {
           const generation =
             operationGenerations.get(event.operation_id) ??
             store.getState().thread_generation;
@@ -141,6 +143,7 @@ export async function connectSurface(
             `operation:${event.operation_id}`,
             generation,
             event.operation_id,
+            turnId,
           ).finally(() => reconciliationTasks.delete(task));
           reconciliationTasks.add(task);
         }

@@ -80,6 +80,7 @@ from awesome_agent.config import (
 from awesome_agent.context import (
     CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
+    ContextManifestItem,
     Mem0ContextResult,
     ThreadCompressor,
     mem0_context_source,
@@ -471,7 +472,11 @@ class _LocalApplicationBackend:
             if current_id is not None
             else None
         )
-        usage = _last_usage(self._conversation, current_id)
+        usage = (
+            self._conversation.thread_usage(current_id)
+            if current_id is not None
+            else UsageSummary()
+        )
         local_enabled = self._local_memory.enabled if self._local_memory else False
         return ApplicationState(
             initialized=self._initialized,
@@ -1167,7 +1172,7 @@ class _LocalApplicationBackend:
 
     def _command_usage(self) -> UsageSummary | None:
         thread_id = self._selected_thread_id()
-        return None if thread_id is None else _last_usage(self._conversation, thread_id)
+        return None if thread_id is None else self._conversation.thread_usage(thread_id)
 
     def _command_status_snapshot(self) -> StatusSnapshot | None:
         thread_id = self._selected_thread_id()
@@ -1234,8 +1239,8 @@ class _LocalApplicationBackend:
             credential_source=credential.selected_source,
             credential_source_available=credential.source_available,
             context_used_tokens=sum(
-                item.usage.input_tokens + item.usage.output_tokens
-                for item in self._conversation.read_thread(thread_id).turns
+                ContextManifestItem.model_validate(item).estimated_tokens
+                for item in self._conversation.latest_context_manifest(thread_id)
             ),
             context_budget_tokens=self._application_config.budgets.total_context_tokens,
             changed_file_count=0,
@@ -1357,16 +1362,6 @@ def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:
         for item in config.workspace_mcp_servers
     )
     return (*user, *workspace)
-
-
-def _last_usage(
-    conversation: ConversationService,
-    thread_id: str | None,
-) -> UsageSummary:
-    if thread_id is None:
-        return UsageSummary()
-    turns = conversation.read_thread(thread_id).turns
-    return turns[-1].usage if turns else UsageSummary()
 
 
 def _application_failure(

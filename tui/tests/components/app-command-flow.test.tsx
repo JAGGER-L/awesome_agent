@@ -62,6 +62,7 @@ describe("submitted slash command history", () => {
       type: "transcript.reconciled",
       generation: 0,
       operation_id: "operation_1",
+      turn_id: "turn_1",
       blocks: [
         { key: "assistant:1", kind: "assistant", text: "answer" },
         { key: "worked:1", kind: "worked", duration_ms: 2_000 },
