@@ -144,6 +144,7 @@ function durableToolItem(
     name: tool.tool_name,
     verb: toolVerb(tool.tool_name),
     outcome: tool.outcome,
+    started_at: tool.created_at,
     summary: tool.result_summary,
     duration_ms: tool.duration_ms,
     ...(tool.error_code === undefined ? {} : { error_code: tool.error_code }),

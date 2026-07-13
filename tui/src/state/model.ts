@@ -23,6 +23,7 @@ export interface ToolProjection {
   readonly call_id: string;
   readonly tool_name: string;
   readonly status: "running" | "completed" | "failed" | "cancelled";
+  readonly started_at: string;
   readonly verb: string;
   readonly target?: string;
   readonly outcome?: string;

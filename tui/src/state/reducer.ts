@@ -226,6 +226,7 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           call_id: payload.call_id,
           tool_name: payload.tool_name,
           status: "running",
+          started_at: event.timestamp,
           verb: payload.verb,
           ...(payload.target === undefined ? {} : { target: payload.target }),
           summary: "",
