@@ -9,12 +9,11 @@ describe("terminalUiReducer", () => {
   it("toggles one presentation-only tool detail state", () => {
     const initial = initialTerminalUiState();
     const expanded = terminalUiReducer(initial, {
-      type: "tool_details.toggle",
+      type: "details.toggle",
     });
-    expect(expanded.toolDetailsExpanded).toBe(true);
+    expect(expanded.detailsExpanded).toBe(true);
     expect(
-      terminalUiReducer(expanded, { type: "tool_details.toggle" })
-        .toolDetailsExpanded,
+      terminalUiReducer(expanded, { type: "details.toggle" }).detailsExpanded,
     ).toBe(false);
   });
 

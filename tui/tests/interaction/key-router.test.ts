@@ -121,7 +121,7 @@ describe("routeTerminalKey", () => {
         ...emptyTerminalKey(),
         ctrl: true,
       }),
-    ).toEqual({ type: "tool_details.toggle" });
+    ).toEqual({ type: "details.toggle" });
   });
 
   it("moves picker selection and respects blocking Escape", () => {

@@ -99,7 +99,7 @@ describe("scrollback transcript components", () => {
     const collapsed = render(<Transcript blocks={blocks} width={80} />);
     expect(collapsed.lastFrame()).not.toContain("full bounded output");
     const expanded = render(
-      <Transcript blocks={blocks} width={80} toolDetailsExpanded />,
+      <Transcript blocks={blocks} width={80} detailsExpanded />,
     );
     expect(expanded.lastFrame()).toContain("full bounded output");
   });
@@ -109,7 +109,7 @@ describe("scrollback transcript components", () => {
       render(
         <Transcript
           width={80}
-          toolDetailsExpanded
+          detailsExpanded
           blocks={[
             {
               key: "write",

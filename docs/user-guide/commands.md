@@ -21,7 +21,7 @@ No other public launch flags are supported.
 | `/resume [thread_id]` | Choose or resume a previous workspace thread. |
 | `/context` | Show the active context manifest and budget. |
 | `/compact` | Compact the current context now. |
-| `/auth [deepseek\|kimi]` | Add, replace, or remove Provider credentials. |
+| `/auth [deepseek\|kimi\|mem0]` | Select or manage model and Memory Provider credentials. |
 | `/model [deepseek\|kimi]` | Choose a Provider, then choose one of its models. |
 | `/thinking [on\|off]` | Show the current mode with a selector, or set it explicitly. |
 | `/permissions [request_approval\|full_access]` | Show or choose the active Thread's permission mode. |
@@ -32,7 +32,7 @@ No other public launch flags are supported.
 | `/tools` | List the effective built-in and extension tools. |
 | `/skills [auto\|off\|name]` | List Skills or select thread Skill mode. |
 | `/mcp` | Show MCP server status. |
-| `/memory` | Show memory status; see the [memory guide](memory-skills-mcp.md). |
+| `/memory` | Choose Local or Cloud Memory, then switch it On or Off. |
 | `/status` | Show the current product and thread status. |
 | `/usage` | Show token and operation usage from the latest turn. |
 | `/doctor` | Check configuration, embedded state, checkpoints, and Provider readiness. |
@@ -84,14 +84,27 @@ executes tools itself.
   the prompt.
 - Ctrl+C cancels an active operation. Input returns after the terminal event;
   a failed cancellation remains visible and can be retried.
-- Ctrl+O expands or folds bounded tool details. Tool details are folded by
-  default.
+- Ctrl+O expands or folds bounded details globally, including Tool sequences,
+  Thinking, and Undo/Redo paths. Details are folded by default.
 
 `/help` is written into normal transcript history rather than opening a modal.
 It renders one command per aligned row with usage and description. Use
 `/help <command>` for one focused row; internal command ownership is not shown.
 `/new` atomically replaces the current transcript and resets Thread-scoped
 permission grants.
+
+## Context and change lifecycles
+
+`/compact` writes one `Compressing context...` result while the request is
+pending, then replaces that same result with `Context compressed` or the exact
+failure. It never emits both pending and terminal lines.
+
+`/diff` renders the ChangeSet ID and bounded terminal Diff. When the workspace
+has no recorded changes, it shows an explicit empty result. `/undo` and `/redo`
+show the action, affected file count, and resulting lifecycle on one folded
+line; Ctrl+O reveals the ChangeSet ID, each affected path, and any warning.
+Missing ChangeSets, workspace conflicts, irreversible changes, and invalid
+lifecycles remain distinct errors.
 
 ## `/status` fields
 

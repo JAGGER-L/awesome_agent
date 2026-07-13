@@ -32,9 +32,23 @@ export type CommandPresentation =
       readonly tone: "info" | "warning";
     }
   | {
+      readonly kind: "diff";
+      readonly title: "Diff";
+      readonly changeSetId?: string;
+      readonly source: string;
+    }
+  | {
       readonly kind: "error";
       readonly title: string;
       readonly message: string;
+    }
+  | {
+      readonly kind: "change";
+      readonly title: "Undo" | "Redo";
+      readonly changeSetId: string;
+      readonly lifecycle: string;
+      readonly paths: readonly string[];
+      readonly warning?: string;
     };
 
 export function formatTokenCount(value: number): string {
@@ -103,27 +117,24 @@ export function presentCommandPayload(
       return { kind: "notice", message: payload.path, tone: "info" };
     case "diff":
       return payload.content
-        ? { kind: "markdown", title, source: payload.content, tone: "info" }
+        ? {
+            kind: "diff",
+            title: "Diff",
+            source: payload.content,
+            ...(payload.change_set_id
+              ? { changeSetId: payload.change_set_id }
+              : {}),
+          }
         : { kind: "empty", title, message: "No workspace changes" };
     case "change":
-      return panel(
-        title,
-        [
-          { label: "Change set", value: payload.change_set_id },
-          { label: "State", value: payload.lifecycle },
-          { label: "Files", value: `${payload.restored_paths.length}` },
-          ...(payload.warning
-            ? [
-                {
-                  label: "Warning",
-                  value: payload.warning,
-                  status: "warning" as const,
-                },
-              ]
-            : []),
-        ],
-        payload.warning ? "warning" : "success",
-      );
+      return {
+        kind: "change",
+        title: payload.action === "undo" ? "Undo" : "Redo",
+        changeSetId: payload.change_set_id,
+        lifecycle: humanize(payload.lifecycle),
+        paths: payload.restored_paths,
+        ...(payload.warning ? { warning: payload.warning } : {}),
+      };
     case "tools":
       return payload.tools.length === 0
         ? { kind: "empty", title, message: "No tools available" }
