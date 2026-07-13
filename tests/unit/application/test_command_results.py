@@ -15,7 +15,7 @@ from awesome_agent.application.command_results import (
 )
 
 
-def test_legacy_arbitrary_command_result_is_rejected() -> None:
+def test_untyped_arbitrary_command_result_is_rejected() -> None:
     with pytest.raises(ValidationError):
         COMMAND_OUTCOME_ADAPTER.validate_python(
             {"status": "success", "content": "", "data": {}}

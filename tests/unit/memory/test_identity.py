@@ -65,7 +65,7 @@ def test_identity_is_generated_only_by_explicit_enable_and_persisted(
     assert persisted.memory.mem0_cloud is False
 
 
-def test_changing_user_id_selects_new_namespace_without_migration() -> None:
+def test_changing_user_id_selects_new_namespace() -> None:
     first = Mem0Identity(
         user_id="user_11111111111111111111111111111111",
         workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -76,7 +76,6 @@ def test_changing_user_id_selects_new_namespace_without_migration() -> None:
 
     assert first.user_id != second.user_id
     assert first.workspace_key == second.workspace_key
-    assert not hasattr(first, "migration")
 
 
 def test_user_config_accepts_only_typed_mem0_identity() -> None:

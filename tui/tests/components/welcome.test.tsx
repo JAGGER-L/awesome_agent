@@ -8,6 +8,7 @@ import {
   FULL_LOGO_ROWS,
 } from "../../src/components/welcome-logo.js";
 import { resolveTheme } from "../../src/preferences/theme.js";
+import { terminalDisplayWidth } from "../../src/layout/width.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
 const baseProps = {
@@ -100,6 +101,25 @@ describe("Welcome", () => {
       );
     }
     for (const row of FULL_LOGO_ROWS) expect(frame).toContain(row);
+  });
+
+  it("keeps the wide Logo panel intrinsic while details receive spare width", () => {
+    const widestLogo = Math.max(
+      ...FULL_LOGO_ROWS.map((row) => terminalDisplayWidth(row)),
+    );
+    const frame100 =
+      render(<Welcome {...baseProps} width={100} />).lastFrame() ?? "";
+    const frame120 =
+      render(<Welcome {...baseProps} width={120} />).lastFrame() ?? "";
+    const top100 = frame100.split("\n")[0] ?? "";
+    const top120 = frame120.split("\n")[0] ?? "";
+    const firstPanel100 = top100.indexOf("╮") + 1;
+    const firstPanel120 = top120.indexOf("╮") + 1;
+    expect(firstPanel100).toBe(widestLogo + 4);
+    expect(firstPanel120).toBe(firstPanel100);
+    expect(terminalDisplayWidth(top120)).toBeGreaterThan(
+      terminalDisplayWidth(top100),
+    );
   });
 
   it("renders resumed, non-Git, and Kimi metadata", () => {

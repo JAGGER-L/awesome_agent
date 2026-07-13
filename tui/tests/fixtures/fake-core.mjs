@@ -226,9 +226,13 @@ const handleLine = (line) => {
       jsonrpc: "2.0",
       id: request.id,
       result: application({
-        status: "success",
-        content: "",
-        data: { thread_id: threadId, title: "Fake Thread" },
+        kind: "result",
+        payload: {
+          kind: "thread",
+          action: "resumed",
+          thread_id: threadId,
+          title: "Fake Thread",
+        },
       }),
     });
   } else if (request.method === "operation.cancel") {

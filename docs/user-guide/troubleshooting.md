@@ -20,11 +20,14 @@ choose DeepSeek or Kimi, and paste the key into the masked input. Use `/auth`
 to replace or remove a saved key. Invalid keys are not stored; network or
 Provider failures offer an explicit `Save anyway` choice.
 
-A process-environment credential overrides Awesome's user secret file and is
-read-only in the TUI. Update or remove it in the launching shell instead. As an
-advanced fallback, edit `<AWESOME_HOME>/.env` and restart Awesome. Run `/doctor`
-when you need an on-demand Provider network check; startup itself performs only
-a presence check.
+Environment and Awesome-managed credentials are separate sources. `/auth`
+shows which sources exist and which one is selected. Environment is read-only
+in the TUI; update or remove it in the launching shell. If the selected source
+becomes unavailable, Awesome reports that state and waits for a new selection
+instead of silently using the other source. As an advanced option, edit
+`<AWESOME_HOME>/.env` and restart Awesome. Run `/doctor` when you need an
+on-demand Provider network check; startup itself performs only a presence
+check.
 
 ## Workspace is not trusted
 

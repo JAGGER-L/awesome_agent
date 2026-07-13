@@ -20,7 +20,7 @@ def _workspace_config(
     )
 
 
-def test_migration_four_stores_only_hash_bound_workspace_enablement(
+def test_store_uses_hash_bound_workspace_enablement(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "state.db"
@@ -29,7 +29,7 @@ def test_migration_four_stores_only_hash_bound_workspace_enablement(
 
     store.enable("workspace-key", config.id, mcp_config_hash(config))
 
-    assert APPLICATION_SCHEMA_VERSION == 6
+    assert APPLICATION_SCHEMA_VERSION == 1
     assert store.is_enabled("workspace-key", config.id, mcp_config_hash(config))
     assert not store.is_enabled(
         "workspace-key",

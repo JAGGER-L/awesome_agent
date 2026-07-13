@@ -98,15 +98,17 @@ describe("Ink scrollback boundaries", () => {
         "components/Composer.tsx",
         ["theme.border", "theme.primary", "theme.secondary"],
       ],
+      ["components/TrustPrompt.tsx", ["theme.brand", "theme.muted"]],
       [
-        "components/TrustPrompt.tsx",
-        ["theme.brand", "theme.muted", "theme.danger"],
+        "components/interactions/SelectionPanel.tsx",
+        ["theme.brand", "theme.warning", "theme.danger", "theme.primary"],
       ],
       ["components/SecretInput.tsx", ["theme.primary", "theme.warning"]],
       [
         "components/transcript/blocks/BlockView.tsx",
-        ["theme.user", "theme.assistant", "theme.tool", "theme.muted"],
+        ["theme.user", "theme.assistant", "theme.muted"],
       ],
+      ["components/transcript/ToolSequence.tsx", ["theme.tool", "theme.muted"]],
     ]);
 
     for (const [path, roles] of expectedRoles) {

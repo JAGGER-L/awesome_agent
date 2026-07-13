@@ -30,7 +30,7 @@ change, and helps verify the result.
 
 Awesome starts with `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
 `glob`, `grep`, and `execute`. Extensions can add more tools; the total is not limited to eight.
-Local file Memory and Mem0 Cloud are independent and default off.
+Local memory and Mem0 Cloud are independent and default off.
 
 ## Install
 

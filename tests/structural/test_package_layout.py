@@ -11,6 +11,7 @@ EXPECTED_PACKAGES = {
     "context",
     "conversation",
     "core",
+    "development",
     "extensions",
     "memory",
     "modeling",

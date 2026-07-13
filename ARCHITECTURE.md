@@ -218,8 +218,7 @@ Core RPC. Composition only wires command services; it contains no command
 semantics and constructs no command results. Commands do not become model
 prompts unless their defined behavior explicitly starts an Agent Turn.
 
-There is no alternate headless Application host. Protocol v1 command results
-and fixtures are intentionally unsupported; Python produces Protocol v2
+`LocalApplication` is the only surface-facing Application host. Python produces Protocol v2
 discriminated outcomes that TypeScript validates and presents exhaustively.
 Command progress is pending Surface lifecycle state, not a second durable
 operation model.

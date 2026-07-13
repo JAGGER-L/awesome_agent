@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { mergeTranscriptBlocks } from "../../src/transcript/merge.js";
+import {
+  mergeTranscriptBlocks,
+  TranscriptIdentityError,
+} from "../../src/transcript/merge.js";
 import type { UserBlock } from "../../src/transcript/model.js";
 
 function user(
@@ -34,5 +37,26 @@ describe("mergeTranscriptBlocks", () => {
         [user("client_2", "persisted")],
       ),
     ).toHaveLength(2);
+  });
+
+  it("accepts the same semantic block regardless of object key order", () => {
+    const first = user("client_1", "persisted");
+    const reordered = {
+      text: first.text,
+      status: first.status,
+      client_message_id: first.client_message_id,
+      kind: first.kind,
+      key: first.key,
+    };
+    expect(mergeTranscriptBlocks([first], [reordered])).toEqual([first]);
+  });
+
+  it("rejects one identity for different content", () => {
+    expect(() =>
+      mergeTranscriptBlocks(
+        [{ key: "same", kind: "status", message: "first" }],
+        [{ key: "same", kind: "status", message: "second" }],
+      ),
+    ).toThrow(TranscriptIdentityError);
   });
 });

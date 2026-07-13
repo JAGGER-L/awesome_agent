@@ -36,9 +36,9 @@ but does not branch on command names or construct outcomes. Skill-owned
 `/init` uses the same dispatcher and may deliberately start an Agent Turn;
 Ink-owned presentation commands never enter Core RPC.
 
-`LocalApplication` is the only surface-facing Application API. There is no
-parallel headless host. Command progress belongs to the Surface pending
-lifecycle and is not persisted as another operation state machine.
+`LocalApplication` is the only surface-facing Application API. Command progress
+belongs to the Surface pending lifecycle and is not persisted as another
+operation state machine.
 
 Synchronous command progress uses one replaceable transcript block. For
 example, `/compact` creates a pending presentation before its RPC and replaces

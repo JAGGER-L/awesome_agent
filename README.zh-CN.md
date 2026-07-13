@@ -28,7 +28,7 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 
 Awesome 最开始提供 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、
 `glob`、`grep` 和 `execute`。扩展可以继续增加工具，Awesome 不限制为八个工具。
-本地文件 Memory 与 Mem0 Cloud 相互独立，二者默认关闭。
+Local memory 与 Mem0 Cloud 相互独立，二者默认关闭。
 
 ## 安装
 
@@ -95,7 +95,7 @@ awesome --help
 - [Roadmap](docs/roadmap.md)
 
 开发者可以通过 `uv run awesome-dev` 运行当前源码；完整的环境准备、启动和故障排查流程请参阅
-[从源码开发](docs/getting-started/quickstart.md#develop-from-source)。
+[从源码启动](docs/getting-started/quickstart.zh-CN.md#从源码启动)。
 
 ## 安全
 
