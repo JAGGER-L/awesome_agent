@@ -64,6 +64,8 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).not.toContain("exit_1");
     expect(view.lastFrame()).not.toContain("You");
     expect(view.lastFrame()).not.toContain("Assistant");
+    expect(view.lastFrame()).toContain("❯ question");
+    expect(view.lastFrame()).toContain("❯ /status");
   });
 
   it("updates the active projection and retains completed thinking until reconciliation", () => {

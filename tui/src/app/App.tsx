@@ -1,4 +1,4 @@
-import { Box, Text, useStdout } from "ink";
+import { Text, useStdout } from "ink";
 import {
   useCallback,
   type Dispatch,
@@ -31,6 +31,7 @@ import { Picker } from "../components/Picker.js";
 import { ProviderSetupNotice } from "../components/ProviderSetupNotice.js";
 import { SecretInput } from "../components/SecretInput.js";
 import { StatusLine } from "../components/StatusLine.js";
+import { TerminalSurfaceLayout } from "../components/TerminalSurfaceLayout.js";
 import { Welcome, type WelcomeProps } from "../components/Welcome.js";
 import { ActiveTurn } from "../components/transcript/ActiveTurn.js";
 import { Transcript } from "../components/transcript/Transcript.js";
@@ -704,71 +705,83 @@ export function App({
     ],
   );
 
+  const inputSurface = cancelling ? null : ui.mode.kind === "approval" ? (
+    <InteractionPrompt
+      interaction={ui.mode.interaction}
+      selected={ui.mode.selected}
+      submitting={ui.mode.submitting}
+      {...(ui.mode.message === undefined ? {} : { message: ui.mode.message })}
+    />
+  ) : ui.mode.kind === "secret" ? (
+    <SecretInput
+      label={ui.mode.prompt.label}
+      value={ui.mode.value}
+      submitting={ui.mode.submitting}
+      {...(ui.mode.message === undefined ? {} : { message: ui.mode.message })}
+    />
+  ) : isAuthPicker(ui.mode) ? (
+    <AuthPicker
+      selection={ui.mode.selection}
+      selected={ui.mode.selected}
+      width={columns}
+    />
+  ) : ui.mode.kind === "picker" ? (
+    <Picker selection={ui.mode.selection} selected={ui.mode.selected} />
+  ) : (
+    <Composer
+      state={ui.composer}
+      submitting={ui.composerSubmitting}
+      {...(ui.composerMessage === undefined
+        ? {}
+        : { message: ui.composerMessage })}
+    />
+  );
+
   return (
-    <Box flexDirection="column">
+    <>
       <TerminalInput active={!cancelling} onInput={handleTerminalInput} />
-      {liveWelcome ? <Welcome {...liveWelcome} width={columns} /> : null}
-      <Transcript
-        key={threadSurfaceKey(state)}
-        blocks={historic}
-        width={columns}
-        detailsExpanded={ui.detailsExpanded}
+      <TerminalSurfaceLayout
+        welcome={
+          liveWelcome ? <Welcome {...liveWelcome} width={columns} /> : null
+        }
+        transcript={
+          <Transcript
+            key={threadSurfaceKey(state)}
+            blocks={historic}
+            width={columns}
+            detailsExpanded={ui.detailsExpanded}
+          />
+        }
+        activeTurn={
+          <ActiveTurn
+            live={live}
+            width={columns}
+            detailsExpanded={ui.detailsExpanded}
+          />
+        }
+        notices={
+          <>
+            {ui.notice ? <Text>{ui.notice}</Text> : null}
+            {providerSetupVisible && ui.mode.kind !== "secret" ? (
+              <ProviderSetupNotice />
+            ) : null}
+          </>
+        }
+        commandMenu={
+          !cancelling && ui.mode.kind === "command_menu" ? (
+            <CommandMenu
+              commands={searchCommands(ui.mode.query)}
+              {...(ui.mode.selectedCommand === undefined
+                ? {}
+                : { selectedCommand: ui.mode.selectedCommand })}
+              viewportStart={ui.mode.viewportStart}
+            />
+          ) : null
+        }
+        input={inputSurface}
+        status={<StatusLine state={state} cancellation={cancellation} />}
       />
-      <ActiveTurn
-        live={live}
-        width={columns}
-        detailsExpanded={ui.detailsExpanded}
-      />
-      {ui.notice ? <Text>{ui.notice}</Text> : null}
-      {providerSetupVisible && ui.mode.kind !== "secret" ? (
-        <ProviderSetupNotice />
-      ) : null}
-      {!cancelling && ui.mode.kind === "command_menu" ? (
-        <CommandMenu
-          commands={searchCommands(ui.mode.query)}
-          {...(ui.mode.selectedCommand === undefined
-            ? {}
-            : { selectedCommand: ui.mode.selectedCommand })}
-          viewportStart={ui.mode.viewportStart}
-        />
-      ) : null}
-      {cancelling ? null : ui.mode.kind === "approval" ? (
-        <InteractionPrompt
-          interaction={ui.mode.interaction}
-          selected={ui.mode.selected}
-          submitting={ui.mode.submitting}
-          {...(ui.mode.message === undefined
-            ? {}
-            : { message: ui.mode.message })}
-        />
-      ) : ui.mode.kind === "secret" ? (
-        <SecretInput
-          label={ui.mode.prompt.label}
-          value={ui.mode.value}
-          submitting={ui.mode.submitting}
-          {...(ui.mode.message === undefined
-            ? {}
-            : { message: ui.mode.message })}
-        />
-      ) : isAuthPicker(ui.mode) ? (
-        <AuthPicker
-          selection={ui.mode.selection}
-          selected={ui.mode.selected}
-          width={columns}
-        />
-      ) : ui.mode.kind === "picker" ? (
-        <Picker selection={ui.mode.selection} selected={ui.mode.selected} />
-      ) : (
-        <Composer
-          state={ui.composer}
-          submitting={ui.composerSubmitting}
-          {...(ui.composerMessage === undefined
-            ? {}
-            : { message: ui.composerMessage })}
-        />
-      )}
-      <StatusLine state={state} cancellation={cancellation} />
-    </Box>
+    </>
   );
 }
 
