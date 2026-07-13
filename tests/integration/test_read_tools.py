@@ -190,8 +190,61 @@ async def test_glob_returns_only_sorted_safe_files(tmp_path: Path) -> None:
     assert result.status is ToolStatus.SUCCESS
     matches = result.metadata["matches"]
     assert isinstance(matches, list)
-    assert matches == ["src/a.py", "src/b.txt", "src/c.py"]
+    assert matches == ["src/a.py", "src/b.txt", "src/binary.bin", "src/c.py"]
     assert result.metadata["truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_glob_matches_metadata_without_reading_file_contents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "a.py").write_bytes(b"\x00binary")
+    executor, context = read_executor(workspace)
+
+    def fail_read(_path: Path) -> bytes:
+        raise AssertionError("Glob must not read file contents.")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+    result = await execute(executor, context, "glob", {"pattern": "*.py"})
+
+    assert result.status is ToolStatus.SUCCESS
+    assert result.metadata["matches"] == ["a.py"]
+
+
+@pytest.mark.asyncio
+async def test_grep_applies_include_before_reading_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    included = workspace / "included.py"
+    excluded = workspace / "excluded.txt"
+    included.write_text("Needle", encoding="utf-8")
+    excluded.write_text("Needle", encoding="utf-8")
+    original = Path.read_bytes
+
+    def guarded_read(path: Path) -> bytes:
+        if path == excluded:
+            raise AssertionError("Excluded files must not be read.")
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read)
+    executor, context = read_executor(workspace)
+    result = await execute(
+        executor,
+        context,
+        "grep",
+        {"pattern": "Needle", "include": "*.py"},
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert result.metadata["matches"] == [
+        {"path": "included.py", "line": 1, "text": "Needle"}
+    ]
 
 
 @pytest.mark.asyncio
