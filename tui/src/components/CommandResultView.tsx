@@ -5,6 +5,7 @@ import { MarkdownBlock } from "../markdown/MarkdownBlock.js";
 import {
   AlignedRows,
   EmptyResult,
+  ExpandableDetails,
   ResultNotice,
   ResultPanel,
 } from "./results/index.js";
@@ -12,9 +13,11 @@ import {
 export function CommandResultView({
   presentation,
   width,
+  detailsExpanded = false,
 }: {
   readonly presentation: CommandPresentation;
   readonly width: number;
+  readonly detailsExpanded?: boolean;
 }) {
   switch (presentation.kind) {
     case "panel":
@@ -59,6 +62,47 @@ export function CommandResultView({
           <Text>{presentation.message}</Text>
         </ResultPanel>
       );
+    case "change": {
+      const count = presentation.paths.length;
+      return (
+        <ExpandableDetails
+          expanded={detailsExpanded}
+          summary={
+            <Text>
+              ✓ {presentation.title} · {count} {count === 1 ? "file" : "files"}{" "}
+              · {presentation.lifecycle}
+            </Text>
+          }
+        >
+          <ResultPanel
+            title={presentation.title}
+            tone={presentation.warning ? "warning" : "success"}
+            width={width}
+          >
+            <AlignedRows
+              width={width}
+              rows={[
+                { label: "Change set", value: presentation.changeSetId },
+                { label: "Lifecycle", value: presentation.lifecycle },
+                ...presentation.paths.map((path, index) => ({
+                  label: `File ${index + 1}`,
+                  value: path,
+                })),
+                ...(presentation.warning
+                  ? [
+                      {
+                        label: "Warning",
+                        value: presentation.warning,
+                        status: "warning" as const,
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          </ResultPanel>
+        </ExpandableDetails>
+      );
+    }
     default:
       return assertNever(presentation);
   }

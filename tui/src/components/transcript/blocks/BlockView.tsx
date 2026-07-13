@@ -101,7 +101,11 @@ export function BlockView({
       return <Text color={theme.muted}>{block.message}</Text>;
     case "command_result":
       return (
-        <CommandResultView presentation={block.presentation} width={width} />
+        <CommandResultView
+          presentation={block.presentation}
+          width={width}
+          detailsExpanded={detailsExpanded}
+        />
       );
     case "error":
       return <Text color={theme.danger}>Error · {block.message}</Text>;
