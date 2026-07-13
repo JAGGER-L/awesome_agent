@@ -78,7 +78,7 @@ function projectDelta(
             ...turn.timeline,
             {
               kind: "thinking",
-              id: `thinking:${turn.thinking_sequence}`,
+              id: `thinking:${turn.id}:${turn.thinking_sequence + 1}`,
               started_at: delta.first_timestamp,
             },
           ],

@@ -24,14 +24,14 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
     for (const item of turn.timeline) {
       if (item.kind === "thinking" && item.duration_ms !== undefined) {
         blocks.push({
-          key: `live:${turn.id}:${item.id}`,
+          key: `live:${item.id}`,
           kind: "reasoning_marker",
           label: reasoningElapsedMarker(item.duration_ms),
         });
       } else if (item.kind === "assistant") {
         flushTools();
         blocks.push({
-          key: `live:${turn.id}:${item.id}`,
+          key: `live:${item.id}`,
           kind: "assistant",
           text: item.text,
         });
