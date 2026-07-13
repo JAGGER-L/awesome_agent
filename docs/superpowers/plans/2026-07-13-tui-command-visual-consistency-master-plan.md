@@ -16,12 +16,19 @@
 - No LangGraph server, HTTP service, PostgreSQL, worker, event store, Redux, XState, or runtime Presenter plugin system is introduced.
 - No compatibility aliases, legacy result fallback, temporary adapter, swallowed exception, or parallel old/new implementation is retained.
 - No new production dependency is added unless a child PR plan proves it is required and the user approves it.
-- The approved UI source is Scheme A in `awesome-interaction-system-v1.html`; browser pixel measurements are not terminal layout contracts.
+- The approved UI direction is Scheme A from the reviewed HTML prototype. The
+  canonical implementation requirements are recorded in this master plan and
+  the relevant child plan, so execution never depends on an external prototype
+  file. Browser pixel measurements are not terminal layout contracts.
 - Welcome uses repository Logo constants without retyping, scaling, trimming, or replacing glyphs.
 - The complete raw Tool output and raw reasoning content are not added to durable storage.
 - Every submitted slash command is recorded immediately as a user-style transcript block, including commands that later fail or are cancelled.
 - The active credential source never falls back silently when an explicitly selected source is unavailable.
 - Every command produces a visible result, progress state, interaction, cancellation result, or actionable error.
+- Agent Turns follow the minimum-action invariant: once the explicit user goal is
+  satisfied, the loop stops unless the user requested validation or an
+  acceptance criterion makes another action necessary. A successful file write
+  must not trigger a fixed follow-up shell command.
 - Each PR starts from and merges back into `codex/tui-command-visual-consistency`; `main` is not the integration target until all eight PRs are complete and the final acceptance gate passes.
 - Each PR removes the production path it replaces in the same PR; no follow-up cleanup PR is used to preserve two authorities temporarily.
 - Validation remains risk-based: formatting and lint, type checking, affected unit tests, structural contracts, affected integration tests, then cross-component flow tests.
@@ -40,6 +47,9 @@ The implementation is complete only while all of these invariants remain true:
 6. **One visual grammar:** shared terminal primitives express information, success, warning, danger, progress, selection, empty state, and expandable detail.
 7. **Bounded persistence:** SQLite stores continuity, security, configuration, Change Journal, and safe execution summaries; ephemeral display detail is not promoted into an Event Store.
 8. **Replaceable TUI:** another client could consume Application semantics without depending on Ink colors, borders, spacing, or display copy.
+9. **Minimum Agent action:** Tool results return to the graph as observations,
+   completion is reevaluated after each result, and no unconditional validation
+   Tool is appended after the requested change is complete.
 
 ## 2. Target Execution Flow
 
@@ -427,6 +437,37 @@ Each PR below must receive its own detailed implementation plan before code is c
 | Welcome Scheme A | PR8 | PR8 exact renders |
 | Documentation consistency | PR8 | PR8 docs review |
 
+### Reported-Problem Coverage Audit
+
+This table is a scope guard. An implementation PR cannot be called complete if
+its reported behavior is absent merely because a lower-level refactor passed.
+
+| Reported behavior | Root owner | Implementation PR | Final proof |
+| --- | --- | --- | --- |
+| Welcome hierarchy, approved mint palette, input/result visual grammar | Ink theme/shared components | PR4, PR5, PR8 | Width and color-capability matrix |
+| Logo panel wastes width | Welcome layout | PR8 | Intrinsic-width tests at 80/100/120 |
+| User/Assistant labels and delayed user echo | Transcript projection | PR2 | Immediate user/command history tests |
+| Raw Markdown, tables, and formulas | Semantic Markdown renderer | Existing renderer, guarded by PR8 | Streaming/final Markdown matrix |
+| Slash navigation, Tab placeholders, ten-row scrolling, Help layout | Canonical command catalog/menu | PR3 | Keyboard and command audit |
+| Silent slash command results and object dumps | Typed contracts/Presenter | PR1, PR4 | Exhaustive Presenter tests |
+| `/context` renders `[object Object]` | Context payload/Presenter | PR1, PR4 | Structured context render test |
+| `/status` invalid snapshot and missing panel | Protocol contract/Presenter | PR1, PR4 | Python-to-TypeScript fixture and width test |
+| `/auth` mutation succeeds then Protocol fails | `application.getState` producer/consumer contract | PR1, PR5 | Fractional usage/null fixture plus mutation flow |
+| Reconnect option is a dead entry | Lifecycle coordinator | Owning existing lifecycle path, guarded by PR8 | Fatal recovery integration flow |
+| Credential availability, explicit source, replace/delete, unavailable source | Configuration/Application | PR1, PR5 | Auth matrix with no silent fallback |
+| Mem0 credential placement and Memory switches | Auth and Memory domain services | PR5 | Nested Auth/Memory flows |
+| Approval does not receive Enter or resume operation | Interaction owner/router | PR5 | Approval keyboard and operation tests |
+| Trust prompt lacks hierarchy/focus | Startup interaction | PR5 | Trust render and input-owner tests |
+| `/new` leaves old history | Thread replacement/generation | PR2 | New/resume stale-event tests |
+| Compact, Diff, Undo, Redo use generic or silent output | Change lifecycle/Presenter | PR6 | Specific lifecycle and empty/error tests |
+| Thinking disappears and Worked is visually weak | Agent activity projection | PR7 | Live/folded duration render tests |
+| Consecutive mixed Tools are not one fold and lack detail | Assistant-bounded Tool sequence | PR1, PR7 | Mixed-tool/List-detail tests |
+| Duplicate assistant React keys and repeated warning noise | Stable identity plus runtime diagnostic aggregation | PR2, PR7 | Identity test and counted-warning test |
+| `/memory` lacks Picker; `/tools`, `/usage`, `/doctor` lack aligned rows | Typed Presenter/shared components | PR4, PR5 | Component width matrix |
+| Model identity differs across Welcome, Status, request, and self-description | Application model identity/context injection | Existing Core boundary, guarded by PR8 | DeepSeek/Kimi identity flow |
+| Agent performs unsolicited shell work after a completed file write | Agent loop stop condition | Agent Core, guarded by PR8 | Deterministic minimum-action flow |
+| Source changes require release installation to test | Development launcher/docs | Existing launcher, completed by PR8 | Launcher unit test and Quickstart review |
+
 ## 11. Validation Policy
 
 Every child PR plan must define the smallest sufficient checks in this order:
@@ -482,6 +523,6 @@ Create the detailed plans in this exact sequence:
 5. `PR5-unified-picker-memory-auth-and-permissions`
 6. `PR6-compact-diff-undo-and-redo-lifecycles`
 7. `PR7-thinking-tool-sequence-detail-mode-and-worked`
-8. `PR8-welcome-documentation-and-regression`
+8. `PR8-welcome-documentation-and-full-regression`
 
 No later child plan may redefine an interface owned by an earlier PR without first amending this master plan and the affected earlier child plan.

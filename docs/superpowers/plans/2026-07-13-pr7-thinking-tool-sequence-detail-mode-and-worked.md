@@ -25,6 +25,10 @@
 - Worked uses local Turn duration from the terminal event, is visually distinct, and is absent after resume when not persisted.
 - Reuse one `detailsExpanded` value; do not add per-block focus or independent expansion flags.
 - Repeated diagnostic aggregation is not a substitute for fixing identity collisions. PR2's unique key invariant remains mandatory.
+- After identity correctness is restored, genuinely repeated runtime warnings
+  with the same stable code and normalized message are represented by one
+  session-only diagnostic block with a count. Distinct warnings are never
+  merged, and React development warnings are never ingested as product data.
 
 ---
 
@@ -293,7 +297,63 @@ git commit -m "feat: distinguish completed turn duration"
 
 Expected: PASS.
 
-## Task 6: Verify PR7 and Merge
+## Task 6: Aggregate Genuine Repeated Runtime Diagnostics
+
+**Files:**
+- Modify: `tui/src/state/model.ts`
+- Modify: `tui/src/state/reducer.ts`
+- Modify: `tui/src/transcript/live.ts`
+- Modify: `tui/src/transcript/model.ts`
+- Modify: `tui/src/components/transcript/blocks/BlockView.tsx`
+- Modify: `tui/tests/state/reducer.test.ts`
+- Modify: `tui/tests/components/transcript.test.tsx`
+
+**Interfaces:**
+- Consumes: stable runtime warning code/message and PR6 `detailsExpanded`.
+- Produces: one session-only counted diagnostic block for one repeated warning signature.
+- Does not consume: `console.error`, React key warnings, or raw arbitrary stderr.
+
+- [ ] **Step 1: Write counted-warning tests**
+
+Dispatch the same warning code and normalized message 18 times and assert one
+block renders `x 18` with a Ctrl+O hint; expanded mode shows the bounded warning
+detail once. Dispatch the same code with a different message and a different
+code with the same message and assert they remain separate blocks. Assert
+Thread replacement clears session warning counts.
+
+- [ ] **Step 2: Prove the current deduplication loses count**
+
+```powershell
+npm --prefix tui test -- --run tests/state/reducer.test.ts tests/components/transcript.test.tsx
+```
+
+Expected before implementation: repeated warnings remain at count one with no
+expandable representation.
+
+- [ ] **Step 3: Implement stable-signature aggregation**
+
+Store `count` and bounded first/last occurrence detail on the existing Surface
+warning record. Increment only for an exact stable code plus normalized message
+signature. Project it through one diagnostic transcript block and reuse global
+Ctrl+O for detail. Do not add a second diagnostic store or persistent record.
+
+- [ ] **Step 4: Verify aggregation and identity independence**
+
+```powershell
+npm --prefix tui test -- --run tests/state/reducer.test.ts tests/components/transcript.test.tsx tests/transcript/identity.test.ts
+```
+
+The duplicate-assistant-key regression must still pass by unique identities;
+warning aggregation must not hide or intercept that failure.
+
+- [ ] **Step 5: Commit diagnostic aggregation**
+
+```powershell
+git add tui/src/state tui/src/transcript tui/src/components/transcript tui/tests/state/reducer.test.ts tui/tests/components/transcript.test.tsx
+git commit -m "feat: aggregate repeated terminal diagnostics"
+```
+
+## Task 7: Verify PR7 and Merge
 
 **Files:**
 - Modify: `docs/architecture/protocol-and-ink.md`
@@ -302,7 +362,7 @@ Expected: PASS.
 
 - [ ] **Step 1: Document activity and persistence boundaries**
 
-Document Thinking interval timing, Tool Sequence boundaries, Ctrl+O, safe ephemeral details, summary-only resume, and Worked local duration.
+Document Thinking interval timing, Tool Sequence boundaries, Ctrl+O, safe ephemeral details, summary-only resume, Worked local duration, and the distinction between counted runtime diagnostics and development-time React failures.
 
 - [ ] **Step 2: Run Python safety gates**
 
@@ -359,5 +419,7 @@ git pull --ff-only
 - Resume uses durable summaries only and never invents unavailable details.
 - Worked is distinct from assistant/history text and reports only local Turn duration.
 - Ctrl+O controls Thinking, Tool sequences, Undo, and Redo through one state value.
+- Repeated genuine runtime diagnostics fold by stable signature and count; distinct diagnostics remain distinct.
+- React identity warnings are fixed at the source and never converted into product diagnostics.
 - No raw reasoning or complete Tool output is newly persisted.
 - PR7 is merged before PR8 is executed.

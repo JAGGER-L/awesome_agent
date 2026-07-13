@@ -23,6 +23,12 @@
 - No arbitrary `dict[str, JsonValue]` or `z.record(z.string(), jsonValueSchema)` remains in the `command.execute` success contract.
 - Protocol v2 Tool terminal events include optional `detail_truncated_count: int >= 0`; the field is current-session presentation metadata and is not added to durable `ToolActivity`.
 - No secret value may appear in a command payload, fixture, test assertion output, Presenter, transcript, or log.
+- Protocol v2 method fixtures must include a real Python-produced
+  `application.getState` after a completed Turn with fractional
+  `usage.active_execution_seconds`, plus model identity with
+  `fallback_from: null`. The TypeScript consumer must accept those exact
+  producer values; do not coerce the float, omit the null, or loosen unrelated
+  fields.
 - Preserve the current command inventory and ownership: twenty Application commands, one Skill command (`init`), and four Ink commands. The Core dispatcher handles the twenty-one non-Ink commands while ownership continues to describe semantic responsibility.
 - Preserve explicit selected credential source behavior: an unavailable selected source returns an error and does not silently fall back.
 - Use test-first changes and remove replaced source and implementation-coupled tests in the same task.
@@ -474,6 +480,12 @@ Run the Baseline Evidence commands again. Mark their results under the correspon
 - [ ] **Step 1: Add failing discriminated-union tests**
 
 Add tests that construct one instance of every payload, wrap it in `result()`, serialize with `exclude_none=True`, and parse it with `COMMAND_OUTCOME_ADAPTER`. Add explicit rejection tests for legacy `status/content/data`, simultaneous interaction variants, unknown fields, missing discriminators, a null non-nullable field, duplicate Picker values, two selected Picker options, and an injected `api_key` field.
+
+Also generate `application.getState` from the real Python Application snapshot
+after a Turn using `active_execution_seconds=0.5` and a non-fallback model
+identity. Assert the TypeScript method schema accepts the fractional duration
+and `fallback_from: null`. This is the regression for the credential mutation
+flow that previously wrote successfully and then failed during state refresh.
 
 ```python
 def test_legacy_arbitrary_command_result_is_rejected() -> None:
