@@ -61,42 +61,27 @@ describe("Provider setup flow", () => {
           if (arguments_.length === 0) {
             return {
               ok: true,
-              value: {
-                status: "success",
-                content: "",
-                data: {},
-                selection: providerSelection("Select Provider"),
-              },
+              value: selectionOutcome(providerSelection("Select Provider")),
             } as never;
           }
           if (!configured) {
             return {
               ok: true,
-              value: {
-                status: "success",
-                content: "",
-                data: {},
-                secret_prompt: secretPrompt("add"),
-              },
+              value: secretOutcome(secretPrompt("add")),
             } as never;
           }
           return {
             ok: true,
-            value: {
-              status: "success",
-              content: "",
-              data: {},
-              selection: {
-                prompt: "Select DeepSeek Model",
-                options: [
-                  {
-                    value: "deepseek/deepseek-v4-flash",
-                    label: "deepseek/deepseek-v4-flash",
-                    selected: true,
-                  },
-                ],
-              },
-            },
+            value: selectionOutcome({
+              prompt: "Select DeepSeek Model",
+              options: [
+                {
+                  value: "deepseek/deepseek-v4-flash",
+                  label: "deepseek/deepseek-v4-flash",
+                  selected: true,
+                },
+              ],
+            }),
           } as never;
         }
         throw new Error(`Unexpected method ${method}`);
@@ -196,34 +181,19 @@ describe("Provider setup flow", () => {
             ok: true,
             value:
               arguments_.length === 0
-                ? {
-                    status: "success",
-                    content: "",
-                    data: {},
-                    selection: providerSelection("Select Provider"),
-                  }
+                ? selectionOutcome(providerSelection("Select Provider"))
                 : configured
-                  ? {
-                      status: "success",
-                      content: "",
-                      data: {},
-                      selection: {
-                        prompt: "Select DeepSeek Model",
-                        options: [
-                          {
-                            value: "deepseek/deepseek-v4-flash",
-                            label: "deepseek/deepseek-v4-flash",
-                            selected: true,
-                          },
-                        ],
-                      },
-                    }
-                  : {
-                      status: "success",
-                      content: "",
-                      data: {},
-                      secret_prompt: secretPrompt("add"),
-                    },
+                  ? selectionOutcome({
+                      prompt: "Select DeepSeek Model",
+                      options: [
+                        {
+                          value: "deepseek/deepseek-v4-flash",
+                          label: "deepseek/deepseek-v4-flash",
+                          selected: true,
+                        },
+                      ],
+                    })
+                  : secretOutcome(secretPrompt("add")),
           } as never;
         }
         throw new Error(`Unexpected method ${method}`);
@@ -333,13 +303,8 @@ describe("Provider setup flow", () => {
             ok: true,
             value:
               arguments_[1] === "replace"
-                ? {
-                    status: "success",
-                    content: "",
-                    data: {},
-                    secret_prompt: secretPrompt("replace"),
-                  }
-                : { status: "success", content: "", data: {}, selection },
+                ? secretOutcome(secretPrompt("replace"))
+                : selectionOutcome(selection!),
           } as never;
         }
         throw new Error(`Unexpected method ${method}`);
@@ -461,6 +426,27 @@ function secretPrompt(action: "add" | "replace") {
   };
 }
 
+function selectionOutcome(selection: {
+  prompt: string;
+  options: Array<{
+    value: string;
+    label: string;
+    selected: boolean;
+  }>;
+}) {
+  return {
+    kind: "interaction" as const,
+    interaction: { kind: "selection" as const, ...selection },
+  };
+}
+
+function secretOutcome(prompt: ReturnType<typeof secretPrompt>) {
+  return {
+    kind: "interaction" as const,
+    interaction: { kind: "secret" as const, ...prompt },
+  };
+}
+
 function modelControllerWithoutCredential(): CommandController {
   return new CommandController({
     request: async <Method extends MethodName>(
@@ -475,18 +461,8 @@ function modelControllerWithoutCredential(): CommandController {
         ok: true,
         value:
           arguments_.length === 0
-            ? {
-                status: "success",
-                content: "",
-                data: {},
-                selection: providerSelection("Select Provider"),
-              }
-            : {
-                status: "success",
-                content: "",
-                data: {},
-                secret_prompt: secretPrompt("add"),
-              },
+            ? selectionOutcome(providerSelection("Select Provider"))
+            : secretOutcome(secretPrompt("add")),
       } as never;
     },
   });
