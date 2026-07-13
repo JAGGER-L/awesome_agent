@@ -28,7 +28,7 @@ credentials are not product history. Tool activity stores bounded summaries;
 tool observations required for recovery remain in the unfinished Turn's
 LangGraph checkpoint.
 
-The Application database has one current schema bootstrap. This development
-line does not carry historical schema migrations or data adapters: a database
-whose `PRAGMA user_version` differs from the current schema is rejected. Tests
-always create isolated current state instead of depending on developer data.
+The Application database has one current schema bootstrap. A database whose
+`PRAGMA user_version` differs from the current schema is rejected; no historical
+data adapter is present. Tests always create isolated current state instead of
+depending on developer data.
