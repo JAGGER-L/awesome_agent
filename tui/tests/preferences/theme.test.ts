@@ -92,7 +92,6 @@ describe("resolveTheme", () => {
         "preference",
         "primary",
         "secondary",
-        "statusBackground",
         "success",
         "tool",
         "user",
@@ -108,6 +107,12 @@ describe("resolveTheme", () => {
     expect(dark).toMatchObject(darkAurora);
     expect(light.logoRows).toEqual(lightAurora.logoRows);
     expect(light).toMatchObject(lightAurora);
+  });
+
+  it("does not expose background-label color roles", () => {
+    expect(resolveTheme("dark", "truecolor")).not.toHaveProperty(
+      "statusBackground",
+    );
   });
 
   it("keeps every light text role at WCAG AA contrast on white", () => {
