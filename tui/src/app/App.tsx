@@ -252,7 +252,14 @@ export function App({
           return { accepted: true };
       }
     },
-    [appendCommandResult, dispatch, lifecycle, runTerminalAction, store],
+    [
+      appendCommandResult,
+      appendPresentation,
+      dispatch,
+      lifecycle,
+      runTerminalAction,
+      store,
+    ],
   );
 
   const applyCommandOutcome = useCallback(
@@ -570,7 +577,6 @@ export function App({
   }, [
     applyCommandOutcome,
     controller,
-    dispatch,
     providerSetupVisible,
     state.application?.current_thread_id,
     store,
