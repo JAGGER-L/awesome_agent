@@ -41,9 +41,6 @@ import {
   type TerminalKey,
 } from "../interaction/key-router.js";
 import type {
-  PickerOwner,
-  PickerSelection,
-  SecretPrompt,
   TerminalUiAction,
   TerminalUiState,
 } from "../interaction/model.js";
@@ -62,13 +59,14 @@ import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 import { useCommandExecution } from "./use-command-execution.js";
 import {
+  pickerMode,
+  useInteractionController,
+} from "./use-interaction-controller.js";
+import {
   ThreadReplacementError,
   useThreadReplacement,
 } from "./use-thread-replacement.js";
-import {
-  isAuthPicker,
-  unavailableSelectionMessage,
-} from "./use-interaction-flow.js";
+import { isAuthPicker } from "./use-interaction-flow.js";
 import { threadViewportKey } from "./use-thread-viewport.js";
 
 interface ComposerSubmitResult {
@@ -119,6 +117,13 @@ export function App({
   const ui = terminal.state;
   const uiRef = terminal.current;
   const dispatch = terminal.dispatch;
+  const applyOutcomeRef = useRef<
+    (
+      outcome: CommandDispatchOutcome,
+      intent?: CommandIntent,
+      generation?: number,
+    ) => Promise<ComposerSubmitResult>
+  >(async () => ({ accepted: true }));
   const {
     appendPresentation,
     appendTextResult: appendCommandResult,
@@ -262,6 +267,20 @@ export function App({
     ],
   );
 
+  const interactions = useInteractionController({
+    controller,
+    store,
+    dispatch,
+    uiRef,
+    currentThreadId: state.application?.current_thread_id,
+    localCommands,
+    interactionResponder,
+    appendCommandResult,
+    applyLocalResult,
+    applyOutcome: async (outcome, intent, generation) =>
+      await applyOutcomeRef.current(outcome, intent, generation),
+  });
+
   const applyCommandOutcome = useCallback(
     async (
       outcome: CommandDispatchOutcome,
@@ -273,22 +292,9 @@ export function App({
       }
       switch (outcome.kind) {
         case "selection":
-          dispatch({
-            type: "mode.open",
-            mode: pickerMode(
-              commandPickerOwner(outcome.intent),
-              outcome.selection,
-              blockingSelection,
-            ),
-          });
-          return { accepted: true };
         case "secret":
-          dispatch({
-            type: "mode.open",
-            mode: secretMode(outcome.intent, outcome.prompt),
-          });
-          return { accepted: true };
         case "application_interaction":
+          interactions.openOutcome(outcome, blockingSelection);
           return { accepted: true };
         case "command_error":
           if (intent) {
@@ -378,12 +384,13 @@ export function App({
       appendPresentation,
       blockingSelection,
       controller,
-      dispatch,
       localCommands,
       replaceThread,
       store,
+      interactions,
     ],
   );
+  applyOutcomeRef.current = applyCommandOutcome;
   const submit = useCallback(
     async (value: string): Promise<ComposerSubmitResult> => {
       dispatch({ type: "notice.clear" });
@@ -582,150 +589,6 @@ export function App({
     uiRef,
   ]);
 
-  const mutateCredential = useCallback(
-    async (
-      intent: CommandIntent,
-      provider: "deepseek" | "kimi" | "mem0",
-      action: "add" | "replace" | "delete",
-      secret?: string,
-      prompt?: SecretPrompt,
-      allowUnverified = false,
-    ) => {
-      if (!controller) return;
-      const generation = store.getState().thread_generation;
-      if (action !== "delete" && !secret) {
-        dispatch({
-          type: "mode.secret.message",
-          message: "API key is required.",
-        });
-        return;
-      }
-      if (prompt && !allowUnverified) {
-        dispatch({ type: "mode.secret.submitting", submitting: true });
-      }
-      const outcome = await controller.setCredential(
-        provider,
-        action,
-        secret,
-        allowUnverified,
-      );
-      if (store.getState().thread_generation !== generation) return;
-      if (outcome.kind === "error") {
-        if (prompt) {
-          dispatch({
-            type: "mode.open",
-            mode: secretMode(intent, prompt, outcome.error.message),
-          });
-        } else {
-          dispatch({ type: "mode.cancel" });
-          appendCommandResult(
-            "auth",
-            "error",
-            outcome.error.message,
-            generation,
-          );
-        }
-        return;
-      }
-      if (outcome.result.status === "invalid") {
-        if (!prompt) return;
-        dispatch({
-          type: "mode.open",
-          mode: secretMode(
-            intent,
-            prompt,
-            "The API key was rejected. Try another key.",
-          ),
-        });
-        return;
-      }
-      if (outcome.result.status === "confirm_unverified") {
-        if (!prompt || !secret) return;
-        dispatch({
-          type: "mode.open",
-          mode: pickerMode(
-            { kind: "credential_confirm", intent, prompt, secret },
-            {
-              prompt:
-                "The Provider could not be reached. Save this key anyway?",
-              options: [
-                { value: "back", label: "Back", selected: true },
-                { value: "save", label: "Save anyway", selected: false },
-              ],
-            },
-            false,
-          ),
-        });
-        return;
-      }
-      const refreshed = await controller.refreshApplication();
-      if (store.getState().thread_generation !== generation) return;
-      if (!refreshed.ok) {
-        if (prompt) {
-          dispatch({
-            type: "mode.open",
-            mode: secretMode(intent, prompt, refreshed.error.message),
-          });
-        } else {
-          dispatch({ type: "mode.cancel" });
-          appendCommandResult(
-            "auth",
-            "error",
-            refreshed.error.message,
-            generation,
-          );
-        }
-        return;
-      }
-      store.dispatch({
-        type: "hydrate.application",
-        application: refreshed.value,
-      });
-      dispatch({ type: "mode.cancel" });
-      if (outcome.result.status === "deleted") {
-        appendCommandResult(
-          "auth",
-          "info",
-          `${providerLabel(provider)} credential deleted.`,
-          generation,
-        );
-        return;
-      }
-      if (intent.name !== "model") {
-        appendCommandResult(
-          "auth",
-          "info",
-          `${providerLabel(provider)} credential configured.`,
-          generation,
-        );
-        return;
-      }
-      const resumed = await controller.submit(
-        { kind: "command", intent },
-        refreshed.value.current_thread_id,
-      );
-      await applyCommandOutcome(resumed, intent, generation);
-    },
-    [applyCommandOutcome, appendCommandResult, controller, dispatch, store],
-  );
-
-  const respondApproval = useCallback(
-    async (decision: string) => {
-      dispatch({ type: "mode.approval.submitting", submitting: true });
-      await interactionResponder?.respond(decision);
-      if (controller) {
-        const refreshed = await controller.refreshApplication();
-        if (refreshed.ok) {
-          store.dispatch({
-            type: "hydrate.application",
-            application: refreshed.value,
-          });
-        }
-      }
-    },
-    [controller, dispatch, interactionResponder, store],
-  );
-
   const selectCurrent = useCallback(async () => {
     const mode = uiRef.current.mode;
     if (mode.kind === "command_menu") {
@@ -740,87 +603,8 @@ export function App({
       dispatch({ type: "mode.cancel" });
       return;
     }
-    if (mode.kind === "approval") {
-      const choice = mode.interaction.choices[mode.selected];
-      if (!choice) return;
-      await respondApproval(choice.decision);
-      return;
-    }
-    if (mode.kind !== "picker") return;
-    const option = mode.selection.options[mode.selected];
-    if (!option) return;
-    const unavailable = unavailableSelectionMessage(option.disabled);
-    if (unavailable) {
-      dispatch({ type: "notice.set", message: unavailable });
-      return;
-    }
-    const owner = mode.owner;
-    if (owner.kind === "local_theme") {
-      const generation = store.getState().thread_generation;
-      dispatch({ type: "mode.cancel" });
-      if (localCommands) {
-        applyLocalResult(
-          await localCommands.execute({
-            name: "theme",
-            arguments: [option.value],
-          }),
-          generation,
-        );
-      }
-      return;
-    }
-    if (owner.kind === "command") {
-      const generation = store.getState().thread_generation;
-      dispatch({ type: "mode.cancel" });
-      if (controller) {
-        const outcome = await controller.select(
-          owner.intent,
-          option.value,
-          state.application?.current_thread_id,
-        );
-        await applyCommandOutcome(outcome, owner.intent, generation);
-      }
-      return;
-    }
-    if (owner.kind === "credential_delete") {
-      if (option.value === "confirm") {
-        await mutateCredential(owner.intent, owner.provider, "delete");
-      } else {
-        dispatch({ type: "mode.cancel" });
-      }
-      return;
-    }
-    if (owner.kind === "credential_confirm") {
-      if (option.value === "save") {
-        await mutateCredential(
-          owner.intent,
-          owner.prompt.provider,
-          owner.prompt.action,
-          owner.secret,
-          owner.prompt,
-          true,
-        );
-      } else {
-        dispatch({
-          type: "mode.open",
-          mode: secretMode(owner.intent, owner.prompt),
-        });
-      }
-    }
-  }, [
-    applyCommandOutcome,
-    applyLocalResult,
-    controller,
-    dispatch,
-    localCommands,
-    state.application?.current_thread_id,
-    store,
-    mutateCredential,
-    respondApproval,
-    submitValue,
-    uiRef,
-  ]);
-
+    await interactions.confirmSelection();
+  }, [dispatch, interactions, submitValue, uiRef]);
   const completeCommand = useCallback(() => {
     const mode = uiRef.current.mode;
     if (mode.kind !== "command_menu" || !mode.selectedCommand) return;
@@ -892,20 +676,13 @@ export function App({
           const mode = uiRef.current.mode;
           if (mode.kind !== "approval") return;
           runTerminalAction(async () => {
-            await respondApproval("deny");
+            await interactions.respondApproval("deny");
           });
         },
         onSecretSubmit: () => {
           if (uiRef.current.mode.kind !== "secret") return;
-          const { intent, prompt, value } = uiRef.current.mode;
           runTerminalAction(async () => {
-            await mutateCredential(
-              intent,
-              prompt.provider,
-              prompt.action,
-              value,
-              prompt,
-            );
+            await interactions.submitSecret();
           });
         },
         onLifecycle: handleLifecycle,
@@ -915,10 +692,9 @@ export function App({
       handleLifecycle,
       completeCommand,
       dispatch,
-      respondApproval,
+      interactions,
       selectCurrent,
       submitComposer,
-      mutateCredential,
       runTerminalAction,
       uiRef,
     ],
@@ -992,26 +768,6 @@ export function App({
   );
 }
 
-function commandPickerOwner(intent: CommandIntent): PickerOwner {
-  const provider = intent.arguments?.[0];
-  if (
-    intent.name === "auth" &&
-    intent.arguments?.at(-1) === "delete" &&
-    (provider === "deepseek" || provider === "kimi" || provider === "mem0")
-  ) {
-    return { kind: "credential_delete", intent, provider };
-  }
-  return { kind: "command", intent };
-}
-
-function providerLabel(provider: "deepseek" | "kimi" | "mem0"): string {
-  return provider === "deepseek"
-    ? "DeepSeek"
-    : provider === "kimi"
-      ? "Kimi"
-      : "Mem0 Cloud";
-}
-
 function credentialConfigured(
   status:
     | {
@@ -1039,38 +795,6 @@ function memoryStateEnabled(
     return value.enabled === true;
   }
   return fallback;
-}
-
-function pickerMode(
-  owner: PickerOwner,
-  selection: NonNullable<PickerSelection>,
-  blocking: boolean,
-): Extract<TerminalUiState["mode"], { kind: "picker" }> {
-  return {
-    kind: "picker",
-    owner,
-    selection,
-    selected: Math.max(
-      0,
-      selection.options.findIndex((option) => option.selected),
-    ),
-    blocking,
-  };
-}
-
-function secretMode(
-  intent: CommandIntent,
-  prompt: SecretPrompt,
-  message?: string,
-): Extract<TerminalUiState["mode"], { kind: "secret" }> {
-  return {
-    kind: "secret",
-    intent,
-    prompt,
-    value: "",
-    submitting: false,
-    ...(message === undefined ? {} : { message }),
-  };
 }
 
 function handleTerminalIntent(
