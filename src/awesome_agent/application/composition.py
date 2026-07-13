@@ -976,6 +976,7 @@ class _LocalApplicationBackend:
             current_thread_id=lambda: (
                 self._commands.current_thread_id if self._commands is not None else None
             ),
+            credential_statuses=lambda: self._sources.provider_credentials,
             local_memory=self._local_memory,
             config_writer=UserConfigWriter(self._paths.config_file),
             mem0_cloud=self._mem0_adapter,

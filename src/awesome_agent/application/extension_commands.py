@@ -23,7 +23,11 @@ from awesome_agent.application.command_results import (
     result,
 )
 from awesome_agent.application.commands import CommandIntent
-from awesome_agent.config import UserConfigDocument, UserConfigWriter
+from awesome_agent.config import (
+    ProviderCredentialStatuses,
+    UserConfigDocument,
+    UserConfigWriter,
+)
 from awesome_agent.conversation import ConversationService
 from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.tools.registry import ToolRegistry
@@ -71,6 +75,7 @@ class ApplicationExtensionService:
         registry: ToolRegistry,
         submit_turn: TurnSubmitter,
         current_thread_id: Callable[[], str | None],
+        credential_statuses: Callable[[], ProviderCredentialStatuses],
         local_memory: LocalMemoryService | None = None,
         config_writer: UserConfigWriter | None = None,
         mem0_cloud: Mem0CloudAdapter | None = None,
@@ -89,6 +94,7 @@ class ApplicationExtensionService:
         self._registry = registry
         self._submit_turn = submit_turn
         self._current_thread_id = current_thread_id
+        self._credential_statuses = credential_statuses
         self._local_memory = local_memory
         self._config_writer = config_writer
         self._mem0_cloud = mem0_cloud
@@ -200,7 +206,38 @@ class ApplicationExtensionService:
     async def memory(self, intent: CommandIntent) -> CommandOutcome:
         arguments = intent.arguments
         if not arguments:
-            return result(self._memory_status())
+            return interaction(
+                CommandSelection(
+                    prompt="Choose a memory system.",
+                    options=(
+                        CommandOption(value="local", label="Local memory"),
+                        CommandOption(value="mem0", label="Cloud memory · Mem0"),
+                    ),
+                ),
+                context=self._memory_status(),
+            )
+        if len(arguments) == 1 and arguments[0] in {"local", "mem0"}:
+            enabled = (
+                self._local_memory.status().enabled
+                if arguments[0] == "local" and self._local_memory is not None
+                else self._mem0_enabled
+                if arguments[0] == "mem0"
+                else False
+            )
+            return interaction(
+                CommandSelection(
+                    prompt=(
+                        "Local memory"
+                        if arguments[0] == "local"
+                        else "Cloud memory · Mem0"
+                    ),
+                    options=(
+                        CommandOption(value="off", label="Off", selected=not enabled),
+                        CommandOption(value="on", label="On", selected=enabled),
+                    ),
+                ),
+                context=self._memory_status(),
+            )
         if arguments[0] == "mem0":
             return await self._mem0_command(arguments[1:])
         service = self._local_memory
@@ -287,6 +324,12 @@ class ApplicationExtensionService:
                     "turn_busy", "Change Mem0 after the active Turn completes."
                 )
             enabled = arguments[0] == "on"
+            if enabled and not self._credential_statuses().mem0.configured:
+                return error(
+                    "mem0_credential_unavailable",
+                    "Select or configure a Mem0 credential with /auth before "
+                    "enabling Cloud memory.",
+                )
             if enabled and self._mem0_cloud is None:
                 diagnostic = self._mem0_initialization_diagnostic or Mem0Diagnostic(
                     code="mem0_unavailable", operation="initialize"
