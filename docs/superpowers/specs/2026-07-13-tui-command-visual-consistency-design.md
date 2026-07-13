@@ -134,10 +134,11 @@ Required payload families:
 - thread replacement;
 - permissions and credential interactions.
 
-The Presenter registry consumes typed payloads and produces terminal view
-models. It must not use `Object.entries`, implicit object stringification,
-`Array.join` on object arrays, or JSON serialization as a normal user-facing
-fallback.
+One exhaustive Presenter boundary consumes typed payloads and produces terminal
+view models. The built-in command set uses a compile-time exhaustive mapping,
+not a runtime registration framework. It must not use `Object.entries`,
+implicit object stringification, `Array.join` on object arrays, or JSON
+serialization as a normal user-facing fallback.
 
 ## Command-specific Behavior
 
@@ -289,9 +290,11 @@ one blank row and cannot be confused with muted Assistant prose.
 
 ## State Ownership
 
-- Python Application owns command semantics and typed command payloads.
+- Python Application owns command semantics and typed command payloads through
+  one command dispatch path. Composition and alternate hosts may wire or invoke
+  this path but may not reimplement command behavior.
 - Protocol owns exact serialized types and nullability.
-- Presenter registry maps typed payloads to terminal view models.
+- The exhaustive Presenter maps typed payloads to terminal view models.
 - Surface store owns transcript blocks, including slash-command user blocks.
 - Terminal UI state owns only transient selection, input, and global detail
   mode.
