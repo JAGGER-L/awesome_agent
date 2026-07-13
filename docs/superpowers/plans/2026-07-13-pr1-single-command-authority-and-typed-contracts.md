@@ -21,6 +21,7 @@
 - Composition may construct services and register handlers, but it may not branch on `CommandName` or construct user-facing command outcomes.
 - Command payloads contain semantic facts only. Borders, colors, labels, aligned columns, glyphs, and spacing stay in the TUI.
 - No arbitrary `dict[str, JsonValue]` or `z.record(z.string(), jsonValueSchema)` remains in the `command.execute` success contract.
+- Protocol v2 Tool terminal events include optional `detail_truncated_count: int >= 0`; the field is current-session presentation metadata and is not added to durable `ToolActivity`.
 - No secret value may appear in a command payload, fixture, test assertion output, Presenter, transcript, or log.
 - Preserve the current command inventory and ownership: twenty Application commands, one Skill command (`init`), and four Ink commands. The Core dispatcher handles the twenty-one non-Ink commands while ownership continues to describe semantic responsibility.
 - Preserve explicit selected credential source behavior: an unavailable selected source returns an error and does not silently fall back.
@@ -596,6 +597,8 @@ Expected: Python and TypeScript fail because v2 fixtures and schemas do not exis
 - [ ] **Step 3: Implement exact Zod mirrors and Protocol v2 constants**
 
 Implement the TypeScript union shown under Canonical Interfaces. Change initialization literals and result schemas to 2. Change the fixture generator target to `protocol/fixtures/v2`, generate one valid fixture for every payload and interaction variant, and generate the declared invalid cases from plain dictionaries that Pydantic must reject.
+
+Extend `ToolPresentation`, terminal `ToolResultPayload`, and the matching TypeScript event Schema with optional `detail_truncated_count`. The List Tool sets it to `max(0, len(entries) - len(bounded))`; other Tools omit it. Add valid and invalid event fixtures and assert the SQLite ToolActivity model/table remain unchanged.
 
 The valid `command.execute` method fixture uses:
 
