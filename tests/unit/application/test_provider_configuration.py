@@ -7,6 +7,13 @@ import pytest
 from dotenv import dotenv_values
 from pydantic import SecretStr
 
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandInteractionResult,
+    CommandResult,
+    ModelCommandPayload,
+    NoticeCommandPayload,
+)
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
@@ -108,18 +115,20 @@ async def test_model_selects_provider_before_model_and_bridges_missing_auth(
         thread_id=thread.id,
     )
 
-    assert providers.selection is not None
-    assert [option.value for option in providers.selection.options] == [
+    assert isinstance(providers, CommandInteractionResult)
+    assert providers.interaction.kind == "selection"
+    assert [option.value for option in providers.interaction.options] == [
         "deepseek",
         "kimi",
     ]
-    assert [option.description for option in providers.selection.options] == [
+    assert [option.description for option in providers.interaction.options] == [
         "Not configured",
         "Not configured",
     ]
-    assert missing.secret_prompt is not None
-    assert missing.secret_prompt.provider == "deepseek"
-    assert missing.secret_prompt.action == "add"
+    assert isinstance(missing, CommandInteractionResult)
+    assert missing.interaction.kind == "secret"
+    assert missing.interaction.provider == "deepseek"
+    assert missing.interaction.action == "add"
 
 
 @pytest.mark.asyncio
@@ -145,8 +154,9 @@ async def test_valid_credential_enables_provider_model_selection(
     assert saved.status is ProviderCredentialSetStatus.CONFIGURED
     assert saved.source is CredentialSource.AWESOME
     assert sources().provider_credentials.deepseek.configured is True
-    assert models.selection is not None
-    assert [option.value for option in models.selection.options] == [
+    assert isinstance(models, CommandInteractionResult)
+    assert models.interaction.kind == "selection"
+    assert [option.value for option in models.interaction.options] == [
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
     ]
@@ -255,12 +265,14 @@ async def test_auth_exposes_both_sources_and_persists_explicit_selection(
         )
     )
 
-    assert picker.selection is not None
-    assert [(item.value, item.disabled) for item in picker.selection.options] == [
+    assert isinstance(picker, CommandInteractionResult)
+    assert picker.interaction.kind == "selection"
+    assert [(item.value, item.disabled) for item in picker.interaction.options] == [
         ("environment", False),
         ("awesome", False),
     ]
-    assert selected.status.value == "success"
+    assert isinstance(selected, CommandResult)
+    assert isinstance(selected.payload, NoticeCommandPayload)
     assert (
         sources().provider_credentials.deepseek.selected_source
         is CredentialSource.AWESOME
@@ -301,7 +313,8 @@ async def test_selected_unavailable_source_fails_without_fallback(
 
     assert status.selected_source is CredentialSource.ENVIRONMENT
     assert status.configured is False
-    assert result.data["error_code"] == "selected_credential_unavailable"
+    assert isinstance(result, CommandError)
+    assert result.code == "selected_credential_unavailable"
     assert sources().secrets.deepseek_api_key is None
 
 
@@ -322,8 +335,9 @@ async def test_mem0_uses_the_same_masked_awesome_credential_flow(
         )
     )
 
-    assert prompt.secret_prompt is not None
-    assert prompt.secret_prompt.provider == "mem0"
+    assert isinstance(prompt, CommandInteractionResult)
+    assert prompt.interaction.kind == "secret"
+    assert prompt.interaction.provider == "mem0"
     assert saved.source is CredentialSource.AWESOME
     assert sources().provider_credentials.mem0.configured is True
 
@@ -383,10 +397,11 @@ async def test_model_selection_updates_current_thread_and_user_default_only(
         thread_id=current.id,
     )
 
-    assert result.data == {
-        "model": "kimi/kimi-k2.6",
-        "default_model_updated": True,
-    }
+    assert isinstance(result, CommandResult)
+    assert result.payload == ModelCommandPayload(
+        model="kimi/kimi-k2.6",
+        default_model_updated=True,
+    )
     assert conversation.read_thread(current.id).thread.current_model == (
         "kimi/kimi-k2.6"
     )

@@ -55,7 +55,7 @@ const handleLine = (line) => {
       id: request.id,
       result: application({
         product_version: "0.1.0",
-        protocol_version: 1,
+        protocol_version: 2,
         status: mode === "trust-required" ? "trust_required" : "ready",
         session_id: "session_fake",
         ...(mode === "trust-required"

@@ -10,11 +10,14 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from awesome_agent.application.command_results import (
+    COMMAND_OUTCOME_ADAPTER,
+    CommandOutcome,
+)
 from awesome_agent.application.commands import (
     COMMAND_OWNERS,
     CommandIntent,
     CommandName,
-    CommandResult,
 )
 from awesome_agent.application.contracts import (
     ApplicationResult,
@@ -37,7 +40,7 @@ from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).parents[3]
-FIXTURES = ROOT / "protocol" / "fixtures" / "v1"
+FIXTURES = ROOT / "protocol" / "fixtures" / "v2"
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -51,7 +54,10 @@ def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
 
     assert manifest["fixture_version"] == 1
     assert manifest["product_version"] == PRODUCT_VERSION
-    assert manifest["protocol_version"] == 1
+    assert manifest["protocol_version"] == 2
+    assert {"command-results.valid.json", "command-results.invalid.json"} <= set(
+        manifest["files"]
+    )
     assert set(manifest["methods"]) == {
         "initialize",
         "application.getState",
@@ -125,9 +131,9 @@ class _FixtureFacade:
 
     async def execute_command(
         self, intent: CommandIntent
-    ) -> ApplicationResult[CommandResult]:
+    ) -> ApplicationResult[CommandOutcome]:
         del intent
-        return ApplicationResult[CommandResult].model_validate(self._result)
+        return ApplicationResult[CommandOutcome].model_validate(self._result)
 
     async def set_provider_credential(
         self, request: ProviderCredentialSetRequest
@@ -242,3 +248,39 @@ def test_failure_and_command_fixtures_are_complete_and_valid() -> None:
         {"name": name.value, "owner": COMMAND_OWNERS[name].value}
         for name in CommandName
     ]
+
+
+def test_command_outcome_corpus_is_complete_and_strict() -> None:
+    valid = _cases("command-results.valid.json")
+    assert {
+        case["outcome"]["payload"]["kind"]
+        for case in valid
+        if case["outcome"]["kind"] == "result"
+    } == {
+        "notice",
+        "thread",
+        "context",
+        "compact",
+        "model",
+        "thinking",
+        "workspace",
+        "diff",
+        "change",
+        "tools",
+        "skills",
+        "mcp",
+        "memory_status",
+        "memory_document",
+        "memory_search",
+        "memory_mutation",
+        "status",
+        "usage",
+        "doctor",
+        "config",
+        "permissions",
+    }
+    for case in valid:
+        COMMAND_OUTCOME_ADAPTER.validate_python(case["outcome"])
+    for case in _cases("command-results.invalid.json"):
+        with pytest.raises(ValidationError):
+            COMMAND_OUTCOME_ADAPTER.validate_python(case["outcome"])

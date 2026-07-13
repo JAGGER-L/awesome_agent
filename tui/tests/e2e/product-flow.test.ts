@@ -73,8 +73,8 @@ describe("networkless candidate product flow", () => {
         requiredInput("/model"),
         threadId,
       );
-      expect(providers).toMatchObject({ kind: "picker" });
-      if (providers.kind !== "picker")
+      expect(providers).toMatchObject({ kind: "selection" });
+      if (providers.kind !== "selection")
         throw new Error("provider picker missing");
       const credential = await commands.select(
         providers.intent,
@@ -109,8 +109,8 @@ describe("networkless candidate product flow", () => {
         requiredInput("/model deepseek"),
         threadId,
       );
-      expect(models).toMatchObject({ kind: "picker" });
-      if (models.kind !== "picker") throw new Error("model picker missing");
+      expect(models).toMatchObject({ kind: "selection" });
+      if (models.kind !== "selection") throw new Error("model picker missing");
       const selected = await commands.select(
         models.intent,
         "deepseek/deepseek-v4-flash",
@@ -210,7 +210,7 @@ describe("networkless candidate product flow", () => {
             );
             expect(selected).toMatchObject({
               kind: "result",
-              result: { status: "success" },
+              payload: { kind: "model", model },
             });
 
             const turn = await commands.submit(

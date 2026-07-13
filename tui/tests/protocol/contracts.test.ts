@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { commandResultSchema } from "../../src/protocol/commands.js";
+import { commandOutcomeSchema } from "../../src/protocol/commands.js";
 import { methodSchemas } from "../../src/protocol/methods.js";
 
 describe("provider credential protocol", () => {
@@ -37,10 +37,9 @@ describe("provider credential protocol", () => {
 
   it("accepts secret prompts without accepting raw credential fields", () => {
     const result = {
-      status: "success",
-      content: "",
-      data: {},
-      secret_prompt: {
+      kind: "interaction",
+      interaction: {
+        kind: "secret",
         provider: "kimi",
         action: "add",
         label: "Kimi API Key",
@@ -49,9 +48,9 @@ describe("provider credential protocol", () => {
       },
     };
 
-    expect(commandResultSchema.safeParse(result).success).toBe(true);
+    expect(commandOutcomeSchema.safeParse(result).success).toBe(true);
     expect(
-      commandResultSchema.safeParse({ ...result, api_key: "secret" }).success,
+      commandOutcomeSchema.safeParse({ ...result, api_key: "secret" }).success,
     ).toBe(false);
   });
 });

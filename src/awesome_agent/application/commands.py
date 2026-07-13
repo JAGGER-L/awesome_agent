@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict
 
 
 class CommandOwner(StrEnum):
@@ -66,7 +65,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.PERMISSIONS,
         )
     },
-    **{name: CommandOwner.SKILL for name in (CommandName.INIT,)},
+    CommandName.INIT: CommandOwner.SKILL,
     **{
         name: CommandOwner.INK
         for name in (
@@ -79,66 +78,8 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
 }
 
 
-class CommandStatus(StrEnum):
-    SUCCESS = "success"
-    ERROR = "error"
-    INTERACTION_REQUIRED = "interaction_required"
-
-
 class CommandIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: CommandName
     arguments: tuple[str, ...] = ()
-
-
-class CommandOption(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    value: str = Field(min_length=1, max_length=200)
-    label: str = Field(min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=1_000)
-    selected: bool = False
-    disabled: bool = False
-
-
-class CommandSelection(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    prompt: str = Field(min_length=1, max_length=1_000)
-    options: tuple[CommandOption, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_options(self) -> Self:
-        values = [option.value for option in self.options]
-        if len(values) != len(set(values)):
-            raise ValueError("Command option values must be unique.")
-        if sum(option.selected for option in self.options) > 1:
-            raise ValueError("At most one Command option may be selected.")
-        return self
-
-
-class CommandSecretPrompt(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    provider: Literal["deepseek", "kimi", "mem0"]
-    action: Literal["add", "replace"]
-    label: str = Field(min_length=1, max_length=200)
-    environment_variable: str = Field(min_length=1, max_length=128)
-    help_url: str = Field(min_length=1, max_length=2_000)
-
-
-class CommandResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    status: CommandStatus
-    content: str = Field(default="", max_length=30_000)
-    data: dict[str, JsonValue] = Field(default_factory=dict)
-    selection: CommandSelection | None = None
-    secret_prompt: CommandSecretPrompt | None = None
-
-    @model_validator(mode="after")
-    def validate_interaction(self) -> Self:
-        if self.selection is not None and self.secret_prompt is not None:
-            raise ValueError("Command result cannot contain two input requests.")
-        return self

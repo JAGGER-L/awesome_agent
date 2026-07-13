@@ -1,15 +1,28 @@
 import type { CommandIntent } from "../commands/parser.js";
 import type { CommandName } from "../protocol/commands.js";
 import type { ComposerAction, ComposerState } from "../composer/model.js";
-import type { MethodValue } from "../protocol/index.js";
 import type { SurfaceState } from "../state/model.js";
 
-export type PickerSelection = NonNullable<
-  MethodValue["command.execute"]["selection"]
->;
-export type SecretPrompt = NonNullable<
-  MethodValue["command.execute"]["secret_prompt"]
->;
+export interface PickerSelection {
+  readonly kind?: "selection";
+  readonly prompt: string;
+  readonly options: readonly {
+    readonly value: string;
+    readonly label: string;
+    readonly description?: string | undefined;
+    readonly selected: boolean;
+    readonly disabled?: boolean | undefined;
+  }[];
+}
+
+export interface SecretPrompt {
+  readonly kind?: "secret";
+  readonly provider: "deepseek" | "kimi" | "mem0";
+  readonly action: "add" | "replace";
+  readonly label: string;
+  readonly environment_variable: string;
+  readonly help_url: string;
+}
 export type PendingInteraction = NonNullable<
   SurfaceState["pending_interaction"]
 >;

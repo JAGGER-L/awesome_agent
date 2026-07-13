@@ -120,6 +120,7 @@ class ToolResultPayload(BaseModel):
     outcome: str = Field(min_length=1, max_length=128)
     summary: str = Field(default="", max_length=2_000)
     detail: str | None = Field(default=None, max_length=4_000)
+    detail_truncated_count: int | None = Field(default=None, ge=0)
     duration_ms: int = Field(ge=0)
     error_code: str | None = Field(default=None, max_length=128)
 

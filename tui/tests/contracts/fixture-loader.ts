@@ -5,6 +5,8 @@ import { z } from "zod";
 
 const fileNames = [
   "commands.json",
+  "command-results.invalid.json",
+  "command-results.valid.json",
   "events.invalid.json",
   "events.valid.json",
   "methods.invalid.json",
@@ -15,7 +17,7 @@ const fileNames = [
 const manifestSchema = z.strictObject({
   fixture_version: z.literal(1),
   product_version: z.string(),
-  protocol_version: z.literal(1),
+  protocol_version: z.literal(2),
   methods: z.array(z.string()),
   event_types: z.array(z.string()),
   command_owners: z.record(z.string(), z.string()),
@@ -30,7 +32,7 @@ export interface FixtureCorpus {
 }
 
 export const defaultFixtureRoot = new URL(
-  "../../../protocol/fixtures/v1/",
+  "../../../protocol/fixtures/v2/",
   import.meta.url,
 );
 

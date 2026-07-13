@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
-from awesome_agent.application.commands import CommandIntent, CommandResult
+from awesome_agent.application.command_results import CommandOutcome
+from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
@@ -56,7 +57,7 @@ class ApplicationFacade(Protocol):
 
     async def execute_command(
         self, intent: CommandIntent
-    ) -> ApplicationResult[CommandResult]: ...
+    ) -> ApplicationResult[CommandOutcome]: ...
 
     async def set_provider_credential(
         self, request: ProviderCredentialSetRequest
@@ -97,7 +98,7 @@ class _ApplicationBackend(Protocol):
         command: str,
     ) -> OperationAccepted: ...
 
-    async def run_command(self, intent: CommandIntent) -> CommandResult: ...
+    async def run_command(self, intent: CommandIntent) -> CommandOutcome: ...
 
     async def set_provider_credential(
         self, request: ProviderCredentialSetRequest
@@ -173,7 +174,7 @@ class LocalApplication:
 
     async def execute_command(
         self, intent: CommandIntent
-    ) -> ApplicationResult[CommandResult]:
+    ) -> ApplicationResult[CommandOutcome]:
         return await self._call(lambda: self._backend.run_command(intent))
 
     async def set_provider_credential(

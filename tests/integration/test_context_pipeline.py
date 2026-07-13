@@ -4,11 +4,12 @@ from typing import Any, cast
 import pytest
 
 from awesome_agent.agent import AgentRuntimeContext, AgentState, new_agent_state
-from awesome_agent.application.commands import (
-    CommandIntent,
-    CommandName,
-    CommandStatus,
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandResult,
+    ContextCommandPayload,
 )
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.operations import OperationController
 from awesome_agent.application.turns import (
@@ -189,13 +190,14 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         CommandIntent(name=CommandName.CONTEXT),
         thread_id=thread.id,
     )
-    assert command.status is CommandStatus.SUCCESS
+    assert isinstance(command, CommandResult)
+    assert isinstance(command.payload, ContextCommandPayload)
     assert "before" not in command.model_dump_json()
     invalid = await context_service.context_command(
         CommandIntent(name=CommandName.CONTEXT, arguments=("extra",)),
         thread_id=thread.id,
     )
-    assert invalid.status is CommandStatus.ERROR
+    assert isinstance(invalid, CommandError)
 
 
 class NeverGraph:
@@ -310,11 +312,11 @@ async def test_compact_failure_keeps_history_and_summary_unchanged(
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
     )
-    assert command.status is CommandStatus.ERROR
+    assert isinstance(command, CommandError)
     invalid = await context_service.compact_command(
         CommandIntent(name=CommandName.COMPACT, arguments=("extra",)),
         thread_id=thread.id,
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
     )
-    assert invalid.status is CommandStatus.ERROR
+    assert isinstance(invalid, CommandError)

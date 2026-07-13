@@ -5,9 +5,16 @@ from typing import Any, cast
 import pytest
 
 from awesome_agent.agent import new_agent_state
-from awesome_agent.application.commands import CommandIntent, CommandName, CommandStatus
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandResult,
+    MemoryDocumentCommandPayload,
+    MemoryMutationCommandPayload,
+    MemoryStatusCommandPayload,
+)
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
-from awesome_agent.application.headless import ApplicationExtensionService
+from awesome_agent.application.extension_commands import ApplicationExtensionService
 from awesome_agent.config import BudgetConfig, TurnConfig, UserConfigWriter
 from awesome_agent.config.loader import read_user_config_document
 from awesome_agent.context import ContextBuilder
@@ -87,24 +94,24 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         workspace_key=workspace.key,
         registry=registry,
         submit_turn=submit_turn,
+        current_thread_id=lambda: thread.id,
         local_memory=memory,
         config_writer=UserConfigWriter(paths.config_file),
     )
 
-    initial = await extensions.handle(
+    initial = await extensions.memory(
         CommandIntent(name=CommandName.MEMORY),
-        thread_id=thread.id,
     )
-    local_status = initial.data["local"]
-    assert isinstance(local_status, dict)
-    assert local_status["enabled"] is False
-    assert initial.data["mem0"] == {"available": False, "enabled": False}
+    assert isinstance(initial, CommandResult)
+    assert isinstance(initial.payload, MemoryStatusCommandPayload)
+    assert initial.payload.local_enabled is False
+    assert initial.payload.cloud_available is False
+    assert initial.payload.cloud_enabled is False
 
-    enabled = await extensions.handle(
+    enabled = await extensions.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("local", "on")),
-        thread_id=thread.id,
     )
-    assert enabled.status is CommandStatus.SUCCESS
+    assert isinstance(enabled, CommandResult)
     assert read_user_config_document(paths.config_file).memory.local_file_memory is True
     assert registry.resolve("memory_add") is not None
 
@@ -112,24 +119,21 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         ("user", ("Prefer", "concise", "answers.")),
         ("workspace", ("Project", "uses", "pytest.")),
     ):
-        result = await extensions.handle(
+        result = await extensions.memory(
             CommandIntent(
                 name=CommandName.MEMORY,
                 arguments=("add", scope, *content),
             ),
-            thread_id=thread.id,
         )
-        assert result.status is CommandStatus.SUCCESS
+        assert isinstance(result, CommandResult)
 
-    listed = await extensions.handle(
+    listed = await extensions.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("list", "user")),
-        thread_id=thread.id,
     )
-    entries = listed.data["entries"]
-    assert isinstance(entries, list)
-    first_entry = entries[0]
-    assert isinstance(first_entry, dict)
-    assert first_entry["content"] == "Prefer concise answers."
+    assert isinstance(listed, CommandResult)
+    assert isinstance(listed.payload, MemoryDocumentCommandPayload)
+    entries = listed.payload.entries
+    assert entries[0].content == "Prefer concise answers."
 
     turn = conversation.begin_turn(
         thread.id,
@@ -182,14 +186,13 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
 
     user_path = paths.user_memory_file
     user_path.write_bytes(user_path.read_bytes() + b"\nManual free Markdown.\n")
-    command_add = await extensions.handle(
+    command_add = await extensions.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("add", "user", "Use", "UTC", "timestamps."),
         ),
-        thread_id=thread.id,
     )
-    assert command_add.status is CommandStatus.SUCCESS
+    assert isinstance(command_add, CommandResult)
     assert b"Manual free Markdown." in user_path.read_bytes()
 
     stale = memory.snapshot(MemoryScope.WORKSPACE)
@@ -202,11 +205,10 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     )
     assert conflict.status is MemoryMutationStatus.CONFLICT
 
-    disabled = await extensions.handle(
+    disabled = await extensions.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("local", "off")),
-        thread_id=thread.id,
     )
-    assert disabled.status is CommandStatus.SUCCESS
+    assert isinstance(disabled, CommandResult)
     assert registry.resolve("memory_add") is None
     assert user_path.is_file() and workspace_file.is_file()
 
@@ -287,46 +289,48 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
         workspace_key=workspace.key,
         registry=ToolRegistry(),
         submit_turn=submit_turn,
+        current_thread_id=lambda: thread.id,
         local_memory=LocalMemoryService(paths=paths, workspace_key=workspace.key),
         config_writer=UserConfigWriter(paths.config_file),
     )
 
-    mem0 = await service.handle(
+    mem0 = await service.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("mem0", "on")),
-        thread_id=thread.id,
     )
-    invalid = await service.handle(
+    invalid = await service.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("unknown",)),
-        thread_id=thread.id,
     )
-    await service.handle(
+    await service.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("local", "on")),
-        thread_id=thread.id,
     )
-    added = await service.handle(
+    added = await service.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("add", "user", "Original", "preference."),
         ),
-        thread_id=thread.id,
     )
-    entry_id = cast(str, added.data["entry_id"])
-    replaced = await service.handle(
+    assert isinstance(added, CommandResult)
+    assert isinstance(added.payload, MemoryMutationCommandPayload)
+    assert added.payload.entry_id is not None
+    entry_id = added.payload.entry_id
+    replaced = await service.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("replace", "user", entry_id, "Updated", "preference."),
         ),
-        thread_id=thread.id,
     )
-    removed = await service.handle(
+    removed = await service.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("remove", "user", entry_id),
         ),
-        thread_id=thread.id,
     )
 
-    assert mem0.data["error_code"] == "mem0_unavailable"
-    assert invalid.data["error_code"] == "invalid_arguments"
-    assert replaced.data["status"] == "replaced"
-    assert removed.data["status"] == "removed"
+    assert isinstance(mem0, CommandError) and mem0.code == "mem0_unavailable"
+    assert isinstance(invalid, CommandError) and invalid.code == "invalid_arguments"
+    assert isinstance(replaced, CommandResult)
+    assert isinstance(replaced.payload, MemoryMutationCommandPayload)
+    assert replaced.payload.status == "replaced"
+    assert isinstance(removed, CommandResult)
+    assert isinstance(removed.payload, MemoryMutationCommandPayload)
+    assert removed.payload.status == "removed"

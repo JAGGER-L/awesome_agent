@@ -1,16 +1,21 @@
 import type { ProductError } from "../protocol/base.js";
 import type {
+  CommandPayload,
+  CommandSecretPrompt,
+  CommandSelection,
+} from "../protocol/commands.js";
+import type {
   MethodName,
   MethodParams,
   MethodValue,
 } from "../protocol/methods.js";
+import { createClientMessageId } from "../transcript/identity.js";
 import { findCommand } from "./catalog.js";
 import type {
   CommandIntent,
   LocalCommandIntent,
   RoutedInput,
 } from "./parser.js";
-import { createClientMessageId } from "../transcript/identity.js";
 
 interface CommandRpc {
   request<Method extends MethodName>(
@@ -25,23 +30,30 @@ interface CommandRpc {
 type OperationAccepted =
   | MethodValue["turn.submit"]
   | MethodValue["direct.execute"];
-type CommandResult = MethodValue["command.execute"];
-type CommandSelection = NonNullable<CommandResult["selection"]>;
-type CommandSecretPrompt = NonNullable<CommandResult["secret_prompt"]>;
 type ProviderCredentialSetResult = MethodValue["provider.credential.set"];
 
 export type CommandDispatchOutcome =
   | { readonly kind: "accepted"; readonly operation: OperationAccepted }
-  | { readonly kind: "result"; readonly result: CommandResult }
+  | { readonly kind: "result"; readonly payload: CommandPayload }
   | {
-      readonly kind: "picker";
+      readonly kind: "selection";
       readonly intent: CommandIntent;
       readonly selection: CommandSelection;
+      readonly context?: CommandPayload;
     }
   | {
       readonly kind: "secret";
       readonly intent: CommandIntent;
       readonly prompt: CommandSecretPrompt;
+    }
+  | {
+      readonly kind: "application_interaction";
+      readonly interactionId: string;
+    }
+  | {
+      readonly kind: "command_error";
+      readonly code: string;
+      readonly message: string;
     }
   | { readonly kind: "local"; readonly intent: LocalCommandIntent }
   | { readonly kind: "error"; readonly error: ProductError }
@@ -71,7 +83,7 @@ export class CommandController {
     }
     if (routed.kind === "turn" || routed.kind === "direct") {
       if (!threadId) return { kind: "error", code: "thread_required" };
-      const result =
+      const response =
         routed.kind === "turn"
           ? await this.rpc.request("turn.submit", {
               thread_id: threadId,
@@ -82,36 +94,52 @@ export class CommandController {
               thread_id: threadId,
               command: routed.command,
             });
-      return result.ok
-        ? { kind: "accepted", operation: result.value }
-        : { kind: "error", error: result.error };
+      return response.ok
+        ? { kind: "accepted", operation: response.value }
+        : { kind: "error", error: response.error };
     }
-
     if (!findCommand(routed.intent.name)) {
       return { kind: "error", code: "unknown_command" };
     }
-    const result = await this.rpc.request("command.execute", {
+    const response = await this.rpc.request("command.execute", {
       name: routed.intent.name,
       ...(routed.intent.arguments
         ? { arguments: [...routed.intent.arguments] }
         : {}),
     });
-    if (!result.ok) return { kind: "error", error: result.error };
-    if (result.value.selection) {
-      return {
-        kind: "picker",
-        intent: routed.intent,
-        selection: result.value.selection,
-      };
+    if (!response.ok) return { kind: "error", error: response.error };
+    const outcome = response.value;
+    switch (outcome.kind) {
+      case "result":
+        return { kind: "result", payload: outcome.payload };
+      case "error":
+        return {
+          kind: "command_error",
+          code: outcome.code,
+          message: outcome.message,
+        };
+      case "interaction":
+        switch (outcome.interaction.kind) {
+          case "selection":
+            return {
+              kind: "selection",
+              intent: routed.intent,
+              selection: outcome.interaction,
+              ...(outcome.context ? { context: outcome.context } : {}),
+            };
+          case "secret":
+            return {
+              kind: "secret",
+              intent: routed.intent,
+              prompt: outcome.interaction,
+            };
+          case "application":
+            return {
+              kind: "application_interaction",
+              interactionId: outcome.interaction.interaction_id,
+            };
+        }
     }
-    if (result.value.secret_prompt) {
-      return {
-        kind: "secret",
-        intent: routed.intent,
-        prompt: result.value.secret_prompt,
-      };
-    }
-    return { kind: "result", result: result.value };
   }
 
   async setCredential(
@@ -126,15 +154,15 @@ export class CommandController {
       }
     | { readonly kind: "error"; readonly error: ProductError }
   > {
-    const result = await this.rpc.request("provider.credential.set", {
+    const response = await this.rpc.request("provider.credential.set", {
       provider,
       action,
       ...(apiKey === undefined ? {} : { api_key: apiKey }),
       ...(action === "delete" ? {} : { allow_unverified: allowUnverified }),
     });
-    return result.ok
-      ? { kind: "credential", result: result.value }
-      : { kind: "error", error: result.error };
+    return response.ok
+      ? { kind: "credential", result: response.value }
+      : { kind: "error", error: response.error };
   }
 
   async refreshApplication() {

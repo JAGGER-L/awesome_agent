@@ -148,7 +148,7 @@ async def test_stdio_full_flow_and_restart(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -165,13 +165,13 @@ async def test_stdio_full_flow_and_restart(
     assert _value(state).get("current_thread_id") is None
     assert _value(state)["initialized"] is True
     created = await client.request("command.execute", {"name": "new"})
-    thread_id = _value(created)["data"]["thread_id"]
+    thread_id = _value(created)["payload"]["thread_id"]
 
     model_selected = await client.request(
         "command.execute",
         {"name": "model", "arguments": [provider, model]},
     )
-    assert _value(model_selected)["data"]["model"] == model
+    assert _value(model_selected)["payload"]["model"] == model
     submitted = await client.request(
         "turn.submit",
         {
@@ -226,7 +226,7 @@ async def test_stdio_full_flow_and_restart(
     ready = await restarted.request(
         "initialize",
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -236,7 +236,7 @@ async def test_stdio_full_flow_and_restart(
         "command.execute",
         {"name": "resume", "arguments": [thread_id]},
     )
-    assert _value(resumed)["data"]["thread_id"] == thread_id
+    assert _value(resumed)["payload"]["thread_id"] == thread_id
     restored = await restarted.request("thread.read", {"thread_id": thread_id})
     assert any(
         entry["kind"] == "direct_command"

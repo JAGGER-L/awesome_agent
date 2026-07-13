@@ -5,6 +5,7 @@ import type {
   MethodValue,
 } from "../protocol/methods.js";
 import type { LaunchIntent } from "../cli/args.js";
+import type { CommandOutcome, CommandSelection } from "../protocol/commands.js";
 import type { SurfaceStore } from "../state/index.js";
 import { PRODUCT_VERSION } from "../version.js";
 
@@ -52,10 +53,6 @@ export interface StartupDiagnostic {
   readonly messages: readonly string[];
 }
 
-type CommandSelection = NonNullable<
-  MethodValue["command.execute"]["selection"]
->;
-
 export type StartupThreadResult =
   | { readonly kind: "ready"; readonly thread: MethodValue["thread.read"] }
   | {
@@ -79,7 +76,7 @@ export async function beginStartup(
 ): Promise<StartupResult> {
   surface.store?.dispatch({ type: "connection.handshaking" });
   const initialized = await surface.request("initialize", {
-    protocol_version: 1,
+    protocol_version: 2,
     client_name: "awesome",
     client_version: PRODUCT_VERSION,
   });
@@ -182,17 +179,25 @@ export async function runStartup(
       return selected;
     }
     case "resume-picker": {
-      const result = await executeCommand(surface, { name: "resume" });
-      if (result.selection) {
-        return { kind: "selection_required", selection: result.selection };
+      let result: CommandOutcome;
+      try {
+        result = await executeCommand(surface, { name: "resume" });
+      } catch (error) {
+        if (
+          error instanceof StartupError &&
+          error.code === "thread_not_found"
+        ) {
+          const selected = await createThread(surface);
+          hydrateSurface(surface, selected);
+          return selected;
+        }
+        throw error;
       }
       if (
-        Array.isArray(result.data.threads) &&
-        result.data.threads.length === 0
+        result.kind === "interaction" &&
+        result.interaction.kind === "selection"
       ) {
-        const selected = await createThread(surface);
-        hydrateSurface(surface, selected);
-        return selected;
+        return { kind: "selection_required", selection: result.interaction };
       }
       const selected = await hydrateCommandThread(surface, result);
       hydrateSurface(surface, selected);
@@ -209,8 +214,11 @@ export async function selectStartupThread(
     name: "resume",
     arguments: [threadId],
   });
-  if (result.selection) {
-    return { kind: "selection_required", selection: result.selection };
+  if (
+    result.kind === "interaction" &&
+    result.interaction.kind === "selection"
+  ) {
+    return { kind: "selection_required", selection: result.interaction };
   }
   return await hydrateCommandThread(surface, result);
 }
@@ -227,30 +235,26 @@ async function createThread(
 async function executeCommand(
   surface: StartupSurface,
   params: MethodParams["command.execute"],
-): Promise<MethodValue["command.execute"]> {
+): Promise<CommandOutcome> {
   const response = await surface.request("command.execute", params);
   if (!response.ok) throw productFailure(response.error);
-  if (response.value.status === "error") {
-    const code = response.value.data.error_code;
-    throw new StartupError(
-      response.value.content || "Startup command failed",
-      typeof code === "string" ? code : "command_failed",
-    );
+  if (response.value.kind === "error") {
+    throw new StartupError(response.value.message, response.value.code);
   }
   return response.value;
 }
 
 async function hydrateCommandThread(
   surface: StartupSurface,
-  result: MethodValue["command.execute"],
+  result: CommandOutcome,
 ): Promise<StartupThreadResult> {
-  const threadId = result.data.thread_id;
-  if (typeof threadId !== "string" || threadId.length === 0) {
+  if (result.kind !== "result" || result.payload.kind !== "thread") {
     throw new StartupError(
       "Startup command did not select a Thread",
       "thread_not_selected",
     );
   }
+  const threadId = result.payload.thread_id;
   const page = await surface.request("thread.read", {
     thread_id: threadId,
     limit: 50,

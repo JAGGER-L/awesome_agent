@@ -89,6 +89,10 @@ function toolResultPayload<
     detail: boundedText(0, 4_000)
       .nullish()
       .transform((value) => value ?? undefined),
+    detail_truncated_count: safeIntegerSchema
+      .min(0)
+      .nullish()
+      .transform((value) => value ?? undefined),
     duration_ms: boundedInteger,
     error_code: nullableErrorCode,
   });

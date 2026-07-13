@@ -32,6 +32,11 @@ const snapshot: StatusSnapshot = {
   configuration_valid: true,
   configuration_diagnostic_count: 0,
   permission_mode: "request_approval",
+  credential_source: "environment",
+  credential_source_available: true,
+  context_used_tokens: 0,
+  context_budget_tokens: 262_144,
+  changed_file_count: 0,
 };
 
 describe("StatusCommand", () => {

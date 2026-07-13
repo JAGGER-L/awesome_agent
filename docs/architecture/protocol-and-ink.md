@@ -10,6 +10,24 @@ typed event notifications as newline-delimited JSON over stdin/stdout. The
 protocol is versioned and bounded; malformed or oversized lines receive
 protocol errors. Core logs use stderr so they cannot corrupt the event stream.
 
+The current wire contract is Protocol v2. Protocol v1 command results and
+fixtures are intentionally unsupported. Python owns serialization of the exact
+`CommandOutcome` variants, TypeScript validates the generated fixtures, and
+the command controller routes only their discriminators. An exhaustive
+Presenter converts typed semantic payloads into terminal blocks; it has no
+generic JSON or object-stringification fallback.
+
+```text
+Ink command controller
+  -> Protocol v2 command.execute
+  -> LocalApplication facade
+  -> complete CommandDispatcher
+  -> focused command service
+  -> CommandOutcome
+  -> exhaustive TUI Presenter
+  -> current transcript path
+```
+
 Intent flows from Ink to the Python `ApplicationFacade`. Events flow from
 Application to Ink. Request IDs, operation IDs, Thread/Turn IDs, event
 sequences, and typed interaction responses let Ink reconcile live output with

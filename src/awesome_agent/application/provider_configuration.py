@@ -3,16 +3,20 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, Protocol, cast
 
-from pydantic import JsonValue, SecretStr
+from pydantic import SecretStr
 
-from awesome_agent.application.commands import (
-    CommandIntent,
+from awesome_agent.application.command_results import (
     CommandOption,
-    CommandResult,
+    CommandOutcome,
     CommandSecretPrompt,
     CommandSelection,
-    CommandStatus,
+    ModelCommandPayload,
+    NoticeCommandPayload,
+    error,
+    interaction,
+    result,
 )
+from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
@@ -78,12 +82,11 @@ class ProviderConfigurationService:
         self._sources = sources
         self._reload_configuration = reload_configuration
 
-    async def auth_command(self, intent: CommandIntent) -> CommandResult:
+    async def auth_command(self, intent: CommandIntent) -> CommandOutcome:
         arguments = intent.arguments
         if not arguments:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt="Authentication",
                     options=self._service_options(),
                 ),
@@ -93,9 +96,8 @@ class ProviderConfigurationService:
             return _error("invalid_arguments", "Usage: /auth [deepseek|kimi|mem0]")
         status = _status(self._sources(), service)
         if len(arguments) == 1:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt=f"{_SERVICE_LABELS[service]} credential source",
                     options=(
                         CommandOption(
@@ -131,18 +133,18 @@ class ProviderConfigurationService:
                     f"{status.environment_variable} is not available in this process.",
                 )
             self._select_source(service, CredentialSource.ENVIRONMENT)
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                content=f"{_SERVICE_LABELS[service]} now uses Environment.",
+            return result(
+                NoticeCommandPayload(
+                    message=f"{_SERVICE_LABELS[service]} now uses Environment."
+                )
             )
         if source != CredentialSource.AWESOME.value:
             return _error("invalid_arguments", "Choose Environment or Awesome API key.")
         if len(arguments) == 2:
             if not status.awesome_configured:
                 return self._secret_prompt(service, action="add")
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt=f"{_SERVICE_LABELS[service]} Awesome API key",
                     options=(
                         CommandOption(value="use", label="Use this API key"),
@@ -154,16 +156,16 @@ class ProviderConfigurationService:
         action = arguments[2]
         if len(arguments) == 3 and action == "use":
             self._select_source(service, CredentialSource.AWESOME)
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                content=f"{_SERVICE_LABELS[service]} now uses Awesome API key.",
+            return result(
+                NoticeCommandPayload(
+                    message=f"{_SERVICE_LABELS[service]} now uses Awesome API key."
+                )
             )
         if len(arguments) == 3 and action == "replace":
             return self._secret_prompt(service, action="replace")
         if len(arguments) == 3 and action == "delete":
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt=(
                         f"Delete {_SERVICE_LABELS[service]} API key? "
                         "This does not revoke it at the Provider."
@@ -181,12 +183,11 @@ class ProviderConfigurationService:
         intent: CommandIntent,
         *,
         thread_id: str,
-    ) -> CommandResult:
+    ) -> CommandOutcome:
         arguments = intent.arguments
         if not arguments:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt="Select Provider",
                     options=self._provider_options(),
                 ),
@@ -204,9 +205,8 @@ class ProviderConfigurationService:
                 for model in SUPPORTED_MODEL_IDS
                 if model.startswith(f"{provider}/")
             )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt=f"Select {_PROVIDER_LABELS[provider]} Model",
                     options=tuple(
                         CommandOption(
@@ -243,10 +243,12 @@ class ProviderConfigurationService:
         )
         self._reload_configuration()
         updated = self._conversation.set_model(thread_id, model)
-        return CommandResult(
-            status=CommandStatus.SUCCESS,
-            content=(f"Model changed to {model}. Default for new Threads updated."),
-            data={"model": updated.current_model, "default_model_updated": True},
+        assert updated.current_model is not None
+        return result(
+            ModelCommandPayload(
+                model=updated.current_model,
+                default_model_updated=True,
+            )
         )
 
     async def set_credential(
@@ -377,10 +379,9 @@ class ProviderConfigurationService:
         provider: CredentialService,
         *,
         action: Literal["add", "replace"],
-    ) -> CommandResult:
-        return CommandResult(
-            status=CommandStatus.SUCCESS,
-            secret_prompt=CommandSecretPrompt(
+    ) -> CommandOutcome:
+        return interaction(
+            CommandSecretPrompt(
                 provider=provider,
                 action=action,
                 label=f"{_SERVICE_LABELS[provider]} API Key",
@@ -415,9 +416,5 @@ def _status(
     return sources.provider_credentials.mem0
 
 
-def _error(code: str, content: str) -> CommandResult:
-    return CommandResult(
-        status=CommandStatus.ERROR,
-        content=content,
-        data=cast(dict[str, JsonValue], {"error_code": code}),
-    )
+def _error(code: str, content: str) -> CommandOutcome:
+    return error(code, content)

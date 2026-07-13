@@ -8,7 +8,7 @@ describe("COMMAND_CATALOG", () => {
   it("matches the shared command fixture exactly", async () => {
     const fixture = JSON.parse(
       await readFile(
-        new URL("../../../protocol/fixtures/v1/commands.json", import.meta.url),
+        new URL("../../../protocol/fixtures/v2/commands.json", import.meta.url),
         "utf8",
       ),
     ) as { commands: { name: string; owner: string }[] };

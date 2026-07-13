@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.application.commands import CommandIntent, CommandName, CommandStatus
+from awesome_agent.application.command_results import StatusCommandPayload
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.composition import compose_local_application
 from awesome_agent.application.contracts import StatusSnapshot, thread_display_id
 from awesome_agent.conversation import ConversationService
@@ -63,6 +64,11 @@ def test_status_snapshot_is_exact_and_resume_friendly() -> None:
         "configuration_valid",
         "configuration_diagnostic_count",
         "permission_mode",
+        "credential_source",
+        "credential_source_available",
+        "context_used_tokens",
+        "context_budget_tokens",
+        "changed_file_count",
     }
     serialized = snapshot.model_dump_json()
     for excluded in ("trusted", "branch", "usage", "secret", "database", "dirty"):
@@ -109,9 +115,9 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     status = await application.execute_command(CommandIntent(name=CommandName.STATUS))
     assert status.ok is True
     assert status.value is not None
-    assert status.value.status is CommandStatus.SUCCESS
-
-    snapshot = StatusSnapshot.model_validate(status.value.data)
+    assert status.value.kind == "result"
+    assert isinstance(status.value.payload, StatusCommandPayload)
+    snapshot = status.value.payload.snapshot
     application_state = await application.get_state()
     assert application_state.ok is True
     assert application_state.value is not None
@@ -130,5 +136,5 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     assert snapshot.mem0_enabled is False
     assert snapshot.configuration_valid is True
     assert snapshot.configuration_diagnostic_count == 0
-    assert "secret_status" not in status.value.data
+    assert "secret_status" not in status.value.model_dump(mode="json")
     await application.shutdown()
