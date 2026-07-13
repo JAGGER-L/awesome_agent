@@ -129,6 +129,7 @@ describe("connectSurface", () => {
         expect.objectContaining({ kind: "assistant", text: "durable answer" }),
       ]),
     });
+    expect(connected.store.getState().active_operation).toBeUndefined();
     const stderr = new TextDecoder().decode(connected.session.stderrTail());
     expect(stderr.match(/thread-read/g)).toHaveLength(1);
     await connected.close();

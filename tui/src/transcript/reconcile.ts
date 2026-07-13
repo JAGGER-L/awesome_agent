@@ -20,7 +20,6 @@ export function reconcileCompletedTurn(
   const failure = validateDurableTurn(live, page);
   if (failure) {
     return {
-      persisted: false,
       blocks: [
         ...live.blocks,
         {
@@ -109,7 +108,6 @@ export function reconcileCompletedTurn(
       ...activity,
       ...withoutActivity.slice(insertion),
     ],
-    persisted: true,
   };
 }
 

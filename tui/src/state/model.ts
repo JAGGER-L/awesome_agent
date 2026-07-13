@@ -15,6 +15,7 @@ export interface SurfaceWarning {
   readonly code: string;
   readonly message: string;
   readonly count: number;
+  readonly operation_id?: string;
 }
 
 export interface ToolProjection {
@@ -83,6 +84,7 @@ export interface SurfaceState {
     readonly change_set_id: string;
     readonly paths: readonly string[];
     readonly reversibility: "full" | "partial" | "none";
+    readonly operation_id?: string;
   };
   readonly pending_interaction?: {
     readonly interaction_id: string;

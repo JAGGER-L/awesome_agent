@@ -143,6 +143,17 @@ describe("projectLiveTurn", () => {
     ).toBe(true);
   });
 
+  it("does not expose usage without a live Turn", () => {
+    const value = state();
+
+    const live = projectLiveTurn({
+      ...value,
+      active_operation: { id: "operation_1", status: "completed" },
+    });
+
+    expect(live.usage).toBeUndefined();
+  });
+
   it("does not present Thought timing when no reasoning interval exists", () => {
     const value = state();
     const operation = value.active_operation;

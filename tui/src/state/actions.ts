@@ -2,7 +2,6 @@ import type { CoreExit } from "../core/index.js";
 import type { EventEnvelope, MethodValue } from "../protocol/index.js";
 import type {
   CommandResultBlock,
-  ReconciledTurn,
   TranscriptBlock,
 } from "../transcript/model.js";
 import type { CoalescedDelta } from "./delta-batcher.js";
@@ -38,8 +37,9 @@ export type SurfaceAction =
     }
   | {
       readonly type: "transcript.reconciled";
-      readonly result: ReconciledTurn;
       readonly generation: number;
+      readonly operation_id?: string;
+      readonly blocks: readonly TranscriptBlock[];
     }
   | {
       readonly type: "transcript.command_result";
