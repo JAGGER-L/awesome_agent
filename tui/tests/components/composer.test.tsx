@@ -270,13 +270,13 @@ describe("App composer integration", () => {
 
     view.stdin.write("/th");
     view.stdin.write("\t");
-    await eventually(() =>
-      expect(view.lastFrame()).toContain("/thinking [on|off]"),
-    );
+    await eventually(() => expect(view.lastFrame()).toContain("/thinking"));
+    expect(view.lastFrame()).not.toContain("[on|off]");
     expect(controller.submit).not.toHaveBeenCalled();
 
     view.stdin.write("\u001b");
-    expect(view.lastFrame()).toContain("/thinking [on|off]");
+    expect(view.lastFrame()).toContain("/thinking");
+    expect(view.lastFrame()).not.toContain("[on|off]");
     expect(controller.submit).not.toHaveBeenCalled();
   });
 

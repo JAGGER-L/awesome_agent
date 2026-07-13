@@ -18,6 +18,7 @@ from awesome_agent.application.extension_commands import ApplicationExtensionSer
 from awesome_agent.config import (
     CredentialSource,
     ProviderCredentialStatus,
+    ProviderCredentialStatuses,
     UserConfigWriter,
     missing_provider_credential_statuses,
 )
@@ -97,7 +98,7 @@ class FakeMem0Client:
         return {"status": "deleted"}
 
 
-def _credential_statuses():
+def _credential_statuses() -> ProviderCredentialStatuses:
     statuses = missing_provider_credential_statuses()
     return statuses.model_copy(
         update={

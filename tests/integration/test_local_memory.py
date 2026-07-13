@@ -110,6 +110,7 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         CommandIntent(name=CommandName.MEMORY),
     )
     assert isinstance(initial, CommandInteractionResult)
+    assert initial.interaction.kind == "selection"
     assert [option.value for option in initial.interaction.options] == [
         "local",
         "mem0",
@@ -120,6 +121,7 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         CommandIntent(name=CommandName.MEMORY, arguments=("local",)),
     )
     assert isinstance(local, CommandInteractionResult)
+    assert local.interaction.kind == "selection"
     assert [option.value for option in local.interaction.options] == ["off", "on"]
     assert local.interaction.options[0].selected is True
 

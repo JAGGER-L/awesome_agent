@@ -20,7 +20,7 @@ confirmation. `/permissions` exposes two Thread-scoped modes:
   shell commands, and unknown extension capabilities ask first.
 - **Full access** allows ordinary workspace edits, deletes, and shell commands
   for the current Thread after a warning confirmation. `/new` and process exit
-  reset it.
+  reset it; `/resume` also starts the selected Thread in Request approval.
 
 An edit approval offers Yes, Yes for all edits during this session, and No.
 The session edit grant covers later ordinary writes only. Shell commands and

@@ -600,7 +600,9 @@ export function App({
         await submitValue(command.completion);
         return;
       }
+      const value = uiRef.current.composer.value;
       dispatch({ type: "mode.cancel" });
+      await submitValue(value);
       return;
     }
     await interactions.confirmSelection();

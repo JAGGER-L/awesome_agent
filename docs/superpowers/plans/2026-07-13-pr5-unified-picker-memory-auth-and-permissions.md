@@ -438,3 +438,17 @@ git pull --ff-only
 - Secrets never enter transcript, logs, project files, or fixtures.
 - `App.tsx` no longer owns individual interaction workflows.
 - PR5 is merged before PR6 is executed.
+
+## Execution Evidence
+
+- Replaced separate Picker, Auth, Trust, and Approval row rendering with one
+  shared SelectionPanel and fixed disabled/submitting key behavior.
+- Implemented nested Local/Cloud then Off/On Memory selection and blocked Mem0
+  enablement when the explicitly selected credential is unavailable.
+- Verified simultaneous Environment/Awesome visibility, explicit persistent
+  source selection, deletion without fallback, invalid preservation, and
+  unverified confirmation.
+- Moved credential, Secret, Picker, and Approval orchestration out of App.tsx
+  into `use-interaction-controller.ts`; the root no longer owns those flows.
+- Reused the shared neutral, warning, danger, and brand variants for ordinary
+  selection, Full access, destructive confirmation, and Trust.
