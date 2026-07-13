@@ -115,7 +115,7 @@ lifecycles remain distinct errors.
 - `Thread` and resumable `Thread ID`;
 - `Model`: the full Provider/model ID and configured state;
 - `Modes`: thinking and Skill mode;
-- `Memory`: local-file and Mem0 Cloud on/off states;
+- `Memory`: Local memory and Mem0 Cloud on/off states;
 - MCP ready/degraded counts, active operation state, and configuration
   diagnostic count.
 

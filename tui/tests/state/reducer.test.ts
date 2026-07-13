@@ -96,7 +96,9 @@ describe("surfaceReducer", () => {
         target: "old.py",
         choices: [{ decision: "deny", label: "No" }],
       },
-      warnings: [{ code: "old", message: "old" }],
+      warnings: [
+        { id: "warning:old:1", code: "old", message: "old", count: 1 },
+      ],
       committed_transcript: [
         { key: "old", kind: "status" as const, message: "old" },
       ],
@@ -442,7 +444,7 @@ describe("surfaceReducer", () => {
     expect(state.connection).toBe("fatal");
   });
 
-  it("bounds live reasoning and discards it at Turn completion", () => {
+  it("bounds reasoning per interval and retains it at Turn completion", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "event.received",
       generation: 0,
@@ -470,21 +472,24 @@ describe("surfaceReducer", () => {
         last_sequence: 3,
       },
     });
+    const interval = state.active_operation?.turn?.timeline.find(
+      (item) => item.kind === "thinking",
+    );
     expect(
-      state.active_operation?.turn?.reasoning_text.length,
+      interval?.kind === "thinking" ? interval.text.length : 0,
     ).toBeLessThanOrEqual(32_000);
     state = surfaceReducer(state, {
       type: "event.received",
       generation: 0,
       event: lifecycle(4, "turn.completed"),
     });
-    expect(state.active_operation?.turn).toMatchObject({
-      reasoning_text: "",
-      duration_ms: 1_000,
-    });
+    expect(state.active_operation?.turn).toMatchObject({ duration_ms: 1_000 });
+    expect(state.active_operation?.turn?.timeline).toContainEqual(
+      expect.objectContaining({ kind: "thinking", duration_ms: 0 }),
+    );
   });
 
-  it("deduplicates warnings and preserves live projection during hydration", () => {
+  it("counts only warnings with the same code and normalized message", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "event.received",
       generation: 0,
@@ -500,11 +505,29 @@ describe("surfaceReducer", () => {
       generation: 0,
       event: lifecycle(3, "warning"),
     });
+    const changedMessage = {
+      ...lifecycle(4, "warning"),
+      payload: { kind: "warning", code: "safe", message: "different" },
+    } as EventEnvelope;
+    const changedCode = {
+      ...lifecycle(5, "warning"),
+      payload: { kind: "warning", code: "other", message: "warning" },
+    } as EventEnvelope;
     state = surfaceReducer(state, {
-      type: "hydrate.application",
-      application: { initialized: true } as never,
+      type: "event.received",
+      generation: 0,
+      event: changedMessage,
     });
-    expect(state.warnings).toHaveLength(1);
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: changedCode,
+    });
+    expect(state.warnings).toEqual([
+      expect.objectContaining({ code: "safe", message: "warning", count: 2 }),
+      expect.objectContaining({ code: "safe", message: "different", count: 1 }),
+      expect.objectContaining({ code: "other", message: "warning", count: 1 }),
+    ]);
     expect(state.active_operation?.id).toBe("operation_1");
   });
 

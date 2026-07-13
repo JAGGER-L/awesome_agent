@@ -73,16 +73,20 @@ function projectDelta(
     return {
       ...turn,
       timeline: hasActiveThinking
-        ? turn.timeline
+        ? turn.timeline.map((item) =>
+            item.kind === "thinking" && item.duration_ms === undefined
+              ? { ...item, text: appendReasoningTail(item.text, delta.text) }
+              : item,
+          )
         : [
             ...turn.timeline,
             {
               kind: "thinking",
               id: `thinking:${turn.id}:${turn.thinking_sequence + 1}`,
               started_at: delta.first_timestamp,
+              text: appendReasoningTail("", delta.text),
             },
           ],
-      reasoning_text: appendReasoningTail(turn.reasoning_text, delta.text),
       thinking_sequence: hasActiveThinking
         ? turn.thinking_sequence
         : turn.thinking_sequence + 1,
@@ -169,7 +173,6 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             id: event.turn_id ?? "",
             status: "active",
             started_at: event.timestamp,
-            reasoning_text: "",
             timeline: [],
             thinking_sequence: 0,
           },
@@ -197,7 +200,6 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
               : payload.kind === "turn.failed"
                 ? "failed"
                 : "cancelled",
-          reasoning_text: "",
           timeline: closeThinking(turn.timeline, event.timestamp),
           duration_ms: payload.duration_ms,
         };
@@ -268,6 +270,9 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             outcome: payload.outcome,
             summary: payload.summary,
             ...(payload.detail === undefined ? {} : { detail: payload.detail }),
+            ...(payload.detail_truncated_count === undefined
+              ? {}
+              : { detail_truncated_count: payload.detail_truncated_count }),
             duration_ms: payload.duration_ms,
             ...(payload.error_code === undefined
               ? {}
@@ -323,19 +328,41 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
     }
     case "warning": {
       const payload = event.payload;
-      return state.warnings.some((warning) => warning.code === payload.code)
-        ? next
-        : {
-            ...next,
-            warnings: [
-              ...state.warnings,
-              { code: payload.code, message: payload.message },
-            ],
-          };
+      const normalized = normalizeWarningMessage(payload.message);
+      const index = state.warnings.findIndex(
+        (warning) =>
+          warning.code === payload.code &&
+          normalizeWarningMessage(warning.message) === normalized,
+      );
+      if (index >= 0)
+        return {
+          ...next,
+          warnings: state.warnings.map((warning, warningIndex) =>
+            warningIndex === index
+              ? { ...warning, count: warning.count + 1 }
+              : warning,
+          ),
+        };
+      return {
+        ...next,
+        warnings: [
+          ...state.warnings,
+          {
+            id: `warning:${payload.code}:${state.warnings.length + 1}`,
+            code: payload.code,
+            message: payload.message,
+            count: 1,
+          },
+        ],
+      };
     }
     default:
       return next;
   }
+}
+
+function normalizeWarningMessage(message: string): string {
+  return message.trim().replace(/\s+/gu, " ");
 }
 
 export function surfaceReducer(

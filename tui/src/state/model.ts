@@ -11,8 +11,10 @@ export type ConnectionState =
   | "closed";
 
 export interface SurfaceWarning {
+  readonly id: string;
   readonly code: string;
   readonly message: string;
+  readonly count: number;
 }
 
 export interface ToolProjection {
@@ -25,6 +27,7 @@ export interface ToolProjection {
   readonly outcome?: string;
   readonly summary: string;
   readonly detail?: string;
+  readonly detail_truncated_count?: number;
   readonly duration_ms?: number;
   readonly error_code?: string;
 }
@@ -33,6 +36,7 @@ export interface ThinkingProjection {
   readonly kind: "thinking";
   readonly id: string;
   readonly started_at: string;
+  readonly text: string;
   readonly duration_ms?: number;
 }
 
@@ -51,7 +55,6 @@ export interface TurnProjection {
   readonly id: string;
   readonly status: "active" | "completed" | "failed" | "cancelled";
   readonly started_at: string;
-  readonly reasoning_text: string;
   readonly timeline: readonly TimelineProjection[];
   readonly thinking_sequence: number;
   readonly duration_ms?: number;

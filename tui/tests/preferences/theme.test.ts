@@ -92,6 +92,7 @@ describe("resolveTheme", () => {
         "preference",
         "primary",
         "secondary",
+        "statusBackground",
         "success",
         "tool",
         "user",

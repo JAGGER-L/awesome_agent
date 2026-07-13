@@ -4,6 +4,9 @@ import { MarkdownBlock } from "../../../markdown/MarkdownBlock.js";
 import type { TranscriptBlock } from "../../../transcript/model.js";
 import { CommandResultView } from "../../CommandResultView.js";
 import { useTheme } from "../../theme.js";
+import { formatDuration } from "../../../transcript/reasoning.js";
+import { ToolSequence } from "../ToolSequence.js";
+import { Worked } from "../Worked.js";
 
 export function BlockView({
   block,
@@ -41,51 +44,12 @@ export function BlockView({
     case "direct_command":
       return <Text color={theme.secondary}>$ {block.command}</Text>;
     case "tools":
-      if (!detailsExpanded) {
-        return (
-          <Text color={theme.tool}>
-            ● {block.items.length} tool{" "}
-            {block.items.length === 1 ? "call" : "calls"} ·{" "}
-            {block.items.some((item) => item.outcome === "running")
-              ? "Running..."
-              : `${block.items.reduce((total, item) => total + (item.duration_ms ?? 0), 0)}ms`}{" "}
-            · Ctrl+O to expand
-          </Text>
-        );
-      }
       return (
-        <Box flexDirection="column">
-          {block.items.map((item) => (
-            <Box key={item.call_id} flexDirection="column">
-              <Text
-                color={item.outcome === "error" ? theme.danger : theme.tool}
-              >
-                ● {item.verb}
-                {item.target ? ` ${item.target}` : ""}
-              </Text>
-              <Text
-                color={item.outcome === "error" ? theme.danger : theme.muted}
-              >
-                {"  └ "}
-                {item.outcome === "running"
-                  ? item.summary
-                  : `${item.presentation_outcome ?? presentationOutcome(item.outcome)} · ${item.summary}`}
-                {width >= 60 && item.duration_ms !== undefined
-                  ? ` · ${item.duration_ms}ms`
-                  : ""}
-                {item.outcome === "error" && item.error_code
-                  ? ` · ${item.error_code}`
-                  : ""}
-              </Text>
-              {detailsExpanded && item.detail ? (
-                <Text color={theme.muted}>
-                  {"    "}
-                  {item.detail}
-                </Text>
-              ) : null}
-            </Box>
-          ))}
-        </Box>
+        <ToolSequence
+          items={block.items}
+          width={width}
+          expanded={detailsExpanded}
+        />
       );
     case "change":
       return (
@@ -93,10 +57,39 @@ export function BlockView({
           Changed {block.paths.join(", ")} · {block.reversibility}
         </Text>
       );
-    case "reasoning_marker":
-      return <Text dimColor>{block.label}</Text>;
+    case "thinking":
+      if (block.duration_ms === undefined)
+        return (
+          <Box flexDirection="column">
+            <Text dimColor>Thinking...</Text>
+            <Text dimColor>{block.text}</Text>
+          </Box>
+        );
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>
+            Thought for {formatDuration(block.duration_ms)} · Ctrl+O to expand
+          </Text>
+          {detailsExpanded ? <Text dimColor>{block.text}</Text> : null}
+        </Box>
+      );
+    case "worked":
+      return <Worked durationMs={block.duration_ms} />;
     case "warning":
-      return <Text color={theme.warning}>Warning · {block.message}</Text>;
+      if (block.count === 1)
+        return <Text color={theme.warning}>Warning · {block.message}</Text>;
+      return (
+        <Box flexDirection="column">
+          <Text color={theme.warning}>
+            × {block.count} UI diagnostic · Ctrl+O to expand
+          </Text>
+          {detailsExpanded ? (
+            <Text color={theme.muted}>
+              {block.code} · {block.message}
+            </Text>
+          ) : null}
+        </Box>
+      );
     case "status":
       return <Text color={theme.muted}>{block.message}</Text>;
     case "command_result":
@@ -112,12 +105,4 @@ export function BlockView({
     case "omitted_history":
       return <Text dimColor>{block.message}</Text>;
   }
-}
-
-function presentationOutcome(
-  outcome: "success" | "error" | "cancelled",
-): string {
-  if (outcome === "success") return "Completed";
-  if (outcome === "error") return "Failed";
-  return "Cancelled";
 }
