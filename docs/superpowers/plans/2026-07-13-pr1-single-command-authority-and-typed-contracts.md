@@ -1292,3 +1292,27 @@ PR1 is complete only when all statements are true:
 - no new persistence, dependency, service process, or visual redesign was introduced.
 - all Task 8 validation evidence is recorded.
 - PR1 is merged into `codex/tui-command-visual-consistency` before PR2 is detailed or executed.
+
+## Execution Evidence — 2026-07-13
+
+Implemented Tasks 1–7 and Task 8 Steps 1–7 on
+`codex/pr1-typed-command-authority`.
+
+- `uv run ruff format --check src tests scripts` — passed, 238 files formatted.
+- `uv run ruff check src tests scripts` — passed.
+- `uv run mypy` — passed, 235 source files checked.
+- PR1 affected Python suite from Task 8 — passed, 133 tests.
+- `npm --prefix tui run format:check` — passed, 174 files checked.
+- `npm --prefix tui run lint` — passed, 174 files checked.
+- `npm --prefix tui run typecheck` — passed.
+- `npm --prefix tui run build` — passed.
+- PR1 affected TUI suite from Task 8 — passed, 116 tests in 15 files.
+- `uv run python scripts/generate_protocol_fixtures.py --check` — passed.
+- `git diff --check` — passed.
+- `src/awesome_agent/application/headless.py` and `protocol/fixtures/v1`
+  deletion checks — both absent.
+- Diff review found no credential values, generated caches, debug output,
+  alternate command dispatcher, or generic command JSON presentation fallback.
+
+Push, required GitHub checks, PR merge, and integration-branch refresh remain
+the Task 8 Step 9 integration gate and are recorded in the PR and merge history.
