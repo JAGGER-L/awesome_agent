@@ -21,6 +21,48 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("submitted slash command history", () => {
+  it("renders finalized Assistant and Worked blocks once after handoff", async () => {
+    const store = createSurfaceStore({
+      ...initialSurfaceState(),
+      active_operation: {
+        id: "operation_1",
+        status: "completed",
+        turn: {
+          id: "turn_1",
+          status: "completed",
+          started_at: "2026-07-13T00:00:00Z",
+          thinking_sequence: 0,
+          duration_ms: 2_000,
+          timeline: [
+            { kind: "assistant", id: "assistant:turn_1:1", text: "answer" },
+          ],
+        },
+      },
+    });
+    const view = render(
+      <App store={store} reportFatal={() => undefined} width={80} />,
+    );
+
+    expect(view.lastFrame()?.match(/answer/gu)).toHaveLength(1);
+    expect(view.lastFrame()?.match(/Worked for/gu)).toHaveLength(1);
+
+    store.dispatch({
+      type: "transcript.reconciled",
+      generation: 0,
+      operation_id: "operation_1",
+      blocks: [
+        { key: "assistant:1", kind: "assistant", text: "answer" },
+        { key: "worked:1", kind: "worked", duration_ms: 2_000 },
+      ],
+    });
+
+    await eventually(() =>
+      expect(store.getState().active_operation).toBeUndefined(),
+    );
+    expect(view.lastFrame()?.match(/answer/gu)).toHaveLength(1);
+    expect(view.lastFrame()?.match(/Worked for/gu)).toHaveLength(1);
+  });
+
   it("Tab completes canonically without executing placeholders", async () => {
     const controller = { submit: vi.fn() } as unknown as CommandController;
     const store = createSurfaceStore();

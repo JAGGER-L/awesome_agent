@@ -106,7 +106,6 @@ function page(): MethodValue["thread.read"] {
 describe("reconcileCompletedTurn", () => {
   it("retains safe current-session activity with durable outcomes", () => {
     const result = reconcileCompletedTurn(live, page());
-    expect(result.persisted).toBe(true);
     expect(result.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "assistant", text: "durable answer" }),
@@ -145,7 +144,6 @@ describe("reconcileCompletedTurn", () => {
     ],
   ])("keeps visible transient output when %s", (_name, value) => {
     const result = reconcileCompletedTurn(live, value);
-    expect(result.persisted).toBe(false);
     expect(result.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "assistant", text: "durable answer" }),

@@ -129,13 +129,76 @@ describe("surfaceReducer", () => {
     const result = surfaceReducer(state, {
       type: "transcript.reconciled",
       generation: 1,
-      result: {
-        persisted: true,
-        blocks: [{ key: "old", kind: "status", message: "old" }],
-      },
+      blocks: [{ key: "old", kind: "status", message: "old" }],
     });
 
     expect(result).toBe(state);
+  });
+
+  it("hands a terminal operation to the finalized transcript exactly once", () => {
+    const blocks = [
+      { key: "assistant:1", kind: "assistant" as const, text: "done" },
+      { key: "worked:1", kind: "worked" as const, duration_ms: 1_000 },
+    ];
+    const state = {
+      ...initialSurfaceState(),
+      latest_change: {
+        change_set_id: "change_1",
+        paths: ["done.py"],
+        reversibility: "full" as const,
+        operation_id: "operation_1",
+      },
+      warnings: [
+        {
+          id: "warning:owned",
+          code: "owned",
+          message: "owned",
+          count: 1,
+          operation_id: "operation_1",
+        },
+        {
+          id: "warning:other",
+          code: "other",
+          message: "other",
+          count: 1,
+          operation_id: "operation_2",
+        },
+      ],
+      active_operation: {
+        id: "operation_1",
+        status: "completed" as const,
+      },
+    };
+
+    const next = surfaceReducer(state, {
+      type: "transcript.reconciled",
+      generation: 0,
+      operation_id: "operation_1",
+      blocks,
+    });
+
+    expect(next.committed_transcript).toEqual(blocks);
+    expect(next.active_operation).toBeUndefined();
+    expect(next.latest_change).toBeUndefined();
+    expect(next.warnings).toEqual([
+      expect.objectContaining({ operation_id: "operation_2" }),
+    ]);
+  });
+
+  it("does not release a newer operation during delayed reconciliation", () => {
+    const state = {
+      ...initialSurfaceState(),
+      active_operation: { id: "operation_2", status: "active" as const },
+    };
+
+    const next = surfaceReducer(state, {
+      type: "transcript.reconciled",
+      generation: 0,
+      operation_id: "operation_1",
+      blocks: [],
+    });
+
+    expect(next.active_operation).toEqual(state.active_operation);
   });
 
   it("ignores command feedback captured by an older thread generation", () => {

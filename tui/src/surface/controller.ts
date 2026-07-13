@@ -80,6 +80,7 @@ export async function connectSurface(
     threadId: string,
     key: string,
     generation: number,
+    operationId: string,
   ): Promise<void> => {
     if (reconciledTerminals.has(key)) return;
     reconciledTerminals.add(key);
@@ -91,7 +92,6 @@ export async function connectSurface(
     const result = page.ok
       ? reconcileCompletedTurn(live, page.value)
       : {
-          persisted: false,
           blocks: [
             ...live.blocks,
             {
@@ -105,13 +105,11 @@ export async function connectSurface(
     store.dispatch({
       type: "transcript.reconciled",
       generation,
-      result: {
-        ...result,
-        blocks: mergeTranscriptBlocks(
-          store.getState().committed_transcript ?? [],
-          result.blocks,
-        ),
-      },
+      operation_id: operationId,
+      blocks: mergeTranscriptBlocks(
+        store.getState().committed_transcript ?? [],
+        result.blocks,
+      ),
     });
   };
 
@@ -142,6 +140,7 @@ export async function connectSurface(
             threadId,
             `operation:${event.operation_id}`,
             generation,
+            event.operation_id,
           ).finally(() => reconciliationTasks.delete(task));
           reconciliationTasks.add(task);
         }

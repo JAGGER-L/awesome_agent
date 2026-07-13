@@ -100,7 +100,9 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
     blocks,
     ...(operation === undefined ? {} : { operation_id: operation.id }),
     ...(turn === undefined ? {} : { turn_id: turn.id }),
-    ...(state.usage === undefined ? {} : { usage: state.usage }),
+    ...(turn === undefined || state.usage === undefined
+      ? {}
+      : { usage: state.usage }),
     terminal: operation !== undefined && operation.status !== "active",
   };
 }

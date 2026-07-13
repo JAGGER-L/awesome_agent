@@ -301,6 +301,9 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           change_set_id: event.payload.change_set_id,
           paths: event.payload.paths,
           reversibility: event.payload.reversibility,
+          ...(event.operation_id === undefined
+            ? {}
+            : { operation_id: event.operation_id }),
         },
       };
     case "interaction.required":
@@ -332,6 +335,7 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
       const index = state.warnings.findIndex(
         (warning) =>
           warning.code === payload.code &&
+          warning.operation_id === event.operation_id &&
           normalizeWarningMessage(warning.message) === normalized,
       );
       if (index >= 0)
@@ -352,6 +356,9 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             code: payload.code,
             message: payload.message,
             count: 1,
+            ...(event.operation_id === undefined
+              ? {}
+              : { operation_id: event.operation_id }),
           },
         ],
       };
@@ -363,6 +370,38 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
 
 function normalizeWarningMessage(message: string): string {
   return message.trim().replace(/\s+/gu, " ");
+}
+
+function reconcileTranscript(
+  state: SurfaceState,
+  action: Extract<SurfaceAction, { readonly type: "transcript.reconciled" }>,
+): SurfaceState {
+  const operationId = action.operation_id;
+  let base = state;
+  if (operationId !== undefined && state.active_operation?.id === operationId) {
+    const { active_operation: _activeOperation, ...withoutActiveOperation } =
+      base;
+    void _activeOperation;
+    base = withoutActiveOperation;
+  }
+  if (
+    operationId !== undefined &&
+    base.latest_change?.operation_id === operationId
+  ) {
+    const { latest_change: _latestChange, ...withoutLatestChange } = base;
+    void _latestChange;
+    base = withoutLatestChange;
+  }
+  return {
+    ...base,
+    warnings:
+      operationId === undefined
+        ? base.warnings
+        : base.warnings.filter(
+            (warning) => warning.operation_id !== operationId,
+          ),
+    committed_transcript: action.blocks,
+  };
 }
 
 export function surfaceReducer(
@@ -430,10 +469,7 @@ export function surfaceReducer(
       );
     case "transcript.reconciled":
       if (action.generation !== state.thread_generation) return state;
-      return {
-        ...state,
-        committed_transcript: action.result.blocks,
-      };
+      return reconcileTranscript(state, action);
     case "transcript.command_result":
       if (action.generation !== state.thread_generation) return state;
       return {

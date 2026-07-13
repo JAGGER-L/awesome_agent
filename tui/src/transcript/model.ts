@@ -112,5 +112,4 @@ export interface LiveTranscriptProjection {
 
 export interface ReconciledTurn {
   readonly blocks: readonly TranscriptBlock[];
-  readonly persisted: boolean;
 }

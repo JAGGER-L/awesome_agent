@@ -86,14 +86,11 @@ export class ReconnectController {
       surface.store.dispatch({
         type: "transcript.reconciled",
         generation: surface.store.getState().thread_generation,
-        result: {
-          persisted: true,
-          blocks: mergeTranscriptBlocks(
-            this.dependencies.committedBlocks(),
-            [reconnected],
-            durable,
-          ),
-        },
+        blocks: mergeTranscriptBlocks(
+          this.dependencies.committedBlocks(),
+          [reconnected],
+          durable,
+        ),
       });
       return surface;
     } catch (error) {
