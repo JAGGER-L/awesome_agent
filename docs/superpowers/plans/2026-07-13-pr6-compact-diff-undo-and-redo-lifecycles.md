@@ -337,3 +337,15 @@ git pull --ff-only
 - All Change error categories remain distinct and unexpected failures are not swallowed.
 - No Tool-only detail state/action/prop or generic `Change operation failed` remains.
 - PR6 is merged before PR7 is executed.
+
+## Execution Evidence
+
+- Confirmed ChangeCommandService already preserves all four domain error
+  categories and lets unexpected failures propagate; no wrapper was added.
+- Removed the Tool-only detail state/action/prop and replaced it atomically with
+  one global transcript detail mode.
+- Added reusable expandable details plus typed folded Undo/Redo presentations.
+- Added a pending/success/failure Compact identity test proving in-place
+  replacement rather than duplicate transcript lines.
+- Added explicit empty and real Diff presentations with ChangeSet identity and
+  terminal Markdown rendering.

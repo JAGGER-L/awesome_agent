@@ -40,6 +40,15 @@ Ink-owned presentation commands never enter Core RPC.
 parallel headless host. Command progress belongs to the Surface pending
 lifecycle and is not persisted as another operation state machine.
 
+Synchronous command progress uses one replaceable transcript block. For
+example, `/compact` creates a pending presentation before its RPC and replaces
+that same block identity on success or failure; neither Core nor LangGraph gains
+a second progress protocol. Change commands keep filesystem semantics in
+`ChangeCommandService`: Diff returns typed identity/content facts, Undo/Redo
+return exact paths and lifecycle, and known domain failures keep distinct error
+codes. Ink owns only folding and terminal layout through the global Ctrl+O
+detail mode.
+
 ## LangGraph owns
 
 - graph routing and execution;
