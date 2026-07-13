@@ -10,7 +10,12 @@ const live: LiveTranscriptProjection = {
   turn_id: "turn_1",
   terminal: true,
   blocks: [
-    { key: "live:assistant", kind: "assistant", text: "coalesced" },
+    {
+      key: "live:thinking",
+      kind: "thinking",
+      text: "bounded reasoning",
+      duration_ms: 1200,
+    },
     {
       key: "live:tools",
       kind: "tools",
@@ -21,10 +26,13 @@ const live: LiveTranscriptProjection = {
           verb: "Read",
           outcome: "success",
           summary: "live",
+          detail: "file config.py",
           duration_ms: 0,
         },
       ],
     },
+    { key: "live:assistant", kind: "assistant", text: "durable answer" },
+    { key: "live:worked", kind: "worked", duration_ms: 2200 },
   ],
 };
 
@@ -96,16 +104,27 @@ function page(): MethodValue["thread.read"] {
 }
 
 describe("reconcileCompletedTurn", () => {
-  it("replaces transient text/tools with durable authority", () => {
+  it("retains safe current-session activity with durable outcomes", () => {
     const result = reconcileCompletedTurn(live, page());
     expect(result.persisted).toBe(true);
     expect(result.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "assistant", text: "durable answer" }),
         expect.objectContaining({
-          kind: "tools",
-          items: [expect.objectContaining({ summary: "durable tool" })],
+          kind: "thinking",
+          text: "bounded reasoning",
         }),
+        expect.objectContaining({
+          kind: "tools",
+          items: [
+            expect.objectContaining({
+              summary: "durable tool",
+              duration_ms: 9,
+              detail: "file config.py",
+            }),
+          ],
+        }),
+        expect.objectContaining({ kind: "worked", duration_ms: 2200 }),
         expect.objectContaining({ kind: "change", change_set_id: "change_1" }),
       ]),
     );
@@ -129,7 +148,7 @@ describe("reconcileCompletedTurn", () => {
     expect(result.persisted).toBe(false);
     expect(result.blocks).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "assistant", text: "coalesced" }),
+        expect.objectContaining({ kind: "assistant", text: "durable answer" }),
         expect.objectContaining({
           kind: "error",
           code: "transcript_not_reconciled",
@@ -141,6 +160,25 @@ describe("reconcileCompletedTurn", () => {
   it("is deterministic for a repeated durable page", () => {
     expect(reconcileCompletedTurn(live, page())).toEqual(
       reconcileCompletedTurn(live, page()),
+    );
+  });
+
+  it("uses the durable assistant when live segments do not match", () => {
+    const changed = {
+      ...live,
+      blocks: live.blocks.map((block) =>
+        block.kind === "assistant" ? { ...block, text: "partial" } : block,
+      ),
+    };
+    const result = reconcileCompletedTurn(changed, page());
+    expect(result.blocks.filter((block) => block.kind === "assistant")).toEqual(
+      [expect.objectContaining({ text: "durable answer" })],
+    );
+    expect(result.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "thinking" }),
+        expect.objectContaining({ kind: "worked" }),
+      ]),
     );
   });
 });

@@ -131,4 +131,19 @@ describe("hydrateThreadPage", () => {
       ),
     ).toBe(false);
   });
+
+  it("hydrates durable summaries without ephemeral thinking or details", () => {
+    const projection = hydrateThreadPage(page());
+    expect(
+      projection.blocks.some(
+        (block) => block.kind === "thinking" || block.kind === "worked",
+      ),
+    ).toBe(false);
+    const tools = projection.blocks.filter((block) => block.kind === "tools");
+    expect(tools.flatMap((block) => block.items)).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({ detail: expect.anything() }),
+      ]),
+    );
+  });
 });
