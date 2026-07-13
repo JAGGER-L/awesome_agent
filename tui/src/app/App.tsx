@@ -12,7 +12,10 @@ import type {
   CommandDispatchOutcome,
 } from "../commands/controller.js";
 import { findCommand } from "../commands/catalog.js";
-import { presentCommandPayload } from "../commands/presenters.js";
+import {
+  presentCommandPayload,
+  presentHelpResult,
+} from "../commands/presenters.js";
 import type {
   LocalCommandResult,
   LocalCommandService,
@@ -225,6 +228,9 @@ export function App({
         return { accepted: true };
       }
       switch (result.kind) {
+        case "help":
+          appendPresentation("help", presentHelpResult(result), generation);
+          return { accepted: true };
         case "result":
           appendCommandResult(
             result.command,

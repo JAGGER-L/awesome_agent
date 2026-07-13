@@ -110,9 +110,12 @@ describe("App local command wiring", () => {
     );
     view.stdin.write("/help");
     view.stdin.write("\r");
-    await eventually(() => expect(view.lastFrame()).toContain("Commands"));
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Start a new thread"),
+    );
     expect(view.lastFrame()).toContain("Message");
     expect(view.lastFrame()).toContain("/new");
+    expect(view.lastFrame()).toContain("/resume [thread_id]");
   });
 
   it("renders visible usage feedback when no usage exists", async () => {
