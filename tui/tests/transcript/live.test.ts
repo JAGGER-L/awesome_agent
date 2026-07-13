@@ -9,7 +9,14 @@ function state(): SurfaceState {
     connection: "ready",
     thread_generation: 0,
     event_sequence: 8,
-    warnings: [{ code: "retry", message: "Provider retrying." }],
+    warnings: [
+      {
+        id: "warning:retry:1",
+        code: "retry",
+        message: "Provider retrying.",
+        count: 1,
+      },
+    ],
     usage: { input_tokens: 12, output_tokens: 4 },
     latest_change: {
       change_set_id: "change_1",

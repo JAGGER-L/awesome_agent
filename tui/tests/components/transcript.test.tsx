@@ -121,6 +121,27 @@ describe("scrollback transcript components", () => {
     expect(expanded.lastFrame()).toContain("full bounded output");
   });
 
+  it("folds repeated runtime diagnostics and expands one bounded detail", () => {
+    const warning = {
+      key: "warning:retry:1",
+      kind: "warning" as const,
+      code: "provider_retry",
+      message: "Provider retrying after a transient failure.",
+      count: 18,
+    };
+    const collapsed = render(
+      <Transcript blocks={[warning]} width={80} />,
+    ).lastFrame();
+    expect(collapsed).toContain("× 18 UI diagnostic · Ctrl+O to expand");
+    expect(collapsed).not.toContain("Provider retrying");
+    const expanded = render(
+      <Transcript blocks={[warning]} width={80} detailsExpanded />,
+    ).lastFrame();
+    expect(expanded).toContain(
+      "provider_retry · Provider retrying after a transient failure.",
+    );
+  });
+
   it("renders structured tool facts and measured duration", () => {
     const frame =
       render(

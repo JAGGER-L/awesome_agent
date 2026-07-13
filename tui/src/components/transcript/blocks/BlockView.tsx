@@ -76,7 +76,20 @@ export function BlockView({
     case "worked":
       return <Worked durationMs={block.duration_ms} />;
     case "warning":
-      return <Text color={theme.warning}>Warning · {block.message}</Text>;
+      if (block.count === 1)
+        return <Text color={theme.warning}>Warning · {block.message}</Text>;
+      return (
+        <Box flexDirection="column">
+          <Text color={theme.warning}>
+            × {block.count} UI diagnostic · Ctrl+O to expand
+          </Text>
+          {detailsExpanded ? (
+            <Text color={theme.muted}>
+              {block.code} · {block.message}
+            </Text>
+          ) : null}
+        </Box>
+      );
     case "status":
       return <Text color={theme.muted}>{block.message}</Text>;
     case "command_result":

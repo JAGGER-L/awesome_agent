@@ -15,11 +15,7 @@ export function Worked({ durationMs }: { readonly durationMs: number }) {
   const background = theme.statusBackground ?? theme.border;
   return (
     <Box marginTop={1}>
-      <Text
-        bold
-        color={theme.secondary}
-        backgroundColor={background}
-      >
+      <Text bold color={theme.secondary} backgroundColor={background}>
         ✻
       </Text>
       <Text color={theme.muted} backgroundColor={background}>

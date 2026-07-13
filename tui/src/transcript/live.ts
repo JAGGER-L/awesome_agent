@@ -89,11 +89,11 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
   }
   for (const warning of state.warnings) {
     blocks.push({
-      key: `live:warning:${warning.code}`,
+      key: `live:${warning.id}`,
       kind: "warning",
       code: warning.code,
       message: warning.message,
-      count: 1,
+      count: warning.count,
     });
   }
   return {

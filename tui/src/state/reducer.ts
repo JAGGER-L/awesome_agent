@@ -328,19 +328,41 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
     }
     case "warning": {
       const payload = event.payload;
-      return state.warnings.some((warning) => warning.code === payload.code)
-        ? next
-        : {
-            ...next,
-            warnings: [
-              ...state.warnings,
-              { code: payload.code, message: payload.message },
-            ],
-          };
+      const normalized = normalizeWarningMessage(payload.message);
+      const index = state.warnings.findIndex(
+        (warning) =>
+          warning.code === payload.code &&
+          normalizeWarningMessage(warning.message) === normalized,
+      );
+      if (index >= 0)
+        return {
+          ...next,
+          warnings: state.warnings.map((warning, warningIndex) =>
+            warningIndex === index
+              ? { ...warning, count: warning.count + 1 }
+              : warning,
+          ),
+        };
+      return {
+        ...next,
+        warnings: [
+          ...state.warnings,
+          {
+            id: `warning:${payload.code}:${state.warnings.length + 1}`,
+            code: payload.code,
+            message: payload.message,
+            count: 1,
+          },
+        ],
+      };
     }
     default:
       return next;
   }
+}
+
+function normalizeWarningMessage(message: string): string {
+  return message.trim().replace(/\s+/gu, " ");
 }
 
 export function surfaceReducer(

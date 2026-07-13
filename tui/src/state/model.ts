@@ -11,8 +11,10 @@ export type ConnectionState =
   | "closed";
 
 export interface SurfaceWarning {
+  readonly id: string;
   readonly code: string;
   readonly message: string;
+  readonly count: number;
 }
 
 export interface ToolProjection {
