@@ -6,6 +6,7 @@ import { CommandResultView } from "../../CommandResultView.js";
 import { useTheme } from "../../theme.js";
 import { formatDuration } from "../../../transcript/reasoning.js";
 import { ToolSequence } from "../ToolSequence.js";
+import { Worked } from "../Worked.js";
 
 export function BlockView({
   block,
@@ -73,11 +74,7 @@ export function BlockView({
         </Box>
       );
     case "worked":
-      return (
-        <Text color={theme.muted}>
-          Worked for {formatDuration(block.duration_ms)}
-        </Text>
-      );
+      return <Worked durationMs={block.duration_ms} />;
     case "warning":
       return <Text color={theme.warning}>Warning · {block.message}</Text>;
     case "status":

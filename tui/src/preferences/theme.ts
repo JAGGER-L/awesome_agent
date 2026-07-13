@@ -13,6 +13,7 @@ export interface SemanticThemeRoles {
   readonly user: string;
   readonly assistant: string;
   readonly tool: string;
+  readonly statusBackground?: string;
 }
 
 export interface Theme extends SemanticThemeRoles {
@@ -114,6 +115,18 @@ export function resolveTheme(
     colorEnabled: capability !== "none",
     logoRows,
     ...roles,
+    ...(capability === "none"
+      ? {}
+      : {
+          statusBackground:
+            capability === "ansi16"
+              ? "blackBright"
+              : capability === "ansi256"
+                ? nearestXtermColor(light ? "#D8EFEA" : "#183C3A")
+                : light
+                  ? "#D8EFEA"
+                  : "#183C3A",
+        }),
     success: "green",
     warning: "yellow",
     danger: "red",
