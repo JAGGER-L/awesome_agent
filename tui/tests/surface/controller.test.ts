@@ -156,6 +156,7 @@ describe("connectSurface", () => {
       application: { current_thread_id: "thread_new" } as never,
       thread: { view: { thread: { id: "thread_new" } } } as never,
       transcript: [],
+      transcript_persisted: true,
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 150));
 

@@ -62,6 +62,10 @@ import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 import { useCommandExecution } from "./use-command-execution.js";
 import {
+  ThreadReplacementError,
+  useThreadReplacement,
+} from "./use-thread-replacement.js";
+import {
   isAuthPicker,
   unavailableSelectionMessage,
 } from "./use-interaction-flow.js";
@@ -122,6 +126,11 @@ export function App({
     beginProgress,
   } = useCommandExecution(store);
   const globalKeys = useRef(new GlobalKeyController()).current;
+  const replaceThread = useThreadReplacement({
+    store,
+    controller,
+    resetThreadScope: lifecycle?.resetThreadScope,
+  });
   const historic =
     state.committed_transcript ??
     (state.thread ? hydrateThreadPage(state.thread).blocks : []);
@@ -312,40 +321,23 @@ export function App({
           const payload = outcome.payload;
           if (payload.kind === "status") {
             setStatus(payload.snapshot);
-          } else if (payload.kind === "thread" && controller) {
-            const replacement = await controller.loadThreadReplacement(
-              payload.thread_id,
-            );
-            if (replacement.kind === "error") {
+          } else if (payload.kind === "thread") {
+            try {
+              await replaceThread({
+                threadId: payload.thread_id,
+                expectedGeneration: generation,
+                reason: payload.action === "created" ? "new" : "resume",
+              });
+              setStatus(undefined);
+            } catch (error) {
+              if (!(error instanceof ThreadReplacementError)) throw error;
               appendCommandResult(
                 intent?.name ?? "resume",
                 "error",
-                replacement.error.message,
+                error.message,
                 generation,
               );
-              return { accepted: true };
             }
-            const transcript =
-              payload.action === "created"
-                ? [
-                    {
-                      key: `thread:${payload.thread_id}:started`,
-                      kind: "status" as const,
-                      message: "New conversation started",
-                    },
-                  ]
-                : hydrateThreadPage(replacement.thread).blocks;
-            if (store.getState().thread_generation !== generation) {
-              return { accepted: true };
-            }
-            store.dispatch({
-              type: "thread.replaced",
-              application: replacement.application,
-              thread: replacement.thread,
-              transcript,
-            });
-            lifecycle?.resetThreadScope?.();
-            setStatus(undefined);
           } else if (intent) {
             appendPresentation(
               intent.name,
@@ -382,7 +374,7 @@ export function App({
       controller,
       dispatch,
       localCommands,
-      lifecycle,
+      replaceThread,
       store,
     ],
   );

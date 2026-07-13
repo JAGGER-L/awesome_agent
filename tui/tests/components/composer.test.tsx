@@ -315,10 +315,11 @@ describe("App composer integration", () => {
     const controller = {
       submit: vi.fn(async () => ({
         kind: "result",
-        result: {
-          status: "success",
-          content: "",
-          data: { thread_id: "thread_new" },
+        payload: {
+          kind: "thread",
+          action: "created",
+          thread_id: "thread_new",
+          title: "New Thread",
         },
       })),
       loadThreadReplacement: vi.fn(async () => ({

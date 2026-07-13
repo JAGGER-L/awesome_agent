@@ -110,6 +110,7 @@ describe("surfaceReducer", () => {
       application,
       thread,
       transcript: [],
+      transcript_persisted: false,
     });
 
     expect(replaced).toEqual({
@@ -120,7 +121,7 @@ describe("surfaceReducer", () => {
       thread,
       warnings: [],
       committed_transcript: [],
-      transcript_persisted: true,
+      transcript_persisted: false,
     });
   });
 

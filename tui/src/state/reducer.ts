@@ -364,7 +364,7 @@ export function surfaceReducer(
         thread: action.thread,
         warnings: [],
         committed_transcript: action.transcript,
-        transcript_persisted: true,
+        transcript_persisted: action.transcript_persisted,
       };
     case "event.received":
       return action.generation === state.thread_generation
