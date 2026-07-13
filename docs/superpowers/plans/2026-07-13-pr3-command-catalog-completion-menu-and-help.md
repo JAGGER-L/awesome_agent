@@ -371,3 +371,29 @@ git pull --ff-only
 - `/help` shows one command per aligned row and focused Help shows no internal owner enum.
 - All 25 commands remain discoverable and removed aliases remain absent.
 - PR3 is merged before PR4 is executed.
+
+## Execution Evidence — 2026-07-13
+
+Implemented Tasks 0–4 and Task 5 Step 1 on
+`codex/pr3-command-catalog-menu-help`.
+
+- One 25-command catalog now owns identity, completion, usage, description,
+  examples, menu search, and Help data.
+- Search returns all matches; a generation-independent ten-row viewport keeps
+  the wrapped selection visible.
+- Tab inserts canonical completion without placeholders; Enter executes the
+  selected command once through the PR2 submission path; Escape retains the
+  draft.
+- Help renders one semantic row per command and focused Help exposes no owner
+  enum.
+
+Quality-gate commands and their results are recorded after Task 5 Step 2;
+push, GitHub checks, PR merge, and integration refresh remain Step 4.
+
+- `npm --prefix tui run format:check` — passed, 182 files checked.
+- `npm --prefix tui run lint` — passed, 182 files checked.
+- `npm --prefix tui run typecheck` — passed.
+- `npm --prefix tui run build` — passed.
+- PR3 command, interaction, menu, Help, and command-flow suite — passed,
+  80 tests in 14 files.
+- `git diff --check` — passed.

@@ -25,7 +25,7 @@ No other public launch flags are supported.
 | `/model [deepseek\|kimi]` | Choose a Provider, then choose one of its models. |
 | `/thinking [on\|off]` | Show the current mode with a selector, or set it explicitly. |
 | `/permissions [request_approval\|full_access]` | Show or choose the active Thread's permission mode. |
-| `/workspace` | Show workspace identity and trust state. |
+| `/workspace` | Show the current workspace path. |
 | `/diff` | Show the latest or selected Change Journal change set. |
 | `/undo` | Undo the latest or selected reversible change set. |
 | `/redo` | Redo the latest or selected undone change set. |
@@ -75,8 +75,10 @@ executes tools itself.
 ## Keyboard behavior
 
 - Typing `/` opens command candidates. Up/Down changes the selection, Tab
-  completes it, Enter executes it, and Escape closes the candidates without
-  discarding the draft.
+  completes only the canonical `/command` text, Enter executes the selected
+  command once, and Escape closes the candidates without changing the draft.
+  Search covers the complete catalog; the menu displays a scrolling ten-row
+  window, so Up/Down can reach every matching command.
 - Pickers, Trust, Approval, and Auth exclusively own input while visible.
   Up/Down selects, Enter confirms, and Escape cancels or denies according to
   the prompt.
@@ -86,6 +88,8 @@ executes tools itself.
   default.
 
 `/help` is written into normal transcript history rather than opening a modal.
+It renders one command per aligned row with usage and description. Use
+`/help <command>` for one focused row; internal command ownership is not shown.
 `/new` atomically replaces the current transcript and resets Thread-scoped
 permission grants.
 
