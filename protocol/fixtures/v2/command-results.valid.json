@@ -1,0 +1,413 @@
+{
+  "cases": [
+    {
+      "name": "result.notice",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "notice",
+          "message": "Ready"
+        }
+      }
+    },
+    {
+      "name": "result.thread",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "action": "created",
+          "kind": "thread",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "title": "Fixture Thread"
+        }
+      }
+    },
+    {
+      "name": "result.context",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "budget_tokens": 262144,
+          "categories": [
+            {
+              "estimated_tokens": 10,
+              "name": "instructions"
+            },
+            {
+              "estimated_tokens": 20,
+              "name": "conversation"
+            },
+            {
+              "estimated_tokens": 30,
+              "name": "files"
+            },
+            {
+              "estimated_tokens": 40,
+              "name": "memory"
+            }
+          ],
+          "kind": "context",
+          "total_tokens": 100
+        }
+      }
+    },
+    {
+      "name": "result.compact",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "compact",
+          "new_covered_entry_sequence": 4,
+          "old_covered_entry_sequence": 0,
+          "usage": {
+            "active_execution_seconds": 0.5,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "compressions": 0,
+            "input_tokens": 0,
+            "model_calls": 0,
+            "output_tokens": 0,
+            "provider_retries": 0,
+            "reasoning_tokens": 0,
+            "tool_calls": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "result.model",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "default_model_updated": true,
+          "kind": "model",
+          "model": "deepseek/deepseek-v4-flash"
+        }
+      }
+    },
+    {
+      "name": "result.thinking",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "enabled": false,
+          "kind": "thinking"
+        }
+      }
+    },
+    {
+      "name": "result.workspace",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "workspace",
+          "path": "C:\\workspace"
+        }
+      }
+    },
+    {
+      "name": "result.diff",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "content": "",
+          "kind": "diff"
+        }
+      }
+    },
+    {
+      "name": "result.change",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "action": "undo",
+          "change_set_id": "change_1",
+          "kind": "change",
+          "lifecycle": "undone",
+          "restored_paths": [
+            "src/example.py"
+          ]
+        }
+      }
+    },
+    {
+      "name": "result.tools",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "tools",
+          "permission_mode": "request_approval",
+          "tools": [
+            {
+              "approval_required": false,
+              "description": "Read file contents",
+              "name": "read_file",
+              "read_only": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "result.skills",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "active_mode": "auto",
+          "diagnostics": [],
+          "kind": "skills",
+          "skills": [
+            {
+              "description": "Coding workflow",
+              "name": "coding",
+              "source": "bundled"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "result.mcp",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "mcp",
+          "servers": [
+            {
+              "server_id": "docs",
+              "state": "configured"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "result.memory_status",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "cloud_available": false,
+          "cloud_enabled": false,
+          "cloud_provider": "mem0",
+          "kind": "memory_status",
+          "local_available": true,
+          "local_enabled": false
+        }
+      }
+    },
+    {
+      "name": "result.memory_document",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "entries": [
+            {
+              "content": "Fact",
+              "id": "entry_1"
+            }
+          ],
+          "kind": "memory_document",
+          "scope": "user"
+        }
+      }
+    },
+    {
+      "name": "result.memory_search",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "memory_search",
+          "memories": [
+            {
+              "content": "Fact",
+              "fact_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "id": "memory_1",
+              "scope": "user"
+            }
+          ],
+          "provider": "mem0"
+        }
+      }
+    },
+    {
+      "name": "result.memory_mutation",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "entry_id": "entry_1",
+          "kind": "memory_mutation",
+          "provider": "local",
+          "scope": "user",
+          "status": "stored"
+        }
+      }
+    },
+    {
+      "name": "result.status",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "status",
+          "snapshot": {
+            "changed_file_count": 0,
+            "configuration_diagnostic_count": 0,
+            "configuration_valid": true,
+            "context_budget_tokens": 262144,
+            "context_used_tokens": 0,
+            "credential_source_available": false,
+            "local_memory_enabled": false,
+            "mcp_degraded": 0,
+            "mcp_ready": 0,
+            "mem0_enabled": false,
+            "model_identity": {
+              "configured_model": "deepseek/deepseek-v4-flash",
+              "effective_model": "deepseek/deepseek-v4-flash",
+              "fallback_active": false,
+              "provider": "deepseek",
+              "runtime_name": "Awesome Agent"
+            },
+            "model_status": "configured",
+            "operation_status": "idle",
+            "permission_mode": "request_approval",
+            "skill_mode": "auto",
+            "thinking_enabled": false,
+            "thread_display_id": "thread_11111111",
+            "thread_id": "thread_11111111111111111111111111111111",
+            "thread_title": "Fixture Thread",
+            "version": "1.1.1",
+            "workspace_path": "C:\\workspace"
+          }
+        }
+      }
+    },
+    {
+      "name": "result.usage",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "usage",
+          "usage": {
+            "active_execution_seconds": 0.5,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "compressions": 0,
+            "input_tokens": 0,
+            "model_calls": 0,
+            "output_tokens": 0,
+            "provider_retries": 0,
+            "reasoning_tokens": 0,
+            "tool_calls": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "result.doctor",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "checks": [
+            {
+              "name": "SQLite",
+              "status": "ok"
+            }
+          ],
+          "kind": "doctor"
+        }
+      }
+    },
+    {
+      "name": "result.config",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "credentials": {
+            "deepseek": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "DEEPSEEK_API_KEY",
+              "provider": "deepseek"
+            },
+            "kimi": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "MOONSHOT_API_KEY",
+              "provider": "kimi"
+            },
+            "mem0": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "MEM0_API_KEY",
+              "provider": "mem0"
+            }
+          },
+          "kind": "config",
+          "sources": [
+            "user"
+          ]
+        }
+      }
+    },
+    {
+      "name": "result.permissions",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "permissions",
+          "mode": "request_approval"
+        }
+      }
+    },
+    {
+      "name": "interaction.selection",
+      "outcome": {
+        "interaction": {
+          "kind": "selection",
+          "options": [
+            {
+              "disabled": false,
+              "label": "One",
+              "selected": false,
+              "value": "one"
+            }
+          ],
+          "prompt": "Choose"
+        },
+        "kind": "interaction"
+      }
+    },
+    {
+      "name": "interaction.secret",
+      "outcome": {
+        "interaction": {
+          "action": "add",
+          "environment_variable": "DEEPSEEK_API_KEY",
+          "help_url": "https://platform.deepseek.com/api_keys",
+          "kind": "secret",
+          "label": "DeepSeek API Key",
+          "provider": "deepseek"
+        },
+        "kind": "interaction"
+      }
+    },
+    {
+      "name": "interaction.application",
+      "outcome": {
+        "interaction": {
+          "interaction_id": "interaction_1",
+          "kind": "application"
+        },
+        "kind": "interaction"
+      }
+    },
+    {
+      "name": "error.invalid_arguments",
+      "outcome": {
+        "code": "invalid_arguments",
+        "kind": "error",
+        "message": "Invalid arguments."
+      }
+    }
+  ]
+}

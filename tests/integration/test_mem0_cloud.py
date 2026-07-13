@@ -6,8 +6,15 @@ from typing import Any, cast
 import pytest
 
 from awesome_agent.agent import CloudPostAnswerMemory
-from awesome_agent.application.commands import CommandIntent, CommandName, CommandStatus
-from awesome_agent.application.headless import ApplicationExtensionService
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandResult,
+    MemoryMutationCommandPayload,
+    MemorySearchCommandPayload,
+    MemoryStatusCommandPayload,
+)
+from awesome_agent.application.commands import CommandIntent, CommandName
+from awesome_agent.application.extension_commands import ApplicationExtensionService
 from awesome_agent.config import UserConfigWriter
 from awesome_agent.config.loader import read_user_config_document
 from awesome_agent.context import mem0_context_source
@@ -167,6 +174,7 @@ def _extensions(
             workspace_key=workspace.key,
             registry=ToolRegistry(),
             submit_turn=submit_turn,
+            current_thread_id=lambda: thread.id,
             config_writer=UserConfigWriter(paths.config_file),
             mem0_cloud=adapter,
             mem0_enabled=mem0_enabled,
@@ -192,21 +200,19 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
 ) -> None:
     client = FakeMem0Client()
     state_changes: list[tuple[bool, object]] = []
-    service, thread_id, config_path, workspace_key, adapter = _extensions(
+    service, _thread_id, config_path, workspace_key, adapter = _extensions(
         tmp_path,
         client=client,
         state_changes=state_changes,
     )
 
-    enabled = await service.handle(
+    enabled = await service.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("mem0", "on")),
-        thread_id=thread_id,
     )
     document = read_user_config_document(config_path)
-    assert enabled.status is CommandStatus.SUCCESS
-    enabled_mem0 = enabled.data["mem0"]
-    assert isinstance(enabled_mem0, dict)
-    assert enabled_mem0["enabled"] is True
+    assert isinstance(enabled, CommandResult)
+    assert isinstance(enabled.payload, MemoryStatusCommandPayload)
+    assert enabled.payload.cloud_enabled is True
     assert document.memory.mem0_cloud is True
     assert document.memory.mem0_user_id is not None
     assert state_changes and state_changes[-1][0] is True
@@ -271,26 +277,21 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
     assert "concise answers" in recalled.source.content
     assert "uses pytest" in recalled.source.content
 
-    restarted, restarted_thread, _, _, _ = _extensions(
+    restarted, _restarted_thread, _, _, _ = _extensions(
         tmp_path,
         client=client,
         mem0_enabled=True,
         state_changes=state_changes,
     )
-    searched = await restarted.handle(
+    searched = await restarted.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("mem0", "search", "pytest"),
         ),
-        thread_id=restarted_thread,
     )
-    assert searched.status is CommandStatus.SUCCESS
-    memories = searched.data["memories"]
-    assert isinstance(memories, list)
-    first_memory = memories[0]
-    assert isinstance(first_memory, dict)
-    memory_id = first_memory["id"]
-    assert isinstance(memory_id, str)
+    assert isinstance(searched, CommandResult)
+    assert isinstance(searched.payload, MemorySearchCommandPayload)
+    memory_id = searched.payload.memories[0].id
 
     client.records["foreign"] = {
         "id": "foreign",
@@ -303,41 +304,38 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
             "fact_hash": "f" * 64,
         },
     }
-    removed = await restarted.handle(
+    removed = await restarted.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("mem0", "remove", memory_id),
         ),
-        thread_id=restarted_thread,
     )
-    rejected = await restarted.handle(
+    rejected = await restarted.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("mem0", "remove", "foreign"),
         ),
-        thread_id=restarted_thread,
     )
-    assert removed.status is CommandStatus.SUCCESS
-    assert rejected.data["status"] == "memory_not_found"
+    assert isinstance(removed, CommandResult)
+    assert isinstance(removed.payload, MemoryMutationCommandPayload)
+    assert isinstance(rejected, CommandError) and rejected.code == "memory_not_found"
 
-    disabled = await restarted.handle(
+    disabled = await restarted.memory(
         CommandIntent(name=CommandName.MEMORY, arguments=("mem0", "off")),
-        thread_id=restarted_thread,
     )
     before = list(client.calls)
-    blocked = await restarted.handle(
+    blocked = await restarted.memory(
         CommandIntent(
             name=CommandName.MEMORY,
             arguments=("mem0", "search", "anything"),
         ),
-        thread_id=restarted_thread,
     )
-    disabled_mem0 = disabled.data["mem0"]
-    assert isinstance(disabled_mem0, dict)
-    assert disabled_mem0["enabled"] is False
+    assert isinstance(disabled, CommandResult)
+    assert isinstance(disabled.payload, MemoryStatusCommandPayload)
+    assert disabled.payload.cloud_enabled is False
     assert state_changes[-1][0] is False
     assert (
         read_user_config_document(config_path).memory.mem0_user_id == identity.user_id
     )
-    assert blocked.data["error_code"] == "memory_disabled"
+    assert isinstance(blocked, CommandError) and blocked.code == "memory_disabled"
     assert client.calls == before

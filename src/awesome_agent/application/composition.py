@@ -19,14 +19,9 @@ from awesome_agent.agent import (
     TurnBudget,
     compile_agent_graph,
 )
-from awesome_agent.application.commands import (
-    CommandIntent,
-    CommandName,
-    CommandOption,
-    CommandResult,
-    CommandSelection,
-    CommandStatus,
-)
+from awesome_agent.application.change_commands import ChangeCommandService
+from awesome_agent.application.command_results import CommandOutcome, error
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.contracts import (
     ApplicationResult,
@@ -49,23 +44,23 @@ from awesome_agent.application.contracts import (
     WorkspacePresentation,
     thread_display_id,
 )
+from awesome_agent.application.conversation_commands import ConversationCommandService
+from awesome_agent.application.diagnostic_commands import DiagnosticCommandService
 from awesome_agent.application.direct import DirectCommandService
+from awesome_agent.application.dispatcher import CommandDispatcher
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.events import ApplicationEventProjector
+from awesome_agent.application.extension_commands import ApplicationExtensionService
 from awesome_agent.application.facade import LocalApplication
-from awesome_agent.application.headless import (
-    ApplicationExtensionService,
-    ConversationCommandService,
-)
 from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
-    full_access_confirmation_choices,
     tool_approval_choices,
     workspace_trust_choices,
 )
 from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.application.permission_commands import PermissionCommandService
 from awesome_agent.application.provider_configuration import (
     CredentialValidator,
     ProviderConfigurationService,
@@ -390,6 +385,10 @@ class _LocalApplicationBackend:
         self._initialized = False
         self._closed = False
         self._commands: ConversationCommandService | None = None
+        self._command_dispatcher: CommandDispatcher | None = None
+        self._diagnostic_commands: DiagnosticCommandService | None = None
+        self._change_commands: ChangeCommandService | None = None
+        self._permission_commands: PermissionCommandService | None = None
         self._provider_configuration: ProviderConfigurationService | None = None
         self._turns: TurnCoordinator | None = None
         self._direct: DirectCommandService | None = None
@@ -411,7 +410,7 @@ class _LocalApplicationBackend:
         if self._initialized:
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=1,
+                protocol_version=2,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
                 workspace=self._workspace_presentation(include_branch=True),
@@ -448,7 +447,7 @@ class _LocalApplicationBackend:
                 )
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=1,
+                protocol_version=2,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
@@ -458,7 +457,7 @@ class _LocalApplicationBackend:
         await self._activate()
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=1,
+            protocol_version=2,
             status=InitializeStatus.READY,
             session_id=self._session_id,
             workspace=self._workspace_presentation(include_branch=True),
@@ -658,22 +657,11 @@ class _LocalApplicationBackend:
                 "Thread was not found.",
             ) from error
 
-    async def run_command(self, intent: CommandIntent) -> CommandResult:
+    async def run_command(self, intent: CommandIntent) -> CommandOutcome:
         self._require_active()
-        assert self._commands is not None
-        assert self._provider_configuration is not None
+        assert self._command_dispatcher is not None
         try:
-            if intent.name is CommandName.AUTH:
-                return await self._provider_configuration.auth_command(intent)
-            if intent.name is CommandName.MODEL:
-                thread_id = self._commands.current_thread_id
-                if thread_id is None:
-                    return _error("thread_not_found", "Select a Thread first.")
-                return await self._provider_configuration.model_command(
-                    intent,
-                    thread_id=thread_id,
-                )
-            return await self._commands.handle(intent)
+            return await self._command_dispatcher.dispatch(intent)
         except ThreadNotFound as error:
             raise _application_failure(
                 ProductErrorCode.THREAD_NOT_FOUND,
@@ -970,6 +958,12 @@ class _LocalApplicationBackend:
             finalize_operation=self._seal_direct,
         )
         assert self._mem0_session is not None
+        self._commands = ConversationCommandService(
+            conversation=self._conversation,
+            workspace_key=self._workspace.key,
+            default_model=self._initial_thread_model,
+            on_thread_selected=self._permission_session.reset,
+        )
         self._extensions = ApplicationExtensionService(
             conversation=self._conversation,
             catalog=catalog,
@@ -979,6 +973,9 @@ class _LocalApplicationBackend:
             workspace_key=self._workspace.key,
             registry=registry,
             submit_turn=self.start_turn,
+            current_thread_id=lambda: (
+                self._commands.current_thread_id if self._commands is not None else None
+            ),
             local_memory=self._local_memory,
             config_writer=UserConfigWriter(self._paths.config_file),
             mem0_cloud=self._mem0_adapter,
@@ -989,13 +986,6 @@ class _LocalApplicationBackend:
             has_active_turn=lambda: self._operations.active_operation_id is not None,
         )
         await self._extensions.prepare_turn_extensions()
-        self._commands = ConversationCommandService(
-            conversation=self._conversation,
-            workspace_key=self._workspace.key,
-            delegate=self._delegate_command,
-            default_model=self._initial_thread_model,
-            on_thread_selected=self._permission_session.reset,
-        )
         self._provider_configuration = ProviderConfigurationService(
             conversation=self._conversation,
             config_writer=UserConfigWriter(self._paths.config_file),
@@ -1003,6 +993,56 @@ class _LocalApplicationBackend:
             validator=self._credential_validator,
             sources=lambda: self._sources,
             reload_configuration=self._reload_provider_configuration,
+        )
+        self._diagnostic_commands = DiagnosticCommandService(
+            workspace_path=self._workspace.display_path,
+            registry=registry,
+            permission_session=self._permission_session,
+            status_reader=self._command_status_snapshot,
+            usage_reader=self._command_usage,
+            credential_statuses=lambda: self._sources.provider_credentials,
+            provider_doctor=self._provider_configuration.doctor,
+        )
+        assert self._change_operations is not None
+        assert self._change_store is not None
+        self._change_commands = ChangeCommandService(
+            operations=self._change_operations,
+            store=self._change_store,
+            workspace_key=self._workspace.key,
+        )
+        self._permission_commands = PermissionCommandService(
+            session=self._permission_session,
+            operations=self._operations,
+            interactions=self._interactions,
+            emitter=self._emitter,
+            current_thread_id=lambda: (
+                self._commands.current_thread_id if self._commands is not None else None
+            ),
+        )
+        self._command_dispatcher = CommandDispatcher(
+            {
+                CommandName.NEW: self._commands.new,
+                CommandName.RESUME: self._commands.resume,
+                CommandName.CONTEXT: self._context_command,
+                CommandName.COMPACT: self._compact_command,
+                CommandName.AUTH: self._provider_configuration.auth_command,
+                CommandName.MODEL: self._model_command,
+                CommandName.THINKING: self._commands.thinking,
+                CommandName.WORKSPACE: self._diagnostic_commands.workspace,
+                CommandName.DIFF: self._change_commands.diff,
+                CommandName.UNDO: self._change_commands.undo,
+                CommandName.REDO: self._change_commands.redo,
+                CommandName.TOOLS: self._diagnostic_commands.tools,
+                CommandName.SKILLS: self._extensions.skills,
+                CommandName.MCP: self._extensions.mcp,
+                CommandName.MEMORY: self._extensions.memory,
+                CommandName.STATUS: self._diagnostic_commands.status,
+                CommandName.USAGE: self._diagnostic_commands.usage,
+                CommandName.DOCTOR: self._diagnostic_commands.doctor,
+                CommandName.CONFIG: self._diagnostic_commands.config,
+                CommandName.PERMISSIONS: self._permission_commands.permissions,
+                CommandName.INIT: self._extensions.init,
+            }
         )
         await self._turns.reconcile_startup()
         self._initialized = True
@@ -1085,282 +1125,115 @@ class _LocalApplicationBackend:
         except ValueError:
             return None
 
-    async def _delegate_command(
-        self,
-        intent: CommandIntent,
-        thread_id: str,
-    ) -> CommandResult:
-        assert self._extensions is not None
-        if intent.name in {
-            CommandName.SKILLS,
-            CommandName.MCP,
-            CommandName.MEMORY,
-            CommandName.INIT,
-        }:
-            return await self._extensions.handle(intent, thread_id=thread_id)
-        if intent.name is CommandName.CONTEXT:
-            assert self._context is not None
-            return await self._context.context_command(intent, thread_id=thread_id)
-        if intent.name is CommandName.COMPACT:
-            assert self._context is not None
-            thread = self._conversation.read_thread(thread_id).thread
-            config = self._turn_config(thread)
-            return await self._context.compact_command(
-                intent,
-                thread_id=thread_id,
-                provider=config.provider,
-                model=config.model,
-            )
-        if intent.name is CommandName.WORKSPACE:
-            if intent.arguments:
-                return _error("invalid_arguments", "Usage: /workspace")
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "workspace_key": self._workspace.key,
-                    "trust": self._trust.status(self._workspace).value,
-                },
-            )
-        if intent.name is CommandName.PERMISSIONS:
-            return await self._permissions_command(intent)
-        if intent.name is CommandName.TOOLS:
-            assert self._registry is not None
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "tools": [
-                        {
-                            "name": spec.name,
-                            "description": spec.description,
-                            "read_only": spec.read_only,
-                        }
-                        for spec in self._registry.specifications()
-                    ]
-                },
-            )
-        if intent.name is CommandName.STATUS:
-            thread = self._conversation.read_thread(thread_id).thread
-            config = self._turn_config(thread)
-            initial_display_id = thread_display_id(thread.id)
-            display_candidates = self._conversation.match_thread_prefix(
-                self._workspace.key,
-                prefix=initial_display_id,
-                limit=200,
-            )
-            statuses = self._mcp.statuses() if self._mcp is not None else ()
-            local_enabled = self._local_memory.enabled if self._local_memory else False
-            mem0_enabled = (
-                self._mem0_session.enabled if self._mem0_session is not None else False
-            )
-            active_operation_id = self._operations.active_operation_id
-            model_identity = self._model_identity(thread)
-            assert model_identity is not None
-            snapshot = StatusSnapshot(
-                version=PRODUCT_VERSION,
-                workspace_path=str(self._workspace.display_path),
-                thread_title=thread.title,
-                thread_id=thread.id,
-                thread_display_id=thread_display_id(
-                    thread.id,
-                    candidate_ids=(item.id for item in display_candidates),
-                ),
-                model_identity=model_identity,
-                model_status=(
-                    "configured"
-                    if self._provider_is_configured(config.provider)
-                    else "not_configured"
-                ),
-                thinking_enabled=thread.thinking_enabled,
-                skill_mode=thread.skill_mode,
-                local_memory_enabled=local_enabled,
-                mem0_enabled=mem0_enabled,
-                mcp_ready=sum(
-                    status.state is McpConnectionState.CONNECTED for status in statuses
-                ),
-                mcp_degraded=sum(
-                    status.state is McpConnectionState.ERROR for status in statuses
-                ),
-                operation_status="active" if active_operation_id else "idle",
-                operation_id=active_operation_id,
-                configuration_valid=True,
-                configuration_diagnostic_count=(
-                    1
-                    if (
-                        self._mem0_diagnostic is not None
-                        and self._mem0_session is not None
-                        and self._mem0_session.enabled
-                    )
-                    else 0
-                ),
-                permission_mode=self._permission_session.mode,
-            )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data=cast(dict[str, JsonValue], snapshot.model_dump(mode="json")),
-            )
-        if intent.name is CommandName.USAGE:
-            usage = _last_usage(self._conversation, thread_id)
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data=usage.model_dump(mode="json"),
-            )
-        if intent.name is CommandName.CONFIG:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "sources": ["defaults", "user", "workspace", "environment"],
-                    "secrets": self._sources.secret_status.model_dump(mode="json"),
-                },
-            )
-        if intent.name is CommandName.DOCTOR:
-            assert self._provider_configuration is not None
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data=cast(
-                    dict[str, JsonValue],
-                    {
-                        "configuration": "ok",
-                        "sqlite": "ok",
-                        "checkpoints": "ok",
-                        "providers": await self._provider_configuration.doctor(),
-                    },
-                ),
-            )
-        if intent.name in {CommandName.DIFF, CommandName.UNDO, CommandName.REDO}:
-            return self._change_command(intent)
-        return _error("command_not_available", "Command is not available.")
+    async def _context_command(self, intent: CommandIntent) -> CommandOutcome:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
+        assert self._context is not None
+        return await self._context.context_command(intent, thread_id=thread_id)
 
-    async def _permissions_command(self, intent: CommandIntent) -> CommandResult:
-        if not intent.arguments:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={"permission_mode": self._permission_session.mode.value},
-                selection=CommandSelection(
-                    prompt="Permission mode",
-                    options=(
-                        CommandOption(
-                            value=PermissionMode.REQUEST_APPROVAL.value,
-                            label="Request approval",
-                            description=(
-                                "Ask before edits, deletes, and shell commands."
-                            ),
-                            selected=(
-                                self._permission_session.mode
-                                is PermissionMode.REQUEST_APPROVAL
-                            ),
-                        ),
-                        CommandOption(
-                            value=PermissionMode.FULL_ACCESS.value,
-                            label="Full access",
-                            description=(
-                                "Allow edits and shell commands for this thread."
-                            ),
-                            selected=(
-                                self._permission_session.mode
-                                is PermissionMode.FULL_ACCESS
-                            ),
-                        ),
-                    ),
-                ),
-            )
-        if len(intent.arguments) != 1:
-            return _error(
-                "invalid_arguments",
-                "Usage: /permissions [request_approval|full_access]",
-            )
-        try:
-            requested = PermissionMode(intent.arguments[0])
-        except ValueError:
-            return _error(
-                "invalid_arguments",
-                "Usage: /permissions [request_approval|full_access]",
-            )
-        if self._operations.active_operation_id is not None:
-            return _error(
-                "operation_busy",
-                "Permission mode cannot change during an active operation.",
-            )
-        if self._interactions.pending is not None:
-            return _error(
-                "interaction_busy",
-                "Resolve the pending interaction before changing permission mode.",
-            )
-        if requested is PermissionMode.REQUEST_APPROVAL:
-            self._permission_session.reset()
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                content="Permission mode changed to Request approval.",
-                data={"permission_mode": requested.value},
-            )
-        if self._permission_session.mode is PermissionMode.FULL_ACCESS:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                content="Full access is already enabled for this thread.",
-                data={"permission_mode": requested.value},
-            )
-        pending = self._interactions.create(
-            kind=InteractionKind.FULL_ACCESS_CONFIRMATION,
-            prompt="Enable Full access for this thread?",
-            operation="enable",
-            target="full access",
-            capability=None,
-            choices=full_access_confirmation_choices(),
+    async def _compact_command(self, intent: CommandIntent) -> CommandOutcome:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
+        assert self._context is not None
+        thread = self._conversation.read_thread(thread_id).thread
+        config = self._turn_config(thread)
+        return await self._context.compact_command(
+            intent,
+            thread_id=thread_id,
+            provider=config.provider,
+            model=config.model,
         )
-        await self._emitter.emit(
-            InteractionRequiredPayload(
-                interaction_id=pending.id,
-                interaction_kind="full_access_confirmation",
-                prompt=pending.prompt,
-                operation=pending.operation,
-                target=pending.target,
-                capability=pending.capability,
-                choices=tuple(
-                    InteractionChoicePayload(
-                        decision=choice.decision.value,
-                        label=choice.label,
-                        description=choice.description,
-                    )
-                    for choice in pending.choices
-                ),
+
+    async def _model_command(self, intent: CommandIntent) -> CommandOutcome:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
+        assert self._provider_configuration is not None
+        return await self._provider_configuration.model_command(
+            intent,
+            thread_id=thread_id,
+        )
+
+    def _selected_thread_id(self) -> str | None:
+        return self._commands.current_thread_id if self._commands is not None else None
+
+    def _command_usage(self) -> UsageSummary | None:
+        thread_id = self._selected_thread_id()
+        return None if thread_id is None else _last_usage(self._conversation, thread_id)
+
+    def _command_status_snapshot(self) -> StatusSnapshot | None:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return None
+        thread = self._conversation.read_thread(thread_id).thread
+        config = self._turn_config(thread)
+        candidates = self._conversation.match_thread_prefix(
+            self._workspace.key,
+            prefix=thread_display_id(thread.id),
+            limit=200,
+        )
+        statuses = self._mcp.statuses() if self._mcp is not None else ()
+        model_identity = self._model_identity(thread)
+        if model_identity is None:
+            return None
+        credential = (
+            self._sources.provider_credentials.deepseek
+            if config.provider == "deepseek"
+            else self._sources.provider_credentials.kimi
+        )
+        return StatusSnapshot(
+            version=PRODUCT_VERSION,
+            workspace_path=str(self._workspace.display_path),
+            thread_title=thread.title,
+            thread_id=thread.id,
+            thread_display_id=thread_display_id(
+                thread.id,
+                candidate_ids=(item.id for item in candidates),
             ),
-            thread_id=(self._commands.current_thread_id if self._commands else None),
+            model_identity=model_identity,
+            model_status=(
+                "configured"
+                if self._provider_is_configured(config.provider)
+                else "not_configured"
+            ),
+            thinking_enabled=thread.thinking_enabled,
+            skill_mode=thread.skill_mode,
+            local_memory_enabled=(
+                self._local_memory.enabled if self._local_memory is not None else False
+            ),
+            mem0_enabled=(
+                self._mem0_session.enabled if self._mem0_session is not None else False
+            ),
+            mcp_ready=sum(
+                item.state is McpConnectionState.CONNECTED for item in statuses
+            ),
+            mcp_degraded=sum(
+                item.state is McpConnectionState.ERROR for item in statuses
+            ),
+            operation_status=(
+                "active" if self._operations.active_operation_id else "idle"
+            ),
+            operation_id=self._operations.active_operation_id,
+            configuration_valid=True,
+            configuration_diagnostic_count=(
+                1
+                if self._mem0_diagnostic is not None
+                and self._mem0_session is not None
+                and self._mem0_session.enabled
+                else 0
+            ),
+            permission_mode=self._permission_session.mode,
+            credential_source=credential.selected_source,
+            credential_source_available=credential.source_available,
+            context_used_tokens=sum(
+                item.usage.input_tokens + item.usage.output_tokens
+                for item in self._conversation.read_thread(thread_id).turns
+            ),
+            context_budget_tokens=self._application_config.budgets.total_context_tokens,
+            changed_file_count=0,
         )
-        return CommandResult(
-            status=CommandStatus.INTERACTION_REQUIRED,
-            content="Confirm Full access to continue.",
-            data={"interaction_id": pending.id},
-        )
-
-    def _change_command(self, intent: CommandIntent) -> CommandResult:
-        assert self._change_operations is not None
-        store = SQLiteChangeSetStore(self._paths.application_db)
-        identifier = intent.arguments[0] if intent.arguments else None
-        if identifier is None:
-            latest = store.latest(self._workspace.key)
-            identifier = latest.id if latest else None
-        if identifier is None:
-            return _error("change_set_not_found", "No ChangeSet exists.")
-        try:
-            if intent.name is CommandName.DIFF:
-                return CommandResult(
-                    status=CommandStatus.SUCCESS,
-                    content=self._change_operations.diff(identifier),
-                    data={"change_set_id": identifier},
-                )
-            result = (
-                self._change_operations.undo(identifier)
-                if intent.name is CommandName.UNDO
-                else self._change_operations.redo(identifier)
-            )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "change_set_id": identifier,
-                    "lifecycle": result.lifecycle.value,
-                },
-            )
-        except Exception:
-            return _error("change_operation_failed", "Change operation failed.")
 
     def _mem0_identity(self) -> Mem0Identity | None:
         user_id = self._application_config.memory.mem0_user_id
@@ -1488,14 +1361,6 @@ def _last_usage(
         return UsageSummary()
     turns = conversation.read_thread(thread_id).turns
     return turns[-1].usage if turns else UsageSummary()
-
-
-def _error(code: str, message: str) -> CommandResult:
-    return CommandResult(
-        status=CommandStatus.ERROR,
-        content=message,
-        data={"error_code": code},
-    )
 
 
 def _application_failure(

@@ -1,48 +1,49 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 
+from awesome_agent.application.command_results import CommandOutcome, error
 from awesome_agent.application.commands import (
     COMMAND_OWNERS,
     CommandIntent,
     CommandName,
     CommandOwner,
-    CommandResult,
-    CommandStatus,
 )
 
-type CommandHandler = Callable[[CommandIntent], Awaitable[CommandResult]]
+type CommandHandler = Callable[[CommandIntent], Awaitable[CommandOutcome]]
+
+_APPLICATION_COMMANDS = frozenset(
+    name for name, owner in COMMAND_OWNERS.items() if owner is not CommandOwner.INK
+)
 
 
-class DuplicateCommandHandler(ValueError):
-    pass
-
-
-class InvalidCommandOwner(ValueError):
+class InvalidCommandInventory(ValueError):
     pass
 
 
 class CommandDispatcher:
-    def __init__(self) -> None:
-        self._handlers: dict[CommandName, CommandHandler] = {}
+    """Immutable, complete authority for Core-owned slash commands."""
+
+    def __init__(self, handlers: Mapping[CommandName, CommandHandler]) -> None:
+        names = frozenset(handlers)
+        if names != _APPLICATION_COMMANDS:
+            missing = sorted(name.value for name in _APPLICATION_COMMANDS - names)
+            unexpected = sorted(name.value for name in names - _APPLICATION_COMMANDS)
+            raise InvalidCommandInventory(
+                "Invalid command inventory; "
+                f"missing={missing}, unexpected={unexpected}."
+            )
+        self._handlers = dict(handlers)
 
     @property
     def registered_names(self) -> tuple[CommandName, ...]:
         return tuple(sorted(self._handlers, key=lambda name: name.value))
 
-    def register(self, name: CommandName, handler: CommandHandler) -> None:
-        if COMMAND_OWNERS[name] is not CommandOwner.APPLICATION:
-            raise InvalidCommandOwner(name.value)
-        if name in self._handlers:
-            raise DuplicateCommandHandler(name.value)
-        self._handlers[name] = handler
-
-    async def dispatch(self, intent: CommandIntent) -> CommandResult:
+    async def dispatch(self, intent: CommandIntent) -> CommandOutcome:
         handler = self._handlers.get(intent.name)
         if handler is None:
-            return CommandResult(
-                status=CommandStatus.ERROR,
-                content="Command is not available in the current product phase.",
-                data={"error_code": "command_not_available"},
+            return error(
+                "command_not_available",
+                "Command is not available in the current product phase.",
             )
         return await handler(intent)

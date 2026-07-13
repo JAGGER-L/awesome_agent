@@ -8,11 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.application.commands import (
-    CommandIntent,
-    CommandResult,
-    CommandStatus,
+from awesome_agent.application.command_results import (
+    CommandOutcome,
+    NoticeCommandPayload,
+    result,
 )
+from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
@@ -68,7 +69,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=1,
+                protocol_version=2,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -135,9 +136,11 @@ class Facade:
 
     async def execute_command(
         self, intent: CommandIntent
-    ) -> ApplicationResult[CommandResult]:
+    ) -> ApplicationResult[CommandOutcome]:
         del intent
-        return ApplicationResult.success(CommandResult(status=CommandStatus.SUCCESS))
+        return ApplicationResult.success(
+            result(NoticeCommandPayload(message="Command completed."))
+        )
 
     async def set_provider_credential(
         self, request: ProviderCredentialSetRequest
@@ -186,7 +189,7 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
         1,
         "initialize",
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },

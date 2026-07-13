@@ -138,7 +138,7 @@ class InitializeStatus(StrEnum):
 class InitializeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol_version: Literal[1]
+    protocol_version: Literal[2]
     client_name: Literal["awesome"]
     client_version: str = Field(min_length=1, max_length=64)
 
@@ -154,7 +154,7 @@ class InitializeResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     product_version: str = Field(min_length=1, max_length=64)
-    protocol_version: Literal[1]
+    protocol_version: Literal[2]
     status: InitializeStatus
     session_id: str = Field(min_length=1, max_length=128)
     interaction_id: str | None = Field(default=None, max_length=128)
@@ -260,6 +260,11 @@ class StatusSnapshot(BaseModel):
     configuration_valid: bool
     configuration_diagnostic_count: int = Field(ge=0)
     permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
+    credential_source: CredentialSource | None = None
+    credential_source_available: bool = False
+    context_used_tokens: int = Field(default=0, ge=0)
+    context_budget_tokens: int = Field(default=262_144, ge=1)
+    changed_file_count: int = Field(default=0, ge=0)
 
 
 def thread_display_id(

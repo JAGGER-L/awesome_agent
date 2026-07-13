@@ -22,6 +22,7 @@ CURRENT_PACKAGES = {
     "context",
     "conversation",
     "core",
+    "development",
     "extensions",
     "memory",
     "modeling",
@@ -94,7 +95,8 @@ def test_product_entrypoints_are_python_host_and_ink_cli() -> None:
     package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
 
     assert project["project"]["scripts"] == {
-        "awesome-core": "awesome_agent.protocol.stdio:main"
+        "awesome-core": "awesome_agent.protocol.stdio:main",
+        "awesome-dev": "awesome_agent.development.launcher:main",
     }
     assert package["bin"] == {"awesome": "dist/cli/index.js"}
     assert (ROOT / "protocol" / "stdio.py").is_file()

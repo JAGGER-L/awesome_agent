@@ -1,0 +1,56 @@
+{
+  "cases": [
+    {
+      "name": "legacy",
+      "outcome": {
+        "content": "",
+        "data": {},
+        "status": "success"
+      }
+    },
+    {
+      "name": "unknown_payload",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "unknown"
+        }
+      }
+    },
+    {
+      "name": "secret_value",
+      "outcome": {
+        "interaction": {
+          "action": "add",
+          "api_key": "private",
+          "environment_variable": "DEEPSEEK_API_KEY",
+          "help_url": "https://example.com",
+          "kind": "secret",
+          "label": "Key",
+          "provider": "deepseek"
+        },
+        "kind": "interaction"
+      }
+    },
+    {
+      "name": "duplicate_options",
+      "outcome": {
+        "interaction": {
+          "kind": "selection",
+          "options": [
+            {
+              "label": "One",
+              "value": "same"
+            },
+            {
+              "label": "Two",
+              "value": "same"
+            }
+          ],
+          "prompt": "Choose"
+        },
+        "kind": "interaction"
+      }
+    }
+  ]
+}

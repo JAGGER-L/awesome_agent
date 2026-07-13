@@ -227,9 +227,7 @@ class UsageCommandPayload(_CommandModel):
 
 class DoctorCheck(_CommandModel):
     name: str = Field(min_length=1, max_length=128)
-    status: Literal[
-        "ok", "missing", "valid", "invalid", "unverified", "off", "error"
-    ]
+    status: Literal["ok", "missing", "valid", "invalid", "unverified", "off", "error"]
     detail: str | None = Field(default=None, max_length=2_000)
 
 

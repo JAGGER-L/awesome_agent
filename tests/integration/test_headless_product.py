@@ -9,7 +9,15 @@ from typing import cast
 
 import pytest
 
-from awesome_agent.application.commands import CommandIntent, CommandName, CommandStatus
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandInteractionResult,
+    CommandResult,
+    ModelCommandPayload,
+    ThreadCommandPayload,
+    ToolCatalogCommandPayload,
+)
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.composition import compose_local_application
 from awesome_agent.application.contracts import (
     ApplicationResult,
@@ -166,12 +174,15 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
     first = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.NEW))
     )
-    first_id = str(first.data["thread_id"])
+    assert isinstance(first, CommandResult)
+    assert isinstance(first.payload, ThreadCommandPayload)
+    first_id = first.payload.thread_id
 
     picker = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.PERMISSIONS))
     )
-    assert picker.selection is not None
+    assert isinstance(picker, CommandInteractionResult)
+    assert picker.interaction.kind == "selection"
     assert _unwrap(await application.get_state()).permission_mode == "request_approval"
 
     confirmation = _unwrap(
@@ -182,8 +193,9 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
             )
         )
     )
-    assert confirmation.status is CommandStatus.INTERACTION_REQUIRED
-    interaction_id = str(confirmation.data["interaction_id"])
+    assert isinstance(confirmation, CommandInteractionResult)
+    assert confirmation.interaction.kind == "application"
+    interaction_id = confirmation.interaction.interaction_id
     blocked = _unwrap(
         await application.execute_command(
             CommandIntent(
@@ -192,8 +204,8 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
             )
         )
     )
-    assert blocked.status is CommandStatus.ERROR
-    assert blocked.data["error_code"] == "interaction_busy"
+    assert isinstance(blocked, CommandError)
+    assert blocked.code == "interaction_busy"
     _unwrap(
         await application.respond_interaction(
             interaction_id,
@@ -253,7 +265,9 @@ async def test_composed_agent_execute_waits_for_application_decision(
     created = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.NEW))
     )
-    thread_id = str(created.data["thread_id"])
+    assert isinstance(created, CommandResult)
+    assert isinstance(created.payload, ThreadCommandPayload)
+    thread_id = created.payload.thread_id
 
     _unwrap(
         await application.submit_turn(thread_id, "run the command", "client_command")
@@ -268,8 +282,8 @@ async def test_composed_agent_execute_waits_for_application_decision(
             )
         )
     )
-    assert blocked.status is CommandStatus.ERROR
-    assert blocked.data["error_code"] == "operation_busy"
+    assert isinstance(blocked, CommandError)
+    assert blocked.code == "operation_busy"
 
     resolved = _unwrap(await application.respond_interaction(interaction_id, decision))
     assert resolved.accepted
@@ -339,14 +353,17 @@ async def test_fresh_home_trust_turn_direct_and_restart(
     created = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.NEW))
     )
-    thread_id = str(created.data["thread_id"])
+    assert isinstance(created, CommandResult)
+    assert isinstance(created.payload, ThreadCommandPayload)
+    thread_id = created.payload.thread_id
 
     model_result = _unwrap(
         await application.execute_command(
             CommandIntent(name=CommandName.MODEL, arguments=(provider, model))
         )
     )
-    assert model_result.status is CommandStatus.SUCCESS
+    assert isinstance(model_result, CommandResult)
+    assert isinstance(model_result.payload, ModelCommandPayload)
     accepted = _unwrap(
         await application.submit_turn(thread_id, "inspect workspace", "client_inspect")
     )
@@ -366,14 +383,9 @@ async def test_fresh_home_trust_turn_direct_and_restart(
     tools = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.TOOLS))
     )
-    tool_items = tools.data["tools"]
-    assert isinstance(tool_items, list)
-    names: set[str] = set()
-    for item in tool_items:
-        assert isinstance(item, dict)
-        name = item["name"]
-        assert isinstance(name, str)
-        names.add(name)
+    assert isinstance(tools, CommandResult)
+    assert isinstance(tools.payload, ToolCatalogCommandPayload)
+    names = {item.name for item in tools.payload.tools}
     assert {
         "ls",
         "read_file",

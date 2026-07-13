@@ -6,9 +6,16 @@ from typing import Any, cast
 import pytest
 
 from awesome_agent.agent import new_agent_state
+from awesome_agent.application.command_results import (
+    CommandInteractionResult,
+    CommandResult,
+    McpCommandPayload,
+    NoticeCommandPayload,
+    SkillCatalogCommandPayload,
+)
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
-from awesome_agent.application.headless import ApplicationExtensionService
+from awesome_agent.application.extension_commands import ApplicationExtensionService
 from awesome_agent.config import BudgetConfig, TurnConfig
 from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService
@@ -124,12 +131,14 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         workspace_key=workspace.key,
         registry=registry,
         submit_turn=submit_turn,
+        current_thread_id=lambda: thread.id,
     )
-    selected = await extensions.handle(
+    selected = await extensions.skills(
         CommandIntent(name=CommandName.SKILLS, arguments=("workspace-review",)),
-        thread_id=thread.id,
     )
-    assert selected.data["skill_mode"] == "workspace-review"
+    assert isinstance(selected, CommandResult)
+    assert isinstance(selected.payload, SkillCatalogCommandPayload)
+    assert selected.payload.active_mode == "workspace-review"
     assert conversation.read_thread(thread.id).thread.skill_mode == "workspace-review"
 
     configured_thread = conversation.read_thread(thread.id).thread
@@ -169,11 +178,12 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         "workspace-review"
     ) == 1
 
-    enabled = await extensions.handle(
+    enabled = await extensions.mcp(
         CommandIntent(name=CommandName.MCP, arguments=("enable", "fixture")),
-        thread_id=thread.id,
     )
-    assert enabled.data["state"] == McpConnectionState.CONFIGURED.value
+    assert isinstance(enabled, CommandResult)
+    assert isinstance(enabled.payload, McpCommandPayload)
+    assert enabled.payload.servers[0].state == McpConnectionState.CONFIGURED.value
     assert registry.resolve("mcp.fixture.echo") is None
 
     await extensions.prepare_turn_extensions()
@@ -237,29 +247,27 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         workspace_key=workspace.key,
         registry=restarted_registry,
         submit_turn=submit_turn,
+        current_thread_id=lambda: thread.id,
     )
     assert restarted.status("fixture").state is McpConnectionState.CONFIGURED
     assert restarted_registry.resolve("mcp.fixture.echo") is None
     await restarted_extensions.prepare_turn_extensions()
     assert restarted_registry.resolve("mcp.fixture.echo") is not None
-    status_result = await restarted_extensions.handle(
+    status_result = await restarted_extensions.mcp(
         CommandIntent(name=CommandName.MCP, arguments=("status", "fixture")),
-        thread_id=thread.id,
     )
-    servers = status_result.data["servers"]
-    assert isinstance(servers, list)
-    first_server = servers[0]
-    assert isinstance(first_server, dict)
-    assert first_server["state"] == "connected"
-    disabled = await restarted_extensions.handle(
+    assert isinstance(status_result, CommandResult)
+    assert isinstance(status_result.payload, McpCommandPayload)
+    assert status_result.payload.servers[0].state == "connected"
+    disabled = await restarted_extensions.mcp(
         CommandIntent(name=CommandName.MCP, arguments=("disable", "fixture")),
-        thread_id=thread.id,
     )
-    assert disabled.data["state"] == "enablement_required"
+    assert isinstance(disabled, CommandResult)
+    assert isinstance(disabled.payload, McpCommandPayload)
+    assert disabled.payload.servers[0].state == "enablement_required"
     assert restarted_registry.resolve("mcp.fixture.echo") is None
-    await restarted_extensions.handle(
+    await restarted_extensions.mcp(
         CommandIntent(name=CommandName.MCP, arguments=("enable", "fixture")),
-        thread_id=thread.id,
     )
     await restarted.aclose()
 
@@ -281,6 +289,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         workspace_key=workspace.key,
         registry=invalidated_registry,
         submit_turn=submit_turn,
+        current_thread_id=lambda: thread.id,
     )
     await invalidated_extensions.prepare_turn_extensions()
     assert invalidated_registry.resolve("mcp.fixture.echo") is None
@@ -326,26 +335,25 @@ async def test_skills_select_mode_and_init_submits_a_normal_turn(
         workspace_key="workspace",
         registry=ToolRegistry(),
         submit_turn=submit_turn,
+        current_thread_id=lambda: thread.id,
     )
 
-    listed = await service.handle(
+    listed = await service.skills(
         CommandIntent(name=CommandName.SKILLS),
-        thread_id=thread.id,
     )
-    picker = await service.handle(
+    picker = await service.skills(
         CommandIntent(name=CommandName.SKILLS),
-        thread_id=thread.id,
     )
-    initialized = await service.handle(
+    initialized = await service.init(
         CommandIntent(name=CommandName.INIT, arguments=("carefully",)),
-        thread_id=thread.id,
     )
 
-    effective = listed.data["effective"]
-    assert isinstance(effective, list)
-    assert len(effective) == 5
-    assert picker.selection is not None
-    assert {option.value for option in picker.selection.options} == {
+    assert isinstance(listed, CommandInteractionResult)
+    assert isinstance(listed.context, SkillCatalogCommandPayload)
+    assert len(listed.context.skills) == 5
+    assert isinstance(picker, CommandInteractionResult)
+    assert picker.interaction.kind == "selection"
+    assert {option.value for option in picker.interaction.options} == {
         "auto",
         "off",
         "init",
@@ -354,7 +362,8 @@ async def test_skills_select_mode_and_init_submits_a_normal_turn(
         "test",
         "git-workflow",
     }
-    assert initialized.data["skill"] == "init"
+    assert isinstance(initialized, CommandResult)
+    assert isinstance(initialized.payload, NoticeCommandPayload)
     assert conversation.read_thread(thread.id).thread.skill_mode == "init"
     assert submitted == [
         (thread.id, "Initialize durable workspace guidance. carefully")
