@@ -54,7 +54,10 @@ import type { ExitReason } from "../lifecycle/exit.js";
 import type { StatusSnapshot } from "../protocol/commands.js";
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
-import { createClientMessageId } from "../transcript/identity.js";
+import {
+  createClientMessageId,
+  createCommandSubmissionId,
+} from "../transcript/identity.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 import { useCommandExecution } from "./use-command-execution.js";
@@ -387,6 +390,15 @@ export function App({
     async (value: string): Promise<ComposerSubmitResult> => {
       setStatus(undefined);
       dispatch({ type: "notice.clear" });
+      const submitted = value.trimStart();
+      if (submitted.startsWith("/")) {
+        store.dispatch({
+          type: "transcript.command.submitted",
+          submission_id: createCommandSubmissionId(),
+          text: submitted,
+          generation: store.getState().thread_generation,
+        });
+      }
       const routed = parseInput(value);
       if (!routed) return { accepted: true };
       if (routed.kind === "invalid") {
