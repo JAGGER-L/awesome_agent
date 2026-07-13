@@ -57,6 +57,7 @@ export type UiMode =
       readonly kind: "command_menu";
       readonly query: string;
       readonly selectedCommand?: CommandName;
+      readonly viewportStart: number;
     }
   | {
       readonly kind: "picker";

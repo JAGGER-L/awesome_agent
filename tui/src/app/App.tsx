@@ -934,6 +934,7 @@ export function App({
           {...(ui.mode.selectedCommand === undefined
             ? {}
             : { selectedCommand: ui.mode.selectedCommand })}
+          viewportStart={ui.mode.viewportStart}
         />
       ) : null}
       {cancelling ? null : ui.mode.kind === "approval" ? (

@@ -75,4 +75,19 @@ describe("terminalUiReducer", () => {
     expect(state.mode).toEqual({ kind: "composer" });
     expect(state.composer.value).toBe("hello");
   });
+
+  it("wraps selection across all commands and scrolls the viewport", () => {
+    let state = terminalUiReducer(initialTerminalUiState(), {
+      type: "composer.edit",
+      action: { type: "insert", text: "/" },
+    });
+    for (let index = 0; index < 12; index += 1) {
+      state = terminalUiReducer(state, { type: "mode.select", delta: 1 });
+    }
+
+    expect(state.mode).toMatchObject({
+      kind: "command_menu",
+      viewportStart: 3,
+    });
+  });
 });

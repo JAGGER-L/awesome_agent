@@ -95,7 +95,11 @@ describe("CommandMenu", () => {
       },
     ];
     const view = render(
-      <CommandMenu commands={commands} selectedCommand="theme" />,
+      <CommandMenu
+        commands={commands}
+        selectedCommand="theme"
+        viewportStart={0}
+      />,
     );
     expect(view.lastFrame()).toContain("/thinking");
     expect(view.lastFrame()).toContain("/theme");
