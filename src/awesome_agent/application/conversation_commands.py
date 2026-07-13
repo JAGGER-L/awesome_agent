@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from typing import Literal
 
 from awesome_agent.application.command_results import (
     CommandOption,
     CommandOutcome,
     CommandSelection,
     ThinkingCommandPayload,
-    ThreadCommandPayload,
+    ThreadTransitionCommandPayload,
+    ThreadTransitionSnapshot,
     error,
     interaction,
     result,
 )
 from awesome_agent.application.commands import CommandIntent
+from awesome_agent.application.contracts import (
+    ApplicationState,
+    ThreadReadQuery,
+    ThreadReadResult,
+)
 from awesome_agent.conversation import ConversationService, Thread, ThreadNotFound
 
 
@@ -25,11 +32,17 @@ class ConversationCommandService:
         *,
         conversation: ConversationService,
         workspace_key: str,
+        application_snapshot: Callable[[], Awaitable[ApplicationState]],
+        thread_snapshot: Callable[[ThreadReadQuery], Awaitable[ThreadReadResult]],
+        has_active_operation: Callable[[], bool],
         default_model: Callable[[], str | None] = lambda: None,
         on_thread_selected: Callable[[], None] = lambda: None,
     ) -> None:
         self._conversation = conversation
         self._workspace_key = workspace_key
+        self._application_snapshot = application_snapshot
+        self._thread_snapshot = thread_snapshot
+        self._has_active_operation = has_active_operation
         self._default_model = default_model
         self._on_thread_selected = on_thread_selected
         self._current_thread_id: str | None = None
@@ -39,20 +52,19 @@ class ConversationCommandService:
         return self._current_thread_id
 
     async def new(self, intent: CommandIntent) -> CommandOutcome:
+        if self._has_active_operation():
+            return self._operation_busy()
         title = " ".join(intent.arguments).strip() or None
         thread = self._conversation.create_thread(
             self._workspace_key,
             title,
             current_model=self._default_model(),
         )
-        self._select(thread)
-        return result(
-            ThreadCommandPayload(
-                action="created", thread_id=thread.id, title=thread.title
-            )
-        )
+        return await self._transition(thread, reason="new")
 
     async def resume(self, intent: CommandIntent) -> CommandOutcome:
+        if self._has_active_operation():
+            return self._operation_busy()
         if len(intent.arguments) > 1:
             return error("invalid_arguments", "Usage: /resume [thread_id]")
         if not intent.arguments:
@@ -88,12 +100,7 @@ class ConversationCommandService:
                 )
             )
         thread = matches[0]
-        self._select(thread)
-        return result(
-            ThreadCommandPayload(
-                action="resumed", thread_id=thread.id, title=thread.title
-            )
-        )
+        return await self._transition(thread, reason="resume")
 
     async def thinking(self, intent: CommandIntent) -> CommandOutcome:
         thread = self._selected_thread()
@@ -141,6 +148,34 @@ class ConversationCommandService:
     def _select(self, thread: Thread) -> None:
         self._current_thread_id = thread.id
         self._on_thread_selected()
+
+    async def _transition(
+        self,
+        thread: Thread,
+        *,
+        reason: Literal["new", "resume"],
+    ) -> CommandOutcome:
+        page = await self._thread_snapshot(
+            ThreadReadQuery(thread_id=thread.id, limit=100)
+        )
+        self._select(thread)
+        application = await self._application_snapshot()
+        return result(
+            ThreadTransitionCommandPayload(
+                transition=ThreadTransitionSnapshot(
+                    reason=reason,
+                    application=application,
+                    thread=page,
+                )
+            )
+        )
+
+    @staticmethod
+    def _operation_busy() -> CommandOutcome:
+        return error(
+            "operation_busy",
+            "Stop the current task before starting or resuming a conversation.",
+        )
 
     def _selected_thread(self) -> Thread | None:
         if self._current_thread_id is None:

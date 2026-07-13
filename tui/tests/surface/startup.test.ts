@@ -40,6 +40,27 @@ const threadPage = (id: string): MethodValue["thread.read"] => ({
   has_more: false,
 });
 
+function threadTransition(
+  id: string,
+  reason: "new" | "resume",
+  application = applicationState(),
+) {
+  return {
+    kind: "thread_transition" as const,
+    transition: {
+      reason,
+      application: {
+        ...application,
+        current_thread_id: id,
+        model_identity:
+          application.model_identity ??
+          modelIdentity("deepseek/deepseek-v4-flash"),
+      },
+      thread: threadPage(id),
+    },
+  };
+}
+
 function harness({
   recent = [thread("thread_recent")],
   resumeSelection,
@@ -62,12 +83,6 @@ function harness({
           return {
             ok: true,
             value: { threads: recent, has_more: false },
-          } as never;
-        }
-        if (method === "thread.read") {
-          return {
-            ok: true,
-            value: threadPage((params as { thread_id: string }).thread_id),
           } as never;
         }
         if (method === "command.execute") {
@@ -100,12 +115,10 @@ function harness({
             ok: true,
             value: {
               kind: "result",
-              payload: {
-                kind: "thread",
-                action: intent.name === "new" ? "created" : "resumed",
-                thread_id: id,
-                title: `Title ${id}`,
-              },
+              payload: threadTransition(
+                id,
+                intent.name === "new" ? "new" : "resume",
+              ),
             },
           } as never;
         }
@@ -146,7 +159,6 @@ describe("runStartup", () => {
     });
     expect(calls).toEqual([
       { method: "command.execute", params: { name: "new" } },
-      { method: "thread.read", params: { thread_id: "thread_new", limit: 50 } },
     ]);
   });
 
@@ -156,7 +168,6 @@ describe("runStartup", () => {
     expect(calls.map(({ method }) => method)).toEqual([
       "thread.list",
       "command.execute",
-      "thread.read",
     ]);
     expect(calls[1]).toEqual({
       method: "command.execute",
@@ -239,12 +250,7 @@ describe("runStartup", () => {
           ok: true,
           value: {
             kind: "result",
-            payload: {
-              kind: "thread",
-              action: "created",
-              thread_id: "thread_new",
-              title: "New thread",
-            },
+            payload: threadTransition("thread_new", "new"),
           },
         } as never;
       }
@@ -263,10 +269,6 @@ describe("runStartup", () => {
       {
         method: "command.execute",
         params: { name: "resume", arguments: ["thread_selected"] },
-      },
-      {
-        method: "thread.read",
-        params: { thread_id: "thread_selected", limit: 50 },
       },
     ]);
   });
@@ -409,17 +411,9 @@ function startupHarness({
             ok: true,
             value: {
               kind: "result",
-              payload: {
-                kind: "thread",
-                action: "created",
-                thread_id: "thread_new",
-                title: "New thread",
-              },
+              payload: threadTransition("thread_new", "new", application),
             },
           } as never;
-        }
-        if (method === "thread.read") {
-          return { ok: true, value: threadPage("thread_new") } as never;
         }
         if (method === "shutdown") {
           return { ok: true, value: { stopped: true } } as never;
@@ -459,8 +453,6 @@ describe("trusted startup state machine", () => {
       "initialize",
       "application.getState",
       "command.execute",
-      "thread.read",
-      "application.getState",
     ]);
   });
 
@@ -502,8 +494,8 @@ describe("trusted startup state machine", () => {
       "connection.handshaking",
       "handshake.ready",
       "hydrate.application",
-      "hydrate.thread",
       "hydrate.application",
+      "hydrate.thread",
     ]);
   });
 

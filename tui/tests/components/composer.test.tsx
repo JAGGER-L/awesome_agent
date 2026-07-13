@@ -321,32 +321,29 @@ describe("App composer integration", () => {
       submit: vi.fn(async () => ({
         kind: "result",
         payload: {
-          kind: "thread",
-          action: "created",
-          thread_id: "thread_new",
-          title: "New Thread",
-        },
-      })),
-      loadThreadReplacement: vi.fn(async () => ({
-        kind: "replacement",
-        application: { current_thread_id: "thread_new" },
-        thread: {
-          view: {
+          kind: "thread_transition",
+          transition: {
+            reason: "new",
+            application: { current_thread_id: "thread_new" },
             thread: {
-              id: "thread_new",
-              workspace_key: "workspace_1",
-              title: "New Thread",
-              thinking_enabled: false,
-              skill_mode: "auto",
-              created_at: "2026-07-12T00:00:00Z",
-              updated_at: "2026-07-12T00:00:00Z",
+              view: {
+                thread: {
+                  id: "thread_new",
+                  workspace_key: "workspace_1",
+                  title: "New Thread",
+                  thinking_enabled: false,
+                  skill_mode: "auto",
+                  created_at: "2026-07-12T00:00:00Z",
+                  updated_at: "2026-07-12T00:00:00Z",
+                },
+                entries: [],
+                turns: [],
+                tool_activities: [],
+              },
+              change_sets: [],
+              has_more: false,
             },
-            entries: [],
-            turns: [],
-            tool_activities: [],
           },
-          change_sets: [],
-          has_more: false,
         },
       })),
     } as unknown as CommandController;

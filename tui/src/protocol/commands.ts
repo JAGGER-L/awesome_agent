@@ -2,6 +2,12 @@ import { z } from "zod";
 
 import { boundedText, safeIntegerSchema } from "./base.js";
 import { modelIdentitySchema } from "./identity.js";
+import {
+  applicationStateSchema,
+  providerCredentialStatusesSchema,
+  threadReadResultSchema,
+  usageSummarySchema,
+} from "./product-projections.js";
 
 export const applicationCommandNames = [
   "new",
@@ -147,33 +153,6 @@ export const commandApplicationInteractionSchema = z.strictObject({
   interaction_id: boundedText(1, 128),
 });
 
-export const usageSummarySchema = z.strictObject({
-  input_tokens: safeIntegerSchema.min(0),
-  output_tokens: safeIntegerSchema.min(0),
-  reasoning_tokens: safeIntegerSchema.min(0),
-  cache_read_tokens: safeIntegerSchema.min(0),
-  cache_write_tokens: safeIntegerSchema.min(0),
-  model_calls: safeIntegerSchema.min(0),
-  tool_calls: safeIntegerSchema.min(0),
-  provider_retries: safeIntegerSchema.min(0),
-  compressions: safeIntegerSchema.min(0),
-  active_execution_seconds: z.number().finite().min(0),
-});
-
-export const credentialSourceSchema = z.enum(["environment", "awesome"]);
-export const providerCredentialStatusSchema = z.strictObject({
-  provider: z.enum(["deepseek", "kimi", "mem0"]),
-  environment_variable: boundedText(1, 128),
-  environment_configured: z.boolean(),
-  awesome_configured: z.boolean(),
-  selected_source: credentialSourceSchema.nullable().optional(),
-});
-export const providerCredentialStatusesSchema = z.strictObject({
-  deepseek: providerCredentialStatusSchema,
-  kimi: providerCredentialStatusSchema,
-  mem0: providerCredentialStatusSchema,
-});
-
 const contextCategorySchema = z.strictObject({
   name: z.enum(["instructions", "conversation", "files", "memory"]),
   estimated_tokens: safeIntegerSchema.min(0),
@@ -231,16 +210,29 @@ const doctorCheckSchema = z.strictObject({
   detail: boundedText(1, 2_000).nullable().optional(),
 });
 
+export const threadTransitionSnapshotSchema = z
+  .strictObject({
+    reason: z.enum(["new", "resume"]),
+    application: applicationStateSchema,
+    thread: threadReadResultSchema,
+  })
+  .superRefine(({ application, thread }, context) => {
+    if (application.current_thread_id !== thread.view.thread.id) {
+      context.addIssue({
+        code: "custom",
+        message: "Thread transition identities must match",
+      });
+    }
+  });
+
 export const commandPayloadSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("notice"),
     message: boundedText(1, 30_000),
   }),
   z.strictObject({
-    kind: z.literal("thread"),
-    action: z.enum(["created", "resumed"]),
-    thread_id: boundedText(1, 128),
-    title: boundedText(1, 500),
+    kind: z.literal("thread_transition"),
+    transition: threadTransitionSnapshotSchema,
   }),
   z.strictObject({
     kind: z.literal("context"),
@@ -352,6 +344,10 @@ export const commandOutcomeSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type CommandPayload = z.infer<typeof commandPayloadSchema>;
+export type ThreadTransitionSnapshot = Extract<
+  CommandPayload,
+  { readonly kind: "thread_transition" }
+>["transition"];
 export type CommandOutcome = z.infer<typeof commandOutcomeSchema>;
 export type CommandSelection = z.infer<typeof commandSelectionSchema>;
 export type CommandSecretPrompt = z.infer<typeof commandSecretPromptSchema>;

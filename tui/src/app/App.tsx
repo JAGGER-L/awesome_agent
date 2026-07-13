@@ -132,7 +132,6 @@ export function App({
   const globalKeys = useRef(new GlobalKeyController()).current;
   const replaceThread = useThreadReplacement({
     store,
-    controller,
     resetThreadScope: lifecycle?.resetThreadScope,
   });
   const historic =
@@ -334,12 +333,11 @@ export function App({
           );
         case "result": {
           const payload = outcome.payload;
-          if (payload.kind === "thread") {
+          if (payload.kind === "thread_transition") {
             try {
               await replaceThread({
-                threadId: payload.thread_id,
+                transition: payload.transition,
                 expectedGeneration: generation,
-                reason: payload.action === "created" ? "new" : "resume",
               });
             } catch (error) {
               if (!(error instanceof ThreadReplacementError)) throw error;
