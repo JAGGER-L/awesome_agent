@@ -65,6 +65,7 @@ export type UiMode =
       readonly selection: PickerSelection;
       readonly selected: number;
       readonly blocking: boolean;
+      readonly submitting?: boolean;
     }
   | {
       readonly kind: "secret";

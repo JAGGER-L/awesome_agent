@@ -149,6 +149,55 @@ describe("routeTerminalKey", () => {
     ).toBeUndefined();
   });
 
+  it("does not confirm disabled or submitting picker rows", () => {
+    const disabled = stateWithMode({
+      kind: "picker",
+      owner: { kind: "command", intent: { name: "auth" } },
+      selected: 0,
+      blocking: false,
+      selection: {
+        prompt: "Choose source",
+        options: [
+          {
+            value: "environment",
+            label: "Environment",
+            selected: true,
+            disabled: true,
+          },
+        ],
+      },
+    });
+    expect(
+      routeTerminalKey(disabled, "", {
+        ...emptyTerminalKey(),
+        return: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      routeTerminalKey(
+        stateWithMode({
+          kind: "picker",
+          owner: { kind: "command", intent: { name: "auth" } },
+          selected: 0,
+          blocking: false,
+          submitting: true,
+          selection: {
+            prompt: "Choose source",
+            options: [
+              {
+                value: "awesome",
+                label: "Awesome API key",
+                selected: true,
+              },
+            ],
+          },
+        }),
+        "x",
+        emptyTerminalKey(),
+      ),
+    ).toBeUndefined();
+  });
+
   it("routes workspace Trust numbers, arrows, Enter, and Escape", () => {
     const trust = stateWithMode({
       kind: "workspace_trust",

@@ -1,6 +1,17 @@
-import { Box, Text } from "ink";
+import { Text } from "ink";
 
+import { SelectionPanel } from "./interactions/index.js";
 import { useTheme } from "./theme.js";
+
+const trustOptions = [
+  {
+    value: "trust",
+    label: "1. Yes, I trust this folder",
+    selected: true,
+    disabled: false,
+  },
+  { value: "exit", label: "2. No, exit", selected: false, disabled: false },
+] as const;
 
 export function TrustPrompt({
   workspacePath,
@@ -15,15 +26,14 @@ export function TrustPrompt({
 }) {
   const theme = useTheme();
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor={theme.brand}
-      paddingX={1}
+    <SelectionPanel
+      title="Trust this workspace?"
+      options={trustOptions}
+      selected={selected}
+      variant="brand"
+      submitting={submitting}
+      message={message}
     >
-      <Text bold color={theme.brand}>
-        Trust this workspace?
-      </Text>
       <Text> </Text>
       <Text color={theme.brand}>{workspacePath}</Text>
       <Text> </Text>
@@ -35,28 +45,6 @@ export function TrustPrompt({
         unfamiliar projects before continuing.
       </Text>
       <Text> </Text>
-      <TrustChoice
-        active={selected === 0}
-        label="1. Yes, I trust this folder"
-      />
-      <TrustChoice active={selected === 1} label="2. No, exit" />
-      <Text> </Text>
-      <Text color={theme.muted}>
-        {submitting
-          ? "Saving trust…"
-          : "↑/↓ select · Enter confirm · Esc cancel"}
-      </Text>
-      {message ? <Text color={theme.danger}>{message}</Text> : null}
-    </Box>
-  );
-}
-
-function TrustChoice({ active, label }: { active: boolean; label: string }) {
-  const theme = useTheme();
-  return (
-    <Text {...(active ? { color: theme.brand } : {})}>
-      {active ? "❯ " : "  "}
-      {label}
-    </Text>
+    </SelectionPanel>
   );
 }
