@@ -56,7 +56,7 @@ Command controller
   - invoke local command or typed RPC
         |
         v
-Python Application command dispatcher
+Python Core command dispatcher
         |
         +-- Conversation commands
         +-- Context commands
@@ -67,7 +67,7 @@ Python Application command dispatcher
         |
         v
 Typed CommandOutcome
-  Result / Interaction / Progress / Error
+  Result / Interaction / Error
         |
         v
 Compile-time exhaustive Presenter
@@ -101,8 +101,8 @@ Thread replacement is an atomic surface transition. `/new` and `/resume` must no
 | `application/dispatcher.py` | Resolve a typed intent to exactly one handler and return a typed outcome. No product-specific duplicate fallback path. |
 | Command domain services | Own command semantics grouped by conversation, context, configuration, extensions, changes, and diagnostics. |
 | `application/composition.py` | Construct dependencies and connect handlers. It does not format user output or implement commands. |
-| `application/headless.py` | Provide the non-Ink host/facade path by delegating to the same Application services. It does not duplicate commands. |
-| `application/commands.py` and related contracts | Define canonical command identity, intent, outcome envelope, semantic payloads, interactions, progress, and errors. |
+| `application/facade.py` | Provide the only surface-facing Application API and delegate to the composed backend. |
+| `application/commands.py` and related contracts | Define canonical command identity, intent, outcome envelope, semantic payloads, interactions, and errors. |
 | Protocol host | Serialize Application contracts and enforce protocol errors. It does not repair malformed results. |
 
 Do not create one class per command. Child plans should prefer a small number of cohesive domain services and keep files reviewable.
@@ -129,9 +129,13 @@ The current arbitrary `data: Record<string, JsonValue>` is replaced by a discrim
 CommandOutcome
   result       semantic command result
   interaction  Picker / secret / confirmation request
-  progress     replaceable lifecycle state
   error        stable code plus safe user-facing context
 ```
+
+Command progress is a Surface lifecycle while an RPC is pending, not a returned
+protocol variant. For example, `/compact` creates a typed local progress block
+before `command.execute` and replaces that same block with the final result or
+error. No unused protocol progress type is introduced.
 
 The result side uses a bounded set of product-semantic families rather than one UI schema per row and rather than one untyped JSON container:
 
@@ -242,7 +246,7 @@ Each PR below must receive its own detailed implementation plan before code is c
 **Acceptance gate:**
 
 - One command has one semantic handler regardless of entry point.
-- Object arrays, nullable fields, floating durations, enums, interactions, progress, and errors cross the Python-TypeScript boundary exactly.
+- Object arrays, nullable fields, floating durations, enums, interactions, and errors cross the Python-TypeScript boundary exactly.
 - No normal command result relies on arbitrary object stringification.
 - Existing Agent, Tool, storage, and Provider behavior remains outside the change.
 
