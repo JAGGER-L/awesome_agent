@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 
+import { terminalDisplayWidth } from "../layout/width.js";
 import type { Theme } from "../preferences/theme.js";
 import { COMPACT_LOGO_ROWS, FULL_LOGO_ROWS } from "./welcome-logo.js";
 
@@ -29,6 +30,7 @@ export function Welcome(props: WelcomeProps) {
   const detailsPanelWidth = sideBySide
     ? props.width - logoPanelWidth
     : props.width;
+  const logoWidth = Math.max(...rows.map(terminalDisplayWidth));
   const details = <WelcomeDetails {...props} />;
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -42,16 +44,18 @@ export function Welcome(props: WelcomeProps) {
           alignItems="center"
           justifyContent="center"
         >
-          {rows.map((row, index) => (
-            <Text
-              key={row}
-              {...(props.theme.logoRows[index]
-                ? { color: props.theme.logoRows[index] }
-                : {})}
-            >
-              {row}
-            </Text>
-          ))}
+          <Box width={logoWidth} flexDirection="column">
+            {rows.map((row, index) => (
+              <Text
+                key={row}
+                {...(props.theme.logoRows[index]
+                  ? { color: props.theme.logoRows[index] }
+                  : {})}
+              >
+                {row}
+              </Text>
+            ))}
+          </Box>
         </Box>
         <Box
           borderStyle="round"

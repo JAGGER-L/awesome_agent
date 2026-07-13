@@ -17,7 +17,6 @@ describe("context and usage presenters", () => {
     });
     expect(result).toMatchObject({
       kind: "panel",
-      valueAlignment: "end",
       rows: [
         { label: "Instructions", value: "12K" },
         { label: "Conversation", value: "4.5K" },
@@ -47,7 +46,7 @@ describe("context and usage presenters", () => {
     });
     expect(result.kind).toBe("panel");
     if (result.kind !== "panel") return;
-    expect(result.valueAlignment).toBe("end");
+    expect("valueAlignment" in result).toBe(false);
     expect(result.rows.map((row) => row.label)).toEqual([
       "Input tokens",
       "Output tokens",

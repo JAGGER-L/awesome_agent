@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { render } from "ink-testing-library";
 import { describe, expect, it } from "vitest";
 
@@ -6,12 +9,11 @@ import { AlignedRows } from "../../../src/components/results/index.js";
 describe("aligned result rows", () => {
   it.each([
     80, 100, 120,
-  ])("aligns values to one right edge at %i columns", (width) => {
+  ])("starts every value after one shared label column at %i columns", (width) => {
     const lines = (
       render(
         <AlignedRows
           width={width}
-          valueAlignment="end"
           rows={[
             { label: "A", value: "1" },
             { label: "Long label", value: "22" },
@@ -20,7 +22,8 @@ describe("aligned result rows", () => {
       ).lastFrame() ?? ""
     ).split("\n");
     if (width <= 100) {
-      expect(lines[0]?.trimEnd().length).toBe(lines[1]?.trimEnd().length);
+      expect(lines[0]?.indexOf("1")).toBe(13);
+      expect(lines[1]?.indexOf("22")).toBe(13);
     } else {
       // ink-testing-library fixes its virtual stdout at 100 columns. A wider
       // component is clipped by that harness, so this case verifies content;
@@ -35,7 +38,6 @@ describe("aligned result rows", () => {
       render(
         <AlignedRows
           width={80}
-          valueAlignment="start"
           rows={[
             { label: "Check", value: "OK" },
             { label: "Check", value: "Missing" },
@@ -50,7 +52,6 @@ describe("aligned result rows", () => {
       render(
         <AlignedRows
           width={30}
-          valueAlignment="start"
           rows={[
             { label: "Workspace", value: "E:/projects/an-important-workspace" },
           ]}
@@ -67,7 +68,6 @@ describe("aligned result rows", () => {
       render(
         <AlignedRows
           width={80}
-          valueAlignment="start"
           rows={[
             { label: "Model", value: "deepseek/deepseek-v4-flash" },
             { label: "Workspace", value: "E:/projects/awesome" },
@@ -76,5 +76,21 @@ describe("aligned result rows", () => {
       ).lastFrame() ?? ""
     ).split("\n");
     expect(lines[0]?.indexOf("deepseek")).toBe(lines[1]?.indexOf("E:/"));
+  });
+
+  it("has no legacy alignment policy in the production result path", () => {
+    const files = [
+      "../../../src/commands/presenters.ts",
+      "../../../src/components/CommandResultView.tsx",
+      "../../../src/components/results/AlignedRows.tsx",
+    ];
+    const source = files
+      .map((path) =>
+        readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8"),
+      )
+      .join("\n");
+    expect(source).not.toContain("ValueAlignment");
+    expect(source).not.toContain("valueAlignment");
+    expect(source).not.toContain('justifyContent="flex-end"');
   });
 });
