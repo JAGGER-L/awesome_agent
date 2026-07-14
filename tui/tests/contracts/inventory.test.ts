@@ -93,7 +93,7 @@ describe("protocol inventory", () => {
   });
 
   it("freezes command ownership and excludes removed commands", () => {
-    expect(applicationCommandNames).toHaveLength(20);
+    expect(applicationCommandNames).toHaveLength(21);
     expect(applicationCommandNames).toContain("auth");
     expect(applicationCommandNames).toContain("permissions");
     expect(inkCommandNames).toEqual(["help", "theme", "copy", "quit"]);

@@ -70,10 +70,10 @@ describe("request failure containment", () => {
         "Awesome could not complete this request. You can retry.",
       ),
     );
-    expect(view.lastFrame()).toContain("❯ hi");
-    expect(view.lastFrame()).toContain("hi▌");
-    expect(view.lastFrame()).toContain("idle · idle");
-    expect(view.lastFrame()).not.toContain("Sending…");
+    const failedFrame = view.lastFrame() ?? "";
+    expect(failedFrame.match(/❯ hi/gu)).toHaveLength(2);
+    expect(failedFrame).toContain("◇ Request approval");
+    expect(failedFrame).not.toContain("Sending…");
     expect(reportFatal).not.toHaveBeenCalled();
 
     view.stdin.write("\u0003");

@@ -41,7 +41,7 @@ describe("Ink terminal ownership boundaries", () => {
         ?.source ?? "";
     expect(
       [...layout.matchAll(/from ["']([^"']+)["']/gu)].map((match) => match[1]),
-    ).toEqual(["ink", "react"]);
+    ).toEqual(["ink", "react", "./cursor/terminal-frame-metrics.js"]);
     const orderedNodes = [
       "props.welcome",
       "props.transcript",
@@ -57,7 +57,8 @@ describe("Ink terminal ownership boundaries", () => {
         layout.indexOf(orderedNodes[index] ?? ""),
       );
     }
-    expect(layout).toContain('<Box flexDirection="column">');
+    expect(layout).toContain("<TerminalFrameMetricsProvider");
+    expect(layout).toContain('<Box ref={frameRef} flexDirection="column">');
   });
 
   it("keeps pending input session-local and outside protocol and Surface state", async () => {
