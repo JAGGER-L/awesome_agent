@@ -15,6 +15,12 @@ from awesome_agent.storage.database import (
     initialize_application_database,
 )
 from awesome_agent.storage.mcp import SQLiteMcpEnablementStore, mcp_config_hash
+from awesome_agent.storage.state_lease import (
+    StateLease,
+    StateLeaseMode,
+    StateLeaseUnavailable,
+)
+from awesome_agent.storage.state_recovery import StateResetError, reset_local_state
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 __all__ = [
@@ -28,10 +34,15 @@ __all__ = [
     "SQLiteMcpEnablementStore",
     "SQLiteWorkspaceTrustStore",
     "StateCompatibility",
+    "StateLease",
+    "StateLeaseMode",
+    "StateLeaseUnavailable",
     "StatePreflight",
+    "StateResetError",
     "application_connection",
     "initialize_application_database",
     "inspect_application_state",
     "mcp_config_hash",
+    "reset_local_state",
     "sqlite_checkpoint_saver",
 ]

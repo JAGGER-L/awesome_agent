@@ -187,7 +187,7 @@ async def test_incompatible_state_is_a_nonmutating_product_failure(
     assert result.error.retryable is False
     assert result.error.data == {
         "found_schema": 1,
-        "expected_schema": 2,
+        "expected_schema": 7,
         "state_directory": str(state.resolve()),
     }
     assert _file_snapshot(state) == before_state
