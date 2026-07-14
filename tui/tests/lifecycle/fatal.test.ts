@@ -12,6 +12,7 @@ import {
   RpcProtocolError,
   RpcValidationError,
 } from "../../src/protocol/client.js";
+import type { ProductError } from "../../src/protocol/base.js";
 import { ProtocolDesynchronized } from "../../src/state/event-stream.js";
 import { StartupProductError } from "../../src/surface/startup.js";
 
@@ -97,6 +98,42 @@ describe("toFatalState", () => {
     });
     if (!fatal) throw new Error("expected fatal state");
     expect(fatalExitCode(fatal)).toBe(2);
+  });
+
+  it.each([
+    {
+      code: "state_unknown",
+      message: "Safe local state failure.",
+      retryable: false,
+      data: { state_directory: "E:\\state" },
+    },
+    {
+      code: "state_unavailable",
+      message: "Safe local state failure.",
+      retryable: true,
+      data: { state_directory: "E:\\state" },
+    },
+    {
+      code: "state_reset_busy",
+      message: "Safe local state failure.",
+      retryable: true,
+      data: { state_directory: "E:\\state" },
+    },
+    {
+      code: "state_reset_failed",
+      message: "Safe local state failure.",
+      retryable: true,
+      data: {
+        diagnostic_code: "fresh_state_initialization_failed",
+        state_directory: "E:\\state",
+      },
+    },
+  ] satisfies readonly ProductError[])("keeps $code as a bounded startup failure", (error) => {
+    expect(toFatalState(new StartupProductError(error), session())).toEqual({
+      kind: "startup_state",
+      message: "Safe local state failure.",
+      diagnosticCode: error.code,
+    });
   });
 
   it("does not turn expected ProductError into fatal state", () => {

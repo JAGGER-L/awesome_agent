@@ -73,11 +73,31 @@ describe("FatalScreen", () => {
       ).lastFrame() ?? "";
 
     expect(frame).toContain("Awesome could not initialize this workspace.");
+    expect(frame).toContain("Upgrade Awesome to continue.");
     expect(frame).toContain("Quit");
     expect(frame).not.toContain("Reconnect");
     expect(frame).not.toContain("Found schema");
     expect(frame).not.toContain("E:\\awesome_agent\\.awesome-dev\\home\\state");
     expect(frame).not.toContain("traceback");
     expect(frame).not.toContain("automatically");
+  });
+
+  it("shows a bounded diagnostic for non-resettable startup state", () => {
+    const frame =
+      render(
+        <FatalScreen
+          fatal={{
+            kind: "startup_state",
+            message: "Local state is currently unavailable.",
+            diagnosticCode: "state_unavailable",
+          }}
+          startup
+        />,
+      ).lastFrame() ?? "";
+
+    expect(frame).toContain("Diagnostic: state_unavailable");
+    expect(frame).toContain("Local state is currently unavailable.");
+    expect(frame).toContain("Quit");
+    expect(frame).not.toContain("Reconnect");
   });
 });

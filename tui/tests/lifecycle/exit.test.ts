@@ -60,6 +60,7 @@ describe("ExitController", () => {
     "ctrl_d",
     "double_ctrl_c",
     "trust_denied",
+    "state_reset_denied",
   ] as const)("uses one graceful path for %s", async (reason) => {
     const value = harness();
     const pending = value.controller.requestExit(reason);

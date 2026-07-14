@@ -26,6 +26,7 @@ export type TerminalIntent =
   | { readonly type: "selection.confirm" }
   | { readonly type: "approval.deny" }
   | { readonly type: "trust.deny" }
+  | { readonly type: "state_reset.deny" }
   | { readonly type: "command.complete" }
   | { readonly type: "secret.insert"; readonly text: string }
   | { readonly type: "secret.backspace" }
@@ -79,6 +80,12 @@ export function routeTerminalKey(
         } else {
           intent = routeSelectionKey(key, true);
         }
+      }
+      break;
+    case "state_reset":
+      if (!mode.submitting) {
+        if (key.escape) intent = { type: "state_reset.deny" };
+        else intent = routeSelectionKey(key, true);
       }
       break;
     case "fatal":

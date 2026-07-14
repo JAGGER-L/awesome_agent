@@ -1,6 +1,12 @@
 import { createInterface } from "node:readline";
 
 const mode = process.env.AWESOME_FAKE_CORE_MODE ?? "normal";
+let startupPhase =
+  mode === "state-reset-required"
+    ? "state_reset"
+    : mode === "trust-required"
+      ? "trust"
+      : "ready";
 const stderr = process.env.AWESOME_FAKE_CORE_STDERR_BASE64;
 if (stderr) process.stderr.write(Buffer.from(stderr, "base64"));
 if (mode === "exit-before-handshake") process.exit(23);
@@ -24,7 +30,7 @@ const applicationState = (threadId) => ({
   session_id: "session_fake",
   workspace_key: "workspace_fake",
   workspace: { display_path: process.cwd(), branch: "fake" },
-  workspace_trusted: mode !== "trust-required",
+  workspace_trusted: startupPhase === "ready",
   ...(threadId ? { current_thread_id: threadId } : {}),
   model_identity: {
     provider: "deepseek",
@@ -130,16 +136,63 @@ const handleLine = (line) => {
       result: application({
         product_version: "0.1.0",
         protocol_version: 2,
-        status: mode === "trust-required" ? "trust_required" : "ready",
+        status:
+          startupPhase === "state_reset"
+            ? "state_reset_required"
+            : startupPhase === "trust"
+              ? "trust_required"
+              : "ready",
         session_id: "session_fake",
-        ...(mode === "trust-required"
-          ? { interaction_id: "interaction_fake" }
-          : {}),
+        ...(startupPhase === "ready"
+          ? {}
+          : {
+              interaction_id:
+                startupPhase === "state_reset"
+                  ? "interaction_state_reset"
+                  : "interaction_fake",
+            }),
         workspace: {
           display_path: process.cwd(),
           branch: process.env.AWESOME_FAKE_CORE_MARKER ?? "fake",
         },
         capabilities: ["threads", "turns", "commands"],
+      }),
+    });
+  } else if (request.method === "interaction.respond") {
+    const decision = request.params.decision;
+    if (
+      startupPhase === "state_reset" &&
+      decision === "reset_state" &&
+      process.env.AWESOME_FAKE_CORE_RESET_FAILURE === "1"
+    ) {
+      output({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: application({
+          accepted: false,
+          status: "state_reset_busy",
+          error: {
+            code: "state_reset_busy",
+            message:
+              "Close other Awesome sessions before resetting local state.",
+            retryable: true,
+            data: { state_directory: "C:\\Awesome\\state" },
+          },
+        }),
+      });
+      return;
+    }
+    if (startupPhase === "state_reset" && decision === "reset_state") {
+      startupPhase = "trust";
+    } else if (startupPhase === "trust" && decision === "trust") {
+      startupPhase = "ready";
+    }
+    output({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: application({
+        accepted: true,
+        status: decision === "deny" ? "denied" : "resolved",
       }),
     });
   } else if (request.method === "application.getState") {

@@ -32,6 +32,10 @@ export const SAFE_DIAGNOSTIC_COMMANDS = [
 
 export type StartupResult =
   | {
+      readonly kind: "state_reset_required";
+      readonly interactionId: string;
+    }
+  | {
       readonly kind: "trust_required";
       readonly interactionId: string;
       readonly workspacePath: string;
@@ -99,6 +103,18 @@ export async function beginStartup(
     client_version: PRODUCT_VERSION,
   });
   if (!initialized.ok) throw productFailure(initialized.error);
+  if (initialized.value.status === "state_reset_required") {
+    if (!initialized.value.interaction_id) {
+      throw new StartupError(
+        "State reset response omitted its interaction identity",
+        "interaction_missing",
+      );
+    }
+    return {
+      kind: "state_reset_required",
+      interactionId: initialized.value.interaction_id,
+    };
+  }
   if (initialized.value.status === "trust_required") {
     surface.store?.dispatch({ type: "handshake.trust_required" });
     if (!initialized.value.interaction_id) {
@@ -136,6 +152,30 @@ export async function beginStartup(
   };
 }
 
+export async function respondStartupStateReset(
+  surface: StartupSurface,
+  intent: LaunchIntent,
+  interactionId: string,
+  decision: "reset_state" | "deny",
+): Promise<StartupResult> {
+  const response = await surface.request("interaction.respond", {
+    interaction_id: interactionId,
+    decision,
+  });
+  if (!response.ok) throw productFailure(response.error);
+  if (!response.value.accepted) {
+    if (response.value.error) throw productFailure(response.value.error);
+    throw new StartupError(
+      "State reset response was not accepted",
+      "interaction_rejected",
+    );
+  }
+  if (decision === "deny") {
+    return { kind: "denied" };
+  }
+  return await beginStartup(surface, intent);
+}
+
 export async function respondStartupTrust(
   surface: StartupSurface,
   intent: LaunchIntent,
@@ -154,8 +194,6 @@ export async function respondStartupTrust(
     );
   }
   if (decision === "deny") {
-    const shutdown = await surface.request("shutdown", {});
-    if (!shutdown.ok) throw productFailure(shutdown.error);
     return { kind: "denied" };
   }
   return await beginStartup(surface, intent);

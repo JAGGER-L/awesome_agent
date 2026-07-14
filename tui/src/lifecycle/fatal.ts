@@ -16,6 +16,11 @@ export type FatalState =
     }
   | { readonly kind: "render"; readonly message: string }
   | { readonly kind: "runtime_missing"; readonly executable: string }
+  | {
+      readonly kind: "startup_state";
+      readonly message: string;
+      readonly diagnosticCode: string;
+    }
   | { readonly kind: "version_incompatible"; readonly message: string };
 
 export class RenderFailure extends Error {
@@ -36,6 +41,18 @@ export function toFatalState(
     };
   }
   if (isProductError(error)) {
+    if (
+      error.code === "state_unknown" ||
+      error.code === "state_unavailable" ||
+      error.code === "state_reset_busy" ||
+      error.code === "state_reset_failed"
+    ) {
+      return {
+        kind: "startup_state",
+        message: error.message,
+        diagnosticCode: error.code,
+      };
+    }
     return error.code === "protocol_version_incompatible" ||
       error.code === "client_version_incompatible" ||
       error.code === "state_created_by_newer_version"
