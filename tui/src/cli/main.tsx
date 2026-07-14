@@ -233,32 +233,21 @@ async function renderInkApplication(
   const loaded = await loadPreferences(awesomeHome);
   let instance: Instance | undefined;
   let settled = false;
-  let cleaned = false;
+  let cleanupPromise: Promise<void> | undefined;
   return await new Promise<CliRenderOutcome>((resolve, reject) => {
     const cleanupTerminal = () => {
-      if (cleaned) return;
-      cleaned = true;
-      instance?.unmount();
+      cleanupPromise ??= unmountInkApplication(instance);
+      return cleanupPromise;
     };
     const finish = (outcome: CliRenderOutcome) => {
       if (settled) return;
       settled = true;
-      try {
-        cleanupTerminal();
-        resolve(outcome);
-      } catch (error) {
-        reject(error);
-      }
+      void cleanupTerminal().then(() => resolve(outcome), reject);
     };
     const fail = (error: unknown) => {
       if (settled) return;
       settled = true;
-      try {
-        cleanupTerminal();
-        reject(error);
-      } catch (cleanupError) {
-        reject(cleanupError);
-      }
+      void cleanupTerminal().then(() => reject(error), reject);
     };
     instance = render(
       <CliApplication
@@ -285,7 +274,7 @@ type CliApplicationProps = CliRenderRequest & {
   readonly preferenceWarning?: string;
   readonly onFinish: (outcome: CliRenderOutcome) => void;
   readonly onFailure: (error: unknown) => void;
-  readonly cleanupTerminal: () => void;
+  readonly cleanupTerminal: () => Promise<void>;
   readonly flushCurrentFrame: () => Promise<void>;
   readonly resetCurrentFrame: () => void;
 };
@@ -791,6 +780,14 @@ export async function flushCurrentInkFrame(
   instance: Pick<Instance, "waitUntilRenderFlush"> | undefined,
 ): Promise<void> {
   await instance?.waitUntilRenderFlush();
+}
+
+export async function unmountInkApplication(
+  instance: Pick<Instance, "unmount" | "waitUntilExit"> | undefined,
+): Promise<void> {
+  if (!instance) return;
+  instance.unmount();
+  await instance.waitUntilExit();
 }
 
 export async function executeFatalRecoverySelection(
