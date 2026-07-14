@@ -145,6 +145,9 @@ PTY cannot operate the user's system IME.
 
 Storage continues to own schema detection and raises
 `ApplicationSchemaMismatch(found, expected)` before returning a connection.
+Application composition must not open the writable LangGraph checkpoint saver
+before this preflight completes; checkpoint resources are acquired only during
+successful activation after the Application schema is accepted.
 Application initialization owns conversion of that storage condition into a
 typed product failure:
 
@@ -205,7 +208,8 @@ Tests must prove:
 - a current Schema 2 database initializes normally;
 - a Schema 1/unknown nonzero database returns the typed non-retryable product
   error with found and expected versions;
-- the incompatible database and sibling configuration files are unchanged;
+- the incompatible database, checkpoint state, and sibling configuration files
+  are unchanged;
 - protocol producer and TypeScript consumer agree on the exact error payload;
 - the TUI displays the dedicated panel and offers only Quit;
 - `core_request_failed` is reserved for genuinely unexpected request failures;
