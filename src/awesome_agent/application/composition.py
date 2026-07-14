@@ -57,6 +57,7 @@ from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
+    state_reset_choices,
     tool_approval_choices,
     workspace_trust_choices,
 )
@@ -175,14 +176,18 @@ from awesome_agent.providers import (
 )
 from awesome_agent.storage import (
     ApplicationSchemaMismatch,
+    ApplicationStateUnavailable,
     ApplicationStateUnknown,
     SQLiteMcpEnablementStore,
     StateCompatibility,
     StateLease,
     StateLeaseMode,
+    StateLeaseUnavailable,
     StatePreflight,
+    StateResetError,
     initialize_application_database,
     inspect_application_state,
+    reset_local_state,
 )
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
@@ -376,6 +381,7 @@ class _LocalApplicationBackend:
         self._workspace_branch: str | None = None
         self._permission_session = PermissionSession()
         self._state_lease: StateLease | None = None
+        self._bootstrap_lock = asyncio.Lock()
         self._resources.callback(self._close_state_lease)
 
     async def initialize_application(self) -> InitializeResult:
@@ -392,14 +398,28 @@ class _LocalApplicationBackend:
             self._ensure_state_lease()
             trust_status = self._trust.status(self._workspace)
         except ApplicationSchemaMismatch as error:
+            if error.direction is StateCompatibility.OLDER:
+                return await self._state_reset_required()
+            raise self._newer_state_failure(error.found, error.expected) from error
+        except ApplicationStateUnknown as error:
             raise _application_failure(
-                ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE,
-                "Awesome state is incompatible with this version.",
-                data={
-                    "found_schema": error.found,
-                    "expected_schema": error.expected,
-                    "state_directory": str(self._paths.state_dir.resolve()),
-                },
+                ProductErrorCode.STATE_UNKNOWN,
+                "Awesome cannot identify the local state format.",
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
+        except ApplicationStateUnavailable as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome cannot read local state.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
+        except StateLeaseUnavailable as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Local state is currently in use.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
             ) from error
         if trust_status is not TrustStatus.TRUSTED:
             pending = self._interactions.pending
@@ -447,6 +467,68 @@ class _LocalApplicationBackend:
             session_id=self._session_id,
             workspace=self._workspace_presentation(include_branch=True),
             capabilities=_CAPABILITIES,
+        )
+
+    async def _state_reset_required(self) -> InitializeResult:
+        pending = self._interactions.pending
+        if pending is None:
+            pending = self._interactions.create(
+                kind=InteractionKind.STATE_RESET,
+                prompt="Awesome needs to reset local state",
+                operation="reset_local_state",
+                target="local state",
+                capability=None,
+                choices=state_reset_choices(),
+            )
+            await self._emitter.emit(
+                InteractionRequiredPayload(
+                    interaction_id=pending.id,
+                    interaction_kind="state_reset",
+                    prompt=pending.prompt,
+                    operation=pending.operation,
+                    target=pending.target,
+                    capability=pending.capability,
+                    choices=tuple(
+                        InteractionChoicePayload(
+                            decision=item.decision.value,
+                            label=item.label,
+                            description=item.description,
+                        )
+                        for item in pending.choices
+                    ),
+                )
+            )
+        elif pending.kind is not InteractionKind.STATE_RESET:
+            raise _application_failure(
+                ProductErrorCode.INTERNAL_ERROR,
+                "Another startup interaction is already active.",
+            )
+        return InitializeResult(
+            product_version=PRODUCT_VERSION,
+            protocol_version=2,
+            status=InitializeStatus.STATE_RESET_REQUIRED,
+            session_id=self._session_id,
+            interaction_id=pending.id,
+            workspace=self._workspace_presentation(include_branch=False),
+            capabilities=_CAPABILITIES,
+        )
+
+    def _newer_state_failure(
+        self,
+        found_schema: int,
+        expected_schema: int,
+    ) -> ApplicationFailure:
+        return _application_failure(
+            ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION,
+            (
+                "Local state was created by a newer Awesome version. "
+                "Upgrade Awesome to continue."
+            ),
+            data={
+                "found_schema": found_schema,
+                "expected_schema": expected_schema,
+                "state_directory": str(self._paths.state_dir.resolve()),
+            },
         )
 
     async def application_state(self) -> ApplicationState:
@@ -677,6 +759,11 @@ class _LocalApplicationBackend:
             parsed = InteractionDecision(decision)
         except ValueError:
             return InteractionResult(accepted=False, status="invalid_decision")
+        if pending.kind is InteractionKind.STATE_RESET:
+            return await self._resolve_state_reset_interaction(
+                interaction_id,
+                parsed,
+            )
         if not self._interactions.resolve(interaction_id, parsed):
             return InteractionResult(accepted=False, status="rejected")
         resolved = await self._interactions.wait(interaction_id)
@@ -698,6 +785,126 @@ class _LocalApplicationBackend:
             else:
                 return InteractionResult(accepted=True, status="denied")
         return InteractionResult(accepted=True, status="resolved")
+
+    async def _resolve_state_reset_interaction(
+        self,
+        interaction_id: str,
+        decision: InteractionDecision,
+    ) -> InteractionResult:
+        async with self._bootstrap_lock:
+            pending = self._interactions.pending
+            if pending is None or pending.id != interaction_id:
+                return InteractionResult(accepted=False, status="not_found")
+            if not self._interactions.allows(interaction_id, decision):
+                return InteractionResult(accepted=False, status="rejected")
+            if decision is InteractionDecision.RESET_STATE:
+                try:
+                    await self._recover_older_state()
+                except ApplicationFailure as failure:
+                    return InteractionResult(
+                        accepted=False,
+                        status=failure.error.code.value,
+                        error=failure.error,
+                    )
+            elif decision is not InteractionDecision.DENY:
+                return InteractionResult(accepted=False, status="rejected")
+
+            if not self._interactions.resolve(interaction_id, decision):
+                return InteractionResult(accepted=False, status="rejected")
+            resolved = await self._interactions.wait(interaction_id)
+            await self._emitter.emit(
+                InteractionResolvedPayload(
+                    interaction_id=interaction_id,
+                    decision=resolved.value,
+                ),
+            )
+            return InteractionResult(
+                accepted=True,
+                status=(
+                    "denied"
+                    if resolved is InteractionDecision.DENY
+                    else "resolved"
+                ),
+            )
+
+    async def _recover_older_state(self) -> None:
+        try:
+            exclusive = StateLease.acquire(
+                self._paths.home,
+                StateLeaseMode.EXCLUSIVE,
+            )
+        except StateLeaseUnavailable as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_RESET_BUSY,
+                "Close other Awesome sessions before resetting local state.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
+
+        try:
+            preflight = inspect_application_state(self._paths.application_db)
+            if preflight.compatibility is StateCompatibility.OLDER:
+                await asyncio.to_thread(reset_local_state, self._paths, exclusive)
+            elif preflight.compatibility is StateCompatibility.NEW:
+                await asyncio.to_thread(
+                    initialize_application_database,
+                    self._paths.application_db,
+                )
+            elif preflight.compatibility is StateCompatibility.NEWER:
+                assert preflight.found_schema is not None
+                raise self._newer_state_failure(
+                    preflight.found_schema,
+                    preflight.expected_schema,
+                )
+            elif preflight.compatibility is StateCompatibility.UNKNOWN:
+                raise _application_failure(
+                    ProductErrorCode.STATE_UNKNOWN,
+                    "Awesome cannot identify the local state format.",
+                    data={
+                        "state_directory": str(self._paths.state_dir.resolve())
+                    },
+                )
+            exclusive.downgrade()
+        except ApplicationFailure:
+            exclusive.close()
+            raise
+        except ApplicationStateUnavailable as error:
+            exclusive.close()
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome cannot read local state.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
+        except StateLeaseUnavailable as error:
+            exclusive.close()
+            raise _application_failure(
+                ProductErrorCode.STATE_RESET_BUSY,
+                "Local state changed while Awesome was resetting it. Try again.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
+        except StateResetError as error:
+            exclusive.close()
+            code = (
+                ProductErrorCode.STATE_RESET_BUSY
+                if error.code == "state_replacement_failed"
+                else ProductErrorCode.STATE_RESET_FAILED
+            )
+            raise _application_failure(
+                code,
+                (
+                    "Close other Awesome sessions before resetting local state."
+                    if code is ProductErrorCode.STATE_RESET_BUSY
+                    else "Awesome could not reset local state safely."
+                ),
+                retryable=True,
+                data={
+                    "diagnostic_code": error.code,
+                    "state_directory": str(self._paths.state_dir.resolve()),
+                },
+            ) from error
+        self._state_lease = exclusive
 
     async def cancel_foreground(self, operation_id: str) -> CancelResult:
         cancelled = await self._operations.cancel(operation_id)

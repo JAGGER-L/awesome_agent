@@ -9,12 +9,14 @@ from pydantic import BaseModel, ConfigDict
 
 class InteractionKind(StrEnum):
     WORKSPACE_TRUST = "workspace_trust"
+    STATE_RESET = "state_reset"
     TOOL_APPROVAL = "tool_approval"
     FULL_ACCESS_CONFIRMATION = "full_access_confirmation"
 
 
 class InteractionDecision(StrEnum):
     TRUST = "trust"
+    RESET_STATE = "reset_state"
     ALLOW_ONCE = "allow_once"
     ALLOW_THREAD_WRITES = "allow_thread_writes"
     ENABLE_FULL_ACCESS = "enable_full_access"
@@ -52,6 +54,16 @@ def workspace_trust_choices() -> tuple[InteractionChoice, ...]:
             label="Yes, I trust this folder",
         ),
         InteractionChoice(decision=InteractionDecision.DENY, label="No, exit"),
+    )
+
+
+def state_reset_choices() -> tuple[InteractionChoice, ...]:
+    return (
+        InteractionChoice(
+            decision=InteractionDecision.RESET_STATE,
+            label="Reset local state and continue",
+        ),
+        InteractionChoice(decision=InteractionDecision.DENY, label="Exit"),
     )
 
 
@@ -121,19 +133,25 @@ class InteractionCoordinator:
         interaction_id: str,
         decision: InteractionDecision,
     ) -> bool:
-        pending = self.pending
-        if (
-            pending is None
-            or pending.id != interaction_id
-            or decision not in {choice.decision for choice in pending.choices}
-            or self._resolved is not None
-        ):
+        if not self.allows(interaction_id, decision) or self._resolved is not None:
             return False
         if self._future is not None:
             self._future.set_result(decision)
         else:
             self._resolved = decision
         return True
+
+    def allows(
+        self,
+        interaction_id: str,
+        decision: InteractionDecision,
+    ) -> bool:
+        pending = self.pending
+        return (
+            pending is not None
+            and pending.id == interaction_id
+            and decision in {choice.decision for choice in pending.choices}
+        )
 
     async def wait(self, interaction_id: str) -> InteractionDecision:
         pending = self.pending
