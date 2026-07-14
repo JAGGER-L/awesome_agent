@@ -2,6 +2,8 @@ import { useCursor, type BoxMetrics, type CursorPosition } from "ink";
 
 import { graphemes } from "../composer/graphemes.js";
 import { displayWidth } from "../composer/viewport.js";
+import { adaptInkCursorPosition } from "./cursor/ink-cursor-bridge.js";
+import { useTerminalFrameMetrics } from "./cursor/terminal-frame-metrics.js";
 
 const COMPOSER_CONTENT_OFFSET = 2;
 const COMPOSER_PROMPT = "❯ ";
@@ -37,6 +39,8 @@ export function resolveComposerCursorPosition({
 }
 
 export function useComposerCursor(options: ComposerCursorOptions): void {
+  const frame = useTerminalFrameMetrics();
   const { setCursorPosition } = useCursor();
-  setCursorPosition(resolveComposerCursorPosition(options));
+  const logical = resolveComposerCursorPosition(options);
+  setCursorPosition(adaptInkCursorPosition(logical, frame));
 }
