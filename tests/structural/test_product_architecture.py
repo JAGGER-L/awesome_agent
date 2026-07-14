@@ -175,9 +175,9 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
     monkeypatch.setenv("AWESOME_VERSION", "9.9.9")
     expected = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8")
 
-    assert expected == "1.1.1\n"
-    assert distribution_version("awesome-agent") == "1.1.1"
-    assert PRODUCT_VERSION == "1.1.1"
+    assert expected == "1.2.0\n"
+    assert distribution_version("awesome-agent") == "1.2.0"
+    assert PRODUCT_VERSION == "1.2.0"
 
     project = tomllib.loads(
         (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -188,11 +188,11 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
 
     package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((TUI_ROOT / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["version"] == "1.1.1"
-    assert lock["version"] == "1.1.1"
-    assert lock["packages"][""]["version"] == "1.1.1"
+    assert package["version"] == "1.2.0"
+    assert lock["version"] == "1.2.0"
+    assert lock["packages"][""]["version"] == "1.2.0"
     assert (TUI_ROOT / "src" / "version.ts").read_text(encoding="utf-8") == (
-        'export const PRODUCT_VERSION = "1.1.1" as const;\n'
+        'export const PRODUCT_VERSION = "1.2.0" as const;\n'
     )
 
 
