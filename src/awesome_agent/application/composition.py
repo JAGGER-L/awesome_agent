@@ -173,7 +173,17 @@ from awesome_agent.providers import (
     KimiProvider,
     ProviderCredentialValidator,
 )
-from awesome_agent.storage import ApplicationSchemaMismatch, SQLiteMcpEnablementStore
+from awesome_agent.storage import (
+    ApplicationSchemaMismatch,
+    ApplicationStateUnknown,
+    SQLiteMcpEnablementStore,
+    StateCompatibility,
+    StateLease,
+    StateLeaseMode,
+    StatePreflight,
+    initialize_application_database,
+    inspect_application_state,
+)
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
     LangGraphCheckpointStore,
@@ -365,6 +375,8 @@ class _LocalApplicationBackend:
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
         self._permission_session = PermissionSession()
+        self._state_lease: StateLease | None = None
+        self._resources.callback(self._close_state_lease)
 
     async def initialize_application(self) -> InitializeResult:
         if self._initialized:
@@ -377,6 +389,7 @@ class _LocalApplicationBackend:
                 capabilities=_CAPABILITIES,
             )
         try:
+            self._ensure_state_lease()
             trust_status = self._trust.status(self._workspace)
         except ApplicationSchemaMismatch as error:
             raise _application_failure(
@@ -698,6 +711,61 @@ class _LocalApplicationBackend:
         if self._mcp is not None:
             await self._mcp.aclose()
         await self._resources.aclose()
+
+    def _ensure_state_lease(self) -> None:
+        if self._state_lease is not None and self._state_lease.active:
+            return
+        shared = StateLease.acquire(self._paths.home, StateLeaseMode.SHARED)
+        try:
+            preflight = inspect_application_state(self._paths.application_db)
+        except Exception:
+            shared.close()
+            raise
+        if preflight.compatibility is StateCompatibility.CURRENT:
+            self._state_lease = shared
+            return
+        shared.close()
+        if preflight.compatibility is not StateCompatibility.NEW:
+            self._raise_preflight(preflight)
+
+        exclusive = StateLease.acquire(
+            self._paths.home,
+            StateLeaseMode.EXCLUSIVE,
+        )
+        try:
+            confirmed = inspect_application_state(self._paths.application_db)
+            if confirmed.compatibility is StateCompatibility.NEW:
+                initialize_application_database(self._paths.application_db)
+            elif confirmed.compatibility is not StateCompatibility.CURRENT:
+                self._raise_preflight(confirmed)
+            exclusive.downgrade()
+        except Exception:
+            exclusive.close()
+            raise
+        self._state_lease = exclusive
+
+    def _raise_preflight(self, preflight: StatePreflight) -> None:
+        if preflight.compatibility in {
+            StateCompatibility.OLDER,
+            StateCompatibility.NEWER,
+        }:
+            assert preflight.found_schema is not None
+            raise ApplicationSchemaMismatch(
+                found=preflight.found_schema,
+                expected=preflight.expected_schema,
+                direction=preflight.compatibility,
+            )
+        if preflight.compatibility is StateCompatibility.UNKNOWN:
+            raise ApplicationStateUnknown(self._paths.application_db)
+        raise RuntimeError(
+            f"Unexpected Application state preflight: {preflight.compatibility}"
+        )
+
+    def _close_state_lease(self) -> None:
+        lease = self._state_lease
+        self._state_lease = None
+        if lease is not None:
+            lease.close()
 
     async def _activate(self) -> None:
         if self._initialized:

@@ -15,6 +15,8 @@ STORAGE_MODULES = {
     "database.py",
     "mcp.py",
     "pagination.py",
+    "state_lease.py",
+    "state_recovery.py",
     "trust.py",
 }
 APPLICATION_TABLES = {
