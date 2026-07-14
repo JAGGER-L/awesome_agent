@@ -376,8 +376,14 @@ function reconcileTranscript(
     void _activeOperation;
     base = withoutActiveOperation;
   }
+  const currentThreadId = base.thread?.view.thread.id;
+  const reconciledThread =
+    action.thread?.view.thread.id === currentThreadId
+      ? action.thread
+      : base.thread;
   return {
     ...base,
+    ...(reconciledThread === undefined ? {} : { thread: reconciledThread }),
     warnings: base.warnings.filter(
       (warning) => warning.operation_id !== operationId,
     ),

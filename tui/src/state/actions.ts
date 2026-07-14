@@ -41,6 +41,7 @@ export type SurfaceAction =
       readonly operation_id: string;
       readonly turn_id: string;
       readonly blocks: readonly TranscriptBlock[];
+      readonly thread?: MethodValue["thread.read"];
     }
   | {
       readonly type: "transcript.command_result";

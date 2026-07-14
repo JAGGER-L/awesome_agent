@@ -27,6 +27,7 @@ from awesome_agent.conversation.repository import (
     TurnNotFound,
     require_turn_transition,
 )
+from awesome_agent.conversation.titles import automatic_title
 
 
 class ConversationService:
@@ -174,7 +175,13 @@ class ConversationService:
             created_at=now,
             updated_at=now,
         )
-        return self._store.begin_turn(entry, turn)
+        thread_update: dict[str, object] = {"updated_at": now}
+        if view.thread.title_source is ThreadTitleSource.AUTOMATIC and not view.entries:
+            thread_update["title"] = automatic_title(user_content)
+        updated_thread = Thread.model_validate(
+            view.thread.model_copy(update=thread_update).model_dump()
+        )
+        return self._store.begin_turn(entry, turn, updated_thread)
 
     def complete_turn(
         self,

@@ -32,6 +32,11 @@ from awesome_agent.conversation.repository import (
     require_turn_transition,
 )
 from awesome_agent.conversation.service import ConversationService
+from awesome_agent.conversation.titles import (
+    automatic_title,
+    normalize_title,
+    visible_graphemes,
+)
 
 __all__ = [
     "ConversationConflict",
@@ -61,5 +66,8 @@ __all__ = [
     "TurnRepository",
     "TurnStatus",
     "UsageSummary",
+    "automatic_title",
+    "normalize_title",
     "require_turn_transition",
+    "visible_graphemes",
 ]

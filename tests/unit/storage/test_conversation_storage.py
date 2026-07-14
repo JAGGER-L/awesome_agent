@@ -246,6 +246,40 @@ def test_repository_transaction_rolls_back_multirow_failure(tmp_path: Path) -> N
     assert repositories.threads.get("thread_1") is None
 
 
+def test_begin_turn_rolls_back_title_and_entry_when_turn_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    thread = _thread().model_copy(
+        update={
+            "title": "New conversation",
+            "title_source": ThreadTitleSource.AUTOMATIC,
+        }
+    )
+    repositories.threads.create(thread)
+    updated = thread.model_copy(
+        update={"title": "calculate cube", "updated_at": _now()}
+    )
+
+    def fail_turn_write(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("turn write failed")
+
+    monkeypatch.setattr(repositories.turns, "create", fail_turn_write)
+
+    with pytest.raises(RuntimeError, match="turn write failed"):
+        repositories.begin_turn(
+            _entry("entry_1", sequence=1),
+            _turn(),
+            updated,
+        )
+
+    view = repositories.read_thread(thread.id)
+    assert view.thread.title == "New conversation"
+    assert view.entries == ()
+    assert view.turns == ()
+
+
 def test_summary_upsert_and_tool_activity_idempotency(tmp_path: Path) -> None:
     repositories = SQLiteConversationRepositories(tmp_path / "application.db")
     repositories.threads.create(_thread())

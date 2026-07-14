@@ -110,6 +110,7 @@ export async function connectSurface(
       operation_id: result.operation_id,
       turn_id: result.turn_id,
       blocks: result.blocks,
+      ...(page.ok ? { thread: page.value } : {}),
     });
   };
 
