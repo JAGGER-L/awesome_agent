@@ -27,6 +27,7 @@ interface ExitSession {
 interface ExitDependencies {
   readonly clock?: ExitClock;
   readonly disableInput: () => void;
+  readonly flushTerminal: () => Promise<void>;
   readonly cleanupTerminal: () => Promise<void> | void;
 }
 
@@ -53,6 +54,24 @@ export class ExitController {
 
   async #run(reason: ExitReason): Promise<ExitOutcome> {
     this.dependencies.disableInput();
+    let flushError: unknown;
+    try {
+      await this.dependencies.flushTerminal();
+    } catch (error) {
+      flushError = error;
+    }
+
+    let outcome: ExitOutcome;
+    try {
+      outcome = await this.#shutdown(reason);
+    } finally {
+      await this.dependencies.cleanupTerminal();
+    }
+    if (flushError !== undefined) throw flushError;
+    return outcome;
+  }
+
+  async #shutdown(reason: ExitReason): Promise<ExitOutcome> {
     let shutdownWarning: string | undefined;
     const clock = this.dependencies.clock ?? systemClock;
     let deadline!: () => void;
@@ -66,12 +85,11 @@ export class ExitController {
     });
 
     try {
-      const outcome = await Promise.race([
+      const shutdownResult = await Promise.race([
         this.session.exit.then(() => "exited" as const),
         timedOut,
       ]);
-      if (outcome === "exited") {
-        timer.cancel();
+      if (shutdownResult === "exited") {
         return {
           reason,
           exitCode: 0,
@@ -88,7 +106,6 @@ export class ExitController {
       };
     } finally {
       timer.cancel();
-      await this.dependencies.cleanupTerminal();
     }
   }
 }
