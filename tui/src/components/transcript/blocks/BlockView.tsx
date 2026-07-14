@@ -5,6 +5,7 @@ import type { TranscriptBlock } from "../../../transcript/model.js";
 import { ActivityLine } from "../../activity/ActivityLine.js";
 import { CommandResultView } from "../../CommandResultView.js";
 import { useTheme } from "../../theme.js";
+import { ChangeSummary } from "../ChangeSummary.js";
 import { ToolSequence } from "../ToolSequence.js";
 import { Worked } from "../Worked.js";
 import { UserLine } from "../UserLine.js";
@@ -55,9 +56,11 @@ export function BlockView({
       );
     case "change":
       return (
-        <Text color={theme.secondary}>
-          Changed {block.changes.map((change) => change.path).join(", ")}
-        </Text>
+        <ChangeSummary
+          changes={block.changes}
+          expanded={detailsExpanded}
+          width={width}
+        />
       );
     case "thinking":
       if (block.duration_ms === undefined)
