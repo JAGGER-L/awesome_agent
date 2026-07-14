@@ -1,5 +1,10 @@
-import type { MethodValue } from "../protocol/index.js";
+import type { EventEnvelope, MethodValue } from "../protocol/index.js";
 import type { TranscriptBlock } from "../transcript/model.js";
+
+type InteractionRequiredPayload = Extract<
+  EventEnvelope["payload"],
+  { readonly kind: "interaction.required" }
+>;
 
 export type ConnectionState =
   | "idle"
@@ -83,11 +88,7 @@ export interface SurfaceState {
   readonly usage?: Record<string, number>;
   readonly pending_interaction?: {
     readonly interaction_id: string;
-    readonly interaction_kind:
-      | "workspace_trust"
-      | "tool_approval"
-      | "full_access_confirmation"
-      | "recovery_decision";
+    readonly interaction_kind: InteractionRequiredPayload["interaction_kind"];
     readonly prompt: string;
     readonly operation: string;
     readonly target: string;

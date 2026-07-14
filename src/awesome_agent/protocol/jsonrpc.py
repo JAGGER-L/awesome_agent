@@ -20,6 +20,7 @@ from awesome_agent.application.contracts import (
     ThreadReadQuery,
 )
 from awesome_agent.application.facade import ApplicationFacade
+from awesome_agent.application.interactions import InteractionDecision
 from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
@@ -66,7 +67,7 @@ class _InteractionParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     interaction_id: str = Field(min_length=1, max_length=128)
-    decision: str = Field(min_length=1, max_length=128)
+    decision: InteractionDecision
 
 
 class _OperationParams(BaseModel):
@@ -216,7 +217,7 @@ class JsonRpcDispatcher:
         parsed = _InteractionParams.model_validate(params)
         return await self._facade.respond_interaction(
             parsed.interaction_id,
-            parsed.decision,
+            parsed.decision.value,
         )
 
     async def _cancel_operation(self, params: Mapping[str, object]) -> object:

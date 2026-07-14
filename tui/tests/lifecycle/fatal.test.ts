@@ -74,15 +74,16 @@ describe("toFatalState", () => {
     });
   });
 
-  it("classifies incompatible state with its exact recovery facts", () => {
+  it("classifies state created by a newer version without offering reset", () => {
     const fatal = toFatalState(
       new StartupProductError({
-        code: "state_schema_incompatible",
-        message: "Awesome state is incompatible with this version.",
+        code: "state_created_by_newer_version",
+        message:
+          "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
         retryable: false,
         data: {
-          found_schema: 1,
-          expected_schema: 2,
+          found_schema: 8,
+          expected_schema: 7,
           state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
         },
       }),
@@ -90,31 +91,12 @@ describe("toFatalState", () => {
     );
 
     expect(fatal).toEqual({
-      kind: "state_schema_incompatible",
-      foundSchema: 1,
-      expectedSchema: 2,
-      stateDirectory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+      kind: "version_incompatible",
+      message:
+        "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
     });
     if (!fatal) throw new Error("expected fatal state");
-    expect(fatalExitCode(fatal)).toBe(1);
-  });
-
-  it("treats malformed incompatible-state data as a protocol fault", () => {
-    expect(
-      toFatalState(
-        {
-          code: "state_schema_incompatible",
-          message: "Invalid state data.",
-          retryable: false,
-          data: { found_schema: 1 },
-        },
-        session(),
-      ),
-    ).toEqual({
-      kind: "protocol",
-      message: "Invalid incompatible-state diagnostic payload.",
-      diagnosticCode: "invalid_state_schema_diagnostic",
-    });
+    expect(fatalExitCode(fatal)).toBe(2);
   });
 
   it("does not turn expected ProductError into fatal state", () => {

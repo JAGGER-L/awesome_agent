@@ -29,24 +29,29 @@
     },
     {
       "method": "initialize",
-      "name": "initialize.state_schema_incompatible",
+      "name": "initialize.state_reset_required",
       "params": {
         "client_name": "awesome",
         "client_version": "1.2.0",
         "protocol_version": 2
       },
       "result": {
-        "error": {
-          "code": "state_schema_incompatible",
-          "data": {
-            "expected_schema": 2,
-            "found_schema": 1,
-            "state_directory": "C:\\Awesome\\state"
-          },
-          "message": "Awesome state is incompatible with this version.",
-          "retryable": false
-        },
-        "ok": false
+        "ok": true,
+        "value": {
+          "capabilities": [
+            "threads",
+            "turns",
+            "commands"
+          ],
+          "interaction_id": "interaction_state_reset",
+          "product_version": "1.2.0",
+          "protocol_version": 2,
+          "session_id": "session_11111111111111111111111111111111",
+          "status": "state_reset_required",
+          "workspace": {
+            "display_path": "C:\\workspace"
+          }
+        }
       }
     },
     {
@@ -312,6 +317,36 @@
         "value": {
           "accepted": true,
           "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.state_reset",
+      "params": {
+        "decision": "reset_state",
+        "interaction_id": "interaction_state_reset"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.state_reset_denied",
+      "params": {
+        "decision": "deny",
+        "interaction_id": "interaction_state_reset"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "denied"
         }
       }
     },

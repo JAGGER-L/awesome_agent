@@ -303,20 +303,20 @@
       "payload": {
         "choices": [
           {
-            "decision": "trust",
-            "label": "Yes"
+            "decision": "reset_state",
+            "label": "Reset local state and continue"
           },
           {
             "decision": "deny",
-            "label": "No"
+            "label": "Exit"
           }
         ],
-        "interaction_id": "interaction_1",
-        "interaction_kind": "workspace_trust",
+        "interaction_id": "interaction_state_reset",
+        "interaction_kind": "state_reset",
         "kind": "interaction.required",
-        "operation": "trust",
-        "prompt": "Trust this workspace?",
-        "target": "C:\\workspace"
+        "operation": "reset_local_state",
+        "prompt": "Awesome needs to reset local state",
+        "target": "local state"
       },
       "sequence": 20,
       "session_id": "session_11111111111111111111111111111111",

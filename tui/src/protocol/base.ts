@@ -54,6 +54,15 @@ export const requestIdSchema = z.union([
   safeIntegerSchema,
 ]);
 
+export const interactionDecisionSchema = z.enum([
+  "trust",
+  "reset_state",
+  "allow_once",
+  "allow_thread_writes",
+  "enable_full_access",
+  "deny",
+]);
+
 const genericProductErrorCodes = [
   "configuration_invalid",
   "workspace_not_trusted",
@@ -73,16 +82,33 @@ const genericProductErrorCodes = [
   "internal_error",
 ] as const;
 
+const storageProductErrorCodes = [
+  "state_created_by_newer_version",
+  "state_unknown",
+  "state_unavailable",
+  "state_reset_busy",
+  "state_reset_failed",
+] as const;
+
 export const productErrorCodes = [
   ...genericProductErrorCodes,
-  "state_schema_incompatible",
+  ...storageProductErrorCodes,
 ] as const;
 
 export const productErrorCodeSchema = z.enum(productErrorCodes);
 
-export const stateSchemaIncompatibleDataSchema = z.strictObject({
+const stateDirectoryDataSchema = z.strictObject({
+  state_directory: boundedText(1, 4_096),
+});
+
+const newerStateDataSchema = z.strictObject({
   found_schema: safeIntegerSchema,
   expected_schema: safeIntegerSchema,
+  state_directory: boundedText(1, 4_096),
+});
+
+const stateResetFailedDataSchema = z.strictObject({
+  diagnostic_code: boundedText(1, 128),
   state_directory: boundedText(1, 4_096),
 });
 
@@ -93,16 +119,48 @@ const genericProductErrorSchema = z.strictObject({
   data: z.record(z.string(), jsonValueSchema),
 });
 
-const stateSchemaIncompatibleErrorSchema = z.strictObject({
-  code: z.literal("state_schema_incompatible"),
+const newerStateErrorSchema = z.strictObject({
+  code: z.literal("state_created_by_newer_version"),
   message: boundedText(1, 2_000),
   retryable: z.literal(false),
-  data: stateSchemaIncompatibleDataSchema,
+  data: newerStateDataSchema,
+});
+
+const stateUnknownErrorSchema = z.strictObject({
+  code: z.literal("state_unknown"),
+  message: boundedText(1, 2_000),
+  retryable: z.literal(false),
+  data: stateDirectoryDataSchema,
+});
+
+const stateUnavailableErrorSchema = z.strictObject({
+  code: z.literal("state_unavailable"),
+  message: boundedText(1, 2_000),
+  retryable: z.literal(true),
+  data: stateDirectoryDataSchema,
+});
+
+const stateResetBusyErrorSchema = z.strictObject({
+  code: z.literal("state_reset_busy"),
+  message: boundedText(1, 2_000),
+  retryable: z.literal(true),
+  data: stateDirectoryDataSchema,
+});
+
+const stateResetFailedErrorSchema = z.strictObject({
+  code: z.literal("state_reset_failed"),
+  message: boundedText(1, 2_000),
+  retryable: z.literal(true),
+  data: stateResetFailedDataSchema,
 });
 
 export const productErrorSchema = z.discriminatedUnion("code", [
   genericProductErrorSchema,
-  stateSchemaIncompatibleErrorSchema,
+  newerStateErrorSchema,
+  stateUnknownErrorSchema,
+  stateUnavailableErrorSchema,
+  stateResetBusyErrorSchema,
+  stateResetFailedErrorSchema,
 ]);
 
 export type ProductError = z.infer<typeof productErrorSchema>;

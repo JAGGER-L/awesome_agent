@@ -180,25 +180,22 @@ def _valid_methods() -> dict[str, object]:
             ),
         ),
         (
-            "initialize.state_schema_incompatible",
+            "initialize.state_reset_required",
             "initialize",
             {
                 "protocol_version": 2,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
-            _model(
-                ApplicationResult[InitializeResult].failure(
-                    ProductError(
-                        code=ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE,
-                        message="Awesome state is incompatible with this version.",
-                        retryable=False,
-                        data={
-                            "found_schema": 1,
-                            "expected_schema": 2,
-                            "state_directory": "C:\\Awesome\\state",
-                        },
-                    )
+            _success(
+                InitializeResult(
+                    product_version=PRODUCT_VERSION,
+                    protocol_version=2,
+                    status=InitializeStatus.STATE_RESET_REQUIRED,
+                    session_id="session_11111111111111111111111111111111",
+                    interaction_id="interaction_state_reset",
+                    workspace=WorkspacePresentation(display_path="C:\\workspace"),
+                    capabilities=("threads", "turns", "commands"),
                 )
             ),
         ),
@@ -331,6 +328,18 @@ def _valid_methods() -> dict[str, object]:
             _success(InteractionResult(accepted=True, status="resolved")),
         ),
         (
+            "interaction.respond.state_reset",
+            "interaction.respond",
+            {"interaction_id": "interaction_state_reset", "decision": "reset_state"},
+            _success(InteractionResult(accepted=True, status="resolved")),
+        ),
+        (
+            "interaction.respond.state_reset_denied",
+            "interaction.respond",
+            {"interaction_id": "interaction_state_reset", "decision": "deny"},
+            _success(InteractionResult(accepted=True, status="denied")),
+        ),
+        (
             "operation.cancel",
             "operation.cancel",
             {"operation_id": OPERATION_ID},
@@ -450,11 +459,22 @@ def _invalid_methods() -> dict[str, object]:
 def _failure_results() -> dict[str, object]:
     cases: list[dict[str, object]] = []
     for code in ProductErrorCode:
-        data: dict[str, object] = {}
-        if code is ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE:
+        data: dict[str, Any] = {}
+        if code is ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION:
             data = {
-                "found_schema": 1,
-                "expected_schema": 2,
+                "found_schema": 8,
+                "expected_schema": 7,
+                "state_directory": "C:\\Awesome\\state",
+            }
+        elif code in {
+            ProductErrorCode.STATE_UNKNOWN,
+            ProductErrorCode.STATE_UNAVAILABLE,
+            ProductErrorCode.STATE_RESET_BUSY,
+        }:
+            data = {"state_directory": "C:\\Awesome\\state"}
+        elif code is ProductErrorCode.STATE_RESET_FAILED:
+            data = {
+                "diagnostic_code": "fresh_state_initialization_failed",
                 "state_directory": "C:\\Awesome\\state",
             }
         cases.append(
@@ -469,6 +489,9 @@ def _failure_results() -> dict[str, object]:
                             in {
                                 ProductErrorCode.OPERATION_BUSY,
                                 ProductErrorCode.TURN_BUSY,
+                                ProductErrorCode.STATE_UNAVAILABLE,
+                                ProductErrorCode.STATE_RESET_BUSY,
+                                ProductErrorCode.STATE_RESET_FAILED,
                             },
                             data=data,
                         )
@@ -533,15 +556,18 @@ def _payload(event_type: EventType) -> EventPayload:
         return MemoryStatusPayload(layer="local", enabled=False, status="disabled")
     if event_type is EventType.INTERACTION_REQUIRED:
         return InteractionRequiredPayload(
-            interaction_id="interaction_1",
-            interaction_kind="workspace_trust",
-            prompt="Trust this workspace?",
-            operation="trust",
-            target="C:\\workspace",
+            interaction_id="interaction_state_reset",
+            interaction_kind="state_reset",
+            prompt="Awesome needs to reset local state",
+            operation="reset_local_state",
+            target="local state",
             capability=None,
             choices=(
-                InteractionChoicePayload(decision="trust", label="Yes"),
-                InteractionChoicePayload(decision="deny", label="No"),
+                InteractionChoicePayload(
+                    decision="reset_state",
+                    label="Reset local state and continue",
+                ),
+                InteractionChoicePayload(decision="deny", label="Exit"),
             ),
         )
     if event_type is EventType.INTERACTION_RESOLVED:

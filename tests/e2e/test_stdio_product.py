@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from awesome_agent.storage import APPLICATION_SCHEMA_VERSION
 from awesome_agent.version import PRODUCT_VERSION
 
 
@@ -134,6 +137,25 @@ async def _spawn(
     return Client(process)
 
 
+def _write_schema_version(home: Path, version: int) -> Path:
+    state_dir = home / "state"
+    state_dir.mkdir(parents=True)
+    database = state_dir / "application.db"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE legacy_marker (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO legacy_marker VALUES ('legacy')")
+        connection.execute(f"PRAGMA user_version = {version}")
+        connection.commit()
+    return database
+
+
+def _schema_version(database: Path) -> int:
+    with closing(sqlite3.connect(database)) as connection:
+        row = connection.execute("PRAGMA user_version").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -256,3 +278,122 @@ async def test_stdio_full_flow_and_restart(
     )
     await restarted.request("shutdown")
     await asyncio.wait_for(restarted.process.wait(), timeout=10)
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_schema", [2, 6])
+async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
+    tmp_path: Path,
+    legacy_schema: int,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    database = _write_schema_version(home, legacy_schema)
+    config = home / "config.yaml"
+    config.write_text("providers: {}\n", encoding="utf-8")
+    client = await _spawn(home=home, workspace=workspace, provider="deepseek")
+
+    initialized = await client.request(
+        "initialize",
+        {
+            "protocol_version": 2,
+            "client_name": "awesome",
+            "client_version": PRODUCT_VERSION,
+        },
+    )
+    reset_required = _value(initialized)
+    assert reset_required["status"] == "state_reset_required"
+    reset_interaction_id = reset_required["interaction_id"]
+    reset_events = [
+        event
+        for event in client.events
+        if event["event_type"] == "interaction.required"
+    ]
+    assert reset_events[-1]["payload"]["interaction_kind"] == "state_reset"
+
+    reset = await client.request(
+        "interaction.respond",
+        {
+            "interaction_id": reset_interaction_id,
+            "decision": "reset_state",
+        },
+    )
+    assert _value(reset) == {"accepted": True, "status": "resolved"}
+
+    after_reset = await client.request(
+        "initialize",
+        {
+            "protocol_version": 2,
+            "client_name": "awesome",
+            "client_version": PRODUCT_VERSION,
+        },
+    )
+    trust_required = _value(after_reset)
+    assert trust_required["status"] == "trust_required"
+    trusted = await client.request(
+        "interaction.respond",
+        {
+            "interaction_id": trust_required["interaction_id"],
+            "decision": "trust",
+        },
+    )
+    assert _value(trusted) == {"accepted": True, "status": "resolved"}
+    assert _schema_version(database) == APPLICATION_SCHEMA_VERSION == 7
+    with closing(sqlite3.connect(database)) as connection:
+        marker = connection.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'legacy_marker'"
+        ).fetchone()
+    assert marker is None
+    assert config.read_text(encoding="utf-8") == "providers: {}\n"
+
+    await client.request("shutdown")
+    await asyncio.wait_for(client.process.wait(), timeout=10)
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_stdio_rejects_newer_state_without_offering_reset(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    database = _write_schema_version(home, 8)
+    before = database.read_bytes()
+    client = await _spawn(home=home, workspace=workspace, provider="deepseek")
+
+    initialized = await client.request(
+        "initialize",
+        {
+            "protocol_version": 2,
+            "client_name": "awesome",
+            "client_version": PRODUCT_VERSION,
+        },
+    )
+
+    assert initialized["result"] == {
+        "ok": False,
+        "error": {
+            "code": "state_created_by_newer_version",
+            "message": (
+                "Local state was created by a newer Awesome version. "
+                "Upgrade Awesome to continue."
+            ),
+            "retryable": False,
+            "data": {
+                "found_schema": 8,
+                "expected_schema": APPLICATION_SCHEMA_VERSION,
+                "state_directory": str((home / "state").resolve()),
+            },
+        },
+    }
+    assert not any(
+        event.get("payload", {}).get("interaction_kind") == "state_reset"
+        for event in client.events
+    )
+    assert database.read_bytes() == before
+
+    await client.request("shutdown")
+    await asyncio.wait_for(client.process.wait(), timeout=10)

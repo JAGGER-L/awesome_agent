@@ -181,17 +181,74 @@
       }
     },
     {
-      "code": "state_schema_incompatible",
+      "code": "state_created_by_newer_version",
       "result": {
         "error": {
-          "code": "state_schema_incompatible",
+          "code": "state_created_by_newer_version",
           "data": {
-            "expected_schema": 2,
-            "found_schema": 1,
+            "expected_schema": 7,
+            "found_schema": 8,
             "state_directory": "C:\\Awesome\\state"
           },
-          "message": "Safe state_schema_incompatible message.",
+          "message": "Safe state_created_by_newer_version message.",
           "retryable": false
+        },
+        "ok": false
+      }
+    },
+    {
+      "code": "state_unknown",
+      "result": {
+        "error": {
+          "code": "state_unknown",
+          "data": {
+            "state_directory": "C:\\Awesome\\state"
+          },
+          "message": "Safe state_unknown message.",
+          "retryable": false
+        },
+        "ok": false
+      }
+    },
+    {
+      "code": "state_unavailable",
+      "result": {
+        "error": {
+          "code": "state_unavailable",
+          "data": {
+            "state_directory": "C:\\Awesome\\state"
+          },
+          "message": "Safe state_unavailable message.",
+          "retryable": true
+        },
+        "ok": false
+      }
+    },
+    {
+      "code": "state_reset_busy",
+      "result": {
+        "error": {
+          "code": "state_reset_busy",
+          "data": {
+            "state_directory": "C:\\Awesome\\state"
+          },
+          "message": "Safe state_reset_busy message.",
+          "retryable": true
+        },
+        "ok": false
+      }
+    },
+    {
+      "code": "state_reset_failed",
+      "result": {
+        "error": {
+          "code": "state_reset_failed",
+          "data": {
+            "diagnostic_code": "fresh_state_initialization_failed",
+            "state_directory": "C:\\Awesome\\state"
+          },
+          "message": "Safe state_reset_failed message.",
+          "retryable": true
         },
         "ok": false
       }

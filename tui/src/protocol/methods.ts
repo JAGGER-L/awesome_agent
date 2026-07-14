@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   applicationResultSchema,
   boundedText,
+  interactionDecisionSchema,
   productErrorSchema,
   safeIntegerSchema,
 } from "./base.js";
@@ -31,7 +32,7 @@ export const initializeParamsSchema = z.strictObject({
 export const initializeResultSchema = z.strictObject({
   product_version: boundedText(1, 64),
   protocol_version: z.literal(2),
-  status: z.enum(["ready", "trust_required"]),
+  status: z.enum(["ready", "trust_required", "state_reset_required"]),
   session_id: identifierSchema,
   interaction_id: identifierSchema.optional(),
   workspace: workspacePresentationSchema,
@@ -150,7 +151,7 @@ export const methodSchemas = {
   "interaction.respond": {
     params: z.strictObject({
       interaction_id: identifierSchema,
-      decision: boundedText(1, 128),
+      decision: interactionDecisionSchema,
     }),
     value: interactionResultSchema,
     result: applicationResultSchema(interactionResultSchema),
