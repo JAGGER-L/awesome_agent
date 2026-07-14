@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-APPLICATION_SCHEMA_VERSION = 1
+APPLICATION_SCHEMA_VERSION = 2
 
 _APPLICATION_SCHEMA = """
 CREATE TABLE trusted_workspaces (
@@ -47,6 +47,7 @@ CREATE TABLE threads (
     thread_id TEXT PRIMARY KEY,
     workspace_key TEXT NOT NULL,
     title TEXT NOT NULL,
+    title_source TEXT NOT NULL CHECK (title_source IN ('automatic', 'manual')),
     current_model TEXT,
     thinking_enabled INTEGER NOT NULL CHECK (thinking_enabled IN (0, 1)),
     skill_mode TEXT NOT NULL,

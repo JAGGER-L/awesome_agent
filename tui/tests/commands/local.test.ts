@@ -12,6 +12,7 @@ const thread = (): MethodValue["thread.read"] => ({
       id: "thread_1",
       workspace_key: "workspace_1",
       title: "Thread",
+      title_source: "automatic",
       current_model: "deepseek/deepseek-v4-flash",
       thinking_enabled: false,
       skill_mode: "auto",

@@ -81,6 +81,7 @@ const ready: StartupResult = {
           id: "thread_1",
           workspace_key: "workspace_1",
           title: "New thread",
+          title_source: "automatic",
           current_model: "deepseek/deepseek-v4-flash",
           thinking_enabled: false,
           skill_mode: "auto",

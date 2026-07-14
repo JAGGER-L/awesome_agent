@@ -59,7 +59,7 @@
               },
               "session_id": "session_11111111111111111111111111111111",
               "skill_mode": "auto",
-              "thinking_enabled": false,
+              "thinking_enabled": true,
               "usage": {
                 "active_execution_seconds": 0.5
               },
@@ -116,8 +116,9 @@
                   "current_model": "deepseek/deepseek-v4-flash",
                   "id": "thread_11111111111111111111111111111111",
                   "skill_mode": "auto",
-                  "thinking_enabled": false,
+                  "thinking_enabled": true,
                   "title": "Fixture Thread",
+                  "title_source": "automatic",
                   "updated_at": "2026-07-11T08:00:00Z",
                   "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
@@ -378,7 +379,7 @@
             "operation_status": "idle",
             "permission_mode": "request_approval",
             "skill_mode": "auto",
-            "thinking_enabled": false,
+            "thinking_enabled": true,
             "thread_display_id": "thread_11111111",
             "thread_id": "thread_11111111111111111111111111111111",
             "thread_title": "Fixture Thread",

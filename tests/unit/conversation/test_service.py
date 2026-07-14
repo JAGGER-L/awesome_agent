@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 
 from awesome_agent.config import BudgetConfig, TurnConfig
 from awesome_agent.conversation import (
@@ -11,6 +12,7 @@ from awesome_agent.conversation import (
     ConversationService,
     InvalidTurnTransition,
     ThreadEntryKind,
+    ThreadTitleSource,
     TurnBusy,
     TurnStatus,
     UsageSummary,
@@ -66,6 +68,8 @@ def test_create_list_and_read_threads_by_workspace(tmp_path: Path) -> None:
 
     assert {thread.id for thread in listed} == {first.id, second.id}
     assert second.title == "New conversation"
+    assert second.title_source is ThreadTitleSource.AUTOMATIC
+    assert second.thinking_enabled is True
     assert view.thread == first
     assert view.entries == ()
     assert view.turns == ()
@@ -184,9 +188,15 @@ def test_terminal_turns_persist_facts_and_derive_thread_totals(tmp_path: Path) -
     complete_usage = UsageSummary(input_tokens=10, output_tokens=4, model_calls=1)
     failed_usage = UsageSummary(input_tokens=6, tool_calls=2)
     cancelled_usage = UsageSummary(input_tokens=3, active_execution_seconds=0.5)
-    complete_manifest = ({"kind": "history", "estimated_tokens": 10},)
-    failed_manifest = ({"kind": "summary", "estimated_tokens": 6},)
-    cancelled_manifest = ({"kind": "path", "estimated_tokens": 3},)
+    complete_manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "history", "estimated_tokens": 10},
+    )
+    failed_manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "summary", "estimated_tokens": 6},
+    )
+    cancelled_manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "path", "estimated_tokens": 3},
+    )
 
     service.complete_turn(
         completed.id,
@@ -233,7 +243,9 @@ def test_terminal_fact_repetition_is_idempotent_and_conflicts_on_change(
         thread.id, "question", _turn_config(), client_message_id="client_1"
     )
     usage = UsageSummary(input_tokens=5, model_calls=1)
-    manifest = ({"kind": "history", "estimated_tokens": 5},)
+    manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "history", "estimated_tokens": 5},
+    )
 
     if terminal is TurnStatus.FAILED:
         result = service.fail_turn(
@@ -270,7 +282,9 @@ def test_latest_context_manifest_skips_newest_empty_terminal_turn(
     first = service.begin_turn(
         thread.id, "first", _turn_config(), client_message_id="client_first"
     )
-    manifest = ({"kind": "history", "estimated_tokens": 11},)
+    manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "history", "estimated_tokens": 11},
+    )
     service.complete_turn(first.id, "done", UsageSummary(), "completed", manifest)
     latest = service.begin_turn(
         thread.id, "latest", _turn_config(), client_message_id="client_latest"

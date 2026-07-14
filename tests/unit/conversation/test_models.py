@@ -12,6 +12,7 @@ from awesome_agent.conversation import (
     ThreadEntry,
     ThreadEntryKind,
     ThreadSummary,
+    ThreadTitleSource,
     ToolActivity,
     ToolActivityOrigin,
     ToolActivityOutcome,
@@ -71,6 +72,13 @@ def test_thread_and_turn_round_trip_as_frozen_boundary_models() -> None:
     assert Turn.model_validate_json(turn.model_dump_json()) == turn
     with pytest.raises(ValidationError):
         thread.title = "changed"
+
+
+def test_thread_defaults_to_automatic_title_provenance_and_thinking_on() -> None:
+    thread = _thread()
+
+    assert thread.title_source is ThreadTitleSource.AUTOMATIC
+    assert thread.thinking_enabled is True
 
 
 def test_checkpoint_key_must_equal_turn_id() -> None:

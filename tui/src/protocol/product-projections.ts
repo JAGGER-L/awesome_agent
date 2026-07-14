@@ -79,6 +79,7 @@ export const threadSchema = z.strictObject({
   id: identifierSchema,
   workspace_key: identifierSchema,
   title: boundedText(1, 500),
+  title_source: z.enum(["automatic", "manual"]),
   current_model: boundedText(0, 200).optional(),
   thinking_enabled: z.boolean(),
   skill_mode: boundedText(1, 64),

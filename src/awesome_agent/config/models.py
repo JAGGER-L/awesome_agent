@@ -237,6 +237,6 @@ class TurnConfig(BaseModel):
 
     provider: Literal["deepseek", "kimi"]
     model: str
-    thinking_enabled: bool = False
+    thinking_enabled: bool = True
     skill_mode: str = "auto"
     budgets: BudgetConfig

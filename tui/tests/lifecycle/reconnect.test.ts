@@ -79,6 +79,7 @@ function ready(title = "Feature auth"): StartupResult {
             id: "thread_full",
             workspace_key: "workspace_1",
             title,
+            title_source: "automatic",
             current_model: "deepseek/deepseek-v4-flash",
             thinking_enabled: false,
             skill_mode: "auto",

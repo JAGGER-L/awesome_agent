@@ -452,7 +452,7 @@ class _LocalApplicationBackend:
             ),
             current_thread_id=current_id,
             model_identity=self._model_identity(current) if current else None,
-            thinking_enabled=current.thinking_enabled if current else False,
+            thinking_enabled=current.thinking_enabled if current else True,
             skill_mode=current.skill_mode if current else "auto",
             active_operation_id=self._operations.active_operation_id,
             pending_interaction_id=(

@@ -44,6 +44,7 @@ function page(): MethodValue["thread.read"] {
         id: "thread_1",
         workspace_key: "ws_1",
         title: "Thread",
+        title_source: "automatic",
         thinking_enabled: false,
         skill_mode: "auto",
         created_at: now,
