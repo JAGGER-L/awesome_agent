@@ -1012,6 +1012,7 @@ class _LocalApplicationBackend:
         self._command_dispatcher = CommandDispatcher(
             {
                 CommandName.NEW: self._commands.new,
+                CommandName.RENAME: self._commands.rename,
                 CommandName.RESUME: self._commands.resume,
                 CommandName.CONTEXT: self._context_command,
                 CommandName.COMPACT: self._compact_command,

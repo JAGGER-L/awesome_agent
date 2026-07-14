@@ -244,6 +244,35 @@ describe("App pending input queue", () => {
     expect(store.getState().application?.current_thread_id).toBe("thread_new");
   });
 
+  it("queues rename behind the active Turn with its exact title", async () => {
+    const submit = vi.fn(async (_routed: unknown, _threadId?: string) => ({
+      kind: "result",
+      payload: { kind: "notice", message: "renamed" },
+    }));
+    const store = activeStore();
+    const view = render(
+      <App
+        store={store}
+        controller={{ submit } as unknown as CommandController}
+        reportFatal={(error) => {
+          throw error;
+        }}
+        width={80}
+      />,
+    );
+
+    submitInput(view, "/rename Cube helper");
+    expect(submit).not.toHaveBeenCalled();
+    store.dispatch(terminalEvent("operation.completed", "operation_0", 1));
+
+    await eventually(() => expect(submit).toHaveBeenCalledOnce());
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({
+      kind: "command",
+      intent: { name: "rename", arguments: ["Cube", "helper"] },
+    });
+    expect(view.lastFrame()).toContain("❯ /rename Cube helper");
+  });
+
   it("pauses at a /resume picker before using the resumed Thread", async () => {
     const submit = vi.fn(async (routed, threadId, clientMessageId) => {
       if (routed.kind === "command" && routed.intent.name === "resume") {

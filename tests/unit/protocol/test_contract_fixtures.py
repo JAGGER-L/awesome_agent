@@ -273,6 +273,7 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
     } == {
         "notice",
         "thread_transition",
+        "thread_renamed",
         "context",
         "compact",
         "model",

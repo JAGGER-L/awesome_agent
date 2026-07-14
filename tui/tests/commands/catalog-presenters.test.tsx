@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { presentCommandPayload } from "../../src/commands/presenters.js";
+import { findCommand } from "../../src/commands/catalog.js";
 
 const credential = (
   provider: "deepseek" | "kimi" | "mem0",
@@ -16,6 +17,36 @@ const credential = (
 });
 
 describe("catalog and configuration presenters", () => {
+  it("registers canonical rename completion without a placeholder", () => {
+    expect(findCommand("rename")).toMatchObject({
+      completion: "/rename",
+      usage: "/rename <title>",
+    });
+  });
+
+  it("presents a successful rename as one success notice", () => {
+    const result = presentCommandPayload("rename", {
+      kind: "thread_renamed",
+      thread: {
+        id: "thread_1",
+        workspace_key: "workspace_1",
+        title: "Cube helper",
+        title_source: "manual",
+        current_model: "deepseek/deepseek-v4-flash",
+        thinking_enabled: true,
+        skill_mode: "auto",
+        created_at: "2026-07-14T00:00:00Z",
+        updated_at: "2026-07-14T00:00:01Z",
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "notice",
+      message: "Conversation renamed · Cube helper",
+      tone: "success",
+    });
+  });
+
   it("preserves Core tool order and policy facts", () => {
     const result = presentCommandPayload("tools", {
       kind: "tools",

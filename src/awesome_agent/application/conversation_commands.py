@@ -9,6 +9,7 @@ from awesome_agent.application.command_results import (
     CommandOutcome,
     CommandSelection,
     ThinkingCommandPayload,
+    ThreadRenamedPayload,
     ThreadTransitionCommandPayload,
     ThreadTransitionSnapshot,
     error,
@@ -52,15 +53,29 @@ class ConversationCommandService:
         return self._current_thread_id
 
     async def new(self, intent: CommandIntent) -> CommandOutcome:
+        if intent.arguments:
+            return error("invalid_arguments", "Usage: /new")
         if self._has_active_operation():
             return self._operation_busy()
-        title = " ".join(intent.arguments).strip() or None
         thread = self._conversation.create_thread(
             self._workspace_key,
-            title,
+            None,
             current_model=self._default_model(),
         )
         return await self._transition(thread, reason="new")
+
+    async def rename(self, intent: CommandIntent) -> CommandOutcome:
+        thread = self._selected_thread()
+        if thread is None:
+            return error("thread_not_found", "Select a Thread first.")
+        title = " ".join(intent.arguments)
+        if not title.strip():
+            return error("invalid_arguments", "Title required · /rename <title>")
+        try:
+            renamed = self._conversation.rename_thread(thread.id, title)
+        except ValueError as exc:
+            return error("invalid_arguments", str(exc))
+        return result(ThreadRenamedPayload(thread=renamed))
 
     async def resume(self, intent: CommandIntent) -> CommandOutcome:
         if self._has_active_operation():

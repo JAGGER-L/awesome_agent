@@ -27,7 +27,11 @@ from awesome_agent.conversation.repository import (
     TurnNotFound,
     require_turn_transition,
 )
-from awesome_agent.conversation.titles import automatic_title
+from awesome_agent.conversation.titles import (
+    automatic_title,
+    normalize_title,
+    visible_graphemes,
+)
 
 
 class ConversationService:
@@ -106,6 +110,22 @@ class ConversationService:
         current = self._store.read_thread(thread_id).thread
         updated = current.model_copy(
             update={"skill_mode": skill_mode, "updated_at": self._clock()}
+        )
+        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
+
+    def rename_thread(self, thread_id: str, title: str) -> Thread:
+        normalized = normalize_title(title)
+        if not normalized:
+            raise ValueError("Title required · /rename <title>")
+        if len(visible_graphemes(normalized)) > 100:
+            raise ValueError("Thread title must be 100 characters or fewer.")
+        current = self._store.read_thread(thread_id).thread
+        updated = current.model_copy(
+            update={
+                "title": normalized,
+                "title_source": ThreadTitleSource.MANUAL,
+                "updated_at": self._clock(),
+            }
         )
         return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 

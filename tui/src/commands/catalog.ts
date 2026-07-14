@@ -18,6 +18,7 @@ const metadata: Readonly<
   Record<CommandName, Omit<CommandMetadata, "name" | "owner">>
 > = {
   new: entry("new", "/new", "Start a new thread"),
+  rename: entry("rename", "/rename <title>", "Rename the current conversation"),
   resume: entry("resume", "/resume [thread_id]", "Resume a previous thread"),
   context: entry("context", "/context", "Show the active context"),
   compact: entry("compact", "/compact", "Compact the current context"),

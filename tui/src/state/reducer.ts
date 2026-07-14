@@ -421,6 +421,15 @@ export function surfaceReducer(
         warnings: [],
         committed_transcript: action.transcript,
       };
+    case "thread.metadata.updated":
+      if (state.thread?.view.thread.id !== action.thread.id) return state;
+      return {
+        ...state,
+        thread: {
+          ...state.thread,
+          view: { ...state.thread.view, thread: action.thread },
+        },
+      };
     case "event.received":
       return action.generation === state.thread_generation
         ? reduceEvent(state, action.event)

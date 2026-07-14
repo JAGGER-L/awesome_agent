@@ -5,12 +5,14 @@ import { modelIdentitySchema } from "./identity.js";
 import {
   applicationStateSchema,
   providerCredentialStatusesSchema,
+  threadSchema,
   threadReadResultSchema,
   usageSummarySchema,
 } from "./product-projections.js";
 
 export const applicationCommandNames = [
   "new",
+  "rename",
   "resume",
   "context",
   "compact",
@@ -75,6 +77,7 @@ export type StatusSnapshot = z.infer<typeof statusSnapshotSchema>;
 
 export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   new: "application",
+  rename: "application",
   resume: "application",
   context: "application",
   compact: "application",
@@ -229,6 +232,10 @@ export const commandPayloadSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("thread_transition"),
     transition: threadTransitionSnapshotSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("thread_renamed"),
+    thread: threadSchema,
   }),
   z.strictObject({
     kind: z.literal("context"),
