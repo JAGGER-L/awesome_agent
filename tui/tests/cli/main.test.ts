@@ -295,19 +295,20 @@ describe("runCli", () => {
     );
   });
 
-  it("renders incompatible state through its dedicated startup fatal state", async () => {
+  it("renders newer state as a non-destructive version failure", async () => {
     const renderApplication = vi.fn(
       async () => ({ kind: "fatal", exitCode: 1 }) as const,
     );
     const value = harness({
       startApplication: vi.fn(async () => {
         throw new StartupProductError({
-          code: "state_schema_incompatible",
-          message: "Awesome state is incompatible with this version.",
+          code: "state_created_by_newer_version",
+          message:
+            "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
           retryable: false,
           data: {
-            found_schema: 1,
-            expected_schema: 2,
+            found_schema: 8,
+            expected_schema: 7,
             state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
           },
         });
@@ -321,10 +322,9 @@ describe("runCli", () => {
         state: {
           kind: "fatal",
           fatal: {
-            kind: "state_schema_incompatible",
-            foundSchema: 1,
-            expectedSchema: 2,
-            stateDirectory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+            kind: "version_incompatible",
+            message:
+              "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
           },
         },
       }),

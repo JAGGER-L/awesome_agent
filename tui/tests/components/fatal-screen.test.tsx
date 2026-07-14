@@ -59,27 +59,24 @@ describe("FatalScreen", () => {
     expect(frame).not.toContain("Reconnect");
   });
 
-  it("renders incompatible state as a Quit-only startup panel", () => {
+  it("does not expose storage details for newer-version state", () => {
     const frame =
       render(
         <FatalScreen
           fatal={{
-            kind: "state_schema_incompatible",
-            foundSchema: 1,
-            expectedSchema: 2,
-            stateDirectory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+            kind: "version_incompatible",
+            message:
+              "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
           }}
           startup
         />,
       ).lastFrame() ?? "";
 
-    expect(frame).toContain("Awesome state is incompatible with this version.");
-    expect(frame).toContain("Found schema 1");
-    expect(frame).toContain("Expected schema 2");
-    expect(frame).toContain("E:\\awesome_agent\\.awesome-dev\\home\\state");
+    expect(frame).toContain("Awesome could not initialize this workspace.");
     expect(frame).toContain("Quit");
     expect(frame).not.toContain("Reconnect");
-    expect(frame).not.toContain("core_request_failed");
+    expect(frame).not.toContain("Found schema");
+    expect(frame).not.toContain("E:\\awesome_agent\\.awesome-dev\\home\\state");
     expect(frame).not.toContain("traceback");
     expect(frame).not.toContain("automatically");
   });

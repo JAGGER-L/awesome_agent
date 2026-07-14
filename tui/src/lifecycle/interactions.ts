@@ -1,5 +1,8 @@
-import type { ProductError } from "../protocol/base.js";
-import type { MethodValue } from "../protocol/methods.js";
+import {
+  interactionDecisionSchema,
+  type ProductError,
+} from "../protocol/base.js";
+import type { MethodParams, MethodValue } from "../protocol/methods.js";
 import type { SurfaceState } from "../state/model.js";
 
 export type InteractionSnapshot =
@@ -15,10 +18,9 @@ export type InteractionSnapshot =
 interface InteractionSource {
   getState(): SurfaceState;
   subscribe(listener: () => void): () => void;
-  request(params: {
-    readonly interaction_id: string;
-    readonly decision: string;
-  }): Promise<
+  request(
+    params: MethodParams["interaction.respond"],
+  ): Promise<
     | { readonly ok: true; readonly value: MethodValue["interaction.respond"] }
     | { readonly ok: false; readonly error: ProductError }
   >;
@@ -46,10 +48,14 @@ export class InteractionController {
         new Error(`Interaction choice ${decision} is not available.`),
       );
     }
+    const parsedDecision = interactionDecisionSchema.safeParse(decision);
+    if (!parsedDecision.success) {
+      return Promise.reject(new Error("Interaction choice is invalid."));
+    }
     const interactionId = pending.interaction_id;
     this.#snapshot = { status: "responding", interactionId };
     this.#responsePromise = this.source
-      .request({ interaction_id: interactionId, decision })
+      .request({ interaction_id: interactionId, decision: parsedDecision.data })
       .then((result) => {
         if (this.#snapshot.status !== "responding") return;
         if (!result.ok) {

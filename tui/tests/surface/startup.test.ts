@@ -427,14 +427,15 @@ function startupHarness({
 }
 
 describe("trusted startup state machine", () => {
-  it("preserves an incompatible-state product failure from initialize", async () => {
+  it("preserves a newer-state product failure from initialize", async () => {
     const error = {
-      code: "state_schema_incompatible" as const,
-      message: "Awesome state is incompatible with this version.",
+      code: "state_created_by_newer_version" as const,
+      message:
+        "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
       retryable: false as const,
       data: {
-        found_schema: 1,
-        expected_schema: 2,
+        found_schema: 8,
+        expected_schema: 7,
         state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
       },
     };

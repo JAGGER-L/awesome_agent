@@ -164,6 +164,7 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
     interaction_id: boundedText(1, 128),
     interaction_kind: z.enum([
       "workspace_trust",
+      "state_reset",
       "tool_approval",
       "full_access_confirmation",
       "recovery_decision",
