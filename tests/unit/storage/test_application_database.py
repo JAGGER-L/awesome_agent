@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -37,3 +38,22 @@ def test_noncurrent_schema_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ApplicationSchemaMismatch):
         initialize_application_database(path)
+
+
+def test_noncurrent_schema_is_rejected_without_mutation(tmp_path: Path) -> None:
+    path = tmp_path / "state" / "application.db"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA user_version = 1")
+    before = path.read_bytes()
+    before_entries = tuple(sorted(item.name for item in path.parent.iterdir()))
+
+    with pytest.raises(ApplicationSchemaMismatch) as raised:
+        initialize_application_database(path)
+
+    assert raised.value.found == 1
+    assert raised.value.expected == APPLICATION_SCHEMA_VERSION
+    assert path.read_bytes() == before
+    assert tuple(sorted(item.name for item in path.parent.iterdir())) == before_entries
+    assert not path.with_name("application.db-wal").exists()
+    assert not path.with_name("application.db-shm").exists()

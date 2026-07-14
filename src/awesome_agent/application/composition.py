@@ -173,7 +173,7 @@ from awesome_agent.providers import (
     KimiProvider,
     ProviderCredentialValidator,
 )
-from awesome_agent.storage import SQLiteMcpEnablementStore
+from awesome_agent.storage import ApplicationSchemaMismatch, SQLiteMcpEnablementStore
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
     LangGraphCheckpointStore,
@@ -220,14 +220,10 @@ async def compose_local_application(
     paths = AwesomePaths.from_home(home)
     identity = resolve_workspace(workspace)
     stack = AsyncExitStack()
-    saver = await stack.enter_async_context(
-        sqlite_checkpoint_saver(paths.checkpoint_db)
-    )
     backend = _LocalApplicationBackend(
         paths=paths,
         workspace=identity,
         event_sink=event_sink,
-        saver=saver,
         resources=stack,
         environ=environ,
         gateway_factory=gateway_factory,
@@ -311,7 +307,6 @@ class _LocalApplicationBackend:
         paths: AwesomePaths,
         workspace: WorkspaceIdentity,
         event_sink: EventSink,
-        saver: BaseCheckpointSaver[str],
         resources: AsyncExitStack,
         environ: Mapping[str, str] | None,
         gateway_factory: GatewayFactory | None,
@@ -342,8 +337,8 @@ class _LocalApplicationBackend:
         )
         self._repositories = SQLiteConversationRepositories(paths.application_db)
         self._conversation = ConversationService(store=self._repositories)
-        self._saver = saver
-        self._checkpoints = LangGraphCheckpointStore(saver)
+        self._saver: BaseCheckpointSaver[str] | None = None
+        self._checkpoints: LangGraphCheckpointStore | None = None
         self._sources = self._load_sources(workspace_trusted=False)
         self._application_config = resolve_application_config(self._sources)
         self._initialized = False
@@ -381,7 +376,19 @@ class _LocalApplicationBackend:
                 workspace=self._workspace_presentation(include_branch=True),
                 capabilities=_CAPABILITIES,
             )
-        if self._trust.status(self._workspace) is not TrustStatus.TRUSTED:
+        try:
+            trust_status = self._trust.status(self._workspace)
+        except ApplicationSchemaMismatch as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE,
+                "Awesome state is incompatible with this version.",
+                data={
+                    "found_schema": error.found,
+                    "expected_schema": error.expected,
+                    "state_directory": str(self._paths.state_dir.resolve()),
+                },
+            ) from error
+        if trust_status is not TrustStatus.TRUSTED:
             pending = self._interactions.pending
             if pending is None:
                 pending = self._interactions.create(
@@ -695,6 +702,15 @@ class _LocalApplicationBackend:
     async def _activate(self) -> None:
         if self._initialized:
             return
+        if self._saver is None:
+            self._saver = await self._resources.enter_async_context(
+                sqlite_checkpoint_saver(self._paths.checkpoint_db)
+            )
+            self._checkpoints = LangGraphCheckpointStore(self._saver)
+        saver = self._saver
+        checkpoints = self._checkpoints
+        assert saver is not None
+        assert checkpoints is not None
         self._workspace_branch = await asyncio.to_thread(
             _git_branch,
             self._workspace.canonical_path,
@@ -795,7 +811,7 @@ class _LocalApplicationBackend:
         )
         self._context = context_service
 
-        graph = compile_agent_graph(self._saver)
+        graph = compile_agent_graph(saver)
 
         def runtime_factory(
             turn: Turn,
@@ -907,7 +923,7 @@ class _LocalApplicationBackend:
             runtime_context_factory=runtime_factory,
             operations=self._operations,
             emitter=self._emitter,
-            checkpoints=self._checkpoints,
+            checkpoints=checkpoints,
             seal_changes=self._seal_turn,
             reconcile_changes=self._change_scope.reconcile,
             turn_input_preparer=context_service.prepare_turn,
