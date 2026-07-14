@@ -190,6 +190,20 @@ async def test_every_valid_method_fixture_round_trips_through_dispatcher() -> No
         assert len(encoded) < 1_048_576
 
 
+def test_thread_read_fixture_contains_discriminated_change_deltas() -> None:
+    case = next(
+        item for item in _cases("methods.valid.json") if item["name"] == "thread.read"
+    )
+    result = ThreadReadResult.model_validate(case["result"]["value"])
+
+    assert [change.kind for change in result.change_sets[0].changes] == [
+        "text_file",
+        "binary_file",
+        "directory",
+        "symlink",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_every_invalid_method_fixture_fails_at_declared_boundary() -> None:
     success = {"ok": True, "value": {}}

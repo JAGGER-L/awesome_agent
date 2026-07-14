@@ -85,7 +85,6 @@ describe("protocol inventory", () => {
       "context.prepared",
       "context.compressed",
       "usage.updated",
-      "workspace.changed",
       "memory.status",
       "interaction.required",
       "interaction.resolved",

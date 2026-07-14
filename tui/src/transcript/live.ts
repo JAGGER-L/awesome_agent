@@ -83,16 +83,6 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
         duration_ms: turn.duration_ms,
       });
   }
-  if (state.latest_change) {
-    blocks.push({
-      key: `live:change:${state.latest_change.change_set_id}`,
-      kind: "change",
-      change_set_id: state.latest_change.change_set_id,
-      paths: state.latest_change.paths,
-      lifecycle: "live",
-      reversibility: state.latest_change.reversibility,
-    });
-  }
   for (const warning of state.warnings) {
     blocks.push({
       key: `live:${warning.id}`,

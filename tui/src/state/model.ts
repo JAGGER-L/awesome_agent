@@ -81,12 +81,6 @@ export interface SurfaceState {
   readonly active_operation?: OperationProjection;
   readonly event_sequence: number;
   readonly usage?: Record<string, number>;
-  readonly latest_change?: {
-    readonly change_set_id: string;
-    readonly paths: readonly string[];
-    readonly reversibility: "full" | "partial" | "none";
-    readonly operation_id?: string;
-  };
   readonly pending_interaction?: {
     readonly interaction_id: string;
     readonly interaction_kind:

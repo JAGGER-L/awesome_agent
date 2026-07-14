@@ -228,13 +228,39 @@ export const threadViewSchema = z.strictObject({
   tool_activities: z.array(toolActivitySchema),
 });
 
+export const changeDeltaSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("text_file"),
+    path: boundedText(1, 1_000),
+    change_kind: z.enum(["created", "updated", "deleted"]),
+    additions: nonNegativeIntegerSchema,
+    deletions: nonNegativeIntegerSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("binary_file"),
+    path: boundedText(1, 1_000),
+    change_kind: z.enum(["created", "updated", "deleted"]),
+    before_bytes: nonNegativeIntegerSchema,
+    after_bytes: nonNegativeIntegerSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("directory"),
+    path: boundedText(1, 1_000),
+    change_kind: z.enum(["created", "updated", "deleted"]),
+  }),
+  z.strictObject({
+    kind: z.literal("symlink"),
+    path: boundedText(1, 1_000),
+    change_kind: z.enum(["created", "updated", "deleted"]),
+  }),
+]);
+
 export const changeSetSummarySchema = z.strictObject({
   change_set_id: identifierSchema,
   turn_id: identifierSchema.optional(),
   operation_id: identifierSchema.optional(),
   lifecycle: boundedText(1, 64),
-  changed_paths: z.array(z.string()).max(1_000),
-  reversibility: boundedText(1, 64),
+  changes: z.array(changeDeltaSchema).max(1_000),
   created_at: utcTimestampSchema,
   sealed_at: utcTimestampSchema.optional(),
 });

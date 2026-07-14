@@ -49,7 +49,6 @@ CURRENT_COMMANDS = {
     "diff",
     "doctor",
     "help",
-    "init",
     "mcp",
     "memory",
     "model",
@@ -250,6 +249,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
         "src/core/process.ts": {"node:child_process"},
         "src/preferences/paths.ts": {"node:os", "node:path"},
         "src/preferences/store.ts": {"node:fs/promises", "node:path"},
+        "src/pending-input/model.ts": {"node:crypto"},
         "src/transcript/identity.ts": {"node:crypto"},
     }
 
@@ -307,3 +307,18 @@ def test_thread_transition_contract_has_one_projection_dependency_chain() -> Non
     assert "threadTransitionSnapshotSchema" in commands
     assert 'type: "thread.replaced"' in transition
     assert "effects.resetCurrentFrame()" in transition
+
+
+def test_change_presentation_has_no_legacy_wire_fields() -> None:
+    forbidden = ("changed_paths", "reversibility", "workspace.changed")
+    roots = (TUI_ROOT / "src", REPOSITORY_ROOT / "protocol" / "fixtures")
+    files = (
+        path
+        for root in roots
+        for pattern in ("*.ts", "*.tsx", "*.json")
+        for path in root.rglob(pattern)
+    )
+    text = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+    for token in forbidden:
+        assert token not in text

@@ -97,6 +97,7 @@ from awesome_agent.conversation import (
     UsageSummary,
 )
 from awesome_agent.core.changes import (
+    ChangeAnalyzer,
     ChangeJournal,
     ChangeOperations,
 )
@@ -365,6 +366,7 @@ class _LocalApplicationBackend:
         self._mcp: McpManager | None = None
         self._change_scope: ChangeScope | None = None
         self._change_store: SQLiteChangeSetStore | None = None
+        self._change_analyzer: ChangeAnalyzer | None = None
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
         self._permission_session = PermissionSession()
@@ -706,10 +708,16 @@ class _LocalApplicationBackend:
         self._change_store = change_store
         change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
         journal = ChangeJournal(change_store, change_blobs, self._workspace)
+        self._change_analyzer = ChangeAnalyzer(
+            change_store,
+            change_blobs,
+            self._workspace,
+        )
         self._change_operations = ChangeOperations(
             change_store,
             change_blobs,
             self._workspace,
+            analyzer=self._change_analyzer,
         )
 
         registry = ToolRegistry()
@@ -1280,7 +1288,7 @@ class _LocalApplicationBackend:
         self,
         activities: tuple[ToolActivity, ...],
     ) -> tuple[ChangeSetSummary, ...]:
-        if self._change_store is None:
+        if self._change_store is None or self._change_analyzer is None:
             return ()
         summaries: list[ChangeSetSummary] = []
         seen: set[str] = set()
@@ -1292,16 +1300,16 @@ class _LocalApplicationBackend:
             change_set = self._change_store.get(change_set_id)
             if change_set is None:
                 continue
+            analysis = self._change_analyzer.analyze(change_set_id)
+            if not analysis.changes:
+                continue
             summaries.append(
                 ChangeSetSummary(
                     change_set_id=change_set.id,
                     turn_id=change_set.turn_id,
                     operation_id=activity.operation_id,
                     lifecycle=change_set.lifecycle.value,
-                    changed_paths=tuple(
-                        sorted({item.path for item in change_set.files})
-                    ),
-                    reversibility=change_set.reversibility.value,
+                    changes=analysis.changes,
                     created_at=change_set.created_at,
                     sealed_at=change_set.sealed_at,
                 )

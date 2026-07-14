@@ -284,14 +284,12 @@
     },
     {
       "event_id": "event_019",
-      "event_type": "workspace.changed",
+      "event_type": "memory.status",
       "payload": {
-        "change_set_id": "change_1",
-        "kind": "workspace.changed",
-        "paths": [
-          "src/example.py"
-        ],
-        "reversibility": "full"
+        "enabled": false,
+        "kind": "memory.status",
+        "layer": "local",
+        "status": "disabled"
       },
       "sequence": 19,
       "session_id": "session_11111111111111111111111111111111",
@@ -301,21 +299,6 @@
     },
     {
       "event_id": "event_020",
-      "event_type": "memory.status",
-      "payload": {
-        "enabled": false,
-        "kind": "memory.status",
-        "layer": "local",
-        "status": "disabled"
-      },
-      "sequence": 20,
-      "session_id": "session_11111111111111111111111111111111",
-      "timestamp": "2026-07-11T08:00:00Z",
-      "version": 1,
-      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    {
-      "event_id": "event_021",
       "event_type": "interaction.required",
       "payload": {
         "choices": [
@@ -335,6 +318,20 @@
         "prompt": "Trust this workspace?",
         "target": "C:\\workspace"
       },
+      "sequence": 20,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_021",
+      "event_type": "interaction.resolved",
+      "payload": {
+        "decision": "trust",
+        "interaction_id": "interaction_1",
+        "kind": "interaction.resolved"
+      },
       "sequence": 21,
       "session_id": "session_11111111111111111111111111111111",
       "timestamp": "2026-07-11T08:00:00Z",
@@ -343,27 +340,13 @@
     },
     {
       "event_id": "event_022",
-      "event_type": "interaction.resolved",
-      "payload": {
-        "decision": "trust",
-        "interaction_id": "interaction_1",
-        "kind": "interaction.resolved"
-      },
-      "sequence": 22,
-      "session_id": "session_11111111111111111111111111111111",
-      "timestamp": "2026-07-11T08:00:00Z",
-      "version": 1,
-      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    {
-      "event_id": "event_023",
       "event_type": "warning",
       "payload": {
         "code": "safe_warning",
         "kind": "warning",
         "message": "Safe warning."
       },
-      "sequence": 23,
+      "sequence": 22,
       "session_id": "session_11111111111111111111111111111111",
       "timestamp": "2026-07-11T08:00:00Z",
       "version": 1,

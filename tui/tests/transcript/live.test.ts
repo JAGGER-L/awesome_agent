@@ -18,11 +18,6 @@ function state(): SurfaceState {
       },
     ],
     usage: { input_tokens: 12, output_tokens: 4 },
-    latest_change: {
-      change_set_id: "change_1",
-      paths: ["src/a.py"],
-      reversibility: "full",
-    },
     active_operation: {
       id: "operation_1",
       status: "active",
@@ -94,7 +89,6 @@ describe("projectLiveTurn", () => {
       "tools",
       "thinking",
       "assistant",
-      "change",
       "warning",
     ]);
     expect(live.blocks[1]).toMatchObject({
