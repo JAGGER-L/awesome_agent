@@ -842,7 +842,7 @@ class _LocalApplicationBackend:
         try:
             preflight = inspect_application_state(self._paths.application_db)
             if preflight.compatibility is StateCompatibility.OLDER:
-                await asyncio.to_thread(reset_local_state, self._paths, exclusive)
+                await asyncio.to_thread(reset_local_state, exclusive)
             elif preflight.compatibility is StateCompatibility.NEW:
                 await asyncio.to_thread(
                     initialize_application_database,
