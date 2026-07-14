@@ -8,6 +8,7 @@ from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
+    state_reset_choices,
     tool_approval_choices,
 )
 
@@ -54,6 +55,28 @@ def test_delete_and_shell_approval_never_offer_thread_write_grant(
         InteractionDecision.ALLOW_ONCE,
         InteractionDecision.DENY,
     ]
+
+
+def test_state_reset_choices_are_explicit_and_can_be_validated_without_resolving() -> (
+    None
+):
+    coordinator = InteractionCoordinator()
+    pending = coordinator.create(
+        kind=InteractionKind.STATE_RESET,
+        prompt="Awesome needs to reset local state",
+        operation="reset_local_state",
+        target="local state",
+        capability=None,
+        choices=state_reset_choices(),
+    )
+
+    assert [choice.label for choice in pending.choices] == [
+        "Reset local state and continue",
+        "Exit",
+    ]
+    assert coordinator.allows(pending.id, InteractionDecision.RESET_STATE) is True
+    assert coordinator.allows(pending.id, InteractionDecision.TRUST) is False
+    assert coordinator.pending is pending
 
 
 def test_only_one_interaction_can_be_pending() -> None:

@@ -30,6 +30,11 @@ const modes: readonly [string, UiMode, TerminalIntent][] = [
     { type: "selection.confirm" },
   ],
   [
+    "state reset",
+    { kind: "state_reset", selected: 0, submitting: false },
+    { type: "selection.confirm" },
+  ],
+  [
     "approval",
     {
       kind: "approval",

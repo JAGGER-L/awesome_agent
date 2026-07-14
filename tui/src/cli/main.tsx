@@ -17,6 +17,7 @@ import { LocalCommandService } from "../commands/local.js";
 import { AppErrorBoundary } from "../components/AppErrorBoundary.js";
 import { FatalScreen } from "../components/FatalScreen.js";
 import { Picker } from "../components/Picker.js";
+import { StateResetPrompt } from "../components/StateResetPrompt.js";
 import { ThemeProvider } from "../components/theme.js";
 import { TrustPrompt } from "../components/TrustPrompt.js";
 import { CoreSpawnError } from "../core/errors.js";
@@ -55,6 +56,7 @@ import {
 } from "../surface/controller.js";
 import {
   beginStartup,
+  respondStartupStateReset,
   respondStartupTrust,
   selectStartupThread,
   type StartupResult,
@@ -231,12 +233,21 @@ async function renderInkApplication(
   const loaded = await loadPreferences(awesomeHome);
   let instance: Instance | undefined;
   let settled = false;
-  return await new Promise<CliRenderOutcome>((resolve) => {
+  let cleanupPromise: Promise<void> | undefined;
+  return await new Promise<CliRenderOutcome>((resolve, reject) => {
+    const cleanupTerminal = () => {
+      cleanupPromise ??= unmountInkApplication(instance);
+      return cleanupPromise;
+    };
     const finish = (outcome: CliRenderOutcome) => {
       if (settled) return;
       settled = true;
-      instance?.unmount();
-      resolve(outcome);
+      void cleanupTerminal().then(() => resolve(outcome), reject);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      void cleanupTerminal().then(() => reject(error), reject);
     };
     instance = render(
       <CliApplication
@@ -247,7 +258,9 @@ async function renderInkApplication(
           ? { preferenceWarning: loaded.warnings[0].message }
           : {})}
         onFinish={finish}
-        unmount={() => instance?.unmount()}
+        onFailure={fail}
+        cleanupTerminal={cleanupTerminal}
+        flushCurrentFrame={() => flushCurrentInkFrame(instance)}
         resetCurrentFrame={() => clearCurrentInkFrame(instance)}
       />,
       { exitOnCtrlC: false },
@@ -260,7 +273,9 @@ type CliApplicationProps = CliRenderRequest & {
   readonly initialTheme: ThemePreference;
   readonly preferenceWarning?: string;
   readonly onFinish: (outcome: CliRenderOutcome) => void;
-  readonly unmount: () => void;
+  readonly onFailure: (error: unknown) => void;
+  readonly cleanupTerminal: () => Promise<void>;
+  readonly flushCurrentFrame: () => Promise<void>;
   readonly resetCurrentFrame: () => void;
 };
 
@@ -339,7 +354,9 @@ function RunningCliApplication({
   initialTheme,
   preferenceWarning,
   onFinish,
-  unmount,
+  onFailure,
+  cleanupTerminal,
+  flushCurrentFrame,
   resetCurrentFrame,
 }: CliApplicationProps & {
   readonly state: Extract<StartupRenderState, { kind: "startup" }>;
@@ -353,6 +370,7 @@ function RunningCliApplication({
   const [themePreference, setThemePreference] = useState(initialTheme);
   const [fatal, setFatal] = useState<FatalState>();
   const [reconnecting, setReconnecting] = useState(false);
+  const [exiting, setExiting] = useState(false);
   const state = useSyncExternalStore(
     surface.store.subscribe,
     surface.store.getState,
@@ -392,21 +410,27 @@ function RunningCliApplication({
   const exitController = useMemo(
     () =>
       new ExitController(surface.session, {
-        disableInput: () => undefined,
-        cleanupTerminal: unmount,
+        disableInput: () => setExiting(true),
+        flushTerminal: flushCurrentFrame,
+        cleanupTerminal,
       }),
-    [surface, unmount],
+    [cleanupTerminal, flushCurrentFrame, surface],
   );
   const requestExit = useCallback(
     async (reason: ExitReason) => {
-      const outcome = await exitController.requestExit(reason);
-      onFinish({
-        kind: reason === "trust_denied" ? "trust_denied" : "quit",
-        exitCode: outcome.exitCode,
-      });
-      return outcome;
+      try {
+        const outcome = await exitController.requestExit(reason);
+        onFinish({
+          kind: reason === "trust_denied" ? "trust_denied" : "quit",
+          exitCode: outcome.exitCode,
+        });
+        return outcome;
+      } catch (error) {
+        onFailure(error);
+        throw error;
+      }
     },
-    [exitController, onFinish],
+    [exitController, onFailure, onFinish],
   );
   const localCommands = useMemo(
     () =>
@@ -481,6 +505,41 @@ function RunningCliApplication({
     [dispatchTerminal, intent, requestExit, startup, surface],
   );
 
+  const submitStartupStateReset = useCallback(
+    (decision: "reset_state" | "deny") => {
+      if (startup.kind !== "state_reset_required") return;
+      dispatchTerminal({
+        type: "mode.state_reset.submitting",
+        submitting: true,
+      });
+      void respondStartupStateReset(
+        surface,
+        intent,
+        startup.interactionId,
+        decision,
+      )
+        .then((result) => {
+          if (result.kind === "denied") {
+            void requestExit("state_reset_denied");
+          } else {
+            setStartup(result);
+          }
+        })
+        .catch((error: unknown) => {
+          dispatchTerminal({
+            type: "mode.state_reset.submitting",
+            submitting: false,
+          });
+          dispatchTerminal({
+            type: "mode.state_reset.message",
+            message:
+              error instanceof Error ? error.message : "State reset failed.",
+          });
+        });
+    },
+    [dispatchTerminal, intent, requestExit, startup, surface],
+  );
+
   const reconnectSurface = useCallback(async () => {
     if (reconnecting) return;
     const threadId = surface.store.getState().application?.current_thread_id;
@@ -531,6 +590,10 @@ function RunningCliApplication({
         submitStartupTrust("deny");
         return;
       }
+      if (routed.type === "state_reset.deny") {
+        submitStartupStateReset("deny");
+        return;
+      }
       if (routed.type !== "selection.confirm") return;
       const mode = terminalUiRef.current.mode;
       if (mode.kind === "fatal") {
@@ -540,6 +603,13 @@ function RunningCliApplication({
             await requestExit("quit_command");
           },
         });
+        return;
+      }
+      if (
+        mode.kind === "state_reset" &&
+        startup.kind === "state_reset_required"
+      ) {
+        submitStartupStateReset(mode.selected === 0 ? "reset_state" : "deny");
         return;
       }
       if (
@@ -567,6 +637,7 @@ function RunningCliApplication({
       requestExit,
       reconnectSurface,
       startup,
+      submitStartupStateReset,
       submitStartupTrust,
       surface,
       terminalUiRef,
@@ -574,9 +645,12 @@ function RunningCliApplication({
   );
 
   const startupInputActive =
-    renderFailure !== undefined ||
-    startup.kind === "trust_required" ||
-    (startup.kind === "ready" && startup.thread.kind === "selection_required");
+    !exiting &&
+    (renderFailure !== undefined ||
+      startup.kind === "state_reset_required" ||
+      startup.kind === "trust_required" ||
+      (startup.kind === "ready" &&
+        startup.thread.kind === "selection_required"));
 
   return (
     <ThemeProvider value={theme}>
@@ -597,6 +671,23 @@ function RunningCliApplication({
             selected={
               terminalUi.mode.kind === "fatal" ? terminalUi.mode.selected : 0
             }
+          />
+        ) : startup.kind === "state_reset_required" ? (
+          <StateResetPrompt
+            selected={
+              terminalUi.mode.kind === "state_reset"
+                ? terminalUi.mode.selected
+                : 0
+            }
+            submitting={
+              terminalUi.mode.kind === "state_reset"
+                ? terminalUi.mode.submitting
+                : false
+            }
+            {...(terminalUi.mode.kind === "state_reset" &&
+            terminalUi.mode.message !== undefined
+              ? { message: terminalUi.mode.message }
+              : {})}
           />
         ) : startup.kind === "trust_required" ? (
           <TrustPrompt
@@ -645,6 +736,7 @@ function RunningCliApplication({
             interactionResponder={interactions}
             providerSetupRequired={startup.readiness === "diagnostics_ready"}
             resetCurrentFrame={resetCurrentFrame}
+            exiting={exiting}
             welcome={{
               version: PRODUCT_VERSION,
               workspacePath: startup.application.workspace.display_path,
@@ -682,6 +774,20 @@ export function clearCurrentInkFrame(
   instance: Pick<Instance, "clear"> | undefined,
 ): void {
   instance?.clear();
+}
+
+export async function flushCurrentInkFrame(
+  instance: Pick<Instance, "waitUntilRenderFlush"> | undefined,
+): Promise<void> {
+  await instance?.waitUntilRenderFlush();
+}
+
+export async function unmountInkApplication(
+  instance: Pick<Instance, "unmount" | "waitUntilExit"> | undefined,
+): Promise<void> {
+  if (!instance) return;
+  instance.unmount();
+  await instance.waitUntilExit();
 }
 
 export async function executeFatalRecoverySelection(
@@ -740,6 +846,13 @@ function startupUiMode(
   fatal: boolean,
 ): Exclude<UiMode, { kind: "composer" }> | undefined {
   if (fatal) return { kind: "fatal", selected: 0 };
+  if (startup.kind === "state_reset_required") {
+    return {
+      kind: "state_reset",
+      selected: 0,
+      submitting: false,
+    };
+  }
   if (startup.kind === "trust_required") {
     return {
       kind: "workspace_trust",
@@ -768,6 +881,9 @@ function startupUiMode(
 
 function sameStartupMode(current: UiMode, next: UiMode): boolean {
   if (current.kind !== next.kind) return false;
+  if (current.kind === "state_reset" && next.kind === "state_reset") {
+    return true;
+  }
   if (current.kind === "workspace_trust" && next.kind === "workspace_trust") {
     return current.workspacePath === next.workspacePath;
   }

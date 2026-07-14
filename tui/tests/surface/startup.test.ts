@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { parseLaunchIntent } from "../../src/cli/args.js";
 import {
   beginStartup,
+  respondStartupStateReset,
   runStartup,
   SAFE_DIAGNOSTIC_COMMANDS,
   selectStartupThread,
@@ -354,13 +355,18 @@ function applicationState({
 
 function startupHarness({
   trustRequired = false,
+  stateResetRequired = false,
+  resetRejected = false,
   application = applicationState(),
 }: {
   trustRequired?: boolean;
+  stateResetRequired?: boolean;
+  resetRejected?: boolean;
   application?: MethodValue["application.getState"];
 } = {}) {
   const calls: Call[] = [];
-  let trusted = !trustRequired;
+  let resetPending = stateResetRequired;
+  let trusted = !trustRequired && !stateResetRequired;
   let selectedThreadId: string | undefined;
   return {
     calls,
@@ -371,14 +377,25 @@ function startupHarness({
       ) => {
         calls.push({ method, params } as Call);
         if (method === "initialize") {
+          const status = resetPending
+            ? "state_reset_required"
+            : trusted
+              ? "ready"
+              : "trust_required";
           return {
             ok: true,
             value: {
               product_version: "0.1.0",
               protocol_version: 2,
-              status: trusted ? "ready" : "trust_required",
+              status,
               session_id: "session_1",
-              ...(trusted ? {} : { interaction_id: "interaction_response" }),
+              ...(status === "ready"
+                ? {}
+                : {
+                    interaction_id: resetPending
+                      ? "interaction_state_reset"
+                      : "interaction_response",
+                  }),
               workspace: { display_path: "E:\\projects\\awesome" },
               capabilities: [],
             },
@@ -387,7 +404,28 @@ function startupHarness({
         if (method === "interaction.respond") {
           const decision = (params as MethodParams["interaction.respond"])
             .decision;
-          trusted = decision === "trust";
+          if (decision === "reset_state" && resetRejected) {
+            return {
+              ok: true,
+              value: {
+                accepted: false,
+                status: "state_reset_busy",
+                error: {
+                  code: "state_reset_busy",
+                  message:
+                    "Close other Awesome sessions before resetting local state.",
+                  retryable: true,
+                  data: { state_directory: "E:\\state" },
+                },
+              },
+            } as never;
+          }
+          if (decision === "reset_state") {
+            resetPending = false;
+            trusted = false;
+          } else if (decision === "trust") {
+            trusted = true;
+          }
           return {
             ok: true,
             value: { accepted: true, status: decision },
@@ -427,14 +465,15 @@ function startupHarness({
 }
 
 describe("trusted startup state machine", () => {
-  it("preserves an incompatible-state product failure from initialize", async () => {
+  it("preserves a newer-state product failure from initialize", async () => {
     const error = {
-      code: "state_schema_incompatible" as const,
-      message: "Awesome state is incompatible with this version.",
+      code: "state_created_by_newer_version" as const,
+      message:
+        "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
       retryable: false as const,
       data: {
-        found_schema: 1,
-        expected_schema: 2,
+        found_schema: 8,
+        expected_schema: 7,
         state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
       },
     };
@@ -456,6 +495,79 @@ describe("trusted startup state machine", () => {
       workspacePath: "E:\\projects\\awesome",
     });
     expect(calls.map(({ method }) => method)).toEqual(["initialize"]);
+  });
+
+  it("stops before trust when initialize requires an explicit state reset", async () => {
+    const { calls, surface } = startupHarness({ stateResetRequired: true });
+
+    await expect(beginStartup(surface, { kind: "new" })).resolves.toEqual({
+      kind: "state_reset_required",
+      interactionId: "interaction_state_reset",
+    });
+    expect(calls.map(({ method }) => method)).toEqual(["initialize"]);
+  });
+
+  it("resets state then reinitializes the same surface into Trust", async () => {
+    const { calls, surface } = startupHarness({ stateResetRequired: true });
+    const pending = await beginStartup(surface, { kind: "new" });
+    if (pending.kind !== "state_reset_required") {
+      throw new Error("expected state reset");
+    }
+
+    await expect(
+      respondStartupStateReset(
+        surface,
+        { kind: "new" },
+        pending.interactionId,
+        "reset_state",
+      ),
+    ).resolves.toEqual({
+      kind: "trust_required",
+      interactionId: "interaction_response",
+      workspacePath: "E:\\projects\\awesome",
+    });
+    expect(calls.map(({ method }) => method)).toEqual([
+      "initialize",
+      "interaction.respond",
+      "initialize",
+    ]);
+  });
+
+  it("exits after declining state reset without reading project state", async () => {
+    const { calls, surface } = startupHarness({ stateResetRequired: true });
+
+    await expect(
+      respondStartupStateReset(
+        surface,
+        { kind: "new" },
+        "interaction_state_reset",
+        "deny",
+      ),
+    ).resolves.toEqual({ kind: "denied" });
+    expect(calls.map(({ method }) => method)).toEqual(["interaction.respond"]);
+  });
+
+  it("keeps the same reset interaction retryable after a typed failure", async () => {
+    const { surface } = startupHarness({
+      stateResetRequired: true,
+      resetRejected: true,
+    });
+
+    await expect(
+      respondStartupStateReset(
+        surface,
+        { kind: "new" },
+        "interaction_state_reset",
+        "reset_state",
+      ),
+    ).rejects.toMatchObject({
+      code: "state_reset_busy",
+      message: "Close other Awesome sessions before resetting local state.",
+    });
+    await expect(beginStartup(surface, { kind: "new" })).resolves.toEqual({
+      kind: "state_reset_required",
+      interactionId: "interaction_state_reset",
+    });
   });
 
   it("trusts the response interaction then reinitializes before project state", async () => {
@@ -489,10 +601,7 @@ describe("trusted startup state machine", () => {
         "deny",
       ),
     ).resolves.toEqual({ kind: "denied" });
-    expect(calls.map(({ method }) => method)).toEqual([
-      "interaction.respond",
-      "shutdown",
-    ]);
+    expect(calls.map(({ method }) => method)).toEqual(["interaction.respond"]);
   });
 
   it("starts an already trusted workspace directly", async () => {

@@ -47,18 +47,22 @@ limits.
 Close every Awesome process and rerun the original one-line installer. It
 stages and validates the new application before replacing the installed files.
 
-## Source checkout reports incompatible state
+## Awesome asks to reset local state
 
-Awesome does not reinterpret development databases created with an unsupported
-schema. The startup panel shows the detected schema, the expected schema, and
-the exact state directory; this condition is not recoverable by reconnecting.
+After an incompatible local data-format change, Awesome can offer to reset
+conversation state before opening the workspace. Review the confirmation panel
+and choose `Reset local state and continue` only when you accept losing local
+conversations, workspace trust, checkpoints, and undo history. API keys,
+configuration, Skills, and Local or Cloud Memory settings are preserved.
 
-Stop Awesome, verify that the displayed directory is
-`<repository>/.awesome-dev/home/state`, and remove only that directory. Then run
-`uv run awesome-dev` again. Do not remove the parent development home:
-configuration and credentials outside `state` are intentionally preserved. See
-the [source Quickstart](../getting-started/quickstart.md#troubleshooting) for
-platform-specific commands.
+Choose Exit or press Esc to leave the state unchanged. A successful reset
+continues to workspace trust without restarting Awesome. If reset reports that
+another session is using the state, close other Awesome processes and retry.
+
+State created by a newer Awesome version is never reset by an older binary;
+rerun the normal installer to upgrade. Unknown, corrupt, unreadable, or locked
+state produces a diagnostic instead of a destructive prompt. Do not delete the
+data directory manually to bypass those diagnostics.
 
 ## Input is shown as pending
 

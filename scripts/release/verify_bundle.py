@@ -34,13 +34,28 @@ def _file_inventory(directory: Path) -> dict[str, bytes]:
     }
 
 
-def verify_storage_contract(database_module: ModuleType, root: Path) -> None:
-    expected_schema = 2
-    if expected_schema != database_module.APPLICATION_SCHEMA_VERSION:
+def _write_versioned_database(path: Path, version: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute(f"PRAGMA user_version = {version}")
+
+
+def _read_schema(path: Path) -> int:
+    with closing(sqlite3.connect(path)) as connection:
+        return int(connection.execute("PRAGMA user_version").fetchone()[0])
+
+
+def verify_storage_contract(
+    storage_module: ModuleType,
+    paths_module: ModuleType,
+    root: Path,
+) -> None:
+    expected_schema = 7
+    if expected_schema != storage_module.APPLICATION_SCHEMA_VERSION:
         raise BundleVerificationError("wheel schema version is invalid")
 
     fresh = root / "fresh-state" / "application.db"
-    database_module.initialize_application_database(fresh)
+    storage_module.initialize_application_database(fresh)
     with closing(sqlite3.connect(fresh)) as connection:
         observed_schema = int(connection.execute("PRAGMA user_version").fetchone()[0])
         tables = {
@@ -55,28 +70,71 @@ def verify_storage_contract(database_module: ModuleType, root: Path) -> None:
     if not required_tables.issubset(tables):
         raise BundleVerificationError("fresh database tables are incomplete")
 
-    incompatible = root / "incompatible-state" / "application.db"
-    incompatible.parent.mkdir(parents=True)
-    with closing(sqlite3.connect(incompatible)) as connection:
-        connection.execute("PRAGMA user_version = 1")
-    before = _file_inventory(incompatible.parent)
-    try:
-        database_module.initialize_application_database(incompatible)
-    except database_module.ApplicationSchemaMismatch as error:
-        if error.found != 1 or error.expected != expected_schema:
+    for found_schema, expected_direction in ((2, "older"), (6, "older"), (8, "newer")):
+        incompatible = root / f"schema-{found_schema}" / "application.db"
+        _write_versioned_database(incompatible, found_schema)
+        before = _file_inventory(incompatible.parent)
+        preflight = storage_module.inspect_application_state(incompatible)
+        if (
+            preflight.found_schema != found_schema
+            or preflight.expected_schema != expected_schema
+            or preflight.compatibility.value != expected_direction
+        ):
             raise BundleVerificationError(
-                "incompatible schema diagnostic is invalid"
-            ) from error
-    else:
-        raise BundleVerificationError("incompatible schema was not rejected")
-    if _file_inventory(incompatible.parent) != before:
-        raise BundleVerificationError("incompatible state was mutated")
+                "incompatible schema classification is invalid"
+            )
+        try:
+            storage_module.initialize_application_database(incompatible)
+        except storage_module.ApplicationSchemaMismatch as error:
+            if (
+                error.found != found_schema
+                or error.expected != expected_schema
+                or error.direction.value != expected_direction
+            ):
+                raise BundleVerificationError(
+                    "incompatible schema diagnostic is invalid"
+                ) from error
+        else:
+            raise BundleVerificationError("incompatible schema was not rejected")
+        if _file_inventory(incompatible.parent) != before:
+            raise BundleVerificationError("incompatible state was mutated")
+
+    home = root / "reset-home"
+    paths = paths_module.AwesomePaths.from_home(home)
+    preserved = {
+        paths.config_file: b"version: 1\n",
+        paths.env_file: b"DEEPSEEK_API_KEY=preserved\n",
+        paths.skills_dir / "review" / "SKILL.md": b"# Review\n",
+        paths.user_memory_file: b"# User memory\n",
+        paths.workspaces_dir / "workspace" / "MEMORY.md": b"# Workspace memory\n",
+        paths.ui_file: b'{"theme":"aurora"}\n',
+    }
+    for path, content in preserved.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    _write_versioned_database(paths.application_db, 6)
+    paths.checkpoint_db.write_bytes(b"discarded checkpoint")
+    paths.change_journal_dir.mkdir(parents=True)
+    (paths.change_journal_dir / "discarded").write_bytes(b"discarded change")
+
+    with storage_module.StateLease.acquire(
+        paths.home,
+        storage_module.StateLeaseMode.EXCLUSIVE,
+    ) as lease:
+        storage_module.reset_local_state(lease)
+
+    if _read_schema(paths.application_db) != expected_schema:
+        raise BundleVerificationError("reset did not create the current schema")
+    if paths.checkpoint_db.exists() or paths.change_journal_dir.exists():
+        raise BundleVerificationError("reset retained discarded state")
+    if any(path.read_bytes() != content for path, content in preserved.items()):
+        raise BundleVerificationError("reset mutated preserved user data")
 
 
 def _load_wheel_modules(
     wheel: Path,
     import_root: Path,
-) -> tuple[ModuleType, ModuleType]:
+) -> tuple[ModuleType, ModuleType, ModuleType]:
     with ZipFile(wheel) as archive:
         archive.extractall(import_root)
     previous_modules = {
@@ -89,7 +147,8 @@ def _load_wheel_modules(
     sys.path.insert(0, str(import_root))
     try:
         version_module = importlib.import_module("awesome_agent.version")
-        database_module = importlib.import_module("awesome_agent.storage.database")
+        storage_module = importlib.import_module("awesome_agent.storage")
+        paths_module = importlib.import_module("awesome_agent.paths")
     except Exception as error:
         raise BundleVerificationError("wheel import failed") from error
     finally:
@@ -98,7 +157,7 @@ def _load_wheel_modules(
             if name == "awesome_agent" or name.startswith("awesome_agent."):
                 del sys.modules[name]
         sys.modules.update(previous_modules)
-    return version_module, database_module
+    return version_module, storage_module, paths_module
 
 
 def resolve_executable(name: str) -> str:
@@ -156,12 +215,28 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
         expected_fragment = f"awesome_agent-{expected_version}"
         if len(wheels) != 1 or expected_fragment not in wheels[0].name:
             raise BundleVerificationError("bundle wheel identity is invalid")
-        version_module, database_module = _load_wheel_modules(
+        with ZipFile(wheels[0]) as wheel_archive:
+            module_paths = {
+                Path(name).as_posix().casefold()
+                for name in wheel_archive.namelist()
+                if name.endswith(".py")
+            }
+        if any(
+            "/migrations/" in path or Path(path).stem in {"migration", "migrations"}
+            for path in module_paths
+        ):
+            raise BundleVerificationError("wheel contains a migration module")
+
+        version_module, storage_module, paths_module = _load_wheel_modules(
             wheels[0], root / "wheel-import"
         )
         if expected_version != version_module.PRODUCT_VERSION:
             raise BundleVerificationError("wheel product version is invalid")
-        verify_storage_contract(database_module, root / "storage-contract")
+        verify_storage_contract(
+            storage_module,
+            paths_module,
+            root / "storage-contract",
+        )
         _verify_tui(payload / "tui", expected_version)
 
 

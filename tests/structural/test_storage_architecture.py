@@ -10,10 +10,13 @@ STORAGE_MODULES = {
     "__init__.py",
     "changes.py",
     "checkpoints.py",
+    "compatibility.py",
     "conversations.py",
     "database.py",
     "mcp.py",
     "pagination.py",
+    "state_lease.py",
+    "state_recovery.py",
     "trust.py",
 }
 APPLICATION_TABLES = {

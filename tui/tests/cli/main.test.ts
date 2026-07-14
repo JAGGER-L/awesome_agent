@@ -4,8 +4,10 @@ import { CoreSpawnError } from "../../src/core/errors.js";
 import {
   clearCurrentInkFrame,
   executeFatalRecoverySelection,
+  flushCurrentInkFrame,
   reconnectAndReplaceSurface,
   runCli,
+  unmountInkApplication,
   type CliDependencies,
 } from "../../src/cli/main.js";
 import { RpcProtocolError } from "../../src/protocol/client.js";
@@ -17,6 +19,14 @@ type ReadyApplication = Extract<
   StartupResult,
   { readonly kind: "ready" }
 >["application"];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 const readyApplication: ReadyApplication = {
   initialized: true,
@@ -134,13 +144,58 @@ describe("runCli", () => {
 
     expect(clear).toHaveBeenCalledOnce();
   });
+
+  it("awaits the current Ink frame flush", async () => {
+    const flushed = deferred<void>();
+    const waitUntilRenderFlush = vi.fn(async () => {
+      await flushed.promise;
+    });
+    let complete = false;
+
+    const pending = flushCurrentInkFrame({ waitUntilRenderFlush }).then(() => {
+      complete = true;
+    });
+
+    expect(waitUntilRenderFlush).toHaveBeenCalledOnce();
+    expect(complete).toBe(false);
+    flushed.resolve();
+    await pending;
+    expect(complete).toBe(true);
+  });
+
+  it("unmounts Ink and waits for all teardown writes", async () => {
+    const exited = deferred<void>();
+    const unmount = vi.fn();
+    const waitUntilExit = vi.fn(async () => {
+      await exited.promise;
+    });
+    let complete = false;
+
+    const pending = unmountInkApplication({ unmount, waitUntilExit }).then(
+      () => {
+        complete = true;
+      },
+    );
+
+    expect(unmount).toHaveBeenCalledOnce();
+    expect(waitUntilExit).toHaveBeenCalledOnce();
+    expect(complete).toBe(false);
+    exited.resolve();
+    await pending;
+    expect(complete).toBe(true);
+  });
+
+  it("treats a missing Ink instance as already cleaned up", async () => {
+    await expect(unmountInkApplication(undefined)).resolves.toBeUndefined();
+    await expect(flushCurrentInkFrame(undefined)).resolves.toBeUndefined();
+  });
   it.each([
     ["--version"],
     ["-V"],
   ])("prints only the product version for %s without starting Core", async (flag) => {
     const value = harness({ argv: [flag] });
     await expect(runCli(value.dependencies)).resolves.toBe(0);
-    expect(value.stdout.join("")).toBe("1.2.0\n");
+    expect(value.stdout.join("")).toBe("1.2.1\n");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 
@@ -185,6 +240,27 @@ describe("runCli", () => {
     expect(value.dependencies.startApplication).toHaveBeenCalledWith(
       value.surface,
       intent,
+    );
+  });
+
+  it("renders state reset as a recoverable startup mode rather than fatal", async () => {
+    const reset: StartupResult = {
+      kind: "state_reset_required",
+      interactionId: "interaction_state_reset",
+    };
+    const renderApplication = vi.fn(
+      async () => ({ kind: "quit", exitCode: 0 }) as const,
+    );
+    const value = harness({
+      startApplication: vi.fn(async () => reset),
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: { kind: "startup", startup: reset },
+      }),
     );
   });
 
@@ -295,19 +371,20 @@ describe("runCli", () => {
     );
   });
 
-  it("renders incompatible state through its dedicated startup fatal state", async () => {
+  it("renders newer state as a non-destructive version failure", async () => {
     const renderApplication = vi.fn(
       async () => ({ kind: "fatal", exitCode: 1 }) as const,
     );
     const value = harness({
       startApplication: vi.fn(async () => {
         throw new StartupProductError({
-          code: "state_schema_incompatible",
-          message: "Awesome state is incompatible with this version.",
+          code: "state_created_by_newer_version",
+          message:
+            "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
           retryable: false,
           data: {
-            found_schema: 1,
-            expected_schema: 2,
+            found_schema: 8,
+            expected_schema: 7,
             state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
           },
         });
@@ -321,10 +398,9 @@ describe("runCli", () => {
         state: {
           kind: "fatal",
           fatal: {
-            kind: "state_schema_incompatible",
-            foundSchema: 1,
-            expectedSchema: 2,
-            stateDirectory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+            kind: "version_incompatible",
+            message:
+              "Local state was created by a newer Awesome version. Upgrade Awesome to continue.",
           },
         },
       }),

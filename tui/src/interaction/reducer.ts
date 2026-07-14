@@ -73,6 +73,16 @@ export function terminalUiReducer(
         ...mode,
         message: action.message,
       }));
+    case "mode.state_reset.submitting":
+      return updateStateReset(state, (mode) => ({
+        ...mode,
+        submitting: action.submitting,
+      }));
+    case "mode.state_reset.message":
+      return updateStateReset(state, (mode) => ({
+        ...mode,
+        message: action.message,
+      }));
     case "composer.edit": {
       const composer = composerReducer(state.composer, action.action);
       return {
@@ -126,7 +136,9 @@ function moveSelection(
       ? mode.selection.options.length
       : mode.kind === "approval"
         ? mode.interaction.choices.length
-        : mode.kind === "workspace_trust" || mode.kind === "fatal"
+        : mode.kind === "workspace_trust" ||
+            mode.kind === "state_reset" ||
+            mode.kind === "fatal"
           ? 2
           : 0;
   if (size === 0 || !("selected" in mode)) return mode;
@@ -170,7 +182,11 @@ function setSelection(
 function selectionSize(mode: TerminalUiState["mode"]): number {
   if (mode.kind === "picker") return mode.selection.options.length;
   if (mode.kind === "approval") return mode.interaction.choices.length;
-  if (mode.kind === "workspace_trust" || mode.kind === "fatal") {
+  if (
+    mode.kind === "workspace_trust" ||
+    mode.kind === "state_reset" ||
+    mode.kind === "fatal"
+  ) {
     return 2;
   }
   return 0;
@@ -216,6 +232,17 @@ function updateTrust(
   ) => Extract<TerminalUiState["mode"], { kind: "workspace_trust" }>,
 ): TerminalUiState {
   return state.mode.kind === "workspace_trust"
+    ? { ...state, mode: update(state.mode) }
+    : state;
+}
+
+function updateStateReset(
+  state: TerminalUiState,
+  update: (
+    mode: Extract<TerminalUiState["mode"], { kind: "state_reset" }>,
+  ) => Extract<TerminalUiState["mode"], { kind: "state_reset" }>,
+): TerminalUiState {
+  return state.mode.kind === "state_reset"
     ? { ...state, mode: update(state.mode) }
     : state;
 }

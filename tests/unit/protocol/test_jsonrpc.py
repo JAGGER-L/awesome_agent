@@ -284,6 +284,41 @@ async def test_credential_rpc_is_strict_and_never_echoes_secret() -> None:
 
 
 @pytest.mark.asyncio
+async def test_interaction_decision_contract_accepts_reset_and_rejects_unknown() -> (
+    None
+):
+    facade = Facade()
+    dispatcher = JsonRpcDispatcher(facade)
+
+    accepted = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "interaction.respond",
+            "params": {
+                "interaction_id": "interaction_state_reset",
+                "decision": "reset_state",
+            },
+        }
+    )
+    invalid = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "interaction.respond",
+            "params": {
+                "interaction_id": "interaction_state_reset",
+                "decision": "unknown",
+            },
+        }
+    )
+
+    assert accepted is not None and accepted["result"]["ok"] is True
+    assert facade.calls == [("interaction", ("interaction_state_reset", "reset_state"))]
+    assert invalid is not None and invalid["error"]["code"] == -32602
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("params", "error_code"),
     [

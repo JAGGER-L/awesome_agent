@@ -106,6 +106,7 @@ export function App({
   reportFatal,
   providerSetupRequired = false,
   resetCurrentFrame = () => undefined,
+  exiting = false,
 }: {
   store: SurfaceStore;
   controller?: CommandController;
@@ -119,6 +120,7 @@ export function App({
   reportFatal: (error: unknown) => void;
   providerSetupRequired?: boolean;
   resetCurrentFrame?: () => void;
+  exiting?: boolean;
 }) {
   const state = useSyncExternalStore(
     store.subscribe,
@@ -909,9 +911,39 @@ export function App({
     />
   );
 
+  const terminalInputActive = !exiting && !cancelling;
+  const visibleInputSurface = exiting ? null : inputSurface;
+  const pendingInputSurface = exiting ? null : (
+    <PendingInputList items={pendingInputs.items} />
+  );
+  const noticeSurface = exiting ? null : (
+    <>
+      {ui.notice ? <Text>{ui.notice}</Text> : null}
+      {providerSetupVisible && ui.mode.kind !== "secret" ? (
+        <ProviderSetupNotice />
+      ) : null}
+    </>
+  );
+  const commandMenuSurface =
+    !exiting && !cancelling && ui.mode.kind === "command_menu" ? (
+      <CommandMenu
+        commands={searchCommands(ui.mode.query)}
+        {...(ui.mode.selectedCommand === undefined
+          ? {}
+          : { selectedCommand: ui.mode.selectedCommand })}
+        viewportStart={ui.mode.viewportStart}
+      />
+    ) : null;
+  const statusSurface = exiting ? null : (
+    <StatusLine state={state} cancellation={cancellation} />
+  );
+
   return (
     <>
-      <TerminalInput active={!cancelling} onInput={handleTerminalInput} />
+      <TerminalInput
+        active={terminalInputActive}
+        onInput={handleTerminalInput}
+      />
       <TerminalSurfaceLayout
         welcome={
           liveWelcome ? <Welcome {...liveWelcome} width={columns} /> : null
@@ -931,28 +963,11 @@ export function App({
             detailsExpanded={ui.detailsExpanded}
           />
         }
-        pendingInputs={<PendingInputList items={pendingInputs.items} />}
-        notices={
-          <>
-            {ui.notice ? <Text>{ui.notice}</Text> : null}
-            {providerSetupVisible && ui.mode.kind !== "secret" ? (
-              <ProviderSetupNotice />
-            ) : null}
-          </>
-        }
-        commandMenu={
-          !cancelling && ui.mode.kind === "command_menu" ? (
-            <CommandMenu
-              commands={searchCommands(ui.mode.query)}
-              {...(ui.mode.selectedCommand === undefined
-                ? {}
-                : { selectedCommand: ui.mode.selectedCommand })}
-              viewportStart={ui.mode.viewportStart}
-            />
-          ) : null
-        }
-        input={inputSurface}
-        status={<StatusLine state={state} cancellation={cancellation} />}
+        pendingInputs={pendingInputSurface}
+        notices={noticeSurface}
+        commandMenu={commandMenuSurface}
+        input={visibleInputSurface}
+        status={statusSurface}
       />
     </>
   );

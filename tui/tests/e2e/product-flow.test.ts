@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { render } from "ink-testing-library";
 import { createElement } from "react";
@@ -11,6 +12,7 @@ import { CommandController } from "../../src/commands/controller.js";
 import { parseInput } from "../../src/commands/parser.js";
 import type { LaunchIntent } from "../../src/cli/args.js";
 import { runCli, type CliDependencies } from "../../src/cli/main.js";
+import { startCoreProcess } from "../../src/core/process.js";
 import { resolveTheme } from "../../src/preferences/theme.js";
 import { initialSurfaceState } from "../../src/state/reducer.js";
 import { createSurfaceStore } from "../../src/state/store.js";
@@ -20,12 +22,16 @@ import {
 } from "../../src/surface/controller.js";
 import {
   beginStartup,
+  respondStartupStateReset,
   respondStartupTrust,
   type StartupResult,
 } from "../../src/surface/startup.js";
 import { createCoreWrapper } from "../fixtures/core-wrapper.js";
 
 const temporary: string[] = [];
+const fakeCore = fileURLToPath(
+  new URL("../fixtures/fake-core.mjs", import.meta.url),
+);
 
 afterEach(async () => {
   await Promise.all(
@@ -36,6 +42,50 @@ afterEach(async () => {
 });
 
 describe("networkless candidate product flow", () => {
+  it("resets startup state and reaches Trust on the same Core process", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "awesome-state-reset-"));
+    temporary.push(workspace);
+    const surface = await connectSurface({
+      executable: process.execPath,
+      cwd: workspace,
+      env: { AWESOME_FAKE_CORE_MODE: "state-reset-required" },
+      startSession: async (launch) =>
+        await startCoreProcess(launch, [fakeCore]),
+    });
+
+    try {
+      const reset = await beginStartup(surface, { kind: "new" });
+      expect(reset).toEqual({
+        kind: "state_reset_required",
+        interactionId: "interaction_state_reset",
+      });
+      if (reset.kind !== "state_reset_required") {
+        throw new Error("state reset was not requested");
+      }
+
+      const trustRequired = await respondStartupStateReset(
+        surface,
+        { kind: "new" },
+        reset.interactionId,
+        "reset_state",
+      );
+      expect(trustRequired).toMatchObject({ kind: "trust_required" });
+      if (trustRequired.kind !== "trust_required") {
+        throw new Error("workspace trust was not requested");
+      }
+
+      const ready = await respondStartupTrust(
+        surface,
+        { kind: "new" },
+        trustRequired.interactionId,
+        "trust",
+      );
+      expect(ready).toMatchObject({ kind: "ready" });
+    } finally {
+      await closeSurface(surface);
+    }
+  });
+
   it("replaces and resumes complete terminal conversations without duplicate Turn output", async () => {
     const oldThread = threadPage("thread_old", [
       entry("entry_old_user", "thread_old", 1, "user_message", "old question"),
@@ -112,7 +162,7 @@ describe("networkless candidate product flow", () => {
         resetCurrentFrame,
         width: 80,
         welcome: {
-          version: "1.2.0",
+          version: "1.2.1",
           workspacePath: "E:/awesome",
           thread: { kind: "new" },
           model: "deepseek/deepseek-v4-flash",

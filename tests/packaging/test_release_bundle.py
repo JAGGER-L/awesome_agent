@@ -18,7 +18,8 @@ from scripts.release.build_bundle import (
 )
 from scripts.release.verify_bundle import verify_storage_contract
 
-from awesome_agent.storage import database as application_database
+from awesome_agent import paths as awesome_paths_module
+from awesome_agent import storage as application_storage
 
 
 def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
@@ -205,7 +206,11 @@ def test_release_storage_contract_uses_current_schema_without_migrations(
     tmp_path: Path,
 ) -> None:
     contract_root = tmp_path / "storage-contract"
-    verify_storage_contract(application_database, contract_root)
+    verify_storage_contract(
+        application_storage,
+        awesome_paths_module,
+        contract_root,
+    )
 
     shutil.rmtree(contract_root)
     assert not contract_root.exists()

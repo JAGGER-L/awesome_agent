@@ -42,6 +42,38 @@ describe("terminalUiReducer", () => {
     });
   });
 
+  it("keeps state reset submission and failure feedback in one modal", () => {
+    const opened = terminalUiReducer(initialTerminalUiState(), {
+      type: "mode.open",
+      mode: { kind: "state_reset", selected: 0, submitting: false },
+    });
+    const moved = terminalUiReducer(opened, {
+      type: "mode.select",
+      delta: 1,
+    });
+    const submitting = terminalUiReducer(moved, {
+      type: "mode.state_reset.submitting",
+      submitting: true,
+    });
+    const failed = terminalUiReducer(
+      terminalUiReducer(submitting, {
+        type: "mode.state_reset.submitting",
+        submitting: false,
+      }),
+      {
+        type: "mode.state_reset.message",
+        message: "State reset is busy.",
+      },
+    );
+
+    expect(failed.mode).toEqual({
+      kind: "state_reset",
+      selected: 1,
+      submitting: false,
+      message: "State reset is busy.",
+    });
+  });
+
   it("restores the composer after cancelling a modal", () => {
     const opened = terminalUiReducer(initialTerminalUiState(), {
       type: "mode.open",

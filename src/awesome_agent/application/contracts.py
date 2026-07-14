@@ -44,7 +44,11 @@ class ProductErrorCode(StrEnum):
     RECOVERY_REQUIRED = "recovery_required"
     CLIENT_VERSION_INCOMPATIBLE = "client_version_incompatible"
     PROTOCOL_VERSION_INCOMPATIBLE = "protocol_version_incompatible"
-    STATE_SCHEMA_INCOMPATIBLE = "state_schema_incompatible"
+    STATE_CREATED_BY_NEWER_VERSION = "state_created_by_newer_version"
+    STATE_UNKNOWN = "state_unknown"
+    STATE_UNAVAILABLE = "state_unavailable"
+    STATE_RESET_BUSY = "state_reset_busy"
+    STATE_RESET_FAILED = "state_reset_failed"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -135,6 +139,7 @@ class ShutdownResult(BaseModel):
 class InitializeStatus(StrEnum):
     READY = "ready"
     TRUST_REQUIRED = "trust_required"
+    STATE_RESET_REQUIRED = "state_reset_required"
 
 
 class InitializeParams(BaseModel):

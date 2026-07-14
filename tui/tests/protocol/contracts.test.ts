@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { commandOutcomeSchema } from "../../src/protocol/commands.js";
+import { productErrorSchema } from "../../src/protocol/base.js";
+import { eventEnvelopeSchema } from "../../src/protocol/events.js";
 import { methodSchemas } from "../../src/protocol/methods.js";
+import { PRODUCT_VERSION } from "../../src/version.js";
 import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
 
 describe("provider credential protocol", () => {
@@ -79,63 +82,129 @@ describe("workspace change protocol", () => {
   });
 });
 
-describe("incompatible state protocol", () => {
-  it("accepts the exact Python failure and rejects malformed data", async () => {
+describe("startup state recovery protocol", () => {
+  it("accepts Python-produced reset initialization and responses", async () => {
     const corpus = await loadFixtureCorpus();
     const methods = corpus.files["methods.valid.json"] as {
-      cases: Array<{ name: string; result: unknown }>;
+      cases: Array<{ name: string; params: unknown; result: unknown }>;
     };
-    const fixture = methods.cases.find(
-      ({ name }) => name === "initialize.state_schema_incompatible",
+    const initialize = methods.cases.find(
+      ({ name }) => name === "initialize.state_reset_required",
     );
-    expect(fixture).toBeDefined();
+    const accepted = methods.cases.find(
+      ({ name }) => name === "interaction.respond.state_reset",
+    );
+    const denied = methods.cases.find(
+      ({ name }) => name === "interaction.respond.state_reset_denied",
+    );
 
-    const result = methodSchemas.initialize.result.parse(fixture?.result);
-    expect(result).toEqual({
-      ok: false,
-      error: {
-        code: "state_schema_incompatible",
-        message: "Awesome state is incompatible with this version.",
-        retryable: false,
-        data: {
-          found_schema: 1,
-          expected_schema: 2,
-          state_directory: "C:\\Awesome\\state",
-        },
+    expect(methodSchemas.initialize.result.parse(initialize?.result)).toEqual({
+      ok: true,
+      value: {
+        capabilities: ["threads", "turns", "commands"],
+        interaction_id: "interaction_state_reset",
+        product_version: PRODUCT_VERSION,
+        protocol_version: 2,
+        session_id: "session_11111111111111111111111111111111",
+        status: "state_reset_required",
+        workspace: { display_path: "C:\\workspace" },
       },
     });
-    if (result.ok) throw new Error("Expected a product failure fixture.");
-    const error = result.error;
+    expect(
+      methodSchemas["interaction.respond"].params.parse(accepted?.params),
+    ).toEqual({
+      interaction_id: "interaction_state_reset",
+      decision: "reset_state",
+    });
+    expect(
+      methodSchemas["interaction.respond"].result.parse(accepted?.result),
+    ).toEqual({ ok: true, value: { accepted: true, status: "resolved" } });
+    expect(
+      methodSchemas["interaction.respond"].result.parse(denied?.result),
+    ).toEqual({ ok: true, value: { accepted: true, status: "denied" } });
+  });
 
+  it("accepts the reset interaction Event emitted by Python", async () => {
+    const corpus = await loadFixtureCorpus();
+    const events = corpus.files["events.valid.json"] as {
+      events: Array<{ event_type: string }>;
+    };
+    const interaction = events.events.find(
+      ({ event_type }) => event_type === "interaction.required",
+    );
+
+    expect(eventEnvelopeSchema.parse(interaction)).toEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          interaction_kind: "state_reset",
+          choices: [
+            {
+              decision: "reset_state",
+              label: "Reset local state and continue",
+              description: undefined,
+            },
+            { decision: "deny", label: "Exit", description: undefined },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("strictly validates every storage diagnostic", async () => {
+    const corpus = await loadFixtureCorpus();
+    const failures = corpus.files["results.failures.json"] as {
+      cases: Array<{
+        code: string;
+        result: { ok: false; error: Record<string, unknown> };
+      }>;
+    };
+    const storageCodes = new Set([
+      "state_created_by_newer_version",
+      "state_unknown",
+      "state_unavailable",
+      "state_reset_busy",
+      "state_reset_failed",
+    ]);
+    const storageFailures = failures.cases.filter(({ code }) =>
+      storageCodes.has(code),
+    );
+
+    expect(storageFailures.map(({ code }) => code)).toEqual([
+      "state_created_by_newer_version",
+      "state_unknown",
+      "state_unavailable",
+      "state_reset_busy",
+      "state_reset_failed",
+    ]);
+    for (const { result } of storageFailures) {
+      expect(productErrorSchema.safeParse(result.error).success).toBe(true);
+      expect(
+        productErrorSchema.safeParse({
+          ...result.error,
+          data: {
+            ...(result.error.data as Record<string, unknown>),
+            extra: true,
+          },
+        }).success,
+      ).toBe(false);
+    }
+
+    const newer = storageFailures[0]?.result.error;
+    const newerData = (newer?.data ?? {}) as Record<string, unknown>;
     expect(
-      methodSchemas.initialize.result.safeParse({
-        ok: false,
-        error: {
-          ...error,
-          data: { found_schema: 1, state_directory: "state" },
-        },
+      productErrorSchema.safeParse({
+        ...newer,
+        data: { found_schema: 8, state_directory: "state" },
       }).success,
     ).toBe(false);
     expect(
-      methodSchemas.initialize.result.safeParse({
-        ok: false,
-        error: {
-          ...error,
-          data: { ...error.data, expected_schema: "2" },
-        },
+      productErrorSchema.safeParse({
+        ...newer,
+        data: { ...newerData, expected_schema: "7" },
       }).success,
     ).toBe(false);
     expect(
-      methodSchemas.initialize.result.safeParse({
-        ok: false,
-        error: { ...error, retryable: true },
-      }).success,
-    ).toBe(false);
-    expect(
-      methodSchemas.initialize.result.safeParse({
-        ok: false,
-        error: { ...error, data: { ...error.data, extra: true } },
-      }).success,
+      productErrorSchema.safeParse({ ...newer, retryable: true }).success,
     ).toBe(false);
   });
 });

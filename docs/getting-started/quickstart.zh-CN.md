@@ -161,25 +161,12 @@ npm --prefix tui run build
 - `--workspace` 只能指向已经存在的目录，启动器不会自动创建项目目录。
 - 请在交互式终端中启动；Ink 界面不能通过非交互管道运行。
 
-如果源码版本提示状态 schema 不兼容，请先退出 Awesome。确认启动错误界面
-显示的状态路径就是当前仓库的开发数据路径，然后再执行：
-
-```powershell
-Resolve-Path .\.awesome-dev\home\state
-Remove-Item -LiteralPath .\.awesome-dev\home\state -Recurse -Force
-uv run awesome-dev
-```
-
-macOS 或 WSL2 使用：
-
-```bash
-realpath .awesome-dev/home/state
-rm -rf -- .awesome-dev/home/state
-uv run awesome-dev
-```
-
-只删除已经核对过的 `state` 目录。开发环境的配置和凭据位于该目录之外，不会
-被删除。这个操作只重置可丢弃的开发会话和 checkpoint，不是数据迁移。
+更新源码后，Awesome 可能会检测到本地数据格式不兼容，并在启动时询问是否重置
+本地会话状态。确认面板会明确列出将删除和保留的内容。重置会删除会话、
+Workspace 信任、checkpoint 和撤销历史，但会保留 API Key、配置、Skills，
+以及 Local 或 Cloud Memory 设置。选择 Exit 不会修改任何数据。如果 Awesome
+提示状态未知、不可用或由更新版本创建，请按照界面中的诊断处理，不要手动删除
+文件。
 
 开发模式不会替换或修改系统中已经安装的 `awesome` 命令。正式安装版使用
 用户数据目录和预构建文件；`uv run awesome-dev` 使用当前 checkout，并默认

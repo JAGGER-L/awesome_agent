@@ -170,6 +170,7 @@ class InteractionRequiredPayload(BaseModel):
     interaction_id: str = Field(min_length=1, max_length=128)
     interaction_kind: Literal[
         "workspace_trust",
+        "state_reset",
         "tool_approval",
         "full_access_confirmation",
         "recovery_decision",

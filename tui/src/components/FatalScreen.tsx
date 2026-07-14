@@ -17,27 +17,24 @@ export function FatalScreen({
 }) {
   const theme = useTheme();
   const summary = fatalSummary(fatal);
-  const quitOnly = startup || fatal.kind === "state_schema_incompatible";
+  const quitOnly = startup;
   return (
     <Box flexDirection="column">
-      {fatal.kind === "state_schema_incompatible" ? (
-        <>
-          <Text color={theme.danger}>
-            Awesome state is incompatible with this version.
-          </Text>
-          <Text>
-            Found schema {fatal.foundSchema} · Expected schema{" "}
-            {fatal.expectedSchema}
-          </Text>
-          <Text>Close Awesome and reset this state directory:</Text>
-          <Text>{fatal.stateDirectory}</Text>
-        </>
-      ) : startup ? (
+      {startup ? (
         <>
           <Text color={theme.danger}>
             Awesome could not initialize this workspace.
           </Text>
-          <Text>Diagnostic: {startupDiagnosticCode(fatal)}</Text>
+          {fatal.kind === "version_incompatible" ? (
+            <Text>{fatal.message}</Text>
+          ) : (
+            <>
+              <Text>Diagnostic: {startupDiagnosticCode(fatal)}</Text>
+              {fatal.kind === "startup_state" ? (
+                <Text>{fatal.message}</Text>
+              ) : null}
+            </>
+          )}
           <Text>
             Run `awesome` again after resolving the reported state issue.
           </Text>
@@ -65,9 +62,7 @@ export function FatalScreen({
         selected={quitOnly ? 0 : selected}
         selection={{
           prompt: quitOnly
-            ? fatal.kind === "state_schema_incompatible"
-              ? "Exit Awesome"
-              : "Exit and run Awesome again"
+            ? "Exit and run Awesome again"
             : disabled
               ? "Reconnecting…"
               : "Choose recovery action",
@@ -84,7 +79,8 @@ export function FatalScreen({
 }
 
 function startupDiagnosticCode(fatal: FatalState): string {
-  return fatal.kind === "protocol" && fatal.diagnosticCode
+  return (fatal.kind === "protocol" || fatal.kind === "startup_state") &&
+    fatal.diagnosticCode
     ? fatal.diagnosticCode
     : "startup_failed";
 }
@@ -110,9 +106,9 @@ function fatalSummary(fatal: FatalState): string {
       return fatal.message;
     case "runtime_missing":
       return `Core runtime not found · ${fatal.executable}`;
+    case "startup_state":
+      return fatal.message;
     case "version_incompatible":
       return `Version incompatible · ${fatal.message}`;
-    case "state_schema_incompatible":
-      return "State schema incompatible";
   }
 }
