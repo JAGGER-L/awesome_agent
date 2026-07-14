@@ -42,7 +42,12 @@ from awesome_agent.config import (
     SecretStatus,
     missing_provider_credential_statuses,
 )
-from awesome_agent.conversation import Thread, ThreadView, UsageSummary
+from awesome_agent.conversation import (
+    Thread,
+    ThreadTitleSource,
+    ThreadView,
+    UsageSummary,
+)
 from awesome_agent.core.changes import (
     BinaryFileChange,
     DirectoryChange,
@@ -625,6 +630,17 @@ def _valid_command_results() -> dict[str, object]:
                 "application": application,
                 "thread": thread,
             },
+        },
+        {
+            "kind": "thread_renamed",
+            "thread": _model(
+                _thread().model_copy(
+                    update={
+                        "title": "Renamed Thread",
+                        "title_source": ThreadTitleSource.MANUAL,
+                    }
+                )
+            ),
         },
         {
             "kind": "context",

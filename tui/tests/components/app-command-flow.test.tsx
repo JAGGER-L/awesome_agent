@@ -21,6 +21,54 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("submitted slash command history", () => {
+  it("applies authoritative rename metadata before presenting success", async () => {
+    const thread = {
+      id: "thread_1",
+      workspace_key: "workspace_1",
+      title: "New conversation",
+      title_source: "automatic" as const,
+      current_model: "deepseek/deepseek-v4-flash",
+      thinking_enabled: true,
+      skill_mode: "auto",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+    };
+    const store = createSurfaceStore({
+      ...initialSurfaceState(),
+      application: { current_thread_id: thread.id } as never,
+      thread: {
+        view: { thread, entries: [], turns: [], tool_activities: [] },
+        change_sets: [],
+        has_more: false,
+      },
+    });
+    const controller = {
+      submit: vi.fn(async () => ({
+        kind: "result",
+        payload: {
+          kind: "thread_renamed",
+          thread: { ...thread, title: "Cube helper", title_source: "manual" },
+        },
+      })),
+    } as unknown as CommandController;
+    const view = render(
+      <App
+        store={store}
+        controller={controller}
+        reportFatal={() => undefined}
+        width={80}
+      />,
+    );
+
+    view.stdin.write("/rename Cube helper");
+    view.stdin.write("\r");
+
+    await eventually(() =>
+      expect(store.getState().thread?.view.thread.title).toBe("Cube helper"),
+    );
+    expect(view.lastFrame()).toContain("Conversation renamed · Cube helper");
+  });
+
   it("keeps the Composer visible while the command menu is open", async () => {
     const store = createSurfaceStore();
     const view = render(

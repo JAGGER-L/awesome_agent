@@ -14,6 +14,7 @@ import type {
 } from "../commands/controller.js";
 import { isOperationBusyOutcome } from "../commands/controller.js";
 import { findCommand } from "../commands/catalog.js";
+import { applyCommandEffect } from "../commands/effects.js";
 import {
   presentCommandPayload,
   presentHelpResult,
@@ -375,6 +376,7 @@ export function App({
               );
             }
           } else if (intent) {
+            applyCommandEffect(payload, store);
             appendPresentation(
               intent.name,
               presentCommandPayload(intent.name, payload),

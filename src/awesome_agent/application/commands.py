@@ -12,6 +12,7 @@ class CommandOwner(StrEnum):
 
 class CommandName(StrEnum):
     NEW = "new"
+    RENAME = "rename"
     RESUME = "resume"
     CONTEXT = "context"
     COMPACT = "compact"
@@ -42,6 +43,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
         name: CommandOwner.APPLICATION
         for name in (
             CommandName.NEW,
+            CommandName.RENAME,
             CommandName.RESUME,
             CommandName.CONTEXT,
             CommandName.COMPACT,

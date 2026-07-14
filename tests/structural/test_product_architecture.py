@@ -56,6 +56,7 @@ CURRENT_COMMANDS = {
     "permissions",
     "quit",
     "redo",
+    "rename",
     "resume",
     "skills",
     "status",

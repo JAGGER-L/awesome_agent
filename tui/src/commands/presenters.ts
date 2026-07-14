@@ -85,6 +85,12 @@ export function presentCommandPayload(
             : `Resumed · ${payload.transition.thread.view.thread.title}`,
         tone: "success",
       };
+    case "thread_renamed":
+      return {
+        kind: "notice",
+        message: `Conversation renamed · ${payload.thread.title}`,
+        tone: "success",
+      };
     case "context":
       return panel(title, [
         ...(["instructions", "conversation", "files", "memory"] as const).map(

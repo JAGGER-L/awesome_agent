@@ -26,6 +26,10 @@ export type SurfaceAction =
       readonly transcript: readonly TranscriptBlock[];
     }
   | {
+      readonly type: "thread.metadata.updated";
+      readonly thread: MethodValue["thread.read"]["view"]["thread"];
+    }
+  | {
       readonly type: "event.received";
       readonly event: EventEnvelope;
       readonly generation: number;

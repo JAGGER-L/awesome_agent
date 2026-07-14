@@ -10,7 +10,7 @@ from awesome_agent.application.contracts import (
     ThreadReadResult,
 )
 from awesome_agent.config.credentials import ProviderCredentialStatuses
-from awesome_agent.conversation.models import UsageSummary
+from awesome_agent.conversation.models import Thread, UsageSummary
 from awesome_agent.core.tools.permissions import PermissionMode
 
 
@@ -81,6 +81,11 @@ class ThreadTransitionSnapshot(_CommandModel):
 class ThreadTransitionCommandPayload(_CommandModel):
     kind: Literal["thread_transition"] = "thread_transition"
     transition: ThreadTransitionSnapshot
+
+
+class ThreadRenamedPayload(_CommandModel):
+    kind: Literal["thread_renamed"] = "thread_renamed"
+    thread: Thread
 
 
 class ContextCategory(_CommandModel):
@@ -264,6 +269,7 @@ class PermissionCommandPayload(_CommandModel):
 CommandPayload = Annotated[
     NoticeCommandPayload
     | ThreadTransitionCommandPayload
+    | ThreadRenamedPayload
     | ContextCommandPayload
     | CompactCommandPayload
     | ModelCommandPayload

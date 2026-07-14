@@ -5,6 +5,10 @@
       "owner": "application"
     },
     {
+      "name": "rename",
+      "owner": "application"
+    },
+    {
       "name": "resume",
       "owner": "application"
     },

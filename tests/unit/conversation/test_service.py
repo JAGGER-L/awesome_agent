@@ -120,6 +120,27 @@ def test_first_accepted_message_names_an_automatic_thread(tmp_path: Path) -> Non
     assert len(view.turns) == 1
 
 
+def test_rename_thread_normalizes_and_persists_manual_provenance(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1")
+
+    renamed = service.rename_thread(thread.id, "  Cube   helper  ")
+
+    assert renamed.title == "Cube helper"
+    assert renamed.title_source is ThreadTitleSource.MANUAL
+    assert service.read_thread(thread.id).thread == renamed
+
+
+def test_rename_thread_rejects_more_than_100_visible_graphemes(tmp_path: Path) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1")
+
+    with pytest.raises(ValueError, match="100 characters or fewer"):
+        service.rename_thread(thread.id, "👩‍💻" * 101)
+
+
 def test_one_in_progress_turn_per_thread_but_other_threads_are_independent(
     tmp_path: Path,
 ) -> None:
