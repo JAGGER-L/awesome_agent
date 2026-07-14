@@ -18,6 +18,7 @@ No other public launch flags are supported.
 | Command | Purpose |
 | --- | --- |
 | `/new` | Start a new thread. |
+| `/rename <title>` | Rename the current thread. A title is required. |
 | `/resume [thread_id]` | Choose or resume a previous workspace thread. |
 | `/context` | Show the active context manifest and budget. |
 | `/compact` | Compact the current context now. |
@@ -38,8 +39,13 @@ No other public launch flags are supported.
 | `/doctor` | Check configuration, embedded state, checkpoints, and Provider readiness. |
 | `/config` | Show effective source and credential-presence diagnostics, never secret values. |
 
-`/thinking` defaults to off. A bare `/thinking` reports the current value and
-offers on/off choices.
+New threads default to Thinking On. A resumed thread retains its saved setting.
+A bare `/thinking` reports the current value and offers on/off choices.
+
+The first accepted natural-language message names a new thread automatically,
+using at most 48 visible characters. `/rename <title>` replaces that name,
+marks it as user-selected, and rejects titles longer than 100 visible
+characters instead of truncating them. `/new` accepts no title argument.
 
 ## Provider and model commands
 
@@ -99,6 +105,10 @@ redraws Awesome with only the selected conversation's saved messages. When
 queued behind a running task, either command completes its Thread switch before
 the next queued input starts. A new Thread also resets Thread-scoped permission
 grants.
+
+`/rename <title>` follows the same queue ordering as every other Slash Command.
+The exact submitted command remains visible in transcript history, and the new
+title appears only after Core has persisted it successfully.
 
 ## Context and change lifecycles
 

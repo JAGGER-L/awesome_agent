@@ -78,7 +78,8 @@ describe("submitted slash command history", () => {
     view.stdin.write("/");
 
     await eventually(() => expect(view.lastFrame()).toContain("/new"));
-    expect(view.lastFrame()).toContain("❯ /▌");
+    expect(view.lastFrame()).toContain("❯ /");
+    expect(view.lastFrame()).not.toContain("▌");
   });
 
   it("renders finalized Assistant and Worked blocks once after handoff", async () => {

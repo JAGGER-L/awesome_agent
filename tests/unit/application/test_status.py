@@ -195,6 +195,7 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     assert snapshot.context_used_tokens == 50
     assert usage.ok is True
     assert usage.value is not None
+    assert usage.value.kind == "result"
     assert isinstance(usage.value.payload, UsageCommandPayload)
     assert usage.value.payload.usage == UsageSummary(
         input_tokens=17,
@@ -205,6 +206,7 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     )
     assert context.ok is True
     assert context.value is not None
+    assert context.value.kind == "result"
     assert isinstance(context.value.payload, ContextCommandPayload)
     assert context.value.payload.total_tokens == snapshot.context_used_tokens
     assert "secret_status" not in status.value.model_dump(mode="json")

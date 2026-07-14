@@ -37,6 +37,12 @@ deterministic product operations and never submit hidden model prompts.
 Ink-owned presentation commands never enter Core RPC; natural-language input
 is the only path that starts an Agent Turn.
 
+Conversation commands also own Thread naming semantics. A new Thread begins
+with automatic title provenance. Accepting its first natural-language message
+atomically commits the normalized automatic title, user Entry, and Turn.
+`/rename <title>` persists manual provenance through a typed deterministic
+result; `/new` rejects arguments and has no hidden title path.
+
 `LocalApplication` is the only surface-facing Application API. Command progress
 belongs to the Surface pending lifecycle and is not persisted as another
 operation state machine.

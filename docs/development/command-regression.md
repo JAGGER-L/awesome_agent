@@ -9,6 +9,7 @@ runtime registry.
 | Command | Owner | Input and result | Interaction and empty/error behavior | Focused coverage |
 | --- | --- | --- | --- | --- |
 | `/new` | Application | Bare command; typed Thread result | Replaces the transcript atomically; errors remain visible | `conversation_commands`, `controller` |
+| `/rename` | Application | Required title; typed persisted Thread result | Rejects empty or overlong titles; queues normally and updates metadata before feedback | `conversation_commands`, `catalog-presenters`, `app-command-flow` |
 | `/resume` | Application | Bare picker or explicit Thread ID | Disabled/empty choices explain why; selected Thread replaces history | `conversation_commands`, `controller` |
 | `/context` | Application | Typed Context rows | Empty categories still show budget; failures are errors | `context-usage-presenters` |
 | `/compact` | Application | In-place progress then typed Compact result | No-op and failure replace the progress row | `change-presenters` |

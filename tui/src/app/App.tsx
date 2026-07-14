@@ -902,6 +902,7 @@ export function App({
     <Composer
       state={ui.composer}
       submitting={ui.composerSubmitting}
+      active={ui.mode.kind === "composer" || ui.mode.kind === "command_menu"}
       {...(ui.composerMessage === undefined
         ? {}
         : { message: ui.composerMessage })}

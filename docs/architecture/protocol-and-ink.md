@@ -21,6 +21,7 @@ The presentation path has four deliberately small layers:
 ```text
 Core semantic facts
   -> Protocol v2 CommandPayload
+  -> typed command effect for authoritative Surface state, when required
   -> exhaustive presentCommandPayload()
   -> CommandPresentation
   -> ResultPanel / AlignedRows / ResultNotice / EmptyResult
@@ -34,6 +35,12 @@ terminal borders, alignment, wrapping, symbols, and semantic colors. There is
 no arbitrary-record renderer, JSON formatter, or legacy presentation shape;
 adding a payload or presentation variant must make the corresponding exhaustive
 switch fail type checking until it is handled.
+
+Command effects and Presenters have separate responsibilities. A semantic
+effect may install authoritative product metadata, such as a persisted Thread
+title, but it cannot format terminal output. The exhaustive Presenter remains
+pure and converts the same payload into user-visible feedback. Commands with
+no state effect pass through unchanged.
 
 ```text
 Ink command controller
@@ -64,6 +71,14 @@ secret input, Approval, Trust, or Fatal. Exactly one mode owns Enter, Escape,
 Tab, and arrow keys. Components render state and never install competing input
 listeners.
 
+Composer text uses Ink's real terminal cursor rather than a rendered block
+glyph. `useBoxMetrics()` measures the Composer's root box, the existing
+display-width-aware viewport supplies row and column coordinates, and
+`useCursor()` publishes the position relative to the Ink output. This leaves
+IME preedit rendering to the terminal host. Submitting and exclusive Picker,
+Approval, Trust, Auth, Secret, and Fatal modes hide the Composer cursor; the
+Command Menu remains a Composer accessory and keeps the draft cursor active.
+
 `TerminalSurfaceLayout` renders one natural terminal flow in this order:
 Welcome, committed transcript, active Turn, pending inputs, notices, Command
 Menu, Composer or exclusive interaction, and status. The current Thread is
@@ -92,6 +107,13 @@ For immediate input, the TUI projects a user message with a generated
 `client_message_id`, then reconciles that block with the accepted Turn and the
 durable transcript. Thread generation tags discard stale results after `/new`
 or `/resume` without replaying them into the new transcript.
+
+Core assigns an automatic title only when it accepts the first natural-language
+message. The title, first user Entry, and Turn are committed in one Application
+SQLite transaction. Terminal reconciliation carries the authoritative Thread
+projection together with finalized blocks; Ink never derives a second title
+from displayed user text. `/rename` uses a separate typed command effect to
+install the persisted manual title before showing its success notice.
 
 A submitted slash command is also projected immediately, using one
 `command_submission_id` generated before parsing or RPC execution. It is
