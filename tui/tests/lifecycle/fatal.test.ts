@@ -13,6 +13,7 @@ import {
   RpcValidationError,
 } from "../../src/protocol/client.js";
 import { ProtocolDesynchronized } from "../../src/state/event-stream.js";
+import { StartupProductError } from "../../src/surface/startup.js";
 
 const session = (stderr = new Uint8Array()) => ({ stderrTail: () => stderr });
 
@@ -70,6 +71,49 @@ describe("toFatalState", () => {
     ).toEqual({
       kind: "version_incompatible",
       message: "Protocol version is incompatible.",
+    });
+  });
+
+  it("classifies incompatible state with its exact recovery facts", () => {
+    const fatal = toFatalState(
+      new StartupProductError({
+        code: "state_schema_incompatible",
+        message: "Awesome state is incompatible with this version.",
+        retryable: false,
+        data: {
+          found_schema: 1,
+          expected_schema: 2,
+          state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+        },
+      }),
+      session(),
+    );
+
+    expect(fatal).toEqual({
+      kind: "state_schema_incompatible",
+      foundSchema: 1,
+      expectedSchema: 2,
+      stateDirectory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+    });
+    if (!fatal) throw new Error("expected fatal state");
+    expect(fatalExitCode(fatal)).toBe(1);
+  });
+
+  it("treats malformed incompatible-state data as a protocol fault", () => {
+    expect(
+      toFatalState(
+        {
+          code: "state_schema_incompatible",
+          message: "Invalid state data.",
+          retryable: false,
+          data: { found_schema: 1 },
+        },
+        session(),
+      ),
+    ).toEqual({
+      kind: "protocol",
+      message: "Invalid incompatible-state diagnostic payload.",
+      diagnosticCode: "invalid_state_schema_diagnostic",
     });
   });
 

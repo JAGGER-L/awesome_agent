@@ -8,17 +8,21 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
+from awesome_agent.application.command_results import (
+    COMMAND_OUTCOME_ADAPTER,
+    StatusCommandPayload,
+    result,
+)
 from awesome_agent.application.commands import (
     COMMAND_OWNERS,
     CommandIntent,
     CommandName,
-    CommandResult,
-    CommandStatus,
 )
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
     CancelResult,
+    ChangeSetSummary,
     InitializeResult,
     InitializeStatus,
     InteractionResult,
@@ -28,12 +32,29 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    StatusSnapshot,
     ThreadListResult,
     ThreadReadResult,
     WorkspacePresentation,
 )
-from awesome_agent.config import CredentialSource, SecretStatus
-from awesome_agent.conversation import Thread, ThreadView
+from awesome_agent.config import (
+    CredentialSource,
+    SecretStatus,
+    missing_provider_credential_statuses,
+)
+from awesome_agent.conversation import (
+    Thread,
+    ThreadTitleSource,
+    ThreadView,
+    UsageSummary,
+)
+from awesome_agent.core.changes import (
+    BinaryFileChange,
+    DirectoryChange,
+    FileChangeKind,
+    SymlinkChange,
+    TextFileChange,
+)
 from awesome_agent.core.events import (
     AssistantReasoningDeltaPayload,
     AssistantTextDeltaPayload,
@@ -52,13 +73,12 @@ from awesome_agent.core.events import (
     TurnLifecyclePayload,
     UsageUpdatedPayload,
     WarningPayload,
-    WorkspaceChangedPayload,
 )
 from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "protocol" / "fixtures" / "v1"
+TARGET = ROOT / "protocol" / "fixtures" / "v2"
 FIXED_TIME = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
 WORKSPACE_KEY = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 THREAD_ID = "thread_11111111111111111111111111111111"
@@ -117,23 +137,68 @@ def _valid_methods() -> dict[str, object]:
         display_path="C:\\workspace",
         branch="feature/fixtures",
     )
+    status_snapshot = StatusSnapshot(
+        version=PRODUCT_VERSION,
+        workspace_path=workspace.display_path,
+        thread_title="Fixture Thread",
+        thread_id=THREAD_ID,
+        thread_display_id="thread_11111111",
+        model_identity=ModelIdentitySnapshot.from_models(
+            configured_model="deepseek/deepseek-v4-flash",
+            effective_model="deepseek/deepseek-v4-flash",
+        ),
+        model_status="configured",
+        thinking_enabled=True,
+        skill_mode="auto",
+        local_memory_enabled=False,
+        mem0_enabled=False,
+        mcp_ready=0,
+        mcp_degraded=0,
+        operation_status="idle",
+        operation_id=None,
+        configuration_valid=True,
+        configuration_diagnostic_count=0,
+    )
     cases: tuple[tuple[str, str, dict[str, object], object], ...] = (
         (
             "initialize.ready",
             "initialize",
             {
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=1,
+                    protocol_version=2,
                     status=InitializeStatus.READY,
                     session_id="session_11111111111111111111111111111111",
                     workspace=workspace,
                     capabilities=("threads", "turns", "commands"),
+                )
+            ),
+        ),
+        (
+            "initialize.state_schema_incompatible",
+            "initialize",
+            {
+                "protocol_version": 2,
+                "client_name": "awesome",
+                "client_version": PRODUCT_VERSION,
+            },
+            _model(
+                ApplicationResult[InitializeResult].failure(
+                    ProductError(
+                        code=ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE,
+                        message="Awesome state is incompatible with this version.",
+                        retryable=False,
+                        data={
+                            "found_schema": 1,
+                            "expected_schema": 2,
+                            "state_directory": "C:\\Awesome\\state",
+                        },
+                    )
                 )
             ),
         ),
@@ -155,6 +220,7 @@ def _valid_methods() -> dict[str, object]:
                     ),
                     configuration_valid=True,
                     secret_status=SecretStatus(deepseek_api_key=True),
+                    usage={"active_execution_seconds": 0.5},
                 )
             ),
         ),
@@ -168,7 +234,43 @@ def _valid_methods() -> dict[str, object]:
             "thread.read",
             "thread.read",
             {"thread_id": THREAD_ID, "limit": 50},
-            _success(ThreadReadResult(view=ThreadView(thread=_thread()))),
+            _success(
+                ThreadReadResult(
+                    view=ThreadView(thread=_thread()),
+                    change_sets=(
+                        ChangeSetSummary(
+                            change_set_id="change_11111111111111111111111111111111",
+                            turn_id=TURN_ID,
+                            operation_id=OPERATION_ID,
+                            lifecycle="applied",
+                            changes=(
+                                TextFileChange(
+                                    path="src/main.py",
+                                    change_kind=FileChangeKind.UPDATED,
+                                    additions=16,
+                                    deletions=2,
+                                ),
+                                BinaryFileChange(
+                                    path="assets/logo.bin",
+                                    change_kind=FileChangeKind.UPDATED,
+                                    before_bytes=12,
+                                    after_bytes=20,
+                                ),
+                                DirectoryChange(
+                                    path="generated",
+                                    change_kind=FileChangeKind.CREATED,
+                                ),
+                                SymlinkChange(
+                                    path="current",
+                                    change_kind=FileChangeKind.UPDATED,
+                                ),
+                            ),
+                            created_at=FIXED_TIME,
+                            sealed_at=FIXED_TIME,
+                        ),
+                    ),
+                )
+            ),
         ),
         (
             "turn.submit",
@@ -202,7 +304,7 @@ def _valid_methods() -> dict[str, object]:
             "command.execute",
             "command.execute",
             _model(CommandIntent(name=CommandName.STATUS)),
-            _success(CommandResult(status=CommandStatus.SUCCESS)),
+            _success(result(StatusCommandPayload(snapshot=status_snapshot))),
         ),
         (
             "provider.credential.set",
@@ -217,7 +319,7 @@ def _valid_methods() -> dict[str, object]:
                 ProviderCredentialSetResult(
                     provider="deepseek",
                     status=ProviderCredentialSetStatus.CONFIGURED,
-                    source=CredentialSource.USER_ENV_FILE,
+                    source=CredentialSource.AWESOME,
                     code="credential_saved",
                 )
             ),
@@ -255,14 +357,14 @@ def _invalid_methods() -> dict[str, object]:
             {
                 "name": "initialize.missing_client_version",
                 "method": "initialize",
-                "params": {"protocol_version": 1, "client_name": "awesome"},
+                "params": {"protocol_version": 2, "client_name": "awesome"},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
                 "name": "initialize.protocol_incompatible",
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 2,
+                    "protocol_version": 1,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -346,8 +448,16 @@ def _invalid_methods() -> dict[str, object]:
 
 
 def _failure_results() -> dict[str, object]:
-    return {
-        "cases": [
+    cases: list[dict[str, object]] = []
+    for code in ProductErrorCode:
+        data: dict[str, object] = {}
+        if code is ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE:
+            data = {
+                "found_schema": 1,
+                "expected_schema": 2,
+                "state_directory": "C:\\Awesome\\state",
+            }
+        cases.append(
             {
                 "code": code.value,
                 "result": _model(
@@ -360,13 +470,13 @@ def _failure_results() -> dict[str, object]:
                                 ProductErrorCode.OPERATION_BUSY,
                                 ProductErrorCode.TURN_BUSY,
                             },
+                            data=data,
                         )
                     )
                 ),
             }
-            for code in ProductErrorCode
-        ]
-    }
+        )
+    return {"cases": cases}
 
 
 def _payload(event_type: EventType) -> EventPayload:
@@ -419,12 +529,6 @@ def _payload(event_type: EventType) -> EventPayload:
         )
     if event_type is EventType.USAGE_UPDATED:
         return UsageUpdatedPayload(input_tokens=12, output_tokens=4)
-    if event_type is EventType.WORKSPACE_CHANGED:
-        return WorkspaceChangedPayload(
-            change_set_id="change_1",
-            paths=("src/example.py",),
-            reversibility="full",
-        )
     if event_type is EventType.MEMORY_STATUS:
         return MemoryStatusPayload(layer="local", enabled=False, status="disabled")
     if event_type is EventType.INTERACTION_REQUIRED:
@@ -531,8 +635,296 @@ def _commands() -> dict[str, object]:
     }
 
 
+def _valid_command_results() -> dict[str, object]:
+    methods = _valid_methods()["cases"]
+    status = next(
+        case["result"]["value"]["payload"]["snapshot"]
+        for case in methods
+        if case["name"] == "command.execute"
+    )
+    application = next(
+        case["result"]["value"]
+        for case in methods
+        if case["name"] == "application.get_state"
+    )
+    thread = next(
+        case["result"]["value"] for case in methods if case["name"] == "thread.read"
+    )
+    credentials = _model(missing_provider_credential_statuses())
+    usage = _model(UsageSummary(active_execution_seconds=0.5))
+    payloads: list[dict[str, object]] = [
+        {"kind": "notice", "message": "Ready"},
+        {
+            "kind": "thread_transition",
+            "transition": {
+                "reason": "new",
+                "application": application,
+                "thread": thread,
+            },
+        },
+        {
+            "kind": "thread_renamed",
+            "thread": _model(
+                _thread().model_copy(
+                    update={
+                        "title": "Renamed Thread",
+                        "title_source": ThreadTitleSource.MANUAL,
+                    }
+                )
+            ),
+        },
+        {
+            "kind": "context",
+            "categories": [
+                {"name": name, "estimated_tokens": value}
+                for name, value in (
+                    ("instructions", 10),
+                    ("conversation", 20),
+                    ("files", 30),
+                    ("memory", 40),
+                )
+            ],
+            "total_tokens": 100,
+            "budget_tokens": 262144,
+        },
+        {
+            "kind": "compact",
+            "old_covered_entry_sequence": 0,
+            "new_covered_entry_sequence": 4,
+            "usage": usage,
+        },
+        {
+            "kind": "model",
+            "model": "deepseek/deepseek-v4-flash",
+            "default_model_updated": True,
+        },
+        {"kind": "thinking", "enabled": False},
+        {"kind": "workspace", "path": "C:\\workspace"},
+        {"kind": "diff", "change_set_id": None, "content": ""},
+        {
+            "kind": "change",
+            "action": "undo",
+            "change_set_id": "change_1",
+            "lifecycle": "undone",
+            "restored_paths": ["src/example.py"],
+            "warning": None,
+        },
+        {
+            "kind": "tools",
+            "permission_mode": "request_approval",
+            "tools": [
+                {
+                    "name": "read_file",
+                    "description": "Read file contents",
+                    "read_only": True,
+                    "approval_required": False,
+                }
+            ],
+        },
+        {
+            "kind": "skills",
+            "active_mode": "auto",
+            "skills": [
+                {
+                    "name": "coding",
+                    "description": "Coding workflow",
+                    "source": "bundled",
+                }
+            ],
+            "diagnostics": [],
+        },
+        {
+            "kind": "mcp",
+            "servers": [{"server_id": "docs", "state": "configured", "detail": None}],
+        },
+        {
+            "kind": "memory_status",
+            "local_available": True,
+            "local_enabled": False,
+            "cloud_provider": "mem0",
+            "cloud_available": False,
+            "cloud_enabled": False,
+            "cloud_error_code": None,
+        },
+        {
+            "kind": "memory_document",
+            "scope": "user",
+            "content_hash": "a" * 64,
+            "entries": [{"id": "entry_1", "content": "Fact"}],
+        },
+        {
+            "kind": "memory_search",
+            "provider": "mem0",
+            "memories": [
+                {
+                    "id": "memory_1",
+                    "content": "Fact",
+                    "scope": "user",
+                    "fact_hash": "b" * 64,
+                }
+            ],
+        },
+        {
+            "kind": "memory_mutation",
+            "provider": "local",
+            "status": "stored",
+            "scope": "user",
+            "entry_id": "entry_1",
+            "memory_id": None,
+            "error_code": None,
+        },
+        {"kind": "status", "snapshot": status},
+        {"kind": "usage", "usage": usage},
+        {
+            "kind": "doctor",
+            "checks": [{"name": "SQLite", "status": "ok", "detail": None}],
+        },
+        {"kind": "config", "sources": ["user"], "credentials": credentials},
+        {"kind": "permissions", "mode": "request_approval"},
+    ]
+    cases: list[dict[str, object]] = []
+    for payload in payloads:
+        outcome = COMMAND_OUTCOME_ADAPTER.validate_python(
+            {"kind": "result", "payload": payload}
+        )
+        cases.append({"name": f"result.{payload['kind']}", "outcome": _model(outcome)})
+    for name, raw in (
+        (
+            "interaction.selection",
+            {
+                "kind": "interaction",
+                "interaction": {
+                    "kind": "selection",
+                    "prompt": "Choose",
+                    "options": [
+                        {
+                            "value": "one",
+                            "label": "One",
+                            "selected": False,
+                            "disabled": False,
+                        }
+                    ],
+                },
+            },
+        ),
+        (
+            "interaction.secret",
+            {
+                "kind": "interaction",
+                "interaction": {
+                    "kind": "secret",
+                    "provider": "deepseek",
+                    "action": "add",
+                    "label": "DeepSeek API Key",
+                    "environment_variable": "DEEPSEEK_API_KEY",
+                    "help_url": "https://platform.deepseek.com/api_keys",
+                },
+            },
+        ),
+        (
+            "interaction.application",
+            {
+                "kind": "interaction",
+                "interaction": {
+                    "kind": "application",
+                    "interaction_id": "interaction_1",
+                },
+            },
+        ),
+        (
+            "error.invalid_arguments",
+            {
+                "kind": "error",
+                "code": "invalid_arguments",
+                "message": "Invalid arguments.",
+            },
+        ),
+    ):
+        cases.append(
+            {
+                "name": name,
+                "outcome": _model(COMMAND_OUTCOME_ADAPTER.validate_python(raw)),
+            }
+        )
+    return {"cases": cases}
+
+
+def _invalid_command_results() -> dict[str, object]:
+    methods = _valid_methods()["cases"]
+    application = next(
+        case["result"]["value"]
+        for case in methods
+        if case["name"] == "application.get_state"
+    )
+    thread = next(
+        case["result"]["value"] for case in methods if case["name"] == "thread.read"
+    )
+    return {
+        "cases": [
+            {
+                "name": "legacy",
+                "outcome": {"status": "success", "content": "", "data": {}},
+            },
+            {
+                "name": "unknown_payload",
+                "outcome": {"kind": "result", "payload": {"kind": "unknown"}},
+            },
+            {
+                "name": "thread_transition_identity_mismatch",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_transition",
+                        "transition": {
+                            "reason": "resume",
+                            "application": {
+                                **application,
+                                "current_thread_id": (
+                                    "thread_22222222222222222222222222222222"
+                                ),
+                            },
+                            "thread": thread,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "secret_value",
+                "outcome": {
+                    "kind": "interaction",
+                    "interaction": {
+                        "kind": "secret",
+                        "provider": "deepseek",
+                        "action": "add",
+                        "label": "Key",
+                        "environment_variable": "DEEPSEEK_API_KEY",
+                        "help_url": "https://example.com",
+                        "api_key": "private",
+                    },
+                },
+            },
+            {
+                "name": "duplicate_options",
+                "outcome": {
+                    "kind": "interaction",
+                    "interaction": {
+                        "kind": "selection",
+                        "prompt": "Choose",
+                        "options": [
+                            {"value": "same", "label": "One"},
+                            {"value": "same", "label": "Two"},
+                        ],
+                    },
+                },
+            },
+        ]
+    }
+
+
 def build_files() -> dict[str, bytes]:
     files = {
+        "command-results.invalid.json": _json_bytes(_invalid_command_results()),
+        "command-results.valid.json": _json_bytes(_valid_command_results()),
         "commands.json": _json_bytes(_commands()),
         "events.invalid.json": _json_bytes(_invalid_events()),
         "events.valid.json": _json_bytes(_valid_events()),
@@ -543,7 +935,7 @@ def build_files() -> dict[str, bytes]:
     manifest = {
         "fixture_version": 1,
         "product_version": PRODUCT_VERSION,
-        "protocol_version": 1,
+        "protocol_version": 2,
         "methods": list(METHODS),
         "event_types": [event_type.value for event_type in EventType],
         "command_owners": {

@@ -15,6 +15,7 @@ from awesome_agent.conversation.models import (
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
+    ThreadTitleSource,
     ThreadView,
     Turn,
     TurnStatus,
@@ -25,6 +26,11 @@ from awesome_agent.conversation.repository import (
     ConversationStore,
     TurnNotFound,
     require_turn_transition,
+)
+from awesome_agent.conversation.titles import (
+    automatic_title,
+    normalize_title,
+    visible_graphemes,
 )
 
 
@@ -56,6 +62,11 @@ class ConversationService:
                 id=self._id_factory("thread"),
                 workspace_key=workspace_key,
                 title=normalized_title,
+                title_source=(
+                    ThreadTitleSource.AUTOMATIC
+                    if title is None
+                    else ThreadTitleSource.MANUAL
+                ),
                 current_model=current_model,
                 created_at=now,
                 updated_at=now,
@@ -99,6 +110,22 @@ class ConversationService:
         current = self._store.read_thread(thread_id).thread
         updated = current.model_copy(
             update={"skill_mode": skill_mode, "updated_at": self._clock()}
+        )
+        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
+
+    def rename_thread(self, thread_id: str, title: str) -> Thread:
+        normalized = normalize_title(title)
+        if not normalized:
+            raise ValueError("Title required · /rename <title>")
+        if len(visible_graphemes(normalized)) > 100:
+            raise ValueError("Thread title must be 100 characters or fewer.")
+        current = self._store.read_thread(thread_id).thread
+        updated = current.model_copy(
+            update={
+                "title": normalized,
+                "title_source": ThreadTitleSource.MANUAL,
+                "updated_at": self._clock(),
+            }
         )
         return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 
@@ -168,7 +195,13 @@ class ConversationService:
             created_at=now,
             updated_at=now,
         )
-        return self._store.begin_turn(entry, turn)
+        thread_update: dict[str, object] = {"updated_at": now}
+        if view.thread.title_source is ThreadTitleSource.AUTOMATIC and not view.entries:
+            thread_update["title"] = automatic_title(user_content)
+        updated_thread = Thread.model_validate(
+            view.thread.model_copy(update=thread_update).model_dump()
+        )
+        return self._store.begin_turn(entry, turn, updated_thread)
 
     def complete_turn(
         self,
@@ -214,12 +247,24 @@ class ConversationService:
         completed = Turn.model_validate(completed.model_dump())
         return self._store.complete_turn(assistant, completed)
 
-    def fail_turn(self, turn_id: str, error_code: str) -> Turn:
+    def fail_turn(
+        self,
+        turn_id: str,
+        error_code: str,
+        *,
+        usage: UsageSummary | None = None,
+        context_manifest: tuple[dict[str, JsonValue], ...] = (),
+    ) -> Turn:
         if not error_code.strip():
             raise ValueError("error_code cannot be empty.")
+        observed_usage = usage or UsageSummary()
         _, current = self._turn_view(turn_id)
         if current.status is TurnStatus.FAILED:
-            if current.error_code == error_code:
+            if (
+                current.error_code == error_code
+                and current.usage == observed_usage
+                and current.context_manifest == context_manifest
+            ):
                 return current
             raise ConversationConflict("Failed Turn finalization differs.")
         require_turn_transition(current.status, TurnStatus.FAILED)
@@ -228,6 +273,8 @@ class ConversationService:
             update={
                 "status": TurnStatus.FAILED,
                 "error_code": error_code,
+                "usage": observed_usage,
+                "context_manifest": context_manifest,
                 "updated_at": now,
                 "completed_at": now,
             }
@@ -235,22 +282,56 @@ class ConversationService:
         failed = Turn.model_validate(failed.model_dump())
         return self._store.update_terminal_turn(failed)
 
-    def cancel_turn(self, turn_id: str) -> Turn:
+    def cancel_turn(
+        self,
+        turn_id: str,
+        *,
+        usage: UsageSummary | None = None,
+        context_manifest: tuple[dict[str, JsonValue], ...] = (),
+    ) -> Turn:
+        observed_usage = usage or UsageSummary()
         _, current = self._turn_view(turn_id)
         if current.status is TurnStatus.CANCELLED:
-            return current
+            if (
+                current.usage == observed_usage
+                and current.context_manifest == context_manifest
+            ):
+                return current
+            raise ConversationConflict("Cancelled Turn finalization differs.")
         require_turn_transition(current.status, TurnStatus.CANCELLED)
         now = self._clock()
         cancelled = current.model_copy(
             update={
                 "status": TurnStatus.CANCELLED,
                 "termination_reason": "cancelled",
+                "usage": observed_usage,
+                "context_manifest": context_manifest,
                 "updated_at": now,
                 "completed_at": now,
             }
         )
         cancelled = Turn.model_validate(cancelled.model_dump())
         return self._store.update_terminal_turn(cancelled)
+
+    def thread_usage(self, thread_id: str) -> UsageSummary:
+        total = UsageSummary()
+        for turn in self._store.read_thread(thread_id).turns:
+            total += turn.usage
+        return total
+
+    def latest_context_manifest(
+        self,
+        thread_id: str,
+    ) -> tuple[dict[str, JsonValue], ...]:
+        turns = self._store.read_thread(thread_id).turns
+        return next(
+            (
+                turn.context_manifest
+                for turn in reversed(turns)
+                if turn.context_manifest
+            ),
+            (),
+        )
 
     def append_direct_command(
         self,

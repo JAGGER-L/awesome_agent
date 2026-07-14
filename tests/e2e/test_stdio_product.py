@@ -21,6 +21,15 @@ def _value(frame: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def _transition_thread_id(frame: dict[str, Any]) -> str:
+    payload = _value(frame)["payload"]
+    assert payload["kind"] == "thread_transition"
+    transition = payload["transition"]
+    thread_id = transition["thread"]["view"]["thread"]["id"]
+    assert transition["application"]["current_thread_id"] == thread_id
+    return str(thread_id)
+
+
 class Client:
     def __init__(self, process: asyncio.subprocess.Process) -> None:
         self.process = process
@@ -148,7 +157,7 @@ async def test_stdio_full_flow_and_restart(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -165,13 +174,13 @@ async def test_stdio_full_flow_and_restart(
     assert _value(state).get("current_thread_id") is None
     assert _value(state)["initialized"] is True
     created = await client.request("command.execute", {"name": "new"})
-    thread_id = _value(created)["data"]["thread_id"]
+    thread_id = _transition_thread_id(created)
 
     model_selected = await client.request(
         "command.execute",
         {"name": "model", "arguments": [provider, model]},
     )
-    assert _value(model_selected)["data"]["model"] == model
+    assert _value(model_selected)["payload"]["model"] == model
     submitted = await client.request(
         "turn.submit",
         {
@@ -226,7 +235,7 @@ async def test_stdio_full_flow_and_restart(
     ready = await restarted.request(
         "initialize",
         {
-            "protocol_version": 1,
+            "protocol_version": 2,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -236,7 +245,7 @@ async def test_stdio_full_flow_and_restart(
         "command.execute",
         {"name": "resume", "arguments": [thread_id]},
     )
-    assert _value(resumed)["data"]["thread_id"] == thread_id
+    assert _transition_thread_id(resumed) == thread_id
     restored = await restarted.request("thread.read", {"thread_id": thread_id})
     assert any(
         entry["kind"] == "direct_command"

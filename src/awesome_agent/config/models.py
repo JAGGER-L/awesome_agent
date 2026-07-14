@@ -24,6 +24,19 @@ class KimiRegion(StrEnum):
     GLOBAL = "global"
 
 
+class CredentialSource(StrEnum):
+    ENVIRONMENT = "environment"
+    AWESOME = "awesome"
+
+
+class CredentialSelectionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    deepseek: CredentialSource | None = None
+    kimi: CredentialSource | None = None
+    mem0: CredentialSource | None = None
+
+
 class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -142,6 +155,9 @@ class UserConfigDocument(BaseModel):
 
     version: Literal[1] = 1
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
+    credentials: CredentialSelectionConfig = Field(
+        default_factory=CredentialSelectionConfig
+    )
     budgets: BudgetConfig = Field(default_factory=BudgetConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
@@ -221,6 +237,6 @@ class TurnConfig(BaseModel):
 
     provider: Literal["deepseek", "kimi"]
     model: str
-    thinking_enabled: bool = False
+    thinking_enabled: bool = True
     skill_mode: str = "auto"
     budgets: BudgetConfig

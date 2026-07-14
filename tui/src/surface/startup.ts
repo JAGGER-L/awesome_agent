@@ -5,6 +5,7 @@ import type {
   MethodValue,
 } from "../protocol/methods.js";
 import type { LaunchIntent } from "../cli/args.js";
+import type { CommandOutcome, CommandSelection } from "../protocol/commands.js";
 import type { SurfaceStore } from "../state/index.js";
 import { PRODUCT_VERSION } from "../version.js";
 
@@ -52,12 +53,12 @@ export interface StartupDiagnostic {
   readonly messages: readonly string[];
 }
 
-type CommandSelection = NonNullable<
-  MethodValue["command.execute"]["selection"]
->;
-
 export type StartupThreadResult =
-  | { readonly kind: "ready"; readonly thread: MethodValue["thread.read"] }
+  | {
+      readonly kind: "ready";
+      readonly application: MethodValue["application.getState"];
+      readonly thread: MethodValue["thread.read"];
+    }
   | {
       readonly kind: "selection_required";
       readonly selection: CommandSelection;
@@ -73,13 +74,27 @@ export class StartupError extends Error {
   }
 }
 
+export class StartupProductError extends StartupError {
+  readonly code: ProductError["code"];
+  readonly retryable: boolean;
+  readonly data: ProductError["data"];
+
+  constructor(error: ProductError) {
+    super(error.message, error.code);
+    this.name = "StartupProductError";
+    this.code = error.code;
+    this.retryable = error.retryable;
+    this.data = error.data;
+  }
+}
+
 export async function beginStartup(
   surface: StartupSurface,
   intent: LaunchIntent,
 ): Promise<StartupResult> {
   surface.store?.dispatch({ type: "connection.handshaking" });
   const initialized = await surface.request("initialize", {
-    protocol_version: 1,
+    protocol_version: 2,
     client_name: "awesome",
     client_version: PRODUCT_VERSION,
   });
@@ -107,18 +122,8 @@ export async function beginStartup(
     application: application.value,
   });
   const thread = await runStartup(surface, intent);
-  const refreshed =
-    thread.kind === "ready"
-      ? await surface.request("application.getState", {})
-      : application;
-  if (!refreshed.ok) throw productFailure(refreshed.error);
-  const resolvedApplication = refreshed.value;
-  if (resolvedApplication !== application.value) {
-    surface.store?.dispatch({
-      type: "hydrate.application",
-      application: resolvedApplication,
-    });
-  }
+  const resolvedApplication =
+    thread.kind === "ready" ? thread.application : application.value;
   const diagnostic = startupDiagnostic(resolvedApplication);
   return {
     kind: "ready",
@@ -182,19 +187,27 @@ export async function runStartup(
       return selected;
     }
     case "resume-picker": {
-      const result = await executeCommand(surface, { name: "resume" });
-      if (result.selection) {
-        return { kind: "selection_required", selection: result.selection };
+      let result: CommandOutcome;
+      try {
+        result = await executeCommand(surface, { name: "resume" });
+      } catch (error) {
+        if (
+          error instanceof StartupError &&
+          error.code === "thread_not_found"
+        ) {
+          const selected = await createThread(surface);
+          hydrateSurface(surface, selected);
+          return selected;
+        }
+        throw error;
       }
       if (
-        Array.isArray(result.data.threads) &&
-        result.data.threads.length === 0
+        result.kind === "interaction" &&
+        result.interaction.kind === "selection"
       ) {
-        const selected = await createThread(surface);
-        hydrateSurface(surface, selected);
-        return selected;
+        return { kind: "selection_required", selection: result.interaction };
       }
-      const selected = await hydrateCommandThread(surface, result);
+      const selected = hydrateCommandThread(result);
       hydrateSurface(surface, selected);
       return selected;
     }
@@ -209,58 +222,49 @@ export async function selectStartupThread(
     name: "resume",
     arguments: [threadId],
   });
-  if (result.selection) {
-    return { kind: "selection_required", selection: result.selection };
+  if (
+    result.kind === "interaction" &&
+    result.interaction.kind === "selection"
+  ) {
+    return { kind: "selection_required", selection: result.interaction };
   }
-  return await hydrateCommandThread(surface, result);
+  return hydrateCommandThread(result);
 }
 
 async function createThread(
   surface: StartupSurface,
 ): Promise<StartupThreadResult> {
-  return await hydrateCommandThread(
-    surface,
-    await executeCommand(surface, { name: "new" }),
-  );
+  return hydrateCommandThread(await executeCommand(surface, { name: "new" }));
 }
 
 async function executeCommand(
   surface: StartupSurface,
   params: MethodParams["command.execute"],
-): Promise<MethodValue["command.execute"]> {
+): Promise<CommandOutcome> {
   const response = await surface.request("command.execute", params);
   if (!response.ok) throw productFailure(response.error);
-  if (response.value.status === "error") {
-    const code = response.value.data.error_code;
-    throw new StartupError(
-      response.value.content || "Startup command failed",
-      typeof code === "string" ? code : "command_failed",
-    );
+  if (response.value.kind === "error") {
+    throw new StartupError(response.value.message, response.value.code);
   }
   return response.value;
 }
 
-async function hydrateCommandThread(
-  surface: StartupSurface,
-  result: MethodValue["command.execute"],
-): Promise<StartupThreadResult> {
-  const threadId = result.data.thread_id;
-  if (typeof threadId !== "string" || threadId.length === 0) {
+function hydrateCommandThread(result: CommandOutcome): StartupThreadResult {
+  if (result.kind !== "result" || result.payload.kind !== "thread_transition") {
     throw new StartupError(
       "Startup command did not select a Thread",
       "thread_not_selected",
     );
   }
-  const page = await surface.request("thread.read", {
-    thread_id: threadId,
-    limit: 50,
-  });
-  if (!page.ok) throw productFailure(page.error);
-  return { kind: "ready", thread: page.value };
+  return {
+    kind: "ready",
+    application: result.payload.transition.application,
+    thread: result.payload.transition.thread,
+  };
 }
 
-function productFailure(error: ProductError): StartupError {
-  return new StartupError(error.message, error.code);
+function productFailure(error: ProductError): StartupProductError {
+  return new StartupProductError(error);
 }
 
 function hydrateSurface(
@@ -268,6 +272,10 @@ function hydrateSurface(
   result: StartupThreadResult,
 ): void {
   if (result.kind === "ready") {
+    surface.store?.dispatch({
+      type: "hydrate.application",
+      application: result.application,
+    });
     surface.store?.dispatch({ type: "hydrate.thread", thread: result.thread });
   }
 }
@@ -285,8 +293,8 @@ function startupDiagnostic(
   }
   if (
     model.length === 0 &&
-    application.provider_credentials.deepseek.source === "missing" &&
-    application.provider_credentials.kimi.source === "missing"
+    !credentialConfigured(application.provider_credentials.deepseek) &&
+    !credentialConfigured(application.provider_credentials.kimi)
   ) {
     return {
       code: "provider_not_configured",
@@ -317,4 +325,16 @@ function startupDiagnostic(
     };
   }
   return undefined;
+}
+
+function credentialConfigured(status: {
+  selected_source?: "environment" | "awesome" | null | undefined;
+  environment_configured: boolean;
+  awesome_configured: boolean;
+}): boolean {
+  return status.selected_source === "environment"
+    ? status.environment_configured
+    : status.selected_source === "awesome"
+      ? status.awesome_configured
+      : false;
 }

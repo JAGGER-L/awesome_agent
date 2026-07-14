@@ -24,6 +24,12 @@ const blocks: TranscriptBlock[] = [
     status: "persisted",
     text: "question",
   },
+  {
+    key: "command:command_1",
+    kind: "command_input",
+    submission_id: "command_1",
+    text: "/status",
+  },
   { key: "assistant", kind: "assistant", text: "durable answer" },
   { key: "direct", kind: "direct_command", command: "git status" },
   {
@@ -50,21 +56,29 @@ describe("scrollback transcript components", () => {
   ])("preserves essential content at %i columns", (width) => {
     const view = render(<Transcript blocks={blocks} width={width} />);
     expect(view.lastFrame()).toContain("question");
+    expect(view.lastFrame()).toContain("/status");
     expect(view.lastFrame()).toContain("durable answer");
     expect(view.lastFrame()).toContain("git status");
-    expect(view.lastFrame()).toContain("failed safely");
-    expect(view.lastFrame()).toContain("exit_1");
+    expect(view.lastFrame()).toContain(
+      "1 tool call · <0.1 s · Ctrl+O to expand",
+    );
+    expect(view.lastFrame()).not.toContain("failed safely");
+    expect(view.lastFrame()).not.toContain("exit_1");
     expect(view.lastFrame()).not.toContain("You");
     expect(view.lastFrame()).not.toContain("Assistant");
+    expect(view.lastFrame()).toContain("❯ question");
+    expect(view.lastFrame()).toContain("❯ /status");
   });
 
-  it("updates only the active projection and hides reasoning when terminal", () => {
+  it("updates the active projection and retains completed thinking until reconciliation", () => {
     const live: LiveTranscriptProjection = {
       operation_id: "operation_1",
       turn_id: "turn_1",
-      reasoning_text: "live reasoning",
       terminal: false,
-      blocks: [{ key: "live", kind: "assistant", text: "first" }],
+      blocks: [
+        { key: "thought", kind: "thinking", text: "live reasoning" },
+        { key: "live", kind: "assistant", text: "first" },
+      ],
     };
     const view = render(<ActiveTurn live={live} width={80} />);
     expect(view.lastFrame()).toContain("live reasoning");
@@ -72,7 +86,10 @@ describe("scrollback transcript components", () => {
       <ActiveTurn
         live={{
           ...live,
-          blocks: [{ key: "live", kind: "assistant", text: "second" }],
+          blocks: [
+            { key: "thought", kind: "thinking", text: "live reasoning" },
+            { key: "live", kind: "assistant", text: "second" },
+          ],
         }}
         width={80}
       />,
@@ -80,20 +97,53 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).toContain("second");
     view.rerender(
       <ActiveTurn
-        live={{ ...live, terminal: true, reasoning_text: "must disappear" }}
+        live={{
+          ...live,
+          terminal: true,
+          blocks: [
+            {
+              key: "thought",
+              kind: "thinking",
+              text: "must remain",
+              duration_ms: 1200,
+            },
+          ],
+        }}
         width={80}
       />,
     );
-    expect(view.lastFrame()).not.toContain("must disappear");
+    expect(view.lastFrame()).toContain("Thought for 1.2 s");
+    expect(view.lastFrame()).not.toContain("must remain");
   });
 
   it("folds tool detail by default and expands it through one prop", () => {
     const collapsed = render(<Transcript blocks={blocks} width={80} />);
     expect(collapsed.lastFrame()).not.toContain("full bounded output");
     const expanded = render(
-      <Transcript blocks={blocks} width={80} toolDetailsExpanded />,
+      <Transcript blocks={blocks} width={80} detailsExpanded />,
     );
     expect(expanded.lastFrame()).toContain("full bounded output");
+  });
+
+  it("folds repeated runtime diagnostics and expands one bounded detail", () => {
+    const warning = {
+      key: "warning:retry:1",
+      kind: "warning" as const,
+      code: "provider_retry",
+      message: "Provider retrying after a transient failure.",
+      count: 18,
+    };
+    const collapsed = render(
+      <Transcript blocks={[warning]} width={80} />,
+    ).lastFrame();
+    expect(collapsed).toContain("× 18 UI diagnostic · Ctrl+O to expand");
+    expect(collapsed).not.toContain("Provider retrying");
+    const expanded = render(
+      <Transcript blocks={[warning]} width={80} detailsExpanded />,
+    ).lastFrame();
+    expect(expanded).toContain(
+      "provider_retry · Provider retrying after a transient failure.",
+    );
   });
 
   it("renders structured tool facts and measured duration", () => {
@@ -101,6 +151,7 @@ describe("scrollback transcript components", () => {
       render(
         <Transcript
           width={80}
+          detailsExpanded
           blocks={[
             {
               key: "write",
@@ -123,12 +174,11 @@ describe("scrollback transcript components", () => {
       ).lastFrame() ?? "";
 
     expect(frame).toContain("● Write circle_area.py");
-    expect(frame).toContain("└ Created · 21 lines · 18ms");
+    expect(frame).toContain("└ Created · 21 lines · <0.1 s");
   });
 
   it("keeps incomplete streaming Markdown readable without completed parsing", () => {
     const live: LiveTranscriptProjection = {
-      reasoning_text: "",
       terminal: false,
       blocks: [
         {
@@ -156,7 +206,6 @@ describe("scrollback transcript components", () => {
           id: "turn_1",
           status: "active",
           started_at: "2026-07-12T00:00:00Z",
-          reasoning_text: "",
           thinking_sequence: 0,
           timeline: [
             {
@@ -180,7 +229,6 @@ describe("scrollback transcript components", () => {
 
   it("hides token annotations at 40 columns", () => {
     const live: LiveTranscriptProjection = {
-      reasoning_text: "",
       terminal: false,
       usage: { input_tokens: 10, output_tokens: 2 },
       blocks: [{ key: "live", kind: "assistant", text: "essential" }],

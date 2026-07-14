@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.application.commands import CommandIntent, CommandResult
+from awesome_agent.application.command_results import CommandOutcome
+from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
@@ -40,7 +41,7 @@ from awesome_agent.protocol.jsonrpc import (
 from awesome_agent.version import PRODUCT_VERSION
 
 INITIALIZE_PARAMS = {
-    "protocol_version": 1,
+    "protocol_version": 2,
     "client_name": "awesome",
     "client_version": PRODUCT_VERSION,
 }
@@ -55,7 +56,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=1,
+                protocol_version=2,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -115,7 +116,7 @@ class Facade:
 
     async def execute_command(
         self, intent: CommandIntent
-    ) -> ApplicationResult[CommandResult]:
+    ) -> ApplicationResult[CommandOutcome]:
         self.calls.append(("command", intent))
         return ApplicationResult.failure(
             ProductError(
@@ -132,7 +133,7 @@ class Facade:
             ProviderCredentialSetResult(
                 provider=request.provider,
                 status=ProviderCredentialSetStatus.CONFIGURED,
-                source=CredentialSource.USER_ENV_FILE,
+                source=CredentialSource.AWESOME,
                 code="credential_saved",
             )
         )
@@ -287,7 +288,7 @@ async def test_credential_rpc_is_strict_and_never_echoes_secret() -> None:
     ("params", "error_code"),
     [
         (
-            {**INITIALIZE_PARAMS, "protocol_version": 2},
+            {**INITIALIZE_PARAMS, "protocol_version": 1},
             "protocol_version_incompatible",
         ),
         (
@@ -326,9 +327,9 @@ async def test_initialize_rejects_incompatible_identity_before_facade_work(
     "params",
     [
         {},
-        {"protocol_version": 1, "client_name": "awesome"},
+        {"protocol_version": 2, "client_name": "awesome"},
         {**INITIALIZE_PARAMS, "extra": True},
-        {**INITIALIZE_PARAMS, "protocol_version": "1"},
+        {**INITIALIZE_PARAMS, "protocol_version": "2"},
     ],
 )
 async def test_initialize_rejects_malformed_identity_as_invalid_params(

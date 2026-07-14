@@ -8,7 +8,7 @@ describe("COMMAND_CATALOG", () => {
   it("matches the shared command fixture exactly", async () => {
     const fixture = JSON.parse(
       await readFile(
-        new URL("../../../protocol/fixtures/v1/commands.json", import.meta.url),
+        new URL("../../../protocol/fixtures/v2/commands.json", import.meta.url),
         "utf8",
       ),
     ) as { commands: { name: string; owner: string }[] };
@@ -21,27 +21,19 @@ describe("COMMAND_CATALOG", () => {
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "application"),
     ).toHaveLength(21);
-    expect(
-      COMMAND_CATALOG.filter(({ owner }) => owner === "skill"),
-    ).toHaveLength(5);
     expect(COMMAND_CATALOG.filter(({ owner }) => owner === "ink")).toHaveLength(
       4,
     );
-    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(30);
+    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(25);
     for (const command of COMMAND_CATALOG) {
+      expect(command.completion).toBe(`/${command.name}`);
+      expect(command.completion).not.toContain("[");
+      expect(command.completion).not.toContain("]");
       expect(command.description.length).toBeGreaterThan(0);
       expect(command.usage).toMatch(new RegExp(`^/${command.name}(?: |$)`));
     }
-  });
-
-  it.each([
-    "editor",
-    "details",
-    "history",
-    "clear",
-  ])("does not restore /%s", (name) => {
-    expect(COMMAND_CATALOG.some((command) => command.name === name)).toBe(
-      false,
-    );
+    expect(
+      COMMAND_CATALOG.find(({ name }) => name === "workspace")?.description,
+    ).toBe("Show the current workspace path");
   });
 });

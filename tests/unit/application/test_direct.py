@@ -84,7 +84,12 @@ def _service(
         sink=CollectingEventSink(),
     )
 
-    def context_factory(thread_id: str, operation_id: str) -> ToolExecutionContext:
+    def context_factory(
+        thread_id: str,
+        operation_id: str,
+        request: ToolRequest,
+    ) -> ToolExecutionContext:
+        assert request.tool_name == "execute"
         return ToolExecutionContext(
             workspace=workspace,
             thread_id=thread_id,

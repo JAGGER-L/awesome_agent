@@ -57,22 +57,23 @@ def _application(
                 deepseek=ProviderCredentialStatus(
                     provider="deepseek",
                     environment_variable="DEEPSEEK_API_KEY",
-                    source=(
-                        CredentialSource.USER_ENV_FILE
-                        if deepseek
-                        else CredentialSource.MISSING
-                    ),
-                    mutable=True,
+                    environment_configured=False,
+                    awesome_configured=deepseek,
+                    selected_source=CredentialSource.AWESOME if deepseek else None,
                 ),
                 kimi=ProviderCredentialStatus(
                     provider="kimi",
                     environment_variable="MOONSHOT_API_KEY",
-                    source=(
-                        CredentialSource.USER_ENV_FILE
-                        if kimi
-                        else CredentialSource.MISSING
-                    ),
-                    mutable=True,
+                    environment_configured=False,
+                    awesome_configured=kimi,
+                    selected_source=CredentialSource.AWESOME if kimi else None,
+                ),
+                mem0=ProviderCredentialStatus(
+                    provider="mem0",
+                    environment_variable="MEM0_API_KEY",
+                    environment_configured=False,
+                    awesome_configured=False,
+                    selected_source=None,
                 ),
             ),
         )
@@ -100,7 +101,7 @@ def test_only_configured_provider_supplies_its_default(
 
     assert turn.provider == expected_provider
     assert turn.model == expected_model
-    assert turn.thinking_enabled is False
+    assert turn.thinking_enabled is True
     assert turn.skill_mode == "auto"
 
 
@@ -181,6 +182,16 @@ def test_thinking_and_skill_use_cli_env_thread_then_defaults() -> None:
     assert (from_thread.thinking_enabled, from_thread.skill_mode) == (True, "debug")
     assert (from_env.thinking_enabled, from_env.skill_mode) == (False, "test")
     assert (from_cli.thinking_enabled, from_cli.skill_mode) == (True, "off")
+
+
+def test_stored_thinking_off_wins_when_thread_is_resumed() -> None:
+    turn = resolve_turn_config(
+        _application(deepseek=True),
+        thread=ThreadConfigState(thinking_enabled=False),
+        environ={},
+    )
+
+    assert turn.thinking_enabled is False
 
 
 @pytest.mark.parametrize(

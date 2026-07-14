@@ -17,13 +17,13 @@ from pydantic import (
 )
 
 from awesome_agent.config.credentials import (
-    CredentialSource,
+    CredentialService,
     ProviderCredentialStatuses,
-    ProviderName,
     missing_provider_credential_statuses,
 )
-from awesome_agent.config.models import SecretStatus
+from awesome_agent.config.models import CredentialSource, SecretStatus
 from awesome_agent.conversation.models import Thread, ThreadView
+from awesome_agent.core.changes import ChangeDelta
 from awesome_agent.core.tools.permissions import PermissionMode
 from awesome_agent.modeling.catalog import ModelIdentitySnapshot
 
@@ -37,7 +37,6 @@ class ProductErrorCode(StrEnum):
     OPERATION_BUSY = "operation_busy"
     MODEL_NOT_CONFIGURED = "model_not_configured"
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
-    CREDENTIAL_MANAGED_EXTERNALLY = "credential_managed_externally"
     INVALID_ARGUMENTS = "invalid_arguments"
     COMMAND_NOT_AVAILABLE = "command_not_available"
     CHECKPOINT_MISSING = "checkpoint_missing"
@@ -45,6 +44,7 @@ class ProductErrorCode(StrEnum):
     RECOVERY_REQUIRED = "recovery_required"
     CLIENT_VERSION_INCOMPATIBLE = "client_version_incompatible"
     PROTOCOL_VERSION_INCOMPATIBLE = "protocol_version_incompatible"
+    STATE_SCHEMA_INCOMPATIBLE = "state_schema_incompatible"
     INTERNAL_ERROR = "internal_error"
 
 
@@ -53,13 +53,12 @@ class ProviderCredentialSetStatus(StrEnum):
     DELETED = "deleted"
     INVALID = "invalid"
     CONFIRM_UNVERIFIED = "confirm_unverified"
-    ENVIRONMENT_MANAGED = "environment_managed"
 
 
 class ProviderCredentialSetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: ProviderName
+    provider: CredentialService
     action: Literal["add", "replace", "delete"]
     api_key: SecretStr | None = None
     allow_unverified: bool = False
@@ -88,9 +87,9 @@ class ProviderCredentialSetRequest(BaseModel):
 class ProviderCredentialSetResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: ProviderName
+    provider: CredentialService
     status: ProviderCredentialSetStatus
-    source: CredentialSource
+    source: CredentialSource | None
     code: str = Field(min_length=1, max_length=128)
 
 
@@ -141,7 +140,7 @@ class InitializeStatus(StrEnum):
 class InitializeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol_version: Literal[1]
+    protocol_version: Literal[2]
     client_name: Literal["awesome"]
     client_version: str = Field(min_length=1, max_length=64)
 
@@ -157,7 +156,7 @@ class InitializeResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     product_version: str = Field(min_length=1, max_length=64)
-    protocol_version: Literal[1]
+    protocol_version: Literal[2]
     status: InitializeStatus
     session_id: str = Field(min_length=1, max_length=128)
     interaction_id: str | None = Field(default=None, max_length=128)
@@ -190,7 +189,7 @@ class ApplicationState(BaseModel):
     workspace_trusted: bool
     current_thread_id: str | None = Field(default=None, max_length=128)
     model_identity: ModelIdentitySnapshot | None = None
-    thinking_enabled: bool = False
+    thinking_enabled: bool = True
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
     active_operation_id: str | None = Field(default=None, max_length=128)
     pending_interaction_id: str | None = Field(default=None, max_length=128)
@@ -236,8 +235,7 @@ class ChangeSetSummary(BaseModel):
     turn_id: str | None = Field(default=None, max_length=128)
     operation_id: str | None = Field(default=None, max_length=128)
     lifecycle: str = Field(min_length=1, max_length=64)
-    changed_paths: tuple[str, ...] = Field(default=(), max_length=1_000)
-    reversibility: str = Field(min_length=1, max_length=64)
+    changes: tuple[ChangeDelta, ...] = Field(default=(), max_length=1_000)
     created_at: datetime
     sealed_at: datetime | None = None
 
@@ -263,6 +261,11 @@ class StatusSnapshot(BaseModel):
     configuration_valid: bool
     configuration_diagnostic_count: int = Field(ge=0)
     permission_mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
+    credential_source: CredentialSource | None = None
+    credential_source_available: bool = False
+    context_used_tokens: int = Field(default=0, ge=0)
+    context_budget_tokens: int = Field(default=262_144, ge=1)
+    changed_file_count: int = Field(default=0, ge=0)
 
 
 def thread_display_id(

@@ -22,6 +22,7 @@ CURRENT_PACKAGES = {
     "context",
     "conversation",
     "core",
+    "development",
     "extensions",
     "memory",
     "modeling",
@@ -41,16 +42,13 @@ EXPECTED_DIRECT_DEPENDENCIES = {
 }
 CURRENT_COMMANDS = {
     "auth",
-    "commit",
     "compact",
     "config",
     "context",
     "copy",
-    "debug",
     "diff",
     "doctor",
     "help",
-    "init",
     "mcp",
     "memory",
     "model",
@@ -58,12 +56,10 @@ CURRENT_COMMANDS = {
     "permissions",
     "quit",
     "redo",
+    "rename",
     "resume",
-    "review",
-    "skill",
     "skills",
     "status",
-    "test",
     "theme",
     "thinking",
     "tools",
@@ -99,7 +95,8 @@ def test_product_entrypoints_are_python_host_and_ink_cli() -> None:
     package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
 
     assert project["project"]["scripts"] == {
-        "awesome-core": "awesome_agent.protocol.stdio:main"
+        "awesome-core": "awesome_agent.protocol.stdio:main",
+        "awesome-dev": "awesome_agent.development.launcher:main",
     }
     assert package["bin"] == {"awesome": "dist/cli/index.js"}
     assert (ROOT / "protocol" / "stdio.py").is_file()
@@ -178,9 +175,9 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
     monkeypatch.setenv("AWESOME_VERSION", "9.9.9")
     expected = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8")
 
-    assert expected == "1.1.1\n"
-    assert distribution_version("awesome-agent") == "1.1.1"
-    assert PRODUCT_VERSION == "1.1.1"
+    assert expected == "1.2.0\n"
+    assert distribution_version("awesome-agent") == "1.2.0"
+    assert PRODUCT_VERSION == "1.2.0"
 
     project = tomllib.loads(
         (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -191,11 +188,11 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
 
     package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((TUI_ROOT / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["version"] == "1.1.1"
-    assert lock["version"] == "1.1.1"
-    assert lock["packages"][""]["version"] == "1.1.1"
+    assert package["version"] == "1.2.0"
+    assert lock["version"] == "1.2.0"
+    assert lock["packages"][""]["version"] == "1.2.0"
     assert (TUI_ROOT / "src" / "version.ts").read_text(encoding="utf-8") == (
-        'export const PRODUCT_VERSION = "1.1.1" as const;\n'
+        'export const PRODUCT_VERSION = "1.2.0" as const;\n'
     )
 
 
@@ -253,6 +250,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
         "src/core/process.ts": {"node:child_process"},
         "src/preferences/paths.ts": {"node:os", "node:path"},
         "src/preferences/store.ts": {"node:fs/promises", "node:path"},
+        "src/pending-input/model.ts": {"node:crypto"},
         "src/transcript/identity.ts": {"node:crypto"},
     }
 
@@ -288,3 +286,40 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
     )
     assert "node:" not in reducer_source
     assert "react" not in reducer_source.casefold()
+
+
+def test_thread_transition_contract_has_one_projection_dependency_chain() -> None:
+    projections = (TUI_ROOT / "src" / "protocol" / "product-projections.ts").read_text(
+        encoding="utf-8"
+    )
+    commands = (TUI_ROOT / "src" / "protocol" / "commands.ts").read_text(
+        encoding="utf-8"
+    )
+    transition = (TUI_ROOT / "src" / "app" / "use-thread-transition.ts").read_text(
+        encoding="utf-8"
+    )
+
+    projection_imports = {
+        match for match in re.findall(r'from ["\']([^"\']+)["\']', projections)
+    }
+    assert projection_imports == {"zod", "./base.js", "./identity.js"}
+    assert "applicationStateSchema" in commands
+    assert "threadReadResultSchema" in commands
+    assert "threadTransitionSnapshotSchema" in commands
+    assert 'type: "thread.replaced"' in transition
+    assert "effects.resetCurrentFrame()" in transition
+
+
+def test_change_presentation_has_no_legacy_wire_fields() -> None:
+    forbidden = ("changed_paths", "reversibility", "workspace.changed")
+    roots = (TUI_ROOT / "src", REPOSITORY_ROOT / "protocol" / "fixtures")
+    files = (
+        path
+        for root in roots
+        for pattern in ("*.ts", "*.tsx", "*.json")
+        for path in root.rglob(pattern)
+    )
+    text = "\n".join(path.read_text(encoding="utf-8") for path in files)
+
+    for token in forbidden:
+        assert token not in text

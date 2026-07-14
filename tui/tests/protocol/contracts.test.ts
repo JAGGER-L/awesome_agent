@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { commandResultSchema } from "../../src/protocol/commands.js";
+import { commandOutcomeSchema } from "../../src/protocol/commands.js";
 import { methodSchemas } from "../../src/protocol/methods.js";
+import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
 
 describe("provider credential protocol", () => {
   it("accepts a dedicated credential request and rejects unknown fields", () => {
@@ -37,10 +38,9 @@ describe("provider credential protocol", () => {
 
   it("accepts secret prompts without accepting raw credential fields", () => {
     const result = {
-      status: "success",
-      content: "",
-      data: {},
-      secret_prompt: {
+      kind: "interaction",
+      interaction: {
+        kind: "secret",
         provider: "kimi",
         action: "add",
         label: "Kimi API Key",
@@ -49,9 +49,93 @@ describe("provider credential protocol", () => {
       },
     };
 
-    expect(commandResultSchema.safeParse(result).success).toBe(true);
+    expect(commandOutcomeSchema.safeParse(result).success).toBe(true);
     expect(
-      commandResultSchema.safeParse({ ...result, api_key: "secret" }).success,
+      commandOutcomeSchema.safeParse({ ...result, api_key: "secret" }).success,
+    ).toBe(false);
+  });
+});
+
+describe("workspace change protocol", () => {
+  it("accepts every structured change delta from the shared fixture", async () => {
+    const corpus = await loadFixtureCorpus();
+    const methods = corpus.files["methods.valid.json"] as {
+      cases: Array<{ name: string; result: unknown }>;
+    };
+    const fixture = methods.cases.find(({ name }) => name === "thread.read");
+    expect(fixture).toBeDefined();
+
+    const result = methodSchemas["thread.read"].result.parse(fixture?.result);
+    expect(result.ok && result.value.change_sets[0]?.changes).toEqual([
+      expect.objectContaining({
+        kind: "text_file",
+        additions: 16,
+        deletions: 2,
+      }),
+      expect.objectContaining({ kind: "binary_file" }),
+      expect.objectContaining({ kind: "directory" }),
+      expect.objectContaining({ kind: "symlink" }),
+    ]);
+  });
+});
+
+describe("incompatible state protocol", () => {
+  it("accepts the exact Python failure and rejects malformed data", async () => {
+    const corpus = await loadFixtureCorpus();
+    const methods = corpus.files["methods.valid.json"] as {
+      cases: Array<{ name: string; result: unknown }>;
+    };
+    const fixture = methods.cases.find(
+      ({ name }) => name === "initialize.state_schema_incompatible",
+    );
+    expect(fixture).toBeDefined();
+
+    const result = methodSchemas.initialize.result.parse(fixture?.result);
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "state_schema_incompatible",
+        message: "Awesome state is incompatible with this version.",
+        retryable: false,
+        data: {
+          found_schema: 1,
+          expected_schema: 2,
+          state_directory: "C:\\Awesome\\state",
+        },
+      },
+    });
+    if (result.ok) throw new Error("Expected a product failure fixture.");
+    const error = result.error;
+
+    expect(
+      methodSchemas.initialize.result.safeParse({
+        ok: false,
+        error: {
+          ...error,
+          data: { found_schema: 1, state_directory: "state" },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas.initialize.result.safeParse({
+        ok: false,
+        error: {
+          ...error,
+          data: { ...error.data, expected_schema: "2" },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas.initialize.result.safeParse({
+        ok: false,
+        error: { ...error, retryable: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas.initialize.result.safeParse({
+        ok: false,
+        error: { ...error, data: { ...error.data, extra: true } },
+      }).success,
     ).toBe(false);
   });
 });

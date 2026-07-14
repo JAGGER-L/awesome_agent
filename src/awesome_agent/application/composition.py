@@ -19,14 +19,10 @@ from awesome_agent.agent import (
     TurnBudget,
     compile_agent_graph,
 )
-from awesome_agent.application.commands import (
-    CommandIntent,
-    CommandName,
-    CommandOption,
-    CommandResult,
-    CommandSelection,
-    CommandStatus,
-)
+from awesome_agent.application.change_commands import ChangeCommandService
+from awesome_agent.application.change_scope import ChangeScope
+from awesome_agent.application.command_results import CommandOutcome, error
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.contracts import (
     ApplicationResult,
@@ -49,23 +45,23 @@ from awesome_agent.application.contracts import (
     WorkspacePresentation,
     thread_display_id,
 )
+from awesome_agent.application.conversation_commands import ConversationCommandService
+from awesome_agent.application.diagnostic_commands import DiagnosticCommandService
 from awesome_agent.application.direct import DirectCommandService
+from awesome_agent.application.dispatcher import CommandDispatcher
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.events import ApplicationEventProjector
+from awesome_agent.application.extension_commands import ApplicationExtensionService
 from awesome_agent.application.facade import LocalApplication
-from awesome_agent.application.headless import (
-    ApplicationExtensionService,
-    ConversationCommandService,
-)
 from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
-    full_access_confirmation_choices,
     tool_approval_choices,
     workspace_trust_choices,
 )
 from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.application.permission_commands import PermissionCommandService
 from awesome_agent.application.provider_configuration import (
     CredentialValidator,
     ProviderConfigurationService,
@@ -85,6 +81,7 @@ from awesome_agent.config import (
 from awesome_agent.context import (
     CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
+    ContextManifestItem,
     Mem0ContextResult,
     ThreadCompressor,
     mem0_context_source,
@@ -100,8 +97,8 @@ from awesome_agent.conversation import (
     UsageSummary,
 )
 from awesome_agent.core.changes import (
+    ChangeAnalyzer,
     ChangeJournal,
-    ChangeLifecycle,
     ChangeOperations,
 )
 from awesome_agent.core.contracts import new_identifier
@@ -116,6 +113,7 @@ from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
+    ToolRequest,
 )
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
@@ -175,7 +173,7 @@ from awesome_agent.providers import (
     KimiProvider,
     ProviderCredentialValidator,
 )
-from awesome_agent.storage import SQLiteMcpEnablementStore
+from awesome_agent.storage import ApplicationSchemaMismatch, SQLiteMcpEnablementStore
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
     LangGraphCheckpointStore,
@@ -222,14 +220,10 @@ async def compose_local_application(
     paths = AwesomePaths.from_home(home)
     identity = resolve_workspace(workspace)
     stack = AsyncExitStack()
-    saver = await stack.enter_async_context(
-        sqlite_checkpoint_saver(paths.checkpoint_db)
-    )
     backend = _LocalApplicationBackend(
         paths=paths,
         workspace=identity,
         event_sink=event_sink,
-        saver=saver,
         resources=stack,
         environ=environ,
         gateway_factory=gateway_factory,
@@ -264,45 +258,6 @@ class _GatewayRouter:
             request,
         ):
             yield event
-
-
-class _ChangeScope:
-    def __init__(
-        self,
-        *,
-        journal: ChangeJournal,
-        store: SQLiteChangeSetStore,
-        session_id: str,
-        workspace: WorkspaceIdentity,
-    ) -> None:
-        self._journal = journal
-        self._store = store
-        self._session_id = session_id
-        self._workspace = workspace
-        self._identifiers: dict[str, str] = {}
-
-    def acquire(self, owner: str, *, turn_id: str | None) -> str:
-        current = self._identifiers.get(owner)
-        if current is not None:
-            return current
-        change_set = self._journal.begin(
-            session_id=self._session_id,
-            turn_id=turn_id,
-            workspace=self._workspace,
-        )
-        self._identifiers[owner] = change_set.id
-        return change_set.id
-
-    def seal(self, owner: str) -> None:
-        identifier = self._identifiers.pop(owner, None)
-        if identifier is None:
-            return
-        change_set = self._store.get(identifier)
-        if change_set is not None and change_set.lifecycle is ChangeLifecycle.OPEN:
-            self._journal.seal(identifier)
-
-    def reconcile(self) -> None:
-        self._journal.reconcile_pending()
 
 
 class _Mem0Session:
@@ -352,7 +307,6 @@ class _LocalApplicationBackend:
         paths: AwesomePaths,
         workspace: WorkspaceIdentity,
         event_sink: EventSink,
-        saver: BaseCheckpointSaver[str],
         resources: AsyncExitStack,
         environ: Mapping[str, str] | None,
         gateway_factory: GatewayFactory | None,
@@ -383,13 +337,17 @@ class _LocalApplicationBackend:
         )
         self._repositories = SQLiteConversationRepositories(paths.application_db)
         self._conversation = ConversationService(store=self._repositories)
-        self._saver = saver
-        self._checkpoints = LangGraphCheckpointStore(saver)
+        self._saver: BaseCheckpointSaver[str] | None = None
+        self._checkpoints: LangGraphCheckpointStore | None = None
         self._sources = self._load_sources(workspace_trusted=False)
         self._application_config = resolve_application_config(self._sources)
         self._initialized = False
         self._closed = False
         self._commands: ConversationCommandService | None = None
+        self._command_dispatcher: CommandDispatcher | None = None
+        self._diagnostic_commands: DiagnosticCommandService | None = None
+        self._change_commands: ChangeCommandService | None = None
+        self._permission_commands: PermissionCommandService | None = None
         self._provider_configuration: ProviderConfigurationService | None = None
         self._turns: TurnCoordinator | None = None
         self._direct: DirectCommandService | None = None
@@ -401,8 +359,9 @@ class _LocalApplicationBackend:
         self._mem0_diagnostic: Mem0Diagnostic | None = None
         self._mem0_session: _Mem0Session | None = None
         self._mcp: McpManager | None = None
-        self._change_scope: _ChangeScope | None = None
+        self._change_scope: ChangeScope | None = None
         self._change_store: SQLiteChangeSetStore | None = None
+        self._change_analyzer: ChangeAnalyzer | None = None
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
         self._permission_session = PermissionSession()
@@ -411,13 +370,25 @@ class _LocalApplicationBackend:
         if self._initialized:
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=1,
+                protocol_version=2,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
                 workspace=self._workspace_presentation(include_branch=True),
                 capabilities=_CAPABILITIES,
             )
-        if self._trust.status(self._workspace) is not TrustStatus.TRUSTED:
+        try:
+            trust_status = self._trust.status(self._workspace)
+        except ApplicationSchemaMismatch as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE,
+                "Awesome state is incompatible with this version.",
+                data={
+                    "found_schema": error.found,
+                    "expected_schema": error.expected,
+                    "state_directory": str(self._paths.state_dir.resolve()),
+                },
+            ) from error
+        if trust_status is not TrustStatus.TRUSTED:
             pending = self._interactions.pending
             if pending is None:
                 pending = self._interactions.create(
@@ -448,7 +419,7 @@ class _LocalApplicationBackend:
                 )
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=1,
+                protocol_version=2,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
@@ -458,7 +429,7 @@ class _LocalApplicationBackend:
         await self._activate()
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=1,
+            protocol_version=2,
             status=InitializeStatus.READY,
             session_id=self._session_id,
             workspace=self._workspace_presentation(include_branch=True),
@@ -472,7 +443,11 @@ class _LocalApplicationBackend:
             if current_id is not None
             else None
         )
-        usage = _last_usage(self._conversation, current_id)
+        usage = (
+            self._conversation.thread_usage(current_id)
+            if current_id is not None
+            else UsageSummary()
+        )
         local_enabled = self._local_memory.enabled if self._local_memory else False
         return ApplicationState(
             initialized=self._initialized,
@@ -484,7 +459,7 @@ class _LocalApplicationBackend:
             ),
             current_thread_id=current_id,
             model_identity=self._model_identity(current) if current else None,
-            thinking_enabled=current.thinking_enabled if current else False,
+            thinking_enabled=current.thinking_enabled if current else True,
             skill_mode=current.skill_mode if current else "auto",
             active_operation_id=self._operations.active_operation_id,
             pending_interaction_id=(
@@ -658,22 +633,11 @@ class _LocalApplicationBackend:
                 "Thread was not found.",
             ) from error
 
-    async def run_command(self, intent: CommandIntent) -> CommandResult:
+    async def run_command(self, intent: CommandIntent) -> CommandOutcome:
         self._require_active()
-        assert self._commands is not None
-        assert self._provider_configuration is not None
+        assert self._command_dispatcher is not None
         try:
-            if intent.name is CommandName.AUTH:
-                return await self._provider_configuration.auth_command(intent)
-            if intent.name is CommandName.MODEL:
-                thread_id = self._commands.current_thread_id
-                if thread_id is None:
-                    return _error("thread_not_found", "Select a Thread first.")
-                return await self._provider_configuration.model_command(
-                    intent,
-                    thread_id=thread_id,
-                )
-            return await self._commands.handle(intent)
+            return await self._command_dispatcher.dispatch(intent)
         except ThreadNotFound as error:
             raise _application_failure(
                 ProductErrorCode.THREAD_NOT_FOUND,
@@ -738,6 +702,15 @@ class _LocalApplicationBackend:
     async def _activate(self) -> None:
         if self._initialized:
             return
+        if self._saver is None:
+            self._saver = await self._resources.enter_async_context(
+                sqlite_checkpoint_saver(self._paths.checkpoint_db)
+            )
+            self._checkpoints = LangGraphCheckpointStore(self._saver)
+        saver = self._saver
+        checkpoints = self._checkpoints
+        assert saver is not None
+        assert checkpoints is not None
         self._workspace_branch = await asyncio.to_thread(
             _git_branch,
             self._workspace.canonical_path,
@@ -751,17 +724,16 @@ class _LocalApplicationBackend:
         self._change_store = change_store
         change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
         journal = ChangeJournal(change_store, change_blobs, self._workspace)
-        self._change_scope = _ChangeScope(
-            journal=journal,
-            store=change_store,
-            session_id=self._session_id,
-            workspace=self._workspace,
+        self._change_analyzer = ChangeAnalyzer(
+            change_store,
+            change_blobs,
+            self._workspace,
         )
-        self._change_scope.reconcile()
         self._change_operations = ChangeOperations(
             change_store,
             change_blobs,
             self._workspace,
+            analyzer=self._change_analyzer,
         )
 
         registry = ToolRegistry()
@@ -769,6 +741,14 @@ class _LocalApplicationBackend:
         register_modifying_tools(registry, journal, ProcessRunner())
         self._registry = registry
         executor = ToolExecutor(registry)
+        self._change_scope = ChangeScope(
+            journal=journal,
+            store=change_store,
+            registry=registry,
+            session_id=self._session_id,
+            workspace=self._workspace,
+        )
+        self._change_scope.reconcile()
 
         bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
         catalog = discover_skills(
@@ -831,7 +811,7 @@ class _LocalApplicationBackend:
         )
         self._context = context_service
 
-        graph = compile_agent_graph(self._saver)
+        graph = compile_agent_graph(saver)
 
         def runtime_factory(
             turn: Turn,
@@ -876,7 +856,11 @@ class _LocalApplicationBackend:
                 decision = await self._interactions.wait(pending.id)
                 return ToolApprovalDecision(decision.value)
 
-            def tool_context(state: object) -> ToolExecutionContext:
+            def tool_context(
+                state: object,
+                request: ToolRequest,
+            ) -> ToolExecutionContext:
+                del state
                 assert self._change_scope is not None
                 return ToolExecutionContext(
                     workspace=self._workspace,
@@ -887,8 +871,9 @@ class _LocalApplicationBackend:
                     emitter=self._emitter,
                     activity_writer=self._repositories.tool_activities,
                     monotonic=monotonic,
-                    change_set_id=self._change_scope.acquire(
-                        turn_id,
+                    change_set_id=self._change_scope.change_set_for_tool(
+                        tool_name=request.tool_name,
+                        owner=turn_id,
                         turn_id=turn_id,
                     ),
                     permission_session=self._permission_session,
@@ -938,13 +923,17 @@ class _LocalApplicationBackend:
             runtime_context_factory=runtime_factory,
             operations=self._operations,
             emitter=self._emitter,
-            checkpoints=self._checkpoints,
+            checkpoints=checkpoints,
             seal_changes=self._seal_turn,
             reconcile_changes=self._change_scope.reconcile,
             turn_input_preparer=context_service.prepare_turn,
         )
 
-        def direct_context(thread_id: str, operation_id: str) -> ToolExecutionContext:
+        def direct_context(
+            thread_id: str,
+            operation_id: str,
+            request: ToolRequest,
+        ) -> ToolExecutionContext:
             assert self._change_scope is not None
             return ToolExecutionContext(
                 workspace=self._workspace,
@@ -955,8 +944,9 @@ class _LocalApplicationBackend:
                 emitter=self._emitter,
                 activity_writer=self._repositories.tool_activities,
                 monotonic=monotonic,
-                change_set_id=self._change_scope.acquire(
-                    operation_id,
+                change_set_id=self._change_scope.change_set_for_tool(
+                    tool_name=request.tool_name,
+                    owner=operation_id,
                     turn_id=None,
                 ),
                 permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
@@ -970,15 +960,28 @@ class _LocalApplicationBackend:
             finalize_operation=self._seal_direct,
         )
         assert self._mem0_session is not None
+        self._commands = ConversationCommandService(
+            conversation=self._conversation,
+            workspace_key=self._workspace.key,
+            application_snapshot=self.application_state,
+            thread_snapshot=self.thread_state,
+            has_active_operation=lambda: (
+                self._operations.active_operation_id is not None
+            ),
+            default_model=self._initial_thread_model,
+            on_thread_selected=self._permission_session.reset,
+        )
         self._extensions = ApplicationExtensionService(
             conversation=self._conversation,
             catalog=catalog,
-            loader=skill_loader,
             manager=self._mcp,
             enablements=enablements,
             workspace_key=self._workspace.key,
             registry=registry,
-            submit_turn=self.start_turn,
+            current_thread_id=lambda: (
+                self._commands.current_thread_id if self._commands is not None else None
+            ),
+            credential_statuses=lambda: self._sources.provider_credentials,
             local_memory=self._local_memory,
             config_writer=UserConfigWriter(self._paths.config_file),
             mem0_cloud=self._mem0_adapter,
@@ -989,13 +992,6 @@ class _LocalApplicationBackend:
             has_active_turn=lambda: self._operations.active_operation_id is not None,
         )
         await self._extensions.prepare_turn_extensions()
-        self._commands = ConversationCommandService(
-            conversation=self._conversation,
-            workspace_key=self._workspace.key,
-            delegate=self._delegate_command,
-            default_model=self._initial_thread_model,
-            on_thread_selected=self._permission_session.reset,
-        )
         self._provider_configuration = ProviderConfigurationService(
             conversation=self._conversation,
             config_writer=UserConfigWriter(self._paths.config_file),
@@ -1003,6 +999,56 @@ class _LocalApplicationBackend:
             validator=self._credential_validator,
             sources=lambda: self._sources,
             reload_configuration=self._reload_provider_configuration,
+        )
+        self._diagnostic_commands = DiagnosticCommandService(
+            workspace_path=self._workspace.display_path,
+            registry=registry,
+            permission_session=self._permission_session,
+            status_reader=self._command_status_snapshot,
+            usage_reader=self._command_usage,
+            credential_statuses=lambda: self._sources.provider_credentials,
+            provider_doctor=self._provider_configuration.doctor,
+        )
+        assert self._change_operations is not None
+        assert self._change_store is not None
+        self._change_commands = ChangeCommandService(
+            operations=self._change_operations,
+            store=self._change_store,
+            workspace_key=self._workspace.key,
+        )
+        self._permission_commands = PermissionCommandService(
+            session=self._permission_session,
+            operations=self._operations,
+            interactions=self._interactions,
+            emitter=self._emitter,
+            current_thread_id=lambda: (
+                self._commands.current_thread_id if self._commands is not None else None
+            ),
+        )
+        self._command_dispatcher = CommandDispatcher(
+            {
+                CommandName.NEW: self._commands.new,
+                CommandName.RENAME: self._commands.rename,
+                CommandName.RESUME: self._commands.resume,
+                CommandName.CONTEXT: self._context_command,
+                CommandName.COMPACT: self._compact_command,
+                CommandName.AUTH: self._provider_configuration.auth_command,
+                CommandName.MODEL: self._model_command,
+                CommandName.THINKING: self._commands.thinking,
+                CommandName.WORKSPACE: self._diagnostic_commands.workspace,
+                CommandName.DIFF: self._change_commands.diff,
+                CommandName.UNDO: self._change_commands.undo,
+                CommandName.REDO: self._change_commands.redo,
+                CommandName.TOOLS: self._diagnostic_commands.tools,
+                CommandName.SKILLS: self._extensions.skills,
+                CommandName.MCP: self._extensions.mcp,
+                CommandName.MEMORY: self._extensions.memory,
+                CommandName.STATUS: self._diagnostic_commands.status,
+                CommandName.USAGE: self._diagnostic_commands.usage,
+                CommandName.DOCTOR: self._diagnostic_commands.doctor,
+                CommandName.CONFIG: self._diagnostic_commands.config,
+                CommandName.PERMISSIONS: self._permission_commands.permissions,
+            }
         )
         await self._turns.reconcile_startup()
         self._initialized = True
@@ -1085,287 +1131,115 @@ class _LocalApplicationBackend:
         except ValueError:
             return None
 
-    async def _delegate_command(
-        self,
-        intent: CommandIntent,
-        thread_id: str,
-    ) -> CommandResult:
-        assert self._extensions is not None
-        if intent.name in {
-            CommandName.SKILLS,
-            CommandName.SKILL,
-            CommandName.MCP,
-            CommandName.MEMORY,
-            CommandName.INIT,
-            CommandName.REVIEW,
-            CommandName.DEBUG,
-            CommandName.TEST,
-            CommandName.COMMIT,
-        }:
-            return await self._extensions.handle(intent, thread_id=thread_id)
-        if intent.name is CommandName.CONTEXT:
-            assert self._context is not None
-            return await self._context.context_command(intent, thread_id=thread_id)
-        if intent.name is CommandName.COMPACT:
-            assert self._context is not None
-            thread = self._conversation.read_thread(thread_id).thread
-            config = self._turn_config(thread)
-            return await self._context.compact_command(
-                intent,
-                thread_id=thread_id,
-                provider=config.provider,
-                model=config.model,
-            )
-        if intent.name is CommandName.WORKSPACE:
-            if intent.arguments:
-                return _error("invalid_arguments", "Usage: /workspace")
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "workspace_key": self._workspace.key,
-                    "trust": self._trust.status(self._workspace).value,
-                },
-            )
-        if intent.name is CommandName.PERMISSIONS:
-            return await self._permissions_command(intent)
-        if intent.name is CommandName.TOOLS:
-            assert self._registry is not None
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "tools": [
-                        {
-                            "name": spec.name,
-                            "description": spec.description,
-                            "read_only": spec.read_only,
-                        }
-                        for spec in self._registry.specifications()
-                    ]
-                },
-            )
-        if intent.name is CommandName.STATUS:
-            thread = self._conversation.read_thread(thread_id).thread
-            config = self._turn_config(thread)
-            initial_display_id = thread_display_id(thread.id)
-            display_candidates = self._conversation.match_thread_prefix(
-                self._workspace.key,
-                prefix=initial_display_id,
-                limit=200,
-            )
-            statuses = self._mcp.statuses() if self._mcp is not None else ()
-            local_enabled = self._local_memory.enabled if self._local_memory else False
-            mem0_enabled = (
-                self._mem0_session.enabled if self._mem0_session is not None else False
-            )
-            active_operation_id = self._operations.active_operation_id
-            model_identity = self._model_identity(thread)
-            assert model_identity is not None
-            snapshot = StatusSnapshot(
-                version=PRODUCT_VERSION,
-                workspace_path=str(self._workspace.display_path),
-                thread_title=thread.title,
-                thread_id=thread.id,
-                thread_display_id=thread_display_id(
-                    thread.id,
-                    candidate_ids=(item.id for item in display_candidates),
-                ),
-                model_identity=model_identity,
-                model_status=(
-                    "configured"
-                    if self._provider_is_configured(config.provider)
-                    else "not_configured"
-                ),
-                thinking_enabled=thread.thinking_enabled,
-                skill_mode=thread.skill_mode,
-                local_memory_enabled=local_enabled,
-                mem0_enabled=mem0_enabled,
-                mcp_ready=sum(
-                    status.state is McpConnectionState.CONNECTED for status in statuses
-                ),
-                mcp_degraded=sum(
-                    status.state is McpConnectionState.ERROR for status in statuses
-                ),
-                operation_status="active" if active_operation_id else "idle",
-                operation_id=active_operation_id,
-                configuration_valid=True,
-                configuration_diagnostic_count=(
-                    1
-                    if (
-                        self._mem0_diagnostic is not None
-                        and self._mem0_session is not None
-                        and self._mem0_session.enabled
-                    )
-                    else 0
-                ),
-                permission_mode=self._permission_session.mode,
-            )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data=cast(dict[str, JsonValue], snapshot.model_dump(mode="json")),
-            )
-        if intent.name is CommandName.USAGE:
-            usage = _last_usage(self._conversation, thread_id)
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data=usage.model_dump(mode="json"),
-            )
-        if intent.name is CommandName.CONFIG:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "sources": ["defaults", "user", "workspace", "environment"],
-                    "secrets": self._sources.secret_status.model_dump(mode="json"),
-                },
-            )
-        if intent.name is CommandName.DOCTOR:
-            assert self._provider_configuration is not None
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data=cast(
-                    dict[str, JsonValue],
-                    {
-                        "configuration": "ok",
-                        "sqlite": "ok",
-                        "checkpoints": "ok",
-                        "providers": await self._provider_configuration.doctor(),
-                    },
-                ),
-            )
-        if intent.name in {CommandName.DIFF, CommandName.UNDO, CommandName.REDO}:
-            return self._change_command(intent)
-        return _error("command_not_available", "Command is not available.")
+    async def _context_command(self, intent: CommandIntent) -> CommandOutcome:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
+        assert self._context is not None
+        return await self._context.context_command(intent, thread_id=thread_id)
 
-    async def _permissions_command(self, intent: CommandIntent) -> CommandResult:
-        if not intent.arguments:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={"permission_mode": self._permission_session.mode.value},
-                selection=CommandSelection(
-                    prompt="Permission mode",
-                    options=(
-                        CommandOption(
-                            value=PermissionMode.REQUEST_APPROVAL.value,
-                            label="Request approval",
-                            description=(
-                                "Ask before edits, deletes, and shell commands."
-                            ),
-                            selected=(
-                                self._permission_session.mode
-                                is PermissionMode.REQUEST_APPROVAL
-                            ),
-                        ),
-                        CommandOption(
-                            value=PermissionMode.FULL_ACCESS.value,
-                            label="Full access",
-                            description=(
-                                "Allow edits and shell commands for this thread."
-                            ),
-                            selected=(
-                                self._permission_session.mode
-                                is PermissionMode.FULL_ACCESS
-                            ),
-                        ),
-                    ),
-                ),
-            )
-        if len(intent.arguments) != 1:
-            return _error(
-                "invalid_arguments",
-                "Usage: /permissions [request_approval|full_access]",
-            )
-        try:
-            requested = PermissionMode(intent.arguments[0])
-        except ValueError:
-            return _error(
-                "invalid_arguments",
-                "Usage: /permissions [request_approval|full_access]",
-            )
-        if self._operations.active_operation_id is not None:
-            return _error(
-                "operation_busy",
-                "Permission mode cannot change during an active operation.",
-            )
-        if self._interactions.pending is not None:
-            return _error(
-                "interaction_busy",
-                "Resolve the pending interaction before changing permission mode.",
-            )
-        if requested is PermissionMode.REQUEST_APPROVAL:
-            self._permission_session.reset()
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                content="Permission mode changed to Request approval.",
-                data={"permission_mode": requested.value},
-            )
-        if self._permission_session.mode is PermissionMode.FULL_ACCESS:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                content="Full access is already enabled for this thread.",
-                data={"permission_mode": requested.value},
-            )
-        pending = self._interactions.create(
-            kind=InteractionKind.FULL_ACCESS_CONFIRMATION,
-            prompt="Enable Full access for this thread?",
-            operation="enable",
-            target="full access",
-            capability=None,
-            choices=full_access_confirmation_choices(),
+    async def _compact_command(self, intent: CommandIntent) -> CommandOutcome:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
+        assert self._context is not None
+        thread = self._conversation.read_thread(thread_id).thread
+        config = self._turn_config(thread)
+        return await self._context.compact_command(
+            intent,
+            thread_id=thread_id,
+            provider=config.provider,
+            model=config.model,
         )
-        await self._emitter.emit(
-            InteractionRequiredPayload(
-                interaction_id=pending.id,
-                interaction_kind="full_access_confirmation",
-                prompt=pending.prompt,
-                operation=pending.operation,
-                target=pending.target,
-                capability=pending.capability,
-                choices=tuple(
-                    InteractionChoicePayload(
-                        decision=choice.decision.value,
-                        label=choice.label,
-                        description=choice.description,
-                    )
-                    for choice in pending.choices
-                ),
+
+    async def _model_command(self, intent: CommandIntent) -> CommandOutcome:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
+        assert self._provider_configuration is not None
+        return await self._provider_configuration.model_command(
+            intent,
+            thread_id=thread_id,
+        )
+
+    def _selected_thread_id(self) -> str | None:
+        return self._commands.current_thread_id if self._commands is not None else None
+
+    def _command_usage(self) -> UsageSummary | None:
+        thread_id = self._selected_thread_id()
+        return None if thread_id is None else self._conversation.thread_usage(thread_id)
+
+    def _command_status_snapshot(self) -> StatusSnapshot | None:
+        thread_id = self._selected_thread_id()
+        if thread_id is None:
+            return None
+        thread = self._conversation.read_thread(thread_id).thread
+        config = self._turn_config(thread)
+        candidates = self._conversation.match_thread_prefix(
+            self._workspace.key,
+            prefix=thread_display_id(thread.id),
+            limit=200,
+        )
+        statuses = self._mcp.statuses() if self._mcp is not None else ()
+        model_identity = self._model_identity(thread)
+        if model_identity is None:
+            return None
+        credential = (
+            self._sources.provider_credentials.deepseek
+            if config.provider == "deepseek"
+            else self._sources.provider_credentials.kimi
+        )
+        return StatusSnapshot(
+            version=PRODUCT_VERSION,
+            workspace_path=str(self._workspace.display_path),
+            thread_title=thread.title,
+            thread_id=thread.id,
+            thread_display_id=thread_display_id(
+                thread.id,
+                candidate_ids=(item.id for item in candidates),
             ),
-            thread_id=(self._commands.current_thread_id if self._commands else None),
+            model_identity=model_identity,
+            model_status=(
+                "configured"
+                if self._provider_is_configured(config.provider)
+                else "not_configured"
+            ),
+            thinking_enabled=thread.thinking_enabled,
+            skill_mode=thread.skill_mode,
+            local_memory_enabled=(
+                self._local_memory.enabled if self._local_memory is not None else False
+            ),
+            mem0_enabled=(
+                self._mem0_session.enabled if self._mem0_session is not None else False
+            ),
+            mcp_ready=sum(
+                item.state is McpConnectionState.CONNECTED for item in statuses
+            ),
+            mcp_degraded=sum(
+                item.state is McpConnectionState.ERROR for item in statuses
+            ),
+            operation_status=(
+                "active" if self._operations.active_operation_id else "idle"
+            ),
+            operation_id=self._operations.active_operation_id,
+            configuration_valid=True,
+            configuration_diagnostic_count=(
+                1
+                if self._mem0_diagnostic is not None
+                and self._mem0_session is not None
+                and self._mem0_session.enabled
+                else 0
+            ),
+            permission_mode=self._permission_session.mode,
+            credential_source=credential.selected_source,
+            credential_source_available=credential.source_available,
+            context_used_tokens=sum(
+                ContextManifestItem.model_validate(item).estimated_tokens
+                for item in self._conversation.latest_context_manifest(thread_id)
+            ),
+            context_budget_tokens=self._application_config.budgets.total_context_tokens,
+            changed_file_count=0,
         )
-        return CommandResult(
-            status=CommandStatus.INTERACTION_REQUIRED,
-            content="Confirm Full access to continue.",
-            data={"interaction_id": pending.id},
-        )
-
-    def _change_command(self, intent: CommandIntent) -> CommandResult:
-        assert self._change_operations is not None
-        store = SQLiteChangeSetStore(self._paths.application_db)
-        identifier = intent.arguments[0] if intent.arguments else None
-        if identifier is None:
-            latest = store.latest(self._workspace.key)
-            identifier = latest.id if latest else None
-        if identifier is None:
-            return _error("change_set_not_found", "No ChangeSet exists.")
-        try:
-            if intent.name is CommandName.DIFF:
-                return CommandResult(
-                    status=CommandStatus.SUCCESS,
-                    content=self._change_operations.diff(identifier),
-                    data={"change_set_id": identifier},
-                )
-            result = (
-                self._change_operations.undo(identifier)
-                if intent.name is CommandName.UNDO
-                else self._change_operations.redo(identifier)
-            )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                data={
-                    "change_set_id": identifier,
-                    "lifecycle": result.lifecycle.value,
-                },
-            )
-        except Exception:
-            return _error("change_operation_failed", "Change operation failed.")
 
     def _mem0_identity(self) -> Mem0Identity | None:
         user_id = self._application_config.memory.mem0_user_id
@@ -1431,7 +1305,7 @@ class _LocalApplicationBackend:
         self,
         activities: tuple[ToolActivity, ...],
     ) -> tuple[ChangeSetSummary, ...]:
-        if self._change_store is None:
+        if self._change_store is None or self._change_analyzer is None:
             return ()
         summaries: list[ChangeSetSummary] = []
         seen: set[str] = set()
@@ -1443,16 +1317,16 @@ class _LocalApplicationBackend:
             change_set = self._change_store.get(change_set_id)
             if change_set is None:
                 continue
+            analysis = self._change_analyzer.analyze(change_set_id)
+            if not analysis.changes:
+                continue
             summaries.append(
                 ChangeSetSummary(
                     change_set_id=change_set.id,
                     turn_id=change_set.turn_id,
                     operation_id=activity.operation_id,
                     lifecycle=change_set.lifecycle.value,
-                    changed_paths=tuple(
-                        sorted({item.path for item in change_set.files})
-                    ),
-                    reversibility=change_set.reversibility.value,
+                    changes=analysis.changes,
                     created_at=change_set.created_at,
                     sealed_at=change_set.sealed_at,
                 )
@@ -1483,24 +1357,6 @@ def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:
         for item in config.workspace_mcp_servers
     )
     return (*user, *workspace)
-
-
-def _last_usage(
-    conversation: ConversationService,
-    thread_id: str | None,
-) -> UsageSummary:
-    if thread_id is None:
-        return UsageSummary()
-    turns = conversation.read_thread(thread_id).turns
-    return turns[-1].usage if turns else UsageSummary()
-
-
-def _error(code: str, message: str) -> CommandResult:
-    return CommandResult(
-        status=CommandStatus.ERROR,
-        content=message,
-        data={"error_code": code},
-    )
 
 
 def _application_failure(

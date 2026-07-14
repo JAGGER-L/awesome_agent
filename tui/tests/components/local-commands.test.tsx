@@ -42,36 +42,54 @@ function controller() {
       return {
         ok: true,
         value: {
-          status: "success",
-          content: "",
-          data:
+          kind: "result",
+          payload:
             command === "usage"
-              ? {}
-              : {
-                  version: "0.1.0",
-                  workspace_path: "E:\\projects\\awesome",
-                  thread_title: "Feature auth",
-                  thread_id: "thread_3f8a1c2d111122223333444455556666",
-                  thread_display_id: "thread_3f8a1c2d",
-                  model_identity: {
-                    provider: "deepseek",
-                    configured_model: "deepseek/deepseek-v4-flash",
-                    effective_model: "deepseek/deepseek-v4-flash",
-                    runtime_name: "Awesome Agent",
-                    fallback_active: false,
+              ? {
+                  kind: "usage",
+                  usage: {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    reasoning_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_write_tokens: 0,
+                    model_calls: 0,
+                    tool_calls: 0,
+                    provider_retries: 0,
+                    compressions: 0,
+                    active_execution_seconds: 0,
                   },
-                  model_status: "configured",
-                  thinking_enabled: false,
-                  skill_mode: "auto",
-                  local_memory_enabled: false,
-                  mem0_enabled: false,
-                  mcp_ready: 0,
-                  mcp_degraded: 0,
-                  operation_status: "idle",
-                  operation_id: null,
-                  configuration_valid: true,
-                  configuration_diagnostic_count: 0,
-                  permission_mode: "request_approval",
+                }
+              : {
+                  kind: "status",
+                  snapshot: {
+                    version: "0.1.0",
+                    workspace_path: "E:\\projects\\awesome",
+                    thread_title: "Feature auth",
+                    thread_id: "thread_3f8a1c2d111122223333444455556666",
+                    thread_display_id: "thread_3f8a1c2d",
+                    model_identity: {
+                      provider: "deepseek",
+                      configured_model: "deepseek/deepseek-v4-flash",
+                      effective_model: "deepseek/deepseek-v4-flash",
+                      runtime_name: "Awesome Agent",
+                      fallback_active: false,
+                    },
+                    model_status: "configured",
+                    thinking_enabled: false,
+                    skill_mode: "auto",
+                    local_memory_enabled: false,
+                    mem0_enabled: false,
+                    mcp_ready: 0,
+                    mcp_degraded: 0,
+                    operation_status: "idle",
+                    operation_id: null,
+                    configuration_valid: true,
+                    configuration_diagnostic_count: 0,
+                    permission_mode: "request_approval",
+                    context_used_tokens: 0,
+                    context_budget_tokens: 262_144,
+                  },
                 },
         },
       } as never;
@@ -92,9 +110,12 @@ describe("App local command wiring", () => {
     );
     view.stdin.write("/help");
     view.stdin.write("\r");
-    await eventually(() => expect(view.lastFrame()).toContain("Commands"));
+    await eventually(() =>
+      expect(view.lastFrame()).toContain("Start a new thread"),
+    );
     expect(view.lastFrame()).toContain("Message");
     expect(view.lastFrame()).toContain("/new");
+    expect(view.lastFrame()).toContain("/resume [thread_id]");
   });
 
   it("renders visible usage feedback when no usage exists", async () => {
@@ -109,9 +130,7 @@ describe("App local command wiring", () => {
     );
     view.stdin.write("/usage");
     view.stdin.write("\r");
-    await eventually(() =>
-      expect(view.lastFrame()).toContain("No usage recorded yet"),
-    );
+    await eventually(() => expect(view.lastFrame()).toContain("Input tokens"));
     expect(view.lastFrame()).toContain("Message");
   });
 
@@ -127,7 +146,7 @@ describe("App local command wiring", () => {
     );
     view.stdin.write("/status");
     view.stdin.write("\r");
-    await eventually(() => expect(view.lastFrame()).toContain("Thread ID"));
+    await eventually(() => expect(view.lastFrame()).toContain("Thread"));
     expect(view.lastFrame()).toContain("thread_3f8a1c2d");
   });
 

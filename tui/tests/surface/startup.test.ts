@@ -8,12 +8,14 @@ import {
   selectStartupThread,
   respondStartupTrust,
   StartupError,
+  StartupProductError,
 } from "../../src/surface/startup.js";
 import type {
   MethodName,
   MethodParams,
   MethodValue,
 } from "../../src/protocol/methods.js";
+import type { CommandSelection } from "../../src/protocol/commands.js";
 
 type Call = { method: MethodName; params: MethodParams[MethodName] };
 
@@ -21,6 +23,7 @@ const thread = (id: string): MethodValue["thread.list"]["threads"][number] => ({
   id,
   workspace_key: "workspace_1",
   title: `Title ${id}`,
+  title_source: "automatic",
   current_model: "deepseek/deepseek-chat",
   thinking_enabled: false,
   skill_mode: "auto",
@@ -39,13 +42,34 @@ const threadPage = (id: string): MethodValue["thread.read"] => ({
   has_more: false,
 });
 
+function threadTransition(
+  id: string,
+  reason: "new" | "resume",
+  application = applicationState(),
+) {
+  return {
+    kind: "thread_transition" as const,
+    transition: {
+      reason,
+      application: {
+        ...application,
+        current_thread_id: id,
+        model_identity:
+          application.model_identity ??
+          modelIdentity("deepseek/deepseek-v4-flash"),
+      },
+      thread: threadPage(id),
+    },
+  };
+}
+
 function harness({
   recent = [thread("thread_recent")],
   resumeSelection,
   commandFailure,
 }: {
   recent?: MethodValue["thread.list"]["threads"];
-  resumeSelection?: MethodValue["command.execute"]["selection"];
+  resumeSelection?: CommandSelection;
   commandFailure?: boolean;
 } = {}) {
   const calls: Call[] = [];
@@ -61,12 +85,6 @@ function harness({
           return {
             ok: true,
             value: { threads: recent, has_more: false },
-          } as never;
-        }
-        if (method === "thread.read") {
-          return {
-            ok: true,
-            value: threadPage((params as { thread_id: string }).thread_id),
           } as never;
         }
         if (method === "command.execute") {
@@ -86,10 +104,8 @@ function harness({
             return {
               ok: true,
               value: {
-                status: "success",
-                content: "",
-                data: {},
-                selection: resumeSelection,
+                kind: "interaction",
+                interaction: resumeSelection,
               },
             } as never;
           }
@@ -100,9 +116,11 @@ function harness({
           return {
             ok: true,
             value: {
-              status: "success",
-              content: "",
-              data: { thread_id: id, title: `Title ${id}` },
+              kind: "result",
+              payload: threadTransition(
+                id,
+                intent.name === "new" ? "new" : "resume",
+              ),
             },
           } as never;
         }
@@ -143,7 +161,6 @@ describe("runStartup", () => {
     });
     expect(calls).toEqual([
       { method: "command.execute", params: { name: "new" } },
-      { method: "thread.read", params: { thread_id: "thread_new", limit: 50 } },
     ]);
   });
 
@@ -153,7 +170,6 @@ describe("runStartup", () => {
     expect(calls.map(({ method }) => method)).toEqual([
       "thread.list",
       "command.execute",
-      "thread.read",
     ]);
     expect(calls[1]).toEqual({
       method: "command.execute",
@@ -183,10 +199,11 @@ describe("runStartup", () => {
 
   it("returns an ambiguous resume selection without hydrating arbitrarily", async () => {
     const selection = {
+      kind: "selection" as const,
       prompt: "Select",
       options: [
-        { value: "thread_a", label: "A", selected: false },
-        { value: "thread_b", label: "B", selected: false },
+        { value: "thread_a", label: "A", selected: false, disabled: false },
+        { value: "thread_b", label: "B", selected: false, disabled: false },
       ],
     };
     const { calls, surface } = harness({ resumeSelection: selection });
@@ -198,8 +215,16 @@ describe("runStartup", () => {
 
   it("opens the recent picker and creates one thread when it is empty", async () => {
     const selection = {
+      kind: "selection" as const,
       prompt: "Select",
-      options: [{ value: "thread_a", label: "A", selected: false }],
+      options: [
+        {
+          value: "thread_a",
+          label: "A",
+          selected: false,
+          disabled: false,
+        },
+      ],
     };
     const picker = harness({ resumeSelection: selection });
     await expect(
@@ -215,16 +240,19 @@ describe("runStartup", () => {
       ) {
         return {
           ok: true,
-          value: { status: "success", content: "", data: { threads: [] } },
+          value: {
+            kind: "error",
+            code: "thread_not_found",
+            message: "No Threads are available.",
+          },
         } as never;
       }
       if (method === "command.execute") {
         return {
           ok: true,
           value: {
-            status: "success",
-            content: "",
-            data: { thread_id: "thread_new" },
+            kind: "result",
+            payload: threadTransition("thread_new", "new"),
           },
         } as never;
       }
@@ -243,10 +271,6 @@ describe("runStartup", () => {
       {
         method: "command.execute",
         params: { name: "resume", arguments: ["thread_selected"] },
-      },
-      {
-        method: "thread.read",
-        params: { thread_id: "thread_selected", limit: 50 },
       },
     ]);
   });
@@ -302,14 +326,23 @@ function applicationState({
       deepseek: {
         provider: "deepseek",
         environment_variable: "DEEPSEEK_API_KEY",
-        source: deepseek ? "process_environment" : "missing",
-        mutable: !deepseek,
+        environment_configured: deepseek,
+        awesome_configured: false,
+        selected_source: deepseek ? "environment" : null,
       },
       kimi: {
         provider: "kimi",
         environment_variable: "MOONSHOT_API_KEY",
-        source: kimi ? "process_environment" : "missing",
-        mutable: !kimi,
+        environment_configured: kimi,
+        awesome_configured: false,
+        selected_source: kimi ? "environment" : null,
+      },
+      mem0: {
+        provider: "mem0",
+        environment_variable: "MEM0_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: null,
       },
     },
     memory_status: {},
@@ -342,7 +375,7 @@ function startupHarness({
             ok: true,
             value: {
               product_version: "0.1.0",
-              protocol_version: 1,
+              protocol_version: 2,
               status: trusted ? "ready" : "trust_required",
               session_id: "session_1",
               ...(trusted ? {} : { interaction_id: "interaction_response" }),
@@ -379,14 +412,10 @@ function startupHarness({
           return {
             ok: true,
             value: {
-              status: "success",
-              content: "",
-              data: { thread_id: "thread_new" },
+              kind: "result",
+              payload: threadTransition("thread_new", "new", application),
             },
           } as never;
-        }
-        if (method === "thread.read") {
-          return { ok: true, value: threadPage("thread_new") } as never;
         }
         if (method === "shutdown") {
           return { ok: true, value: { stopped: true } } as never;
@@ -398,6 +427,27 @@ function startupHarness({
 }
 
 describe("trusted startup state machine", () => {
+  it("preserves an incompatible-state product failure from initialize", async () => {
+    const error = {
+      code: "state_schema_incompatible" as const,
+      message: "Awesome state is incompatible with this version.",
+      retryable: false as const,
+      data: {
+        found_schema: 1,
+        expected_schema: 2,
+        state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+      },
+    };
+    const surface = {
+      request: async () => ({ ok: false as const, error }),
+    };
+
+    const rejection = beginStartup(surface as never, { kind: "new" });
+
+    await expect(rejection).rejects.toBeInstanceOf(StartupProductError);
+    await expect(rejection).rejects.toMatchObject(error);
+  });
+
   it("stops before project state when initialize requires trust", async () => {
     const { calls, surface } = startupHarness({ trustRequired: true });
     await expect(beginStartup(surface, { kind: "new" })).resolves.toEqual({
@@ -426,8 +476,6 @@ describe("trusted startup state machine", () => {
       "initialize",
       "application.getState",
       "command.execute",
-      "thread.read",
-      "application.getState",
     ]);
   });
 
@@ -469,8 +517,8 @@ describe("trusted startup state machine", () => {
       "connection.handshaking",
       "handshake.ready",
       "hydrate.application",
-      "hydrate.thread",
       "hydrate.application",
+      "hydrate.thread",
     ]);
   });
 

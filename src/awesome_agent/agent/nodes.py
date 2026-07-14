@@ -305,13 +305,14 @@ async def execute_one_tool(
     else:
         updated = charge_tool_call(updated)
         started = context.monotonic()
+        request = ToolRequest(
+            call_id=call_id,
+            tool_name=tool_name,
+            arguments=cast(dict[str, JsonValue], arguments),
+        )
         result = await context.executor.execute(
-            ToolRequest(
-                call_id=call_id,
-                tool_name=tool_name,
-                arguments=cast(dict[str, JsonValue], arguments),
-            ),
-            context=context.tool_context_factory(updated),
+            request,
+            context=context.tool_context_factory(updated, request),
         )
         ended = context.monotonic()
         updated = add_active_segment(updated, started_at=started, ended_at=ended)

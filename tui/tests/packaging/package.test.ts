@@ -67,7 +67,7 @@ describe("awesome package", () => {
       license: string;
     };
     expect(installedPackage).toMatchObject({
-      version: "1.1.1",
+      version: "1.2.0",
       type: "module",
       bin: { awesome: "dist/cli/index.js" },
       license: "UNLICENSED",
@@ -95,7 +95,7 @@ describe("awesome package", () => {
             env: { ...process.env },
           });
     expect(version.status, version.stderr).toBe(0);
-    expect(version.stdout).toBe("1.1.1\n");
+    expect(version.stdout).toBe("1.2.0\n");
   }, 60_000);
 });
 

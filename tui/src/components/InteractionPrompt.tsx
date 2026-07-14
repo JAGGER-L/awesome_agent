@@ -14,6 +14,13 @@ export function InteractionPrompt({
 }) {
   return (
     <Picker
+      variant={
+        interaction.interaction_kind === "full_access_confirmation"
+          ? "warning"
+          : interaction.operation === "delete"
+            ? "danger"
+            : "neutral"
+      }
       selected={selected}
       selection={{
         prompt: message ?? (submitting ? "Submitting…" : interaction.prompt),

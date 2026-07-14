@@ -2,7 +2,6 @@ import type { CoreExit } from "../core/index.js";
 import type { EventEnvelope, MethodValue } from "../protocol/index.js";
 import type {
   CommandResultBlock,
-  ReconciledTurn,
   TranscriptBlock,
 } from "../transcript/model.js";
 import type { CoalescedDelta } from "./delta-batcher.js";
@@ -27,6 +26,10 @@ export type SurfaceAction =
       readonly transcript: readonly TranscriptBlock[];
     }
   | {
+      readonly type: "thread.metadata.updated";
+      readonly thread: MethodValue["thread.read"]["view"]["thread"];
+    }
+  | {
       readonly type: "event.received";
       readonly event: EventEnvelope;
       readonly generation: number;
@@ -38,11 +41,25 @@ export type SurfaceAction =
     }
   | {
       readonly type: "transcript.reconciled";
-      readonly result: ReconciledTurn;
       readonly generation: number;
+      readonly operation_id: string;
+      readonly turn_id: string;
+      readonly blocks: readonly TranscriptBlock[];
+      readonly thread?: MethodValue["thread.read"];
     }
   | {
       readonly type: "transcript.command_result";
+      readonly block: CommandResultBlock;
+      readonly generation: number;
+    }
+  | {
+      readonly type: "transcript.command.submitted";
+      readonly submission_id: string;
+      readonly text: string;
+      readonly generation: number;
+    }
+  | {
+      readonly type: "transcript.command_result.replace";
       readonly block: CommandResultBlock;
       readonly generation: number;
     }

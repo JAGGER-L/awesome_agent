@@ -109,6 +109,12 @@ describe("resolveTheme", () => {
     expect(light).toMatchObject(lightAurora);
   });
 
+  it("does not expose background-label color roles", () => {
+    expect(resolveTheme("dark", "truecolor")).not.toHaveProperty(
+      "statusBackground",
+    );
+  });
+
   it("keeps every light text role at WCAG AA contrast on white", () => {
     for (const value of [
       lightAurora.brand,

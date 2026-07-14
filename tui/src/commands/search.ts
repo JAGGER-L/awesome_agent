@@ -9,7 +9,6 @@ export function searchCommands(query: string): readonly CommandMetadata[] {
   }))
     .filter(({ rank }) => rank < 3)
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
-    .slice(0, 10)
     .map(({ command }) => command);
 }
 

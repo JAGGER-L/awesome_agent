@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -7,6 +8,7 @@ from awesome_agent.application import composition
 from awesome_agent.application.contracts import (
     ApplicationResult,
     InitializeStatus,
+    ProductErrorCode,
     ThreadListQuery,
 )
 from awesome_agent.config import load_config_sources
@@ -24,6 +26,16 @@ def _unwrap[T](result: ApplicationResult[T]) -> T:
     assert result.ok is True
     assert result.value is not None
     return result.value
+
+
+def _file_snapshot(root: Path) -> dict[str, bytes]:
+    if not root.exists():
+        return {}
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
 
 
 def test_accept_survives_reopen_and_revoke(tmp_path: Path) -> None:
@@ -141,4 +153,43 @@ async def test_branch_is_not_read_before_trust_and_is_cached_afterward(
     ] == [False, True]
     assert skill_discovery.call_count == 1
     assert mcp_config_builder.call_count == 1
+    _unwrap(await application.shutdown())
+
+
+@pytest.mark.asyncio
+async def test_incompatible_state_is_a_nonmutating_product_failure(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    state = home / "state"
+    state.mkdir(parents=True)
+    database = state / "application.db"
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA user_version = 1")
+    config = home / "config.yaml"
+    config.write_text("providers: {}\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    before_state = _file_snapshot(state)
+    before_config = config.read_bytes()
+
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    result = await application.initialize()
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code is ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE
+    assert result.error.retryable is False
+    assert result.error.data == {
+        "found_schema": 1,
+        "expected_schema": 2,
+        "state_directory": str(state.resolve()),
+    }
+    assert _file_snapshot(state) == before_state
+    assert config.read_bytes() == before_config
     _unwrap(await application.shutdown())

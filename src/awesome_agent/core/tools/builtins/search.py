@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-import os
+import asyncio
 import re
-from collections.abc import Iterator
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path, PurePath
 from typing import cast
 
 from pydantic import BaseModel, Field, JsonValue
 
+from awesome_agent.core.tools.builtins.file_enumerator import (
+    EnumeratedFile,
+    ScanCancellation,
+    ScanCancelled,
+    enumerate_workspace_files,
+)
 from awesome_agent.core.tools.builtins.read_file import MAX_FILE_BYTES
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
@@ -53,60 +60,30 @@ def _search_root(
     )
 
 
-def _safe_text_files(
+def _glob_scan_root(
     root: SafeWorkspacePath,
+    pattern: str,
     context: ToolExecutionContext,
-) -> Iterator[tuple[str, str]]:
-    workspace = context.workspace.canonical_path
-    for current, directory_names, file_names in os.walk(
-        root.resolved,
-        followlinks=False,
-    ):
-        current_path = Path(current)
-        safe_directories: list[str] = []
-        for name in sorted(
-            directory_names, key=lambda value: (value.casefold(), value)
-        ):
-            child = current_path / name
-            if name == ".git" or child.is_symlink():
-                continue
-            relative = child.relative_to(workspace).as_posix()
-            try:
-                resolve_workspace_path(
-                    context.workspace,
-                    relative,
-                    must_exist=True,
-                    expected_kind="directory",
-                )
-            except ExpectedToolFailure:
-                continue
-            safe_directories.append(name)
-        directory_names[:] = safe_directories
-
-        for name in sorted(file_names, key=lambda value: (value.casefold(), value)):
-            path = current_path / name
-            if path.is_symlink():
-                continue
-            relative = path.relative_to(workspace).as_posix()
-            try:
-                safe = resolve_workspace_path(
-                    context.workspace,
-                    relative,
-                    must_exist=True,
-                    expected_kind="file",
-                )
-                if safe.resolved.stat().st_size > MAX_FILE_BYTES:
-                    continue
-                data = safe.resolved.read_bytes()
-            except (ExpectedToolFailure, OSError):
-                continue
-            if b"\x00" in data:
-                continue
-            try:
-                text = data.decode("utf-8", errors="strict")
-            except UnicodeDecodeError:
-                continue
-            yield relative, text
+) -> SafeWorkspacePath | None:
+    fixed_parts: list[str] = []
+    for part in PurePath(pattern).parts[:-1]:
+        if any(character in part for character in "*?["):
+            break
+        fixed_parts.append(part)
+    if not fixed_parts:
+        return root
+    relative = root.relative.joinpath(*fixed_parts).as_posix()
+    try:
+        return resolve_workspace_path(
+            context.workspace,
+            relative,
+            must_exist=True,
+            expected_kind="directory",
+        )
+    except ExpectedToolFailure as error:
+        if error.code is ToolErrorCode.NOT_FOUND:
+            return None
+        raise
 
 
 def _validate_pattern(pattern: str) -> None:
@@ -118,6 +95,18 @@ def _validate_pattern(pattern: str) -> None:
         )
 
 
+async def _run_scan[T](scan: Callable[[ScanCancellation], T]) -> T:
+    cancellation = ScanCancellation()
+    worker = asyncio.create_task(asyncio.to_thread(scan, cancellation))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancellation.cancel()
+        with suppress(ScanCancelled):
+            await worker
+        raise
+
+
 async def glob_files(
     arguments: BaseModel,
     context: ToolExecutionContext,
@@ -125,15 +114,26 @@ async def glob_files(
     options = cast(GlobArguments, arguments)
     _validate_pattern(options.pattern)
     root = _search_root(context, options.path)
-    matches: list[str] = []
-    for relative, _ in _safe_text_files(root, context):
-        relative_to_root = Path(relative).relative_to(root.relative).as_posix()
-        if PurePath(relative_to_root).match(options.pattern):
-            matches.append(relative)
-            if len(matches) > options.max_results:
-                break
-    truncated = len(matches) > options.max_results
-    bounded = matches[: options.max_results]
+    scan_root = _glob_scan_root(root, options.pattern, context)
+
+    def scan(cancellation: ScanCancellation) -> tuple[list[str], bool]:
+        if scan_root is None:
+            return [], False
+        matches: list[str] = []
+        for item in enumerate_workspace_files(
+            scan_root,
+            context,
+            cancellation=cancellation,
+            prune_defaults=True,
+        ):
+            relative_to_root = Path(item.relative).relative_to(root.relative).as_posix()
+            if PurePath(relative_to_root).match(options.pattern):
+                matches.append(item.relative)
+                if len(matches) > options.max_results:
+                    break
+        return matches[: options.max_results], len(matches) > options.max_results
+
+    bounded, truncated = await _run_scan(scan)
     content = "\n".join(bounded)
     return ToolOutput(
         content=content,
@@ -165,36 +165,48 @@ async def grep_files(
                 f"Invalid regular expression: {error}",
             ) from error
 
-    matches: list[dict[str, JsonValue]] = []
-    for relative, text in _safe_text_files(root, context):
-        relative_to_root = Path(relative).relative_to(root.relative).as_posix()
-        if options.include is not None and not PurePath(relative_to_root).match(
-            options.include
+    def scan(
+        cancellation: ScanCancellation,
+    ) -> tuple[list[dict[str, JsonValue]], bool]:
+        matches: list[dict[str, JsonValue]] = []
+        for item in enumerate_workspace_files(
+            root,
+            context,
+            cancellation=cancellation,
+            prune_defaults=True,
         ):
-            continue
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            if compiled is not None:
-                matched = compiled.search(line) is not None
-            elif options.case_sensitive:
-                matched = options.pattern in line
-            else:
-                matched = options.pattern.casefold() in line.casefold()
-            if not matched:
+            relative_to_root = Path(item.relative).relative_to(root.relative).as_posix()
+            if options.include is not None and not PurePath(relative_to_root).match(
+                options.include
+            ):
                 continue
-            matches.append(
-                {
-                    "path": relative,
-                    "line": line_number,
-                    "text": line[:2_000],
-                }
-            )
+            text = _read_searchable_text(item)
+            if text is None:
+                continue
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                cancellation.raise_if_cancelled()
+                if compiled is not None:
+                    matched = compiled.search(line) is not None
+                elif options.case_sensitive:
+                    matched = options.pattern in line
+                else:
+                    matched = options.pattern.casefold() in line.casefold()
+                if not matched:
+                    continue
+                matches.append(
+                    {
+                        "path": item.relative,
+                        "line": line_number,
+                        "text": line[:2_000],
+                    }
+                )
+                if len(matches) > options.max_results:
+                    break
             if len(matches) > options.max_results:
                 break
-        if len(matches) > options.max_results:
-            break
+        return matches[: options.max_results], len(matches) > options.max_results
 
-    truncated = len(matches) > options.max_results
-    bounded = matches[: options.max_results]
+    bounded, truncated = await _run_scan(scan)
     content = "\n".join(
         f"{match['path']}:{match['line']}: {match['text']}" for match in bounded
     )
@@ -209,3 +221,18 @@ async def grep_files(
             detail=content[:4_000] or None,
         ),
     )
+
+
+def _read_searchable_text(item: EnumeratedFile) -> str | None:
+    try:
+        if item.resolved.stat().st_size > MAX_FILE_BYTES:
+            return None
+        data = item.resolved.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data:
+        return None
+    try:
+        return data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None

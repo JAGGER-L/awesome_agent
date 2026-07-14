@@ -10,11 +10,11 @@ describe("TrustPrompt", () => {
         <TrustPrompt workspacePath={"E:\\projects\\awesome"} selected={0} />,
       ).lastFrame() ?? "";
     expect(frame).toContain("E:\\projects\\awesome");
-    expect(frame).toContain("Is this a project you created or trust?");
-    expect(frame).toContain("File changes and shell commands");
+    expect(frame).toContain("Quick safety check");
+    expect(frame).toContain("read, edit, and execute files");
     expect(frame).toContain("1. Yes, I trust this folder");
     expect(frame).toContain("2. No, exit");
-    expect(frame).toContain("Enter Confirm · Esc Exit");
+    expect(frame).toContain("Enter confirm · Esc cancel");
     expect(frame).not.toContain("branch");
   });
 
@@ -23,7 +23,7 @@ describe("TrustPrompt", () => {
       <TrustPrompt workspacePath="/workspace" selected={1} />,
     );
     view.stdin.write("\u001b[A\r");
-    expect(view.lastFrame()).toContain("❯ 2. No, exit");
+    expect(view.lastFrame()).toContain("› 2. No, exit");
   });
 
   it("renders submitting and recoverable error feedback", () => {
@@ -36,7 +36,7 @@ describe("TrustPrompt", () => {
           message="Unable to save trust."
         />,
       ).lastFrame() ?? "";
-    expect(frame).toContain("Saving trust…");
+    expect(frame).toContain("Submitting…");
     expect(frame).toContain("Unable to save trust.");
   });
 });

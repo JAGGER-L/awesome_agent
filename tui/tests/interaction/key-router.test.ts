@@ -17,6 +17,7 @@ describe("routeTerminalKey", () => {
       kind: "command_menu",
       query: "/th",
       selectedCommand: "thinking",
+      viewportStart: 0,
     });
 
     expect(
@@ -83,6 +84,7 @@ describe("routeTerminalKey", () => {
           kind: "command_menu",
           query: "/th",
           selectedCommand: "thinking",
+          viewportStart: 0,
         }),
         "",
         { ...emptyTerminalKey(), tab: true },
@@ -104,6 +106,71 @@ describe("routeTerminalKey", () => {
     ).toEqual({ type: "composer.submit" });
   });
 
+  it("recalls the queue tail before Composer history only when empty", () => {
+    expect(
+      routeTerminalKey(
+        initialTerminalUiState(),
+        "",
+        { ...emptyTerminalKey(), upArrow: true },
+        2,
+      ),
+    ).toEqual({ type: "queue.recall" });
+
+    const nonEmpty = {
+      ...initialTerminalUiState(),
+      composer: {
+        ...initialTerminalUiState().composer,
+        value: "draft",
+      },
+    };
+    expect(
+      routeTerminalKey(
+        nonEmpty,
+        "",
+        { ...emptyTerminalKey(), upArrow: true },
+        2,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("keeps command menus and exclusive interactions above queue recall", () => {
+    const key = { ...emptyTerminalKey(), upArrow: true };
+    expect(
+      routeTerminalKey(
+        stateWithMode({
+          kind: "command_menu",
+          query: "/",
+          selectedCommand: "new",
+          viewportStart: 0,
+        }),
+        "",
+        key,
+        2,
+      ),
+    ).toEqual({ type: "selection.move", delta: -1 });
+
+    expect(
+      routeTerminalKey(
+        stateWithMode({
+          kind: "approval",
+          interaction: {
+            interaction_id: "interaction_1",
+            interaction_kind: "tool_approval",
+            prompt: "Run command?",
+            operation: "run",
+            target: "pytest",
+            choices: [{ decision: "deny", label: "No" }],
+          },
+          selected: 0,
+          submitting: false,
+        }),
+        "",
+        key,
+        2,
+      ),
+    ).toEqual({ type: "selection.move", delta: -1 });
+  });
+
   it("falls through unconsumed control keys to lifecycle handling", () => {
     expect(
       routeTerminalKey(initialTerminalUiState(), "c", {
@@ -119,7 +186,7 @@ describe("routeTerminalKey", () => {
         ...emptyTerminalKey(),
         ctrl: true,
       }),
-    ).toEqual({ type: "tool_details.toggle" });
+    ).toEqual({ type: "details.toggle" });
   });
 
   it("moves picker selection and respects blocking Escape", () => {
@@ -144,6 +211,55 @@ describe("routeTerminalKey", () => {
         ...emptyTerminalKey(),
         escape: true,
       }),
+    ).toBeUndefined();
+  });
+
+  it("does not confirm disabled or submitting picker rows", () => {
+    const disabled = stateWithMode({
+      kind: "picker",
+      owner: { kind: "command", intent: { name: "auth" } },
+      selected: 0,
+      blocking: false,
+      selection: {
+        prompt: "Choose source",
+        options: [
+          {
+            value: "environment",
+            label: "Environment",
+            selected: true,
+            disabled: true,
+          },
+        ],
+      },
+    });
+    expect(
+      routeTerminalKey(disabled, "", {
+        ...emptyTerminalKey(),
+        return: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      routeTerminalKey(
+        stateWithMode({
+          kind: "picker",
+          owner: { kind: "command", intent: { name: "auth" } },
+          selected: 0,
+          blocking: false,
+          submitting: true,
+          selection: {
+            prompt: "Choose source",
+            options: [
+              {
+                value: "awesome",
+                label: "Awesome API key",
+                selected: true,
+              },
+            ],
+          },
+        }),
+        "x",
+        emptyTerminalKey(),
+      ),
     ).toBeUndefined();
   });
 

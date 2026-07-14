@@ -1,3 +1,8 @@
+import type { MethodValue } from "../protocol/methods.js";
+
+export type ChangeDelta =
+  MethodValue["thread.read"]["change_sets"][number]["changes"][number];
+
 export interface BlockBase {
   readonly key: string;
   readonly kind: string;
@@ -9,6 +14,11 @@ export interface UserBlock extends BlockBase {
   readonly status: "pending" | "accepted" | "persisted" | "failed";
   readonly text: string;
   readonly error_message?: string;
+}
+export interface CommandInputBlock extends BlockBase {
+  readonly kind: "command_input";
+  readonly submission_id: string;
+  readonly text: string;
 }
 export interface AssistantBlock extends BlockBase {
   readonly kind: "assistant";
@@ -24,9 +34,11 @@ export interface ToolItem {
   readonly verb: string;
   readonly target?: string;
   readonly outcome: "running" | "success" | "error" | "cancelled";
+  readonly started_at?: string;
   readonly presentation_outcome?: string;
   readonly summary: string;
   readonly detail?: string;
+  readonly detail_truncated_count?: number;
   readonly duration_ms?: number;
   readonly error_code?: string;
 }
@@ -37,18 +49,24 @@ export interface ToolGroupBlock extends BlockBase {
 export interface ChangeSummaryBlock extends BlockBase {
   readonly kind: "change";
   readonly change_set_id: string;
-  readonly paths: readonly string[];
   readonly lifecycle: string;
-  readonly reversibility: string;
+  readonly changes: readonly ChangeDelta[];
 }
-export interface ReasoningMarkerBlock extends BlockBase {
-  readonly kind: "reasoning_marker";
-  readonly label: string;
+export interface ThinkingBlock extends BlockBase {
+  readonly kind: "thinking";
+  readonly started_at?: string;
+  readonly text: string;
+  readonly duration_ms?: number;
+}
+export interface WorkedBlock extends BlockBase {
+  readonly kind: "worked";
+  readonly duration_ms: number;
 }
 export interface WarningBlock extends BlockBase {
   readonly kind: "warning";
   readonly code: string;
   readonly message: string;
+  readonly count: number;
 }
 export interface StatusBlock extends BlockBase {
   readonly kind: "status";
@@ -57,8 +75,7 @@ export interface StatusBlock extends BlockBase {
 export interface CommandResultBlock extends BlockBase {
   readonly kind: "command_result";
   readonly command: string;
-  readonly tone: "info" | "warning" | "error";
-  readonly content: string;
+  readonly presentation: import("../commands/presenters.js").CommandPresentation;
 }
 export interface ErrorBlock extends BlockBase {
   readonly kind: "error";
@@ -72,11 +89,13 @@ export interface OmittedHistoryBlock extends BlockBase {
 
 export type TranscriptBlock =
   | UserBlock
+  | CommandInputBlock
   | AssistantBlock
   | DirectCommandBlock
   | ToolGroupBlock
   | ChangeSummaryBlock
-  | ReasoningMarkerBlock
+  | ThinkingBlock
+  | WorkedBlock
   | StatusBlock
   | CommandResultBlock
   | WarningBlock
@@ -93,12 +112,13 @@ export interface LiveTranscriptProjection {
   readonly blocks: readonly TranscriptBlock[];
   readonly operation_id?: string;
   readonly turn_id?: string;
-  readonly reasoning_text: string;
+  readonly started_at?: string;
   readonly usage?: Readonly<Record<string, number>>;
   readonly terminal: boolean;
 }
 
-export interface ReconciledTurn {
+export interface TerminalTurnReconciliation {
+  readonly operation_id: string;
+  readonly turn_id: string;
   readonly blocks: readonly TranscriptBlock[];
-  readonly persisted: boolean;
 }

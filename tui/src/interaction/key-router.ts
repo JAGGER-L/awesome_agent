@@ -32,7 +32,8 @@ export type TerminalIntent =
   | { readonly type: "secret.submit" }
   | { readonly type: "composer.edit"; readonly action: ComposerAction }
   | { readonly type: "composer.submit" }
-  | { readonly type: "tool_details.toggle" }
+  | { readonly type: "queue.recall" }
+  | { readonly type: "details.toggle" }
   | { readonly type: "lifecycle.evaluate"; readonly input: string };
 
 export function emptyTerminalKey(): TerminalKey {
@@ -64,6 +65,7 @@ export function routeTerminalKey(
   state: TerminalUiState,
   input: string,
   key: TerminalKey,
+  pendingInputCount = 0,
 ): TerminalIntent | undefined {
   const { mode } = state;
   let intent: TerminalIntent | undefined;
@@ -99,7 +101,15 @@ export function routeTerminalKey(
       }
       break;
     case "picker":
-      intent = routeSelectionKey(key, mode.blocking);
+      if (!mode.submitting) {
+        intent = routeSelectionKey(key, mode.blocking);
+        if (
+          intent?.type === "selection.confirm" &&
+          mode.selection.options[mode.selected]?.disabled
+        ) {
+          intent = undefined;
+        }
+      }
       break;
     case "command_menu":
       if (key.upArrow) intent = { type: "selection.move", delta: -1 };
@@ -116,6 +126,14 @@ export function routeTerminalKey(
       break;
     case "composer": {
       if (state.composerSubmitting) break;
+      if (
+        key.upArrow &&
+        state.composer.value.length === 0 &&
+        pendingInputCount > 0
+      ) {
+        intent = { type: "queue.recall" };
+        break;
+      }
       const mapped = mapComposerKey(
         input,
         key,
@@ -132,7 +150,7 @@ export function routeTerminalKey(
 
   if (intent) return intent;
   const control = key.ctrl ? input.toLowerCase() : "";
-  if (control === "o") return { type: "tool_details.toggle" };
+  if (control === "o") return { type: "details.toggle" };
   return control === "c" || control === "d"
     ? { type: "lifecycle.evaluate", input }
     : undefined;

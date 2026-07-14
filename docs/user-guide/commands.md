@@ -18,29 +18,34 @@ No other public launch flags are supported.
 | Command | Purpose |
 | --- | --- |
 | `/new` | Start a new thread. |
+| `/rename <title>` | Rename the current thread. A title is required. |
 | `/resume [thread_id]` | Choose or resume a previous workspace thread. |
 | `/context` | Show the active context manifest and budget. |
 | `/compact` | Compact the current context now. |
-| `/auth [deepseek\|kimi]` | Add, replace, or remove Provider credentials. |
+| `/auth [deepseek\|kimi\|mem0]` | Select or manage model and Memory Provider credentials. |
 | `/model [deepseek\|kimi]` | Choose a Provider, then choose one of its models. |
 | `/thinking [on\|off]` | Show the current mode with a selector, or set it explicitly. |
 | `/permissions [request_approval\|full_access]` | Show or choose the active Thread's permission mode. |
-| `/workspace` | Show workspace identity and trust state. |
+| `/workspace` | Show the current workspace path. |
 | `/diff` | Show the latest or selected Change Journal change set. |
 | `/undo` | Undo the latest or selected reversible change set. |
 | `/redo` | Redo the latest or selected undone change set. |
 | `/tools` | List the effective built-in and extension tools. |
-| `/skills` | List discovered Skills and diagnostics. |
-| `/skill [auto\|off\|name]` | Show or select thread Skill mode. |
+| `/skills [auto\|off\|name]` | List Skills or select thread Skill mode. |
 | `/mcp` | Show MCP server status. |
-| `/memory` | Show memory status; see the [memory guide](memory-skills-mcp.md). |
+| `/memory` | Choose Local or Cloud Memory, then switch it On or Off. |
 | `/status` | Show the current product and thread status. |
-| `/usage` | Show token and operation usage from the latest turn. |
+| `/usage` | Show cumulative token and operation usage for the current thread. |
 | `/doctor` | Check configuration, embedded state, checkpoints, and Provider readiness. |
 | `/config` | Show effective source and credential-presence diagnostics, never secret values. |
 
-`/thinking` defaults to off. A bare `/thinking` reports the current value and
-offers on/off choices.
+New threads default to Thinking On. A resumed thread retains its saved setting.
+A bare `/thinking` reports the current value and offers on/off choices.
+
+The first accepted natural-language message names a new thread automatically,
+using at most 48 visible characters. `/rename <title>` replaces that name,
+marks it as user-selected, and rejects titles longer than 100 visible
+characters instead of truncating them. `/new` accepts no title argument.
 
 ## Provider and model commands
 
@@ -54,12 +59,6 @@ never accepted as command arguments. A rejected key is not saved. When the
 Provider cannot be reached, Awesome asks whether to save the key unverified.
 Removing a local credential does not revoke it at the Provider.
 
-## Skill-backed commands
-
-`/init`, `/review`, `/debug`, `/test`, and `/commit` select the corresponding
-bundled Skill and submit the remaining text as a normal Agent task. They do not
-create a second execution system.
-
 ## Ink-local commands
 
 | Command | Purpose |
@@ -70,25 +69,59 @@ create a second execution system.
 | `/quit` | Shut down Core and exit. |
 
 `@path` adds a workspace path reference to a message. `! command` runs the
-direct-shell interaction through the same Core execution policy; Ink never
-executes tools itself.
+command directly through Awesome's normal Core shell policy, without asking the
+model to decide how to run it. Ink never executes tools itself.
 
 ## Keyboard behavior
 
 - Typing `/` opens command candidates. Up/Down changes the selection, Tab
-  completes it, Enter executes it, and Escape closes the candidates without
-  discarding the draft.
+  completes only the canonical `/command` text, Enter executes the selected
+  command once, and Escape closes the candidates without changing the draft.
+  Search covers the complete catalog; the menu displays a scrolling ten-row
+  window, so Up/Down can reach every matching command.
 - Pickers, Trust, Approval, and Auth exclusively own input while visible.
   Up/Down selects, Enter confirms, and Escape cancels or denies according to
   the prompt.
 - Ctrl+C cancels an active operation. Input returns after the terminal event;
   a failed cancellation remains visible and can be retried.
-- Ctrl+O expands or folds bounded tool details. Tool details are folded by
-  default.
+- Ctrl+O expands or folds bounded details globally, including Tool sequences,
+  Thinking, and Undo/Redo paths. Details are folded by default.
+- While a task is running, Awesome queues up to three inputs. Natural-language
+  messages, Slash Commands, and `! shell` run in submission order. Pending
+  inputs appear between the active task and the Composer.
+- With an empty Composer, Up recalls the newest pending input back into the
+  draft. Repeated recall therefore moves from newest to oldest, one draft at a
+  time. A non-empty draft, Command Menu, Picker, Approval, Trust, or Auth keeps
+  ownership of Up instead.
+- A queued `/quit` prevents additional queue entries. Recall it before adding
+  more input, or let it exit at its ordered position.
 
 `/help` is written into normal transcript history rather than opening a modal.
-`/new` atomically replaces the current transcript and resets Thread-scoped
-permission grants.
+It renders one command per aligned row with usage and description. Use
+`/help <command>` for one focused row; internal command ownership is not shown.
+`/new` starts a clean conversation and redraws Awesome from the Welcome panel.
+The previous conversation remains available through `/resume`. `/resume`
+redraws Awesome with only the selected conversation's saved messages. When
+queued behind a running task, either command completes its Thread switch before
+the next queued input starts. A new Thread also resets Thread-scoped permission
+grants.
+
+`/rename <title>` follows the same queue ordering as every other Slash Command.
+The exact submitted command remains visible in transcript history, and the new
+title appears only after Core has persisted it successfully.
+
+## Context and change lifecycles
+
+`/compact` writes one `Compressing context...` result while the request is
+pending, then replaces that same result with `Context compressed` or the exact
+failure. It never emits both pending and terminal lines.
+
+`/diff` renders the ChangeSet ID and bounded terminal Diff. When the workspace
+has no recorded changes, it shows an explicit empty result. `/undo` and `/redo`
+show the action, affected file count, and resulting lifecycle on one folded
+line; Ctrl+O reveals the ChangeSet ID, each affected path, and any warning.
+Missing ChangeSets, workspace conflicts, irreversible changes, and invalid
+lifecycles remain distinct errors.
 
 ## `/status` fields
 
@@ -96,12 +129,17 @@ permission grants.
 
 - `Version`: one numeric value such as `1.1.0`;
 - `Workspace`: the workspace path, without trust or Git-branch suffixes;
-- `Thread` and resumable `Thread ID`;
-- `Model`: the full Provider/model ID and configured state;
-- `Modes`: thinking and Skill mode;
-- `Memory`: local-file and Mem0 Cloud on/off states;
-- MCP ready/degraded counts, active operation state, and configuration
-  diagnostic count.
+- `Thread`: the title and resumable Thread ID;
+- `Model`: the full Provider/model ID;
+- `Credentials`: the selected credential source and its availability;
+- `Permissions`: the current Thread permission mode;
+- `Context`: used Tokens and the active budget;
+- `Thinking` and `Skill`: their current modes;
+- `Memory`: Local memory and Mem0 Cloud on/off states;
+- `MCP`: ready and degraded server counts;
+- `Operation`: idle or the active operation ID;
+- `Changes`: the number of modified files, when present.
 
 Context details and token/operation usage are intentionally separate in
-`/context` and `/usage`.
+`/context` and `/usage`. `/context` shows the latest meaningful active Context;
+`/usage` shows cumulative observed Usage for the current Thread.

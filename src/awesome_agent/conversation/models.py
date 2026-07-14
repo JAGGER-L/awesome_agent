@@ -22,6 +22,11 @@ class ThreadEntryKind(StrEnum):
     DIRECT_COMMAND = "direct_command"
 
 
+class ThreadTitleSource(StrEnum):
+    AUTOMATIC = "automatic"
+    MANUAL = "manual"
+
+
 class TurnStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -77,8 +82,9 @@ class Thread(BaseModel):
     id: str = Field(min_length=1, max_length=128)
     workspace_key: str = Field(min_length=1, max_length=128)
     title: str = Field(min_length=1, max_length=500)
+    title_source: ThreadTitleSource = ThreadTitleSource.AUTOMATIC
     current_model: str | None = Field(default=None, max_length=200)
-    thinking_enabled: bool = False
+    thinking_enabled: bool = True
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
     created_at: datetime
     updated_at: datetime

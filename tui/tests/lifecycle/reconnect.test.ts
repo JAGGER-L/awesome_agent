@@ -12,59 +12,74 @@ import type { TranscriptBlock } from "../../src/transcript/model.js";
 
 function ready(title = "Feature auth"): StartupResult {
   const now = "2026-07-11T00:00:00Z";
+  const application: Extract<
+    StartupResult,
+    { readonly kind: "ready" }
+  >["application"] = {
+    initialized: true,
+    session_id: "session_new",
+    workspace_key: "workspace_1",
+    workspace: { display_path: "/workspace" },
+    workspace_trusted: true,
+    current_thread_id: "thread_full",
+    model_identity: {
+      provider: "deepseek",
+      configured_model: "deepseek/deepseek-v4-flash",
+      effective_model: "deepseek/deepseek-v4-flash",
+      runtime_name: "Awesome Agent",
+      fallback_active: false,
+    },
+    thinking_enabled: false,
+    skill_mode: "auto",
+    permission_mode: "request_approval",
+    configuration_valid: true,
+    secret_status: {
+      deepseek_api_key: true,
+      moonshot_api_key: false,
+      mem0_api_key: false,
+    },
+    provider_credentials: {
+      deepseek: {
+        provider: "deepseek",
+        environment_variable: "DEEPSEEK_API_KEY",
+        environment_configured: false,
+        awesome_configured: true,
+        selected_source: "awesome",
+      },
+      kimi: {
+        provider: "kimi",
+        environment_variable: "MOONSHOT_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: null,
+      },
+      mem0: {
+        provider: "mem0",
+        environment_variable: "MEM0_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: null,
+      },
+    },
+    memory_status: {},
+    mcp_status: [],
+    usage: {},
+    configuration_diagnostics: [],
+  };
   return {
     kind: "ready",
     readiness: "agent_ready",
-    application: {
-      initialized: true,
-      session_id: "session_new",
-      workspace_key: "workspace_1",
-      workspace: { display_path: "/workspace" },
-      workspace_trusted: true,
-      current_thread_id: "thread_full",
-      model_identity: {
-        provider: "deepseek",
-        configured_model: "deepseek/deepseek-v4-flash",
-        effective_model: "deepseek/deepseek-v4-flash",
-        runtime_name: "Awesome Agent",
-        fallback_active: false,
-      },
-      thinking_enabled: false,
-      skill_mode: "auto",
-      permission_mode: "request_approval",
-      configuration_valid: true,
-      secret_status: {
-        deepseek_api_key: true,
-        moonshot_api_key: false,
-        mem0_api_key: false,
-      },
-      provider_credentials: {
-        deepseek: {
-          provider: "deepseek",
-          environment_variable: "DEEPSEEK_API_KEY",
-          source: "user_env_file",
-          mutable: true,
-        },
-        kimi: {
-          provider: "kimi",
-          environment_variable: "MOONSHOT_API_KEY",
-          source: "missing",
-          mutable: true,
-        },
-      },
-      memory_status: {},
-      mcp_status: [],
-      usage: {},
-      configuration_diagnostics: [],
-    },
+    application,
     thread: {
       kind: "ready",
+      application,
       thread: {
         view: {
           thread: {
             id: "thread_full",
             workspace_key: "workspace_1",
             title,
+            title_source: "automatic",
             current_model: "deepseek/deepseek-v4-flash",
             thinking_enabled: false,
             skill_mode: "auto",

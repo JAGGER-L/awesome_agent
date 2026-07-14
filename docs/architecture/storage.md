@@ -23,16 +23,34 @@ user-visible state.
 
 ## Durability boundary
 
+Thread rows persist both the title and its `automatic` or `manual` provenance.
+The first accepted message uses one transaction to update the automatic title,
+append the user Entry, and create the Turn. A failure in any write rolls back
+all three facts. Later model failure or cancellation does not undo an already
+accepted first message or its title.
+
 Token deltas, spinner state, raw provider payloads, unbounded shell output, and
 credentials are not product history. Tool activity stores bounded summaries;
 tool observations required for recovery remain in the unfinished Turn's
 LangGraph checkpoint.
 
-Schema changes move forward from the current embedded schemas. Tests create
-isolated state instead of depending on developer data.
+The Application database has one current schema bootstrap. A database whose
+`PRAGMA user_version` differs from the current schema is rejected; no historical
+data adapter is present. Tests always create isolated current state instead of
+depending on developer data.
 
-Published application migrations are immutable and advance through
-`PRAGMA user_version`. Upgrade tests retain the exact schema shapes produced by
-released versions, including multiple historical shapes that reported the same
-version. Startup migrates state transactionally and verifies foreign keys
-before exposing the Application facade.
+Schema detection opens an existing Application database read-only and runs
+before writable database configuration. Application initialization maps a
+known mismatch to the non-retryable `state_schema_incompatible` product error;
+the private protocol carries the detected version, expected version, and exact
+state directory to Ink. The TUI presents those facts with a Quit-only recovery
+screen. LangGraph checkpoint resources are opened only after this Application
+preflight succeeds, so diagnosing an incompatible database does not create or
+modify checkpoint state.
+
+The current Application schema is version 2. During source development, a
+schema mismatch is resolved by stopping Awesome and removing the disposable
+repository-local `.awesome-dev/home/state` directory before running
+`uv run awesome-dev` again. Configuration and credentials outside `state`
+remain intact. Awesome intentionally does not migrate or reinterpret Schema v1
+test data.

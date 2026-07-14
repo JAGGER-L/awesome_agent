@@ -66,14 +66,33 @@ function projectDelta(
   turn: TurnProjection,
   delta: CoalescedDelta,
 ): TurnProjection {
-  const timeline = closeThinking(turn.timeline, delta.first_timestamp);
   if (delta.delta_kind === "reasoning") {
+    const hasActiveThinking = turn.timeline.some(
+      (item) => item.kind === "thinking" && item.duration_ms === undefined,
+    );
     return {
       ...turn,
-      timeline,
-      reasoning_text: appendReasoningTail(turn.reasoning_text, delta.text),
+      timeline: hasActiveThinking
+        ? turn.timeline.map((item) =>
+            item.kind === "thinking" && item.duration_ms === undefined
+              ? { ...item, text: appendReasoningTail(item.text, delta.text) }
+              : item,
+          )
+        : [
+            ...turn.timeline,
+            {
+              kind: "thinking",
+              id: `thinking:${turn.id}:${turn.thinking_sequence + 1}`,
+              started_at: delta.first_timestamp,
+              text: appendReasoningTail("", delta.text),
+            },
+          ],
+      thinking_sequence: hasActiveThinking
+        ? turn.thinking_sequence
+        : turn.thinking_sequence + 1,
     };
   }
+  const timeline = closeThinking(turn.timeline, delta.first_timestamp);
   const last = timeline.at(-1);
   return {
     ...turn,
@@ -84,7 +103,7 @@ function projectDelta(
             ...timeline,
             {
               kind: "assistant",
-              id: `assistant:${turn.id}`,
+              id: `assistant:${turn.id}:${timeline.filter((item) => item.kind === "assistant").length + 1}`,
               text: delta.text,
             },
           ],
@@ -154,15 +173,8 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             id: event.turn_id ?? "",
             status: "active",
             started_at: event.timestamp,
-            reasoning_text: "",
-            timeline: [
-              {
-                kind: "thinking",
-                id: "thinking:0",
-                started_at: event.timestamp,
-              },
-            ],
-            thinking_sequence: 1,
+            timeline: [],
+            thinking_sequence: 0,
           },
         },
       };
@@ -188,7 +200,6 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
               : payload.kind === "turn.failed"
                 ? "failed"
                 : "cancelled",
-          reasoning_text: "",
           timeline: closeThinking(turn.timeline, event.timestamp),
           duration_ms: payload.duration_ms,
         };
@@ -215,6 +226,7 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           call_id: payload.call_id,
           tool_name: payload.tool_name,
           status: "running",
+          started_at: event.timestamp,
           verb: payload.verb,
           ...(payload.target === undefined ? {} : { target: payload.target }),
           summary: "",
@@ -259,6 +271,9 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
             outcome: payload.outcome,
             summary: payload.summary,
             ...(payload.detail === undefined ? {} : { detail: payload.detail }),
+            ...(payload.detail_truncated_count === undefined
+              ? {}
+              : { detail_truncated_count: payload.detail_truncated_count }),
             duration_ms: payload.duration_ms,
             ...(payload.error_code === undefined
               ? {}
@@ -266,21 +281,7 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           };
         });
         if (!matched) return turn;
-        if (payload.kind === "tool.cancelled") {
-          return { ...turn, timeline };
-        }
-        return {
-          ...turn,
-          timeline: [
-            ...timeline,
-            {
-              kind: "thinking",
-              id: `thinking:${turn.thinking_sequence}`,
-              started_at: event.timestamp,
-            },
-          ],
-          thinking_sequence: turn.thinking_sequence + 1,
-        };
+        return { ...turn, timeline };
       });
     }
     case "usage.updated":
@@ -292,15 +293,6 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           reasoning_tokens: event.payload.reasoning_tokens,
           cache_read_tokens: event.payload.cache_read_tokens,
           cache_write_tokens: event.payload.cache_write_tokens,
-        },
-      };
-    case "workspace.changed":
-      return {
-        ...next,
-        latest_change: {
-          change_set_id: event.payload.change_set_id,
-          paths: event.payload.paths,
-          reversibility: event.payload.reversibility,
         },
       };
     case "interaction.required":
@@ -328,19 +320,78 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
     }
     case "warning": {
       const payload = event.payload;
-      return state.warnings.some((warning) => warning.code === payload.code)
-        ? next
-        : {
-            ...next,
-            warnings: [
-              ...state.warnings,
-              { code: payload.code, message: payload.message },
-            ],
-          };
+      const normalized = normalizeWarningMessage(payload.message);
+      const index = state.warnings.findIndex(
+        (warning) =>
+          warning.code === payload.code &&
+          warning.operation_id === event.operation_id &&
+          normalizeWarningMessage(warning.message) === normalized,
+      );
+      if (index >= 0)
+        return {
+          ...next,
+          warnings: state.warnings.map((warning, warningIndex) =>
+            warningIndex === index
+              ? { ...warning, count: warning.count + 1 }
+              : warning,
+          ),
+        };
+      return {
+        ...next,
+        warnings: [
+          ...state.warnings,
+          {
+            id: `warning:${payload.code}:${state.warnings.length + 1}`,
+            code: payload.code,
+            message: payload.message,
+            count: 1,
+            ...(event.operation_id === undefined
+              ? {}
+              : { operation_id: event.operation_id }),
+          },
+        ],
+      };
     }
     default:
       return next;
   }
+}
+
+function normalizeWarningMessage(message: string): string {
+  return message.trim().replace(/\s+/gu, " ");
+}
+
+function reconcileTranscript(
+  state: SurfaceState,
+  action: Extract<SurfaceAction, { readonly type: "transcript.reconciled" }>,
+): SurfaceState {
+  const operationId = action.operation_id;
+  let base = state;
+  if (
+    state.active_operation?.id === operationId &&
+    state.active_operation.turn?.id === action.turn_id
+  ) {
+    const { active_operation: _activeOperation, ...withoutActiveOperation } =
+      base;
+    void _activeOperation;
+    base = withoutActiveOperation;
+  }
+  const currentThreadId = base.thread?.view.thread.id;
+  const reconciledThread =
+    action.thread?.view.thread.id === currentThreadId
+      ? action.thread
+      : base.thread;
+  return {
+    ...base,
+    ...(reconciledThread === undefined ? {} : { thread: reconciledThread }),
+    warnings: base.warnings.filter(
+      (warning) => warning.operation_id !== operationId,
+    ),
+    committed_transcript: mergeTranscriptBlocks(
+      base.committed_transcript ?? [],
+      action.blocks,
+    ),
+  };
 }
 
 export function surfaceReducer(
@@ -369,7 +420,15 @@ export function surfaceReducer(
         thread: action.thread,
         warnings: [],
         committed_transcript: action.transcript,
-        transcript_persisted: true,
+      };
+    case "thread.metadata.updated":
+      if (state.thread?.view.thread.id !== action.thread.id) return state;
+      return {
+        ...state,
+        thread: {
+          ...state.thread,
+          view: { ...state.thread.view, thread: action.thread },
+        },
       };
     case "event.received":
       return action.generation === state.thread_generation
@@ -409,11 +468,7 @@ export function surfaceReducer(
       );
     case "transcript.reconciled":
       if (action.generation !== state.thread_generation) return state;
-      return {
-        ...state,
-        committed_transcript: action.result.blocks,
-        transcript_persisted: action.result.persisted,
-      };
+      return reconcileTranscript(state, action);
     case "transcript.command_result":
       if (action.generation !== state.thread_generation) return state;
       return {
@@ -421,6 +476,30 @@ export function surfaceReducer(
         committed_transcript: mergeTranscriptBlocks(
           state.committed_transcript ?? [],
           [action.block],
+        ),
+      };
+    case "transcript.command_result.replace":
+      if (action.generation !== state.thread_generation) return state;
+      return {
+        ...state,
+        committed_transcript: (state.committed_transcript ?? []).map((block) =>
+          block.key === action.block.key ? action.block : block,
+        ),
+      };
+    case "transcript.command.submitted":
+      if (action.generation !== state.thread_generation) return state;
+      return {
+        ...state,
+        committed_transcript: mergeTranscriptBlocks(
+          state.committed_transcript ?? [],
+          [
+            {
+              key: `command:${action.submission_id}`,
+              kind: "command_input",
+              submission_id: action.submission_id,
+              text: action.text,
+            },
+          ],
         ),
       };
     case "transcript.user.pending":
@@ -439,7 +518,6 @@ export function surfaceReducer(
             },
           ],
         ),
-        transcript_persisted: false,
       };
     case "transcript.user.accepted":
       if (action.generation !== state.thread_generation) return state;

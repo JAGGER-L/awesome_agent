@@ -30,7 +30,7 @@ change, and helps verify the result.
 
 Awesome starts with `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
 `glob`, `grep`, and `execute`. Extensions can add more tools; the total is not limited to eight.
-Local file Memory and Mem0 Cloud are independent and default off.
+Local memory and Mem0 Cloud are independent and default off.
 
 ## Install
 
@@ -99,6 +99,10 @@ Analyze this project's structure and tell me where I should start reading.
 - [Architecture](ARCHITECTURE.md)
 - [Development](docs/development/README.md)
 - [Roadmap](docs/roadmap.md)
+
+Contributors can run the current checkout with `uv run awesome-dev`; see
+[Develop from Source](docs/getting-started/quickstart.md#develop-from-source)
+for the complete setup and troubleshooting flow.
 
 ## Security
 

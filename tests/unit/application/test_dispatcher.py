@@ -1,60 +1,53 @@
+from collections.abc import Awaitable, Callable
+
 import pytest
 
+from awesome_agent.application.command_results import (
+    CommandOutcome,
+    NoticeCommandPayload,
+    result,
+)
 from awesome_agent.application.commands import (
+    COMMAND_OWNERS,
     CommandIntent,
     CommandName,
-    CommandResult,
-    CommandStatus,
+    CommandOwner,
 )
 from awesome_agent.application.dispatcher import (
     CommandDispatcher,
-    DuplicateCommandHandler,
-    InvalidCommandOwner,
+    InvalidCommandInventory,
 )
 
-PHASE_ONE_COMMANDS = {
-    CommandName.WORKSPACE,
-    CommandName.TOOLS,
-    CommandName.DIFF,
-    CommandName.UNDO,
-    CommandName.REDO,
-    CommandName.STATUS,
-    CommandName.DOCTOR,
-}
+
+async def successful_handler(intent: CommandIntent) -> CommandOutcome:
+    return result(NoticeCommandPayload(message=intent.name.value))
 
 
-async def successful_handler(intent: CommandIntent) -> CommandResult:
-    return CommandResult(status=CommandStatus.SUCCESS, content=intent.name.value)
-
-
-@pytest.mark.asyncio
-async def test_dispatcher_has_exact_phase_one_handlers() -> None:
-    dispatcher = CommandDispatcher()
-    for name in PHASE_ONE_COMMANDS:
-        dispatcher.register(name, successful_handler)
-
-    assert set(dispatcher.registered_names) == PHASE_ONE_COMMANDS
-    result = await dispatcher.dispatch(CommandIntent(name=CommandName.TOOLS))
-    assert result.status is CommandStatus.SUCCESS
-
-
-def test_dispatcher_rejects_duplicate_and_non_application_handlers() -> None:
-    dispatcher = CommandDispatcher()
-    dispatcher.register(CommandName.TOOLS, successful_handler)
-
-    with pytest.raises(DuplicateCommandHandler):
-        dispatcher.register(CommandName.TOOLS, successful_handler)
-    with pytest.raises(InvalidCommandOwner):
-        dispatcher.register(CommandName.INIT, successful_handler)
-    with pytest.raises(InvalidCommandOwner):
-        dispatcher.register(CommandName.HELP, successful_handler)
+def _complete_handlers() -> dict[
+    CommandName, Callable[[CommandIntent], Awaitable[CommandOutcome]]
+]:
+    return {
+        name: successful_handler
+        for name, owner in COMMAND_OWNERS.items()
+        if owner is not CommandOwner.INK
+    }
 
 
 @pytest.mark.asyncio
-async def test_unregistered_accepted_command_is_not_available() -> None:
-    dispatcher = CommandDispatcher()
+async def test_dispatcher_requires_and_exposes_exact_core_inventory() -> None:
+    handlers = _complete_handlers()
+    dispatcher = CommandDispatcher(handlers)
 
-    result = await dispatcher.dispatch(CommandIntent(name=CommandName.NEW))
+    assert len(handlers) == 21
+    assert set(dispatcher.registered_names) == set(handlers)
+    outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.TOOLS))
+    assert outcome == result(NoticeCommandPayload(message="tools"))
 
-    assert result.status is CommandStatus.ERROR
-    assert result.data["error_code"] == "command_not_available"
+
+def test_dispatcher_rejects_incomplete_or_surface_owned_inventory() -> None:
+    with pytest.raises(InvalidCommandInventory):
+        CommandDispatcher({})
+    with pytest.raises(InvalidCommandInventory):
+        CommandDispatcher(
+            {**_complete_handlers(), CommandName.HELP: successful_handler}
+        )

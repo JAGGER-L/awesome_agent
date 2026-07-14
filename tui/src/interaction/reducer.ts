@@ -1,6 +1,7 @@
 import { composerReducer, initialComposerState } from "../composer/reducer.js";
 import { graphemes } from "../composer/graphemes.js";
 import { searchCommands } from "../commands/search.js";
+import { commandMenuWindow } from "../commands/menu-window.js";
 import type { TerminalUiAction, TerminalUiState } from "./model.js";
 
 export function initialTerminalUiState(): TerminalUiState {
@@ -8,7 +9,7 @@ export function initialTerminalUiState(): TerminalUiState {
     mode: { kind: "composer" },
     composer: initialComposerState(),
     composerSubmitting: false,
-    toolDetailsExpanded: false,
+    detailsExpanded: false,
   };
 }
 
@@ -52,6 +53,11 @@ export function terminalUiReducer(
         ...mode,
         submitting: action.submitting,
       }));
+    case "mode.picker.submitting":
+      return updatePicker(state, (mode) => ({
+        ...mode,
+        submitting: action.submitting,
+      }));
     case "mode.approval.message":
       return updateApproval(state, (mode) => ({
         ...mode,
@@ -85,8 +91,8 @@ export function terminalUiReducer(
       return { ...state, notice: action.message };
     case "notice.clear":
       return withoutNotice(state);
-    case "tool_details.toggle":
-      return { ...state, toolDetailsExpanded: !state.toolDetailsExpanded };
+    case "details.toggle":
+      return { ...state, detailsExpanded: !state.detailsExpanded };
   }
 }
 
@@ -103,7 +109,17 @@ function moveSelection(
     const index =
       (Math.max(current, 0) + delta + matches.length) % matches.length;
     const selected = matches[index];
-    return selected ? { ...mode, selectedCommand: selected.name } : mode;
+    if (!selected) return mode;
+    const window = commandMenuWindow(
+      matches,
+      selected.name,
+      mode.viewportStart,
+    );
+    return {
+      ...mode,
+      selectedCommand: selected.name,
+      viewportStart: window.start,
+    };
   }
   const size =
     mode.kind === "picker"
@@ -137,6 +153,7 @@ function commandMenuMode(
   return {
     kind: "command_menu",
     query: classified,
+    viewportStart: 0,
     ...(selectedCommand === undefined ? {} : { selectedCommand }),
   };
 }
@@ -177,6 +194,17 @@ function updateApproval(
   ) => Extract<TerminalUiState["mode"], { kind: "approval" }>,
 ): TerminalUiState {
   return state.mode.kind === "approval"
+    ? { ...state, mode: update(state.mode) }
+    : state;
+}
+
+function updatePicker(
+  state: TerminalUiState,
+  update: (
+    mode: Extract<TerminalUiState["mode"], { kind: "picker" }>,
+  ) => Extract<TerminalUiState["mode"], { kind: "picker" }>,
+): TerminalUiState {
+  return state.mode.kind === "picker"
     ? { ...state, mode: update(state.mode) }
     : state;
 }

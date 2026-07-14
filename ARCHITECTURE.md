@@ -199,8 +199,30 @@ Shell effects may escape the workspace and cannot be reversed by the journal.
    └── Skill command -> shared Skill/Application boundary
 ```
 
-Commands do not become model prompts unless their defined behavior explicitly
-starts an Agent Turn.
+The authoritative Core command path is:
+
+```text
+Ink command controller
+    -> Protocol v2 command.execute
+    -> LocalApplication facade
+    -> complete CommandDispatcher
+    -> one focused command service
+    -> CommandOutcome
+    -> exhaustive TUI Presenter
+    -> current transcript path
+```
+
+The immutable dispatcher owns every Core command. Ink-owned commands remain
+local presentation actions and never enter Core RPC. Composition only wires
+command services; it contains no command semantics and constructs no command
+results. Slash commands are deterministic product operations and never submit
+hidden model prompts; natural-language input is the only path that starts an
+Agent Turn.
+
+`LocalApplication` is the only surface-facing Application host. Python produces Protocol v2
+discriminated outcomes that TypeScript validates and presents exhaustively.
+Command progress is pending Surface lifecycle state, not a second durable
+operation model.
 
 ### Resume and recovery
 
@@ -314,7 +336,7 @@ only external memory adapter currently supported.
 
 - **Responsibility:** versioned JSON-RPC requests, typed events, bounded NDJSON,
   terminal input, rendering, keyboard behavior, transcript projection, theme,
-  clipboard, and local presentation preferences.
+  clipboard, session-only pending input, and local presentation preferences.
 - **Does not own:** models, LangGraph, tools, storage, Memory, Skills, or MCP.
 - **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
   `tui/src/core/process.ts`, `tui/src/app/App.tsx`.
@@ -325,6 +347,13 @@ competing component listeners. Optimistic user messages are keyed by
 `client_message_id`; Thread generations reject stale events after replacement.
 The active Turn is one ordered Thinking/tool/answer timeline, and completed
 answers use terminal Markdown rendering.
+
+The TUI may queue at most three terminal inputs while the single Core Operation
+is active. The queue is session-only and outside Thread Surface state: it
+survives `/new` and `/resume`, parses each head only when promoted, executes
+FIFO, recalls the tail with Up when Composer is empty, and treats queued
+`/quit` as a terminal barrier. It never becomes a Runtime, protocol method,
+database record, or second execution authority.
 
 ### Safety
 
@@ -416,6 +445,8 @@ history stores bounded summaries.
 - Cancellation propagates through the foreground operation, model call, and
   tool execution. Application marks the Turn cancelled, seals known changes,
   and removes its checkpoint.
+- A terminal event permits the TUI to promote one pending input. Typed busy
+  races requeue the same identity at the head without duplicate failure text.
 - TUI cancellation and interaction controllers release completed request
   identity before the next Operation or Interaction. Nonfatal failures remain
   visible and retryable; Core exit is fatal and disables Composer input.

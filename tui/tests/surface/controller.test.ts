@@ -78,7 +78,12 @@ describe("connectSurface", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 5));
     }
     expect(connected.store.getState().warnings).toEqual([
-      { code: "early", message: "Early warning." },
+      {
+        id: "warning:early:1",
+        code: "early",
+        message: "Early warning.",
+        count: 1,
+      },
     ]);
     await connected.close();
   });
@@ -120,11 +125,11 @@ describe("connectSurface", () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 5));
     }
     expect(connected.store.getState()).toMatchObject({
-      transcript_persisted: true,
       committed_transcript: expect.arrayContaining([
         expect.objectContaining({ kind: "assistant", text: "durable answer" }),
       ]),
     });
+    expect(connected.store.getState().active_operation).toBeUndefined();
     const stderr = new TextDecoder().decode(connected.session.stderrTail());
     expect(stderr.match(/thread-read/g)).toHaveLength(1);
     await connected.close();

@@ -54,4 +54,22 @@ describe("parseTerminalMarkdown", () => {
       text: "print('ok')",
     });
   });
+
+  it("creates semantic table and math nodes", () => {
+    const nodes = parseTerminalMarkdown(
+      "| Name | 公式 |\n| --- | ---: |\n| 圆 | $S = πr²$ |\n\n$$\nE = mc^2\n$$",
+    );
+    expect(nodes.map((node) => node.kind)).toEqual(["table", "math"]);
+    expect(nodes[0]).toMatchObject({
+      kind: "table",
+      align: [null, "right"],
+      rows: [
+        [
+          expect.any(Array),
+          [expect.objectContaining({ kind: "math", text: "S = πr²" })],
+        ],
+      ],
+    });
+    expect(nodes[1]).toEqual({ kind: "math", text: "E = mc^2" });
+  });
 });

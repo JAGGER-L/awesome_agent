@@ -1,15 +1,28 @@
 import type { CommandIntent } from "../commands/parser.js";
 import type { CommandName } from "../protocol/commands.js";
 import type { ComposerAction, ComposerState } from "../composer/model.js";
-import type { MethodValue } from "../protocol/index.js";
 import type { SurfaceState } from "../state/model.js";
 
-export type PickerSelection = NonNullable<
-  MethodValue["command.execute"]["selection"]
->;
-export type SecretPrompt = NonNullable<
-  MethodValue["command.execute"]["secret_prompt"]
->;
+export interface PickerSelection {
+  readonly kind?: "selection";
+  readonly prompt: string;
+  readonly options: readonly {
+    readonly value: string;
+    readonly label: string;
+    readonly description?: string | undefined;
+    readonly selected: boolean;
+    readonly disabled?: boolean | undefined;
+  }[];
+}
+
+export interface SecretPrompt {
+  readonly kind?: "secret";
+  readonly provider: "deepseek" | "kimi" | "mem0";
+  readonly action: "add" | "replace";
+  readonly label: string;
+  readonly environment_variable: string;
+  readonly help_url: string;
+}
 export type PendingInteraction = NonNullable<
   SurfaceState["pending_interaction"]
 >;
@@ -21,10 +34,10 @@ export type PickerOwner =
   | {
       readonly kind: "credential_delete";
       readonly intent: CommandIntent;
-      readonly provider: "deepseek" | "kimi";
+      readonly provider: "deepseek" | "kimi" | "mem0";
     }
   | {
-      readonly kind: "credential_confirm";
+      readonly kind: "credential_unverified";
       readonly intent: CommandIntent;
       readonly prompt: SecretPrompt;
       readonly secret: string;
@@ -44,6 +57,7 @@ export type UiMode =
       readonly kind: "command_menu";
       readonly query: string;
       readonly selectedCommand?: CommandName;
+      readonly viewportStart: number;
     }
   | {
       readonly kind: "picker";
@@ -51,6 +65,7 @@ export type UiMode =
       readonly selection: PickerSelection;
       readonly selected: number;
       readonly blocking: boolean;
+      readonly submitting?: boolean;
     }
   | {
       readonly kind: "secret";
@@ -72,7 +87,7 @@ export interface TerminalUiState {
   readonly mode: UiMode;
   readonly composer: ComposerState;
   readonly composerSubmitting: boolean;
-  readonly toolDetailsExpanded: boolean;
+  readonly detailsExpanded: boolean;
   readonly composerMessage?: string | undefined;
   readonly notice?: string;
 }
@@ -93,6 +108,7 @@ export type TerminalUiAction =
       readonly message?: string | undefined;
     }
   | { readonly type: "mode.approval.submitting"; readonly submitting: boolean }
+  | { readonly type: "mode.picker.submitting"; readonly submitting: boolean }
   | {
       readonly type: "mode.approval.message";
       readonly message?: string | undefined;
@@ -107,4 +123,4 @@ export type TerminalUiAction =
   | { readonly type: "composer.message"; readonly message?: string | undefined }
   | { readonly type: "notice.set"; readonly message: string }
   | { readonly type: "notice.clear" }
-  | { readonly type: "tool_details.toggle" };
+  | { readonly type: "details.toggle" };

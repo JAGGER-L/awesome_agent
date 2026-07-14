@@ -42,21 +42,23 @@ function controllerReturning(outcome: unknown): CommandController {
 describe("Composer", () => {
   it.each([
     40, 60, 120,
-  ])("renders controlled multiline input and a cursor at %i columns", (width) => {
+  ])("renders controlled multiline input at %i columns", (width) => {
     const view = render(
       <Composer state={composerState("first\nsecond", width)} />,
     );
     expect(view.lastFrame()).toContain("first");
     expect(view.lastFrame()).toContain("second");
-    expect(view.lastFrame()).toContain("▌");
+    expect(view.lastFrame()).not.toContain("▌");
     expect(view.lastFrame()).toContain("╭");
     expect(view.lastFrame()).toContain("╰");
     expect(view.lastFrame()).toContain("❯");
   });
 
-  it("renders the cursor at the controlled grapheme position", () => {
+  it("renders the controlled value without a fake cursor glyph", () => {
     const state = composerReducer(composerState("a😀c", 40), { type: "left" });
-    expect(render(<Composer state={state} />).lastFrame()).toContain("a😀▌c");
+    const frame = render(<Composer state={state} />).lastFrame();
+    expect(frame).toContain("a😀c");
+    expect(frame).not.toContain("▌");
   });
 
   it("renders controlled submission and error states", () => {
@@ -80,6 +82,7 @@ describe("CommandMenu", () => {
       {
         name: "thinking" as const,
         owner: "application" as const,
+        completion: "/thinking" as const,
         usage: "/thinking [on|off]",
         description: "Show or choose thinking mode",
         examples: ["/thinking [on|off]"],
@@ -87,13 +90,18 @@ describe("CommandMenu", () => {
       {
         name: "theme" as const,
         owner: "ink" as const,
+        completion: "/theme" as const,
         usage: "/theme [system|dark|light]",
         description: "Show or choose the color theme",
         examples: ["/theme [system|dark|light]"],
       },
     ];
     const view = render(
-      <CommandMenu commands={commands} selectedCommand="theme" />,
+      <CommandMenu
+        commands={commands}
+        selectedCommand="theme"
+        viewportStart={0}
+      />,
     );
     expect(view.lastFrame()).toContain("/thinking");
     expect(view.lastFrame()).toContain("/theme");
@@ -242,7 +250,6 @@ describe("App composer integration", () => {
     view.stdin.write("/s");
     await eventually(() => expect(view.lastFrame()).toContain("/status"));
     view.stdin.write("\u001b[B");
-    view.stdin.write("\u001b[B");
     view.stdin.write("\r");
 
     await eventually(() => expect(controller.submit).toHaveBeenCalledOnce());
@@ -265,13 +272,13 @@ describe("App composer integration", () => {
 
     view.stdin.write("/th");
     view.stdin.write("\t");
-    await eventually(() =>
-      expect(view.lastFrame()).toContain("/thinking [on|off]"),
-    );
+    await eventually(() => expect(view.lastFrame()).toContain("/thinking"));
+    expect(view.lastFrame()).not.toContain("[on|off]");
     expect(controller.submit).not.toHaveBeenCalled();
 
     view.stdin.write("\u001b");
-    expect(view.lastFrame()).toContain("/thinking [on|off]");
+    expect(view.lastFrame()).toContain("/thinking");
+    expect(view.lastFrame()).not.toContain("[on|off]");
     expect(controller.submit).not.toHaveBeenCalled();
   });
 
@@ -304,40 +311,42 @@ describe("App composer integration", () => {
         key: "old",
         kind: "command_result",
         command: "old",
-        tone: "info",
-        content: "old transcript",
+        presentation: {
+          kind: "notice",
+          message: "old transcript",
+          tone: "info",
+        },
       },
     });
     const resetThreadScope = vi.fn();
+    const resetCurrentFrame = vi.fn();
     const controller = {
       submit: vi.fn(async () => ({
         kind: "result",
-        result: {
-          status: "success",
-          content: "",
-          data: { thread_id: "thread_new" },
-        },
-      })),
-      loadThreadReplacement: vi.fn(async () => ({
-        kind: "replacement",
-        application: { current_thread_id: "thread_new" },
-        thread: {
-          view: {
+        payload: {
+          kind: "thread_transition",
+          transition: {
+            reason: "new",
+            application: { current_thread_id: "thread_new" },
             thread: {
-              id: "thread_new",
-              workspace_key: "workspace_1",
-              title: "New Thread",
-              thinking_enabled: false,
-              skill_mode: "auto",
-              created_at: "2026-07-12T00:00:00Z",
-              updated_at: "2026-07-12T00:00:00Z",
+              view: {
+                thread: {
+                  id: "thread_new",
+                  workspace_key: "workspace_1",
+                  title: "New Thread",
+                  thinking_enabled: false,
+                  skill_mode: "auto",
+                  created_at: "2026-07-12T00:00:00Z",
+                  updated_at: "2026-07-12T00:00:00Z",
+                },
+                entries: [],
+                turns: [],
+                tool_activities: [],
+              },
+              change_sets: [],
+              has_more: false,
             },
-            entries: [],
-            turns: [],
-            tool_activities: [],
           },
-          change_sets: [],
-          has_more: false,
         },
       })),
     } as unknown as CommandController;
@@ -351,6 +360,7 @@ describe("App composer integration", () => {
           requestExit: async () => undefined,
           resetThreadScope,
         }}
+        resetCurrentFrame={resetCurrentFrame}
         width={60}
       />,
     );
@@ -362,9 +372,14 @@ describe("App composer integration", () => {
     expect(store.getState()).toMatchObject({
       application: { current_thread_id: "thread_new" },
       thread: { view: { thread: { id: "thread_new" } } },
-      committed_transcript: [],
+      committed_transcript: [
+        expect.objectContaining({ message: "New conversation started" }),
+      ],
     });
     expect(JSON.stringify(store.getState())).not.toContain("old transcript");
     expect(resetThreadScope).toHaveBeenCalledOnce();
+    expect(resetCurrentFrame).toHaveBeenCalledOnce();
+    expect(view.lastFrame()).toContain("New conversation started");
+    expect(view.lastFrame()).not.toContain("old transcript");
   });
 });

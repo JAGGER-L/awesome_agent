@@ -4,27 +4,45 @@ import type {
   ToolItem,
   TranscriptBlock,
 } from "./model.js";
-import { formatDuration, reasoningElapsedMarker } from "./reasoning.js";
 
 export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
   const blocks: TranscriptBlock[] = [];
   const operation = state.active_operation;
   const turn = operation?.turn;
   if (turn) {
+    let pendingTools: ToolItem[] = [];
+    let toolInsertionIndex: number | undefined;
+    const flushTools = () => {
+      if (pendingTools.length === 0) return;
+      const block: TranscriptBlock = {
+        key: `live:${turn.id}:tools:${pendingTools[0]?.call_id ?? "sequence"}`,
+        kind: "tools",
+        items: pendingTools,
+      };
+      blocks.splice(toolInsertionIndex ?? blocks.length, 0, block);
+      pendingTools = [];
+      toolInsertionIndex = undefined;
+    };
     for (const item of turn.timeline) {
-      if (item.kind === "thinking" && item.duration_ms !== undefined) {
+      if (item.kind === "thinking") {
         blocks.push({
-          key: `live:${turn.id}:${item.id}`,
-          kind: "reasoning_marker",
-          label: reasoningElapsedMarker(item.duration_ms),
+          key: `live:${item.id}`,
+          kind: "thinking",
+          started_at: item.started_at,
+          text: item.text,
+          ...(item.duration_ms === undefined
+            ? {}
+            : { duration_ms: item.duration_ms }),
         });
       } else if (item.kind === "assistant") {
+        flushTools();
         blocks.push({
-          key: `live:${turn.id}:${item.id}`,
+          key: `live:${item.id}`,
           kind: "assistant",
           text: item.text,
         });
       } else if (item.kind === "tool") {
+        toolInsertionIndex ??= blocks.length;
         const tool: ToolItem = {
           call_id: item.call_id,
           name: item.tool_name,
@@ -38,11 +56,15 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
                 : item.status === "cancelled"
                   ? "cancelled"
                   : "running",
+          started_at: item.started_at,
           ...(item.outcome === undefined
             ? {}
             : { presentation_outcome: item.outcome }),
           summary: item.status === "running" ? "Running…" : item.summary,
           ...(item.detail === undefined ? {} : { detail: item.detail }),
+          ...(item.detail_truncated_count === undefined
+            ? {}
+            : { detail_truncated_count: item.detail_truncated_count }),
           ...(item.duration_ms === undefined
             ? {}
             : { duration_ms: item.duration_ms }),
@@ -50,45 +72,34 @@ export function projectLiveTurn(state: SurfaceState): LiveTranscriptProjection {
             ? {}
             : { error_code: item.error_code }),
         };
-        blocks.push({
-          key: `live:${turn.id}:tool:${item.call_id}`,
-          kind: "tools",
-          items: [tool],
-        });
+        pendingTools.push(tool);
       }
     }
-    if (turn.duration_ms !== undefined) {
+    flushTools();
+    if (turn.duration_ms !== undefined)
       blocks.push({
-        key: `live:${turn.id}:duration`,
-        kind: "status",
-        message: `Worked for ${formatDuration(turn.duration_ms)}`,
+        key: `live:${turn.id}:worked`,
+        kind: "worked",
+        duration_ms: turn.duration_ms,
       });
-    }
-  }
-  if (state.latest_change) {
-    blocks.push({
-      key: `live:change:${state.latest_change.change_set_id}`,
-      kind: "change",
-      change_set_id: state.latest_change.change_set_id,
-      paths: state.latest_change.paths,
-      lifecycle: "live",
-      reversibility: state.latest_change.reversibility,
-    });
   }
   for (const warning of state.warnings) {
     blocks.push({
-      key: `live:warning:${warning.code}`,
+      key: `live:${warning.id}`,
       kind: "warning",
       code: warning.code,
       message: warning.message,
+      count: warning.count,
     });
   }
   return {
     blocks,
     ...(operation === undefined ? {} : { operation_id: operation.id }),
     ...(turn === undefined ? {} : { turn_id: turn.id }),
-    reasoning_text: turn?.reasoning_text ?? "",
-    ...(state.usage === undefined ? {} : { usage: state.usage }),
+    ...(turn === undefined ? {} : { started_at: turn.started_at }),
+    ...(turn === undefined || state.usage === undefined
+      ? {}
+      : { usage: state.usage }),
     terminal: operation !== undefined && operation.status !== "active",
   };
 }

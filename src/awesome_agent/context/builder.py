@@ -165,9 +165,6 @@ class ContextBuilder:
 def model_identity_context_source(
     identity: ModelIdentitySnapshot,
 ) -> ContextSource:
-    fallback = (
-        f"yes, from {identity.fallback_from}" if identity.fallback_active else "no"
-    )
     return ContextSource(
         kind=ContextSourceKind.PRODUCT_INSTRUCTIONS,
         source_id="model_identity",
@@ -176,12 +173,13 @@ def model_identity_context_source(
         content=(
             "Runtime identity (authoritative):\n"
             f"- Runtime: {identity.runtime_name}\n"
-            f"- Provider: {identity.provider}\n"
-            f"- Configured model: {identity.configured_model}\n"
             f"- Effective model: {identity.effective_model}\n"
-            f"- Fallback active: {fallback}\n"
-            "When asked about your identity, report these facts and do not infer "
-            "a different model or runtime."
+            "When asked about your identity, answer in one concise sentence: "
+            "you are Awesome Agent and the effective model provides your model "
+            "capability. Do not add workspace, credential, permission, Memory, "
+            "MCP, Thinking, configured-model, or fallback details unless the user "
+            "explicitly asks for them. Never infer a different model or runtime, "
+            "and never claim to be Claude, ChatGPT, or another host."
         ),
     )
 

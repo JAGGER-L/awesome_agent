@@ -4,11 +4,12 @@ from typing import Any, cast
 import pytest
 
 from awesome_agent.agent import AgentRuntimeContext, AgentState, new_agent_state
-from awesome_agent.application.commands import (
-    CommandIntent,
-    CommandName,
-    CommandStatus,
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandResult,
+    ContextCommandPayload,
 )
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.operations import OperationController
 from awesome_agent.application.turns import (
@@ -140,6 +141,11 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
     assert "pytest: passed" in frozen_json
     assert "Awesome Agent" in frozen_json
     assert "deepseek/deepseek-v4-flash" in frozen_json
+    assert all(
+        str(workspace.canonical_path) not in message.content
+        for message in prepared.messages
+        if message.role == "system"
+    )
     assert "question 4" in frozen_json
     assert "question 0" not in frozen_json
 
@@ -171,25 +177,34 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
         "completed",
         tuple(prepared.manifest),
     )
+    empty_cancelled = conversation.begin_turn(
+        thread.id,
+        "cancelled after context",
+        _config(),
+        client_message_id="client_empty_cancelled",
+    )
+    conversation.cancel_turn(empty_cancelled.id)
     inspected = context_service.inspect(thread.id)
     serialized = str(inspected)
     assert "before" not in serialized
     assert "child" not in serialized
     assert inspected["summary_covered_turn_count"] == 4
-    assert conversation.read_thread(thread.id).entries[-2].content == (
-        "inspect @note.txt @dir"
+    assert any(
+        entry.content == "inspect @note.txt @dir"
+        for entry in conversation.read_thread(thread.id).entries
     )
     command = await context_service.context_command(
         CommandIntent(name=CommandName.CONTEXT),
         thread_id=thread.id,
     )
-    assert command.status is CommandStatus.SUCCESS
+    assert isinstance(command, CommandResult)
+    assert isinstance(command.payload, ContextCommandPayload)
     assert "before" not in command.model_dump_json()
     invalid = await context_service.context_command(
         CommandIntent(name=CommandName.CONTEXT, arguments=("extra",)),
         thread_id=thread.id,
     )
-    assert invalid.status is CommandStatus.ERROR
+    assert isinstance(invalid, CommandError)
 
 
 class NeverGraph:
@@ -304,11 +319,11 @@ async def test_compact_failure_keeps_history_and_summary_unchanged(
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
     )
-    assert command.status is CommandStatus.ERROR
+    assert isinstance(command, CommandError)
     invalid = await context_service.compact_command(
         CommandIntent(name=CommandName.COMPACT, arguments=("extra",)),
         thread_id=thread.id,
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
     )
-    assert invalid.status is CommandStatus.ERROR
+    assert isinstance(invalid, CommandError)

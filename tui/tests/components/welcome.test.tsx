@@ -8,9 +8,11 @@ import {
   FULL_LOGO_ROWS,
 } from "../../src/components/welcome-logo.js";
 import { resolveTheme } from "../../src/preferences/theme.js";
+import { terminalDisplayWidth } from "../../src/layout/width.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
 const baseProps = {
+  version: "1.2.0",
   workspacePath: "E:\\projects\\awesome",
   thread: { kind: "new" as const },
   model: "deepseek/deepseek-v4-flash",
@@ -59,16 +61,84 @@ describe("Welcome", () => {
     expect(narrow.lastFrame()).not.toContain("████");
   });
 
-  it("renders approved new-thread metadata without a tagline or version", () => {
+  it("renders approved Welcome C metadata without a tagline", () => {
     const view = render(<Welcome {...baseProps} width={80} />);
-    expect(view.lastFrame()).toContain("E:\\projects\\awesome · New thread");
+    expect(view.lastFrame()).toContain("Version      1.2.0");
+    expect(view.lastFrame()).toContain("Workspace    E:\\projects\\awesome");
+    expect(view.lastFrame()).toContain("Thread       New thread");
     expect(view.lastFrame()).toContain(
-      "deepseek/deepseek-v4-flash · Thinking off · Memory off · Permissions request approval",
+      "Model        deepseek/deepseek-v4-flash",
     );
+    expect(view.lastFrame()).toContain("Local memory Off");
+    expect(view.lastFrame()).toContain("Cloud memory Off");
+    expect(view.lastFrame()).toContain("Provider     Mem0 Cloud");
+    expect(view.lastFrame()).toContain("Permission   Request approval");
     expect(view.lastFrame()).toContain("/ commands · @ files · ! shell");
     expect(view.lastFrame()).not.toContain("feature/auth");
     expect(view.lastFrame()).not.toContain("Local-first coding agent");
-    expect(view.lastFrame()).not.toContain("0.1.0");
+    expect(view.lastFrame()).not.toContain("Local coding session ready");
+  });
+
+  it.each([
+    80, 100, 120,
+  ])("keeps the approved field order at %i columns", (width) => {
+    const frame =
+      render(<Welcome {...baseProps} width={width} />).lastFrame() ?? "";
+    const labels = [
+      "Version",
+      "Workspace",
+      "Thread",
+      "Model",
+      "Thinking",
+      "Local memory",
+      "Cloud memory",
+      "Provider",
+      "Permission",
+    ];
+    for (let index = 1; index < labels.length; index += 1) {
+      expect(frame.indexOf(labels[index - 1] ?? "")).toBeLessThan(
+        frame.indexOf(labels[index] ?? ""),
+      );
+    }
+    for (const row of FULL_LOGO_ROWS) expect(frame).toContain(row);
+  });
+
+  it("gives the Logo two thirds of a wide Welcome", () => {
+    const frame100 =
+      render(<Welcome {...baseProps} width={100} />).lastFrame() ?? "";
+    const frame120 =
+      render(<Welcome {...baseProps} width={120} />).lastFrame() ?? "";
+    const frame99 =
+      render(<Welcome {...baseProps} width={99} />).lastFrame() ?? "";
+    const top100 = frame100.split("\n")[0] ?? "";
+    const top120 = frame120.split("\n")[0] ?? "";
+    const top99 = frame99.split("\n")[0] ?? "";
+    expect(top100.indexOf("╮") + 1).toBe(66);
+    expect(top120.indexOf("╮") + 1).toBe(80);
+    expect(terminalDisplayWidth(top100)).toBe(100);
+    expect(terminalDisplayWidth(top99)).toBe(99);
+    expect(top99.match(/╭/gu)).toHaveLength(1);
+  });
+
+  it.each([
+    100, 120,
+  ])("centers one fixed-width Logo container at %i columns", (width) => {
+    const frame =
+      render(<Welcome {...baseProps} width={width} />).lastFrame() ?? "";
+    const lines = FULL_LOGO_ROWS.map((row) =>
+      frame.split("\n").find((candidate) => candidate.includes(row)),
+    );
+    expect(lines.every((line) => line !== undefined)).toBe(true);
+    const starts = lines.map((line, index) =>
+      (line ?? "").indexOf(FULL_LOGO_ROWS[index] ?? ""),
+    );
+    expect(new Set(starts).size).toBe(1);
+    const logoWidth = Math.max(...FULL_LOGO_ROWS.map(terminalDisplayWidth));
+    const panelWidth = Math.floor((width * 2) / 3);
+    const wrapperStart = starts[0] ?? 0;
+    const leftPadding = wrapperStart - 1;
+    const rightPadding = panelWidth - 1 - (wrapperStart + logoWidth);
+    expect(Math.abs(leftPadding - rightPadding)).toBeLessThanOrEqual(1);
   });
 
   it("renders resumed, non-Git, and Kimi metadata", () => {
@@ -83,20 +153,18 @@ describe("Welcome", () => {
         mem0Enabled
       />,
     );
-    expect(view.lastFrame()).toContain(
-      "E:\\projects\\awesome · Resumed · Fix auth",
-    );
+    expect(view.lastFrame()).toContain("Thread       Resumed · Fix auth");
     expect(view.lastFrame()).not.toContain("feature/auth");
-    expect(view.lastFrame()).toContain(
-      "kimi/kimi-k2.6 · Thinking on · Memory local + Mem0 · Permissions request approval",
-    );
+    expect(view.lastFrame()).toContain("Thinking     On");
+    expect(view.lastFrame()).toContain("Local memory On");
+    expect(view.lastFrame()).toContain("Cloud memory On");
   });
 
   it("shows full access as an explicit welcome mode", () => {
     const view = render(
       <Welcome {...baseProps} width={80} permissionMode="full_access" />,
     );
-    expect(view.lastFrame()).toContain("Permissions full access");
+    expect(view.lastFrame()).toContain("Permission   Full access");
   });
 
   it("renders the same glyph without color support", () => {
@@ -110,7 +178,7 @@ describe("Welcome", () => {
     for (const row of FULL_LOGO_ROWS) expect(view.lastFrame()).toContain(row);
   });
 
-  it("integrates the Welcome into static scrollback above the composer", () => {
+  it("integrates the Welcome into the natural flow above the composer", () => {
     const { width: _width, ...welcome } = { ...baseProps, width: 60 };
     const view = render(
       <App

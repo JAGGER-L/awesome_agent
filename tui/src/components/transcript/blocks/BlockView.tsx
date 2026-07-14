@@ -2,30 +2,38 @@ import { Box, Text } from "ink";
 
 import { MarkdownBlock } from "../../../markdown/MarkdownBlock.js";
 import type { TranscriptBlock } from "../../../transcript/model.js";
+import { ActivityLine } from "../../activity/ActivityLine.js";
+import { CommandResultView } from "../../CommandResultView.js";
 import { useTheme } from "../../theme.js";
+import { ChangeSummary } from "../ChangeSummary.js";
+import { ToolSequence } from "../ToolSequence.js";
+import { Worked } from "../Worked.js";
+import { UserLine } from "../UserLine.js";
 
 export function BlockView({
   block,
   width,
-  toolDetailsExpanded = false,
+  detailsExpanded = false,
+  activityShimmer = false,
 }: {
   block: TranscriptBlock;
   width: number;
-  toolDetailsExpanded?: boolean;
+  detailsExpanded?: boolean;
+  activityShimmer?: boolean;
 }) {
   const theme = useTheme();
   switch (block.kind) {
     case "user":
       return (
-        <Box flexDirection="column">
-          <Text color={theme.user}>❯ {block.text}</Text>
-          {block.status === "failed" ? (
-            <Text color={theme.danger}>
-              Failed · {block.error_message ?? "Turn was not accepted."}
-            </Text>
-          ) : null}
-        </Box>
+        <UserLine
+          text={block.text}
+          {...(block.status === "failed"
+            ? { failure: block.error_message ?? "Turn was not accepted." }
+            : {})}
+        />
       );
+    case "command_input":
+      return <UserLine text={block.text} />;
     case "assistant":
       return (
         <Box width={width}>
@@ -39,79 +47,82 @@ export function BlockView({
       return <Text color={theme.secondary}>$ {block.command}</Text>;
     case "tools":
       return (
-        <Box flexDirection="column">
-          {block.items.map((item) => (
-            <Box key={item.call_id} flexDirection="column">
-              <Text
-                color={item.outcome === "error" ? theme.danger : theme.tool}
-              >
-                ● {item.verb}
-                {item.target ? ` ${item.target}` : ""}
-              </Text>
-              <Text
-                color={item.outcome === "error" ? theme.danger : theme.muted}
-              >
-                {"  └ "}
-                {item.outcome === "running"
-                  ? item.summary
-                  : `${item.presentation_outcome ?? presentationOutcome(item.outcome)} · ${item.summary}`}
-                {width >= 60 && item.duration_ms !== undefined
-                  ? ` · ${item.duration_ms}ms`
-                  : ""}
-                {item.outcome === "error" && item.error_code
-                  ? ` · ${item.error_code}`
-                  : ""}
-              </Text>
-              {toolDetailsExpanded && item.detail ? (
-                <Text color={theme.muted}>
-                  {"    "}
-                  {item.detail}
-                </Text>
-              ) : null}
-            </Box>
-          ))}
-        </Box>
+        <ToolSequence
+          items={block.items}
+          width={width}
+          expanded={detailsExpanded}
+          activityShimmer={activityShimmer}
+        />
       );
     case "change":
       return (
-        <Text color={theme.secondary}>
-          Changed {block.paths.join(", ")} · {block.reversibility}
-        </Text>
+        <ChangeSummary
+          changes={block.changes}
+          expanded={detailsExpanded}
+          width={width}
+        />
       );
-    case "reasoning_marker":
-      return <Text dimColor>{block.label}</Text>;
+    case "thinking":
+      if (block.duration_ms === undefined)
+        return (
+          <Box flexDirection="column">
+            <ActivityLine
+              state="active"
+              marker="✦"
+              text="Thinking for"
+              {...(block.started_at === undefined
+                ? {}
+                : { startedAt: block.started_at })}
+              shimmer={activityShimmer}
+            />
+            {block.text ? <Text color={theme.muted}>{block.text}</Text> : null}
+          </Box>
+        );
+      return (
+        <Box flexDirection="column">
+          <ActivityLine
+            state="completed"
+            marker="◆"
+            text="Thought for"
+            durationMs={block.duration_ms}
+            shimmer={false}
+            hint={detailsExpanded ? "Ctrl+O to collapse" : "Ctrl+O to expand"}
+          />
+          {detailsExpanded ? (
+            <Text color={theme.muted}>{block.text}</Text>
+          ) : null}
+        </Box>
+      );
+    case "worked":
+      return <Worked durationMs={block.duration_ms} />;
     case "warning":
-      return <Text color={theme.warning}>Warning · {block.message}</Text>;
+      if (block.count === 1)
+        return <Text color={theme.warning}>Warning · {block.message}</Text>;
+      return (
+        <Box flexDirection="column">
+          <Text color={theme.warning}>
+            × {block.count} UI diagnostic · Ctrl+O to expand
+          </Text>
+          {detailsExpanded ? (
+            <Text color={theme.muted}>
+              {block.code} · {block.message}
+            </Text>
+          ) : null}
+        </Box>
+      );
     case "status":
       return <Text color={theme.muted}>{block.message}</Text>;
     case "command_result":
       return (
-        <Box flexDirection="column">
-          <Text
-            color={
-              block.tone === "error"
-                ? theme.danger
-                : block.tone === "warning"
-                  ? theme.warning
-                  : theme.muted
-            }
-          >
-            /{block.command}
-          </Text>
-          <Text>{block.content}</Text>
-        </Box>
+        <CommandResultView
+          presentation={block.presentation}
+          width={width}
+          detailsExpanded={detailsExpanded}
+        />
       );
     case "error":
       return <Text color={theme.danger}>Error · {block.message}</Text>;
     case "omitted_history":
       return <Text dimColor>{block.message}</Text>;
   }
-}
-
-function presentationOutcome(
-  outcome: "success" | "error" | "cancelled",
-): string {
-  if (outcome === "success") return "Completed";
-  if (outcome === "error") return "Failed";
-  return "Cancelled";
 }

@@ -1,63 +1,88 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CoreSpawnError } from "../../src/core/errors.js";
-import { runCli, type CliDependencies } from "../../src/cli/main.js";
+import {
+  clearCurrentInkFrame,
+  executeFatalRecoverySelection,
+  reconnectAndReplaceSurface,
+  runCli,
+  type CliDependencies,
+} from "../../src/cli/main.js";
 import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
+import { StartupProductError } from "../../src/surface/startup.js";
+
+type ReadyApplication = Extract<
+  StartupResult,
+  { readonly kind: "ready" }
+>["application"];
+
+const readyApplication: ReadyApplication = {
+  initialized: true,
+  session_id: "session_1",
+  workspace_key: "workspace_1",
+  workspace: { display_path: "E:\\workspace" },
+  workspace_trusted: true,
+  model_identity: {
+    provider: "deepseek",
+    configured_model: "deepseek/deepseek-v4-flash",
+    effective_model: "deepseek/deepseek-v4-flash",
+    runtime_name: "Awesome Agent",
+    fallback_active: false,
+  },
+  thinking_enabled: false,
+  skill_mode: "auto",
+  permission_mode: "request_approval",
+  configuration_valid: true,
+  secret_status: {
+    deepseek_api_key: true,
+    moonshot_api_key: true,
+    mem0_api_key: false,
+  },
+  provider_credentials: {
+    deepseek: {
+      provider: "deepseek",
+      environment_variable: "DEEPSEEK_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+    kimi: {
+      provider: "kimi",
+      environment_variable: "MOONSHOT_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+    mem0: {
+      provider: "mem0",
+      environment_variable: "MEM0_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+  },
+  memory_status: {},
+  mcp_status: [],
+  usage: {},
+  configuration_diagnostics: [],
+};
 
 const ready: StartupResult = {
   kind: "ready",
   readiness: "agent_ready",
-  application: {
-    initialized: true,
-    session_id: "session_1",
-    workspace_key: "workspace_1",
-    workspace: { display_path: "E:\\workspace" },
-    workspace_trusted: true,
-    model_identity: {
-      provider: "deepseek",
-      configured_model: "deepseek/deepseek-v4-flash",
-      effective_model: "deepseek/deepseek-v4-flash",
-      runtime_name: "Awesome Agent",
-      fallback_active: false,
-    },
-    thinking_enabled: false,
-    skill_mode: "auto",
-    permission_mode: "request_approval",
-    configuration_valid: true,
-    secret_status: {
-      deepseek_api_key: true,
-      moonshot_api_key: true,
-      mem0_api_key: false,
-    },
-    provider_credentials: {
-      deepseek: {
-        provider: "deepseek",
-        environment_variable: "DEEPSEEK_API_KEY",
-        source: "missing",
-        mutable: true,
-      },
-      kimi: {
-        provider: "kimi",
-        environment_variable: "MOONSHOT_API_KEY",
-        source: "missing",
-        mutable: true,
-      },
-    },
-    memory_status: {},
-    mcp_status: [],
-    usage: {},
-    configuration_diagnostics: [],
-  },
+  application: readyApplication,
   thread: {
     kind: "ready",
+    application: readyApplication,
     thread: {
       view: {
         thread: {
           id: "thread_1",
           workspace_key: "workspace_1",
           title: "New thread",
+          title_source: "automatic",
           current_model: "deepseek/deepseek-v4-flash",
           thinking_enabled: false,
           skill_mode: "auto",
@@ -102,13 +127,20 @@ function harness(overrides: Partial<CliDependencies> = {}) {
 }
 
 describe("runCli", () => {
+  it("clears only the current Ink frame through the render host", () => {
+    const clear = vi.fn();
+
+    clearCurrentInkFrame({ clear });
+
+    expect(clear).toHaveBeenCalledOnce();
+  });
   it.each([
     ["--version"],
     ["-V"],
   ])("prints only the product version for %s without starting Core", async (flag) => {
     const value = harness({ argv: [flag] });
     await expect(runCli(value.dependencies)).resolves.toBe(0);
-    expect(value.stdout.join("")).toBe("1.1.1\n");
+    expect(value.stdout.join("")).toBe("1.2.0\n");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 
@@ -261,5 +293,111 @@ describe("runCli", () => {
     expect(value.stderr.join("")).not.toContain(
       "The terminal interface failed unexpectedly.",
     );
+  });
+
+  it("renders incompatible state through its dedicated startup fatal state", async () => {
+    const renderApplication = vi.fn(
+      async () => ({ kind: "fatal", exitCode: 1 }) as const,
+    );
+    const value = harness({
+      startApplication: vi.fn(async () => {
+        throw new StartupProductError({
+          code: "state_schema_incompatible",
+          message: "Awesome state is incompatible with this version.",
+          retryable: false,
+          data: {
+            found_schema: 1,
+            expected_schema: 2,
+            state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+          },
+        });
+      }),
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: {
+          kind: "fatal",
+          fatal: {
+            kind: "state_schema_incompatible",
+            foundSchema: 1,
+            expectedSchema: 2,
+            stateDirectory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+          },
+        },
+      }),
+    );
+  });
+});
+
+describe("fatal recovery selection", () => {
+  it("runs Reconnect for the first recovery option", async () => {
+    const reconnect = vi.fn(async () => undefined);
+    const quit = vi.fn(async () => undefined);
+
+    await executeFatalRecoverySelection(0, { reconnect, quit });
+
+    expect(reconnect).toHaveBeenCalledOnce();
+    expect(quit).not.toHaveBeenCalled();
+  });
+
+  it("closes the stale Surface before replacing its subscriptions", async () => {
+    const close = vi.fn(async () => undefined);
+    const connected = {} as ConnectedSurface;
+    const reconnect = vi.fn(async () => connected);
+    const replace = vi.fn();
+
+    await expect(
+      reconnectAndReplaceSurface(
+        { close },
+        { reconnect },
+        { cwd: "E:\\workspace", threadId: "thread_1" },
+        replace,
+      ),
+    ).resolves.toBe(connected);
+
+    expect(reconnect).toHaveBeenCalledWith({
+      cwd: "E:\\workspace",
+      threadId: "thread_1",
+    });
+    expect(close).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith(connected);
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(
+      replace.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("closes the recovered Surface and preserves the current one when cleanup fails", async () => {
+    const cleanupError = new Error("stale surface cleanup failed");
+    const closeCurrent = vi.fn(async () => {
+      throw cleanupError;
+    });
+    const closeRecovered = vi.fn(async () => undefined);
+    const connected = { close: closeRecovered } as unknown as ConnectedSurface;
+    const replace = vi.fn();
+
+    await expect(
+      reconnectAndReplaceSurface(
+        { close: closeCurrent },
+        { reconnect: async () => connected },
+        { cwd: "E:\\workspace", threadId: "thread_1" },
+        replace,
+      ),
+    ).rejects.toBe(cleanupError);
+
+    expect(closeRecovered).toHaveBeenCalledOnce();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it("runs Quit for the second recovery option", async () => {
+    const reconnect = vi.fn(async () => undefined);
+    const quit = vi.fn(async () => undefined);
+
+    await executeFatalRecoverySelection(1, { reconnect, quit });
+
+    expect(quit).toHaveBeenCalledOnce();
+    expect(reconnect).not.toHaveBeenCalled();
   });
 });

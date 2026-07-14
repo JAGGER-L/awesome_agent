@@ -24,12 +24,14 @@ from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
+    ToolRequest,
 )
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
 from awesome_agent.core.tools.permissions import PermissionMode, PermissionSession
+from awesome_agent.core.tools.process import ProcessResult
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.modeling import (
@@ -78,6 +80,28 @@ class BlockingGateway:
             yield _completed("unreachable")
 
 
+class SuccessfulProcessRunner:
+    async def run(
+        self,
+        *,
+        argv: list[str],
+        cwd: Path,
+        environment: dict[str, str],
+        timeout_seconds: float,
+        max_output_chars: int,
+    ) -> ProcessResult:
+        del argv, cwd, environment, timeout_seconds, max_output_chars
+        return ProcessResult(
+            exit_code=0,
+            stdout="1 passed",
+            stderr="",
+            timed_out=False,
+            stdout_truncated=False,
+            stderr_truncated=False,
+            duration_ms=1.0,
+        )
+
+
 def _completed(
     content: str,
     tool_calls: tuple[ToolCall, ...] = (),
@@ -111,6 +135,11 @@ def _completed(
             },
             "success",
         ),
+        (
+            "execute",
+            {"command": "python -m pytest tests/test_area.py"},
+            "success",
+        ),
         ("read_file", {"path": "missing.txt"}, "error"),
     ],
 )
@@ -135,7 +164,7 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
     )
     registry = ToolRegistry()
     register_read_tools(registry)
-    register_modifying_tools(registry, journal)
+    register_modifying_tools(registry, journal, SuccessfulProcessRunner())
     executor = ToolExecutor(registry)
     scripts = (
         ((_completed("done"),),)
@@ -184,15 +213,24 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
             async def context_builder(state: object) -> PreparedAgentContext:
                 del state
                 return PreparedAgentContext(
-                    messages=(UserMessage(content="inspect"),),
+                    messages=(
+                        UserMessage(
+                            content=(
+                                "validate with tests"
+                                if tool_name == "execute"
+                                else "inspect"
+                            )
+                        ),
+                    ),
                     manifest=({"kind": "temporary_thread_history", "count": 1},),
                 )
 
-            return AgentRuntimeContext(
-                gateway=cast(Any, gateway),
-                executor=executor,
-                tool_catalog=registry.specifications,
-                tool_context_factory=lambda state: ToolExecutionContext(
+            def tool_context_factory(
+                state: object,
+                request: ToolRequest,
+            ) -> ToolExecutionContext:
+                del state, request
+                return ToolExecutionContext(
                     workspace=workspace,
                     thread_id=turn.thread_id,
                     operation_id=operation_id,
@@ -205,7 +243,13 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                     permission_session=PermissionSession(
                         mode=PermissionMode.FULL_ACCESS
                     ),
-                ),
+                )
+
+            return AgentRuntimeContext(
+                gateway=cast(Any, gateway),
+                executor=executor,
+                tool_catalog=registry.specifications,
+                tool_context_factory=tool_context_factory,
                 event_projector=projector,
                 context_builder=context_builder,
                 budget=TurnBudget(),
@@ -232,7 +276,9 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
         )
 
         accepted = await coordinator.submit_turn(
-            thread.id, "inspect", client_message_id="client_inspect"
+            thread.id,
+            "validate with tests" if tool_name == "execute" else "inspect",
+            client_message_id="client_inspect",
         )
         await coordinator.wait(accepted.operation_id)
 
@@ -256,10 +302,17 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
         assert [activity.tool_name for activity in view.tool_activities] == [
             "write_file"
         ]
+        assert len(gateway.requests) == 2
+    if tool_name == "execute":
+        assert [activity.tool_name for activity in view.tool_activities] == ["execute"]
+        assert gateway.requests[0].messages[-1].content == "validate with tests"
     if expected_status == "error":
         observation = gateway.requests[1].messages[-1]
         assert observation.role == "tool"
         assert observation.is_error is True
+        assert [activity.tool_name for activity in view.tool_activities] == [
+            "read_file"
+        ]
 
 
 @pytest.mark.asyncio
@@ -296,11 +349,18 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
                     manifest=({"kind": "temporary_thread_history"},),
                 )
 
+            def tool_context_factory(
+                state: object,
+                request: ToolRequest,
+            ) -> ToolExecutionContext:
+                del state, request
+                return cast(ToolExecutionContext, None)
+
             return AgentRuntimeContext(
                 gateway=cast(Any, BlockingGateway()),
                 executor=executor,
                 tool_catalog=registry.specifications,
-                tool_context_factory=lambda state: cast(Any, None),
+                tool_context_factory=tool_context_factory,
                 event_projector=projector,
                 context_builder=context_builder,
                 budget=TurnBudget(),

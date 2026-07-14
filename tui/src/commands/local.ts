@@ -2,7 +2,7 @@ import type { ClipboardAdapter } from "../adapters/clipboard.js";
 import type { PickerSelection } from "../interaction/model.js";
 import type { MethodValue } from "../protocol/methods.js";
 import type { ThemePreference } from "../preferences/theme.js";
-import { COMMAND_CATALOG, findCommand } from "./catalog.js";
+import { helpForCommand, helpOverview, type HelpResult } from "./help.js";
 import type { LocalCommandIntent } from "./parser.js";
 
 export interface LocalCommandDependencies {
@@ -14,6 +14,7 @@ export interface LocalCommandDependencies {
 }
 
 export type LocalCommandResult =
+  | HelpResult
   | {
       readonly kind: "result";
       readonly command: string;
@@ -48,12 +49,7 @@ export class LocalCommandService {
 
   #help(arguments_: readonly string[]): LocalCommandResult {
     if (arguments_.length === 0) {
-      return {
-        kind: "result",
-        command: "help",
-        tone: "info",
-        content: helpOverview(),
-      };
+      return helpOverview();
     }
     if (arguments_.length !== 1) {
       return {
@@ -64,14 +60,9 @@ export class LocalCommandService {
       };
     }
     const command = arguments_[0]?.replace(/^\//u, "") ?? "";
-    const metadata = findCommand(command);
-    return metadata
-      ? {
-          kind: "result",
-          command: "help",
-          tone: "info",
-          content: `${metadata.usage}\n${metadata.description}\nOwner: ${metadata.owner}`,
-        }
+    const help = helpForCommand(command);
+    return help
+      ? help
       : {
           kind: "result",
           command: "help",
@@ -152,13 +143,6 @@ export class LocalCommandService {
       };
     }
   }
-}
-
-function helpOverview(): string {
-  const names = COMMAND_CATALOG.map((command) => `/${command.name}`).join(
-    " · ",
-  );
-  return `Commands\n${names}`;
 }
 
 export function latestAssistantAnswer(

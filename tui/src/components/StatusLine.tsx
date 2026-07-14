@@ -22,11 +22,10 @@ export function StatusLine({
       </Text>
     );
   }
-  const operation = state.active_operation?.status ?? "idle";
+  const fullAccess = state.application?.permission_mode === "full_access";
   return (
-    <Text color={theme.muted}>
-      {state.connection} · {operation} ·{" "}
-      {state.application?.permission_mode ?? "request_approval"}
+    <Text bold color={fullAccess ? theme.warning : theme.secondary}>
+      {fullAccess ? "◆ Full access" : "◇ Request approval"}
     </Text>
   );
 }

@@ -21,7 +21,6 @@ export const eventTypes = [
   "context.prepared",
   "context.compressed",
   "usage.updated",
-  "workspace.changed",
   "memory.status",
   "interaction.required",
   "interaction.resolved",
@@ -89,6 +88,10 @@ function toolResultPayload<
     detail: boundedText(0, 4_000)
       .nullish()
       .transform((value) => value ?? undefined),
+    detail_truncated_count: safeIntegerSchema
+      .min(0)
+      .nullish()
+      .transform((value) => value ?? undefined),
     duration_ms: boundedInteger,
     error_code: nullableErrorCode,
   });
@@ -149,12 +152,6 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
     reasoning_tokens: boundedInteger,
     cache_read_tokens: boundedInteger,
     cache_write_tokens: boundedInteger,
-  }),
-  z.strictObject({
-    kind: z.literal("workspace.changed"),
-    change_set_id: boundedText(1, 128),
-    paths: z.array(z.string()).max(1_000),
-    reversibility: z.enum(["full", "partial", "none"]),
   }),
   z.strictObject({
     kind: z.literal("memory.status"),

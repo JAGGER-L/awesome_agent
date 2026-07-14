@@ -19,7 +19,6 @@ from awesome_agent.application.contracts import (
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import ApplicationFacade, LocalApplication
-from awesome_agent.application.headless import StartupResult, StartupStatus
 from awesome_agent.application.interactions import InteractionDecision
 
 __all__ = [
@@ -37,8 +36,6 @@ __all__ = [
     "ProductError",
     "ProductErrorCode",
     "ShutdownResult",
-    "StartupResult",
-    "StartupStatus",
     "StatusSnapshot",
     "ThreadListQuery",
     "ThreadListResult",

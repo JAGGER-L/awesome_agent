@@ -20,7 +20,7 @@ confirmation. `/permissions` exposes two Thread-scoped modes:
   shell commands, and unknown extension capabilities ask first.
 - **Full access** allows ordinary workspace edits, deletes, and shell commands
   for the current Thread after a warning confirmation. `/new` and process exit
-  reset it.
+  reset it; `/resume` also starts the selected Thread in Request approval.
 
 An edit approval offers Yes, Yes for all edits during this session, and No.
 The session edit grant covers later ordinary writes only. Shell commands and
@@ -56,11 +56,16 @@ are denied in both permission modes. File tools never accept an absolute path
 or workspace escape. There is no Docker sandbox today; a future Docker
 execution backend is deferred until real demand.
 
-Tool activity is rendered in the order it happens: locally measured Thinking,
-the tool operation, its bounded result and duration, the next Thinking period,
-and the final answer. Ctrl+O expands or folds bounded tool details. Markdown is
-rendered for completed answers; streaming output uses a stable partial renderer
-and is finalized once at completion.
+Tool activity keeps its event order. All Tool calls between two assistant
+segments form one sequence, even when Thinking occurs between calls. The whole
+sequence folds to one row; Ctrl+O reveals each Tool's target, bounded result,
+duration, and known omitted-entry count. Current-session details are not
+durable history, so resumed Threads show stored Tool summaries only.
+
+Completed answers render Markdown tables and readable inline or block formulas
+such as `S = πr²`. Streaming output holds incomplete structural blocks until
+they can render stably. Advanced LaTeX that cannot be represented faithfully in
+a terminal remains visible as source text rather than disappearing.
 
 ## Change Journal
 

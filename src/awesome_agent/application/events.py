@@ -143,6 +143,7 @@ class ApplicationEventProjector:
                     outcome=presentation.outcome or "Completed",
                     summary=presentation.summary,
                     detail=presentation.detail,
+                    detail_truncated_count=presentation.detail_truncated_count,
                     duration_ms=presentation.duration_ms,
                 )
             )
@@ -158,6 +159,7 @@ class ApplicationEventProjector:
                 outcome=presentation.outcome or "Failed",
                 summary=presentation.summary,
                 detail=presentation.detail,
+                detail_truncated_count=presentation.detail_truncated_count,
                 duration_ms=presentation.duration_ms,
                 error_code=result.error.code.value,
             )

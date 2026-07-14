@@ -7,6 +7,7 @@ from awesome_agent.conversation.models import (
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
+    ThreadTitleSource,
     ThreadView,
     ToolActivity,
     ToolActivityOrigin,
@@ -31,6 +32,11 @@ from awesome_agent.conversation.repository import (
     require_turn_transition,
 )
 from awesome_agent.conversation.service import ConversationService
+from awesome_agent.conversation.titles import (
+    automatic_title,
+    normalize_title,
+    visible_graphemes,
+)
 
 __all__ = [
     "ConversationConflict",
@@ -48,6 +54,7 @@ __all__ = [
     "ThreadRepository",
     "ThreadSummary",
     "ThreadSummaryRepository",
+    "ThreadTitleSource",
     "ThreadView",
     "ToolActivity",
     "ToolActivityOrigin",
@@ -59,5 +66,8 @@ __all__ = [
     "TurnRepository",
     "TurnStatus",
     "UsageSummary",
+    "automatic_title",
+    "normalize_title",
     "require_turn_transition",
+    "visible_graphemes",
 ]

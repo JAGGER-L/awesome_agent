@@ -84,16 +84,14 @@ export class ReconnectController {
       };
       const durable = hydrateThreadPage(result.thread.thread).blocks;
       surface.store.dispatch({
-        type: "transcript.reconciled",
-        generation: surface.store.getState().thread_generation,
-        result: {
-          persisted: true,
-          blocks: mergeTranscriptBlocks(
-            this.dependencies.committedBlocks(),
-            [reconnected],
-            durable,
-          ),
-        },
+        type: "thread.replaced",
+        application: result.application,
+        thread: result.thread.thread,
+        transcript: mergeTranscriptBlocks(
+          this.dependencies.committedBlocks(),
+          [reconnected],
+          durable,
+        ),
       });
       return surface;
     } catch (error) {

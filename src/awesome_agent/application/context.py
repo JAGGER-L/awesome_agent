@@ -5,19 +5,24 @@ from dataclasses import dataclass
 from math import floor
 from typing import Literal, cast
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import TypeAdapter
 
 from awesome_agent.agent import AgentCompressionResult, AgentState, PreparedAgentContext
-from awesome_agent.application.commands import (
-    CommandIntent,
-    CommandResult,
-    CommandStatus,
+from awesome_agent.application.command_results import (
+    CommandOutcome,
+    CompactCommandPayload,
+    ContextCategory,
+    ContextCommandPayload,
+    error,
+    result,
 )
+from awesome_agent.application.commands import CommandIntent
 from awesome_agent.context import (
     CompressionRequest,
     CompressionResult,
     CompressionStatus,
     ContextBuilder,
+    ContextManifestItem,
     ContextRequest,
     ContextSource,
     ContextSourceKind,
@@ -38,6 +43,7 @@ from awesome_agent.conversation import (
     Turn,
     TurnStatus,
 )
+from awesome_agent.conversation.models import UsageSummary
 from awesome_agent.core.workspace import WorkspaceIdentity
 from awesome_agent.extensions.skills import SkillLoader
 from awesome_agent.memory import LocalMemoryService, MemoryScope
@@ -59,6 +65,20 @@ _FROZEN_KINDS = frozenset(
         ContextSourceKind.OPEN_TOOL_CHAIN,
     }
 )
+_CONTEXT_CATEGORY = {
+    ContextSourceKind.PRODUCT_INSTRUCTIONS: "instructions",
+    ContextSourceKind.WORKSPACE_INSTRUCTIONS: "instructions",
+    ContextSourceKind.SKILL: "instructions",
+    ContextSourceKind.THREAD_SUMMARY: "conversation",
+    ContextSourceKind.RECENT_TURNS: "conversation",
+    ContextSourceKind.DIRECT_COMMAND: "conversation",
+    ContextSourceKind.CURRENT_INPUT: "conversation",
+    ContextSourceKind.OPEN_TOOL_CHAIN: "conversation",
+    ContextSourceKind.EXPLICIT_PATH: "files",
+    ContextSourceKind.USER_MEMORY: "memory",
+    ContextSourceKind.WORKSPACE_MEMORY: "memory",
+    ContextSourceKind.MEM0: "memory",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,7 +162,11 @@ class ApplicationContextService:
             )
         ]
         if self._model_identity is not None:
-            sources.append(model_identity_context_source(self._model_identity(turn)))
+            sources.append(
+                model_identity_context_source(
+                    self._model_identity(turn),
+                )
+            )
         if self._workspace_instructions:
             sources.append(
                 ContextSource(
@@ -314,9 +338,9 @@ class ApplicationContextService:
 
     def inspect(self, thread_id: str) -> dict[str, object]:
         view = self._conversation.read_thread(thread_id)
-        latest = view.turns[-1] if view.turns else None
+        manifest = self._conversation.latest_context_manifest(thread_id)
         return {
-            "manifest": list(latest.context_manifest) if latest else [],
+            "manifest": list(manifest),
             "summary_covered_entry_sequence": (
                 view.summary.covered_entry_sequence if view.summary else 0
             ),
@@ -330,16 +354,29 @@ class ApplicationContextService:
         intent: CommandIntent,
         *,
         thread_id: str,
-    ) -> CommandResult:
+    ) -> CommandOutcome:
         if intent.arguments:
-            return CommandResult(
-                status=CommandStatus.ERROR,
-                content="Usage: /context",
-                data={"error_code": "invalid_arguments"},
+            return error("invalid_arguments", "Usage: /context")
+        manifest = self._conversation.latest_context_manifest(thread_id)
+        totals = {
+            name: 0 for name in ("instructions", "conversation", "files", "memory")
+        }
+        for raw in manifest:
+            item = ContextManifestItem.model_validate(raw)
+            totals[_CONTEXT_CATEGORY[item.kind]] += item.estimated_tokens
+        category_names: tuple[
+            Literal["instructions", "conversation", "files", "memory"], ...
+        ] = ("instructions", "conversation", "files", "memory")
+        categories = tuple(
+            ContextCategory(name=name, estimated_tokens=totals[name])
+            for name in category_names
+        )
+        return result(
+            ContextCommandPayload(
+                categories=categories,
+                total_tokens=sum(item.estimated_tokens for item in categories),
+                budget_tokens=self._configured_total_tokens,
             )
-        return CommandResult(
-            status=CommandStatus.SUCCESS,
-            data=cast(dict[str, JsonValue], self.inspect(thread_id)),
         )
 
     async def compact_command(
@@ -349,40 +386,35 @@ class ApplicationContextService:
         thread_id: str,
         provider: str,
         model: str,
-    ) -> CommandResult:
+    ) -> CommandOutcome:
         if intent.arguments:
-            return CommandResult(
-                status=CommandStatus.ERROR,
-                content="Usage: /compact",
-                data={"error_code": "invalid_arguments"},
-            )
+            return error("invalid_arguments", "Usage: /compact")
         before = self._conversation.read_thread(thread_id).summary
-        result = await self.compact_thread(
+        compression = await self.compact_thread(
             thread_id,
             provider=provider,
             model=model,
         )
-        if result.status is CompressionStatus.FAILED:
-            return CommandResult(
-                status=CommandStatus.ERROR,
-                content="Context compression failed.",
-                data={"error_code": result.error_code or "compression_failed"},
+        if compression.status is CompressionStatus.FAILED:
+            return error(
+                compression.error_code or "compression_failed",
+                "Context compression failed.",
             )
         after = self._conversation.read_thread(thread_id).summary
-        return CommandResult(
-            status=CommandStatus.SUCCESS,
-            data={
-                "old_covered_entry_sequence": (
+        return result(
+            CompactCommandPayload(
+                old_covered_entry_sequence=(
                     before.covered_entry_sequence if before else 0
                 ),
-                "new_covered_entry_sequence": (
+                new_covered_entry_sequence=(
                     after.covered_entry_sequence if after else 0
                 ),
-                "usage": cast(
-                    JsonValue,
-                    result.usage.model_dump(mode="json"),
+                usage=UsageSummary(
+                    **compression.usage.model_dump(mode="python"),
+                    model_calls=1,
+                    compressions=1,
                 ),
-            },
+            )
         )
 
 

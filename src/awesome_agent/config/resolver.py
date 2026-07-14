@@ -194,7 +194,7 @@ def _select_thinking(
         return normalized == "on"
     if thread.thinking_enabled is not None:
         return thread.thinking_enabled
-    return False
+    return True
 
 
 def _select_skill_mode(

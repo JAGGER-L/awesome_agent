@@ -19,6 +19,80 @@ const failure = (code) => ({
   ok: false,
   error: { code, message: `Safe ${code}.`, retryable: false, data: {} },
 });
+const applicationState = (threadId) => ({
+  initialized: true,
+  session_id: "session_fake",
+  workspace_key: "workspace_fake",
+  workspace: { display_path: process.cwd(), branch: "fake" },
+  workspace_trusted: mode !== "trust-required",
+  ...(threadId ? { current_thread_id: threadId } : {}),
+  model_identity: {
+    provider: "deepseek",
+    configured_model: "deepseek/deepseek-v4-flash",
+    effective_model: "deepseek/deepseek-v4-flash",
+    runtime_name: "Awesome Agent",
+    fallback_active: false,
+  },
+  thinking_enabled: false,
+  skill_mode: "auto",
+  permission_mode: "request_approval",
+  configuration_valid: true,
+  secret_status: {
+    deepseek_api_key: true,
+    moonshot_api_key: false,
+    mem0_api_key: false,
+  },
+  provider_credentials: {
+    deepseek: {
+      provider: "deepseek",
+      environment_variable: "DEEPSEEK_API_KEY",
+      environment_configured: true,
+      awesome_configured: false,
+      selected_source: "environment",
+    },
+    kimi: {
+      provider: "kimi",
+      environment_variable: "MOONSHOT_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+    mem0: {
+      provider: "mem0",
+      environment_variable: "MEM0_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: null,
+    },
+  },
+  memory_status: {},
+  mcp_status: [],
+  usage: {},
+  configuration_diagnostics: [],
+});
+const emptyThreadRead = (threadId) => {
+  const now = "2026-07-11T08:00:00Z";
+  return {
+    view: {
+      thread: {
+        id: threadId,
+        workspace_key: "workspace_fake",
+        title: "Fake Thread",
+        title_source: "automatic",
+        current_model: "deepseek/deepseek-v4-flash",
+        thinking_enabled: false,
+        skill_mode: "auto",
+        created_at: now,
+        updated_at: now,
+      },
+      entries: [],
+      turns: [],
+      tool_activities: [],
+    },
+    change_sets: [],
+    has_more: false,
+  };
+};
 const handleLine = (line) => {
   const request = JSON.parse(line);
   if (request.method === "initialize") {
@@ -55,7 +129,7 @@ const handleLine = (line) => {
       id: request.id,
       result: application({
         product_version: "0.1.0",
-        protocol_version: 1,
+        protocol_version: 2,
         status: mode === "trust-required" ? "trust_required" : "ready",
         session_id: "session_fake",
         ...(mode === "trust-required"
@@ -74,48 +148,7 @@ const handleLine = (line) => {
     output({
       jsonrpc: "2.0",
       id: request.id,
-      result: application({
-        initialized: true,
-        session_id: "session_fake",
-        workspace_key: "workspace_fake",
-        workspace: { display_path: process.cwd(), branch: "fake" },
-        workspace_trusted: mode !== "trust-required",
-        ...(thread ? { current_thread_id: thread } : {}),
-        model_identity: {
-          provider: "deepseek",
-          configured_model: "deepseek/deepseek-v4-flash",
-          effective_model: "deepseek/deepseek-v4-flash",
-          runtime_name: "Awesome Agent",
-          fallback_active: false,
-        },
-        thinking_enabled: false,
-        skill_mode: "auto",
-        permission_mode: "request_approval",
-        configuration_valid: true,
-        secret_status: {
-          deepseek_api_key: true,
-          moonshot_api_key: false,
-          mem0_api_key: false,
-        },
-        provider_credentials: {
-          deepseek: {
-            provider: "deepseek",
-            environment_variable: "DEEPSEEK_API_KEY",
-            source: "process_environment",
-            mutable: false,
-          },
-          kimi: {
-            provider: "kimi",
-            environment_variable: "MOONSHOT_API_KEY",
-            source: "missing",
-            mutable: true,
-          },
-        },
-        memory_status: {},
-        mcp_status: [],
-        usage: {},
-        configuration_diagnostics: [],
-      }),
+      result: application(applicationState(thread)),
     });
   } else if (request.method === "thread.read") {
     const now = "2026-07-11T08:00:00Z";
@@ -130,6 +163,7 @@ const handleLine = (line) => {
             id: request.params.thread_id,
             workspace_key: "workspace_fake",
             title: "Fake Thread",
+            title_source: "automatic",
             current_model: "deepseek/deepseek-v4-flash",
             thinking_enabled: false,
             skill_mode: "auto",
@@ -217,9 +251,15 @@ const handleLine = (line) => {
       jsonrpc: "2.0",
       id: request.id,
       result: application({
-        status: "success",
-        content: "",
-        data: { thread_id: threadId, title: "Fake Thread" },
+        kind: "result",
+        payload: {
+          kind: "thread_transition",
+          transition: {
+            reason: request.params.name === "new" ? "new" : "resume",
+            application: applicationState(threadId),
+            thread: emptyThreadRead(threadId),
+          },
+        },
       }),
     });
   } else if (request.method === "operation.cancel") {

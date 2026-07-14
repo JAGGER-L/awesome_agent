@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 
 from awesome_agent.config import BudgetConfig, TurnConfig
 from awesome_agent.conversation import (
@@ -11,6 +12,7 @@ from awesome_agent.conversation import (
     ConversationService,
     InvalidTurnTransition,
     ThreadEntryKind,
+    ThreadTitleSource,
     TurnBusy,
     TurnStatus,
     UsageSummary,
@@ -66,6 +68,8 @@ def test_create_list_and_read_threads_by_workspace(tmp_path: Path) -> None:
 
     assert {thread.id for thread in listed} == {first.id, second.id}
     assert second.title == "New conversation"
+    assert second.title_source is ThreadTitleSource.AUTOMATIC
+    assert second.thinking_enabled is True
     assert view.thread == first
     assert view.entries == ()
     assert view.turns == ()
@@ -96,6 +100,45 @@ def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -
     assert view.entries[0].content == "Inspect repository"
     assert view.entries[0].client_message_id == "client_1"
     assert view.turns == (turn,)
+
+
+def test_first_accepted_message_names_an_automatic_thread(tmp_path: Path) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1")
+
+    service.begin_turn(
+        thread.id,
+        "  calculate   cube  ",
+        _turn_config(),
+        client_message_id="client_first",
+    )
+
+    view = service.read_thread(thread.id)
+    assert view.thread.title == "calculate cube"
+    assert view.thread.title_source is ThreadTitleSource.AUTOMATIC
+    assert len(view.entries) == 1
+    assert len(view.turns) == 1
+
+
+def test_rename_thread_normalizes_and_persists_manual_provenance(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1")
+
+    renamed = service.rename_thread(thread.id, "  Cube   helper  ")
+
+    assert renamed.title == "Cube helper"
+    assert renamed.title_source is ThreadTitleSource.MANUAL
+    assert service.read_thread(thread.id).thread == renamed
+
+
+def test_rename_thread_rejects_more_than_100_visible_graphemes(tmp_path: Path) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1")
+
+    with pytest.raises(ValueError, match="100 characters or fewer"):
+        service.rename_thread(thread.id, "👩‍💻" * 101)
 
 
 def test_one_in_progress_turn_per_thread_but_other_threads_are_independent(
@@ -173,6 +216,121 @@ def test_failure_and_cancellation_are_idempotent_terminal_updates(
     assert repeated == result
     with pytest.raises(InvalidTurnTransition):
         service.complete_turn(turn.id, "late", UsageSummary(), "completed")
+
+
+def test_terminal_turns_persist_facts_and_derive_thread_totals(tmp_path: Path) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    completed = service.begin_turn(
+        thread.id, "complete", _turn_config(), client_message_id="client_complete"
+    )
+    complete_usage = UsageSummary(input_tokens=10, output_tokens=4, model_calls=1)
+    failed_usage = UsageSummary(input_tokens=6, tool_calls=2)
+    cancelled_usage = UsageSummary(input_tokens=3, active_execution_seconds=0.5)
+    complete_manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "history", "estimated_tokens": 10},
+    )
+    failed_manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "summary", "estimated_tokens": 6},
+    )
+    cancelled_manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "path", "estimated_tokens": 3},
+    )
+
+    service.complete_turn(
+        completed.id,
+        "done",
+        complete_usage,
+        "completed",
+        complete_manifest,
+    )
+    failed = service.begin_turn(
+        thread.id, "fail", _turn_config(), client_message_id="client_failed"
+    )
+    failed_result = service.fail_turn(
+        failed.id,
+        "model_failed",
+        usage=failed_usage,
+        context_manifest=failed_manifest,
+    )
+    cancelled = service.begin_turn(
+        thread.id, "cancel", _turn_config(), client_message_id="client_cancelled"
+    )
+    cancelled_result = service.cancel_turn(
+        cancelled.id,
+        usage=cancelled_usage,
+        context_manifest=cancelled_manifest,
+    )
+
+    assert failed_result.usage == failed_usage
+    assert failed_result.context_manifest == failed_manifest
+    assert cancelled_result.usage == cancelled_usage
+    assert cancelled_result.context_manifest == cancelled_manifest
+    assert service.thread_usage(thread.id) == (
+        complete_usage + failed_usage + cancelled_usage
+    )
+
+
+@pytest.mark.parametrize("terminal", [TurnStatus.FAILED, TurnStatus.CANCELLED])
+def test_terminal_fact_repetition_is_idempotent_and_conflicts_on_change(
+    tmp_path: Path,
+    terminal: TurnStatus,
+) -> None:
+    service = _service(tmp_path / f"{terminal}-facts.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    turn = service.begin_turn(
+        thread.id, "question", _turn_config(), client_message_id="client_1"
+    )
+    usage = UsageSummary(input_tokens=5, model_calls=1)
+    manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "history", "estimated_tokens": 5},
+    )
+
+    if terminal is TurnStatus.FAILED:
+        result = service.fail_turn(
+            turn.id, "model_failed", usage=usage, context_manifest=manifest
+        )
+        repeated = service.fail_turn(
+            turn.id, "model_failed", usage=usage, context_manifest=manifest
+        )
+        with pytest.raises(ConversationConflict):
+            service.fail_turn(
+                turn.id,
+                "model_failed",
+                usage=UsageSummary(input_tokens=6),
+                context_manifest=manifest,
+            )
+    else:
+        result = service.cancel_turn(turn.id, usage=usage, context_manifest=manifest)
+        repeated = service.cancel_turn(turn.id, usage=usage, context_manifest=manifest)
+        with pytest.raises(ConversationConflict):
+            service.cancel_turn(
+                turn.id,
+                usage=UsageSummary(input_tokens=6),
+                context_manifest=manifest,
+            )
+
+    assert repeated == result
+
+
+def test_latest_context_manifest_skips_newest_empty_terminal_turn(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    first = service.begin_turn(
+        thread.id, "first", _turn_config(), client_message_id="client_first"
+    )
+    manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "history", "estimated_tokens": 11},
+    )
+    service.complete_turn(first.id, "done", UsageSummary(), "completed", manifest)
+    latest = service.begin_turn(
+        thread.id, "latest", _turn_config(), client_message_id="client_latest"
+    )
+    service.cancel_turn(latest.id)
+
+    assert service.latest_context_manifest(thread.id) == manifest
 
 
 def test_append_direct_command_uses_next_durable_sequence(tmp_path: Path) -> None:

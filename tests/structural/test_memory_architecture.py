@@ -102,16 +102,16 @@ def test_local_writes_are_visible_commands_or_tools() -> None:
         for path in Path("src/awesome_agent/agent").rglob("*.py")
     )
     tools = Path("src/awesome_agent/memory/tools.py").read_text(encoding="utf-8")
-    headless = Path("src/awesome_agent/application/headless.py").read_text(
-        encoding="utf-8"
-    )
+    extension_commands = Path(
+        "src/awesome_agent/application/extension_commands.py"
+    ).read_text(encoding="utf-8")
 
     assert "LocalMemoryService" not in application_turns
     assert "LocalMemoryService" not in agent_source
     assert "service.add(" in tools
     assert "service.replace(" in tools
     assert "service.remove(" in tools
-    assert "service.add(" in headless
+    assert "service.add(" in extension_commands
     assert "post_answer" not in tools
 
 

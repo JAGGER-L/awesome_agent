@@ -36,4 +36,38 @@ describe("MarkdownBlock", () => {
     expect(frame).toContain("alert('x')");
     expect(frame).toContain("docs (https://example.com)");
   });
+
+  it.each([
+    24, 80,
+  ])("aligns mixed CJK tables and preserves formulas at width %i", (width) => {
+    const frame =
+      render(
+        <MarkdownBlock
+          source={
+            "| Name | Formula |\n| --- | --- |\n| 圆 | S = πr² |\n| square | $A = a^2$ |\n\n$$\n\\sum_{i=1}^n i\n$$"
+          }
+          width={width}
+        />,
+      ).lastFrame() ?? "";
+    expect(frame).toContain(width < 30 ? "Name: 圆" : "| Name");
+    expect(frame).toContain("S = πr²");
+    expect(frame).toContain("A = a^2");
+    expect(frame).toContain("\\sum_{i=1}^n i");
+  });
+
+  it("renders tables and formulas after streaming chunks complete", () => {
+    const view = render(<MarkdownBlock source="| Name" width={80} />);
+    view.rerender(
+      <MarkdownBlock
+        source={
+          "| Name | Formula |\n| --- | --- |\n| circle | S = πr² |\n\n$E = mc^2$"
+        }
+        width={80}
+      />,
+    );
+    const frame = view.lastFrame() ?? "";
+    expect(frame).toContain("| Name");
+    expect(frame).toContain("S = πr²");
+    expect(frame).toContain("E = mc^2");
+  });
 });

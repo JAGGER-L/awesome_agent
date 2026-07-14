@@ -12,6 +12,7 @@ function page(): MethodValue["thread.read"] {
         id: "thread_1",
         workspace_key: "ws_1",
         title: "Thread",
+        title_source: "automatic",
         thinking_enabled: false,
         skill_mode: "auto",
         created_at: now,
@@ -82,8 +83,15 @@ function page(): MethodValue["thread.read"] {
         change_set_id: "change_1",
         turn_id: "turn_1",
         lifecycle: "sealed",
-        changed_paths: ["src/a.py"],
-        reversibility: "full",
+        changes: [
+          {
+            kind: "text_file",
+            path: "src/a.py",
+            change_kind: "updated",
+            additions: 2,
+            deletions: 1,
+          },
+        ],
         created_at: now,
       } as never,
     ],
@@ -114,8 +122,7 @@ describe("hydrateThreadPage", () => {
     });
     expect(projection.blocks[3]).toMatchObject({
       kind: "change",
-      paths: ["src/a.py"],
-      reversibility: "full",
+      changes: [expect.objectContaining({ path: "src/a.py" })],
     });
     expect(projection.blocks[6]).toMatchObject({
       kind: "tools",
@@ -130,5 +137,20 @@ describe("hydrateThreadPage", () => {
         (block) => block.kind === "omitted_history",
       ),
     ).toBe(false);
+  });
+
+  it("hydrates durable summaries without ephemeral thinking or details", () => {
+    const projection = hydrateThreadPage(page());
+    expect(
+      projection.blocks.some(
+        (block) => block.kind === "thinking" || block.kind === "worked",
+      ),
+    ).toBe(false);
+    const tools = projection.blocks.filter((block) => block.kind === "tools");
+    expect(tools.flatMap((block) => block.items)).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({ detail: expect.anything() }),
+      ]),
+    );
   });
 });

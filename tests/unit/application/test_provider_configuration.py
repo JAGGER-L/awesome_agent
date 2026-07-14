@@ -7,6 +7,13 @@ import pytest
 from dotenv import dotenv_values
 from pydantic import SecretStr
 
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandInteractionResult,
+    CommandResult,
+    ModelCommandPayload,
+    NoticeCommandPayload,
+)
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
@@ -108,18 +115,20 @@ async def test_model_selects_provider_before_model_and_bridges_missing_auth(
         thread_id=thread.id,
     )
 
-    assert providers.selection is not None
-    assert [option.value for option in providers.selection.options] == [
+    assert isinstance(providers, CommandInteractionResult)
+    assert providers.interaction.kind == "selection"
+    assert [option.value for option in providers.interaction.options] == [
         "deepseek",
         "kimi",
     ]
-    assert [option.description for option in providers.selection.options] == [
+    assert [option.description for option in providers.interaction.options] == [
         "Not configured",
         "Not configured",
     ]
-    assert missing.secret_prompt is not None
-    assert missing.secret_prompt.provider == "deepseek"
-    assert missing.secret_prompt.action == "add"
+    assert isinstance(missing, CommandInteractionResult)
+    assert missing.interaction.kind == "secret"
+    assert missing.interaction.provider == "deepseek"
+    assert missing.interaction.action == "add"
 
 
 @pytest.mark.asyncio
@@ -143,10 +152,11 @@ async def test_valid_credential_enables_provider_model_selection(
     )
 
     assert saved.status is ProviderCredentialSetStatus.CONFIGURED
-    assert saved.source is CredentialSource.USER_ENV_FILE
+    assert saved.source is CredentialSource.AWESOME
     assert sources().provider_credentials.deepseek.configured is True
-    assert models.selection is not None
-    assert [option.value for option in models.selection.options] == [
+    assert isinstance(models, CommandInteractionResult)
+    assert models.interaction.kind == "selection"
+    assert [option.value for option in models.interaction.options] == [
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
     ]
@@ -204,7 +214,9 @@ async def test_unverified_credential_requires_explicit_save_anyway(
 
 
 @pytest.mark.asyncio
-async def test_process_environment_credentials_are_not_mutated(tmp_path: Path) -> None:
+async def test_awesome_credentials_can_be_managed_alongside_environment(
+    tmp_path: Path,
+) -> None:
     service, _, _ = _service(
         tmp_path,
         validator=FakeValidator(CredentialValidationStatus.VALID),
@@ -225,9 +237,172 @@ async def test_process_environment_credentials_are_not_mutated(tmp_path: Path) -
         )
     )
 
-    assert replacement.status is ProviderCredentialSetStatus.ENVIRONMENT_MANAGED
-    assert deletion.status is ProviderCredentialSetStatus.ENVIRONMENT_MANAGED
-    assert not (tmp_path / "home" / ".env").exists()
+    assert replacement.status is ProviderCredentialSetStatus.CONFIGURED
+    assert replacement.source is CredentialSource.AWESOME
+    assert deletion.status is ProviderCredentialSetStatus.DELETED
+
+
+@pytest.mark.asyncio
+async def test_auth_exposes_both_sources_and_persists_explicit_selection(
+    tmp_path: Path,
+) -> None:
+    service, _, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+    UserSecretStore(tmp_path / "home" / ".env").set(
+        "DEEPSEEK_API_KEY", SecretStr("awesome-secret")
+    )
+
+    picker = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("deepseek",))
+    )
+    selected = await service.auth_command(
+        CommandIntent(
+            name=CommandName.AUTH,
+            arguments=("deepseek", "awesome", "use"),
+        )
+    )
+
+    assert isinstance(picker, CommandInteractionResult)
+    assert picker.interaction.kind == "selection"
+    assert [(item.value, item.disabled) for item in picker.interaction.options] == [
+        ("environment", False),
+        ("awesome", False),
+    ]
+    assert isinstance(selected, CommandResult)
+    assert isinstance(selected.payload, NoticeCommandPayload)
+    assert (
+        sources().provider_credentials.deepseek.selected_source
+        is CredentialSource.AWESOME
+    )
+    key = sources().secrets.deepseek_api_key
+    assert key is not None
+    assert key.get_secret_value() == "awesome-secret"
+
+
+@pytest.mark.asyncio
+async def test_environment_only_keeps_awesome_available_for_configuration(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+
+    picker = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("deepseek",))
+    )
+    prompt = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("deepseek", "awesome"))
+    )
+
+    assert isinstance(picker, CommandInteractionResult)
+    assert picker.interaction.kind == "selection"
+    assert [
+        (option.value, option.selected, option.disabled)
+        for option in picker.interaction.options
+    ] == [
+        ("environment", True, False),
+        ("awesome", False, False),
+    ]
+    assert isinstance(prompt, CommandInteractionResult)
+    assert prompt.interaction.kind == "secret"
+
+
+@pytest.mark.asyncio
+async def test_deleting_selected_awesome_key_never_falls_back_to_environment(
+    tmp_path: Path,
+) -> None:
+    service, _, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+    await service.set_credential(
+        ProviderCredentialSetRequest(
+            provider="deepseek",
+            action="add",
+            api_key=SecretStr("awesome-secret"),
+        )
+    )
+
+    deleted = await service.set_credential(
+        ProviderCredentialSetRequest(provider="deepseek", action="delete")
+    )
+    status = sources().provider_credentials.deepseek
+    top = await service.auth_command(CommandIntent(name=CommandName.AUTH))
+
+    assert deleted.status is ProviderCredentialSetStatus.DELETED
+    assert deleted.source is CredentialSource.AWESOME
+    assert status.selected_source is CredentialSource.AWESOME
+    assert status.source_available is False
+    assert status.environment_configured is True
+    assert isinstance(top, CommandInteractionResult)
+    assert top.interaction.kind == "selection"
+    assert top.interaction.options[0].description == ("Active · awesome · Unavailable")
+
+
+@pytest.mark.asyncio
+async def test_selected_unavailable_source_fails_without_fallback(
+    tmp_path: Path,
+) -> None:
+    service, _, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+    )
+    service._config_writer.update(
+        lambda current: current.model_copy(
+            update={
+                "credentials": current.credentials.model_copy(
+                    update={"deepseek": CredentialSource.ENVIRONMENT}
+                )
+            }
+        )
+    )
+    UserSecretStore(tmp_path / "home" / ".env").set(
+        "DEEPSEEK_API_KEY", SecretStr("awesome-secret")
+    )
+
+    status = sources().provider_credentials.deepseek
+    result = await service.auth_command(
+        CommandIntent(
+            name=CommandName.AUTH,
+            arguments=("deepseek", "environment"),
+        )
+    )
+
+    assert status.selected_source is CredentialSource.ENVIRONMENT
+    assert status.configured is False
+    assert isinstance(result, CommandError)
+    assert result.code == "selected_credential_unavailable"
+    assert sources().secrets.deepseek_api_key is None
+
+
+@pytest.mark.asyncio
+async def test_mem0_uses_the_same_masked_awesome_credential_flow(
+    tmp_path: Path,
+) -> None:
+    service, _, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+    )
+    prompt = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("mem0", "awesome"))
+    )
+    saved = await service.set_credential(
+        ProviderCredentialSetRequest(
+            provider="mem0", action="add", api_key=SecretStr("mem0-secret")
+        )
+    )
+
+    assert isinstance(prompt, CommandInteractionResult)
+    assert prompt.interaction.kind == "secret"
+    assert prompt.interaction.provider == "mem0"
+    assert saved.source is CredentialSource.AWESOME
+    assert sources().provider_credentials.mem0.configured is True
 
 
 @pytest.mark.asyncio
@@ -248,7 +423,7 @@ async def test_delete_removes_only_the_selected_user_credential(
 
     values = dotenv_values(tmp_path / "home" / ".env")
     assert result.status is ProviderCredentialSetStatus.DELETED
-    assert result.source is CredentialSource.MISSING
+    assert result.source in {CredentialSource.AWESOME, None}
     assert "DEEPSEEK_API_KEY" not in values
     assert values["MOONSHOT_API_KEY"] == "kimi-secret"
     assert sources().provider_credentials.deepseek.configured is False
@@ -285,10 +460,11 @@ async def test_model_selection_updates_current_thread_and_user_default_only(
         thread_id=current.id,
     )
 
-    assert result.data == {
-        "model": "kimi/kimi-k2.6",
-        "default_model_updated": True,
-    }
+    assert isinstance(result, CommandResult)
+    assert result.payload == ModelCommandPayload(
+        model="kimi/kimi-k2.6",
+        default_model_updated=True,
+    )
     assert conversation.read_thread(current.id).thread.current_model == (
         "kimi/kimi-k2.6"
     )

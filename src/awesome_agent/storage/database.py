@@ -1,23 +1,19 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-APPLICATION_SCHEMA_VERSION = 6
+APPLICATION_SCHEMA_VERSION = 2
 
-type Migration = str | Callable[[sqlite3.Connection], None]
-
-_MIGRATION_1 = """
+_APPLICATION_SCHEMA = """
 CREATE TABLE trusted_workspaces (
     workspace_key TEXT PRIMARY KEY,
     canonical_path TEXT NOT NULL,
     trusted_at TEXT NOT NULL
-)
-"""
+);
 
-_MIGRATION_2 = """
 CREATE TABLE change_sets (
     change_set_id TEXT PRIMARY KEY,
     workspace_key TEXT NOT NULL,
@@ -46,13 +42,12 @@ CREATE TABLE pending_mutations (
     intended_after_mode INTEGER,
     created_at TEXT NOT NULL
 );
-"""
 
-_MIGRATION_3 = """
 CREATE TABLE threads (
     thread_id TEXT PRIMARY KEY,
     workspace_key TEXT NOT NULL,
     title TEXT NOT NULL,
+    title_source TEXT NOT NULL CHECK (title_source IN ('automatic', 'manual')),
     current_model TEXT,
     thinking_enabled INTEGER NOT NULL CHECK (thinking_enabled IN (0, 1)),
     skill_mode TEXT NOT NULL,
@@ -60,7 +55,7 @@ CREATE TABLE threads (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_threads_workspace_updated
-ON threads (workspace_key, updated_at DESC);
+ON threads (workspace_key, updated_at DESC, thread_id);
 
 CREATE TABLE thread_entries (
     entry_id TEXT PRIMARY KEY,
@@ -70,9 +65,15 @@ CREATE TABLE thread_entries (
         kind IN ('user_message', 'assistant_message', 'direct_command')
     ),
     content TEXT NOT NULL,
+    client_message_id TEXT,
     metadata_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    UNIQUE (thread_id, entry_id)
+    CHECK (
+        (kind = 'user_message' AND client_message_id IS NOT NULL)
+        OR (kind <> 'user_message' AND client_message_id IS NULL)
+    ),
+    UNIQUE (thread_id, entry_id),
+    UNIQUE (thread_id, client_message_id)
 );
 CREATE UNIQUE INDEX idx_thread_entries_sequence
 ON thread_entries (thread_id, sequence);
@@ -147,109 +148,29 @@ CREATE UNIQUE INDEX idx_tool_activities_operation_call
 ON tool_activities (operation_id, call_id);
 CREATE INDEX idx_tool_activities_thread_created
 ON tool_activities (thread_id, created_at);
-"""
+CREATE INDEX idx_tool_activities_thread_turn
+ON tool_activities (thread_id, turn_id);
+CREATE INDEX idx_tool_activities_thread_operation
+ON tool_activities (thread_id, operation_id);
 
-_MIGRATION_4 = """
 CREATE TABLE mcp_enablements (
     workspace_key TEXT NOT NULL,
     server_id TEXT NOT NULL,
     config_hash TEXT NOT NULL,
     enabled_at TEXT NOT NULL,
     PRIMARY KEY (workspace_key, server_id)
-)
-"""
-
-_MIGRATION_5 = """
-DROP INDEX idx_threads_workspace_updated;
-CREATE INDEX idx_threads_workspace_updated
-ON threads (workspace_key, updated_at DESC, thread_id);
-CREATE INDEX idx_tool_activities_thread_turn
-ON tool_activities (thread_id, turn_id);
-CREATE INDEX idx_tool_activities_thread_operation
-ON tool_activities (thread_id, operation_id)
+);
 """
 
 
-def _migration_6(connection: sqlite3.Connection) -> None:
-    columns = {
-        str(row[1]) for row in connection.execute("PRAGMA table_info(thread_entries)")
-    }
-    if "client_message_id" not in columns:
-        connection.execute(
-            "ALTER TABLE thread_entries ADD COLUMN client_message_id TEXT"
-        )
-    connection.execute(
-        """
-        UPDATE thread_entries
-        SET client_message_id = 'client_legacy_' || entry_id
-        WHERE kind = 'user_message' AND client_message_id IS NULL
-        """
-    )
-    connection.execute(
-        """
-        UPDATE thread_entries
-        SET client_message_id = NULL
-        WHERE kind <> 'user_message' AND client_message_id IS NOT NULL
-        """
-    )
-    invalid = connection.execute(
-        """
-        SELECT entry_id FROM thread_entries
-        WHERE (kind = 'user_message' AND client_message_id IS NULL)
-           OR (kind <> 'user_message' AND client_message_id IS NOT NULL)
-        LIMIT 1
-        """
-    ).fetchone()
-    if invalid is not None:
-        raise sqlite3.IntegrityError("thread entry client identity is invalid")
-    connection.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_entries_client_message
-        ON thread_entries (thread_id, client_message_id)
-        WHERE client_message_id IS NOT NULL
-        """
-    )
-    connection.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS trg_thread_entries_client_identity_insert
-        BEFORE INSERT ON thread_entries
-        WHEN (NEW.kind = 'user_message' AND NEW.client_message_id IS NULL)
-          OR (NEW.kind <> 'user_message' AND NEW.client_message_id IS NOT NULL)
-        BEGIN
-            SELECT RAISE(ABORT, 'thread entry client identity is invalid');
-        END
-        """
-    )
-    connection.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS trg_thread_entries_client_identity_update
-        BEFORE UPDATE OF kind, client_message_id ON thread_entries
-        WHEN (NEW.kind = 'user_message' AND NEW.client_message_id IS NULL)
-          OR (NEW.kind <> 'user_message' AND NEW.client_message_id IS NOT NULL)
-        BEGIN
-            SELECT RAISE(ABORT, 'thread entry client identity is invalid');
-        END
-        """
-    )
-
-
-_MIGRATIONS: dict[int, Migration] = {
-    1: _MIGRATION_1,
-    2: _MIGRATION_2,
-    3: _MIGRATION_3,
-    4: _MIGRATION_4,
-    5: _MIGRATION_5,
-    6: _migration_6,
-}
-
-
-class ApplicationSchemaTooNew(RuntimeError):
-    def __init__(self, *, found: int, supported: int) -> None:
+class ApplicationSchemaMismatch(RuntimeError):
+    def __init__(self, *, found: int, expected: int) -> None:
         super().__init__(
-            f"Application state schema {found} is newer than supported {supported}."
+            f"Application state schema {found} is unsupported; expected {expected}. "
+            "Remove the development data directory and start Awesome again."
         )
         self.found = found
-        self.supported = supported
+        self.expected = expected
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -264,45 +185,40 @@ def _connect(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def initialize_application_database(path: Path) -> None:
-    connection = _connect(path)
+def _schema_version(path: Path) -> int:
+    database_path = path.expanduser().resolve()
+    if not database_path.exists():
+        return 0
+    connection = sqlite3.connect(
+        f"{database_path.as_uri()}?mode=ro",
+        uri=True,
+        timeout=5.0,
+    )
     try:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version > APPLICATION_SCHEMA_VERSION:
-            raise ApplicationSchemaTooNew(
-                found=version,
-                supported=APPLICATION_SCHEMA_VERSION,
-            )
-        for target_version in range(version + 1, APPLICATION_SCHEMA_VERSION + 1):
-            _apply_migration(connection, target_version, _MIGRATIONS[target_version])
+        return int(connection.execute("PRAGMA user_version").fetchone()[0])
     finally:
         connection.close()
 
 
-def _apply_migration(
-    connection: sqlite3.Connection,
-    target_version: int,
-    migration: Migration,
-) -> None:
-    if isinstance(migration, str):
-        script = (
+def initialize_application_database(path: Path) -> None:
+    version = _schema_version(path)
+    if version == APPLICATION_SCHEMA_VERSION:
+        return
+    if version != 0:
+        raise ApplicationSchemaMismatch(
+            found=version,
+            expected=APPLICATION_SCHEMA_VERSION,
+        )
+    connection = _connect(path)
+    try:
+        connection.executescript(
             "BEGIN IMMEDIATE;\n"
-            f"{migration.rstrip().rstrip(';')};\n"
-            f"PRAGMA user_version = {target_version};\n"
+            f"{_APPLICATION_SCHEMA.rstrip().rstrip(';')};\n"
+            f"PRAGMA user_version = {APPLICATION_SCHEMA_VERSION};\n"
             "COMMIT;"
         )
-        connection.executescript(script)
-        return
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        migration(connection)
-        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-            raise sqlite3.IntegrityError("foreign key check failed")
-        connection.execute(f"PRAGMA user_version = {target_version}")
-        connection.commit()
-    except BaseException:
-        connection.rollback()
-        raise
+    finally:
+        connection.close()
 
 
 @contextmanager

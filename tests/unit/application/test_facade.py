@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import inspect
-from pathlib import Path
 from typing import get_type_hints
 
 import pytest
 from pydantic import SecretStr
 
-from awesome_agent.application.commands import (
-    CommandIntent,
-    CommandName,
-    CommandResult,
-    CommandStatus,
+from awesome_agent.application.command_results import (
+    CommandOutcome,
+    NoticeCommandPayload,
+    result,
 )
+from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
@@ -34,10 +33,7 @@ from awesome_agent.application.facade import (
     ThreadReadResult,
     WorkspacePresentation,
 )
-from awesome_agent.application.headless import ConversationCommandService
 from awesome_agent.config import CredentialSource, SecretStatus
-from awesome_agent.conversation import ConversationService
-from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 METHODS = {
     "initialize",
@@ -62,7 +58,7 @@ class Backend:
         self.calls.append(("initialize", None))
         return InitializeResult(
             product_version="0.1.0",
-            protocol_version=1,
+            protocol_version=2,
             status=InitializeStatus.READY,
             session_id="session_1",
             workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -107,9 +103,9 @@ class Backend:
         self.calls.append(("direct", (thread_id, command)))
         return OperationAccepted(operation_id="operation_2", thread_id=thread_id)
 
-    async def run_command(self, intent: CommandIntent) -> CommandResult:
+    async def run_command(self, intent: CommandIntent) -> CommandOutcome:
         self.calls.append(("command", intent))
-        return CommandResult(status=CommandStatus.SUCCESS)
+        return result(NoticeCommandPayload(message="Command completed."))
 
     async def set_provider_credential(
         self, request: ProviderCredentialSetRequest
@@ -118,7 +114,7 @@ class Backend:
         return ProviderCredentialSetResult(
             provider=request.provider,
             status=ProviderCredentialSetStatus.CONFIGURED,
-            source=CredentialSource.USER_ENV_FILE,
+            source=CredentialSource.AWESOME,
             code="credential_saved",
         )
 
@@ -197,7 +193,9 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
         _unwrap(await facade.execute_direct("thread_1", "git status")).operation_id
         == "operation_2"
     )
-    assert _unwrap(await facade.execute_command(intent)).status is CommandStatus.SUCCESS
+    assert _unwrap(await facade.execute_command(intent)) == result(
+        NoticeCommandPayload(message="Command completed.")
+    )
     credential = ProviderCredentialSetRequest(
         provider="deepseek",
         action="add",
@@ -211,177 +209,3 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
         is True
     )
     assert _unwrap(await facade.cancel_operation("operation_1")).cancelled is True
-
-
-@pytest.mark.asyncio
-async def test_conversation_commands_use_dynamic_defaults_and_delegate_model(
-    tmp_path: Path,
-) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    conversation = ConversationService(store=repositories)
-    delegated: list[tuple[CommandName, str]] = []
-
-    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
-        delegated.append((intent.name, thread_id))
-        return CommandResult(status=CommandStatus.SUCCESS)
-
-    default_model = "deepseek/deepseek-v4-flash"
-    commands = ConversationCommandService(
-        conversation=conversation,
-        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        delegate=delegate,
-        default_model=lambda: default_model,
-    )
-
-    created = await commands.handle(
-        CommandIntent(name=CommandName.NEW, arguments=("Feature", "work"))
-    )
-    thread_id = created.data["thread_id"]
-    assert created.data["title"] == "Feature work"
-    assert (
-        conversation.read_thread(str(thread_id)).thread.current_model
-        == "deepseek/deepseek-v4-flash"
-    )
-
-    thinking_query = await commands.handle(CommandIntent(name=CommandName.THINKING))
-    assert thinking_query.data["thinking_enabled"] is False
-    assert thinking_query.selection is not None
-
-    model = await commands.handle(CommandIntent(name=CommandName.MODEL))
-    thinking = await commands.handle(
-        CommandIntent(name=CommandName.THINKING, arguments=("on",))
-    )
-    selected = conversation.read_thread(str(thread_id)).thread
-    assert model.status is CommandStatus.SUCCESS
-    assert thinking.data["thinking_enabled"] is True
-    assert selected.current_model == "deepseek/deepseek-v4-flash"
-    assert selected.thinking_enabled is True
-
-    default_model = "kimi/kimi-k2.6"
-    next_thread = await commands.handle(CommandIntent(name=CommandName.NEW))
-    assert conversation.read_thread(
-        str(next_thread.data["thread_id"])
-    ).thread.current_model == ("kimi/kimi-k2.6")
-
-    delegated_result = await commands.handle(CommandIntent(name=CommandName.STATUS))
-    assert delegated_result.status is CommandStatus.SUCCESS
-    assert delegated == [
-        (CommandName.MODEL, thread_id),
-        (CommandName.STATUS, next_thread.data["thread_id"]),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_resume_is_workspace_scoped_and_ink_commands_are_surface_owned(
-    tmp_path: Path,
-) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    conversation = ConversationService(store=repositories)
-    own = conversation.create_thread("ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-    conversation.create_thread("ws_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-
-    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
-        del intent, thread_id
-        return CommandResult(status=CommandStatus.SUCCESS)
-
-    commands = ConversationCommandService(
-        conversation=conversation,
-        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        delegate=delegate,
-    )
-
-    picker = await commands.handle(CommandIntent(name=CommandName.RESUME))
-    selected = await commands.handle(
-        CommandIntent(name=CommandName.RESUME, arguments=(own.id,))
-    )
-    surface = await commands.handle(CommandIntent(name=CommandName.HELP))
-    invalid = await commands.handle(
-        CommandIntent(name=CommandName.RESUME, arguments=("foreign",))
-    )
-
-    assert picker.selection is not None
-    assert [option.value for option in picker.selection.options] == [own.id]
-    assert selected.data["thread_id"] == own.id
-    assert surface.data["error_code"] == "surface_command"
-    assert invalid.data["error_code"] == "thread_not_found"
-
-
-@pytest.mark.asyncio
-async def test_new_and_resume_replace_thread_scoped_permission_state(
-    tmp_path: Path,
-) -> None:
-    conversation = ConversationService(
-        store=SQLiteConversationRepositories(tmp_path / "application.db")
-    )
-    existing = conversation.create_thread("workspace_1")
-    resets: list[str] = []
-
-    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
-        del intent, thread_id
-        return CommandResult(status=CommandStatus.SUCCESS)
-
-    commands = ConversationCommandService(
-        conversation=conversation,
-        workspace_key="workspace_1",
-        delegate=delegate,
-        on_thread_selected=lambda: resets.append("reset"),
-    )
-
-    await commands.handle(CommandIntent(name=CommandName.NEW))
-    await commands.handle(
-        CommandIntent(name=CommandName.RESUME, arguments=(existing.id,))
-    )
-
-    assert resets == ["reset", "reset"]
-
-
-@pytest.mark.asyncio
-async def test_resume_accepts_full_or_unique_prefix_and_selects_ambiguity(
-    tmp_path: Path,
-) -> None:
-    identifiers = iter(
-        (
-            "thread_aaaaaaaa111111111111111111111111",
-            "thread_aaaaaaaa222222222222222222222222",
-            "thread_bbbbbbbb333333333333333333333333",
-        )
-    )
-    conversation = ConversationService(
-        store=SQLiteConversationRepositories(tmp_path / "application.db"),
-        id_factory=lambda prefix: next(identifiers),
-    )
-    first = conversation.create_thread("workspace_1", "First")
-    second = conversation.create_thread("workspace_1", "Second")
-    third = conversation.create_thread("workspace_1", "Third")
-
-    async def delegate(intent: CommandIntent, thread_id: str) -> CommandResult:
-        del intent, thread_id
-        return CommandResult(status=CommandStatus.SUCCESS)
-
-    commands = ConversationCommandService(
-        conversation=conversation,
-        workspace_key="workspace_1",
-        delegate=delegate,
-    )
-
-    exact = await commands.handle(
-        CommandIntent(name=CommandName.RESUME, arguments=(first.id,))
-    )
-    unique = await commands.handle(
-        CommandIntent(name=CommandName.RESUME, arguments=("thread_bbbbbbbb",))
-    )
-    ambiguous = await commands.handle(
-        CommandIntent(name=CommandName.RESUME, arguments=("thread_aaaaaaaa",))
-    )
-    too_short = await commands.handle(
-        CommandIntent(name=CommandName.RESUME, arguments=("thread_bbbbbbb",))
-    )
-
-    assert exact.data["thread_id"] == first.id
-    assert unique.data["thread_id"] == third.id
-    assert ambiguous.selection is not None
-    assert {option.value for option in ambiguous.selection.options} == {
-        first.id,
-        second.id,
-    }
-    assert too_short.data["error_code"] == "thread_not_found"

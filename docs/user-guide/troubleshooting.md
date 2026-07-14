@@ -20,11 +20,14 @@ choose DeepSeek or Kimi, and paste the key into the masked input. Use `/auth`
 to replace or remove a saved key. Invalid keys are not stored; network or
 Provider failures offer an explicit `Save anyway` choice.
 
-A process-environment credential overrides Awesome's user secret file and is
-read-only in the TUI. Update or remove it in the launching shell instead. As an
-advanced fallback, edit `<AWESOME_HOME>/.env` and restart Awesome. Run `/doctor`
-when you need an on-demand Provider network check; startup itself performs only
-a presence check.
+Environment and Awesome-managed credentials are separate sources. `/auth`
+shows which sources exist and which one is selected. Environment is read-only
+in the TUI; update or remove it in the launching shell. If the selected source
+becomes unavailable, Awesome reports that state and waits for a new selection
+instead of silently using the other source. As an advanced option, edit
+`<AWESOME_HOME>/.env` and restart Awesome. Run `/doctor` when you need an
+on-demand Provider network check; startup itself performs only a presence
+check.
 
 ## Workspace is not trusted
 
@@ -43,6 +46,27 @@ limits.
 
 Close every Awesome process and rerun the original one-line installer. It
 stages and validates the new application before replacing the installed files.
+
+## Source checkout reports incompatible state
+
+Awesome does not reinterpret development databases created with an unsupported
+schema. The startup panel shows the detected schema, the expected schema, and
+the exact state directory; this condition is not recoverable by reconnecting.
+
+Stop Awesome, verify that the displayed directory is
+`<repository>/.awesome-dev/home/state`, and remove only that directory. Then run
+`uv run awesome-dev` again. Do not remove the parent development home:
+configuration and credentials outside `state` are intentionally preserved. See
+the [source Quickstart](../getting-started/quickstart.md#troubleshooting) for
+platform-specific commands.
+
+## Input is shown as pending
+
+Awesome runs one foreground task at a time and keeps up to three later inputs
+in a session-only queue. Wait for the current task to finish, or cancel it with
+Ctrl+C; the next input then starts automatically. With an empty input box, press
+Up to recall the newest pending item into the draft. A full queue or a queued
+`/quit` keeps new text in the input box and explains why it was not queued.
 
 ## Mem0 Cloud or MCP is unavailable
 

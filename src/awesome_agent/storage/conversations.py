@@ -15,6 +15,7 @@ from awesome_agent.conversation.models import (
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
+    ThreadTitleSource,
     ThreadView,
     ToolActivity,
     ToolActivityOrigin,
@@ -156,20 +157,24 @@ class SQLiteConversationRepositories:
         turn = self.turns.get(turn_id)
         return None if turn is None else turn.thread_id
 
-    def begin_turn(self, user_entry: ThreadEntry, turn: Turn) -> Turn:
+    def begin_turn(
+        self,
+        user_entry: ThreadEntry,
+        turn: Turn,
+        updated_thread: Thread,
+    ) -> Turn:
         with self.transaction() as connection:
             thread = self.threads.get(turn.thread_id, connection=connection)
             if thread is None:
                 raise ThreadNotFound(turn.thread_id)
+            if updated_thread.id != thread.id:
+                raise ConversationConflict("Thread update identity differs.")
             if self.turns.in_progress(turn.thread_id, connection=connection):
                 raise TurnBusy(turn.thread_id)
             self._require_next_sequence(user_entry, connection)
             self.entries.append(user_entry, connection=connection)
             self.turns.create(turn, connection=connection)
-            self.threads.update(
-                thread.model_copy(update={"updated_at": user_entry.created_at}),
-                connection=connection,
-            )
+            self.threads.update(updated_thread, connection=connection)
         return turn
 
     def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn:
@@ -274,14 +279,15 @@ class SQLiteThreadRepository(_SQLiteRepository):
                 active.execute(
                     """
                     INSERT INTO threads (
-                        thread_id, workspace_key, title, current_model,
+                        thread_id, workspace_key, title, title_source, current_model,
                         thinking_enabled, skill_mode, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         thread.id,
                         thread.workspace_key,
                         thread.title,
+                        thread.title_source.value,
                         thread.current_model,
                         int(thread.thinking_enabled),
                         thread.skill_mode,
@@ -396,13 +402,14 @@ class SQLiteThreadRepository(_SQLiteRepository):
             cursor = active.execute(
                 """
                 UPDATE threads SET
-                    workspace_key = ?, title = ?, current_model = ?,
+                    workspace_key = ?, title = ?, title_source = ?, current_model = ?,
                     thinking_enabled = ?, skill_mode = ?, updated_at = ?
                 WHERE thread_id = ?
                 """,
                 (
                     thread.workspace_key,
                     thread.title,
+                    thread.title_source.value,
                     thread.current_model,
                     int(thread.thinking_enabled),
                     thread.skill_mode,
@@ -850,6 +857,7 @@ def _thread_from_row(row: sqlite3.Row) -> Thread:
         id=row["thread_id"],
         workspace_key=row["workspace_key"],
         title=row["title"],
+        title_source=ThreadTitleSource(row["title_source"]),
         current_model=row["current_model"],
         thinking_enabled=bool(row["thinking_enabled"]),
         skill_mode=row["skill_mode"],

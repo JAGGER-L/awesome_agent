@@ -1,6 +1,17 @@
-import { Box, Text } from "ink";
+import { Text } from "ink";
 
+import { SelectionPanel } from "./interactions/index.js";
 import { useTheme } from "./theme.js";
+
+const trustOptions = [
+  {
+    value: "trust",
+    label: "1. Yes, I trust this folder",
+    selected: true,
+    disabled: false,
+  },
+  { value: "exit", label: "2. No, exit", selected: false, disabled: false },
+] as const;
 
 export function TrustPrompt({
   workspacePath,
@@ -15,40 +26,25 @@ export function TrustPrompt({
 }) {
   const theme = useTheme();
   return (
-    <Box flexDirection="column">
-      <Text bold color={theme.brand}>
-        Trust this workspace?
-      </Text>
+    <SelectionPanel
+      title="Trust this workspace?"
+      options={trustOptions}
+      selected={selected}
+      variant="brand"
+      submitting={submitting}
+      message={message}
+    >
       <Text> </Text>
       <Text color={theme.brand}>{workspacePath}</Text>
       <Text> </Text>
-      <Text>Is this a project you created or trust?</Text>
-      <Text color={theme.muted}>
-        Awesome can read files in this workspace. File changes and shell
-        commands
+      <Text>
+        Quick safety check: Is this a project you created or one you trust?
       </Text>
-      <Text color={theme.muted}>follow your current permission mode.</Text>
-      <Text> </Text>
-      <TrustChoice
-        active={selected === 0}
-        label="1. Yes, I trust this folder"
-      />
-      <TrustChoice active={selected === 1} label="2. No, exit" />
-      <Text> </Text>
       <Text color={theme.muted}>
-        {submitting ? "Saving trust…" : "↑/↓ Select · Enter Confirm · Esc Exit"}
+        Awesome can read, edit, and execute files in this workspace. Review
+        unfamiliar projects before continuing.
       </Text>
-      {message ? <Text color={theme.danger}>{message}</Text> : null}
-    </Box>
-  );
-}
-
-function TrustChoice({ active, label }: { active: boolean; label: string }) {
-  const theme = useTheme();
-  return (
-    <Text {...(active ? { color: theme.brand } : {})}>
-      {active ? "❯ " : "  "}
-      {label}
-    </Text>
+      <Text> </Text>
+    </SelectionPanel>
   );
 }

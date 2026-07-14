@@ -2,16 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import type { MethodValue } from "../../src/protocol/index.js";
 import type { LiveTranscriptProjection } from "../../src/transcript/model.js";
-import { reconcileCompletedTurn } from "../../src/transcript/reconcile.js";
+import { reconcileTerminalTurn } from "../../src/transcript/reconcile.js";
 
 const now = "2026-07-11T08:00:00Z";
 const live: LiveTranscriptProjection = {
   operation_id: "operation_1",
   turn_id: "turn_1",
-  reasoning_text: "",
   terminal: true,
   blocks: [
-    { key: "live:assistant", kind: "assistant", text: "coalesced" },
+    {
+      key: "live:thinking",
+      kind: "thinking",
+      text: "bounded reasoning",
+      duration_ms: 1200,
+    },
     {
       key: "live:tools",
       kind: "tools",
@@ -22,10 +26,13 @@ const live: LiveTranscriptProjection = {
           verb: "Read",
           outcome: "success",
           summary: "live",
+          detail: "file config.py",
           duration_ms: 0,
         },
       ],
     },
+    { key: "live:assistant", kind: "assistant", text: "durable answer" },
+    { key: "live:worked", kind: "worked", duration_ms: 2200 },
   ],
 };
 
@@ -37,6 +44,7 @@ function page(): MethodValue["thread.read"] {
         id: "thread_1",
         workspace_key: "ws_1",
         title: "Thread",
+        title_source: "automatic",
         thinking_enabled: false,
         skill_mode: "auto",
         created_at: now,
@@ -88,25 +96,46 @@ function page(): MethodValue["thread.read"] {
         change_set_id: "change_1",
         turn_id: "turn_1",
         lifecycle: "sealed",
-        changed_paths: ["src/a.py"],
-        reversibility: "full",
+        changes: [
+          {
+            kind: "text_file",
+            path: "src/a.py",
+            change_kind: "updated",
+            additions: 2,
+            deletions: 1,
+          },
+        ],
         created_at: now,
       } as never,
     ],
   };
 }
 
-describe("reconcileCompletedTurn", () => {
-  it("replaces transient text/tools with durable authority", () => {
-    const result = reconcileCompletedTurn(live, page());
-    expect(result.persisted).toBe(true);
+describe("reconcileTerminalTurn", () => {
+  it("retains safe current-session activity with durable outcomes", () => {
+    const result = reconcileTerminalTurn(live, page());
+    expect(result).toMatchObject({
+      operation_id: "operation_1",
+      turn_id: "turn_1",
+    });
     expect(result.blocks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "assistant", text: "durable answer" }),
         expect.objectContaining({
-          kind: "tools",
-          items: [expect.objectContaining({ summary: "durable tool" })],
+          kind: "thinking",
+          text: "bounded reasoning",
         }),
+        expect.objectContaining({
+          kind: "tools",
+          items: [
+            expect.objectContaining({
+              summary: "durable tool",
+              duration_ms: 9,
+              detail: "file config.py",
+            }),
+          ],
+        }),
+        expect.objectContaining({ kind: "worked", duration_ms: 2200 }),
         expect.objectContaining({ kind: "change", change_set_id: "change_1" }),
       ]),
     );
@@ -126,11 +155,10 @@ describe("reconcileCompletedTurn", () => {
       { ...page(), view: { ...page().view, tool_activities: [] } },
     ],
   ])("keeps visible transient output when %s", (_name, value) => {
-    const result = reconcileCompletedTurn(live, value);
-    expect(result.persisted).toBe(false);
+    const result = reconcileTerminalTurn(live, value);
     expect(result.blocks).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ kind: "assistant", text: "coalesced" }),
+        expect.objectContaining({ kind: "assistant", text: "durable answer" }),
         expect.objectContaining({
           kind: "error",
           code: "transcript_not_reconciled",
@@ -140,8 +168,50 @@ describe("reconcileCompletedTurn", () => {
   });
 
   it("is deterministic for a repeated durable page", () => {
-    expect(reconcileCompletedTurn(live, page())).toEqual(
-      reconcileCompletedTurn(live, page()),
+    expect(reconcileTerminalTurn(live, page())).toEqual(
+      reconcileTerminalTurn(live, page()),
     );
+  });
+
+  it("uses the durable assistant when live segments do not match", () => {
+    const changed = {
+      ...live,
+      blocks: live.blocks.map((block) =>
+        block.kind === "assistant" ? { ...block, text: "partial" } : block,
+      ),
+    };
+    const result = reconcileTerminalTurn(changed, page());
+    expect(result.blocks.filter((block) => block.kind === "assistant")).toEqual(
+      [expect.objectContaining({ text: "durable answer" })],
+    );
+    expect(result.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "thinking" }),
+        expect.objectContaining({ kind: "worked" }),
+      ]),
+    );
+  });
+
+  it("returns only the cancelled Turn projection and retains partial output", () => {
+    const cancelledPage = page();
+    cancelledPage.view.turns = [
+      {
+        ...cancelledPage.view.turns[0],
+        status: "cancelled",
+        assistant_entry_id: undefined,
+        termination_reason: "cancelled",
+      } as never,
+    ];
+    cancelledPage.view.entries = cancelledPage.view.entries.slice(0, 1);
+
+    const result = reconcileTerminalTurn(live, cancelledPage);
+
+    expect(result.blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "assistant", text: "durable answer" }),
+        expect.objectContaining({ kind: "error", code: "cancelled" }),
+      ]),
+    );
+    expect(result.blocks.some((block) => block.kind === "user")).toBe(false);
   });
 });

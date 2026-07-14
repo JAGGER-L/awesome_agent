@@ -24,7 +24,7 @@ from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
 JSONRPC_VERSION = "2.0"
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class _OperationParams(BaseModel):
 class _ProviderCredentialParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["deepseek", "kimi"]
+    provider: Literal["deepseek", "kimi", "mem0"]
     action: Literal["add", "replace", "delete"]
     api_key: str | None = Field(default=None, min_length=1, max_length=20_000)
     allow_unverified: bool = False

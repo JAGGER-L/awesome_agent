@@ -3,16 +3,20 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, Protocol, cast
 
-from pydantic import JsonValue, SecretStr
+from pydantic import SecretStr
 
-from awesome_agent.application.commands import (
-    CommandIntent,
+from awesome_agent.application.command_results import (
     CommandOption,
-    CommandResult,
+    CommandOutcome,
     CommandSecretPrompt,
     CommandSelection,
-    CommandStatus,
+    ModelCommandPayload,
+    NoticeCommandPayload,
+    error,
+    interaction,
+    result,
 )
+from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
@@ -20,6 +24,7 @@ from awesome_agent.application.contracts import (
 )
 from awesome_agent.config import (
     SUPPORTED_MODEL_IDS,
+    CredentialService,
     CredentialSource,
     CredentialValidation,
     CredentialValidationStatus,
@@ -37,9 +42,15 @@ _PROVIDER_LABELS: dict[ProviderName, str] = {
     "deepseek": "DeepSeek",
     "kimi": "Kimi",
 }
-_PROVIDER_HELP_URLS: dict[ProviderName, str] = {
+_SERVICE_LABELS: dict[CredentialService, str] = {
+    "deepseek": "DeepSeek",
+    "kimi": "Kimi",
+    "mem0": "Mem0 Cloud",
+}
+_SERVICE_HELP_URLS: dict[CredentialService, str] = {
     "deepseek": "https://platform.deepseek.com/api_keys",
     "kimi": "https://platform.moonshot.cn/console/api-keys",
+    "mem0": "https://app.mem0.ai/dashboard/api-keys",
 }
 
 
@@ -71,56 +82,92 @@ class ProviderConfigurationService:
         self._sources = sources
         self._reload_configuration = reload_configuration
 
-    async def auth_command(self, intent: CommandIntent) -> CommandResult:
+    async def auth_command(self, intent: CommandIntent) -> CommandOutcome:
         arguments = intent.arguments
         if not arguments:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
-                    prompt="Provider Authentication",
-                    options=self._provider_options(),
+            return interaction(
+                CommandSelection(
+                    prompt="Authentication",
+                    options=self._service_options(),
                 ),
             )
-        provider = _provider(arguments[0])
-        if provider is None:
-            return _error("invalid_arguments", "Usage: /auth [deepseek|kimi]")
-        status = _status(self._sources(), provider)
+        service = _service(arguments[0])
+        if service is None:
+            return _error("invalid_arguments", "Usage: /auth [deepseek|kimi|mem0]")
+        status = _status(self._sources(), service)
         if len(arguments) == 1:
-            if status.source is CredentialSource.MISSING:
-                return self._secret_prompt(provider, action="add")
-            if status.source is CredentialSource.PROCESS_ENVIRONMENT:
-                return CommandResult(
-                    status=CommandStatus.SUCCESS,
-                    content=(
-                        f"{_PROVIDER_LABELS[provider]} is configured through "
-                        f"{status.environment_variable} in the process environment."
-                    ),
-                    data={"provider": provider, "source": status.source.value},
-                )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
-                    prompt=f"{_PROVIDER_LABELS[provider]} Authentication",
+            return interaction(
+                CommandSelection(
+                    prompt=f"{_SERVICE_LABELS[service]} credential source",
                     options=(
+                        CommandOption(
+                            value="environment",
+                            label="Environment",
+                            description=(
+                                f"Detected · {status.environment_variable}"
+                                if status.environment_configured
+                                else "Not detected"
+                            ),
+                            selected=status.selected_source
+                            is CredentialSource.ENVIRONMENT,
+                            disabled=not status.environment_configured,
+                        ),
+                        CommandOption(
+                            value="awesome",
+                            label="Awesome API key",
+                            description=(
+                                "Configured"
+                                if status.awesome_configured
+                                else "Not configured"
+                            ),
+                            selected=status.selected_source is CredentialSource.AWESOME,
+                        ),
+                    ),
+                ),
+            )
+        source = arguments[1]
+        if len(arguments) == 2 and source == CredentialSource.ENVIRONMENT.value:
+            if not status.environment_configured:
+                return _error(
+                    "selected_credential_unavailable",
+                    f"{status.environment_variable} is not available in this process.",
+                )
+            self._select_source(service, CredentialSource.ENVIRONMENT)
+            return result(
+                NoticeCommandPayload(
+                    message=f"{_SERVICE_LABELS[service]} now uses Environment."
+                )
+            )
+        if source != CredentialSource.AWESOME.value:
+            return _error("invalid_arguments", "Choose Environment or Awesome API key.")
+        if len(arguments) == 2:
+            if not status.awesome_configured:
+                return self._secret_prompt(service, action="add")
+            return interaction(
+                CommandSelection(
+                    prompt=f"{_SERVICE_LABELS[service]} Awesome API key",
+                    options=(
+                        CommandOption(value="use", label="Use this API key"),
                         CommandOption(value="replace", label="Replace API key"),
                         CommandOption(value="delete", label="Delete API key"),
-                        CommandOption(value="back", label="Back"),
                     ),
                 ),
             )
-        action = arguments[1]
-        if len(arguments) == 2 and action == "replace":
-            if status.source is CredentialSource.PROCESS_ENVIRONMENT:
-                return _managed_error(status.environment_variable)
-            return self._secret_prompt(provider, action="replace")
-        if len(arguments) == 2 and action == "back":
-            return CommandResult(status=CommandStatus.SUCCESS)
-        if len(arguments) == 2 and action == "delete":
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+        action = arguments[2]
+        if len(arguments) == 3 and action == "use":
+            self._select_source(service, CredentialSource.AWESOME)
+            return result(
+                NoticeCommandPayload(
+                    message=f"{_SERVICE_LABELS[service]} now uses Awesome API key."
+                )
+            )
+        if len(arguments) == 3 and action == "replace":
+            return self._secret_prompt(service, action="replace")
+        if len(arguments) == 3 and action == "delete":
+            return interaction(
+                CommandSelection(
                     prompt=(
-                        f"Delete {_PROVIDER_LABELS[provider]} API key? "
+                        f"Delete {_SERVICE_LABELS[service]} API key? "
                         "This does not revoke it at the Provider."
                     ),
                     options=(
@@ -129,19 +176,18 @@ class ProviderConfigurationService:
                     ),
                 ),
             )
-        return _error("invalid_arguments", "Usage: /auth [deepseek|kimi]")
+        return _error("invalid_arguments", "Usage: /auth [service] [source] [action]")
 
     async def model_command(
         self,
         intent: CommandIntent,
         *,
         thread_id: str,
-    ) -> CommandResult:
+    ) -> CommandOutcome:
         arguments = intent.arguments
         if not arguments:
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt="Select Provider",
                     options=self._provider_options(),
                 ),
@@ -159,9 +205,8 @@ class ProviderConfigurationService:
                 for model in SUPPORTED_MODEL_IDS
                 if model.startswith(f"{provider}/")
             )
-            return CommandResult(
-                status=CommandStatus.SUCCESS,
-                selection=CommandSelection(
+            return interaction(
+                CommandSelection(
                     prompt=f"Select {_PROVIDER_LABELS[provider]} Model",
                     options=tuple(
                         CommandOption(
@@ -198,10 +243,12 @@ class ProviderConfigurationService:
         )
         self._reload_configuration()
         updated = self._conversation.set_model(thread_id, model)
-        return CommandResult(
-            status=CommandStatus.SUCCESS,
-            content=(f"Model changed to {model}. Default for new Threads updated."),
-            data={"model": updated.current_model, "default_model_updated": True},
+        assert updated.current_model is not None
+        return result(
+            ModelCommandPayload(
+                model=updated.current_model,
+                default_model_updated=True,
+            )
         )
 
     async def set_credential(
@@ -209,33 +256,32 @@ class ProviderConfigurationService:
         request: ProviderCredentialSetRequest,
     ) -> ProviderCredentialSetResult:
         status = _status(self._sources(), request.provider)
-        if status.source is CredentialSource.PROCESS_ENVIRONMENT:
-            return ProviderCredentialSetResult(
-                provider=request.provider,
-                status=ProviderCredentialSetStatus.ENVIRONMENT_MANAGED,
-                source=CredentialSource.PROCESS_ENVIRONMENT,
-                code="credential_managed_by_environment",
-            )
         if request.action == "delete":
             self._secret_store.delete(status.environment_variable)
             self._reload_configuration()
             return ProviderCredentialSetResult(
                 provider=request.provider,
                 status=ProviderCredentialSetStatus.DELETED,
-                source=CredentialSource.MISSING,
+                source=status.selected_source,
                 code="credential_deleted",
             )
         assert request.api_key is not None
-        result = await self._validator.validate(
-            request.provider,
-            request.api_key,
-            kimi_region=self._sources().user.providers.kimi_region,
+        result = (
+            CredentialValidation(
+                status=CredentialValidationStatus.VALID, code="credential_valid"
+            )
+            if request.provider == "mem0"
+            else await self._validator.validate(
+                request.provider,
+                request.api_key,
+                kimi_region=self._sources().user.providers.kimi_region,
+            )
         )
         if result.status is CredentialValidationStatus.INVALID:
             return ProviderCredentialSetResult(
                 provider=request.provider,
                 status=ProviderCredentialSetStatus.INVALID,
-                source=status.source,
+                source=status.selected_source,
                 code=result.code,
             )
         if (
@@ -245,15 +291,16 @@ class ProviderConfigurationService:
             return ProviderCredentialSetResult(
                 provider=request.provider,
                 status=ProviderCredentialSetStatus.CONFIRM_UNVERIFIED,
-                source=status.source,
+                source=status.selected_source,
                 code=result.code,
             )
         self._secret_store.set(status.environment_variable, request.api_key)
+        self._select_source(request.provider, CredentialSource.AWESOME)
         self._reload_configuration()
         return ProviderCredentialSetResult(
             provider=request.provider,
             status=ProviderCredentialSetStatus.CONFIGURED,
-            source=CredentialSource.USER_ENV_FILE,
+            source=CredentialSource.AWESOME,
             code=(
                 "credential_saved_unverified"
                 if result.status is CredentialValidationStatus.UNVERIFIED
@@ -285,39 +332,61 @@ class ProviderConfigurationService:
             results[provider] = validation.status.value
         return results
 
-    def _provider_options(self) -> tuple[CommandOption, ...]:
+    def _service_options(self) -> tuple[CommandOption, ...]:
         sources = self._sources()
         options: list[CommandOption] = []
-        for provider in ("deepseek", "kimi"):
-            status = _status(sources, provider)
-            description = {
-                CredentialSource.MISSING: "Not configured",
-                CredentialSource.USER_ENV_FILE: "Configured · Awesome",
-                CredentialSource.PROCESS_ENVIRONMENT: "Configured · Environment",
-            }[status.source]
+        for service in ("deepseek", "kimi", "mem0"):
+            status = _status(sources, service)
+            active = status.selected_source.value if status.selected_source else None
             options.append(
                 CommandOption(
-                    value=provider,
-                    label=_PROVIDER_LABELS[provider],
-                    description=description,
+                    value=service,
+                    label=_SERVICE_LABELS[service],
+                    description=(
+                        "Not configured"
+                        if active is None
+                        else f"Active · {active}"
+                        if status.source_available
+                        else f"Active · {active} · Unavailable"
+                    ),
                 )
             )
         return tuple(options)
 
+    def _provider_options(self) -> tuple[CommandOption, ...]:
+        return tuple(
+            option for option in self._service_options() if option.value != "mem0"
+        )
+
+    def _select_source(
+        self,
+        service: CredentialService,
+        source: CredentialSource,
+    ) -> None:
+        self._config_writer.update(
+            lambda current: current.model_copy(
+                update={
+                    "credentials": current.credentials.model_copy(
+                        update={service: source}
+                    )
+                }
+            )
+        )
+        self._reload_configuration()
+
     def _secret_prompt(
         self,
-        provider: ProviderName,
+        provider: CredentialService,
         *,
         action: Literal["add", "replace"],
-    ) -> CommandResult:
-        return CommandResult(
-            status=CommandStatus.SUCCESS,
-            secret_prompt=CommandSecretPrompt(
+    ) -> CommandOutcome:
+        return interaction(
+            CommandSecretPrompt(
                 provider=provider,
                 action=action,
-                label=f"{_PROVIDER_LABELS[provider]} API Key",
+                label=f"{_SERVICE_LABELS[provider]} API Key",
                 environment_variable=provider_environment_variable(provider),
-                help_url=_PROVIDER_HELP_URLS[provider],
+                help_url=_SERVICE_HELP_URLS[provider],
             ),
         )
 
@@ -330,25 +399,22 @@ def _provider(value: str) -> ProviderName | None:
     return None
 
 
+def _service(value: str) -> CredentialService | None:
+    if value in {"deepseek", "kimi", "mem0"}:
+        return cast(CredentialService, value)
+    return None
+
+
 def _status(
     sources: LoadedConfigSources,
-    provider: ProviderName,
+    provider: CredentialService,
 ) -> ProviderCredentialStatus:
     if provider == "deepseek":
         return sources.provider_credentials.deepseek
-    return sources.provider_credentials.kimi
+    if provider == "kimi":
+        return sources.provider_credentials.kimi
+    return sources.provider_credentials.mem0
 
 
-def _error(code: str, content: str) -> CommandResult:
-    return CommandResult(
-        status=CommandStatus.ERROR,
-        content=content,
-        data=cast(dict[str, JsonValue], {"error_code": code}),
-    )
-
-
-def _managed_error(environment_variable: str) -> CommandResult:
-    return _error(
-        "credential_managed_by_environment",
-        f"Credential is managed by {environment_variable} in the process environment.",
-    )
+def _error(code: str, content: str) -> CommandOutcome:
+    return error(code, content)

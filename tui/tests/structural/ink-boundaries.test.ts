@@ -25,42 +25,99 @@ async function sourceFiles(
   return values;
 }
 
-describe("Ink scrollback boundaries", () => {
-  it("keeps terminal input and viewport authority in focused components", async () => {
+describe("Ink terminal ownership boundaries", () => {
+  it("keeps one keyboard owner and one ordered natural-flow layout", async () => {
     const files = await sourceFiles(
       fileURLToPath(new URL("../../src", import.meta.url)),
     );
-    const source = files.map((file) => file.source).join("\n");
-    expect(source).not.toMatch(/1049|alternate.?screen|mouse|sidebar/iu);
-
     expect(
       files
         .filter((file) => file.source.includes("useInput"))
         .map((file) => file.path),
     ).toEqual(["interaction/TerminalInput.tsx"]);
 
-    const transcript = files
-      .filter((file) => file.path.includes("transcript"))
-      .map((file) => file.source)
-      .join("\n");
-    expect(transcript).not.toMatch(/useInput|viewport/iu);
+    const layout =
+      files.find((file) => file.path === "components/TerminalSurfaceLayout.tsx")
+        ?.source ?? "";
+    expect(
+      [...layout.matchAll(/from ["']([^"']+)["']/gu)].map((match) => match[1]),
+    ).toEqual(["ink", "react", "./cursor/terminal-frame-metrics.js"]);
+    const orderedNodes = [
+      "props.welcome",
+      "props.transcript",
+      "props.activeTurn",
+      "props.pendingInputs",
+      "props.notices",
+      "props.commandMenu",
+      "props.input",
+      "props.status",
+    ];
+    for (let index = 1; index < orderedNodes.length; index += 1) {
+      expect(layout.indexOf(orderedNodes[index - 1] ?? "")).toBeLessThan(
+        layout.indexOf(orderedNodes[index] ?? ""),
+      );
+    }
+    expect(layout).toContain("<TerminalFrameMetricsProvider");
+    expect(layout).toContain('<Box ref={frameRef} flexDirection="column">');
   });
 
-  it("contains no superseded input, modal, role-label, or timing paths", async () => {
+  it("keeps pending input session-local and outside protocol and Surface state", async () => {
     const files = await sourceFiles(
       fileURLToPath(new URL("../../src", import.meta.url)),
     );
-    const source = files.map((file) => file.source).join("\n");
-    const app = files.find((file) => file.path === "app/App.tsx")?.source ?? "";
-
-    expect(app).not.toMatch(
-      /commandInputBlocked|CredentialFlow|showHelp|helpOverlay|isModalOpen/u,
+    const pendingFiles = files.filter((file) =>
+      file.path.startsWith("pending-input/"),
     );
-    expect(source).not.toContain("execute_boundary");
-    expect(source).not.toMatch(/choices\??:\s*(?:readonly\s+)?string\[\]/u);
-    expect(source).not.toMatch(/<Text[^>]*>\s*(?:You|Assistant)\s*</u);
-    expect(source).not.toMatch(/duration_ms\s*:\s*0\b/u);
-    expect(files.some((file) => /HelpOverlay/iu.test(file.path))).toBe(false);
+
+    expect(pendingFiles.map((file) => file.path).toSorted()).toEqual([
+      "pending-input/model.ts",
+      "pending-input/reducer.ts",
+      "pending-input/use-pending-input-queue.ts",
+    ]);
+    for (const file of pendingFiles) {
+      expect(file.source).not.toContain("../protocol/");
+      expect(file.source).not.toContain("../state/");
+      expect(file.source).not.toContain("SQLite");
+    }
+  });
+
+  it("keeps the Ink frame effect in the CLI host", async () => {
+    const files = await sourceFiles(
+      fileURLToPath(new URL("../../src", import.meta.url)),
+    );
+    expect(
+      files
+        .filter((file) => file.source.includes("instance?.clear()"))
+        .map((file) => file.path),
+    ).toEqual(["cli/main.tsx"]);
+
+    const transition =
+      files.find((file) => file.path === "app/use-thread-transition.ts")
+        ?.source ?? "";
+    expect(transition.indexOf('type: "thread.replaced"')).toBeLessThan(
+      transition.indexOf("effects.resetCurrentFrame()"),
+    );
+  });
+
+  it("replaces one Thread surface with current product projections", async () => {
+    const files = await sourceFiles(
+      fileURLToPath(new URL("../../src", import.meta.url)),
+    );
+    const actions =
+      files.find((file) => file.path === "state/actions.ts")?.source ?? "";
+    const replacement = actions.slice(
+      actions.indexOf('readonly type: "thread.replaced"'),
+      actions.indexOf('readonly type: "event.received"'),
+    );
+    expect(replacement).toContain(
+      'readonly application: MethodValue["application.getState"]',
+    );
+    expect(replacement).toContain(
+      'readonly thread: MethodValue["thread.read"]',
+    );
+    expect(replacement).toContain(
+      "readonly transcript: readonly TranscriptBlock[]",
+    );
   });
 
   it("keeps Aurora brand colors in the semantic theme boundary", async () => {
@@ -92,21 +149,24 @@ describe("Ink scrollback boundaries", () => {
     const expectedRoles = new Map<string, readonly string[]>([
       [
         "components/Welcome.tsx",
-        ["theme.primary", "theme.secondary", "theme.muted"],
+        ["props.theme.logoRows", "props.theme.border", "props.theme.muted"],
       ],
       [
         "components/Composer.tsx",
         ["theme.border", "theme.primary", "theme.secondary"],
       ],
+      ["components/TrustPrompt.tsx", ["theme.brand", "theme.muted"]],
       [
-        "components/TrustPrompt.tsx",
-        ["theme.brand", "theme.muted", "theme.danger"],
+        "components/interactions/SelectionPanel.tsx",
+        ["theme.brand", "theme.warning", "theme.danger", "theme.primary"],
       ],
       ["components/SecretInput.tsx", ["theme.primary", "theme.warning"]],
       [
         "components/transcript/blocks/BlockView.tsx",
-        ["theme.user", "theme.assistant", "theme.tool", "theme.muted"],
+        ["theme.assistant", "theme.muted"],
       ],
+      ["components/transcript/UserLine.tsx", ["theme.user", "theme.danger"]],
+      ["components/transcript/ToolSequence.tsx", ["theme.tool", "theme.muted"]],
     ]);
 
     for (const [path, roles] of expectedRoles) {

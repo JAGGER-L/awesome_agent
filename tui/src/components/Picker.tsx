@@ -1,29 +1,21 @@
-import { Box, Text } from "ink";
-
 import type { PickerSelection } from "../interaction/model.js";
-import { useTheme } from "./theme.js";
+import { SelectionPanel, type SelectionVariant } from "./interactions/index.js";
 
 export function Picker({
   selection,
   selected,
+  variant = "neutral",
 }: {
   readonly selection: PickerSelection;
   readonly selected: number;
+  readonly variant?: SelectionVariant;
 }) {
-  const theme = useTheme();
   return (
-    <Box flexDirection="column">
-      <Text color={theme.primary}>{selection.prompt}</Text>
-      {selection.options.map((option, index) => (
-        <Text
-          key={option.value}
-          {...(index === selected ? { color: theme.primary } : {})}
-        >
-          {index === selected ? "› " : "  "}
-          {option.label}
-          {option.description ? ` — ${option.description}` : ""}
-        </Text>
-      ))}
-    </Box>
+    <SelectionPanel
+      title={selection.prompt}
+      options={selection.options}
+      selected={selected}
+      variant={variant}
+    />
   );
 }

@@ -161,7 +161,10 @@ def _runtime(
                 read_only=False,
             ),
         ),
-        tool_context_factory=lambda state: cast(Any, {"turn_id": state["turn_id"]}),
+        tool_context_factory=lambda state, request: cast(
+            Any,
+            {"turn_id": state["turn_id"], "tool_name": request.tool_name},
+        ),
         event_projector=FakeProjector(),
         context_builder=context_builder,
         budget=budget or TurnBudget(),

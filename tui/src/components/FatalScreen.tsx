@@ -17,9 +17,22 @@ export function FatalScreen({
 }) {
   const theme = useTheme();
   const summary = fatalSummary(fatal);
+  const quitOnly = startup || fatal.kind === "state_schema_incompatible";
   return (
     <Box flexDirection="column">
-      {startup ? (
+      {fatal.kind === "state_schema_incompatible" ? (
+        <>
+          <Text color={theme.danger}>
+            Awesome state is incompatible with this version.
+          </Text>
+          <Text>
+            Found schema {fatal.foundSchema} · Expected schema{" "}
+            {fatal.expectedSchema}
+          </Text>
+          <Text>Close Awesome and reset this state directory:</Text>
+          <Text>{fatal.stateDirectory}</Text>
+        </>
+      ) : startup ? (
         <>
           <Text color={theme.danger}>
             Awesome could not initialize this workspace.
@@ -49,14 +62,16 @@ export function FatalScreen({
         <Text>Exit code {fatalExitCode(fatal)}</Text>
       ) : null}
       <Picker
-        selected={startup ? 0 : selected}
+        selected={quitOnly ? 0 : selected}
         selection={{
-          prompt: startup
-            ? "Exit and run Awesome again"
+          prompt: quitOnly
+            ? fatal.kind === "state_schema_incompatible"
+              ? "Exit Awesome"
+              : "Exit and run Awesome again"
             : disabled
               ? "Reconnecting…"
               : "Choose recovery action",
-          options: startup
+          options: quitOnly
             ? [{ value: "quit", label: "Quit", selected: true }]
             : [
                 { value: "reconnect", label: "Reconnect", selected: true },
@@ -97,5 +112,7 @@ function fatalSummary(fatal: FatalState): string {
       return `Core runtime not found · ${fatal.executable}`;
     case "version_incompatible":
       return `Version incompatible · ${fatal.message}`;
+    case "state_schema_incompatible":
+      return "State schema incompatible";
   }
 }

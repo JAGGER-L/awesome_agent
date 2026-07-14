@@ -112,6 +112,7 @@ function appendTools(
         name: tool.tool_name,
         verb: toolVerb(tool.tool_name),
         outcome: tool.outcome,
+        started_at: tool.created_at,
         summary: tool.result_summary,
         duration_ms: tool.duration_ms,
         ...(tool.error_code === undefined
@@ -130,13 +131,13 @@ function appendChanges(
   for (const change of page.change_sets.filter(
     (item) => item.turn_id === turnId && item.operation_id === operationId,
   )) {
+    if (change.changes.length === 0) continue;
     blocks.push({
       key: `change:${change.change_set_id}`,
       kind: "change",
       change_set_id: change.change_set_id,
-      paths: change.changed_paths,
       lifecycle: change.lifecycle,
-      reversibility: change.reversibility,
+      changes: change.changes,
     });
   }
 }
