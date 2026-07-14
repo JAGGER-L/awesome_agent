@@ -20,6 +20,7 @@ from awesome_agent.agent import (
     compile_agent_graph,
 )
 from awesome_agent.application.change_commands import ChangeCommandService
+from awesome_agent.application.change_scope import ChangeScope
 from awesome_agent.application.command_results import CommandOutcome, error
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
@@ -97,7 +98,6 @@ from awesome_agent.conversation import (
 )
 from awesome_agent.core.changes import (
     ChangeJournal,
-    ChangeLifecycle,
     ChangeOperations,
 )
 from awesome_agent.core.contracts import new_identifier
@@ -112,6 +112,7 @@ from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
+    ToolRequest,
 )
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
@@ -262,45 +263,6 @@ class _GatewayRouter:
             yield event
 
 
-class _ChangeScope:
-    def __init__(
-        self,
-        *,
-        journal: ChangeJournal,
-        store: SQLiteChangeSetStore,
-        session_id: str,
-        workspace: WorkspaceIdentity,
-    ) -> None:
-        self._journal = journal
-        self._store = store
-        self._session_id = session_id
-        self._workspace = workspace
-        self._identifiers: dict[str, str] = {}
-
-    def acquire(self, owner: str, *, turn_id: str | None) -> str:
-        current = self._identifiers.get(owner)
-        if current is not None:
-            return current
-        change_set = self._journal.begin(
-            session_id=self._session_id,
-            turn_id=turn_id,
-            workspace=self._workspace,
-        )
-        self._identifiers[owner] = change_set.id
-        return change_set.id
-
-    def seal(self, owner: str) -> None:
-        identifier = self._identifiers.pop(owner, None)
-        if identifier is None:
-            return
-        change_set = self._store.get(identifier)
-        if change_set is not None and change_set.lifecycle is ChangeLifecycle.OPEN:
-            self._journal.seal(identifier)
-
-    def reconcile(self) -> None:
-        self._journal.reconcile_pending()
-
-
 class _Mem0Session:
     def __init__(
         self,
@@ -401,7 +363,7 @@ class _LocalApplicationBackend:
         self._mem0_diagnostic: Mem0Diagnostic | None = None
         self._mem0_session: _Mem0Session | None = None
         self._mcp: McpManager | None = None
-        self._change_scope: _ChangeScope | None = None
+        self._change_scope: ChangeScope | None = None
         self._change_store: SQLiteChangeSetStore | None = None
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
@@ -744,13 +706,6 @@ class _LocalApplicationBackend:
         self._change_store = change_store
         change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
         journal = ChangeJournal(change_store, change_blobs, self._workspace)
-        self._change_scope = _ChangeScope(
-            journal=journal,
-            store=change_store,
-            session_id=self._session_id,
-            workspace=self._workspace,
-        )
-        self._change_scope.reconcile()
         self._change_operations = ChangeOperations(
             change_store,
             change_blobs,
@@ -762,6 +717,14 @@ class _LocalApplicationBackend:
         register_modifying_tools(registry, journal, ProcessRunner())
         self._registry = registry
         executor = ToolExecutor(registry)
+        self._change_scope = ChangeScope(
+            journal=journal,
+            store=change_store,
+            registry=registry,
+            session_id=self._session_id,
+            workspace=self._workspace,
+        )
+        self._change_scope.reconcile()
 
         bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
         catalog = discover_skills(
@@ -869,7 +832,11 @@ class _LocalApplicationBackend:
                 decision = await self._interactions.wait(pending.id)
                 return ToolApprovalDecision(decision.value)
 
-            def tool_context(state: object) -> ToolExecutionContext:
+            def tool_context(
+                state: object,
+                request: ToolRequest,
+            ) -> ToolExecutionContext:
+                del state
                 assert self._change_scope is not None
                 return ToolExecutionContext(
                     workspace=self._workspace,
@@ -880,8 +847,9 @@ class _LocalApplicationBackend:
                     emitter=self._emitter,
                     activity_writer=self._repositories.tool_activities,
                     monotonic=monotonic,
-                    change_set_id=self._change_scope.acquire(
-                        turn_id,
+                    change_set_id=self._change_scope.change_set_for_tool(
+                        tool_name=request.tool_name,
+                        owner=turn_id,
                         turn_id=turn_id,
                     ),
                     permission_session=self._permission_session,
@@ -937,7 +905,11 @@ class _LocalApplicationBackend:
             turn_input_preparer=context_service.prepare_turn,
         )
 
-        def direct_context(thread_id: str, operation_id: str) -> ToolExecutionContext:
+        def direct_context(
+            thread_id: str,
+            operation_id: str,
+            request: ToolRequest,
+        ) -> ToolExecutionContext:
             assert self._change_scope is not None
             return ToolExecutionContext(
                 workspace=self._workspace,
@@ -948,8 +920,9 @@ class _LocalApplicationBackend:
                 emitter=self._emitter,
                 activity_writer=self._repositories.tool_activities,
                 monotonic=monotonic,
-                change_set_id=self._change_scope.acquire(
-                    operation_id,
+                change_set_id=self._change_scope.change_set_for_tool(
+                    tool_name=request.tool_name,
+                    owner=operation_id,
                     turn_id=None,
                 ),
                 permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),

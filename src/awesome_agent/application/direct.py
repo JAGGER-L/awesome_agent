@@ -35,7 +35,7 @@ class DirectToolExecutor(Protocol):
     ) -> ToolResult: ...
 
 
-type DirectContextFactory = Callable[[str, str], ToolExecutionContext]
+type DirectContextFactory = Callable[[str, str, ToolRequest], ToolExecutionContext]
 type DirectOperationFinalizer = Callable[[str], None]
 
 
@@ -63,18 +63,18 @@ class DirectCommandService:
         self._conversation.read_thread(thread_id)
 
         async def execute(operation_id: str) -> None:
-            context = self._context_factory(thread_id, operation_id)
+            request = ToolRequest(
+                call_id=new_identifier("call"),
+                tool_name="execute",
+                arguments={"command": normalized},
+            )
+            context = self._context_factory(thread_id, operation_id, request)
             if (
                 context.origin is not ToolExecutionOrigin.DIRECT
                 or context.turn_id is not None
                 or context.thread_id != thread_id
             ):
                 raise RuntimeError("Direct context violates operation authority.")
-            request = ToolRequest(
-                call_id=new_identifier("call"),
-                tool_name="execute",
-                arguments={"command": normalized},
-            )
             try:
                 try:
                     result = await self._executor.execute(request, context=context)
