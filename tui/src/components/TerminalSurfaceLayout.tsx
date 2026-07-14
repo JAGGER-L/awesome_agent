@@ -1,5 +1,7 @@
-import { Box } from "ink";
-import type { ReactNode } from "react";
+import { Box, useBoxMetrics, useWindowSize, type DOMElement } from "ink";
+import { useRef, type ReactNode } from "react";
+
+import { TerminalFrameMetricsProvider } from "./cursor/terminal-frame-metrics.js";
 
 export interface TerminalSurfaceLayoutProps {
   readonly welcome?: ReactNode;
@@ -13,16 +15,27 @@ export interface TerminalSurfaceLayoutProps {
 }
 
 export function TerminalSurfaceLayout(props: TerminalSurfaceLayoutProps) {
+  const frameRef = useRef<DOMElement>(null);
+  const frame = useBoxMetrics(frameRef);
+  const { rows } = useWindowSize();
   return (
-    <Box flexDirection="column">
-      {props.welcome}
-      {props.transcript}
-      {props.activeTurn}
-      {props.pendingInputs}
-      {props.notices}
-      {props.commandMenu}
-      {props.input}
-      {props.status}
-    </Box>
+    <TerminalFrameMetricsProvider
+      value={{
+        frameHeight: frame.height,
+        terminalRows: rows,
+        hasMeasured: frame.hasMeasured,
+      }}
+    >
+      <Box ref={frameRef} flexDirection="column">
+        {props.welcome}
+        {props.transcript}
+        {props.activeTurn}
+        {props.pendingInputs}
+        {props.notices}
+        {props.commandMenu}
+        {props.input}
+        {props.status}
+      </Box>
+    </TerminalFrameMetricsProvider>
   );
 }

@@ -72,12 +72,28 @@ Tab, and arrow keys. Components render state and never install competing input
 listeners.
 
 Composer text uses Ink's real terminal cursor rather than a rendered block
-glyph. `useBoxMetrics()` measures the Composer's root box, the existing
-display-width-aware viewport supplies row and column coordinates, and
-`useCursor()` publishes the position relative to the Ink output. This leaves
-IME preedit rendering to the terminal host. Submitting and exclusive Picker,
-Approval, Trust, Auth, Secret, and Fatal modes hide the Composer cursor; the
-Command Menu remains a Composer accessory and keeps the draft cursor active.
+glyph. The cursor boundary is:
+
+```text
+Composer logical cursor
+  -> TerminalFrameMetrics (React-only)
+  -> InkCursorBridge (Ink 7.1 fullscreen convention)
+  -> useCursor physical position
+```
+
+`useBoxMetrics()` measures the Composer's logical position inside the output,
+and the existing display-width-aware viewport supplies its row and column.
+`TerminalSurfaceLayout` separately publishes the measured frame height and
+terminal row count. Ink 7.1 omits the trailing newline once a frame fills the
+viewport, so `InkCursorBridge` translates only that renderer-specific physical
+row convention. These metrics remain presentation state and never enter the
+Surface store or protocol. A future Ink upgrade may remove the bridge only
+after the below-, equal-, and above-viewport ANSI regression passes unchanged.
+
+This leaves IME preedit rendering to the terminal host. Submitting and
+exclusive Picker, Approval, Trust, Auth, Secret, and Fatal modes hide the
+Composer cursor; the Command Menu remains a Composer accessory and keeps the
+draft cursor active.
 
 `TerminalSurfaceLayout` renders one natural terminal flow in this order:
 Welcome, committed transcript, active Turn, pending inputs, notices, Command
