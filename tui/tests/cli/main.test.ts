@@ -4,8 +4,10 @@ import { CoreSpawnError } from "../../src/core/errors.js";
 import {
   clearCurrentInkFrame,
   executeFatalRecoverySelection,
+  flushCurrentInkFrame,
   reconnectAndReplaceSurface,
   runCli,
+  unmountInkApplication,
   type CliDependencies,
 } from "../../src/cli/main.js";
 import { RpcProtocolError } from "../../src/protocol/client.js";
@@ -17,6 +19,14 @@ type ReadyApplication = Extract<
   StartupResult,
   { readonly kind: "ready" }
 >["application"];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 const readyApplication: ReadyApplication = {
   initialized: true,
@@ -133,6 +143,51 @@ describe("runCli", () => {
     clearCurrentInkFrame({ clear });
 
     expect(clear).toHaveBeenCalledOnce();
+  });
+
+  it("awaits the current Ink frame flush", async () => {
+    const flushed = deferred<void>();
+    const waitUntilRenderFlush = vi.fn(async () => {
+      await flushed.promise;
+    });
+    let complete = false;
+
+    const pending = flushCurrentInkFrame({ waitUntilRenderFlush }).then(() => {
+      complete = true;
+    });
+
+    expect(waitUntilRenderFlush).toHaveBeenCalledOnce();
+    expect(complete).toBe(false);
+    flushed.resolve();
+    await pending;
+    expect(complete).toBe(true);
+  });
+
+  it("unmounts Ink and waits for all teardown writes", async () => {
+    const exited = deferred<void>();
+    const unmount = vi.fn();
+    const waitUntilExit = vi.fn(async () => {
+      await exited.promise;
+    });
+    let complete = false;
+
+    const pending = unmountInkApplication({ unmount, waitUntilExit }).then(
+      () => {
+        complete = true;
+      },
+    );
+
+    expect(unmount).toHaveBeenCalledOnce();
+    expect(waitUntilExit).toHaveBeenCalledOnce();
+    expect(complete).toBe(false);
+    exited.resolve();
+    await pending;
+    expect(complete).toBe(true);
+  });
+
+  it("treats a missing Ink instance as already cleaned up", async () => {
+    await expect(unmountInkApplication(undefined)).resolves.toBeUndefined();
+    await expect(flushCurrentInkFrame(undefined)).resolves.toBeUndefined();
   });
   it.each([
     ["--version"],

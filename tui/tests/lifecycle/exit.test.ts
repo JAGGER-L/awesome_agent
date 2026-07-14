@@ -11,6 +11,10 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+async function nextTurn(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 class FakeClock implements ExitClock {
   #tasks: { at: number; callback: () => void; cancelled: boolean }[] = [];
   #now = 0;
@@ -35,19 +39,31 @@ class FakeClock implements ExitClock {
 function harness() {
   const exit = deferred<CoreExit>();
   const clock = new FakeClock();
-  const requestShutdown = vi.fn(async () => undefined);
-  const terminate = vi.fn(async () => undefined);
-  const disableInput = vi.fn();
-  const cleanupTerminal = vi.fn(async () => undefined);
+  const calls: string[] = [];
+  const requestShutdown = vi.fn(async () => {
+    calls.push("shutdown");
+  });
+  const terminate = vi.fn(async () => {
+    calls.push("terminate");
+  });
+  const disableInput = vi.fn(() => calls.push("disable"));
+  const flushTerminal = vi.fn(async () => {
+    calls.push("flush");
+  });
+  const cleanupTerminal = vi.fn(async () => {
+    calls.push("cleanup");
+  });
   const controller = new ExitController(
     { exit: exit.promise, requestShutdown, terminate },
-    { clock, disableInput, cleanupTerminal },
+    { clock, disableInput, flushTerminal, cleanupTerminal },
   );
   return {
+    calls,
     clock,
     controller,
     disableInput,
     exit,
+    flushTerminal,
     cleanupTerminal,
     requestShutdown,
     terminate,
@@ -65,6 +81,7 @@ describe("ExitController", () => {
     const value = harness();
     const pending = value.controller.requestExit(reason);
     expect(value.disableInput).toHaveBeenCalledOnce();
+    await Promise.resolve();
     expect(value.requestShutdown).toHaveBeenCalledOnce();
     value.exit.resolve({ code: 0, signal: null, shutdown_requested: true });
     await expect(pending).resolves.toEqual({
@@ -74,21 +91,93 @@ describe("ExitController", () => {
     });
     expect(value.terminate).not.toHaveBeenCalled();
     expect(value.cleanupTerminal).toHaveBeenCalledOnce();
+    expect(value.calls).toEqual(["disable", "flush", "shutdown", "cleanup"]);
   });
 
-  it("shares one idempotent exit Promise", () => {
+  it("shares one idempotent exit Promise", async () => {
     const value = harness();
     const first = value.controller.requestExit("quit_command");
     const second = value.controller.requestExit("ctrl_d");
     expect(second).toBe(first);
+    await Promise.resolve();
     expect(value.requestShutdown).toHaveBeenCalledOnce();
     value.exit.resolve({ code: 0, signal: null, shutdown_requested: true });
-    return first;
+    await first;
+  });
+
+  it("waits for the final presentation flush before requesting shutdown", async () => {
+    const exit = deferred<CoreExit>();
+    const flushed = deferred<void>();
+    const calls: string[] = [];
+    const requestShutdown = vi.fn(async () => {
+      calls.push("shutdown");
+    });
+    const cleanupTerminal = vi.fn(async () => {
+      calls.push("cleanup");
+    });
+    const controller = new ExitController(
+      {
+        exit: exit.promise,
+        requestShutdown,
+        terminate: async () => {
+          calls.push("terminate");
+        },
+      },
+      {
+        disableInput: () => calls.push("disable"),
+        flushTerminal: async () => {
+          calls.push("flush");
+          await flushed.promise;
+        },
+        cleanupTerminal,
+      },
+    );
+
+    const pending = controller.requestExit("quit_command");
+    expect(calls).toEqual(["disable", "flush"]);
+    expect(requestShutdown).not.toHaveBeenCalled();
+
+    flushed.resolve();
+    await nextTurn();
+    expect(calls).toEqual(["disable", "flush", "shutdown"]);
+
+    exit.resolve({ code: 0, signal: null, shutdown_requested: true });
+    await expect(pending).resolves.toMatchObject({ forced: false });
+    expect(calls).toEqual(["disable", "flush", "shutdown", "cleanup"]);
+  });
+
+  it("shuts down and cleans up before reporting a presentation flush failure", async () => {
+    const exit = deferred<CoreExit>();
+    const requestShutdown = vi.fn(async () => undefined);
+    const cleanupTerminal = vi.fn(async () => undefined);
+    const controller = new ExitController(
+      {
+        exit: exit.promise,
+        requestShutdown,
+        terminate: async () => undefined,
+      },
+      {
+        disableInput: () => undefined,
+        flushTerminal: async () => {
+          throw new Error("render flush failed");
+        },
+        cleanupTerminal,
+      },
+    );
+
+    const pending = controller.requestExit("quit_command");
+    await Promise.resolve();
+    expect(requestShutdown).toHaveBeenCalledOnce();
+    exit.resolve({ code: 0, signal: null, shutdown_requested: true });
+
+    await expect(pending).rejects.toThrow("render flush failed");
+    expect(cleanupTerminal).toHaveBeenCalledOnce();
   });
 
   it("waits five seconds then terminates once with a local warning", async () => {
     const value = harness();
     const pending = value.controller.requestExit("quit_command");
+    await nextTurn();
     value.clock.advance(4_999);
     expect(value.terminate).not.toHaveBeenCalled();
     value.clock.advance(1);
@@ -116,7 +205,12 @@ describe("ExitController", () => {
           throw new Error("terminate failed");
         },
       },
-      { clock, disableInput: () => {}, cleanupTerminal },
+      {
+        clock,
+        disableInput: () => {},
+        flushTerminal: async () => undefined,
+        cleanupTerminal,
+      },
     );
     const pending = controller.requestExit("quit_command");
     await Promise.resolve();

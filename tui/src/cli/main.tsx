@@ -233,12 +233,21 @@ async function renderInkApplication(
   const loaded = await loadPreferences(awesomeHome);
   let instance: Instance | undefined;
   let settled = false;
-  return await new Promise<CliRenderOutcome>((resolve) => {
+  let cleanupPromise: Promise<void> | undefined;
+  return await new Promise<CliRenderOutcome>((resolve, reject) => {
+    const cleanupTerminal = () => {
+      cleanupPromise ??= unmountInkApplication(instance);
+      return cleanupPromise;
+    };
     const finish = (outcome: CliRenderOutcome) => {
       if (settled) return;
       settled = true;
-      instance?.unmount();
-      resolve(outcome);
+      void cleanupTerminal().then(() => resolve(outcome), reject);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      void cleanupTerminal().then(() => reject(error), reject);
     };
     instance = render(
       <CliApplication
@@ -249,7 +258,9 @@ async function renderInkApplication(
           ? { preferenceWarning: loaded.warnings[0].message }
           : {})}
         onFinish={finish}
-        unmount={() => instance?.unmount()}
+        onFailure={fail}
+        cleanupTerminal={cleanupTerminal}
+        flushCurrentFrame={() => flushCurrentInkFrame(instance)}
         resetCurrentFrame={() => clearCurrentInkFrame(instance)}
       />,
       { exitOnCtrlC: false },
@@ -262,7 +273,9 @@ type CliApplicationProps = CliRenderRequest & {
   readonly initialTheme: ThemePreference;
   readonly preferenceWarning?: string;
   readonly onFinish: (outcome: CliRenderOutcome) => void;
-  readonly unmount: () => void;
+  readonly onFailure: (error: unknown) => void;
+  readonly cleanupTerminal: () => Promise<void>;
+  readonly flushCurrentFrame: () => Promise<void>;
   readonly resetCurrentFrame: () => void;
 };
 
@@ -341,7 +354,9 @@ function RunningCliApplication({
   initialTheme,
   preferenceWarning,
   onFinish,
-  unmount,
+  onFailure,
+  cleanupTerminal,
+  flushCurrentFrame,
   resetCurrentFrame,
 }: CliApplicationProps & {
   readonly state: Extract<StartupRenderState, { kind: "startup" }>;
@@ -355,6 +370,7 @@ function RunningCliApplication({
   const [themePreference, setThemePreference] = useState(initialTheme);
   const [fatal, setFatal] = useState<FatalState>();
   const [reconnecting, setReconnecting] = useState(false);
+  const [exiting, setExiting] = useState(false);
   const state = useSyncExternalStore(
     surface.store.subscribe,
     surface.store.getState,
@@ -394,21 +410,27 @@ function RunningCliApplication({
   const exitController = useMemo(
     () =>
       new ExitController(surface.session, {
-        disableInput: () => undefined,
-        cleanupTerminal: unmount,
+        disableInput: () => setExiting(true),
+        flushTerminal: flushCurrentFrame,
+        cleanupTerminal,
       }),
-    [surface, unmount],
+    [cleanupTerminal, flushCurrentFrame, surface],
   );
   const requestExit = useCallback(
     async (reason: ExitReason) => {
-      const outcome = await exitController.requestExit(reason);
-      onFinish({
-        kind: reason === "trust_denied" ? "trust_denied" : "quit",
-        exitCode: outcome.exitCode,
-      });
-      return outcome;
+      try {
+        const outcome = await exitController.requestExit(reason);
+        onFinish({
+          kind: reason === "trust_denied" ? "trust_denied" : "quit",
+          exitCode: outcome.exitCode,
+        });
+        return outcome;
+      } catch (error) {
+        onFailure(error);
+        throw error;
+      }
     },
-    [exitController, onFinish],
+    [exitController, onFailure, onFinish],
   );
   const localCommands = useMemo(
     () =>
@@ -623,10 +645,12 @@ function RunningCliApplication({
   );
 
   const startupInputActive =
-    renderFailure !== undefined ||
-    startup.kind === "state_reset_required" ||
-    startup.kind === "trust_required" ||
-    (startup.kind === "ready" && startup.thread.kind === "selection_required");
+    !exiting &&
+    (renderFailure !== undefined ||
+      startup.kind === "state_reset_required" ||
+      startup.kind === "trust_required" ||
+      (startup.kind === "ready" &&
+        startup.thread.kind === "selection_required"));
 
   return (
     <ThemeProvider value={theme}>
@@ -712,6 +736,7 @@ function RunningCliApplication({
             interactionResponder={interactions}
             providerSetupRequired={startup.readiness === "diagnostics_ready"}
             resetCurrentFrame={resetCurrentFrame}
+            exiting={exiting}
             welcome={{
               version: PRODUCT_VERSION,
               workspacePath: startup.application.workspace.display_path,
@@ -749,6 +774,20 @@ export function clearCurrentInkFrame(
   instance: Pick<Instance, "clear"> | undefined,
 ): void {
   instance?.clear();
+}
+
+export async function flushCurrentInkFrame(
+  instance: Pick<Instance, "waitUntilRenderFlush"> | undefined,
+): Promise<void> {
+  await instance?.waitUntilRenderFlush();
+}
+
+export async function unmountInkApplication(
+  instance: Pick<Instance, "unmount" | "waitUntilExit"> | undefined,
+): Promise<void> {
+  if (!instance) return;
+  instance.unmount();
+  await instance.waitUntilExit();
 }
 
 export async function executeFatalRecoverySelection(
