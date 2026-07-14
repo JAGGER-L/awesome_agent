@@ -11,6 +11,7 @@ from awesome_agent.agent.state import AgentState
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutor,
+    ToolRequest,
     ToolResult,
     ToolSpec,
 )
@@ -219,7 +220,7 @@ class AgentRuntimeContext:
     gateway: ModelGateway
     executor: ToolExecutor
     tool_catalog: Callable[[], tuple[ToolSpec, ...]]
-    tool_context_factory: Callable[[AgentState], ToolExecutionContext]
+    tool_context_factory: Callable[[AgentState, ToolRequest], ToolExecutionContext]
     event_projector: AgentEventProjector
     context_builder: AgentContextBuilder
     budget: TurnBudget
