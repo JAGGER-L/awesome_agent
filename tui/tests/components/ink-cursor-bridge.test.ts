@@ -15,18 +15,17 @@ describe("Ink cursor bridge", () => {
     ).toEqual(logical);
   });
 
-  it.each([24, 25])(
-    "adapts the physical row when frame height is %i",
-    (frameHeight) => {
-      expect(
-        adaptInkCursorPosition(logical, {
-          frameHeight,
-          terminalRows: 24,
-          hasMeasured: true,
-        }),
-      ).toEqual({ x: 12, y: 19 });
-    },
-  );
+  it.each([
+    24, 25,
+  ])("adapts the physical row when frame height is %i", (frameHeight) => {
+    expect(
+      adaptInkCursorPosition(logical, {
+        frameHeight,
+        terminalRows: 24,
+        hasMeasured: true,
+      }),
+    ).toEqual({ x: 12, y: 19 });
+  });
 
   it("hides the cursor until both frame and cursor are available", () => {
     expect(

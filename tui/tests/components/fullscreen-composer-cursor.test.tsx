@@ -1,12 +1,6 @@
 import { Writable } from "node:stream";
 
-import {
-  Box,
-  Text,
-  render,
-  renderToString,
-  type Instance,
-} from "ink";
+import { Box, Text, render, renderToString, type Instance } from "ink";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -19,8 +13,11 @@ import { TerminalSurfaceLayout } from "../../src/components/TerminalSurfaceLayou
 
 const SHOW_CURSOR = "\u001B[?25h";
 const HIDE_CURSOR = "\u001B[?25l";
-const CURSOR_SUFFIX =
-  /(?:\u001B\[(\d+)A)?\u001B\[(\d+)G\u001B\[\?25h/gu;
+// biome-ignore lint/complexity/useRegexLiterals: a constructor keeps terminal control bytes out of the regex literal.
+const CURSOR_SUFFIX = new RegExp(
+  String.raw`(?:\x1B\[(\d+)A)?\x1B\[(\d+)G\x1B\[\?25h`,
+  "gu",
+);
 
 class CaptureTty extends Writable {
   readonly isTTY = true;
@@ -72,8 +69,11 @@ function surface(transcriptRows: number, active = true): ReactElement {
     <TerminalSurfaceLayout
       transcript={
         <Box flexDirection="column">
-          {Array.from({ length: transcriptRows }, (_, index) => (
-            <Text key={index}>history {index + 1}</Text>
+          {Array.from(
+            { length: transcriptRows },
+            (_, index) => `history ${index + 1}`,
+          ).map((line) => (
+            <Text key={line}>{line}</Text>
           ))}
         </Box>
       }
