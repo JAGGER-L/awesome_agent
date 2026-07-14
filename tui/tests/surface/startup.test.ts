@@ -8,6 +8,7 @@ import {
   selectStartupThread,
   respondStartupTrust,
   StartupError,
+  StartupProductError,
 } from "../../src/surface/startup.js";
 import type {
   MethodName,
@@ -426,6 +427,27 @@ function startupHarness({
 }
 
 describe("trusted startup state machine", () => {
+  it("preserves an incompatible-state product failure from initialize", async () => {
+    const error = {
+      code: "state_schema_incompatible" as const,
+      message: "Awesome state is incompatible with this version.",
+      retryable: false as const,
+      data: {
+        found_schema: 1,
+        expected_schema: 2,
+        state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+      },
+    };
+    const surface = {
+      request: async () => ({ ok: false as const, error }),
+    };
+
+    const rejection = beginStartup(surface as never, { kind: "new" });
+
+    await expect(rejection).rejects.toBeInstanceOf(StartupProductError);
+    await expect(rejection).rejects.toMatchObject(error);
+  });
+
   it("stops before project state when initialize requires trust", async () => {
     const { calls, surface } = startupHarness({ trustRequired: true });
     await expect(beginStartup(surface, { kind: "new" })).resolves.toEqual({

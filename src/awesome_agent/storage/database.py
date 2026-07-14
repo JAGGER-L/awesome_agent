@@ -185,17 +185,32 @@ def _connect(path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _schema_version(path: Path) -> int:
+    database_path = path.expanduser().resolve()
+    if not database_path.exists():
+        return 0
+    connection = sqlite3.connect(
+        f"{database_path.as_uri()}?mode=ro",
+        uri=True,
+        timeout=5.0,
+    )
+    try:
+        return int(connection.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        connection.close()
+
+
 def initialize_application_database(path: Path) -> None:
+    version = _schema_version(path)
+    if version == APPLICATION_SCHEMA_VERSION:
+        return
+    if version != 0:
+        raise ApplicationSchemaMismatch(
+            found=version,
+            expected=APPLICATION_SCHEMA_VERSION,
+        )
     connection = _connect(path)
     try:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if version == APPLICATION_SCHEMA_VERSION:
-            return
-        if version != 0:
-            raise ApplicationSchemaMismatch(
-                found=version,
-                expected=APPLICATION_SCHEMA_VERSION,
-            )
         connection.executescript(
             "BEGIN IMMEDIATE;\n"
             f"{_APPLICATION_SCHEMA.rstrip().rstrip(';')};\n"

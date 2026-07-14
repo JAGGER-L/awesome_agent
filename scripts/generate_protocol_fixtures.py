@@ -180,6 +180,29 @@ def _valid_methods() -> dict[str, object]:
             ),
         ),
         (
+            "initialize.state_schema_incompatible",
+            "initialize",
+            {
+                "protocol_version": 2,
+                "client_name": "awesome",
+                "client_version": PRODUCT_VERSION,
+            },
+            _model(
+                ApplicationResult[InitializeResult].failure(
+                    ProductError(
+                        code=ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE,
+                        message="Awesome state is incompatible with this version.",
+                        retryable=False,
+                        data={
+                            "found_schema": 1,
+                            "expected_schema": 2,
+                            "state_directory": "C:\\Awesome\\state",
+                        },
+                    )
+                )
+            ),
+        ),
+        (
             "application.get_state",
             "application.getState",
             {},
@@ -425,8 +448,16 @@ def _invalid_methods() -> dict[str, object]:
 
 
 def _failure_results() -> dict[str, object]:
-    return {
-        "cases": [
+    cases: list[dict[str, object]] = []
+    for code in ProductErrorCode:
+        data: dict[str, object] = {}
+        if code is ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE:
+            data = {
+                "found_schema": 1,
+                "expected_schema": 2,
+                "state_directory": "C:\\Awesome\\state",
+            }
+        cases.append(
             {
                 "code": code.value,
                 "result": _model(
@@ -439,13 +470,13 @@ def _failure_results() -> dict[str, object]:
                                 ProductErrorCode.OPERATION_BUSY,
                                 ProductErrorCode.TURN_BUSY,
                             },
+                            data=data,
                         )
                     )
                 ),
             }
-            for code in ProductErrorCode
-        ]
-    }
+        )
+    return {"cases": cases}
 
 
 def _payload(event_type: EventType) -> EventPayload:

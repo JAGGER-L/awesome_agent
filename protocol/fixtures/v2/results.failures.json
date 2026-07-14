@@ -181,6 +181,22 @@
       }
     },
     {
+      "code": "state_schema_incompatible",
+      "result": {
+        "error": {
+          "code": "state_schema_incompatible",
+          "data": {
+            "expected_schema": 2,
+            "found_schema": 1,
+            "state_directory": "C:\\Awesome\\state"
+          },
+          "message": "Safe state_schema_incompatible message.",
+          "retryable": false
+        },
+        "ok": false
+      }
+    },
+    {
       "code": "internal_error",
       "result": {
         "error": {

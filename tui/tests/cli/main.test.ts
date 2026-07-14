@@ -11,6 +11,7 @@ import {
 import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
+import { StartupProductError } from "../../src/surface/startup.js";
 
 type ReadyApplication = Extract<
   StartupResult,
@@ -291,6 +292,42 @@ describe("runCli", () => {
     );
     expect(value.stderr.join("")).not.toContain(
       "The terminal interface failed unexpectedly.",
+    );
+  });
+
+  it("renders incompatible state through its dedicated startup fatal state", async () => {
+    const renderApplication = vi.fn(
+      async () => ({ kind: "fatal", exitCode: 1 }) as const,
+    );
+    const value = harness({
+      startApplication: vi.fn(async () => {
+        throw new StartupProductError({
+          code: "state_schema_incompatible",
+          message: "Awesome state is incompatible with this version.",
+          retryable: false,
+          data: {
+            found_schema: 1,
+            expected_schema: 2,
+            state_directory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+          },
+        });
+      }),
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: {
+          kind: "fatal",
+          fatal: {
+            kind: "state_schema_incompatible",
+            foundSchema: 1,
+            expectedSchema: 2,
+            stateDirectory: "E:\\awesome_agent\\.awesome-dev\\home\\state",
+          },
+        },
+      }),
     );
   });
 });

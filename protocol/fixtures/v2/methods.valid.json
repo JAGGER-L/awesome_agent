@@ -28,6 +28,28 @@
       }
     },
     {
+      "method": "initialize",
+      "name": "initialize.state_schema_incompatible",
+      "params": {
+        "client_name": "awesome",
+        "client_version": "1.1.1",
+        "protocol_version": 2
+      },
+      "result": {
+        "error": {
+          "code": "state_schema_incompatible",
+          "data": {
+            "expected_schema": 2,
+            "found_schema": 1,
+            "state_directory": "C:\\Awesome\\state"
+          },
+          "message": "Awesome state is incompatible with this version.",
+          "retryable": false
+        },
+        "ok": false
+      }
+    },
+    {
       "method": "application.getState",
       "name": "application.get_state",
       "params": {},

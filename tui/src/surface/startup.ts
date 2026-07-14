@@ -74,6 +74,20 @@ export class StartupError extends Error {
   }
 }
 
+export class StartupProductError extends StartupError {
+  readonly code: ProductError["code"];
+  readonly retryable: boolean;
+  readonly data: ProductError["data"];
+
+  constructor(error: ProductError) {
+    super(error.message, error.code);
+    this.name = "StartupProductError";
+    this.code = error.code;
+    this.retryable = error.retryable;
+    this.data = error.data;
+  }
+}
+
 export async function beginStartup(
   surface: StartupSurface,
   intent: LaunchIntent,
@@ -249,8 +263,8 @@ function hydrateCommandThread(result: CommandOutcome): StartupThreadResult {
   };
 }
 
-function productFailure(error: ProductError): StartupError {
-  return new StartupError(error.message, error.code);
+function productFailure(error: ProductError): StartupProductError {
+  return new StartupProductError(error);
 }
 
 function hydrateSurface(

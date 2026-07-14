@@ -1,5 +1,6 @@
 import { CoreSpawnError } from "../core/errors.js";
 import type { CoreExit, CoreSession } from "../core/process.js";
+import { stateSchemaIncompatibleDataSchema } from "../protocol/base.js";
 import { RpcProtocolError, RpcValidationError } from "../protocol/client.js";
 import { ProtocolDesynchronized } from "../state/event-stream.js";
 
@@ -16,7 +17,13 @@ export type FatalState =
     }
   | { readonly kind: "render"; readonly message: string }
   | { readonly kind: "runtime_missing"; readonly executable: string }
-  | { readonly kind: "version_incompatible"; readonly message: string };
+  | { readonly kind: "version_incompatible"; readonly message: string }
+  | {
+      readonly kind: "state_schema_incompatible";
+      readonly foundSchema: number;
+      readonly expectedSchema: number;
+      readonly stateDirectory: string;
+    };
 
 export class RenderFailure extends Error {
   constructor(message: string) {
@@ -36,6 +43,22 @@ export function toFatalState(
     };
   }
   if (isProductError(error)) {
+    if (error.code === "state_schema_incompatible") {
+      const data = stateSchemaIncompatibleDataSchema.safeParse(error.data);
+      if (!data.success) {
+        return {
+          kind: "protocol",
+          message: "Invalid incompatible-state diagnostic payload.",
+          diagnosticCode: "invalid_state_schema_diagnostic",
+        };
+      }
+      return {
+        kind: "state_schema_incompatible",
+        foundSchema: data.data.found_schema,
+        expectedSchema: data.data.expected_schema,
+        stateDirectory: data.data.state_directory,
+      };
+    }
     return error.code === "protocol_version_incompatible" ||
       error.code === "client_version_incompatible"
       ? { kind: "version_incompatible", message: error.message }
@@ -106,9 +129,12 @@ function executableFromSpawnError(error: CoreSpawnError): string {
     : "awesome-core";
 }
 
-function isProductError(
-  value: unknown,
-): value is { code: string; message: string; retryable: boolean } {
+function isProductError(value: unknown): value is {
+  code: string;
+  message: string;
+  retryable: boolean;
+  data?: unknown;
+} {
   return (
     typeof value === "object" &&
     value !== null &&

@@ -44,6 +44,7 @@ class ProductErrorCode(StrEnum):
     RECOVERY_REQUIRED = "recovery_required"
     CLIENT_VERSION_INCOMPATIBLE = "client_version_incompatible"
     PROTOCOL_VERSION_INCOMPATIBLE = "protocol_version_incompatible"
+    STATE_SCHEMA_INCOMPATIBLE = "state_schema_incompatible"
     INTERNAL_ERROR = "internal_error"
 
 
