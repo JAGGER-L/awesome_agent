@@ -32,7 +32,7 @@ from awesome_agent.core.changes import (
 from awesome_agent.core.events import CollectingEventSink
 from awesome_agent.core.workspace import WorkspaceTrustService, resolve_workspace
 from awesome_agent.paths import AwesomePaths
-from awesome_agent.storage.changes import SQLiteChangeSetStore
+from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
@@ -124,6 +124,9 @@ async def test_surface_thread_page_projects_safe_change_set_summary(
         {"operation_id": "operation_1"},
     )
     now = datetime.now(UTC)
+    blobs = FileChangeBlobStore(paths.change_journal_dir)
+    before_blob = blobs.put(b"before\n")
+    after_blob = blobs.put(b"after\n")
     change_set = ChangeSet(
         id="change_1",
         session_id="session_1",
@@ -136,8 +139,10 @@ async def test_surface_thread_page_projects_safe_change_set_summary(
                 path="src/example.py",
                 kind=FileChangeKind.UPDATED,
                 node_type=FileNodeType.FILE,
-                before_hash="private-before-hash",
-                after_hash="private-after-hash",
+                before_hash=before_blob,
+                after_hash=after_blob,
+                before_blob=before_blob,
+                after_blob=after_blob,
             )
         ],
         created_at=now,
@@ -176,9 +181,9 @@ async def test_surface_thread_page_projects_safe_change_set_summary(
     summary = result.value.change_sets[0]
     assert summary.change_set_id == change_set.id
     assert summary.operation_id == "operation_1"
-    assert summary.changed_paths == ("src/example.py",)
-    assert "private-before-hash" not in summary.model_dump_json()
-    assert "private-after-hash" not in summary.model_dump_json()
+    assert tuple(change.path for change in summary.changes) == ("src/example.py",)
+    assert before_blob not in summary.model_dump_json()
+    assert after_blob not in summary.model_dump_json()
     await application.shutdown()
 
 

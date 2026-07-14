@@ -1,20 +1,33 @@
-import { Box, Text } from "ink";
+import { Box, Text, useBoxMetrics, type DOMElement } from "ink";
+import { useRef } from "react";
 
 import { graphemes } from "../composer/graphemes.js";
 import type { ComposerState } from "../composer/model.js";
 import { displayWidth } from "../composer/viewport.js";
 import { useTheme } from "./theme.js";
+import { useComposerCursor } from "./use-composer-cursor.js";
 
 export function Composer({
   state,
   message,
   submitting = false,
+  active = true,
 }: {
   readonly state: ComposerState;
   readonly message?: string;
   readonly submitting?: boolean;
+  readonly active?: boolean;
 }) {
   const theme = useTheme();
+  const composerRef = useRef<DOMElement>(null);
+  const metrics = useBoxMetrics(composerRef);
+  useComposerCursor({
+    active: active && !submitting,
+    metrics,
+    cursorRow: state.viewport.cursorRow,
+    cursorColumn: state.viewport.cursorColumn,
+    hiddenAbove: state.viewport.hiddenAbove,
+  });
   const [beforeCursor, afterCursor] = splitVisibleAtCursor(
     state.viewport.rows,
     state.viewport.cursorRow,
@@ -22,7 +35,7 @@ export function Composer({
   );
 
   return (
-    <Box flexDirection="column">
+    <Box ref={composerRef} flexDirection="column">
       <Box
         borderStyle="round"
         borderColor={theme.border}
@@ -38,7 +51,6 @@ export function Composer({
             ❯{" "}
           </Text>
           {beforeCursor}
-          <Text color={theme.primary}>▌</Text>
           {afterCursor}
         </Text>
         {state.viewport.hiddenBelow ? <Text dimColor>↓ more</Text> : null}

@@ -42,21 +42,23 @@ function controllerReturning(outcome: unknown): CommandController {
 describe("Composer", () => {
   it.each([
     40, 60, 120,
-  ])("renders controlled multiline input and a cursor at %i columns", (width) => {
+  ])("renders controlled multiline input at %i columns", (width) => {
     const view = render(
       <Composer state={composerState("first\nsecond", width)} />,
     );
     expect(view.lastFrame()).toContain("first");
     expect(view.lastFrame()).toContain("second");
-    expect(view.lastFrame()).toContain("▌");
+    expect(view.lastFrame()).not.toContain("▌");
     expect(view.lastFrame()).toContain("╭");
     expect(view.lastFrame()).toContain("╰");
     expect(view.lastFrame()).toContain("❯");
   });
 
-  it("renders the cursor at the controlled grapheme position", () => {
+  it("renders the controlled value without a fake cursor glyph", () => {
     const state = composerReducer(composerState("a😀c", 40), { type: "left" });
-    expect(render(<Composer state={state} />).lastFrame()).toContain("a😀▌c");
+    const frame = render(<Composer state={state} />).lastFrame();
+    expect(frame).toContain("a😀c");
+    expect(frame).not.toContain("▌");
   });
 
   it("renders controlled submission and error states", () => {

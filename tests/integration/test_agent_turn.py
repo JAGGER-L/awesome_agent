@@ -24,6 +24,7 @@ from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
+    ToolRequest,
 )
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
@@ -224,11 +225,12 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                     manifest=({"kind": "temporary_thread_history", "count": 1},),
                 )
 
-            return AgentRuntimeContext(
-                gateway=cast(Any, gateway),
-                executor=executor,
-                tool_catalog=registry.specifications,
-                tool_context_factory=lambda state: ToolExecutionContext(
+            def tool_context_factory(
+                state: object,
+                request: ToolRequest,
+            ) -> ToolExecutionContext:
+                del state, request
+                return ToolExecutionContext(
                     workspace=workspace,
                     thread_id=turn.thread_id,
                     operation_id=operation_id,
@@ -241,7 +243,13 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                     permission_session=PermissionSession(
                         mode=PermissionMode.FULL_ACCESS
                     ),
-                ),
+                )
+
+            return AgentRuntimeContext(
+                gateway=cast(Any, gateway),
+                executor=executor,
+                tool_catalog=registry.specifications,
+                tool_context_factory=tool_context_factory,
                 event_projector=projector,
                 context_builder=context_builder,
                 budget=TurnBudget(),
@@ -341,11 +349,18 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
                     manifest=({"kind": "temporary_thread_history"},),
                 )
 
+            def tool_context_factory(
+                state: object,
+                request: ToolRequest,
+            ) -> ToolExecutionContext:
+                del state, request
+                return cast(ToolExecutionContext, None)
+
             return AgentRuntimeContext(
                 gateway=cast(Any, BlockingGateway()),
                 executor=executor,
                 tool_catalog=registry.specifications,
-                tool_context_factory=lambda state: cast(Any, None),
+                tool_context_factory=tool_context_factory,
                 event_projector=projector,
                 context_builder=context_builder,
                 budget=TurnBudget(),

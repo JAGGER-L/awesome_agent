@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
@@ -24,7 +25,7 @@ from awesome_agent.core.tools.builtins.file_enumerator import (
     enumerate_workspace_files,
 )
 from awesome_agent.core.tools.builtins.search import GlobArguments, glob_files
-from awesome_agent.core.tools.policy import resolve_workspace_path
+from awesome_agent.core.tools.policy import SafeWorkspacePath, resolve_workspace_path
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 
@@ -121,7 +122,13 @@ async def test_glob_worker_keeps_loop_responsive_and_stops_on_cancel(
     started = Event()
     stopped = Event()
 
-    def gated_files(root, current, *, cancellation, prune_defaults):
+    def gated_files(
+        root: SafeWorkspacePath,
+        current: ToolExecutionContext,
+        *,
+        cancellation: ScanCancellation,
+        prune_defaults: bool,
+    ) -> Iterator[EnumeratedFile]:
         del root, current, prune_defaults
         started.set()
         try:
@@ -165,7 +172,13 @@ async def test_glob_uses_fixed_prefix_and_stops_after_truncation_probe(
     visited: list[str] = []
     yielded: list[str] = []
 
-    def files(root, current, *, cancellation, prune_defaults):
+    def files(
+        root: SafeWorkspacePath,
+        current: ToolExecutionContext,
+        *,
+        cancellation: ScanCancellation,
+        prune_defaults: bool,
+    ) -> Iterator[EnumeratedFile]:
         del current, prune_defaults
         visited.append(root.relative.as_posix())
         for name in ("a.py", "b.py", "c.py"):
@@ -200,7 +213,13 @@ async def test_executor_timeout_waits_for_scan_worker_exit(
     context = _context(workspace)
     stopped = Event()
 
-    def endless_files(root, current, *, cancellation, prune_defaults):
+    def endless_files(
+        root: SafeWorkspacePath,
+        current: ToolExecutionContext,
+        *,
+        cancellation: ScanCancellation,
+        prune_defaults: bool,
+    ) -> Iterator[EnumeratedFile]:
         del root, current, prune_defaults
         try:
             while True:
