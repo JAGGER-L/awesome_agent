@@ -57,8 +57,9 @@ def test_delete_and_shell_approval_never_offer_thread_write_grant(
     ]
 
 
-def test_state_reset_choices_are_explicit_and_can_be_validated_without_resolving(
-) -> None:
+def test_state_reset_choices_are_explicit_and_can_be_validated_without_resolving() -> (
+    None
+):
     coordinator = InteractionCoordinator()
     pending = coordinator.create(
         kind=InteractionKind.STATE_RESET,

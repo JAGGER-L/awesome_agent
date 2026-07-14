@@ -385,16 +385,12 @@ async def test_reset_confirmation_rejects_state_that_became_newer(
 
     assert response.accepted is False
     assert response.error is not None
-    assert (
-        response.error.code is ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION
-    )
+    assert response.error.code is ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION
     assert database.read_bytes() == before
     repeated = await application.initialize()
     assert repeated.ok is False
     assert repeated.error is not None
-    assert (
-        repeated.error.code is ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION
-    )
+    assert repeated.error.code is ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION
     _unwrap(await application.shutdown())
 
 
@@ -491,7 +487,6 @@ async def test_corrupt_state_is_unavailable_without_reset_interaction(
     assert result.error.retryable is True
     assert database.read_bytes() == before
     assert not any(
-        isinstance(event.payload, InteractionRequiredPayload)
-        for event in sink.events
+        isinstance(event.payload, InteractionRequiredPayload) for event in sink.events
     )
     _unwrap(await application.shutdown())

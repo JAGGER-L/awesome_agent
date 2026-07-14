@@ -821,9 +821,7 @@ class _LocalApplicationBackend:
             return InteractionResult(
                 accepted=True,
                 status=(
-                    "denied"
-                    if resolved is InteractionDecision.DENY
-                    else "resolved"
+                    "denied" if resolved is InteractionDecision.DENY else "resolved"
                 ),
             )
 
@@ -860,9 +858,7 @@ class _LocalApplicationBackend:
                 raise _application_failure(
                     ProductErrorCode.STATE_UNKNOWN,
                     "Awesome cannot identify the local state format.",
-                    data={
-                        "state_directory": str(self._paths.state_dir.resolve())
-                    },
+                    data={"state_directory": str(self._paths.state_dir.resolve())},
                 )
             exclusive.downgrade()
         except ApplicationFailure:

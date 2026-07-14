@@ -49,8 +49,7 @@ def inspect_application_state(path: Path) -> StatePreflight:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         user_objects = int(
             connection.execute(
-                "SELECT COUNT(*) FROM sqlite_schema "
-                "WHERE name NOT LIKE 'sqlite_%'"
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
             ).fetchone()[0]
         )
     except (OSError, sqlite3.Error, TypeError, ValueError) as error:
@@ -61,9 +60,7 @@ def inspect_application_state(path: Path) -> StatePreflight:
 
     if version == 0:
         compatibility = (
-            StateCompatibility.NEW
-            if user_objects == 0
-            else StateCompatibility.UNKNOWN
+            StateCompatibility.NEW if user_objects == 0 else StateCompatibility.UNKNOWN
         )
     elif version == APPLICATION_SCHEMA_VERSION:
         compatibility = StateCompatibility.CURRENT

@@ -5,7 +5,7 @@
       "name": "initialize.ready",
       "params": {
         "client_name": "awesome",
-        "client_version": "1.2.0",
+        "client_version": "1.2.1",
         "protocol_version": 2
       },
       "result": {
@@ -16,7 +16,7 @@
             "turns",
             "commands"
           ],
-          "product_version": "1.2.0",
+          "product_version": "1.2.1",
           "protocol_version": 2,
           "session_id": "session_11111111111111111111111111111111",
           "status": "ready",
@@ -32,7 +32,7 @@
       "name": "initialize.state_reset_required",
       "params": {
         "client_name": "awesome",
-        "client_version": "1.2.0",
+        "client_version": "1.2.1",
         "protocol_version": 2
       },
       "result": {
@@ -44,7 +44,7 @@
             "commands"
           ],
           "interaction_id": "interaction_state_reset",
-          "product_version": "1.2.0",
+          "product_version": "1.2.1",
           "protocol_version": 2,
           "session_id": "session_11111111111111111111111111111111",
           "status": "state_reset_required",
@@ -279,7 +279,7 @@
               "thread_display_id": "thread_11111111",
               "thread_id": "thread_11111111111111111111111111111111",
               "thread_title": "Fixture Thread",
-              "version": "1.2.0",
+              "version": "1.2.1",
               "workspace_path": "C:\\workspace"
             }
           }

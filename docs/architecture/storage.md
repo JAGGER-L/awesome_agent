@@ -34,23 +34,43 @@ credentials are not product history. Tool activity stores bounded summaries;
 tool observations required for recovery remain in the unfinished Turn's
 LangGraph checkpoint.
 
-The Application database has one current schema bootstrap. A database whose
-`PRAGMA user_version` differs from the current schema is rejected; no historical
-data adapter is present. Tests always create isolated current state instead of
-depending on developer data.
+The Application database has one current bootstrap format: Schema 7. Schema
+identity is independent from the Awesome product version and changes only when
+persisted structure, interpretation, or cross-record invariants change. Schema
+identities increase monotonically and are never reused.
 
-Schema detection opens an existing Application database read-only and runs
-before writable database configuration. Application initialization maps a
-known mismatch to the non-retryable `state_schema_incompatible` product error;
-the private protocol carries the detected version, expected version, and exact
-state directory to Ink. The TUI presents those facts with a Quit-only recovery
-screen. LangGraph checkpoint resources are opened only after this Application
-preflight succeeds, so diagnosing an incompatible database does not create or
-modify checkpoint state.
+Startup opens an existing Application database read-only before workspace
+trust, checkpoints, Change Journal state, or writable database configuration.
+It classifies the database as new, current, older, newer, unknown, or
+unavailable:
 
-The current Application schema is version 2. During source development, a
-schema mismatch is resolved by stopping Awesome and removing the disposable
-repository-local `.awesome-dev/home/state` directory before running
-`uv run awesome-dev` again. Configuration and credentials outside `state`
-remain intact. Awesome intentionally does not migrate or reinterpret Schema v1
-test data.
+- new and current state continue normally;
+- older state opens one explicit reset-or-exit interaction;
+- newer state asks the user to upgrade Awesome and never offers reset;
+- unknown, corrupt, unreadable, or locked state stops with a diagnostic and is
+  never silently deleted.
+
+Awesome does not include historical adapters or a generic migration framework.
+The current recovery flow is deliberately destructive only after confirmation:
+
+```text
+Ink startup prompt
+    -> interaction.respond(reset_state)
+    -> Application bootstrap
+    -> exclusive state lease
+    -> Storage atomic replacement
+    -> fresh Schema 7
+    -> workspace trust
+```
+
+Storage validates that the reset boundary is exactly `<AWESOME_HOME>/state`,
+renames it atomically, creates and validates fresh state, and restores the
+original directory if initialization fails. Normal Awesome processes retain a
+shared state lease; reset requires exclusive ownership, so it cannot race an
+active session.
+
+Reset removes conversations, Threads, trust, checkpoints, and Change Journal
+history. It preserves `config.yaml`, `.env`, `skills/`, `memory/`,
+`workspaces/`, `ui.json`, and every workspace file because those paths are
+outside the state boundary. Successful recovery continues to workspace trust
+in the same Core process.

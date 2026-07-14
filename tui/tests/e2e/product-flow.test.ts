@@ -162,7 +162,7 @@ describe("networkless candidate product flow", () => {
         resetCurrentFrame,
         width: 80,
         welcome: {
-          version: "1.2.0",
+          version: "1.2.1",
           workspacePath: "E:/awesome",
           thread: { kind: "new" },
           model: "deepseek/deepseek-v4-flash",
