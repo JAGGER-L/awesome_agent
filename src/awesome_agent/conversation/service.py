@@ -15,6 +15,7 @@ from awesome_agent.conversation.models import (
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
+    ThreadTitleSource,
     ThreadView,
     Turn,
     TurnStatus,
@@ -56,6 +57,11 @@ class ConversationService:
                 id=self._id_factory("thread"),
                 workspace_key=workspace_key,
                 title=normalized_title,
+                title_source=(
+                    ThreadTitleSource.AUTOMATIC
+                    if title is None
+                    else ThreadTitleSource.MANUAL
+                ),
                 current_model=current_model,
                 created_at=now,
                 updated_at=now,

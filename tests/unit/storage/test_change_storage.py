@@ -16,6 +16,7 @@ from awesome_agent.core.changes.ports import PendingMutation
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
+    ApplicationSchemaMismatch,
     application_connection,
     initialize_application_database,
 )
@@ -32,11 +33,13 @@ def test_current_schema_contains_change_and_pending_tables(tmp_path: Path) -> No
             )
         }
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert APPLICATION_SCHEMA_VERSION == version == 1
+    assert APPLICATION_SCHEMA_VERSION == version == 2
     assert {"change_sets", "pending_mutations"} <= names
 
 
-def test_schema_one_trust_data_upgrades_without_loss(tmp_path: Path) -> None:
+def test_schema_one_is_rejected_without_a_compatibility_migration(
+    tmp_path: Path,
+) -> None:
     database = tmp_path / "application.db"
     with sqlite3.connect(database) as connection:
         connection.execute(
@@ -50,15 +53,11 @@ def test_schema_one_trust_data_upgrades_without_loss(tmp_path: Path) -> None:
         )
         connection.execute("PRAGMA user_version = 1")
 
-    initialize_application_database(database)
+    with pytest.raises(ApplicationSchemaMismatch) as raised:
+        initialize_application_database(database)
 
-    with application_connection(database) as connection:
-        row = connection.execute(
-            "SELECT workspace_key, canonical_path FROM trusted_workspaces"
-        ).fetchone()
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert tuple(row) == ("ws_1", "C:/workspace")
-    assert version == APPLICATION_SCHEMA_VERSION
+    assert raised.value.found == 1
+    assert raised.value.expected == APPLICATION_SCHEMA_VERSION
 
 
 def test_blob_store_is_content_addressed_and_detects_corruption(

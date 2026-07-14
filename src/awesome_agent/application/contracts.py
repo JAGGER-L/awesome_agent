@@ -188,7 +188,7 @@ class ApplicationState(BaseModel):
     workspace_trusted: bool
     current_thread_id: str | None = Field(default=None, max_length=128)
     model_identity: ModelIdentitySnapshot | None = None
-    thinking_enabled: bool = False
+    thinking_enabled: bool = True
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
     active_operation_id: str | None = Field(default=None, max_length=128)
     pending_interaction_id: str | None = Field(default=None, max_length=128)

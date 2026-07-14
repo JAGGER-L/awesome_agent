@@ -143,7 +143,7 @@ def _valid_methods() -> dict[str, object]:
             effective_model="deepseek/deepseek-v4-flash",
         ),
         model_status="configured",
-        thinking_enabled=False,
+        thinking_enabled=True,
         skill_mode="auto",
         local_memory_enabled=False,
         mem0_enabled=False,

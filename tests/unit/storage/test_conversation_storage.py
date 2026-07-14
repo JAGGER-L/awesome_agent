@@ -14,6 +14,7 @@ from awesome_agent.conversation import (
     ThreadEntry,
     ThreadEntryKind,
     ThreadSummary,
+    ThreadTitleSource,
     ToolActivity,
     ToolActivityOrigin,
     ToolActivityOutcome,
@@ -112,7 +113,7 @@ def test_application_schema_creates_only_product_state_tables(
             ).fetchall()
         }
 
-    assert version == APPLICATION_SCHEMA_VERSION == 1
+    assert version == APPLICATION_SCHEMA_VERSION == 2
     assert {
         "trusted_workspaces",
         "change_sets",
@@ -169,8 +170,11 @@ def test_repositories_persist_and_reopen_ordered_thread_state(tmp_path: Path) ->
     repositories.turns.create(_turn())
 
     reopened = SQLiteConversationRepositories(path)
+    reopened_thread = reopened.threads.get("thread_1")
 
-    assert reopened.threads.get("thread_1") == _thread_from_store(repositories)
+    assert reopened_thread == _thread_from_store(repositories)
+    assert reopened_thread is not None
+    assert reopened_thread.title_source is ThreadTitleSource.AUTOMATIC
     assert [entry.id for entry in reopened.entries.list("thread_1")] == [
         "entry_1",
         "entry_2",

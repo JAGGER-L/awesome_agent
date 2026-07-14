@@ -22,6 +22,7 @@ const thread = (id: string): MethodValue["thread.list"]["threads"][number] => ({
   id,
   workspace_key: "workspace_1",
   title: `Title ${id}`,
+  title_source: "automatic",
   current_model: "deepseek/deepseek-chat",
   thinking_enabled: false,
   skill_mode: "auto",

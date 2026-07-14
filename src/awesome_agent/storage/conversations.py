@@ -15,6 +15,7 @@ from awesome_agent.conversation.models import (
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
+    ThreadTitleSource,
     ThreadView,
     ToolActivity,
     ToolActivityOrigin,
@@ -274,14 +275,15 @@ class SQLiteThreadRepository(_SQLiteRepository):
                 active.execute(
                     """
                     INSERT INTO threads (
-                        thread_id, workspace_key, title, current_model,
+                        thread_id, workspace_key, title, title_source, current_model,
                         thinking_enabled, skill_mode, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         thread.id,
                         thread.workspace_key,
                         thread.title,
+                        thread.title_source.value,
                         thread.current_model,
                         int(thread.thinking_enabled),
                         thread.skill_mode,
@@ -396,13 +398,14 @@ class SQLiteThreadRepository(_SQLiteRepository):
             cursor = active.execute(
                 """
                 UPDATE threads SET
-                    workspace_key = ?, title = ?, current_model = ?,
+                    workspace_key = ?, title = ?, title_source = ?, current_model = ?,
                     thinking_enabled = ?, skill_mode = ?, updated_at = ?
                 WHERE thread_id = ?
                 """,
                 (
                     thread.workspace_key,
                     thread.title,
+                    thread.title_source.value,
                     thread.current_model,
                     int(thread.thinking_enabled),
                     thread.skill_mode,
@@ -850,6 +853,7 @@ def _thread_from_row(row: sqlite3.Row) -> Thread:
         id=row["thread_id"],
         workspace_key=row["workspace_key"],
         title=row["title"],
+        title_source=ThreadTitleSource(row["title_source"]),
         current_model=row["current_model"],
         thinking_enabled=bool(row["thinking_enabled"]),
         skill_mode=row["skill_mode"],

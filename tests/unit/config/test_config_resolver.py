@@ -101,7 +101,7 @@ def test_only_configured_provider_supplies_its_default(
 
     assert turn.provider == expected_provider
     assert turn.model == expected_model
-    assert turn.thinking_enabled is False
+    assert turn.thinking_enabled is True
     assert turn.skill_mode == "auto"
 
 
@@ -182,6 +182,16 @@ def test_thinking_and_skill_use_cli_env_thread_then_defaults() -> None:
     assert (from_thread.thinking_enabled, from_thread.skill_mode) == (True, "debug")
     assert (from_env.thinking_enabled, from_env.skill_mode) == (False, "test")
     assert (from_cli.thinking_enabled, from_cli.skill_mode) == (True, "off")
+
+
+def test_stored_thinking_off_wins_when_thread_is_resumed() -> None:
+    turn = resolve_turn_config(
+        _application(deepseek=True),
+        thread=ThreadConfigState(thinking_enabled=False),
+        environ={},
+    )
+
+    assert turn.thinking_enabled is False
 
 
 @pytest.mark.parametrize(
