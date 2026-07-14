@@ -54,7 +54,7 @@ export const requestIdSchema = z.union([
   safeIntegerSchema,
 ]);
 
-export const productErrorCodes = [
+const genericProductErrorCodes = [
   "configuration_invalid",
   "workspace_not_trusted",
   "thread_not_found",
@@ -73,14 +73,37 @@ export const productErrorCodes = [
   "internal_error",
 ] as const;
 
+export const productErrorCodes = [
+  ...genericProductErrorCodes,
+  "state_schema_incompatible",
+] as const;
+
 export const productErrorCodeSchema = z.enum(productErrorCodes);
 
-export const productErrorSchema = z.strictObject({
-  code: productErrorCodeSchema,
+export const stateSchemaIncompatibleDataSchema = z.strictObject({
+  found_schema: safeIntegerSchema,
+  expected_schema: safeIntegerSchema,
+  state_directory: boundedText(1, 4_096),
+});
+
+const genericProductErrorSchema = z.strictObject({
+  code: z.enum(genericProductErrorCodes),
   message: boundedText(1, 2_000),
   retryable: z.boolean(),
   data: z.record(z.string(), jsonValueSchema),
 });
+
+const stateSchemaIncompatibleErrorSchema = z.strictObject({
+  code: z.literal("state_schema_incompatible"),
+  message: boundedText(1, 2_000),
+  retryable: z.literal(false),
+  data: stateSchemaIncompatibleDataSchema,
+});
+
+export const productErrorSchema = z.discriminatedUnion("code", [
+  genericProductErrorSchema,
+  stateSchemaIncompatibleErrorSchema,
+]);
 
 export type ProductError = z.infer<typeof productErrorSchema>;
 

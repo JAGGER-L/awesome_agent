@@ -255,6 +255,13 @@ def test_failure_and_command_fixtures_are_complete_and_valid() -> None:
         result = ApplicationResult[dict[str, object]].model_validate(case["result"])
         assert result.ok is False
         assert result.error is not None and result.error.code.value == case["code"]
+        if result.error.code is ProductErrorCode.STATE_SCHEMA_INCOMPATIBLE:
+            assert result.error.retryable is False
+            assert result.error.data == {
+                "found_schema": 1,
+                "expected_schema": 2,
+                "state_directory": "C:\\Awesome\\state",
+            }
 
     commands = _load("commands.json")
     assert isinstance(commands, dict)

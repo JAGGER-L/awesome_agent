@@ -57,8 +57,8 @@
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
     "events.valid.json": "7daa6a843d0c2bda5dd3ad5bb5569373c40730901e244b241b18354e912019e5",
     "methods.invalid.json": "0d71c51c4aa84fae43e2bbdc535a8636aac0e60cff3a42d047e73332d2b0a6ee",
-    "methods.valid.json": "f5eb43160da431d2a83def38e979ba55214c7c94c7a75ef7bf4b2296b29efc9f",
-    "results.failures.json": "8d88ff46fab61b689d029b8c735de82cac8e277464244b5c6b0a0baaaf584ef0"
+    "methods.valid.json": "dcd4e56f2275f93293ff9300fe903ff3c921dd3143c6947f34b7b454cd8980d0",
+    "results.failures.json": "7679a1fcdaadb5f81f959a99922c9184cf19f13232fea783f481d279293f64ba"
   },
   "fixture_version": 1,
   "methods": [
