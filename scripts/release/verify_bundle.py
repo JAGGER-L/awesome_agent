@@ -121,7 +121,7 @@ def verify_storage_contract(
         paths.home,
         storage_module.StateLeaseMode.EXCLUSIVE,
     ) as lease:
-        storage_module.reset_local_state(paths, lease)
+        storage_module.reset_local_state(lease)
 
     if _read_schema(paths.application_db) != expected_schema:
         raise BundleVerificationError("reset did not create the current schema")
