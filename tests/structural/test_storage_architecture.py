@@ -10,6 +10,7 @@ STORAGE_MODULES = {
     "__init__.py",
     "changes.py",
     "checkpoints.py",
+    "compatibility.py",
     "conversations.py",
     "database.py",
     "mcp.py",

@@ -5,7 +5,15 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-APPLICATION_SCHEMA_VERSION = 2
+from awesome_agent.storage.compatibility import (
+    APPLICATION_SCHEMA_VERSION as CURRENT_APPLICATION_SCHEMA_VERSION,
+)
+from awesome_agent.storage.compatibility import (
+    StateCompatibility,
+    inspect_application_state,
+)
+
+APPLICATION_SCHEMA_VERSION = CURRENT_APPLICATION_SCHEMA_VERSION
 
 _APPLICATION_SCHEMA = """
 CREATE TABLE trusted_workspaces (
@@ -164,13 +172,27 @@ CREATE TABLE mcp_enablements (
 
 
 class ApplicationSchemaMismatch(RuntimeError):
-    def __init__(self, *, found: int, expected: int) -> None:
+    def __init__(
+        self,
+        *,
+        found: int,
+        expected: int,
+        direction: StateCompatibility,
+    ) -> None:
         super().__init__(
-            f"Application state schema {found} is unsupported; expected {expected}. "
-            "Remove the development data directory and start Awesome again."
+            f"Application state schema {found} is {direction.value}; "
+            f"expected {expected}."
         )
         self.found = found
         self.expected = expected
+        self.direction = direction
+
+
+class ApplicationStateUnknown(RuntimeError):
+    def __init__(self, path: Path) -> None:
+        resolved = path.expanduser().resolve()
+        super().__init__(f"Application state format is unknown: {resolved}")
+        self.path = resolved
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -185,30 +207,22 @@ def _connect(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _schema_version(path: Path) -> int:
-    database_path = path.expanduser().resolve()
-    if not database_path.exists():
-        return 0
-    connection = sqlite3.connect(
-        f"{database_path.as_uri()}?mode=ro",
-        uri=True,
-        timeout=5.0,
-    )
-    try:
-        return int(connection.execute("PRAGMA user_version").fetchone()[0])
-    finally:
-        connection.close()
-
-
 def initialize_application_database(path: Path) -> None:
-    version = _schema_version(path)
-    if version == APPLICATION_SCHEMA_VERSION:
+    preflight = inspect_application_state(path)
+    if preflight.compatibility is StateCompatibility.CURRENT:
         return
-    if version != 0:
+    if preflight.compatibility in {
+        StateCompatibility.OLDER,
+        StateCompatibility.NEWER,
+    }:
+        assert preflight.found_schema is not None
         raise ApplicationSchemaMismatch(
-            found=version,
-            expected=APPLICATION_SCHEMA_VERSION,
+            found=preflight.found_schema,
+            expected=preflight.expected_schema,
+            direction=preflight.compatibility,
         )
+    if preflight.compatibility is StateCompatibility.UNKNOWN:
+        raise ApplicationStateUnknown(path)
     connection = _connect(path)
     try:
         connection.executescript(
