@@ -56,8 +56,8 @@ the exact state directory; this condition is not recoverable by reconnecting.
 Stop Awesome, verify that the displayed directory is
 `<repository>/.awesome-dev/home/state`, and remove only that directory. Then run
 `uv run awesome-dev` again. Do not remove the parent development home:
-`config.yaml`, `ui.json`, and `<AWESOME_HOME>/.env` are intentionally preserved.
-See the [source Quickstart](../getting-started/quickstart.md#troubleshooting) for
+configuration and credentials outside `state` are intentionally preserved. See
+the [source Quickstart](../getting-started/quickstart.md#troubleshooting) for
 platform-specific commands.
 
 ## Input is shown as pending

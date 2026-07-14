@@ -52,12 +52,12 @@
   ],
   "files": {
     "command-results.invalid.json": "dc3805ec4615626779daaabe26cecf524dd55c6ed30fea366445a5fcfaa27585",
-    "command-results.valid.json": "27a42a0ea1279397e7b79922ba19dbc791606c4f821942dd5aec5085873c1836",
+    "command-results.valid.json": "23db104945d678d0152af32e1844a2dc3e651d65738e60889b9e102f50826c0f",
     "commands.json": "f1c3ef46e58fef972715d528d5c1d31ab2e79b590323b8fb17a956dd8dabd196",
     "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
     "events.valid.json": "7daa6a843d0c2bda5dd3ad5bb5569373c40730901e244b241b18354e912019e5",
-    "methods.invalid.json": "0d71c51c4aa84fae43e2bbdc535a8636aac0e60cff3a42d047e73332d2b0a6ee",
-    "methods.valid.json": "dcd4e56f2275f93293ff9300fe903ff3c921dd3143c6947f34b7b454cd8980d0",
+    "methods.invalid.json": "c1da5e2cedac8de7c48ba52a74c0c8dfdde252a3361d7683ee297c4f98e318c3",
+    "methods.valid.json": "8df9a29012da03a1a61b50ba9f451cf91959207874d8e1367d53e91dab592a47",
     "results.failures.json": "7679a1fcdaadb5f81f959a99922c9184cf19f13232fea783f481d279293f64ba"
   },
   "fixture_version": 1,
@@ -74,6 +74,6 @@
     "operation.cancel",
     "shutdown"
   ],
-  "product_version": "1.1.1",
+  "product_version": "1.2.0",
   "protocol_version": 2
 }

@@ -195,10 +195,10 @@ rm -rf -- .awesome-dev/home/state
 uv run awesome-dev
 ```
 
-Remove only the verified `state` directory. Development `config.yaml`,
-`ui.json`, and `<AWESOME_HOME>/.env` are outside that directory and remain
-unchanged. This resets disposable development conversations and checkpoints;
-it is not a data migration.
+Remove only the verified `state` directory. Development configuration and
+credentials are stored outside that directory and remain unchanged. This
+resets disposable development conversations and checkpoints; it is not a data
+migration.
 
 Development mode does not replace or modify an installed `awesome` command.
 Installed Awesome uses its normal user data directory and prebuilt release

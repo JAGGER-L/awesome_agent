@@ -5,6 +5,7 @@ CONVERSATION_MODULES = {
     "models.py",
     "repository.py",
     "service.py",
+    "titles.py",
 }
 
 

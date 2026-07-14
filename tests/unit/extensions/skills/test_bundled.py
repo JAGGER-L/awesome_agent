@@ -6,13 +6,12 @@ from awesome_agent.extensions.skills import SkillLoader, discover_skills
 EXPECTED = {
     "debug": "Diagnose failures systematically from evidence",
     "git-workflow": "Prepare safe Git commits and workflow handoff",
-    "init": "Initialize project guidance for this workspace",
     "review": "Review code for correctness, risk, and maintainability",
     "test": "Design and run focused validation for changes",
 }
 
 
-def test_installed_package_exposes_exactly_five_bundled_skills() -> None:
+def test_installed_package_exposes_exactly_four_bundled_skills() -> None:
     bundled = files("awesome_agent.extensions.skills").joinpath("bundled")
     catalog = discover_skills(
         bundled_root=Path(str(bundled)),

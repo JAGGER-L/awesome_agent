@@ -20,7 +20,7 @@ def test_dispatcher_inventory_is_complete_and_composition_only_wires_it() -> Non
         encoding="utf-8"
     )
 
-    assert len(core_commands) == 20
+    assert len(core_commands) == 21
     assert "return await self._command_dispatcher.dispatch(intent)" in composition
     assert "CommandResult(" not in composition
     assert "CommandInteractionResult(" not in composition

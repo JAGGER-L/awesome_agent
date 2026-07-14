@@ -186,7 +186,7 @@ async def test_submit_turn_freezes_config_commits_then_emits_and_cleans_checkpoi
         view.thread.model_copy(
             update={
                 "current_model": "kimi/kimi-k2.6",
-                "thinking_enabled": True,
+                "thinking_enabled": False,
             }
         )
     )
@@ -199,7 +199,7 @@ async def test_submit_turn_freezes_config_commits_then_emits_and_cleans_checkpoi
     assert completed.entries[0].client_message_id == "client_1"
     assert {event.client_message_id for event in sink.events} == {"client_1"}
     assert graph.inputs[0]["provider"] == "deepseek"
-    assert graph.inputs[0]["thinking_enabled"] is False
+    assert graph.inputs[0]["thinking_enabled"] is True
     assert graph.configs[0]["configurable"]["thread_id"] == accepted.turn_id
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events] == [
