@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import difflib
 import hashlib
 import os
 import stat
@@ -11,6 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
+from awesome_agent.core.changes.analysis import ChangeAnalyzer, merge_file_changes
 from awesome_agent.core.changes.errors import (
     ChangeConflict,
     ChangeLifecycleError,
@@ -32,8 +32,6 @@ from awesome_agent.core.changes.ports import (
     PendingMutation,
 )
 from awesome_agent.core.workspace import WorkspaceIdentity
-
-MAX_DIFF_CHARS = 30_000
 
 
 class ChangeOperationResult(BaseModel):
@@ -133,49 +131,18 @@ def _write_snapshot(path: Path, snapshot: NodeSnapshot | None) -> None:
     _atomic_write(path, snapshot.content or b"", snapshot.mode)
 
 
-def _merge_changes(changes: list[FileChange]) -> list[FileChange]:
-    merged: dict[str, FileChange] = {}
-    order: list[str] = []
-    for change in changes:
-        existing = merged.get(change.path)
-        if existing is None:
-            merged[change.path] = change
-            order.append(change.path)
-            continue
-        before_exists = existing.before_hash is not None
-        after_exists = change.after_hash is not None
-        if not before_exists and not after_exists:
-            merged.pop(change.path)
-            order.remove(change.path)
-            continue
-        if not before_exists:
-            kind = FileChangeKind.CREATED
-        elif not after_exists:
-            kind = FileChangeKind.DELETED
-        else:
-            kind = FileChangeKind.UPDATED
-        merged[change.path] = existing.model_copy(
-            update={
-                "kind": kind,
-                "node_type": (change.node_type if after_exists else existing.node_type),
-                "after_hash": change.after_hash,
-                "after_blob": change.after_blob,
-                "after_mode": change.after_mode,
-            }
-        )
-    return [merged[path] for path in order]
-
-
 class ChangeOperations:
     def __init__(
         self,
         store: ChangeSetStore,
         blobs: ChangeBlobStore,
         workspace: WorkspaceIdentity,
+        analyzer: ChangeAnalyzer | None = None,
     ) -> None:
         self._store = store
         self._blobs = blobs
         self._workspace = workspace
+        self._analyzer = analyzer or ChangeAnalyzer(store, blobs, workspace)
 
     def _get(self, change_set_id: str) -> ChangeSet:
         change_set = self._store.get(change_set_id)
@@ -200,42 +167,7 @@ class ChangeOperations:
         return NodeSnapshot(change.node_type, content, mode)
 
     def diff(self, change_set_id: str) -> str:
-        change_set = self._get(change_set_id)
-        parts: list[str] = []
-        for change in sorted(
-            _merge_changes(change_set.files), key=lambda item: item.path
-        ):
-            before = self._snapshot(change, before=True)
-            after = self._snapshot(change, before=False)
-            before_content = before.content if before is not None else b""
-            after_content = after.content if after is not None else b""
-            if (
-                change.node_type is not FileNodeType.FILE
-                or b"\x00" in (before_content or b"")
-                or b"\x00" in (after_content or b"")
-            ):
-                before_size = len(before_content or b"")
-                after_size = len(after_content or b"")
-                parts.append(
-                    f"Binary change: {change.path} "
-                    f"({before_size} -> {after_size} bytes)\n"
-                )
-                continue
-            try:
-                before_text = (before_content or b"").decode("utf-8")
-                after_text = (after_content or b"").decode("utf-8")
-            except UnicodeDecodeError:
-                parts.append(f"Binary change: {change.path}\n")
-                continue
-            parts.extend(
-                difflib.unified_diff(
-                    before_text.splitlines(keepends=True),
-                    after_text.splitlines(keepends=True),
-                    fromfile=f"a/{change.path}",
-                    tofile=f"b/{change.path}",
-                )
-            )
-        return "".join(parts)[:MAX_DIFF_CHARS]
+        return self._analyzer.analyze(change_set_id).diff
 
     def _preflight(
         self,
@@ -311,7 +243,7 @@ class ChangeOperations:
         if change_set.reversibility is ChangeReversibility.NONE:
             raise ChangeNotReversible("ChangeSet contains only unmanaged effects.")
 
-        changes = _merge_changes(change_set.files)
+        changes = list(merge_file_changes(change_set.files))
         self._preflight(changes, before=not undo)
         ordered = list(reversed(changes)) if undo else changes
         for change in ordered:
