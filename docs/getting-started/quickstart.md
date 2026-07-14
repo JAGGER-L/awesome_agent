@@ -177,28 +177,14 @@ Release bundles and installers use a separate packaging flow; see the
 - Run the command in an interactive terminal. The Ink interface cannot run
   through a non-interactive pipe.
 
-If a source checkout reports that its state schema is incompatible, stop
-Awesome before changing any files. Confirm that the state path shown in the
-startup panel is the repository-local development path:
-
-```powershell
-Resolve-Path .\.awesome-dev\home\state
-Remove-Item -LiteralPath .\.awesome-dev\home\state -Recurse -Force
-uv run awesome-dev
-```
-
-On macOS or WSL2:
-
-```bash
-realpath .awesome-dev/home/state
-rm -rf -- .awesome-dev/home/state
-uv run awesome-dev
-```
-
-Remove only the verified `state` directory. Development configuration and
-credentials are stored outside that directory and remain unchanged. This
-resets disposable development conversations and checkpoints; it is not a data
-migration.
+After you update the source checkout, Awesome may detect an incompatible local
+data format and offer to reset its conversation state during startup. The panel
+lists exactly what will be removed and kept. Reset removes conversations,
+workspace trust, checkpoints, and undo history; API keys, configuration,
+Skills, and Local or Cloud Memory settings remain. Choose Exit to leave the
+data unchanged. If Awesome reports unknown, unavailable, or newer-version
+state instead, follow the displayed diagnostic rather than deleting files
+manually.
 
 Development mode does not replace or modify an installed `awesome` command.
 Installed Awesome uses its normal user data directory and prebuilt release

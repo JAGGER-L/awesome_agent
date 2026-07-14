@@ -123,6 +123,14 @@ Ink starts awesome-core
         ▼
 Application resolves canonical workspace
         │
+        ├── state current/new ───► continue to workspace trust
+        │
+        ├── state older ─────────► explicit reset-or-exit interaction
+        │                          confirmed reset -> exclusive lease
+        │                          atomic state replacement -> trust
+        │
+        ├── state newer ─────────► stop and ask user to upgrade
+        │
         ├── trusted ─────────────► load user/workspace configuration
         │                          load Skills and MCP declarations
         │                          create or resume a Thread
@@ -134,6 +142,13 @@ Application resolves canonical workspace
 
 Project-controlled configuration, instructions, Skills, and MCP declarations
 are not loaded before trust is accepted.
+
+Application state preflight is read-only and runs before trust, checkpoints,
+or writable storage. The current format is Schema 7. Product and schema
+versions are independent: schema identity changes only with persisted
+semantics and increases monotonically. Older state can be reset only through
+the typed startup interaction; newer, unknown, corrupt, unreadable, or locked
+state is never silently deleted.
 
 ### Conversation Turn
 
@@ -298,7 +313,16 @@ maximum tool count.
   ChangeSet metadata, checkpoint access, and SQLite transactions.
 - **Does not own:** graph node transitions or TUI transcript state.
 - **Primary files:** `conversation/models.py`, `conversation/service.py`,
-  `storage/database.py`, `storage/conversations.py`, `storage/checkpoints.py`.
+  `storage/database.py`, `storage/compatibility.py`, `storage/state_lease.py`,
+  `storage/state_recovery.py`, `storage/conversations.py`,
+  `storage/checkpoints.py`.
+
+The resettable boundary is exactly `<AWESOME_HOME>/state`. Storage performs
+atomic replacement under an exclusive lease; Application owns confirmation
+and startup continuation; Protocol carries typed facts; Ink only presents and
+routes the decision. Configuration, credentials, Skills, Memory, UI
+preferences, and workspace files live outside that boundary and survive a
+confirmed reset.
 
 ### Change Journal
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from pytest import MonkeyPatch
 
 from awesome_agent.application.commands import COMMAND_OWNERS, CommandName
+from awesome_agent.storage import APPLICATION_SCHEMA_VERSION
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path("src/awesome_agent")
@@ -175,9 +176,9 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
     monkeypatch.setenv("AWESOME_VERSION", "9.9.9")
     expected = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8")
 
-    assert expected == "1.2.0\n"
-    assert distribution_version("awesome-agent") == "1.2.0"
-    assert PRODUCT_VERSION == "1.2.0"
+    assert expected == "1.2.1\n"
+    assert distribution_version("awesome-agent") == "1.2.1"
+    assert PRODUCT_VERSION == "1.2.1"
 
     project = tomllib.loads(
         (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -188,11 +189,22 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
 
     package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((TUI_ROOT / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["version"] == "1.2.0"
-    assert lock["version"] == "1.2.0"
-    assert lock["packages"][""]["version"] == "1.2.0"
+    assert package["version"] == "1.2.1"
+    assert lock["version"] == "1.2.1"
+    assert lock["packages"][""]["version"] == "1.2.1"
     assert (TUI_ROOT / "src" / "version.ts").read_text(encoding="utf-8") == (
-        'export const PRODUCT_VERSION = "1.2.0" as const;\n'
+        'export const PRODUCT_VERSION = "1.2.1" as const;\n'
+    )
+
+
+def test_application_schema_identity_is_independent_from_product_version() -> None:
+    compatibility = ROOT / "storage" / "compatibility.py"
+
+    assert APPLICATION_SCHEMA_VERSION == 7
+    assert not any(
+        imported == "awesome_agent.version"
+        or imported.startswith("awesome_agent.version.")
+        for imported in _imports(compatibility)
     )
 
 

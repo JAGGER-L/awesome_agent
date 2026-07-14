@@ -240,7 +240,7 @@ describe("submitted slash command history", () => {
         payload: {
           kind: "status",
           snapshot: {
-            version: "1.2.0",
+            version: "1.2.1",
             workspace_path: "E:\\workspace",
             thread_title: "Current thread",
             thread_id: "thread_12345678",

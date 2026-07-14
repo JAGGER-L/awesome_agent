@@ -201,6 +201,24 @@ def test_quickstarts_are_exactly_five_onboarding_steps() -> None:
     assert "按 Enter" in chinese
 
 
+def test_state_recovery_docs_use_the_product_flow() -> None:
+    storage = (ROOT / "docs/architecture/storage.md").read_text(encoding="utf-8")
+    troubleshooting = (ROOT / "docs/user-guide/troubleshooting.md").read_text(
+        encoding="utf-8"
+    )
+    quickstarts = "\n".join(
+        (ROOT / "docs/getting-started" / name).read_text(encoding="utf-8")
+        for name in ("quickstart.md", "quickstart.zh-CN.md")
+    )
+
+    assert "Schema 7" in storage
+    assert "exclusive state lease" in storage
+    assert "Reset local state and continue" in troubleshooting
+    assert "API keys" in troubleshooting
+    assert "Remove-Item" not in quickstarts
+    assert "rm -rf" not in quickstarts
+
+
 def test_roadmap_has_the_approved_product_order() -> None:
     roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
     positions = [roadmap.index(f"## {heading}") for heading in ROADMAP_HEADINGS]

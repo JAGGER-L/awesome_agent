@@ -134,11 +134,7 @@ def _lock(descriptor: int, mode: StateLeaseMode) -> object | None:
     fcntl = cast(Any, importlib.import_module("fcntl"))
 
     operation = fcntl.LOCK_NB
-    operation |= (
-        fcntl.LOCK_SH
-        if mode is StateLeaseMode.SHARED
-        else fcntl.LOCK_EX
-    )
+    operation |= fcntl.LOCK_SH if mode is StateLeaseMode.SHARED else fcntl.LOCK_EX
     fcntl.flock(descriptor, operation)
     return None
 
