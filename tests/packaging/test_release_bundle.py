@@ -15,6 +15,9 @@ from scripts.release.build_bundle import (
     read_version,
     validate_version_files,
 )
+from scripts.release.verify_bundle import verify_storage_contract
+
+from awesome_agent.storage import database as application_database
 
 
 def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
@@ -195,3 +198,9 @@ def test_bundle_rejects_installer_version_drift(
 
     with pytest.raises(BundleError, match="installer version"):
         assemble_bundle(tmp_path, "1.0.0")
+
+
+def test_release_storage_contract_uses_current_schema_without_migrations(
+    tmp_path: Path,
+) -> None:
+    verify_storage_contract(application_database, tmp_path)
