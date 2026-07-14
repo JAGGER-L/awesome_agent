@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
@@ -40,7 +41,7 @@ def verify_storage_contract(database_module: ModuleType, root: Path) -> None:
 
     fresh = root / "fresh-state" / "application.db"
     database_module.initialize_application_database(fresh)
-    with sqlite3.connect(fresh) as connection:
+    with closing(sqlite3.connect(fresh)) as connection:
         observed_schema = int(connection.execute("PRAGMA user_version").fetchone()[0])
         tables = {
             str(row[0])
@@ -56,7 +57,7 @@ def verify_storage_contract(database_module: ModuleType, root: Path) -> None:
 
     incompatible = root / "incompatible-state" / "application.db"
     incompatible.parent.mkdir(parents=True)
-    with sqlite3.connect(incompatible) as connection:
+    with closing(sqlite3.connect(incompatible)) as connection:
         connection.execute("PRAGMA user_version = 1")
     before = _file_inventory(incompatible.parent)
     try:

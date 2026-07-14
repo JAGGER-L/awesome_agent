@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -203,4 +204,8 @@ def test_bundle_rejects_installer_version_drift(
 def test_release_storage_contract_uses_current_schema_without_migrations(
     tmp_path: Path,
 ) -> None:
-    verify_storage_contract(application_database, tmp_path)
+    contract_root = tmp_path / "storage-contract"
+    verify_storage_contract(application_database, contract_root)
+
+    shutil.rmtree(contract_root)
+    assert not contract_root.exists()
