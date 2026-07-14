@@ -64,6 +64,8 @@ show additions and deletions with Git-familiar semantics:
 - Counts are line additions and deletions, not byte deltas and not net lines.
 - A binary file is shown as `Bin <before> → <after> bytes`.
 - A directory is shown as `Directory created` or `Directory deleted`.
+- A symbolic link is shown as `Symlink created`, `Symlink updated`, or
+  `Symlink deleted`; it is not mislabeled as a binary file.
 - A mixed header uses natural grammar, for example
   `2 files and 1 directory changed`.
 - No Change block is rendered when the structured change list is empty.
@@ -220,6 +222,10 @@ BinaryFileChange
 DirectoryChange
   path
   change_kind
+
+SymlinkChange
+  path
+  change_kind
 ```
 
 The Python producer and TypeScript consumer must agree on nullability,
@@ -359,7 +365,7 @@ color or cursor capabilities.
 - every read-only built-in Tool avoids ChangeSet allocation;
 - text create, edit, and delete produce exact addition/deletion counts;
 - created and deleted files count all added or removed lines respectively;
-- binary files and directories use their dedicated variants;
+- binary files, directories, and symbolic links use their dedicated variants;
 - mixed summaries use correct singular/plural grammar;
 - execute-only observations do not display `Changed`;
 - `/diff` and Change summaries share analyzer fixtures;
