@@ -177,6 +177,29 @@ Release bundles and installers use a separate packaging flow; see the
 - Run the command in an interactive terminal. The Ink interface cannot run
   through a non-interactive pipe.
 
+If a source checkout reports that its state schema is incompatible, stop
+Awesome before changing any files. Confirm that the state path shown in the
+startup panel is the repository-local development path:
+
+```powershell
+Resolve-Path .\.awesome-dev\home\state
+Remove-Item -LiteralPath .\.awesome-dev\home\state -Recurse -Force
+uv run awesome-dev
+```
+
+On macOS or WSL2:
+
+```bash
+realpath .awesome-dev/home/state
+rm -rf -- .awesome-dev/home/state
+uv run awesome-dev
+```
+
+Remove only the verified `state` directory. Development `config.yaml`,
+`ui.json`, and `<AWESOME_HOME>/.env` are outside that directory and remain
+unchanged. This resets disposable development conversations and checkpoints;
+it is not a data migration.
+
 Development mode does not replace or modify an installed `awesome` command.
 Installed Awesome uses its normal user data directory and prebuilt release
 files; `uv run awesome-dev` uses the current checkout, rebuilds the TUI, and

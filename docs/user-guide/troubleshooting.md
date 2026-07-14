@@ -47,6 +47,19 @@ limits.
 Close every Awesome process and rerun the original one-line installer. It
 stages and validates the new application before replacing the installed files.
 
+## Source checkout reports incompatible state
+
+Awesome does not reinterpret development databases created with an unsupported
+schema. The startup panel shows the detected schema, the expected schema, and
+the exact state directory; this condition is not recoverable by reconnecting.
+
+Stop Awesome, verify that the displayed directory is
+`<repository>/.awesome-dev/home/state`, and remove only that directory. Then run
+`uv run awesome-dev` again. Do not remove the parent development home:
+`config.yaml`, `ui.json`, and `<AWESOME_HOME>/.env` are intentionally preserved.
+See the [source Quickstart](../getting-started/quickstart.md#troubleshooting) for
+platform-specific commands.
+
 ## Input is shown as pending
 
 Awesome runs one foreground task at a time and keeps up to three later inputs

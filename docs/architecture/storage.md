@@ -39,8 +39,18 @@ The Application database has one current schema bootstrap. A database whose
 data adapter is present. Tests always create isolated current state instead of
 depending on developer data.
 
+Schema detection opens an existing Application database read-only and runs
+before writable database configuration. Application initialization maps a
+known mismatch to the non-retryable `state_schema_incompatible` product error;
+the private protocol carries the detected version, expected version, and exact
+state directory to Ink. The TUI presents those facts with a Quit-only recovery
+screen. LangGraph checkpoint resources are opened only after this Application
+preflight succeeds, so diagnosing an incompatible database does not create or
+modify checkpoint state.
+
 The current Application schema is version 2. During source development, a
 schema mismatch is resolved by stopping Awesome and removing the disposable
-repository-local `.awesome-dev` directory before running `uv run awesome-dev`
-again. Awesome intentionally does not migrate or reinterpret Schema v1 test
-data.
+repository-local `.awesome-dev/home/state` directory before running
+`uv run awesome-dev` again. Configuration and credentials outside `state`
+remain intact. Awesome intentionally does not migrate or reinterpret Schema v1
+test data.
