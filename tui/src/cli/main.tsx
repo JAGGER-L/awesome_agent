@@ -17,6 +17,7 @@ import { LocalCommandService } from "../commands/local.js";
 import { AppErrorBoundary } from "../components/AppErrorBoundary.js";
 import { FatalScreen } from "../components/FatalScreen.js";
 import { Picker } from "../components/Picker.js";
+import { StateResetPrompt } from "../components/StateResetPrompt.js";
 import { ThemeProvider } from "../components/theme.js";
 import { TrustPrompt } from "../components/TrustPrompt.js";
 import { CoreSpawnError } from "../core/errors.js";
@@ -55,6 +56,7 @@ import {
 } from "../surface/controller.js";
 import {
   beginStartup,
+  respondStartupStateReset,
   respondStartupTrust,
   selectStartupThread,
   type StartupResult,
@@ -481,6 +483,41 @@ function RunningCliApplication({
     [dispatchTerminal, intent, requestExit, startup, surface],
   );
 
+  const submitStartupStateReset = useCallback(
+    (decision: "reset_state" | "deny") => {
+      if (startup.kind !== "state_reset_required") return;
+      dispatchTerminal({
+        type: "mode.state_reset.submitting",
+        submitting: true,
+      });
+      void respondStartupStateReset(
+        surface,
+        intent,
+        startup.interactionId,
+        decision,
+      )
+        .then((result) => {
+          if (result.kind === "denied") {
+            void requestExit("state_reset_denied");
+          } else {
+            setStartup(result);
+          }
+        })
+        .catch((error: unknown) => {
+          dispatchTerminal({
+            type: "mode.state_reset.submitting",
+            submitting: false,
+          });
+          dispatchTerminal({
+            type: "mode.state_reset.message",
+            message:
+              error instanceof Error ? error.message : "State reset failed.",
+          });
+        });
+    },
+    [dispatchTerminal, intent, requestExit, startup, surface],
+  );
+
   const reconnectSurface = useCallback(async () => {
     if (reconnecting) return;
     const threadId = surface.store.getState().application?.current_thread_id;
@@ -531,6 +568,10 @@ function RunningCliApplication({
         submitStartupTrust("deny");
         return;
       }
+      if (routed.type === "state_reset.deny") {
+        submitStartupStateReset("deny");
+        return;
+      }
       if (routed.type !== "selection.confirm") return;
       const mode = terminalUiRef.current.mode;
       if (mode.kind === "fatal") {
@@ -540,6 +581,13 @@ function RunningCliApplication({
             await requestExit("quit_command");
           },
         });
+        return;
+      }
+      if (
+        mode.kind === "state_reset" &&
+        startup.kind === "state_reset_required"
+      ) {
+        submitStartupStateReset(mode.selected === 0 ? "reset_state" : "deny");
         return;
       }
       if (
@@ -567,6 +615,7 @@ function RunningCliApplication({
       requestExit,
       reconnectSurface,
       startup,
+      submitStartupStateReset,
       submitStartupTrust,
       surface,
       terminalUiRef,
@@ -575,6 +624,7 @@ function RunningCliApplication({
 
   const startupInputActive =
     renderFailure !== undefined ||
+    startup.kind === "state_reset_required" ||
     startup.kind === "trust_required" ||
     (startup.kind === "ready" && startup.thread.kind === "selection_required");
 
@@ -597,6 +647,23 @@ function RunningCliApplication({
             selected={
               terminalUi.mode.kind === "fatal" ? terminalUi.mode.selected : 0
             }
+          />
+        ) : startup.kind === "state_reset_required" ? (
+          <StateResetPrompt
+            selected={
+              terminalUi.mode.kind === "state_reset"
+                ? terminalUi.mode.selected
+                : 0
+            }
+            submitting={
+              terminalUi.mode.kind === "state_reset"
+                ? terminalUi.mode.submitting
+                : false
+            }
+            {...(terminalUi.mode.kind === "state_reset" &&
+            terminalUi.mode.message !== undefined
+              ? { message: terminalUi.mode.message }
+              : {})}
           />
         ) : startup.kind === "trust_required" ? (
           <TrustPrompt
@@ -740,6 +807,13 @@ function startupUiMode(
   fatal: boolean,
 ): Exclude<UiMode, { kind: "composer" }> | undefined {
   if (fatal) return { kind: "fatal", selected: 0 };
+  if (startup.kind === "state_reset_required") {
+    return {
+      kind: "state_reset",
+      selected: 0,
+      submitting: false,
+    };
+  }
   if (startup.kind === "trust_required") {
     return {
       kind: "workspace_trust",
@@ -768,6 +842,9 @@ function startupUiMode(
 
 function sameStartupMode(current: UiMode, next: UiMode): boolean {
   if (current.kind !== next.kind) return false;
+  if (current.kind === "state_reset" && next.kind === "state_reset") {
+    return true;
+  }
   if (current.kind === "workspace_trust" && next.kind === "workspace_trust") {
     return current.workspacePath === next.workspacePath;
   }

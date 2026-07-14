@@ -188,6 +188,27 @@ describe("runCli", () => {
     );
   });
 
+  it("renders state reset as a recoverable startup mode rather than fatal", async () => {
+    const reset: StartupResult = {
+      kind: "state_reset_required",
+      interactionId: "interaction_state_reset",
+    };
+    const renderApplication = vi.fn(
+      async () => ({ kind: "quit", exitCode: 0 }) as const,
+    );
+    const value = harness({
+      startApplication: vi.fn(async () => reset),
+      renderApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+    expect(renderApplication).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: { kind: "startup", startup: reset },
+      }),
+    );
+  });
+
   it("rejects invalid combinations before starting Core", async () => {
     const value = harness({ argv: ["--continue", "--resume"] });
     await expect(runCli(value.dependencies)).resolves.toBe(2);

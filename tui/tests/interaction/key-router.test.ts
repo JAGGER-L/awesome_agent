@@ -293,4 +293,47 @@ describe("routeTerminalKey", () => {
       }),
     ).toEqual({ type: "trust.deny" });
   });
+
+  it("routes state reset arrows, Enter, and Escape before every other owner", () => {
+    const reset = stateWithMode({
+      kind: "state_reset",
+      selected: 0,
+      submitting: false,
+    });
+    expect(
+      routeTerminalKey(reset, "", {
+        ...emptyTerminalKey(),
+        downArrow: true,
+      }),
+    ).toEqual({ type: "selection.move", delta: 1 });
+    expect(
+      routeTerminalKey(reset, "", {
+        ...emptyTerminalKey(),
+        upArrow: true,
+      }),
+    ).toEqual({ type: "selection.move", delta: -1 });
+    expect(
+      routeTerminalKey(reset, "", {
+        ...emptyTerminalKey(),
+        return: true,
+      }),
+    ).toEqual({ type: "selection.confirm" });
+    expect(
+      routeTerminalKey(reset, "", {
+        ...emptyTerminalKey(),
+        escape: true,
+      }),
+    ).toEqual({ type: "state_reset.deny" });
+    expect(
+      routeTerminalKey(
+        stateWithMode({
+          kind: "state_reset",
+          selected: 0,
+          submitting: true,
+        }),
+        "",
+        { ...emptyTerminalKey(), return: true },
+      ),
+    ).toBeUndefined();
+  });
 });

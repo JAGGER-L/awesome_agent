@@ -4,7 +4,8 @@ export type ExitReason =
   | "quit_command"
   | "ctrl_d"
   | "double_ctrl_c"
-  | "trust_denied";
+  | "trust_denied"
+  | "state_reset_denied";
 
 export interface ExitOutcome {
   readonly reason: ExitReason;

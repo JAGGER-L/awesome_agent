@@ -52,6 +52,12 @@ export type UiMode =
       readonly submitting: boolean;
       readonly message?: string | undefined;
     }
+  | {
+      readonly kind: "state_reset";
+      readonly selected: number;
+      readonly submitting: boolean;
+      readonly message?: string | undefined;
+    }
   | { readonly kind: "fatal"; readonly selected: number }
   | {
       readonly kind: "command_menu";
@@ -116,6 +122,14 @@ export type TerminalUiAction =
   | { readonly type: "mode.trust.submitting"; readonly submitting: boolean }
   | {
       readonly type: "mode.trust.message";
+      readonly message?: string | undefined;
+    }
+  | {
+      readonly type: "mode.state_reset.submitting";
+      readonly submitting: boolean;
+    }
+  | {
+      readonly type: "mode.state_reset.message";
       readonly message?: string | undefined;
     }
   | { readonly type: "composer.edit"; readonly action: ComposerAction }
