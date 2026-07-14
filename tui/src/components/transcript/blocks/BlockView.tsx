@@ -56,7 +56,7 @@ export function BlockView({
     case "change":
       return (
         <Text color={theme.secondary}>
-          Changed {block.paths.join(", ")} · {block.reversibility}
+          Changed {block.changes.map((change) => change.path).join(", ")}
         </Text>
       );
     case "thinking":

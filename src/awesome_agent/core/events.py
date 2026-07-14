@@ -29,7 +29,6 @@ class EventType(StrEnum):
     CONTEXT_PREPARED = "context.prepared"
     CONTEXT_COMPRESSED = "context.compressed"
     USAGE_UPDATED = "usage.updated"
-    WORKSPACE_CHANGED = "workspace.changed"
     MEMORY_STATUS = "memory.status"
     INTERACTION_REQUIRED = "interaction.required"
     INTERACTION_RESOLVED = "interaction.resolved"
@@ -147,15 +146,6 @@ class UsageUpdatedPayload(BaseModel):
     cache_write_tokens: int = Field(default=0, ge=0)
 
 
-class WorkspaceChangedPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    kind: Literal[EventType.WORKSPACE_CHANGED] = EventType.WORKSPACE_CHANGED
-    change_set_id: str = Field(min_length=1, max_length=128)
-    paths: tuple[str, ...] = Field(max_length=1_000)
-    reversibility: Literal["full", "partial", "none"]
-
-
 class MemoryStatusPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -220,7 +210,6 @@ EventPayload = Annotated[
     | ToolResultPayload
     | ContextPayload
     | UsageUpdatedPayload
-    | WorkspaceChangedPayload
     | MemoryStatusPayload
     | InteractionRequiredPayload
     | InteractionResolvedPayload

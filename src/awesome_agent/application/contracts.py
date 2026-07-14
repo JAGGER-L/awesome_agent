@@ -23,6 +23,7 @@ from awesome_agent.config.credentials import (
 )
 from awesome_agent.config.models import CredentialSource, SecretStatus
 from awesome_agent.conversation.models import Thread, ThreadView
+from awesome_agent.core.changes import ChangeDelta
 from awesome_agent.core.tools.permissions import PermissionMode
 from awesome_agent.modeling.catalog import ModelIdentitySnapshot
 
@@ -233,8 +234,7 @@ class ChangeSetSummary(BaseModel):
     turn_id: str | None = Field(default=None, max_length=128)
     operation_id: str | None = Field(default=None, max_length=128)
     lifecycle: str = Field(min_length=1, max_length=64)
-    changed_paths: tuple[str, ...] = Field(default=(), max_length=1_000)
-    reversibility: str = Field(min_length=1, max_length=64)
+    changes: tuple[ChangeDelta, ...] = Field(default=(), max_length=1_000)
     created_at: datetime
     sealed_at: datetime | None = None
 

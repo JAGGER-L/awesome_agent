@@ -295,18 +295,6 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           cache_write_tokens: event.payload.cache_write_tokens,
         },
       };
-    case "workspace.changed":
-      return {
-        ...next,
-        latest_change: {
-          change_set_id: event.payload.change_set_id,
-          paths: event.payload.paths,
-          reversibility: event.payload.reversibility,
-          ...(event.operation_id === undefined
-            ? {}
-            : { operation_id: event.operation_id }),
-        },
-      };
     case "interaction.required":
       return {
         ...next,
@@ -387,11 +375,6 @@ function reconcileTranscript(
       base;
     void _activeOperation;
     base = withoutActiveOperation;
-  }
-  if (base.latest_change?.operation_id === operationId) {
-    const { latest_change: _latestChange, ...withoutLatestChange } = base;
-    void _latestChange;
-    base = withoutLatestChange;
   }
   return {
     ...base,

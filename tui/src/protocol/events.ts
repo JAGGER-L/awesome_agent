@@ -21,7 +21,6 @@ export const eventTypes = [
   "context.prepared",
   "context.compressed",
   "usage.updated",
-  "workspace.changed",
   "memory.status",
   "interaction.required",
   "interaction.resolved",
@@ -153,12 +152,6 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
     reasoning_tokens: boundedInteger,
     cache_read_tokens: boundedInteger,
     cache_write_tokens: boundedInteger,
-  }),
-  z.strictObject({
-    kind: z.literal("workspace.changed"),
-    change_set_id: boundedText(1, 128),
-    paths: z.array(z.string()).max(1_000),
-    reversibility: z.enum(["full", "partial", "none"]),
   }),
   z.strictObject({
     kind: z.literal("memory.status"),

@@ -1,3 +1,8 @@
+import type { MethodValue } from "../protocol/methods.js";
+
+export type ChangeDelta =
+  MethodValue["thread.read"]["change_sets"][number]["changes"][number];
+
 export interface BlockBase {
   readonly key: string;
   readonly kind: string;
@@ -44,9 +49,8 @@ export interface ToolGroupBlock extends BlockBase {
 export interface ChangeSummaryBlock extends BlockBase {
   readonly kind: "change";
   readonly change_set_id: string;
-  readonly paths: readonly string[];
   readonly lifecycle: string;
-  readonly reversibility: string;
+  readonly changes: readonly ChangeDelta[];
 }
 export interface ThinkingBlock extends BlockBase {
   readonly kind: "thinking";

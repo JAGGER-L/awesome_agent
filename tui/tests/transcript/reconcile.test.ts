@@ -95,8 +95,15 @@ function page(): MethodValue["thread.read"] {
         change_set_id: "change_1",
         turn_id: "turn_1",
         lifecycle: "sealed",
-        changed_paths: ["src/a.py"],
-        reversibility: "full",
+        changes: [
+          {
+            kind: "text_file",
+            path: "src/a.py",
+            change_kind: "updated",
+            additions: 2,
+            deletions: 1,
+          },
+        ],
         created_at: now,
       } as never,
     ],

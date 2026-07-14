@@ -22,6 +22,7 @@ from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
     CancelResult,
+    ChangeSetSummary,
     InitializeResult,
     InitializeStatus,
     InteractionResult,
@@ -42,6 +43,13 @@ from awesome_agent.config import (
     missing_provider_credential_statuses,
 )
 from awesome_agent.conversation import Thread, ThreadView, UsageSummary
+from awesome_agent.core.changes import (
+    BinaryFileChange,
+    DirectoryChange,
+    FileChangeKind,
+    SymlinkChange,
+    TextFileChange,
+)
 from awesome_agent.core.events import (
     AssistantReasoningDeltaPayload,
     AssistantTextDeltaPayload,
@@ -60,7 +68,6 @@ from awesome_agent.core.events import (
     TurnLifecyclePayload,
     UsageUpdatedPayload,
     WarningPayload,
-    WorkspaceChangedPayload,
 )
 from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
@@ -199,7 +206,43 @@ def _valid_methods() -> dict[str, object]:
             "thread.read",
             "thread.read",
             {"thread_id": THREAD_ID, "limit": 50},
-            _success(ThreadReadResult(view=ThreadView(thread=_thread()))),
+            _success(
+                ThreadReadResult(
+                    view=ThreadView(thread=_thread()),
+                    change_sets=(
+                        ChangeSetSummary(
+                            change_set_id="change_11111111111111111111111111111111",
+                            turn_id=TURN_ID,
+                            operation_id=OPERATION_ID,
+                            lifecycle="applied",
+                            changes=(
+                                TextFileChange(
+                                    path="src/main.py",
+                                    change_kind=FileChangeKind.UPDATED,
+                                    additions=16,
+                                    deletions=2,
+                                ),
+                                BinaryFileChange(
+                                    path="assets/logo.bin",
+                                    change_kind=FileChangeKind.UPDATED,
+                                    before_bytes=12,
+                                    after_bytes=20,
+                                ),
+                                DirectoryChange(
+                                    path="generated",
+                                    change_kind=FileChangeKind.CREATED,
+                                ),
+                                SymlinkChange(
+                                    path="current",
+                                    change_kind=FileChangeKind.UPDATED,
+                                ),
+                            ),
+                            created_at=FIXED_TIME,
+                            sealed_at=FIXED_TIME,
+                        ),
+                    ),
+                )
+            ),
         ),
         (
             "turn.submit",
@@ -450,12 +493,6 @@ def _payload(event_type: EventType) -> EventPayload:
         )
     if event_type is EventType.USAGE_UPDATED:
         return UsageUpdatedPayload(input_tokens=12, output_tokens=4)
-    if event_type is EventType.WORKSPACE_CHANGED:
-        return WorkspaceChangedPayload(
-            change_set_id="change_1",
-            paths=("src/example.py",),
-            reversibility="full",
-        )
     if event_type is EventType.MEMORY_STATUS:
         return MemoryStatusPayload(layer="local", enabled=False, status="disabled")
     if event_type is EventType.INTERACTION_REQUIRED:

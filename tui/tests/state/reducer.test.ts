@@ -83,11 +83,6 @@ describe("surfaceReducer", () => {
       thread: { view: { thread: { id: "thread_old" } } } as never,
       active_operation: { id: "operation_old", status: "active" as const },
       usage: { input_tokens: 10 },
-      latest_change: {
-        change_set_id: "change_old",
-        paths: ["old.py"],
-        reversibility: "full" as const,
-      },
       pending_interaction: {
         interaction_id: "interaction_old",
         interaction_kind: "tool_approval" as const,
@@ -147,12 +142,6 @@ describe("surfaceReducer", () => {
       committed_transcript: [
         { key: "entry:old", kind: "assistant" as const, text: "old answer" },
       ],
-      latest_change: {
-        change_set_id: "change_1",
-        paths: ["done.py"],
-        reversibility: "full" as const,
-        operation_id: "operation_1",
-      },
       warnings: [
         {
           id: "warning:owned",
@@ -200,7 +189,6 @@ describe("surfaceReducer", () => {
       ),
     ).toHaveLength(1);
     expect(next.active_operation).toBeUndefined();
-    expect(next.latest_change).toBeUndefined();
     expect(next.warnings).toEqual([
       expect.objectContaining({ operation_id: "operation_2" }),
     ]);
