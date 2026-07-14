@@ -102,6 +102,24 @@ def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -
     assert view.turns == (turn,)
 
 
+def test_first_accepted_message_names_an_automatic_thread(tmp_path: Path) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1")
+
+    service.begin_turn(
+        thread.id,
+        "  calculate   cube  ",
+        _turn_config(),
+        client_message_id="client_first",
+    )
+
+    view = service.read_thread(thread.id)
+    assert view.thread.title == "calculate cube"
+    assert view.thread.title_source is ThreadTitleSource.AUTOMATIC
+    assert len(view.entries) == 1
+    assert len(view.turns) == 1
+
+
 def test_one_in_progress_turn_per_thread_but_other_threads_are_independent(
     tmp_path: Path,
 ) -> None:

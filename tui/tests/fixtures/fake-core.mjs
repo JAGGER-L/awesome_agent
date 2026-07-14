@@ -139,6 +139,7 @@ const handleLine = (line) => {
             id: request.params.thread_id,
             workspace_key: "workspace_fake",
             title: "Fake Thread",
+            title_source: "automatic",
             current_model: "deepseek/deepseek-v4-flash",
             thinking_enabled: false,
             skill_mode: "auto",
