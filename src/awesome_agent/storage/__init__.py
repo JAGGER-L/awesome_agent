@@ -1,9 +1,16 @@
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import sqlite_checkpoint_saver
+from awesome_agent.storage.compatibility import (
+    APPLICATION_SCHEMA_VERSION,
+    ApplicationStateUnavailable,
+    StateCompatibility,
+    StatePreflight,
+    inspect_application_state,
+)
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.database import (
-    APPLICATION_SCHEMA_VERSION,
     ApplicationSchemaMismatch,
+    ApplicationStateUnknown,
     application_connection,
     initialize_application_database,
 )
@@ -13,13 +20,18 @@ from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 __all__ = [
     "APPLICATION_SCHEMA_VERSION",
     "ApplicationSchemaMismatch",
+    "ApplicationStateUnavailable",
+    "ApplicationStateUnknown",
     "FileChangeBlobStore",
     "SQLiteChangeSetStore",
     "SQLiteConversationRepositories",
     "SQLiteMcpEnablementStore",
     "SQLiteWorkspaceTrustStore",
+    "StateCompatibility",
+    "StatePreflight",
     "application_connection",
     "initialize_application_database",
+    "inspect_application_state",
     "mcp_config_hash",
     "sqlite_checkpoint_saver",
 ]

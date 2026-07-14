@@ -113,7 +113,7 @@ def test_application_schema_creates_only_product_state_tables(
             ).fetchall()
         }
 
-    assert version == APPLICATION_SCHEMA_VERSION == 2
+    assert version == APPLICATION_SCHEMA_VERSION == 7
     assert {
         "trusted_workspaces",
         "change_sets",

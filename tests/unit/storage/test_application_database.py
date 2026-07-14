@@ -24,7 +24,7 @@ def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None:
         table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'trusted_workspaces'"
         ).fetchone()
-    assert version == APPLICATION_SCHEMA_VERSION == 2
+    assert version == APPLICATION_SCHEMA_VERSION == 7
     assert str(journal_mode).lower() == "wal"
     assert foreign_keys == 1
     assert table is not None
@@ -36,8 +36,10 @@ def test_noncurrent_schema_is_rejected(tmp_path: Path) -> None:
     with application_connection(path) as connection:
         connection.execute("PRAGMA user_version = 99")
 
-    with pytest.raises(ApplicationSchemaMismatch):
+    with pytest.raises(ApplicationSchemaMismatch) as raised:
         initialize_application_database(path)
+
+    assert raised.value.direction.value == "newer"
 
 
 def test_noncurrent_schema_is_rejected_without_mutation(tmp_path: Path) -> None:
@@ -53,6 +55,7 @@ def test_noncurrent_schema_is_rejected_without_mutation(tmp_path: Path) -> None:
 
     assert raised.value.found == 1
     assert raised.value.expected == APPLICATION_SCHEMA_VERSION
+    assert raised.value.direction.value == "older"
     assert path.read_bytes() == before
     assert tuple(sorted(item.name for item in path.parent.iterdir())) == before_entries
     assert not path.with_name("application.db-wal").exists()
