@@ -10,7 +10,9 @@ typed event notifications as newline-delimited JSON over stdin/stdout. The
 protocol is versioned and bounded; malformed or oversized lines receive
 protocol errors. Core logs use stderr so they cannot corrupt the event stream.
 
-The wire contract is Protocol v2. Python owns serialization of the exact
+The wire contract is Protocol v3. Both initialize directions carry the strict
+literal `protocol_version: 3`; a v2 peer fails the handshake explicitly even
+when product versions happen to match. Python owns serialization of the exact
 `CommandOutcome` variants, TypeScript validates generated fixtures, and
 the command controller routes only their discriminators. An exhaustive
 Presenter converts typed semantic payloads into terminal blocks; it has no
@@ -20,7 +22,7 @@ The presentation path has four deliberately small layers:
 
 ```text
 Core semantic facts
-  -> Protocol v2 CommandPayload
+  -> Protocol v3 CommandPayload
   -> typed command effect for authoritative Surface state, when required
   -> exhaustive presentCommandPayload()
   -> CommandPresentation
@@ -44,7 +46,7 @@ no state effect pass through unchanged.
 
 ```text
 Ink command controller
-  -> Protocol v2 command.execute
+  -> Protocol v3 command.execute
   -> LocalApplication facade
   -> complete CommandDispatcher
   -> focused command service
@@ -57,6 +59,13 @@ Intent flows from Ink to the Python `ApplicationFacade`. Events flow from
 Application to Ink. Request IDs, operation IDs, Thread/Turn IDs, event
 sequences, and typed interaction responses let Ink reconcile live output with
 durable transcript reads after reconnect or resume.
+
+`ApplicationState.permission_mode` is the exact three-way enum Request
+approval, Accept edits, or Full access. Its optional nullable
+`workspace_instruction_diagnostic` is a strict `{code, source_id, message}`
+record. Ink preserves that structured fact and renders its bounded message in
+Welcome and the status line; `/doctor` renders each typed check detail rather
+than discarding it.
 
 Presentation state such as theme, composer history, expanded reasoning, and
 selection remains in the TUI. The host terminal owns scrollback and mouse

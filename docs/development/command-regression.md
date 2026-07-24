@@ -3,8 +3,8 @@
 The runtime command authority is `CommandName` and `COMMAND_OWNERS` in
 `src/awesome_agent/application/commands.py`. Protocol fixtures, the generated
 Ink catalog, completion, Help, presenters, and the tests below must match that
-authority exactly. This table documents verification; it is not another
-runtime registry.
+authority exactly. Protocol v3 fixtures are the cross-language boundary. This
+table documents verification; it is not another runtime registry.
 
 | Command | Owner | Input and result | Interaction and empty/error behavior | Focused coverage |
 | --- | --- | --- | --- | --- |
@@ -22,13 +22,13 @@ runtime registry.
 | `/redo` | Application | Typed Change result | Folded paths; no-op/conflict/error are distinct | `change-presenters` |
 | `/tools` | Application | One row per effective Tool | Empty inventory is explicit; policy facts are typed | `catalog-presenters` |
 | `/skills` | Application | List or mode picker | Empty/diagnostic states are visible | `catalog-presenters`, `controller` |
-| `/mcp` | Application | Typed server rows | No configured servers is an explicit empty state | `catalog-presenters` |
+| `/mcp` | Application | Typed server rows and explicit restart | No configured servers is explicit; restart removes stale namespace before atomic replacement | `catalog-presenters`, MCP manager tests |
 | `/memory` | Application | Local/Cloud picker, then On/Off | Values are independent; unavailable Cloud reports its reason | `memory-flow` |
 | `/status` | Application | Aligned product-status panel | Invalid snapshots fail the protocol contract | `status-doctor-presenters` |
 | `/usage` | Application | Aligned usage rows | Zero usage remains visible | `context-usage-presenters` |
-| `/doctor` | Application | Aligned diagnostic rows | Each check has a typed status | `status-doctor-presenters` |
+| `/doctor` | Application | Aligned diagnostic rows | Each check renders its typed status and bounded detail, including AGENTS.md diagnostics | `status-doctor-presenters` |
 | `/config` | Application | Effective sources and credential presence | Never renders secret values | `catalog-presenters` |
-| `/permissions` | Application | Permission picker/result | Full access uses warning confirmation | `controller`, interaction tests |
+| `/permissions` | Application | Three-mode permission picker/result | Accept edits remains write-only; Full access uses a Thread/generation-bound warning with the safe choice selected | `controller`, interaction tests |
 | `/help` | Ink | Bare catalog or focused command | Ordinary transcript result; unknown name explains failure | `help` |
 | `/theme` | Ink | Theme picker or explicit value | Escape returns to Composer | `local` |
 | `/copy` | Ink | Copies the latest assistant response | Empty transcript and clipboard errors are visible | `local` |
@@ -44,3 +44,11 @@ session-only queue as natural input and `! shell`. Promotion remains FIFO;
 empty-Composer recall remains LIFO. Commands that open a Picker or Approval
 pause promotion, Thread transitions bind the following item to the new Thread,
 and `/quit` is an ordered terminal barrier.
+
+At the Core boundary, a foreground Operation permits only the exact read-only
+snapshot set `/context`, `/workspace`, `/tools`, `/mcp`, `/mcp status [id]`,
+`/status`, `/usage`, and `/config`. `/diff` and `/doctor` remain exclusive.
+Barrier tests cover Operation-to-command, command-to-Operation,
+command-to-command, credential-to-Turn, and shutdown-to-mutation races in both
+directions. Pending interactions block new state changes; matching Tool
+approval is the owning Operation's continuation.

@@ -3,8 +3,14 @@ import asyncio
 import pytest
 
 from awesome_agent.application.events import ApplicationEventProjector
+from awesome_agent.application.foreground import ForegroundArbiter, ForegroundBusy
 from awesome_agent.application.operations import OperationBusy, OperationController
-from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
+from awesome_agent.core.events import (
+    CollectingEventSink,
+    EventEmitter,
+    EventEnvelope,
+    EventType,
+)
 from awesome_agent.core.tools import (
     ToolError,
     ToolErrorCode,
@@ -28,6 +34,25 @@ def _emitter(sink: CollectingEventSink) -> EventEmitter:
         workspace_key="workspace_1",
         sink=sink,
     )
+
+
+class BlockingOperationSink:
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def emit(self, event: EventEnvelope) -> None:
+        assert event.event_type is EventType.OPERATION_STARTED
+        self.entered.set()
+        await self.release.wait()
+
+
+class CancelAfterStartedEventSink:
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.OPERATION_STARTED:
+            owner = asyncio.current_task()
+            assert owner is not None
+            asyncio.get_running_loop().call_soon(owner.cancel)
 
 
 @pytest.mark.asyncio
@@ -59,6 +84,106 @@ async def test_operation_serialization_and_completed_terminal_event() -> None:
     assert {event.operation_id for event in sink.events} == {active_id}
     assert {event.turn_id for event in sink.events} == {"turn_1"}
     assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_operation_and_exclusive_leases_are_atomic_in_both_directions() -> None:
+    foreground = ForegroundArbiter()
+    controller = OperationController(
+        _emitter(CollectingEventSink()),
+        foreground,
+    )
+    exclusive = foreground.acquire_exclusive()
+
+    with pytest.raises(OperationBusy):
+        controller.reserve()
+
+    exclusive.release()
+    reservation = controller.reserve()
+    with pytest.raises(ForegroundBusy):
+        foreground.acquire_exclusive()
+    controller.abort(reservation)
+
+
+@pytest.mark.asyncio
+async def test_aborted_reservation_releases_foreground_without_events() -> None:
+    foreground = ForegroundArbiter()
+    controller = OperationController(
+        _emitter(CollectingEventSink()),
+        foreground,
+    )
+    reservation = controller.reserve()
+
+    controller.abort(reservation)
+
+    assert controller.active_operation_id is None
+    lease = foreground.acquire_exclusive()
+    lease.release()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_unpublished_operation_task() -> None:
+    foreground = ForegroundArbiter()
+    sink = BlockingOperationSink()
+    controller = OperationController(
+        EventEmitter(
+            session_id="session_1",
+            workspace_key="workspace_1",
+            sink=sink,
+        ),
+        foreground,
+    )
+    factory_called = False
+
+    async def factory(operation_id: str) -> None:
+        nonlocal factory_called
+        del operation_id
+        factory_called = True
+
+    starter = asyncio.create_task(controller.start(factory))
+    await sink.entered.wait()
+    foreground.begin_closing()
+
+    await asyncio.wait_for(controller.shutdown(), timeout=1)
+
+    with pytest.raises(asyncio.CancelledError):
+        await starter
+    await asyncio.wait_for(foreground.wait_idle(), timeout=1)
+    assert controller.active_operation_id is None
+    assert foreground.active_kind is None
+    assert factory_called is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_child_publication_cancels_and_waits_for_child() -> None:
+    controller = OperationController(
+        EventEmitter(
+            session_id="session_1",
+            workspace_key="workspace_1",
+            sink=CancelAfterStartedEventSink(),
+        )
+    )
+    factory_started = asyncio.Event()
+    factory_cancelled = False
+
+    async def factory(operation_id: str) -> None:
+        nonlocal factory_cancelled
+        del operation_id
+        factory_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            factory_cancelled = True
+            raise
+
+    starter = asyncio.create_task(controller.start(factory))
+    with pytest.raises(asyncio.CancelledError):
+        await starter
+    released_before_cleanup = controller.active_operation_id is None
+    await controller.shutdown()
+
+    assert released_before_cleanup is True
+    assert not factory_started.is_set() or factory_cancelled is True
 
 
 @pytest.mark.asyncio

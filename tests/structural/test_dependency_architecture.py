@@ -35,6 +35,7 @@ ALLOWED_INTERNAL_IMPORTS = {
 }
 
 EXTERNAL_FRAMEWORK_OWNERS = {
+    "jsonschema": {"extensions"},
     "langgraph": {"agent", "application", "storage"},
     "mcp": {"extensions"},
     "openai": {"providers"},

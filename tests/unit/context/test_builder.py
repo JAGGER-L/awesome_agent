@@ -71,6 +71,42 @@ async def test_exact_normalized_duplicate_keeps_higher_priority_label() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mandatory_instruction_sources_are_not_deduplicated() -> None:
+    prepared = await ContextBuilder().prepare(
+        ContextRequest(
+            sources=(
+                _source(
+                    ContextSourceKind.PRODUCT_INSTRUCTIONS,
+                    "same instructions",
+                    mandatory=True,
+                    source_id="product",
+                ),
+                _source(
+                    ContextSourceKind.WORKSPACE_INSTRUCTIONS,
+                    " same  instructions ",
+                    mandatory=True,
+                    source_id="AGENTS.md",
+                ),
+                _source(
+                    ContextSourceKind.SKILL,
+                    "same instructions",
+                    mandatory=True,
+                    source_id="review",
+                ),
+            ),
+            configured_total_tokens=262_144,
+            model_context_limit=262_144,
+        )
+    )
+
+    assert [(item.kind, item.source_id) for item in prepared.manifest] == [
+        (ContextSourceKind.PRODUCT_INSTRUCTIONS, "product"),
+        (ContextSourceKind.WORKSPACE_INSTRUCTIONS, "AGENTS.md"),
+        (ContextSourceKind.SKILL, "review"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_optional_sources_truncate_but_mandatory_sources_are_preserved() -> None:
     prepared = await ContextBuilder().prepare(
         ContextRequest(

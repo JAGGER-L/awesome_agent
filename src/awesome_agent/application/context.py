@@ -101,6 +101,7 @@ class ApplicationContextService:
         product_instructions: str,
         model_identity: ModelIdentityResolver | None = None,
         workspace_instructions: str = "",
+        workspace_instruction_source_id: str = "AGENTS.md",
         skill_loader: SkillLoader | None = None,
         local_memory: LocalMemoryService | None = None,
         mem0_recall: Mem0Recall | None = None,
@@ -114,6 +115,7 @@ class ApplicationContextService:
         self._product_instructions = product_instructions
         self._model_identity = model_identity
         self._workspace_instructions = workspace_instructions
+        self._workspace_instruction_source_id = workspace_instruction_source_id
         self._skill_loader = skill_loader
         self._local_memory = local_memory
         self._mem0_recall = mem0_recall
@@ -171,7 +173,7 @@ class ApplicationContextService:
             sources.append(
                 ContextSource(
                     kind=ContextSourceKind.WORKSPACE_INSTRUCTIONS,
-                    source_id=self._workspace.key,
+                    source_id=self._workspace_instruction_source_id,
                     content=self._workspace_instructions,
                     role="system",
                     mandatory=True,

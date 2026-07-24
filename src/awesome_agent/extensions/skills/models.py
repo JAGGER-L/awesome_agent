@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+
+from awesome_agent.context._safe_files import FileFingerprint, FileIdentity
 
 
 class SkillSource(StrEnum):
@@ -39,14 +42,29 @@ class SkillNotFound(LookupError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class _WorkspaceSkillBoundary:
+    workspace_anchor: Path
+    workspace_anchor_identity: FileIdentity
+    skills_root: Path
+    skills_root_identity: FileIdentity
+    package_root: Path
+    package_root_identity: FileIdentity
+    skill_file: Path
+    skill_file_fingerprint: FileFingerprint
+    skill_file_content_hash: str
+
+
 class SkillCatalog:
     def __init__(
         self,
         descriptors: tuple[SkillDescriptor, ...],
         diagnostics: tuple[SkillDiagnostic, ...],
+        workspace_boundaries: dict[str, _WorkspaceSkillBoundary] | None = None,
     ) -> None:
         self._descriptors = descriptors
         self._diagnostics = diagnostics
+        self._workspace_boundaries = dict(workspace_boundaries or {})
 
     def descriptors(self) -> tuple[SkillDescriptor, ...]:
         return self._descriptors
@@ -62,3 +80,6 @@ class SkillCatalog:
         if descriptor is None:
             raise SkillNotFound(name)
         return descriptor
+
+    def _workspace_boundary(self, name: str) -> _WorkspaceSkillBoundary | None:
+        return self._workspace_boundaries.get(name)

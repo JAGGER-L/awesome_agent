@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.13"
 license = {text = "MIT"}
 authors = [{name = "JAGGER-L"}]
 dependencies = [
+  "jsonschema>=4.26,<5",
   "langgraph>=0.6",
   "langgraph-checkpoint-sqlite>=3.1.0",
   "mcp>=1,<2",
@@ -36,6 +37,7 @@ dev = [
   "pytest-asyncio>=1.1",
   "pytest-cov>=6.2",
   "ruff>=0.12",
+  "types-jsonschema>=4.26,<5",
   "types-PyYAML>=6.0.12.20250516",
 ]
 

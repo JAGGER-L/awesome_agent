@@ -10,12 +10,14 @@ from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedP
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
     evaluate_command,
+    host_shell_dialect,
 )
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
     ToolError,
     ToolErrorCode,
+    ToolOutput,
     ToolPresentation,
     ToolRequest,
     ToolResult,
@@ -33,7 +35,10 @@ from awesome_agent.core.tools.permissions import (
     ToolApprovalRequest,
     ToolCapability,
 )
-from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
+
+_HANDLER_CANCELLATION_GRACE_SECONDS = 10.0
+_HANDLER_TIMEOUT_MAX_CANCELLATION_GRACE_SECONDS = 0.5
 
 type ToolOutcome = Literal["success", "error", "cancelled"]
 type ToolTerminalEventType = Literal[
@@ -141,8 +146,19 @@ class ToolExecutor:
                             "Thread write approval cannot grant another capability."
                         )
                     context.permission_session.grant_thread_writes()
-            async with asyncio.timeout(self._timeout_seconds):
-                output = await registered.handler(arguments, context)
+            total_timeout = (
+                registered.timeout_resolver(arguments)
+                if registered.timeout_resolver is not None
+                else self._timeout_seconds
+            )
+            if total_timeout <= 0:
+                raise ToolInvariantError("Tool timeout must be positive.")
+            output = await self._invoke_with_deadline(
+                registered,
+                arguments,
+                context,
+                timeout_seconds=total_timeout,
+            )
         except asyncio.CancelledError:
             await self._finalize(
                 request,
@@ -227,6 +243,95 @@ class ToolExecutor:
         return result
 
     @staticmethod
+    async def _invoke_with_deadline(
+        registered: RegisteredTool,
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+        *,
+        timeout_seconds: float,
+    ) -> ToolOutput:
+        loop = asyncio.get_running_loop()
+        overall_deadline = loop.time() + timeout_seconds
+        timeout_cleanup_grace = min(
+            _HANDLER_TIMEOUT_MAX_CANCELLATION_GRACE_SECONDS,
+            timeout_seconds / 2,
+        )
+        execution_deadline = overall_deadline - timeout_cleanup_grace
+        completed_at: float | None = None
+
+        async def invoke() -> ToolOutput:
+            nonlocal completed_at
+            try:
+                return await registered.handler(arguments, context)
+            finally:
+                completed_at = loop.time()
+
+        handler_task: asyncio.Task[ToolOutput] = asyncio.create_task(
+            invoke(),
+            name=f"tool-handler:{registered.spec.name}",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (handler_task,),
+                timeout=max(0.0, execution_deadline - loop.time()),
+            )
+        except asyncio.CancelledError:
+            await ToolExecutor._cancel_handler_task(
+                handler_task,
+                grace_seconds=_HANDLER_CANCELLATION_GRACE_SECONDS,
+                propagate_caller_cancellation=False,
+            )
+            raise
+        completed_within_deadline = (
+            handler_task in done
+            and completed_at is not None
+            and completed_at <= execution_deadline
+        )
+        if not completed_within_deadline:
+            await ToolExecutor._cancel_handler_task(
+                handler_task,
+                grace_seconds=max(0.0, overall_deadline - loop.time()),
+                propagate_caller_cancellation=True,
+            )
+            raise TimeoutError
+        return handler_task.result()
+
+    @staticmethod
+    async def _cancel_handler_task(
+        handler_task: asyncio.Task[ToolOutput],
+        *,
+        grace_seconds: float,
+        propagate_caller_cancellation: bool,
+    ) -> None:
+        handler_task.cancel()
+        deadline = asyncio.get_running_loop().time() + grace_seconds
+        caller_cancellation: asyncio.CancelledError | None = None
+        while not handler_task.done():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait((handler_task,), timeout=remaining)
+            except asyncio.CancelledError as error:
+                caller_cancellation = caller_cancellation or error
+                continue
+        if not handler_task.done():
+            handler_task.add_done_callback(ToolExecutor._consume_handler_task)
+        else:
+            ToolExecutor._consume_handler_task(handler_task)
+        if propagate_caller_cancellation and caller_cancellation is not None:
+            raise caller_cancellation
+
+    @staticmethod
+    def _consume_handler_task(handler_task: asyncio.Task[ToolOutput]) -> None:
+        if handler_task.cancelled():
+            return
+        try:
+            handler_task.exception()
+        except Exception:
+            return
+
+    @staticmethod
     def _hard_deny_reason(
         capability: str,
         arguments: BaseModel,
@@ -237,7 +342,15 @@ class ToolExecutor:
         command = getattr(arguments, "command", None)
         if not isinstance(command, str):
             return "Shell tool arguments do not contain a valid command."
-        decision = evaluate_command(command, context.workspace.canonical_path)
+        requested_cwd = getattr(arguments, "cwd", None)
+        if not isinstance(requested_cwd, str):
+            return "Shell tool arguments do not contain a valid working directory."
+        decision = evaluate_command(
+            command,
+            dialect=host_shell_dialect(),
+            cwd=context.workspace.canonical_path / requested_cwd,
+            workspace=context.workspace.canonical_path,
+        )
         return decision.reason if decision.action is CommandPolicyAction.DENY else None
 
     @staticmethod

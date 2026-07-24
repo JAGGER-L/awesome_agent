@@ -13,6 +13,7 @@ class ToolCapability(StrEnum):
 
 class PermissionMode(StrEnum):
     REQUEST_APPROVAL = "request_approval"
+    ACCEPT_EDITS = "accept_edits"
     FULL_ACCESS = "full_access"
 
 
@@ -40,13 +41,18 @@ class ToolApprovalRequest:
 class PermissionSession:
     mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     granted_capabilities: set[str] = field(default_factory=set)
+    generation: int = 0
 
     def grant_thread_writes(self) -> None:
         self.granted_capabilities.add(ToolCapability.WORKSPACE_WRITE.value)
 
     def reset(self) -> None:
-        self.mode = PermissionMode.REQUEST_APPROVAL
+        self.set_mode(PermissionMode.REQUEST_APPROVAL)
+
+    def set_mode(self, mode: PermissionMode) -> None:
+        self.mode = mode
         self.granted_capabilities.clear()
+        self.generation += 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,10 +94,23 @@ class PermissionPolicy:
                 PolicyAction.ALLOW,
                 "Workspace reads are allowed in a trusted workspace.",
             )
-        if request.mode is PermissionMode.FULL_ACCESS or capability in granted:
+        if capability in granted:
             return PolicyDecision(
                 PolicyAction.ALLOW,
                 "The active permission session allows this capability.",
+            )
+        if (
+            request.mode is PermissionMode.ACCEPT_EDITS
+            and capability == ToolCapability.WORKSPACE_WRITE
+        ):
+            return PolicyDecision(
+                PolicyAction.ALLOW,
+                "Accept edits allows workspace file creation and modification.",
+            )
+        if request.mode is PermissionMode.FULL_ACCESS:
+            return PolicyDecision(
+                PolicyAction.ALLOW,
+                "Full access allows this built-in local capability.",
             )
         return PolicyDecision(
             PolicyAction.ASK,

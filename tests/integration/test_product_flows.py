@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from pydantic import SecretStr
 
 from awesome_agent.application.command_results import (
     CommandError,
     CommandInteractionResult,
     CommandResult,
+    DoctorCommandPayload,
     ModelCommandPayload,
     ThreadTransitionCommandPayload,
     ToolCatalogCommandPayload,
@@ -22,10 +24,13 @@ from awesome_agent.application.composition import compose_local_application
 from awesome_agent.application.contracts import (
     ApplicationResult,
     InitializeStatus,
+    ProviderCredentialSetRequest,
     ThreadListQuery,
     ThreadReadQuery,
 )
 from awesome_agent.application.facade import LocalApplication
+from awesome_agent.config import CredentialValidation, CredentialValidationStatus
+from awesome_agent.context import ContextManifestItem
 from awesome_agent.conversation import ThreadView
 from awesome_agent.core.events import CollectingEventSink, EventType
 from awesome_agent.modeling import (
@@ -121,6 +126,54 @@ class ExecuteGateway(FakeGateway):
         )
 
 
+class BlockingGateway(FakeGateway):
+    def __init__(self, provider: str, model: str) -> None:
+        super().__init__(provider, model)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def stream(
+        self,
+        selected: SelectedModel,
+        request: ModelRequest,
+    ) -> AsyncIterator[GatewayEvent]:
+        self.requests.append(request)
+        self.started.set()
+        await self.release.wait()
+        yield TextDelta(text="done")
+        yield TurnCompleted(
+            turn=ModelTurn(
+                provider=selected.provider,
+                model=selected.model,
+                assistant=AssistantMessage(content="done"),
+                stop_reason=StopReason.COMPLETED,
+            )
+        )
+
+
+class BlockingCredentialValidator:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = 0
+
+    async def validate(
+        self,
+        provider: str,
+        api_key: SecretStr,
+        *,
+        kimi_region: object,
+    ) -> CredentialValidation:
+        del provider, api_key, kimi_region
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        return CredentialValidation(
+            status=CredentialValidationStatus.VALID,
+            code="credential_valid",
+        )
+
+
 def _unwrap[T](result: ApplicationResult[T]) -> T:
     assert result.ok is True
     assert result.value is not None
@@ -154,6 +207,171 @@ async def _wait_for_interaction(application: LocalApplication) -> str:
 
 
 @pytest.mark.asyncio
+async def test_trusted_agents_md_is_snapshotted_into_model_context_and_manifest(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    instructions = workspace / "AGENTS.md"
+    instructions.write_text("MANDATORY_WORKSPACE_RULE", encoding="utf-8")
+    gateways: list[FakeGateway] = []
+
+    def gateway_factory(provider: ProviderId, model: str) -> ModelGateway:
+        gateway = FakeGateway(provider, model)
+        gateways.append(gateway)
+        return cast(ModelGateway, gateway)
+
+    sink = CollectingEventSink()
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=sink,
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=gateway_factory,
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    instructions.write_text("REPLACED_AFTER_TRUST", encoding="utf-8")
+    created = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(created, CommandResult)
+    assert isinstance(created.payload, ThreadTransitionCommandPayload)
+    thread_id = created.payload.transition.thread.view.thread.id
+
+    _unwrap(await application.submit_turn(thread_id, "inspect", "client_agents"))
+    view = await _wait_for_thread(application, thread_id, entries=2)
+
+    requests = [request for gateway in gateways for request in gateway.requests]
+    assert requests
+    system_context = "\n".join(
+        message.content
+        for request in requests
+        for message in request.messages
+        if message.role == "system"
+    )
+    assert "MANDATORY_WORKSPACE_RULE" in system_context
+    assert "REPLACED_AFTER_TRUST" not in system_context
+    manifest = tuple(
+        ContextManifestItem.model_validate(item)
+        for item in view.turns[-1].context_manifest
+    )
+    assert any(item.source_id == "AGENTS.md" for item in manifest)
+    assert (
+        _unwrap(await application.get_state()).workspace_instruction_diagnostic is None
+    )
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_invalid_agents_md_is_ignored_without_invalidating_configuration(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "AGENTS.md").write_bytes(b"x" * (32 * 1024 + 1))
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+
+    state = _unwrap(await application.get_state())
+    assert state.configuration_valid is True
+    assert state.workspace_instruction_diagnostic is not None
+    assert (
+        state.workspace_instruction_diagnostic.code
+        == "workspace_instructions_too_large"
+    )
+    doctor = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.DOCTOR))
+    )
+    assert isinstance(doctor, CommandResult)
+    assert isinstance(doctor.payload, DoctorCommandPayload)
+    workspace_check = next(
+        check
+        for check in doctor.payload.checks
+        if check.name == "Workspace instructions"
+    )
+    assert workspace_check.status == "error"
+    assert workspace_check.detail == state.workspace_instruction_diagnostic.message
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_credential_and_turn_leases_exclude_each_other_in_both_directions(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    validator = BlockingCredentialValidator()
+    gateway = BlockingGateway("deepseek", "deepseek/deepseek-v4-flash")
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "original-key"},
+        gateway_factory=lambda provider, model: cast(ModelGateway, gateway),
+        credential_validator=validator,
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    created = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(created, CommandResult)
+    assert isinstance(created.payload, ThreadTransitionCommandPayload)
+    thread_id = created.payload.transition.thread.view.thread.id
+    credential_request = ProviderCredentialSetRequest(
+        provider="deepseek",
+        action="replace",
+        api_key=SecretStr("replacement-key"),
+    )
+
+    saving = asyncio.create_task(
+        application.set_provider_credential(credential_request)
+    )
+    await validator.started.wait()
+    blocked_turn = await application.submit_turn(
+        thread_id,
+        "must wait for credential mutation",
+        "client_credential_busy",
+    )
+    assert blocked_turn.ok is False
+    assert blocked_turn.error is not None
+    assert blocked_turn.error.code == "operation_busy"
+    validator.release.set()
+    assert _unwrap(await saving).status == "configured"
+
+    accepted = _unwrap(
+        await application.submit_turn(
+            thread_id,
+            "hold the operation",
+            "client_turn_busy",
+        )
+    )
+    await gateway.started.wait()
+    blocked_credential = await application.set_provider_credential(credential_request)
+    assert blocked_credential.ok is False
+    assert blocked_credential.error is not None
+    assert blocked_credential.error.code == "operation_busy"
+    assert validator.calls == 1
+    _unwrap(await application.cancel_operation(accepted.operation_id))
+    for _ in range(200):
+        if _unwrap(await application.get_state()).active_operation_id is None:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        raise AssertionError("cancelled operation did not release its lease")
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
     tmp_path: Path,
 ) -> None:
@@ -177,6 +395,17 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
     assert isinstance(first, CommandResult)
     assert isinstance(first.payload, ThreadTransitionCommandPayload)
     first_id = first.payload.transition.thread.view.thread.id
+    second = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(second, CommandResult)
+    assert isinstance(second.payload, ThreadTransitionCommandPayload)
+    second_id = second.payload.transition.thread.view.thread.id
+    _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.RESUME, arguments=(first_id,))
+        )
+    )
 
     picker = _unwrap(
         await application.execute_command(CommandIntent(name=CommandName.PERMISSIONS))
@@ -184,6 +413,17 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
     assert isinstance(picker, CommandInteractionResult)
     assert picker.interaction.kind == "selection"
     assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+
+    accepted_edits = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("accept_edits",),
+            )
+        )
+    )
+    assert isinstance(accepted_edits, CommandResult)
+    assert _unwrap(await application.get_state()).permission_mode == "accept_edits"
 
     confirmation = _unwrap(
         await application.execute_command(
@@ -196,6 +436,25 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
     assert isinstance(confirmation, CommandInteractionResult)
     assert confirmation.interaction.kind == "application"
     interaction_id = confirmation.interaction.interaction_id
+    blocked_turn = await application.submit_turn(
+        first_id,
+        "must not start",
+        "client_permission_pending",
+    )
+    assert blocked_turn.ok is False
+    assert blocked_turn.error is not None
+    assert blocked_turn.error.code == "operation_busy"
+    blocked_direct = await application.execute_direct(first_id, "echo blocked")
+    assert blocked_direct.ok is False
+    assert blocked_direct.error is not None
+    assert blocked_direct.error.code == "operation_busy"
+    for intent in (
+        CommandIntent(name=CommandName.NEW),
+        CommandIntent(name=CommandName.RESUME, arguments=(first_id,)),
+    ):
+        blocked_transition = _unwrap(await application.execute_command(intent))
+        assert isinstance(blocked_transition, CommandError)
+        assert blocked_transition.code == "interaction_busy"
     blocked = _unwrap(
         await application.execute_command(
             CommandIntent(
@@ -214,7 +473,38 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
     )
     assert _unwrap(await application.get_state()).permission_mode == "full_access"
 
-    _unwrap(await application.execute_command(CommandIntent(name=CommandName.NEW)))
+    cross_thread_turn = await application.submit_turn(
+        second_id,
+        "must not inherit full access",
+        "client_cross_thread_permission",
+    )
+    assert cross_thread_turn.ok is False
+    assert cross_thread_turn.error is not None
+    assert cross_thread_turn.error.code == "invalid_arguments"
+    cross_thread_direct = await application.execute_direct(second_id, "echo blocked")
+    assert cross_thread_direct.ok is False
+    assert cross_thread_direct.error is not None
+    assert cross_thread_direct.error.code == "invalid_arguments"
+    second_view = _unwrap(
+        await application.read_thread(ThreadReadQuery(thread_id=second_id))
+    )
+    assert second_view.view.turns == ()
+    assert second_view.view.entries == ()
+
+    _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.RESUME, arguments=(second_id,))
+        )
+    )
+    assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+    stale = _unwrap(
+        await application.respond_interaction(
+            interaction_id,
+            "enable_full_access",
+        )
+    )
+    assert stale.accepted is False
+    assert stale.status == "not_found"
     assert _unwrap(await application.get_state()).permission_mode == "request_approval"
     _unwrap(
         await application.execute_command(

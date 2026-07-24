@@ -135,7 +135,7 @@ const handleLine = (line) => {
       id: request.id,
       result: application({
         product_version: "0.1.0",
-        protocol_version: 2,
+        protocol_version: 3,
         status:
           startupPhase === "state_reset"
             ? "state_reset_required"

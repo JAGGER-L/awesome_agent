@@ -297,7 +297,9 @@ export function presentCommandPayload(
         title,
         payload.checks.map((check) => ({
           label: check.name,
-          value: doctorStatus(check.status),
+          value: check.detail
+            ? `${doctorStatus(check.status)} · ${check.detail}`
+            : doctorStatus(check.status),
           status:
             check.status === "error" || check.status === "invalid"
               ? "danger"

@@ -12,6 +12,7 @@ from awesome_agent.core.tools.builtins.edit_file import (
 from awesome_agent.core.tools.builtins.execute import (
     ExecuteArguments,
     create_execute_handler,
+    resolve_execute_timeout,
 )
 from awesome_agent.core.tools.builtins.listing import LsArguments, list_directory
 from awesome_agent.core.tools.builtins.read_file import ReadFileArguments, read_file
@@ -29,7 +30,7 @@ from awesome_agent.core.tools.context import ToolHandler
 from awesome_agent.core.tools.contracts import ToolSpec
 from awesome_agent.core.tools.permissions import ToolCapability
 from awesome_agent.core.tools.process import ShellExecutionBackend
-from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.tools.registry import ToolRegistry, ToolTimeoutResolver
 
 
 def _register(
@@ -42,6 +43,7 @@ def _register(
     capability: ToolCapability,
     verb: str,
     read_only: bool = True,
+    timeout_resolver: ToolTimeoutResolver | None = None,
 ) -> None:
     registry.register(
         spec=ToolSpec(
@@ -54,6 +56,7 @@ def _register(
         ),
         input_model=input_model,
         handler=handler,
+        timeout_resolver=timeout_resolver,
     )
 
 
@@ -131,6 +134,7 @@ def register_modifying_tools(
             capability=ToolCapability.SHELL_EXECUTE,
             verb="Run",
             read_only=False,
+            timeout_resolver=resolve_execute_timeout,
         )
     _register(
         registry,

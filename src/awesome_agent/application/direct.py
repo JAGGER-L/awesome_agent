@@ -60,7 +60,12 @@ class DirectCommandService:
         normalized = command.strip()
         if not normalized:
             raise ValueError("Direct command cannot be empty.")
-        self._conversation.read_thread(thread_id)
+        reservation = self._operations.reserve()
+        try:
+            self._conversation.read_thread(thread_id)
+        except BaseException:
+            self._operations.abort(reservation)
+            raise
 
         async def execute(operation_id: str) -> None:
             request = ToolRequest(
@@ -102,7 +107,15 @@ class DirectCommandService:
             finally:
                 self._finalize_operation(operation_id)
 
-        handle = await self._operations.start(execute, thread_id=thread_id)
+        try:
+            handle = await self._operations.start_reserved(
+                reservation,
+                execute,
+                thread_id=thread_id,
+            )
+        except BaseException:
+            self._operations.abort(reservation)
+            raise
         self._tasks[handle.operation_id] = handle.task
         return OperationAccepted(
             operation_id=handle.operation_id,

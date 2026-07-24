@@ -7,6 +7,14 @@ to a canonical path and asks for trust on first use. A trusted workspace may
 provide `.awesome/config.yaml`, `.awesome/skills/`, project instructions, and
 MCP declarations. Declining exits before those sources or tools are loaded.
 
+After trust, Core reads only a plain root `AGENTS.md` and freezes it for the
+session. The read is limited to 32 KiB and to the smaller of 8,192 tokens or
+10% of the effective input budget. Links and reparse points, path escapes,
+binary or non-UTF-8 content, replacement during the read, and any limit excess
+cause the whole file to be ignored. Awesome does not truncate instructions that
+could change meaning. The structured diagnostic remains visible in Welcome,
+the status line, and `/doctor`; a missing file is normal.
+
 Trust grants normal coding access inside that workspace; it is not an
 operating-system sandbox and does not grant access to every path on the host.
 
@@ -14,13 +22,23 @@ operating-system sandbox and does not grant access to every path on the host.
 
 Trust answers whether project-controlled content may influence Awesome.
 Permission mode separately decides whether an already trusted operation needs
-confirmation. `/permissions` exposes two Thread-scoped modes:
+confirmation. `/permissions` exposes three session-only modes:
 
-- **Request approval** is the default. Reads are allowed; edits, deletes,
-  shell commands, and unknown extension capabilities ask first.
-- **Full access** allows ordinary workspace edits, deletes, and shell commands
-  for the current Thread after a warning confirmation. `/new` and process exit
-  reset it; `/resume` also starts the selected Thread in Request approval.
+| Capability | Request approval | Accept edits | Full access |
+| --- | --- | --- | --- |
+| Read | Allow | Allow | Allow |
+| Create or modify workspace files | Ask | Allow | Allow |
+| Delete | Ask | Ask | Allow |
+| Shell | Ask | Ask | Allow |
+| MCP or unknown extension | Ask | Ask | Ask |
+
+Request approval is the default. Accept edits automates only ordinary
+`workspace.write` operations. Full access requires a warning confirmation tied
+to the selected Thread and current permission generation; keeping Request
+approval is the preselected safe choice. Switching Threads or modes invalidates
+an old confirmation and clears temporary capability grants. Full access raises
+only known built-in local capabilities and never makes MCP or a future unknown
+capability implicit.
 
 An edit approval offers Yes, Yes for all edits during this session, and No.
 The session edit grant covers later ordinary writes only. Shell commands and
@@ -50,11 +68,28 @@ validation, workspace policy, normalized results, events, and change capture.
 File tools reject absolute paths, workspace escapes, unsafe symlink results,
 and sensitive paths such as secret files and private keys.
 
-`execute` runs on the local host in the workspace. Privilege elevation,
-shutdown, disk formatting, destructive filesystem-root/workspace-root commands
-are denied in both permission modes. File tools never accept an absolute path
-or workspace escape. There is no Docker sandbox today; a future Docker
-execution backend is deferred until real demand.
+Before approval and again before process start, one dialect-aware command
+policy examines the command, actual working directory, and workspace. It
+handles known CMD, POSIX-shell, and PowerShell wrappers, compound commands,
+pipelines, newlines, PowerShell encoded commands, and selected literal Python
+`-c` filesystem/process calls within bounded parser limits. Unparseable input is
+denied. Privilege elevation, shutdown/reboot, disk formatting, block-device
+overwrite, fork bombs, and recursive filesystem-root or workspace-root deletion
+remain hard denied in every mode and for direct `!` commands.
+
+This hard-deny layer is a non-disableable circuit breaker for recognizable
+accidents. It does not claim to detect arbitrary malicious obfuscation and is
+not an operating-system sandbox. `execute` runs on the local host. Its requested
+command timeout governs the process lifecycle, with a bounded cleanup budget
+for process-tree termination and pipe draining. A timed-out or disconnected
+external side effect may have an uncertain outcome and is never replayed
+transparently.
+
+File tools never accept an absolute path or workspace escape. Before recursive
+delete builds its inventory, it rejects any nested symlink, junction, or other
+reparse directory, so the failure occurs before either workspace or external
+files are changed. There is no Docker sandbox today; a future Docker execution
+backend is deferred until real demand.
 
 Tool activity keeps its event order. All Tool calls between two assistant
 segments form one sequence, even when Thinking occurs between calls. The whole

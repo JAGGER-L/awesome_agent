@@ -6,7 +6,7 @@ import { StatusLine } from "../../src/components/StatusLine.js";
 import { initialSurfaceState } from "../../src/state/reducer.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
-describe("StatusLine cancellation", () => {
+describe("StatusLine", () => {
   it("renders user-facing permission labels instead of internal enums", () => {
     const request = render(
       <StatusLine state={initialSurfaceState()} />,
@@ -25,6 +25,38 @@ describe("StatusLine cancellation", () => {
     expect(full).toContain("◆ Full access");
     expect(full).not.toContain("full_access");
     expect(full).not.toMatch(/ready|idle|active/u);
+    const edits = render(
+      <StatusLine
+        state={{
+          ...initialSurfaceState(),
+          application: { permission_mode: "accept_edits" } as never,
+        }}
+      />,
+    ).lastFrame();
+    expect(edits).toContain("◈ Accept edits");
+    expect(edits).not.toContain("accept_edits");
+  });
+
+  it("keeps an ignored AGENTS.md diagnostic visible", () => {
+    const frame = render(
+      <StatusLine
+        state={{
+          ...initialSurfaceState(),
+          application: {
+            permission_mode: "request_approval",
+            workspace_instruction_diagnostic: {
+              code: "workspace_instructions_not_utf8",
+              source_id: "AGENTS.md",
+              message: "AGENTS.md was ignored because it is not UTF-8 text.",
+            },
+          } as never,
+        }}
+      />,
+    ).lastFrame();
+    expect(frame).toContain(
+      "AGENTS.md was ignored because it is not UTF-8 text.",
+    );
+    expect(frame).toContain("Request approval");
   });
   it("renders one cancelling state while a request is pending", () => {
     const view = render(

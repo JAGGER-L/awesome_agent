@@ -8,6 +8,7 @@ from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
+    full_access_confirmation_choices,
     state_reset_choices,
     tool_approval_choices,
 )
@@ -33,6 +34,9 @@ async def test_create_file_interaction_is_structured_and_resolves_once() -> None
             ),
             InteractionChoice(decision=InteractionDecision.DENY, label="No"),
         ),
+        thread_id="thread_1",
+        turn_id="turn_1",
+        operation_id="operation_1",
     )
     assert pending.operation == "create"
     assert pending.target == "circle_area.py"
@@ -79,6 +83,47 @@ def test_state_reset_choices_are_explicit_and_can_be_validated_without_resolving
     assert coordinator.pending is pending
 
 
+def test_full_access_confirmation_is_thread_bound_and_safe_by_default() -> None:
+    coordinator = InteractionCoordinator()
+    pending = coordinator.create(
+        kind=InteractionKind.FULL_ACCESS_CONFIRMATION,
+        prompt="Enable Full access?",
+        operation="enable",
+        target="full access",
+        capability=None,
+        choices=full_access_confirmation_choices(),
+        thread_id="thread_1",
+        permission_generation=3,
+    )
+
+    assert pending.thread_id == "thread_1"
+    assert pending.permission_generation == 3
+    assert pending.choices[0].decision is InteractionDecision.DENY
+
+
+@pytest.mark.asyncio
+async def test_second_response_is_rejected_before_waiter_clears_pending() -> None:
+    coordinator = InteractionCoordinator()
+    pending = coordinator.create(
+        kind=InteractionKind.TOOL_APPROVAL,
+        prompt="Approve?",
+        operation="write",
+        target="file.txt",
+        capability="workspace.write",
+        choices=tool_approval_choices("workspace.write"),
+        thread_id="thread_1",
+        turn_id="turn_1",
+        operation_id="operation_1",
+    )
+    waiter = asyncio.create_task(coordinator.wait(pending.id))
+    await asyncio.sleep(0)
+
+    assert coordinator.resolve(pending.id, InteractionDecision.ALLOW_ONCE) is True
+    assert coordinator.resolve(pending.id, InteractionDecision.DENY) is False
+    assert await waiter is InteractionDecision.ALLOW_ONCE
+    assert coordinator.pending is None
+
+
 def test_only_one_interaction_can_be_pending() -> None:
     coordinator = InteractionCoordinator()
     coordinator.create(
@@ -106,6 +151,9 @@ def test_only_one_interaction_can_be_pending() -> None:
                 ),
                 InteractionChoice(decision=InteractionDecision.DENY, label="No"),
             ),
+            thread_id="thread_1",
+            turn_id="turn_1",
+            operation_id="operation_1",
         )
 
 

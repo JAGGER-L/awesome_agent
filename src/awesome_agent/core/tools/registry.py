@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -9,12 +10,15 @@ from awesome_agent.core.tools.context import ToolHandler
 from awesome_agent.core.tools.contracts import ToolSpec
 from awesome_agent.core.tools.errors import DuplicateToolName as DuplicateToolName
 
+type ToolTimeoutResolver = Callable[[BaseModel], float]
+
 
 @dataclass(frozen=True, slots=True)
 class RegisteredTool:
     spec: ToolSpec
     input_model: type[BaseModel]
     handler: ToolHandler
+    timeout_resolver: ToolTimeoutResolver | None = None
 
 
 class ToolRegistry:
@@ -27,10 +31,16 @@ class ToolRegistry:
         spec: ToolSpec,
         input_model: type[BaseModel],
         handler: ToolHandler,
+        timeout_resolver: ToolTimeoutResolver | None = None,
     ) -> None:
         if spec.name in self._items:
             raise DuplicateToolName(spec.name)
-        self._items[spec.name] = RegisteredTool(spec, input_model, handler)
+        self._items[spec.name] = RegisteredTool(
+            spec,
+            input_model,
+            handler,
+            timeout_resolver,
+        )
 
     def resolve(self, name: str) -> RegisteredTool | None:
         return self._items.get(name)

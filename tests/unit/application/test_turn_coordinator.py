@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,7 +11,12 @@ from awesome_agent.application.operations import OperationController
 from awesome_agent.application.turns import TurnCoordinator, TurnExecutionFailed
 from awesome_agent.config import BudgetConfig, TurnConfig
 from awesome_agent.conversation import ConversationService, TurnStatus
-from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
+from awesome_agent.core.events import (
+    CollectingEventSink,
+    EventEmitter,
+    EventEnvelope,
+    EventType,
+)
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 
@@ -82,6 +88,18 @@ class FakeCheckpoints:
         self.deleted.append(turn_id)
 
 
+class BlockingOperationStartedSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.OPERATION_STARTED:
+            self.entered.set()
+            await asyncio.Event().wait()
+        await super().emit(event)
+
+
 def _config() -> TurnConfig:
     return TurnConfig(
         provider="deepseek",
@@ -109,6 +127,9 @@ def _result(*, final_answer: str | None, reason: str) -> AgentState:
 def _coordinator(
     tmp_path: Path,
     graph: FakeGraph,
+    *,
+    turn_extension_preparer: Callable[[], Awaitable[None]] | None = None,
+    event_sink: CollectingEventSink | None = None,
 ) -> tuple[
     TurnCoordinator,
     ConversationService,
@@ -120,7 +141,7 @@ def _coordinator(
     repositories = SQLiteConversationRepositories(tmp_path / "application.db")
     conversation = ConversationService(store=repositories)
     thread = conversation.create_thread("workspace_1")
-    sink = CollectingEventSink()
+    sink = event_sink or CollectingEventSink()
     emitter = EventEmitter(
         session_id="session_1",
         workspace_key="workspace_1",
@@ -135,6 +156,9 @@ def _coordinator(
     ) -> AgentRuntimeContext:
         del turn, operation_id, projector
         return cast(AgentRuntimeContext, object())
+
+    async def default_extension_preparer() -> None:
+        return None
 
     coordinator = TurnCoordinator(
         workspace_key="workspace_1",
@@ -156,8 +180,78 @@ def _coordinator(
         emitter=emitter,
         checkpoints=checkpoints,
         seal_changes=lambda turn_id: None,
+        turn_extension_preparer=(turn_extension_preparer or default_extension_preparer),
     )
     return coordinator, conversation, sink, checkpoints, repositories, thread.id
+
+
+@pytest.mark.asyncio
+async def test_shutdown_during_operation_start_fails_persisted_turn_and_releases_lease(
+    tmp_path: Path,
+) -> None:
+    sink = BlockingOperationStartedSink()
+    coordinator, conversation, _, _, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="unused", reason="completed")),
+        event_sink=sink,
+    )
+    submission = asyncio.create_task(
+        coordinator.submit_turn(
+            thread_id,
+            "inspect",
+            client_message_id="client_shutdown_start",
+        )
+    )
+    await sink.entered.wait()
+
+    await asyncio.wait_for(coordinator._operations.shutdown(), timeout=1)
+
+    with pytest.raises(asyncio.CancelledError):
+        await submission
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.FAILED
+    assert turn.error_code == "operation_start_failed"
+    assert coordinator.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_turn_prepares_extensions_inside_operation_and_cleans_up_cancel(
+    tmp_path: Path,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def prepare_extensions() -> None:
+        entered.set()
+        await release.wait()
+
+    graph = FakeGraph(_result(final_answer="unreachable", reason="completed"))
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        graph,
+        turn_extension_preparer=prepare_extensions,
+    )
+
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_extensions",
+    )
+    await entered.wait()
+    assert graph.inputs == []
+    assert await coordinator.cancel_operation(accepted.operation_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.CANCELLED
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        EventType.TURN_STARTED,
+        EventType.TURN_CANCELLED,
+        EventType.OPERATION_CANCELLED,
+    ]
 
 
 @pytest.mark.asyncio

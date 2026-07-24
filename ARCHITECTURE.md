@@ -132,6 +132,7 @@ Application resolves canonical workspace
         ├── state newer ─────────► stop and ask user to upgrade
         │
         ├── trusted ─────────────► load user/workspace configuration
+        │                          snapshot bounded root AGENTS.md
         │                          load Skills and MCP declarations
         │                          create or resume a Thread
         │
@@ -142,6 +143,11 @@ Application resolves canonical workspace
 
 Project-controlled configuration, instructions, Skills, and MCP declarations
 are not loaded before trust is accepted.
+
+The root `AGENTS.md` is an immutable session source loaded only after trust. A
+bounded identity-checked read either supplies the whole mandatory instruction
+source or supplies no content plus a structured diagnostic; it is never
+meaning-changing truncation. That diagnostic does not invalidate configuration.
 
 Application state preflight is read-only and runs before trust, checkpoints,
 or writable storage. The current format is Schema 7. Product and schema
@@ -158,9 +164,9 @@ User Message
     ▼
 turn.submit -> ApplicationFacade.submit_turn
     │
+    ├── atomically acquire the foreground Operation lease
     ├── resolve Thread configuration
-    ├── create Turn and user transcript entry
-    └── acquire the single foreground operation
+    └── create Turn and user transcript entry
              │
              ▼
        LangGraph Agent
@@ -199,11 +205,14 @@ Model ToolCall
 ```
 
 File-changing built-ins write through the Change Journal. `execute` runs on the
-host and is not a sandbox. Request approval mode asks before edits, deletes,
-shell execution, and unknown extension capabilities; confirmed Full access
-allows ordinary operations for the current Thread. Hard denials always run
-first. A command entered directly with `!` is already explicit user authority.
-Shell effects may escape the workspace and cannot be reversed by the journal.
+host and is not a sandbox. Request approval asks before writes, deletes, shell,
+MCP, and unknown capabilities. Accept edits allows ordinary workspace writes
+only. Confirmed Full access allows known built-in local writes, deletes, and
+shell for its bound Thread; MCP and unknown capabilities still ask. Hard
+denials always run first for Agent and direct `!` commands. The dialect-aware
+command circuit breaker is designed to stop recognizable accidents, not to
+detect arbitrary hostile obfuscation. Shell effects may escape the workspace
+and cannot be reversed by the journal.
 
 ### Slash command
 
@@ -218,7 +227,7 @@ The authoritative Core command path is:
 
 ```text
 Ink command controller
-    -> Protocol v2 command.execute
+    -> Protocol v3 command.execute
     -> LocalApplication facade
     -> complete CommandDispatcher
     -> one focused command service
@@ -234,8 +243,9 @@ results. Slash commands are deterministic product operations and never submit
 hidden model prompts; natural-language input is the only path that starts an
 Agent Turn.
 
-`LocalApplication` is the only surface-facing Application host. Python produces Protocol v2
-discriminated outcomes that TypeScript validates and presents exhaustively.
+`LocalApplication` is the only surface-facing Application host. Python produces
+Protocol v3 discriminated outcomes that TypeScript validates and presents
+exhaustively.
 Command progress is pending Surface lifecycle state, not a second durable
 operation model.
 
@@ -265,6 +275,15 @@ with LangGraph checkpoints:
   `application/turns.py`, `application/operations.py`.
 - **Dependencies:** Agent Core, current adapters, Conversation, Storage, Core,
   Context, Extensions, and Memory.
+
+A shared foreground arbiter grants one atomic lease to Agent Turns, direct
+commands, state-changing commands, credential mutation, non-Tool interaction
+resolution, or shutdown. Admission happens before Turn persistence. Read-only
+snapshot commands are the explicit exception during an active Operation; a
+pending interaction blocks new Operations and mutations, while matching Tool
+approval continues the Operation that owns it. Shutdown closes admission,
+cancels active work, and waits for leases to clean up before closing processes
+or databases.
 
 ### Agent Core and LangGraph
 
@@ -345,6 +364,14 @@ parallel output object for ordinary file changes.
   `extensions/skills/loader.py`, `extensions/mcp/manager.py`,
   `extensions/mcp/adapter.py`.
 
+Workspace Skill paths and opened identities are revalidated without following
+links or reparse points; one invalid package remains an isolated diagnostic.
+MCP compiles a server's complete bounded JSON Schema catalog before atomically
+publishing its client, generation, namespace, and `CONNECTED` state. References
+remain local to one schema. Restart removes the previous namespace first, and
+timeout, disconnect, or cancellation invalidates the generation; calls never
+lazily reconnect or replay an uncertain external action in the same Turn.
+
 ### Memory
 
 - **Responsibility:** independent local files (`USER.md`, workspace
@@ -386,6 +413,11 @@ database record, or second execution authority.
   redaction, and tool output bounds.
 - **Primary files:** `core/tools/policy.py`, `core/tools/command_policy.py`,
   `safety/redaction.py`.
+
+Full access is an approval mode, not an isolation boundary. The current product
+does not provide an operating-system sandbox; workspace trust, permissions,
+and the command circuit breaker remain distinct policy layers above host
+execution.
 
 ## Design Principles
 

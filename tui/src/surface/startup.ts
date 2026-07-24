@@ -98,7 +98,7 @@ export async function beginStartup(
 ): Promise<StartupResult> {
   surface.store?.dispatch({ type: "connection.handshaking" });
   const initialized = await surface.request("initialize", {
-    protocol_version: 2,
+    protocol_version: 3,
     client_name: "awesome",
     client_version: PRODUCT_VERSION,
   });

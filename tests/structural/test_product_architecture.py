@@ -33,6 +33,7 @@ CURRENT_PACKAGES = {
     "storage",
 }
 EXPECTED_DIRECT_DEPENDENCIES = {
+    "jsonschema",
     "langgraph",
     "langgraph-checkpoint-sqlite",
     "mcp",

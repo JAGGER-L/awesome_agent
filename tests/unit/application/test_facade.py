@@ -58,7 +58,7 @@ class Backend:
         self.calls.append(("initialize", None))
         return InitializeResult(
             product_version="0.1.0",
-            protocol_version=2,
+            protocol_version=3,
             status=InitializeStatus.READY,
             session_id="session_1",
             workspace=WorkspacePresentation(display_path="C:\\workspace"),

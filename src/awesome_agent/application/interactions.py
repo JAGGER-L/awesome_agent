@@ -4,7 +4,7 @@ import asyncio
 from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class InteractionKind(StrEnum):
@@ -32,7 +32,7 @@ class InteractionChoice(BaseModel):
 
 
 class PendingInteraction(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
     kind: InteractionKind
@@ -41,6 +41,22 @@ class PendingInteraction(BaseModel):
     target: str
     capability: str | None
     choices: tuple[InteractionChoice, ...]
+    thread_id: str | None = Field(default=None, max_length=128)
+    turn_id: str | None = Field(default=None, max_length=128)
+    operation_id: str | None = Field(default=None, max_length=128)
+    permission_generation: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_authority_binding(self) -> PendingInteraction:
+        if self.kind is InteractionKind.FULL_ACCESS_CONFIRMATION and (
+            self.thread_id is None or self.permission_generation is None
+        ):
+            raise ValueError("Full access confirmation requires thread authority.")
+        if self.kind is InteractionKind.TOOL_APPROVAL and (
+            self.thread_id is None or self.turn_id is None or self.operation_id is None
+        ):
+            raise ValueError("Tool approval requires operation authority.")
+        return self
 
 
 class InteractionBusy(RuntimeError):
@@ -83,15 +99,15 @@ def tool_approval_choices(capability: str) -> tuple[InteractionChoice, ...]:
 def full_access_confirmation_choices() -> tuple[InteractionChoice, ...]:
     return (
         InteractionChoice(
+            decision=InteractionDecision.DENY,
+            label="Keep current permission mode",
+        ),
+        InteractionChoice(
             decision=InteractionDecision.ENABLE_FULL_ACCESS,
             label="Enable Full access for this thread",
             description=(
                 "Awesome will edit files and run shell commands without approval."
             ),
-        ),
-        InteractionChoice(
-            decision=InteractionDecision.DENY,
-            label="Keep Request approval",
         ),
     )
 
@@ -111,6 +127,10 @@ class InteractionCoordinator:
         target: str,
         capability: str | None,
         choices: tuple[InteractionChoice, ...],
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        operation_id: str | None = None,
+        permission_generation: int | None = None,
     ) -> PendingInteraction:
         if self.pending is not None:
             raise InteractionBusy("Another interaction is pending.")
@@ -122,6 +142,10 @@ class InteractionCoordinator:
             target=target,
             capability=capability,
             choices=choices,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            operation_id=operation_id,
+            permission_generation=permission_generation,
         )
         self.pending = pending
         self._future = None
@@ -135,10 +159,12 @@ class InteractionCoordinator:
     ) -> bool:
         if not self.allows(interaction_id, decision) or self._resolved is not None:
             return False
-        if self._future is not None:
-            self._future.set_result(decision)
-        else:
-            self._resolved = decision
+        future = self._future
+        if future is not None and future.done():
+            return False
+        self._resolved = decision
+        if future is not None:
+            future.set_result(decision)
         return True
 
     def allows(
@@ -173,3 +199,15 @@ class InteractionCoordinator:
         if self.pending is None:
             return False
         return self.resolve(self.pending.id, InteractionDecision.DENY)
+
+    def discard(self, interaction_id: str) -> bool:
+        pending = self.pending
+        if pending is None or pending.id != interaction_id:
+            return False
+        future = self._future
+        self.pending = None
+        self._future = None
+        self._resolved = None
+        if future is not None and not future.done():
+            future.cancel()
+        return True

@@ -1,3 +1,5 @@
+import os
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
@@ -278,3 +280,53 @@ async def test_delete_capacity_fails_before_removing_any_node(
     assert result.error.code is ToolErrorCode.EXECUTION_FAILED
     assert (target / "one.txt").exists()
     assert (target / "two.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_nested_directory_reparse_before_any_mutation(
+    tmp_path: Path,
+) -> None:
+    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    target = workspace / "target"
+    target.mkdir()
+    local = target / "local.txt"
+    local.write_text("local", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("outside", encoding="utf-8")
+    linked = target / "linked"
+    if os.name == "nt":
+        completed = subprocess.run(
+            [
+                os.environ.get("COMSPEC", "cmd.exe"),
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                str(linked),
+                str(outside),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+    else:
+        linked.symlink_to(outside, target_is_directory=True)
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_delete_reparse",
+            tool_name="delete",
+            arguments={"path": "target"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.PERMISSION_DENIED
+    assert local.read_text(encoding="utf-8") == "local"
+    assert sentinel.read_text(encoding="utf-8") == "outside"
+    assert journal.seal(context.change_set_id or "").files == []

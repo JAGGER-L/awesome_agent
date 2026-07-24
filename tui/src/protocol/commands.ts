@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { boundedText, safeIntegerSchema } from "./base.js";
+import {
+  boundedText,
+  permissionModeSchema,
+  safeIntegerSchema,
+} from "./base.js";
 import { modelIdentitySchema } from "./identity.js";
 import {
   applicationStateSchema,
@@ -65,7 +69,7 @@ export const statusSnapshotSchema = z.strictObject({
   operation_id: boundedText(1, 128).nullable().optional(),
   configuration_valid: z.boolean(),
   configuration_diagnostic_count: safeIntegerSchema.min(0),
-  permission_mode: z.enum(["request_approval", "full_access"]),
+  permission_mode: permissionModeSchema,
   credential_source: z.enum(["environment", "awesome"]).nullable().optional(),
   credential_source_available: z.boolean(),
   context_used_tokens: safeIntegerSchema.min(0),
@@ -271,7 +275,7 @@ export const commandPayloadSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("tools"),
-    permission_mode: z.enum(["request_approval", "full_access"]),
+    permission_mode: permissionModeSchema,
     tools: z.array(toolItemSchema),
   }),
   z.strictObject({
@@ -323,7 +327,7 @@ export const commandPayloadSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("permissions"),
-    mode: z.enum(["request_approval", "full_access"]),
+    mode: permissionModeSchema,
   }),
 ]);
 

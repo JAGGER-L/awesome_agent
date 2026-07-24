@@ -320,6 +320,9 @@ def _ordered_unique(sources: tuple[ContextSource, ...]) -> tuple[ContextSource, 
     seen: set[str] = set()
     result: list[ContextSource] = []
     for _, source in indexed:
+        if _mandatory(source):
+            result.append(source)
+            continue
         normalized = " ".join(source.content.split())
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         if digest in seen:

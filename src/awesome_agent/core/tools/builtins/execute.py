@@ -10,6 +10,7 @@ from awesome_agent.core.changes import ChangeJournal
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
     evaluate_command,
+    host_shell_dialect,
 )
 from awesome_agent.core.tools.context import (
     ToolExecutionContext,
@@ -25,12 +26,19 @@ from awesome_agent.core.tools.policy import resolve_workspace_path
 from awesome_agent.core.tools.process import ShellExecutionBackend
 from awesome_agent.safety.redaction import redact_text
 
+_EXECUTE_CLEANUP_BUDGET_SECONDS = 10.0
+
 
 class ExecuteArguments(BaseModel):
     command: str = Field(min_length=1, max_length=8_000)
     cwd: str = "."
     timeout_seconds: float = Field(default=60.0, gt=0, le=600.0)
     max_output_chars: int = Field(default=30_000, ge=1_000, le=200_000)
+
+
+def resolve_execute_timeout(arguments: BaseModel) -> float:
+    options = cast(ExecuteArguments, arguments)
+    return options.timeout_seconds + _EXECUTE_CLEANUP_BUDGET_SECONDS
 
 
 def _sanitized_environment() -> dict[str, str]:
@@ -78,7 +86,12 @@ def create_execute_handler(
             must_exist=True,
             expected_kind="directory",
         )
-        decision = evaluate_command(options.command, context.workspace.canonical_path)
+        decision = evaluate_command(
+            options.command,
+            dialect=host_shell_dialect(),
+            cwd=cwd.resolved,
+            workspace=context.workspace.canonical_path,
+        )
         if decision.action is CommandPolicyAction.DENY:
             raise ExpectedToolFailure(
                 ToolErrorCode.PERMISSION_DENIED,
@@ -87,6 +100,11 @@ def create_execute_handler(
         environment = _sanitized_environment()
         if os.name == "nt":
             environment["AWESOME_EXEC_COMMAND"] = options.command
+        journal.record_execute(
+            change_set_id=context.change_set_id,
+            command=options.command,
+            observed_paths=[],
+        )
         result = await process_runner.run(
             argv=_shell_argv(options.command),
             cwd=cwd.resolved,
@@ -96,11 +114,6 @@ def create_execute_handler(
         )
         stdout = redact_text(result.stdout)
         stderr = redact_text(result.stderr)
-        journal.record_execute(
-            change_set_id=context.change_set_id,
-            command=options.command,
-            observed_paths=[],
-        )
         metadata: dict[str, JsonValue] = {
             "exit_code": result.exit_code,
             "timed_out": result.timed_out,

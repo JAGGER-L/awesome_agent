@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -53,6 +53,7 @@ from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.extension_commands import ApplicationExtensionService
 from awesome_agent.application.facade import LocalApplication
+from awesome_agent.application.foreground import ForegroundArbiter, ForegroundBusy
 from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
@@ -85,6 +86,9 @@ from awesome_agent.context import (
     ContextManifestItem,
     Mem0ContextResult,
     ThreadCompressor,
+    WorkspaceInstructionSnapshot,
+    calculate_context_budget,
+    load_workspace_instructions,
     mem0_context_source,
 )
 from awesome_agent.conversation import (
@@ -345,7 +349,8 @@ class _LocalApplicationBackend:
             workspace_key=workspace.key,
             sink=event_sink,
         )
-        self._operations = OperationController(self._emitter)
+        self._foreground = ForegroundArbiter()
+        self._operations = OperationController(self._emitter, self._foreground)
         self._interactions = InteractionCoordinator()
         self._trust = WorkspaceTrustService(
             SQLiteWorkspaceTrustStore(paths.application_db)
@@ -379,16 +384,27 @@ class _LocalApplicationBackend:
         self._change_analyzer: ChangeAnalyzer | None = None
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
+        self._workspace_instruction_snapshot: WorkspaceInstructionSnapshot | None = None
         self._permission_session = PermissionSession()
         self._state_lease: StateLease | None = None
         self._bootstrap_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
         self._resources.callback(self._close_state_lease)
 
     async def initialize_application(self) -> InitializeResult:
+        async with self._bootstrap_lock:
+            if self._closed or self._foreground.closing:
+                raise _application_failure(
+                    ProductErrorCode.INTERNAL_ERROR,
+                    "Application is shutting down.",
+                )
+            return await self._initialize_application_locked()
+
+    async def _initialize_application_locked(self) -> InitializeResult:
         if self._initialized:
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=2,
+                protocol_version=3,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
                 workspace=self._workspace_presentation(include_branch=True),
@@ -452,7 +468,7 @@ class _LocalApplicationBackend:
                 )
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=2,
+                protocol_version=3,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
@@ -462,7 +478,7 @@ class _LocalApplicationBackend:
         await self._activate()
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=2,
+            protocol_version=3,
             status=InitializeStatus.READY,
             session_id=self._session_id,
             workspace=self._workspace_presentation(include_branch=True),
@@ -505,7 +521,7 @@ class _LocalApplicationBackend:
             )
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=2,
+            protocol_version=3,
             status=InitializeStatus.STATE_RESET_REQUIRED,
             session_id=self._session_id,
             interaction_id=pending.id,
@@ -532,6 +548,7 @@ class _LocalApplicationBackend:
         )
 
     async def application_state(self) -> ApplicationState:
+        self._require_open()
         current_id = self._commands.current_thread_id if self._commands else None
         current = (
             self._conversation.read_thread(current_id).thread
@@ -591,6 +608,11 @@ class _LocalApplicationBackend:
                     and self._mem0_session.enabled
                 )
                 else ()
+            ),
+            workspace_instruction_diagnostic=(
+                self._workspace_instruction_snapshot.diagnostic
+                if self._workspace_instruction_snapshot is not None
+                else None
             ),
         )
 
@@ -666,11 +688,18 @@ class _LocalApplicationBackend:
         client_message_id: str,
     ) -> OperationAccepted:
         self._require_active()
+        self._require_selected_thread(thread_id)
         assert self._turns is not None
         if not content.strip():
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
                 "Turn input is invalid.",
+            )
+        if self._interactions.pending is not None:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Resolve the pending interaction before starting a Turn.",
+                retryable=True,
             )
         try:
             thread = self._conversation.read_thread(thread_id).thread
@@ -708,11 +737,18 @@ class _LocalApplicationBackend:
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
         self._require_active()
+        self._require_selected_thread(thread_id)
         assert self._direct is not None
         if not command.strip():
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
                 "Direct command is invalid.",
+            )
+        if self._interactions.pending is not None:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Resolve the pending interaction before running a command.",
+                retryable=True,
             )
         try:
             return await self._direct.start(thread_id, command)
@@ -745,13 +781,29 @@ class _LocalApplicationBackend:
     ) -> ProviderCredentialSetResult:
         self._require_active()
         assert self._provider_configuration is not None
-        return await self._provider_configuration.set_credential(request)
+        if self._interactions.pending is not None:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Resolve the pending interaction before changing credentials.",
+                retryable=True,
+            )
+        try:
+            lease = self._foreground.acquire_exclusive()
+        except ForegroundBusy as error:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Another foreground operation is active.",
+                retryable=True,
+            ) from error
+        async with lease:
+            return await self._provider_configuration.set_credential(request)
 
     async def resolve_interaction(
         self,
         interaction_id: str,
         decision: str,
     ) -> InteractionResult:
+        self._require_open()
         pending = self._interactions.pending
         if pending is None or pending.id != interaction_id:
             return InteractionResult(accepted=False, status="not_found")
@@ -760,31 +812,114 @@ class _LocalApplicationBackend:
         except ValueError:
             return InteractionResult(accepted=False, status="invalid_decision")
         if pending.kind is InteractionKind.STATE_RESET:
-            return await self._resolve_state_reset_interaction(
-                interaction_id,
-                parsed,
-            )
-        if not self._interactions.resolve(interaction_id, parsed):
-            return InteractionResult(accepted=False, status="rejected")
-        resolved = await self._interactions.wait(interaction_id)
-        await self._emitter.emit(
-            InteractionResolvedPayload(
-                interaction_id=interaction_id,
-                decision=resolved.value,
-            ),
-        )
+            try:
+                lease = self._foreground.acquire_interaction_resolution()
+            except ForegroundBusy:
+                return InteractionResult(accepted=False, status="operation_busy")
+            async with lease:
+                return await self._resolve_state_reset_interaction(
+                    interaction_id,
+                    parsed,
+                )
         if pending.kind is InteractionKind.WORKSPACE_TRUST:
-            if resolved is not InteractionDecision.TRUST:
-                return InteractionResult(accepted=True, status="denied")
-            self._trust.accept(self._workspace)
-            await self._activate()
-        elif pending.kind is InteractionKind.FULL_ACCESS_CONFIRMATION:
-            if resolved is InteractionDecision.ENABLE_FULL_ACCESS:
-                self._permission_session.mode = PermissionMode.FULL_ACCESS
-                self._permission_session.granted_capabilities.clear()
-            else:
-                return InteractionResult(accepted=True, status="denied")
-        return InteractionResult(accepted=True, status="resolved")
+            try:
+                lease = self._foreground.acquire_interaction_resolution()
+            except ForegroundBusy:
+                return InteractionResult(accepted=False, status="operation_busy")
+            async with lease, self._bootstrap_lock:
+                current = self._interactions.pending
+                if (
+                    current is None
+                    or current.id != interaction_id
+                    or current.kind is not InteractionKind.WORKSPACE_TRUST
+                ):
+                    return InteractionResult(accepted=False, status="not_found")
+                if not self._interactions.resolve(interaction_id, parsed):
+                    return InteractionResult(accepted=False, status="rejected")
+                resolved = await self._interactions.wait(interaction_id)
+                if resolved is InteractionDecision.TRUST:
+                    self._trust.accept(self._workspace)
+                    await self._activate()
+                await self._emitter.emit(
+                    InteractionResolvedPayload(
+                        interaction_id=interaction_id,
+                        decision=resolved.value,
+                    ),
+                )
+                return InteractionResult(
+                    accepted=True,
+                    status=(
+                        "resolved"
+                        if resolved is InteractionDecision.TRUST
+                        else "denied"
+                    ),
+                )
+        if pending.kind is InteractionKind.TOOL_APPROVAL:
+            current_thread_id = (
+                self._commands.current_thread_id if self._commands is not None else None
+            )
+            if (
+                pending.operation_id != self._operations.active_operation_id
+                or pending.thread_id != current_thread_id
+                or pending.thread_id != self._operations.active_thread_id
+                or pending.turn_id != self._operations.active_turn_id
+            ):
+                self._interactions.discard(interaction_id)
+                return InteractionResult(accepted=False, status="stale")
+            if not self._interactions.resolve(interaction_id, parsed):
+                return InteractionResult(accepted=False, status="rejected")
+            await self._emitter.emit(
+                InteractionResolvedPayload(
+                    interaction_id=interaction_id,
+                    decision=parsed.value,
+                ),
+                thread_id=pending.thread_id,
+                turn_id=pending.turn_id,
+                operation_id=pending.operation_id,
+            )
+            return InteractionResult(accepted=True, status="resolved")
+        if pending.kind is InteractionKind.FULL_ACCESS_CONFIRMATION:
+            try:
+                lease = self._foreground.acquire_interaction_resolution()
+            except ForegroundBusy:
+                return InteractionResult(accepted=False, status="operation_busy")
+            async with lease:
+                current = self._interactions.pending
+                current_thread_id = (
+                    self._commands.current_thread_id
+                    if self._commands is not None
+                    else None
+                )
+                if (
+                    current is None
+                    or current.id != interaction_id
+                    or current.thread_id != current_thread_id
+                    or current.permission_generation
+                    != self._permission_session.generation
+                ):
+                    self._interactions.discard(interaction_id)
+                    return InteractionResult(accepted=False, status="stale")
+                if not self._interactions.resolve(interaction_id, parsed):
+                    return InteractionResult(accepted=False, status="rejected")
+                resolved = await self._interactions.wait(interaction_id)
+                if resolved is InteractionDecision.ENABLE_FULL_ACCESS:
+                    self._permission_session.set_mode(PermissionMode.FULL_ACCESS)
+                await self._emitter.emit(
+                    InteractionResolvedPayload(
+                        interaction_id=interaction_id,
+                        decision=resolved.value,
+                    ),
+                    thread_id=current_thread_id,
+                )
+                return InteractionResult(
+                    accepted=True,
+                    status=(
+                        "resolved"
+                        if resolved is InteractionDecision.ENABLE_FULL_ACCESS
+                        else "denied"
+                    ),
+                )
+        return InteractionResult(accepted=False, status="rejected")
 
     async def _resolve_state_reset_interaction(
         self,
@@ -839,15 +974,22 @@ class _LocalApplicationBackend:
                 data={"state_directory": str(self._paths.state_dir.resolve())},
             ) from error
 
+        worker: asyncio.Task[None] | None = None
         try:
             preflight = inspect_application_state(self._paths.application_db)
             if preflight.compatibility is StateCompatibility.OLDER:
-                await asyncio.to_thread(reset_local_state, exclusive)
-            elif preflight.compatibility is StateCompatibility.NEW:
-                await asyncio.to_thread(
-                    initialize_application_database,
-                    self._paths.application_db,
+                worker = asyncio.create_task(
+                    asyncio.to_thread(reset_local_state, exclusive)
                 )
+                await asyncio.shield(worker)
+            elif preflight.compatibility is StateCompatibility.NEW:
+                worker = asyncio.create_task(
+                    asyncio.to_thread(
+                        initialize_application_database,
+                        self._paths.application_db,
+                    )
+                )
+                await asyncio.shield(worker)
             elif preflight.compatibility is StateCompatibility.NEWER:
                 assert preflight.found_schema is not None
                 raise self._newer_state_failure(
@@ -861,6 +1003,11 @@ class _LocalApplicationBackend:
                     data={"state_directory": str(self._paths.state_dir.resolve())},
                 )
             exclusive.downgrade()
+        except asyncio.CancelledError:
+            if worker is not None:
+                await _finish_cancelled_worker(worker)
+            exclusive.close()
+            raise
         except ApplicationFailure:
             exclusive.close()
             raise
@@ -907,13 +1054,18 @@ class _LocalApplicationBackend:
         return CancelResult(operation_id=operation_id, cancelled=cancelled)
 
     async def close_application(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        await self._operations.shutdown()
-        if self._mcp is not None:
-            await self._mcp.aclose()
-        await self._resources.aclose()
+        async with self._close_lock:
+            if self._closed:
+                return
+            self._foreground.begin_closing()
+            await self._operations.shutdown()
+            self._foreground.cancel_exclusive()
+            await self._foreground.wait_idle()
+            async with self._bootstrap_lock:
+                if self._mcp is not None:
+                    await self._mcp.aclose()
+                await self._resources.aclose()
+            self._closed = True
 
     def _ensure_state_lease(self) -> None:
         if self._state_lease is not None and self._state_lease.active:
@@ -1027,6 +1179,7 @@ class _LocalApplicationBackend:
             user_root=self._paths.skills_dir,
             workspace_root=self._workspace.canonical_path / ".awesome" / "skills",
             workspace_trusted=True,
+            workspace_anchor=self._workspace.canonical_path,
             disabled=set(),
         )
         skill_loader = SkillLoader(catalog)
@@ -1064,6 +1217,15 @@ class _LocalApplicationBackend:
             diagnostic=self._mem0_diagnostic,
         )
 
+        context_budget = calculate_context_budget(
+            self._application_config.budgets.total_context_tokens,
+            self._application_config.budgets.total_context_tokens,
+        )
+        self._workspace_instruction_snapshot = load_workspace_instructions(
+            workspace_root=self._workspace.canonical_path,
+            workspace_trusted=True,
+            effective_input_limit=context_budget.effective_input_limit,
+        )
         context_service = ApplicationContextService(
             conversation=self._conversation,
             workspace=self._workspace,
@@ -1072,6 +1234,10 @@ class _LocalApplicationBackend:
             configured_total_tokens=self._application_config.budgets.total_context_tokens,
             model_context_limit=self._application_config.budgets.total_context_tokens,
             product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
+            workspace_instructions=(self._workspace_instruction_snapshot.content or ""),
+            workspace_instruction_source_id=(
+                self._workspace_instruction_snapshot.source_id
+            ),
             model_identity=lambda turn: ModelIdentitySnapshot.from_models(
                 configured_model=turn.model,
                 effective_model=turn.model,
@@ -1102,28 +1268,35 @@ class _LocalApplicationBackend:
                     target=request.target,
                     capability=request.capability,
                     choices=tool_approval_choices(request.capability),
-                )
-                await self._emitter.emit(
-                    InteractionRequiredPayload(
-                        interaction_id=pending.id,
-                        interaction_kind="tool_approval",
-                        prompt=pending.prompt,
-                        operation=pending.operation,
-                        target=pending.target,
-                        capability=pending.capability,
-                        choices=tuple(
-                            InteractionChoicePayload(
-                                decision=choice.decision.value,
-                                label=choice.label,
-                                description=choice.description,
-                            )
-                            for choice in pending.choices
-                        ),
-                    ),
                     thread_id=turn.thread_id,
                     turn_id=turn_id,
                     operation_id=operation_id,
                 )
+                try:
+                    await self._emitter.emit(
+                        InteractionRequiredPayload(
+                            interaction_id=pending.id,
+                            interaction_kind="tool_approval",
+                            prompt=pending.prompt,
+                            operation=pending.operation,
+                            target=pending.target,
+                            capability=pending.capability,
+                            choices=tuple(
+                                InteractionChoicePayload(
+                                    decision=choice.decision.value,
+                                    label=choice.label,
+                                    description=choice.description,
+                                )
+                                for choice in pending.choices
+                            ),
+                        ),
+                        thread_id=turn.thread_id,
+                        turn_id=turn_id,
+                        operation_id=operation_id,
+                    )
+                except BaseException:
+                    self._interactions.discard(pending.id)
+                    raise
                 decision = await self._interactions.wait(pending.id)
                 return ToolApprovalDecision(decision.value)
 
@@ -1198,6 +1371,7 @@ class _LocalApplicationBackend:
             seal_changes=self._seal_turn,
             reconcile_changes=self._change_scope.reconcile,
             turn_input_preparer=context_service.prepare_turn,
+            turn_extension_preparer=self._prepare_turn_extensions,
         )
 
         def direct_context(
@@ -1240,7 +1414,7 @@ class _LocalApplicationBackend:
                 self._operations.active_operation_id is not None
             ),
             default_model=self._initial_thread_model,
-            on_thread_selected=self._permission_session.reset,
+            on_thread_selected=self._on_thread_selected,
         )
         self._extensions = ApplicationExtensionService(
             conversation=self._conversation,
@@ -1279,6 +1453,11 @@ class _LocalApplicationBackend:
             usage_reader=self._command_usage,
             credential_statuses=lambda: self._sources.provider_credentials,
             provider_doctor=self._provider_configuration.doctor,
+            workspace_instruction_diagnostic=lambda: (
+                self._workspace_instruction_snapshot.diagnostic
+                if self._workspace_instruction_snapshot is not None
+                else None
+            ),
         )
         assert self._change_operations is not None
         assert self._change_store is not None
@@ -1319,7 +1498,9 @@ class _LocalApplicationBackend:
                 CommandName.DOCTOR: self._diagnostic_commands.doctor,
                 CommandName.CONFIG: self._diagnostic_commands.config,
                 CommandName.PERMISSIONS: self._permission_commands.permissions,
-            }
+            },
+            foreground=self._foreground,
+            has_pending_interaction=lambda: self._interactions.pending is not None,
         )
         await self._turns.reconcile_startup()
         self._initialized = True
@@ -1335,6 +1516,20 @@ class _LocalApplicationBackend:
     def _reload_provider_configuration(self) -> None:
         self._sources = self._load_sources(workspace_trusted=True)
         self._application_config = resolve_application_config(self._sources)
+
+    def _on_thread_selected(self) -> None:
+        pending = self._interactions.pending
+        if (
+            pending is not None
+            and pending.kind is InteractionKind.FULL_ACCESS_CONFIRMATION
+        ):
+            self._interactions.discard(pending.id)
+        self._permission_session.reset()
+
+    async def _prepare_turn_extensions(self) -> None:
+        if self._extensions is None:
+            raise RuntimeError("Application extensions are not initialized.")
+        await self._extensions.prepare_turn_extensions()
 
     def _provider_factory(self) -> GatewayFactory:
         def build(provider: ProviderId, model: str) -> ModelGateway:
@@ -1540,10 +1735,18 @@ class _LocalApplicationBackend:
             self._change_scope.seal(operation_id)
 
     def _require_active(self) -> None:
+        self._require_open()
         if not self._initialized:
             raise _application_failure(
                 ProductErrorCode.WORKSPACE_NOT_TRUSTED,
                 "Trust the workspace before using project capabilities.",
+            )
+
+    def _require_open(self) -> None:
+        if self._closed or self._foreground.closing:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Application is shutting down.",
             )
 
     def _require_provider_configured(self, provider: ProviderId) -> None:
@@ -1552,6 +1755,13 @@ class _LocalApplicationBackend:
                 ProductErrorCode.PROVIDER_NOT_CONFIGURED,
                 f"{provider} credentials are not configured.",
                 data={"provider": provider},
+            )
+
+    def _require_selected_thread(self, thread_id: str) -> None:
+        if self._selected_thread_id() != thread_id:
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Select the target Thread before starting an operation.",
             )
 
     def _provider_is_configured(self, provider: ProviderId) -> bool:
@@ -1603,6 +1813,21 @@ class _LocalApplicationBackend:
                 )
             )
         return tuple(summaries)
+
+
+async def _finish_cancelled_worker(worker: asyncio.Task[None]) -> None:
+    """Keep uncancellable thread work owned until it has actually stopped."""
+
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    if not worker.cancelled():
+        with suppress(Exception):
+            worker.result()
 
 
 def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -8,12 +9,20 @@ from typing import Protocol
 
 from mcp.types import CallToolResult, Tool
 
+from awesome_agent.extensions.mcp.catalog import (
+    McpCatalog,
+    McpCatalogError,
+    compile_mcp_catalog,
+)
 from awesome_agent.extensions.mcp.models import (
     McpServerConfig,
     McpSource,
     mcp_config_hash,
 )
 from awesome_agent.extensions.mcp.stdio import McpStdioClient
+
+_MCP_CALL_TIMEOUT_SECONDS = 30.0
+_MCP_CLOSE_TIMEOUT_SECONDS = 5.0
 
 
 class McpClient(Protocol):
@@ -76,17 +85,24 @@ class McpManager:
         workspace_trusted: bool,
         enablements: McpEnablementReader,
         client_factory: Callable[[McpServerConfig], McpClient] = McpStdioClient,
+        call_timeout_seconds: float = _MCP_CALL_TIMEOUT_SECONDS,
     ) -> None:
         self._configs = {config.id: config for config in configs}
         if len(self._configs) != len(configs):
             raise ValueError("MCP server IDs must be unique")
+        if call_timeout_seconds <= 0:
+            raise ValueError("MCP call timeout must be positive")
         self._workspace_key = workspace_key
         self._workspace_trusted = workspace_trusted
         self._enablements = enablements
         self._client_factory = client_factory
+        self._call_timeout_seconds = call_timeout_seconds
         self._clients: dict[str, McpClient] = {}
-        self._tools: dict[str, tuple[Tool, ...]] = {}
+        self._catalogs: dict[str, McpCatalog] = {}
+        self._generations = {server_id: 0 for server_id in self._configs}
         self._statuses: dict[str, McpServerStatus] = {}
+        self._locks = {server_id: asyncio.Lock() for server_id in self._configs}
+        self._catalog_invalidators: dict[str, Callable[[], None]] = {}
 
     def configs(self) -> tuple[McpServerConfig, ...]:
         return tuple(self._configs.values())
@@ -102,95 +118,220 @@ class McpManager:
         return tuple(self.status(server_id) for server_id in self._configs)
 
     def tool_names(self, server_id: str) -> tuple[str, ...]:
-        return tuple(tool.name for tool in self._tools.get(server_id, ()))
+        return tuple(tool.name for tool in self.tools(server_id))
 
     def tools(self, server_id: str) -> tuple[Tool, ...]:
-        return self._tools.get(server_id, ())
+        catalog = self._catalogs.get(server_id)
+        return catalog.tools if catalog is not None else ()
+
+    def catalog(self, server_id: str) -> McpCatalog:
+        self._config(server_id)
+        try:
+            return self._catalogs[server_id]
+        except KeyError as error:
+            raise McpUnavailable(
+                f"MCP server has no active catalog: {server_id}"
+            ) from error
+
+    def bind_catalog_invalidator(
+        self,
+        server_id: str,
+        invalidator: Callable[[], None],
+    ) -> None:
+        self._config(server_id)
+        self._catalog_invalidators[server_id] = invalidator
 
     async def start_enabled(self) -> tuple[McpServerStatus, ...]:
         for config in self._configs.values():
-            if not self._is_effective(config):
-                self._statuses[config.id] = self._inactive_status(config)
-                continue
-            if config.id not in self._clients:
-                await self._connect_one(config)
+            async with self._locks[config.id]:
+                if not self._is_effective(config):
+                    await self._drop_client_locked(config.id)
+                    self._statuses[config.id] = self._inactive_status(config)
+                    continue
+                if config.id not in self._clients:
+                    await self._connect_one_locked(config)
         return self.statuses()
 
     async def restart(self, server_id: str) -> McpServerStatus:
         config = self._config(server_id)
-        await self._drop_client(server_id)
-        if not self._is_effective(config):
-            status = self._inactive_status(config)
-            self._statuses[server_id] = status
-            return status
-        await self._connect_one(config)
-        return self.status(server_id)
+        async with self._locks[server_id]:
+            await self._drop_client_locked(server_id)
+            self._statuses[server_id] = self._inactive_status(config)
+            if not self._is_effective(config):
+                return self._statuses[server_id]
+            await self._connect_one_locked(config)
+            return self.status(server_id)
 
     async def refresh_enablement(self, server_id: str) -> McpServerStatus:
         config = self._config(server_id)
-        await self._drop_client(server_id)
-        self._statuses.pop(server_id, None)
-        return self._inactive_status(config)
+        async with self._locks[server_id]:
+            await self._drop_client_locked(server_id)
+            self._statuses.pop(server_id, None)
+            return self._inactive_status(config)
 
     async def call_tool(
         self,
         server_id: str,
         tool_name: str,
         arguments: dict[str, object],
+        *,
+        generation: int,
     ) -> CallToolResult:
         config = self._config(server_id)
         if not self._is_effective(config):
             raise McpUnavailable(f"MCP server is unavailable: {server_id}")
-        if server_id not in self._clients:
-            await self._connect_one(config)
-        client = self._clients.get(server_id)
-        if client is None:
-            raise McpUnavailable(f"MCP server failed to connect: {server_id}")
-        try:
-            return await client.call_tool(tool_name, arguments)
-        except Exception as error:
-            await self._drop_client(server_id)
-            self._statuses[server_id] = McpServerStatus(
-                server_id,
-                McpConnectionState.ERROR,
-                f"Tool connection failed ({type(error).__name__}).",
-            )
-            raise McpCallUncertain(
-                f"MCP call outcome is uncertain: {server_id}.{tool_name}"
-            ) from error
+        async with self._locks[server_id]:
+            client = self._clients.get(server_id)
+            catalog = self._catalogs.get(server_id)
+            if (
+                client is None
+                or catalog is None
+                or self.status(server_id).state is not McpConnectionState.CONNECTED
+            ):
+                raise McpUnavailable(f"MCP server is not connected: {server_id}")
+            if catalog.generation != generation:
+                raise McpUnavailable(f"MCP tool catalog is stale: {server_id}")
+            try:
+                catalog.resolve(tool_name)
+            except McpCatalogError as error:
+                raise McpUnavailable(f"MCP tool is unavailable: {server_id}") from error
+            call_task = asyncio.create_task(client.call_tool(tool_name, arguments))
+            try:
+                done, _ = await asyncio.wait(
+                    (call_task,),
+                    timeout=self._call_timeout_seconds,
+                )
+                if call_task not in done:
+                    call_task.cancel()
+                    _detach_task(call_task)
+                    await self._invalidate_call_locked(
+                        server_id,
+                        "MCP tool call timed out; outcome may be uncertain.",
+                    )
+                    raise McpCallUncertain(
+                        f"MCP call outcome is uncertain: {server_id}.{tool_name}"
+                    )
+                return call_task.result()
+            except asyncio.CancelledError as error:
+                current_task = asyncio.current_task()
+                caller_cancelled = (
+                    current_task is not None and current_task.cancelling() > 0
+                )
+                call_task.cancel()
+                _detach_task(call_task)
+                await self._invalidate_call_locked(
+                    server_id,
+                    "MCP tool call was cancelled; outcome may be uncertain.",
+                )
+                if caller_cancelled:
+                    raise
+                raise McpCallUncertain(
+                    f"MCP call outcome is uncertain: {server_id}.{tool_name}"
+                ) from error
+            except McpCallUncertain:
+                raise
+            except Exception as error:
+                await self._invalidate_call_locked(
+                    server_id,
+                    "MCP tool call failed; outcome may be uncertain.",
+                )
+                raise McpCallUncertain(
+                    f"MCP call outcome is uncertain: {server_id}.{tool_name}"
+                ) from error
 
     async def aclose(self) -> None:
-        for server_id in tuple(self._clients):
-            await self._drop_client(server_id)
+        for server_id in self._configs:
+            async with self._locks[server_id]:
+                await self._drop_client_locked(server_id)
+                self._statuses[server_id] = self._inactive_status(
+                    self._configs[server_id]
+                )
 
-    async def _connect_one(self, config: McpServerConfig) -> None:
+    async def _connect_one_locked(self, config: McpServerConfig) -> None:
         client = self._client_factory(config)
         try:
             await client.connect()
             tools = await client.list_tools()
-        except Exception as error:
-            with suppress(Exception):
-                await client.aclose()
-            self._tools.pop(config.id, None)
+            generation = self._generations[config.id] + 1
+            catalog = compile_mcp_catalog(tools, generation=generation)
+        except asyncio.CancelledError:
+            await self._close_client(client)
+            self._invalidate_catalog(config.id)
             self._statuses[config.id] = McpServerStatus(
                 config.id,
                 McpConnectionState.ERROR,
-                f"Connection failed ({type(error).__name__}).",
+                "MCP server connection was cancelled.",
+            )
+            raise
+        except McpCatalogError:
+            await self._close_client(client)
+            self._invalidate_catalog(config.id)
+            self._statuses[config.id] = McpServerStatus(
+                config.id,
+                McpConnectionState.ERROR,
+                "MCP server returned an invalid tool catalog.",
             )
             return
+        except Exception:
+            await self._close_client(client)
+            self._invalidate_catalog(config.id)
+            self._statuses[config.id] = McpServerStatus(
+                config.id,
+                McpConnectionState.ERROR,
+                "MCP server connection failed.",
+            )
+            return
+        self._generations[config.id] = generation
         self._clients[config.id] = client
-        self._tools[config.id] = tools
+        self._catalogs[config.id] = catalog
         self._statuses[config.id] = McpServerStatus(
             config.id,
             McpConnectionState.CONNECTED,
         )
 
-    async def _drop_client(self, server_id: str) -> None:
+    async def _invalidate_call_locked(self, server_id: str, detail: str) -> None:
         client = self._clients.pop(server_id, None)
-        self._tools.pop(server_id, None)
+        self._invalidate_catalog(server_id)
+        self._statuses[server_id] = McpServerStatus(
+            server_id,
+            McpConnectionState.ERROR,
+            detail,
+        )
         if client is not None:
+            await self._close_client(client)
+
+    async def _drop_client_locked(self, server_id: str) -> None:
+        client = self._clients.pop(server_id, None)
+        self._invalidate_catalog(server_id)
+        if client is not None:
+            await self._close_client(client)
+
+    def _invalidate_catalog(self, server_id: str) -> None:
+        existed = self._catalogs.pop(server_id, None) is not None
+        self._generations[server_id] += 1
+        invalidator = self._catalog_invalidators.get(server_id)
+        if existed and invalidator is not None:
             with suppress(Exception):
-                await client.aclose()
+                invalidator()
+
+    @staticmethod
+    async def _close_client(client: McpClient) -> None:
+        close_task = asyncio.create_task(client.aclose())
+        try:
+            done, _ = await asyncio.wait(
+                (close_task,),
+                timeout=_MCP_CLOSE_TIMEOUT_SECONDS,
+            )
+        except asyncio.CancelledError:
+            close_task.cancel()
+            _detach_task(close_task)
+            raise
+        if close_task not in done:
+            close_task.cancel()
+            _detach_task(close_task)
+            return
+        with suppress(Exception, asyncio.CancelledError):
+            close_task.result()
 
     def _config(self, server_id: str) -> McpServerConfig:
         try:
@@ -225,3 +366,13 @@ class McpManager:
         else:
             state = McpConnectionState.ENABLEMENT_REQUIRED
         return McpServerStatus(config.id, state)
+
+
+def _detach_task(task: asyncio.Task[object]) -> None:
+    """Consume a late terminal result without ever accepting it as call success."""
+
+    def consume(completed: asyncio.Task[object]) -> None:
+        with suppress(Exception, asyncio.CancelledError):
+            completed.result()
+
+    task.add_done_callback(consume)

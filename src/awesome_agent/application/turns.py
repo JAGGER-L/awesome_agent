@@ -14,7 +14,7 @@ from awesome_agent.agent import (
 )
 from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.events import ApplicationEventProjector
-from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.application.operations import OperationController
 from awesome_agent.application.turn_facts import (
     ObservedTurnFacts,
     observed_turn_facts,
@@ -52,6 +52,7 @@ type RuntimeContextFactory = Callable[
     AgentRuntimeContext,
 ]
 type PostAnswerMemory = Callable[[AgentState], Awaitable[AgentState]]
+type TurnExtensionPreparer = Callable[[], Awaitable[None]]
 
 
 class TurnExecutionFailed(RuntimeError):
@@ -83,6 +84,10 @@ async def disabled_post_answer_memory(state: AgentState) -> AgentState:
     return state
 
 
+async def disabled_turn_extension_preparer() -> None:
+    return None
+
+
 class TurnCoordinator:
     def __init__(
         self,
@@ -99,6 +104,9 @@ class TurnCoordinator:
         post_answer_memory: PostAnswerMemory = disabled_post_answer_memory,
         reconcile_changes: Callable[[], None] = lambda: None,
         turn_input_preparer: Callable[[Turn, str], None] = lambda turn, content: None,
+        turn_extension_preparer: TurnExtensionPreparer = (
+            disabled_turn_extension_preparer
+        ),
     ) -> None:
         self._workspace_key = workspace_key
         self._conversation = conversation
@@ -112,6 +120,7 @@ class TurnCoordinator:
         self._post_answer_memory = post_answer_memory
         self._reconcile_changes = reconcile_changes
         self._turn_input_preparer = turn_input_preparer
+        self._turn_extension_preparer = turn_extension_preparer
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
@@ -125,16 +134,19 @@ class TurnCoordinator:
         *,
         client_message_id: str,
     ) -> OperationAccepted:
-        if self._operations.active_operation_id is not None:
-            raise OperationBusy("Another operation is active.")
-        thread = self._conversation.read_thread(thread_id).thread
-        config = self._config_resolver(thread)
-        turn = self._conversation.begin_turn(
-            thread_id,
-            content,
-            config,
-            client_message_id=client_message_id,
-        )
+        reservation = self._operations.reserve()
+        try:
+            thread = self._conversation.read_thread(thread_id).thread
+            config = self._config_resolver(thread)
+            turn = self._conversation.begin_turn(
+                thread_id,
+                content,
+                config,
+                client_message_id=client_message_id,
+            )
+        except BaseException:
+            self._operations.abort(reservation)
+            raise
 
         async def execute(operation_id: str) -> None:
             projector = ApplicationEventProjector(
@@ -155,14 +167,22 @@ class TurnCoordinator:
             await self._execute_turn(turn, operation_id, projector)
 
         try:
-            handle = await self._operations.start(
+            handle = await self._operations.start_reserved(
+                reservation,
                 execute,
                 thread_id=turn.thread_id,
                 turn_id=turn.id,
                 client_message_id=client_message_id,
             )
         except BaseException:
-            self._conversation.fail_turn(turn.id, "operation_start_failed")
+            self._operations.abort(reservation)
+            current = next(
+                item
+                for item in self._conversation.read_thread(turn.thread_id).turns
+                if item.id == turn.id
+            )
+            if current.status is TurnStatus.IN_PROGRESS:
+                self._conversation.fail_turn(turn.id, "operation_start_failed")
             raise
         self._tasks[handle.operation_id] = handle.task
         handle.task.add_done_callback(lambda _: self._trim_tasks())
@@ -186,17 +206,22 @@ class TurnCoordinator:
         return await self._operations.cancel(operation_id)
 
     async def resume_unfinished(self, thread_id: str) -> OperationAccepted:
-        view = self._conversation.read_thread(thread_id)
-        turn = next(
-            (item for item in view.turns if item.status is TurnStatus.IN_PROGRESS),
-            None,
-        )
-        if turn is None:
-            raise TurnExecutionFailed("No unfinished Turn exists.")
-        state = await self._checkpoints.latest_state(turn.id)
-        if state is None:
-            raise TurnExecutionFailed("checkpoint_missing")
-        client_message_id = _client_message_id(view, turn)
+        reservation = self._operations.reserve()
+        try:
+            view = self._conversation.read_thread(thread_id)
+            turn = next(
+                (item for item in view.turns if item.status is TurnStatus.IN_PROGRESS),
+                None,
+            )
+            if turn is None:
+                raise TurnExecutionFailed("No unfinished Turn exists.")
+            state = await self._checkpoints.latest_state(turn.id)
+            if state is None:
+                raise TurnExecutionFailed("checkpoint_missing")
+            client_message_id = _client_message_id(view, turn)
+        except BaseException:
+            self._operations.abort(reservation)
+            raise
 
         async def execute(operation_id: str) -> None:
             projector = ApplicationEventProjector(
@@ -209,12 +234,17 @@ class TurnCoordinator:
             await projector.turn_started()
             await self._execute_turn(turn, operation_id, projector, resume=True)
 
-        handle = await self._operations.start(
-            execute,
-            thread_id=turn.thread_id,
-            turn_id=turn.id,
-            client_message_id=client_message_id,
-        )
+        try:
+            handle = await self._operations.start_reserved(
+                reservation,
+                execute,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+                client_message_id=client_message_id,
+            )
+        except BaseException:
+            self._operations.abort(reservation)
+            raise
         self._tasks[handle.operation_id] = handle.task
         handle.task.add_done_callback(lambda _: self._trim_tasks())
         return OperationAccepted(
@@ -364,6 +394,24 @@ class TurnCoordinator:
         *,
         resume: bool = False,
     ) -> None:
+        try:
+            await self._turn_extension_preparer()
+        except asyncio.CancelledError:
+            facts = await self._latest_observed_facts(turn.id)
+            self._conversation.cancel_turn(
+                turn.id,
+                usage=facts.usage,
+                context_manifest=facts.context_manifest,
+            )
+            await projector.turn_cancelled("cancelled")
+            self._seal_changes(turn.id)
+            await self._checkpoints.delete(turn.id)
+            raise
+        except Exception:
+            self._conversation.fail_turn(turn.id, "agent_initialization_failed")
+            await projector.turn_failed("agent_initialization_failed")
+            await self._checkpoints.delete(turn.id)
+            raise
         state = (
             None
             if resume

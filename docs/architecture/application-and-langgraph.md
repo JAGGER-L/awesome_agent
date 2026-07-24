@@ -20,7 +20,7 @@ Core-owned slash commands have one execution path:
 
 ```text
 Ink command controller
-  -> Protocol v2 command.execute
+  -> Protocol v3 command.execute
   -> LocalApplication facade
   -> complete CommandDispatcher
   -> one focused command service

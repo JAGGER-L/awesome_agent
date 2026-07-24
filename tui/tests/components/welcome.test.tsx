@@ -167,6 +167,30 @@ describe("Welcome", () => {
     expect(view.lastFrame()).toContain("Permission   Full access");
   });
 
+  it("shows accept edits as a distinct welcome mode", () => {
+    const view = render(
+      <Welcome {...baseProps} width={80} permissionMode="accept_edits" />,
+    );
+    expect(view.lastFrame()).toContain("Permission   Accept edits");
+  });
+
+  it("keeps an ignored AGENTS.md diagnostic visible", () => {
+    const view = render(
+      <Welcome
+        {...baseProps}
+        width={80}
+        workspaceInstructionDiagnostic={{
+          code: "workspace_instructions_too_large",
+          source_id: "AGENTS.md",
+          message: "AGENTS.md was ignored because it exceeds the 32 KiB limit.",
+        }}
+      />,
+    );
+    expect(view.lastFrame()).toContain(
+      "AGENTS.md was ignored because it exceeds the 32 KiB limit.",
+    );
+  });
+
   it("renders the same glyph without color support", () => {
     const view = render(
       <Welcome

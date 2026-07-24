@@ -20,8 +20,9 @@ from awesome_agent.core.tools import (
 from awesome_agent.core.tools.executor import ToolExecutor
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
-from awesome_agent.extensions.mcp import McpCallUncertain
+from awesome_agent.extensions.mcp import McpCallUncertain, McpUnavailable
 from awesome_agent.extensions.mcp.adapter import McpToolAdapter
+from awesome_agent.extensions.mcp.catalog import McpCatalog, compile_mcp_catalog
 
 
 class ActivityWriter(ToolActivityWriter):
@@ -36,17 +37,42 @@ class FakeManager:
             content=[TextContent(type="text", text="hello")],
         )
         self.uncertain = False
+        self._catalog = compile_mcp_catalog((echo_tool(),), generation=1)
+        self._invalidator: object | None = None
+
+    def catalog(self, server_id: str) -> McpCatalog:
+        assert server_id == "fixture"
+        return self._catalog
+
+    def bind_catalog_invalidator(
+        self,
+        server_id: str,
+        invalidator: object,
+    ) -> None:
+        assert server_id == "fixture"
+        self._invalidator = invalidator
 
     async def call_tool(
         self,
         server_id: str,
         tool_name: str,
         arguments: dict[str, object],
+        *,
+        generation: int,
     ) -> CallToolResult:
+        if generation != self._catalog.generation:
+            raise McpUnavailable("stale catalog")
         self.calls.append((server_id, tool_name, arguments))
         if self.uncertain:
             raise McpCallUncertain("uncertain secret")
         return self.result
+
+    def replace_catalog(self, catalog: McpCatalog) -> None:
+        self._catalog = catalog
+
+    def invalidate(self) -> None:
+        assert callable(self._invalidator)
+        self._invalidator()
 
 
 async def approve(_: ToolApprovalRequest) -> ToolApprovalDecision:
@@ -103,6 +129,13 @@ async def test_adapter_registers_and_executes_only_through_shared_executor(
     registered = registry.resolve("mcp.fixture.echo")
     assert registered is not None
     assert registered.spec.read_only is False
+    assert registered.timeout_resolver is not None
+    assert (
+        registered.timeout_resolver(
+            registered.input_model.model_validate({"text": "hello"})
+        )
+        == 40.0
+    )
 
     executor = ToolExecutor(registry)
     result = await executor.execute(
@@ -184,3 +217,88 @@ async def test_adapter_never_replays_an_uncertain_external_call(tmp_path: Path) 
     assert result.error.retryable is False
     assert len(manager.calls) == 1
     assert "secret" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_adapter_uses_compiled_composition_and_reference_validator(
+    tmp_path: Path,
+) -> None:
+    schema_tool = Tool(
+        name="echo",
+        description="Echo text",
+        inputSchema={
+            "$defs": {"long": {"type": "string", "minLength": 3}},
+            "type": "object",
+            "properties": {
+                "text": {
+                    "allOf": [
+                        {"$ref": "#/$defs/long"},
+                        {"pattern": "^[a-z]+$"},
+                    ]
+                }
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    )
+    manager = FakeManager()
+    manager.replace_catalog(compile_mcp_catalog((schema_tool,), generation=4))
+    registry = ToolRegistry()
+    McpToolAdapter(manager, "fixture").replace_registry_tools(
+        registry,
+        (schema_tool,),
+    )
+    executor = ToolExecutor(registry)
+
+    invalid = await executor.execute(
+        ToolRequest(
+            call_id="invalid-composition",
+            tool_name="mcp.fixture.echo",
+            arguments={"text": "X"},
+        ),
+        context=context(tmp_path),
+    )
+
+    assert invalid.error is not None
+    assert invalid.error.code is ToolErrorCode.INVALID_ARGUMENTS
+    assert manager.calls == []
+    assert "pattern" not in invalid.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_adapter_rejects_stale_generation_without_external_call(
+    tmp_path: Path,
+) -> None:
+    manager = FakeManager()
+    registry = ToolRegistry()
+    McpToolAdapter(manager, "fixture").replace_registry_tools(
+        registry,
+        (echo_tool(),),
+    )
+    manager.replace_catalog(compile_mcp_catalog((echo_tool(),), generation=2))
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="stale",
+            tool_name="mcp.fixture.echo",
+            arguments={"text": "hello"},
+        ),
+        context=context(tmp_path),
+    )
+
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.EXECUTION_FAILED
+    assert manager.calls == []
+
+
+def test_adapter_removes_registry_namespace_when_catalog_is_invalidated() -> None:
+    manager = FakeManager()
+    registry = ToolRegistry()
+    McpToolAdapter(manager, "fixture").replace_registry_tools(
+        registry,
+        (echo_tool(),),
+    )
+
+    manager.invalidate()
+
+    assert registry.resolve("mcp.fixture.echo") is None

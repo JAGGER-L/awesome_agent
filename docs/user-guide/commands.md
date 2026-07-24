@@ -25,14 +25,14 @@ No other public launch flags are supported.
 | `/auth [deepseek\|kimi\|mem0]` | Select or manage model and Memory Provider credentials. |
 | `/model [deepseek\|kimi]` | Choose a Provider, then choose one of its models. |
 | `/thinking [on\|off]` | Show the current mode with a selector, or set it explicitly. |
-| `/permissions [request_approval\|full_access]` | Show or choose the active Thread's permission mode. |
+| `/permissions [request_approval\|accept_edits\|full_access]` | Show or choose the active Thread's permission mode. |
 | `/workspace` | Show the current workspace path. |
 | `/diff` | Show the latest or selected Change Journal change set. |
 | `/undo` | Undo the latest or selected reversible change set. |
 | `/redo` | Redo the latest or selected undone change set. |
 | `/tools` | List the effective built-in and extension tools. |
 | `/skills [auto\|off\|name]` | List Skills or select thread Skill mode. |
-| `/mcp` | Show MCP server status. |
+| `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | Show or manage MCP server status. |
 | `/memory` | Choose Local or Cloud Memory, then switch it On or Off. |
 | `/status` | Show the current product and thread status. |
 | `/usage` | Show cumulative token and operation usage for the current thread. |
@@ -41,6 +41,11 @@ No other public launch flags are supported.
 
 New threads default to Thinking On. A resumed thread retains its saved setting.
 A bare `/thinking` reports the current value and offers on/off choices.
+Request approval asks before writes, deletes, and shell commands. Accept edits
+allows ordinary workspace writes but keeps delete, shell, MCP, and unknown
+extensions behind approval. Full access allows known built-in local writes,
+deletes, and shell commands only after a Thread-bound warning confirmation;
+MCP and unknown extensions still ask.
 
 The first accepted natural-language message names a new thread automatically,
 using at most 48 visible characters. `/rename <title>` replaces that name,
@@ -96,6 +101,15 @@ model to decide how to run it. Ink never executes tools itself.
 - A queued `/quit` prevents additional queue entries. Recall it before adding
   more input, or let it exit at its ordered position.
 
+Core atomically admits one foreground Operation or state-changing command. A
+request that loses a race receives `operation_busy` before it writes a Turn or
+changes state. During an active Operation, only `/context`, `/workspace`,
+`/tools`, `/mcp`, `/mcp status [id]`, `/status`, `/usage`, and `/config` are
+side-effect-free snapshot exceptions. `/diff` reads a changing ChangeSet and
+`/doctor` may contact Providers, so neither is an exception. A pending
+interaction blocks new Operations and state changes until it is resolved or
+cancelled; matching Tool approval continues its existing Operation.
+
 `/help` is written into normal transcript history rather than opening a modal.
 It renders one command per aligned row with usage and description. Use
 `/help <command>` for one focused row; internal command ownership is not shown.
@@ -143,3 +157,7 @@ lifecycles remain distinct errors.
 Context details and token/operation usage are intentionally separate in
 `/context` and `/usage`. `/context` shows the latest meaningful active Context;
 `/usage` shows cumulative observed Usage for the current Thread.
+
+`/doctor` renders each check's bounded detail rather than hiding it behind the
+status label. A rejected root `AGENTS.md` therefore shows its stable reason in
+the doctor panel as well as Welcome and the status line.

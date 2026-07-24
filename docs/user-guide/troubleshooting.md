@@ -35,6 +35,14 @@ Restart `awesome` in the intended directory and check the displayed canonical
 path. Choosing No does not save a denial, so Awesome asks again on the next
 launch. Trust only projects whose files and instructions you understand.
 
+## `AGENTS.md` was ignored
+
+Read the full reason in Welcome, the status line, or `/doctor`. The root file
+must be a plain, stable, UTF-8 text file with no NUL bytes, links, junctions, or
+other reparse components. It must fit both the 32 KiB byte limit and its context
+allocation. Awesome ignores an invalid file whole; fix it and start a new
+session to take a new immutable snapshot. A missing `AGENTS.md` is normal.
+
 ## Configuration is invalid
 
 Run `/doctor` and inspect `<AWESOME_HOME>/config.yaml` together with the trusted
@@ -77,4 +85,6 @@ Up to recall the newest pending item into the draft. A full queue or a queued
 Use `/memory`, `/mcp`, `/config`, and `/doctor`. Confirm the required environment
 variable is present and the configured external command or network is
 available. Disable the affected extension to continue working while the
-external service is unavailable.
+external service is unavailable. MCP timeout or connection loss may mean the
+remote side already acted; Awesome invalidates that catalog and reports an
+uncertain outcome instead of reconnecting and replaying the call automatically.

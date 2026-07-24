@@ -18,6 +18,7 @@ from awesome_agent.core.tools.contracts import (
     ToolPresentation,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
+from awesome_agent.core.tools.filesystem import is_directory_link_or_reparse
 from awesome_agent.core.tools.policy import (
     is_sensitive_workspace_path,
     resolve_workspace_path,
@@ -48,6 +49,13 @@ def _deny_protected(relative: Path) -> None:
 def _inventory(path: Path, workspace: Path) -> list[_DeleteNode]:
     relative = path.relative_to(workspace)
     _deny_protected(relative)
+    status = path.lstat()
+    if is_directory_link_or_reparse(path, status):
+        raise ExpectedToolFailure(
+            ToolErrorCode.PERMISSION_DENIED,
+            "Directory links and reparse points cannot be deleted recursively.",
+            metadata={"path": relative.as_posix()},
+        )
     if path.is_symlink():
         return [
             _DeleteNode(
@@ -74,6 +82,33 @@ def _inventory(path: Path, workspace: Path) -> list[_DeleteNode]:
         nodes.extend(_inventory(Path(child.path), workspace))
     nodes.append(_DeleteNode(path, FileNodeType.DIRECTORY, 0))
     return nodes
+
+
+def _assert_safe_delete_tree(path: Path, workspace: Path) -> None:
+    relative = path.relative_to(workspace)
+    _deny_protected(relative)
+    status = path.lstat()
+    if is_directory_link_or_reparse(path, status):
+        raise ExpectedToolFailure(
+            ToolErrorCode.PERMISSION_DENIED,
+            "Directory links and reparse points cannot be deleted recursively.",
+            metadata={"path": relative.as_posix()},
+        )
+    if path.is_symlink() or path.is_file():
+        return
+    if not path.is_dir():
+        raise ExpectedToolFailure(
+            ToolErrorCode.INVALID_ARGUMENTS,
+            "Unsupported filesystem node.",
+            metadata={"path": relative.as_posix()},
+        )
+    with os.scandir(path) as entries:
+        children = sorted(
+            entries,
+            key=lambda entry: (entry.name.casefold(), entry.name),
+        )
+    for child in children:
+        _assert_safe_delete_tree(Path(child.path), workspace)
 
 
 def _delete_node(node: _DeleteNode) -> None:
@@ -119,6 +154,7 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
             )
         relative = target.relative_to(context.workspace.canonical_path)
         _deny_protected(relative)
+        _assert_safe_delete_tree(target, context.workspace.canonical_path)
         nodes = _inventory(target, context.workspace.canonical_path)
         try:
             journal.preflight_batch(

@@ -1,4 +1,6 @@
+import asyncio
 import sqlite3
+import threading
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock
@@ -160,6 +162,47 @@ async def test_branch_is_not_read_before_trust_and_is_cached_afterward(
 
 
 @pytest.mark.asyncio
+async def test_shutdown_cancels_workspace_trust_activation_before_closing_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_branch_reader(path: Path) -> str | None:
+        del path
+        entered.set()
+        release.wait(timeout=2)
+        return None
+
+    monkeypatch.setattr(composition, "_git_branch", blocked_branch_reader)
+    application = await composition.compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    pending = _unwrap(await application.initialize())
+    assert pending.interaction_id is not None
+    response = asyncio.create_task(
+        application.respond_interaction(pending.interaction_id, "trust")
+    )
+    assert await asyncio.to_thread(entered.wait, 1)
+
+    shutdown = asyncio.create_task(application.shutdown())
+    shutdown_result = await asyncio.wait_for(shutdown, timeout=1)
+    response_was_done = response.done()
+    release.set()
+
+    assert _unwrap(shutdown_result).stopped is True
+    assert response_was_done is True
+    with pytest.raises(asyncio.CancelledError):
+        await response
+
+
+@pytest.mark.asyncio
 async def test_older_state_requests_reset_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -263,6 +306,69 @@ async def test_confirmed_reset_preserves_nonstate_data_and_continues_to_trust(
     assert config.read_bytes() == b"providers: {}\n"
     assert memory.read_bytes() == b"remember"
     _unwrap(await application.shutdown())
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_cancelled_state_reset_worker_before_releasing_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    database = home / "state" / "application.db"
+    database.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("PRAGMA user_version = 6")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocked_reset(lease: StateLease) -> None:
+        del lease
+        entered.set()
+        release.wait(timeout=2)
+        finished.set()
+
+    monkeypatch.setattr(composition, "reset_local_state", blocked_reset)
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    pending = _unwrap(await application.initialize())
+    assert pending.interaction_id is not None
+    response = asyncio.create_task(
+        application.respond_interaction(pending.interaction_id, "reset_state")
+    )
+    assert await asyncio.to_thread(entered.wait, 1)
+
+    shutdown = asyncio.create_task(application.shutdown())
+    await asyncio.sleep(0.05)
+    completed_before_worker = shutdown.done()
+    closing_state = await application.get_state()
+    release.set()
+    shutdown_result = await asyncio.wait_for(shutdown, timeout=1)
+
+    assert completed_before_worker is False
+    assert closing_state.ok is False
+    assert closing_state.error is not None
+    assert closing_state.error.code is ProductErrorCode.OPERATION_BUSY
+    assert finished.is_set()
+    assert _unwrap(shutdown_result).stopped is True
+    with pytest.raises(asyncio.CancelledError):
+        await response
+    closed_state = await application.get_state()
+    assert closed_state.ok is False
+    assert closed_state.error is not None
+    assert closed_state.error.code is ProductErrorCode.OPERATION_BUSY
+    closed_threads = await application.list_threads(ThreadListQuery())
+    assert closed_threads.ok is False
+    assert closed_threads.error is not None
+    assert closed_threads.error.code is ProductErrorCode.OPERATION_BUSY
+    probe = StateLease.acquire(home, StateLeaseMode.EXCLUSIVE)
+    probe.close()
 
 
 @pytest.mark.asyncio

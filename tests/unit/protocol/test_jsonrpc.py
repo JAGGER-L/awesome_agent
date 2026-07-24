@@ -41,7 +41,7 @@ from awesome_agent.protocol.jsonrpc import (
 from awesome_agent.version import PRODUCT_VERSION
 
 INITIALIZE_PARAMS = {
-    "protocol_version": 2,
+    "protocol_version": 3,
     "client_name": "awesome",
     "client_version": PRODUCT_VERSION,
 }
@@ -56,7 +56,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=2,
+                protocol_version=3,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -323,7 +323,7 @@ async def test_interaction_decision_contract_accepts_reset_and_rejects_unknown()
     ("params", "error_code"),
     [
         (
-            {**INITIALIZE_PARAMS, "protocol_version": 1},
+            {**INITIALIZE_PARAMS, "protocol_version": 2},
             "protocol_version_incompatible",
         ),
         (
@@ -362,9 +362,9 @@ async def test_initialize_rejects_incompatible_identity_before_facade_work(
     "params",
     [
         {},
-        {"protocol_version": 2, "client_name": "awesome"},
+        {"protocol_version": 3, "client_name": "awesome"},
         {**INITIALIZE_PARAMS, "extra": True},
-        {**INITIALIZE_PARAMS, "protocol_version": "2"},
+        {**INITIALIZE_PARAMS, "protocol_version": "3"},
     ],
 )
 async def test_initialize_rejects_malformed_identity_as_invalid_params(
