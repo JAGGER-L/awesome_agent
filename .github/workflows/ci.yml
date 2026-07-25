@@ -273,6 +273,44 @@ jobs:
         working-directory: tui
         run: npm pack --dry-run
 
+  docs-site:
+    name: Docs site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: site
+        run: npm ci
+
+      - name: Check site
+        working-directory: site
+        run: npm run check
+
+      - name: Build site
+        working-directory: site
+        env:
+          SITE_URL: https://jagger-l.github.io
+          BASE_PATH: /awesome_agent
+        run: npm run build
+
+      - name: Check built links
+        working-directory: site
+        env:
+          BASE_PATH: /awesome_agent
+        run: npm run check:links
+
   required:
     name: Required
     if: always()
@@ -282,6 +320,7 @@ jobs:
       - windows-contracts
       - python-contracts
       - tui
+      - docs-site
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -289,4 +328,4 @@ jobs:
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          test "$RESULTS" = "success success success success success"
+          test "$RESULTS" = "success success success success success success"

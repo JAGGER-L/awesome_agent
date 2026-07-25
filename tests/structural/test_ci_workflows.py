@@ -78,6 +78,7 @@ def test_required_ci_covers_every_product_boundary() -> None:
         "windows-contracts",
         "python-contracts",
         "tui",
+        "docs-site",
         "required",
     } == set(jobs)
 
@@ -130,6 +131,18 @@ def test_required_ci_covers_every_product_boundary() -> None:
         isinstance(entry, dict) and entry.get("os") == "windows-latest"
         for entry in included
     )
+
+    docs_site = jobs["docs-site"]
+    assert isinstance(docs_site, dict)
+    docs_steps = docs_site["steps"]
+    assert isinstance(docs_steps, list)
+    docs_by_name = {
+        step.get("name"): step for step in docs_steps if isinstance(step, dict)
+    }
+    assert docs_by_name["Install locked dependencies"]["run"] == "npm ci"
+    assert docs_by_name["Check site"]["run"] == "npm run check"
+    assert docs_by_name["Build site"]["run"] == "npm run build"
+    assert docs_by_name["Check built links"]["run"] == "npm run check:links"
 
 
 def test_tui_job_provisions_locked_python_core_before_e2e_tests() -> None:
@@ -306,13 +319,13 @@ def test_security_workflow_exposes_one_stable_required_check() -> None:
     assert "--disable-pip" in osv_audit
 
 
-def test_docs_site_builds_on_prs_and_deploys_only_from_main() -> None:
+def test_docs_site_deployment_is_main_only() -> None:
     workflow = _workflow(PRIMARY_WORKFLOWS[4])
     triggers = workflow["on"]
     jobs = workflow["jobs"]
 
     assert isinstance(triggers, dict)
-    assert {"pull_request", "push", "workflow_dispatch"} == set(triggers)
+    assert {"push", "workflow_dispatch"} == set(triggers)
     push = triggers["push"]
     assert isinstance(push, dict)
     assert push["branches"] == ["main"]
