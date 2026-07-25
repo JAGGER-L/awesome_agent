@@ -81,8 +81,9 @@ text on POSIX.
 
 Before a built-in file operation reads or changes anything, Core binds the
 workspace, parent directories, and the resolved target's existence and identity.
-Opening performs a no-follow `lstat -> open -> fstat` comparison; bounded reads
-also verify the opened file again after reading. `@path`, `read_file`, `ls`,
+Opening performs a no-follow `lstat -> open -> fstat` comparison. Bounded reads
+rewind the pinned regular-file descriptor, repeat the same bounded read, and
+require both content and metadata to remain stable. `@path`, `read_file`, `ls`,
 `glob`, and `grep` use the same primitives rather than reopening a checked
 pathname. Regular files with multiple hard links are refused because reading or
 modifying one name could affect an alias outside the visible workspace. Write

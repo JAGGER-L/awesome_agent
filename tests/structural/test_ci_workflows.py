@@ -159,6 +159,40 @@ def test_tui_job_provisions_locked_python_core_before_e2e_tests() -> None:
     assert names.index("Install locked Core test dependencies") < names.index("Test")
 
 
+def test_tui_package_installation_runs_once_outside_the_parallel_suite() -> None:
+    workflows = (
+        (PRIMARY_WORKFLOWS[0], "tui", "Build"),
+        (PRIMARY_WORKFLOWS[2], "full-suite", "Build TUI"),
+    )
+    parallel_command = "npm test -- --exclude tests/packaging/package.test.ts"
+    package_command = "npm test -- tests/packaging/package.test.ts"
+
+    for path, job_name, build_name in workflows:
+        workflow = _workflow(path)
+        jobs = workflow["jobs"]
+        assert isinstance(jobs, dict)
+        job = jobs[job_name]
+        assert isinstance(job, dict)
+        steps = job["steps"]
+        assert isinstance(steps, list)
+        named_steps = {
+            step.get("name"): step for step in steps if isinstance(step, dict)
+        }
+        commands = [
+            step.get("run")
+            for step in steps
+            if isinstance(step, dict) and "run" in step
+        ]
+        assert commands.count(parallel_command) == 1
+        assert commands.count(package_command) == 1
+        assert named_steps["Test"]["run"] == parallel_command
+        assert named_steps["Test installed TUI package"]["run"] == package_command
+
+        names = [step.get("name") for step in steps if isinstance(step, dict)]
+        assert names.index("Test") < names.index("Test installed TUI package")
+        assert names.index("Test installed TUI package") < names.index(build_name)
+
+
 def test_workflows_use_bounded_jobs_and_immutable_action_references() -> None:
     for path in WORKFLOWS:
         workflow = _workflow(path)

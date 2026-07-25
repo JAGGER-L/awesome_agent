@@ -55,9 +55,13 @@ jobs:
       - name: Run complete Python suite
         run: uv run --extra memory pytest -q tests
 
-      - name: Run complete TUI suite
+      - name: Test
         working-directory: tui
-        run: npm test
+        run: npm test -- --exclude tests/packaging/package.test.ts
+
+      - name: Test installed TUI package
+        working-directory: tui
+        run: npm test -- tests/packaging/package.test.ts
 
       - name: Build TUI
         working-directory: tui

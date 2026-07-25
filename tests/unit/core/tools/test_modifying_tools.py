@@ -303,18 +303,40 @@ async def test_edit_file_rejects_in_place_change_during_before_snapshot(
     target = workspace / "target.txt"
     target.write_text("old content", encoding="utf-8")
     original_read = os.read
+    original_fstat = os.fstat
+    baseline_status: os.stat_result | None = None
+    mutated = False
+    observed_reads: list[bytes] = []
 
     def torn_read(descriptor: int, *, max_bytes: int | None) -> bytes:
+        nonlocal baseline_status, mutated
         del max_bytes
         first = original_read(descriptor, 3)
-        with target.open("r+b") as writer:
-            writer.seek(0)
-            writer.write(b"new")
-            writer.flush()
-            os.fsync(writer.fileno())
-        return first + original_read(descriptor, 64 * 1024)
+        if not mutated:
+            baseline_status = original_fstat(descriptor)
+            with target.open("r+b") as writer:
+                writer.seek(0)
+                writer.write(b"new")
+                writer.flush()
+                os.fsync(writer.fileno())
+            mutated = True
+        data = first + original_read(descriptor, 64 * 1024)
+        observed_reads.append(data)
+        return data
+
+    def stale_target_fstat(descriptor: int) -> os.stat_result:
+        current = original_fstat(descriptor)
+        if (
+            mutated
+            and baseline_status is not None
+            and core_filesystem_module.identity(current)
+            == core_filesystem_module.identity(baseline_status)
+        ):
+            return baseline_status
+        return current
 
     monkeypatch.setattr(core_filesystem_module, "read_descriptor", torn_read)
+    monkeypatch.setattr(os, "fstat", stale_target_fstat)
     monkeypatch.setattr(
         tools_filesystem_module,
         "_read_descriptor",
@@ -339,6 +361,7 @@ async def test_edit_file_rejects_in_place_change_during_before_snapshot(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.CONFLICT
     assert target.read_text(encoding="utf-8") == "new content"
+    assert observed_reads == [b"old content", b"new content"]
     assert journal.seal(context.change_set_id or "").files == []
 
 

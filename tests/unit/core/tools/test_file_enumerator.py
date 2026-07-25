@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
@@ -18,6 +18,7 @@ from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
+    ToolOutput,
     ToolRequest,
     ToolStatus,
 )
@@ -262,6 +263,7 @@ async def test_executor_timeout_waits_for_scan_worker_exit(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     context = _context(workspace)
+    started = Event()
     stopped = Event()
 
     def endless_files(
@@ -272,6 +274,7 @@ async def test_executor_timeout_waits_for_scan_worker_exit(
         prune_defaults: bool,
     ) -> Iterator[EnumeratedFile]:
         del root, current, prune_defaults
+        started.set()
         try:
             while True:
                 cancellation.raise_if_cancelled()
@@ -286,7 +289,27 @@ async def test_executor_timeout_waits_for_scan_worker_exit(
     )
     registry = ToolRegistry()
     register_read_tools(registry)
-    executor = ToolExecutor(registry, timeout_seconds=0.01)
+    executor = ToolExecutor(registry, timeout_seconds=1.0)
+    real_wait = asyncio.wait
+    wait_calls = 0
+
+    async def timeout_after_worker_started(
+        futures: Iterable[asyncio.Future[ToolOutput]],
+        *,
+        timeout: float | None = None,
+    ) -> tuple[
+        set[asyncio.Future[ToolOutput]],
+        set[asyncio.Future[ToolOutput]],
+    ]:
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls == 1:
+            assert await asyncio.to_thread(started.wait, 1.0)
+            pending = set(futures)
+            return set(), pending
+        return await real_wait(futures, timeout=timeout)
+
+    monkeypatch.setattr(asyncio, "wait", timeout_after_worker_started)
 
     result = await executor.execute(
         ToolRequest(call_id="call_1", tool_name="glob", arguments={"pattern": "*"}),

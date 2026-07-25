@@ -463,15 +463,20 @@ def read_regular_child(
         if max_bytes is not None and int(opened.st_size) > max_bytes:
             raise WorkspaceFileTooLarge
         data = read_descriptor(descriptor, max_bytes=max_bytes)
-        after = os.fstat(descriptor)
-        if (
-            identity(after) != identity(opened)
-            or is_link_or_reparse(after)
-            or not stat.S_ISREG(after.st_mode)
-            or int(after.st_nlink) != 1
-            or int(after.st_size) != int(opened.st_size)
-            or int(after.st_mtime_ns) != int(opened.st_mtime_ns)
-        ):
+        _assert_regular_read_status(opened, os.fstat(descriptor))
+        try:
+            position = os.lseek(descriptor, 0, os.SEEK_SET)
+        except OSError as error:
+            raise MutationTargetChanged(
+                "A workspace file changed while it was being read."
+            ) from error
+        if position != 0:
+            raise MutationTargetChanged(
+                "A workspace file changed while it was being read."
+            )
+        verified = read_descriptor(descriptor, max_bytes=max_bytes)
+        _assert_regular_read_status(opened, os.fstat(descriptor))
+        if verified != data:
             raise MutationTargetChanged(
                 "A workspace file changed while it was being read."
             )
@@ -479,6 +484,18 @@ def read_regular_child(
         os.close(descriptor)
     parent.verify_reachable()
     return ReadRegularFile(data=data, status=opened)
+
+
+def _assert_regular_read_status(opened: stat_result, observed: stat_result) -> None:
+    if (
+        identity(observed) != identity(opened)
+        or is_link_or_reparse(observed)
+        or not stat.S_ISREG(observed.st_mode)
+        or int(observed.st_nlink) != 1
+        or int(observed.st_size) != int(opened.st_size)
+        or int(observed.st_mtime_ns) != int(opened.st_mtime_ns)
+    ):
+        raise MutationTargetChanged("A workspace file changed while it was being read.")
 
 
 def list_directory_entries(
