@@ -22,6 +22,17 @@ updates:
     commit-message:
       prefix: deps(tui)
 
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps(site)
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

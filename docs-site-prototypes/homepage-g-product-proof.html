@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Awesome Docs homepage concept H1 — Product Proof">
+  <title>Awesome Docs — Product Proof</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/round-4.css">
+  <script src="assets/round-4.js" defer></script>
+</head>
+<body class="homepage product-page">
+  <header class="home-nav">
+    <div class="nav-inner">
+      <a class="home-brand brand-m1" href="homepage-g-product-proof.html"><span class="brand-symbol">A</span><span>Awesome Docs</span></a>
+      <nav class="home-nav-links" aria-label="主导航">
+        <a class="active" href="#start">开始</a><a href="#workflow">工作流</a><a href="#resources">文档</a><a href="refinement-round-4.html">返回选择</a>
+      </nav>
+      <div class="home-nav-actions">
+        <div class="nav-search"><span>搜索文档</span><kbd>Ctrl K</kbd></div>
+        <button class="clean-theme-toggle" type="button" data-global-theme-toggle aria-label="切换主题"><span class="solid-sun"></span><span class="clean-moon moon-solid"></span><b></b></button>
+        <div class="global-language" role="group" aria-label="切换语言"><i></i><button class="active" type="button" data-global-language-choice="zh">中</button><button type="button" data-global-language-choice="en">EN</button></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="home-shell">
+    <section class="product-hero" id="start">
+      <div class="product-hero-copy">
+        <div class="home-kicker">Terminal-native · One Python Core · Recoverable changes</div>
+        <h1 data-copy-zh="把开发意图，变成经过验证的修改。" data-copy-en="Turn intent into a verified change.">把开发意图，变成经过验证的修改。</h1>
+        <p data-copy-zh="Awesome 是面向审慎软件开发的 AI 编程助手。它理解代码库、提出计划、通过受控工具执行修改、验证结果，并让每一步都保持可见和可恢复。" data-copy-en="Awesome is an AI coding assistant for deliberate software work. It understands your codebase, plans the change, acts through controlled tools, verifies the result, and keeps recovery explicit.">Awesome 是面向审慎软件开发的 AI 编程助手。它理解代码库、提出计划、通过受控工具执行修改、验证结果，并让每一步都保持可见和可恢复。</p>
+        <div class="home-actions"><a class="home-action primary" href="#resources">五分钟快速开始 <span>→</span></a><a class="home-action" href="#workflow">了解工作方式</a></div>
+        <div class="hero-install"><code>irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex</code><button type="button" data-copy-install>Copy</button></div>
+        <div class="proof-pills"><span>Request approval by default</span><span>One foreground operation</span><span>Change Journal</span></div>
+      </div>
+
+      <div class="session-card product-terminal" aria-label="基于 Awesome 当前 TUI 组件还原的产品界面原型">
+        <div class="session-head"><i></i><i></i><i></i><span>awesome · E:/awesome_agent</span><span class="session-status">PRODUCT UI PROTOTYPE</span></div>
+        <div class="terminal-body">
+          <div class="terminal-provenance"><span>BASED ON CURRENT TUI</span><strong>v1.2.1 · DARK AURORA</strong></div>
+          <div class="terminal-line terminal-user"><b>❯</b><span>修复登录重试逻辑，并运行最小相关测试。</span></div>
+          <div class="terminal-activity"><span>│ </span><b>◆</b><span> Thought for 1.2 s · Ctrl+O to expand</span></div>
+          <div class="terminal-tool-summary">● 3 tool calls · 3.0 s · Ctrl+O to collapse</div>
+          <div class="terminal-detail"><strong>● Read src/auth/retry.py</strong><small>└ Completed · 84 lines · 0.2 s</small></div>
+          <div class="terminal-detail"><strong>● Edit src/auth/retry.py</strong><small>└ Completed · Retry policy updated · 0.4 s</small></div>
+          <div class="terminal-detail"><strong>● Run pytest tests/unit/test_retry.py</strong><small>└ Completed · 12 passed · 2.4 s</small></div>
+          <div class="terminal-change-summary">◇ 2 files changed · Ctrl+O to collapse</div>
+          <div class="terminal-change-row"><span>src/auth/retry.py</span><span class="add">+18</span><span class="remove">−7</span></div>
+          <div class="terminal-change-row"><span>tests/unit/test_retry.py</span><span class="add">+24</span><span class="remove">−1</span></div>
+          <div class="terminal-line terminal-assistant"><b>●</b><span>已修复重试边界，并补充了失败后恢复测试。相关测试全部通过。</span></div>
+          <div class="terminal-worked"><span>│ </span><b>✻</b><span> Worked for 8.4 s</span></div>
+          <div class="terminal-composer"><span>Message</span><div><b>❯</b></div></div>
+          <div class="terminal-permission">◇ Request approval</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="product-proof-strip" aria-label="产品边界">
+      <div><span>01 / CORE</span><strong>一个行为权威</strong><p>模型、工具、状态与恢复统一进入 Python Core。</p></div>
+      <div><span>02 / CONTROL</span><strong>操作始终可见</strong><p>审批、事件和规范化结果共享同一条执行路径。</p></div>
+      <div><span>03 / VERIFY</span><strong>验证不是附加项</strong><p>按风险运行最小充分检查，并记录真实结果。</p></div>
+      <div><span>04 / RECOVER</span><strong>修改可以恢复</strong><p>Change Journal 为受控修改提供明确的撤销语义。</p></div>
+    </section>
+
+    <section class="home-section" id="workflow">
+      <header class="home-section-head"><span>01 / PRODUCT LOOP</span><div><h2>从理解到验证，形成一个完整闭环。</h2><p>主页不只罗列能力，而是解释 Awesome 如何完成一项真实的软件工作。</p></div></header>
+      <div class="product-loop">
+        <article class="loop-step"><span>01</span><h3>Understand</h3><p>读取相关代码、约束、文档和当前契约，建立有限上下文。</p></article>
+        <article class="loop-step"><span>02</span><h3>Plan</h3><p>明确目标、影响范围、风险与最轻验证路径。</p></article>
+        <article class="loop-step"><span>03</span><h3>Change</h3><p>所有工具调用经过统一 Registry、Policy 和 Executor。</p></article>
+        <article class="loop-step"><span>04</span><h3>Verify</h3><p>运行相关检查，解释结果，并保留恢复路径。</p></article>
+      </div>
+    </section>
+
+    <section class="home-section" id="resources">
+      <header class="home-section-head"><span>02 / START HERE</span><div><h2>按任务进入文档。</h2><p>成熟的文档主页应该帮助用户马上完成下一步，而不是让用户先理解整个目录树。</p></div></header>
+      <div class="resource-grid">
+        <a class="resource-card" href="#"><span>GET STARTED</span><h3>安装并完成第一次会话 →</h3><p>配置模型、信任 Workspace，并从一个只读任务开始。</p></a>
+        <a class="resource-card" href="#"><span>OPERATE</span><h3>理解命令、权限与修改控制 →</h3><p>掌握 Thread、审批、diff、undo 和恢复行为。</p></a>
+        <a class="resource-card" href="#"><span>EXTEND</span><h3>使用 Memory、Skills 与 MCP →</h3><p>扩展上下文和工具，同时不绕过统一策略边界。</p></a>
+        <a class="resource-card" href="#"><span>UNDERSTAND</span><h3>阅读系统架构与数据流 →</h3><p>从 Ink 到 Application、Agent、工具和存储。</p></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="home-footer"><div class="home-footer-inner"><span>Awesome Docs · Product Proof concept H1</span><span>Local-first documentation prototype</span></div></footer>
+</body>
+</html>

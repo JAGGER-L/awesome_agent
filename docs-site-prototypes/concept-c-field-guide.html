@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Awesome Docs concept C — Field Guide">
+  <title>Architecture — Awesome Field Guide</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="concept-c">
+  <div class="prototype-note">Concept C · Field Guide <span>—</span> <a href="index.html">Back to all directions</a></div>
+  <header class="field-top">
+    <a class="field-brand" href="concept-c-field-guide.html">Awesome®</a>
+    <div class="field-edition">Technical field guide · Edition 01</div>
+    <div class="field-actions"><button class="icon-button" data-search-open aria-label="Search">⌕</button><button class="language-button" data-language>EN</button></div>
+  </header>
+
+  <div class="field-layout">
+    <nav class="field-rail" aria-label="Chapters">
+      <a href="#"><span>00</span>Introduction</a><a href="#"><span>01</span>Quickstart</a><a href="#"><span>02</span>Operation</a><a class="active" href="#"><span>03</span>Architecture</a><a href="#"><span>04</span>Storage</a><a href="#"><span>05</span>Security</a><a href="#"><span>06</span>Develop</a>
+    </nav>
+
+    <main class="field-content">
+      <section class="field-hero">
+        <div class="field-title">
+          <div class="field-kicker">03 — System architecture</div>
+          <h1>One intent.<br><em>Clear owners.</em></h1>
+          <p>Awesome keeps product behavior, agent reasoning, tools, persistence, and terminal presentation behind explicit boundaries. Follow one user message through the system.</p>
+        </div>
+        <aside class="field-folio"><div class="folio-top"><span>Awesome Agent</span><span>2026</span></div><div class="big-number">03</div><p>READING TIME 08 MIN<br>LAST REVIEWED JUL 2026</p></aside>
+      </section>
+
+      <section class="architecture-section">
+        <div class="section-head"><span class="section-no">03.1 / FLOW</span><h2>From typed intent to a bounded, verified result.</h2></div>
+        <div class="architecture-flow" role="img" aria-label="Awesome request flow">
+          <div class="flow-node"><span class="flow-index">01</span><h3>Ink TUI</h3><p>Captures intent and renders typed events.</p></div>
+          <div class="flow-node"><span class="flow-index">02</span><h3>Application</h3><p>Owns Thread, Turn, commands, and recovery.</p></div>
+          <div class="flow-node"><span class="flow-index">03</span><h3>Agent</h3><p>Routes context, model calls, and tool loops.</p></div>
+          <div class="flow-node"><span class="flow-index">04</span><h3>Tool policy</h3><p>Validates authority, scope, and execution.</p></div>
+          <div class="flow-node"><span class="flow-index">05</span><h3>Storage</h3><p>Persists product records and checkpoints.</p></div>
+        </div>
+        <div class="field-caption"><span>FIG. 03-A</span><span>Ink never calls models, runs graphs, executes tools, or writes product state. Python Core remains the single authority for product behavior.</span></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="search-overlay" data-search-overlay hidden>
+    <div class="search-dialog" role="dialog" aria-label="Search documentation"><div class="search-row"><span>⌕</span><input placeholder="Search the field guide…"><button data-search-close>Esc</button></div><div class="search-results"><div class="search-result"><div><strong>Application boundary</strong><span>03 Architecture · Ownership</span></div><span>↵</span></div><div class="search-result"><div><strong>Recovery</strong><span>04 Storage · Interrupted turns</span></div><span>↵</span></div></div></div>
+  </div>
+  <script src="assets/app.js"></script>
+</body>
+</html>

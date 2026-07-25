@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Awesome Docs concept F — Margin Notes"><title>Commands — Awesome Docs / Margin Notes</title><link rel="stylesheet" href="assets/styles.css"></head>
+<body class="concept-f">
+  <div class="prototype-note">Concept F · Margin Notes <span>—</span> <a href="index.html">Back to round two</a></div>
+  <header class="site-top">
+    <a class="wordmark" href="concept-f-margin-notes.html"><span class="mark">A</span><span>Awesome Handbook</span></a>
+    <nav class="site-top-nav" aria-label="Primary"><a href="#">Start</a><a class="active" href="#">Handbook</a><a href="#">Inside Awesome</a><a href="https://github.com/JAGGER-L/awesome_agent">GitHub ↗</a></nav>
+    <div class="top-actions"><button class="search-button" data-search-open><span>⌕</span><span class="search-text">Look something up</span><kbd>Ctrl K</kbd></button><button class="language-button" data-language aria-label="Change language">EN</button><button class="icon-button" data-theme-toggle aria-label="Switch theme"><span class="theme-icon"></span></button><button class="menu-button" data-menu-toggle aria-label="Open navigation" aria-expanded="false">☰</button></div>
+  </header>
+  <aside class="sidebar" data-sidebar>
+    <div class="sidebar-label">Start here</div><a href="#">Quickstart</a><a href="#">Model setup</a>
+    <div class="sidebar-label">Everyday work</div><a class="active" href="#">Commands</a><a href="#">Workspace &amp; tools</a><a href="#">Permissions</a><a href="#">Changes &amp; recovery</a>
+    <div class="sidebar-label">Go deeper</div><a href="#">Memory, Skills &amp; MCP</a><a href="#">Architecture</a><a href="#">Troubleshooting</a>
+  </aside>
+  <div class="docs-grid">
+    <article class="doc-main">
+      <div class="breadcrumb"><span>Handbook</span><span>/</span><span class="current">Commands</span></div>
+      <div class="margin-intro"><span class="article-label">Everyday control</span><h1>Keep the Thread <em>in your hands.</em></h1><p class="lead">Slash commands are deterministic product operations. They never hide a model prompt or start an Agent turn.</p><aside class="pencil-note">A useful distinction: natural language asks the Agent to reason; slash commands operate the product directly.</aside></div>
+      <div class="command-ledger" aria-label="Essential command index"><div class="ledger-row"><code>/model</code><span>Choose a provider and model</span><small>setup</small></div><div class="ledger-row"><code>/permissions</code><span>Review or change the Thread's active mode</span><small>safety</small></div><div class="ledger-row"><code>/diff</code><span>Inspect controlled workspace changes</span><small>changes</small></div><div class="ledger-row"><code>/undo</code><span>Reverse the latest reversible ChangeSet</span><small>recovery</small></div></div>
+      <h2 id="permissions">Permissions are Thread-scoped</h2>
+      <p>Awesome begins in <strong>Request approval</strong> mode. Full access allows ordinary operations for the current Thread, while hard safety denials still run first.</p>
+      <div class="callout"><strong>A good review rhythm</strong><p>Use <span class="mono">/diff</span> before keeping a change. Use <span class="mono">/undo</span> when the journal can safely reverse it; shell side effects may not be reversible.</p></div>
+      <h2 id="resume">Continue where you left off</h2>
+      <div class="code-block"><div class="code-top">Launch options<button class="copy-button" data-copy>Copy</button></div><pre><code><span class="prompt">$</span> awesome --continue
+<span class="prompt">$</span> awesome --resume &lt;thread_id&gt;</code></pre></div>
+      <a class="next-card" href="#"><div><span>Next handbook page</span><strong>Workspace, tools, and visible effects</strong></div><b>→</b></a>
+    </article>
+    <nav class="toc" aria-label="On this page"><strong>Page notes</strong><a href="#permissions">Thread-scoped permissions</a><a href="#resume">Continue a Thread</a></nav>
+  </div>
+  <div class="search-overlay" data-search-overlay hidden><div class="search-dialog" role="dialog" aria-label="Search documentation"><div class="search-row"><span>⌕</span><input placeholder="Search the handbook…"><button data-search-close>Esc</button></div><div class="search-results"><div class="search-result"><div><strong>/undo</strong><span>Everyday work · Changes</span></div><span>↵</span></div><div class="search-result"><div><strong>Request approval</strong><span>Everyday work · Permissions</span></div><span>↵</span></div></div></div></div>
+  <script src="assets/app.js"></script>
+</body></html>

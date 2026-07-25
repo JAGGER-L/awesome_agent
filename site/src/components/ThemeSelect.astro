@@ -1,0 +1,191 @@
+---
+const language = Astro.locals.starlightRoute.lang;
+const labels = language === "zh-CN"
+  ? {
+      control: "切换主题",
+      toDark: "切换到深色主题",
+      toLight: "切换到浅色主题",
+    }
+  : {
+      control: "Switch theme",
+      toDark: "Switch to dark theme",
+      toLight: "Switch to light theme",
+    };
+---
+
+<awesome-theme-toggle>
+  <button
+    class="awesome-theme-toggle"
+    type="button"
+    aria-label={labels.control}
+    title={labels.control}
+    data-label-dark={labels.toDark}
+    data-label-light={labels.toLight}
+  >
+    <span class="awesome-sun" aria-hidden="true"></span>
+    <span class="awesome-moon" aria-hidden="true"></span>
+    <i aria-hidden="true"></i>
+  </button>
+</awesome-theme-toggle>
+
+<style>
+  awesome-theme-toggle {
+    display: inline-flex;
+  }
+
+  .awesome-theme-toggle {
+    position: relative;
+    width: 72px;
+    height: 34px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--sl-color-white) 14%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-bg) 80%, white 20%);
+    color: var(--sl-color-white);
+    cursor: pointer;
+    transition:
+      background-color 280ms ease,
+      border-color 280ms ease,
+      color 280ms ease;
+  }
+
+  .awesome-theme-toggle:hover {
+    border-color: color-mix(in srgb, var(--sl-color-white) 28%, transparent);
+  }
+
+  .awesome-theme-toggle:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  .awesome-theme-toggle > i {
+    position: absolute;
+    z-index: 0;
+    top: 50%;
+    left: 25%;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #d8ff55;
+    transform: translate(-50%, -50%);
+    transition:
+      left 280ms cubic-bezier(0.2, 0.9, 0.2, 1),
+      background-color 280ms ease;
+  }
+
+  .awesome-theme-toggle > span {
+    position: relative;
+    z-index: 1;
+    display: block;
+    place-self: center;
+  }
+
+  .awesome-sun {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .awesome-moon {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: currentColor;
+    -webkit-mask: radial-gradient(circle at 68% 32%, transparent 0 42%, #000 44%);
+    mask: radial-gradient(circle at 68% 32%, transparent 0 42%, #000 44%);
+  }
+
+  :global(:root[data-theme="dark"]) .awesome-theme-toggle {
+    border-color: color-mix(in srgb, white 16%, transparent);
+    background: #282a31;
+    color: #f5f4ee;
+  }
+
+  :global(:root[data-theme="dark"]) .awesome-theme-toggle > i {
+    left: 75%;
+    background: #6858ff;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .awesome-theme-toggle,
+    .awesome-theme-toggle > i {
+      transition-duration: 0.01ms;
+    }
+  }
+
+  @media (max-width: 30rem) {
+    .awesome-theme-toggle {
+      width: 64px;
+    }
+  }
+</style>
+
+<script>
+  const storageKey = "starlight-theme";
+
+  class AwesomeThemeToggle extends HTMLElement {
+    private observer?: MutationObserver;
+
+    connectedCallback() {
+      if (this.dataset.ready === "true") return;
+      this.dataset.ready = "true";
+
+      const button = this.querySelector("button");
+      if (!(button instanceof HTMLButtonElement)) return;
+
+      const sync = () => {
+        const dark = document.documentElement.dataset.theme === "dark";
+        button.setAttribute("aria-pressed", String(dark));
+        const label = dark ? button.dataset.labelLight : button.dataset.labelDark;
+        if (label) {
+          button.setAttribute("aria-label", label);
+          button.title = label;
+        }
+      };
+
+      button.addEventListener("click", () => {
+        const root = document.documentElement;
+        const next = root.dataset.theme === "dark" ? "light" : "dark";
+        root.dataset.themeTransition = "true";
+        root.dataset.theme = next;
+        try {
+          localStorage.setItem(storageKey, next);
+        } catch {
+          // The visible theme still changes when storage is unavailable.
+        }
+        document.querySelectorAll("awesome-theme-toggle").forEach((toggle) => {
+          const peer = toggle.querySelector("button");
+          if (!(peer instanceof HTMLButtonElement)) return;
+          const dark = next === "dark";
+          peer.setAttribute("aria-pressed", String(dark));
+          const label = dark ? peer.dataset.labelLight : peer.dataset.labelDark;
+          if (label) {
+            peer.setAttribute("aria-label", label);
+            peer.title = label;
+          }
+        });
+        window.setTimeout(() => delete root.dataset.themeTransition, 320);
+      });
+
+      this.observer = new MutationObserver(sync);
+      this.observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+      sync();
+    }
+
+    disconnectedCallback() {
+      this.observer?.disconnect();
+    }
+  }
+
+  if (!customElements.get("awesome-theme-toggle")) {
+    customElements.define("awesome-theme-toggle", AwesomeThemeToggle);
+  }
+</script>

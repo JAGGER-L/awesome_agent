@@ -14,6 +14,7 @@ PRIMARY_WORKFLOWS = (
     ROOT / ".github" / "workflows" / "security.yml",
     ROOT / ".github" / "workflows" / "nightly.yml",
     ROOT / ".github" / "workflows" / "release-gate.yml",
+    ROOT / ".github" / "workflows" / "docs-pages.yml",
 )
 
 
@@ -45,6 +46,14 @@ JOB_PERMISSION_OVERRIDES = {
         "contents": "read",
         "id-token": "write",
         "attestations": "write",
+    },
+    ("docs-pages.yml", "build"): {
+        "contents": "read",
+        "pages": "read",
+    },
+    ("docs-pages.yml", "deploy"): {
+        "pages": "write",
+        "id-token": "write",
     },
 }
 
@@ -284,6 +293,7 @@ def test_security_workflow_exposes_one_stable_required_check() -> None:
         "Validate lock hashes and audit PyPI advisories",
         "Supplement the Python audit with OSV advisories",
         "Audit locked TUI dependencies",
+        "Audit locked docs-site dependencies",
     } <= step_names
     steps_by_name = {step.get("name"): step for step in steps if isinstance(step, dict)}
     pypi_audit = steps_by_name["Validate lock hashes and audit PyPI advisories"]["run"]
@@ -294,6 +304,48 @@ def test_security_workflow_exposes_one_stable_required_check() -> None:
     assert "--disable-pip" not in pypi_audit
     assert "--vulnerability-service osv" in osv_audit
     assert "--disable-pip" in osv_audit
+
+
+def test_docs_site_builds_on_prs_and_deploys_only_from_main() -> None:
+    workflow = _workflow(PRIMARY_WORKFLOWS[4])
+    triggers = workflow["on"]
+    jobs = workflow["jobs"]
+
+    assert isinstance(triggers, dict)
+    assert {"pull_request", "push", "workflow_dispatch"} == set(triggers)
+    push = triggers["push"]
+    assert isinstance(push, dict)
+    assert push["branches"] == ["main"]
+
+    assert isinstance(jobs, dict)
+    assert set(jobs) == {"build", "deploy"}
+    build = jobs["build"]
+    deploy = jobs["deploy"]
+    assert isinstance(build, dict)
+    assert isinstance(deploy, dict)
+
+    build_steps = build["steps"]
+    assert isinstance(build_steps, list)
+    build_by_name = {
+        step.get("name"): step for step in build_steps if isinstance(step, dict)
+    }
+    assert build_by_name["Install dependencies"]["run"] == "npm ci"
+    assert build_by_name["Check site"]["run"] == "npm run check"
+    assert build_by_name["Build site"]["run"] == "npm run build"
+    assert build_by_name["Check built links"]["run"] == "npm run check:links"
+
+    main_only = "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
+    assert build_by_name["Upload Pages artifact"]["if"] == main_only
+    assert deploy["if"] == main_only
+    assert deploy["needs"] == "build"
+    assert deploy["concurrency"] == {
+        "group": "pages",
+        "cancel-in-progress": "false",
+    }
+    assert deploy["environment"] == {
+        "name": "github-pages",
+        "url": "${{ steps.deployment.outputs.page_url }}",
+    }
 
 
 def test_release_gate_binds_artifacts_to_main_and_version_tag() -> None:
@@ -396,7 +448,12 @@ def test_dependabot_covers_every_locked_dependency_ecosystem() -> None:
         for entry in updates
         if isinstance(entry, dict)
     }
-    assert configured == {("uv", "/"), ("npm", "/tui"), ("github-actions", "/")}
+    assert configured == {
+        ("uv", "/"),
+        ("npm", "/tui"),
+        ("npm", "/site"),
+        ("github-actions", "/"),
+    }
 
 
 def test_build_backend_and_toolchain_are_locked_to_release_inputs() -> None:

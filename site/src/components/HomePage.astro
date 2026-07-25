@@ -1,0 +1,246 @@
+---
+const isChinese = Astro.locals.starlightRoute.locale === "zh-cn";
+
+const content = isChinese
+  ? {
+      kicker: "终端原生 · 单一 Python Core · 修改可恢复",
+      title: "把开发意图，变成经过验证的修改。",
+      lead:
+        "Awesome 是面向审慎软件开发的 AI 编程助手。它理解代码库、规划修改、通过受控工具执行并验证结果，让每一步都保持可见、有边界且可以恢复。",
+      primaryAction: "五分钟快速开始",
+      secondaryAction: "了解工作方式",
+      copy: "复制",
+      copied: "已复制",
+      previewLabel: "基于 Awesome 当前 TUI 还原的产品界面预览",
+      userPrompt: "收紧 Workspace 路径策略，并运行最小相关测试。",
+      assistantReply: "已收紧路径边界并补充覆盖测试。相关单元测试全部通过。",
+      boundariesLabel: "产品边界",
+      boundaries: [
+        ["01 / CORE", "一个行为权威", "模型、工具、状态与恢复统一进入 Python Core。"],
+        ["02 / CONTROL", "操作始终可见", "审批、事件和规范化结果共享同一条执行路径。"],
+        ["03 / VERIFY", "验证不是附加项", "按风险运行最小充分检查，并记录真实结果。"],
+        ["04 / RECOVER", "修改可以恢复", "Change Journal 为受控修改提供明确的撤销语义。"],
+      ],
+      loopEyebrow: "01 / PRODUCT LOOP",
+      loopTitle: "从理解到验证，形成完整闭环。",
+      loopLead: "Awesome 不只生成代码，而是围绕一项真实的软件工作组织上下文、执行和证据。",
+      loop: [
+        ["01", "Understand", "读取相关代码、约束、文档和当前契约，建立有限上下文。"],
+        ["02", "Plan", "明确目标、影响范围、风险与最轻验证路径。"],
+        ["03", "Change", "所有工具调用经过统一 Registry、Policy 和 Executor。"],
+        ["04", "Verify", "运行相关检查，解释结果，并保留恢复路径。"],
+      ],
+      resourcesEyebrow: "02 / START HERE",
+      resourcesTitle: "按任务进入文档。",
+      resourcesLead: "直接选择你要完成的工作，不必先读完整个目录树。",
+      resources: [
+        ["GET STARTED", "安装并完成第一次会话", "配置模型、信任 Workspace，并从一个只读任务开始。", "./getting-started/quickstart/"],
+        ["OPERATE", "理解命令、权限与修改控制", "掌握 Thread、审批、diff、undo 和恢复行为。", "./user-guide/commands/"],
+        ["EXTEND", "使用 Memory、Skills 与 MCP", "扩展上下文和工具，同时不绕过统一策略边界。", "./user-guide/memory-skills-mcp/"],
+        ["UNDERSTAND", "阅读系统架构与数据流", "从 Ink 到 Application、Agent、工具与存储。架构正文暂为英文。", "./architecture/overview/"],
+      ],
+      closingTitle: "从一次可控的只读任务开始。",
+      closingLead: "安装 Awesome、信任当前 Workspace，然后让第一轮对话只解释代码库。",
+      closingAction: "打开快速开始",
+    }
+  : {
+      kicker: "Terminal-native · One Python Core · Recoverable changes",
+      title: "Turn intent into a verified change.",
+      lead:
+        "Awesome is an AI coding assistant for deliberate software work. It understands your codebase, plans the change, acts through controlled tools, verifies the result, and keeps every step visible, bounded, and recoverable.",
+      primaryAction: "Start in five minutes",
+      secondaryAction: "See how it works",
+      copy: "Copy",
+      copied: "Copied",
+      previewLabel: "Product interface preview based on Awesome's current TUI",
+      userPrompt: "Tighten the workspace path policy and run the smallest relevant tests.",
+      assistantReply: "The path boundary is tighter and coverage is in place. All related unit tests pass.",
+      boundariesLabel: "Product boundaries",
+      boundaries: [
+        ["01 / CORE", "One behavior authority", "Models, tools, state, and recovery converge in Python Core."],
+        ["02 / CONTROL", "Operations stay visible", "Approvals, events, and normalized results share one execution path."],
+        ["03 / VERIFY", "Verification is part of the work", "Awesome runs the smallest sufficient checks and records real results."],
+        ["04 / RECOVER", "Changes have a way back", "The Change Journal gives controlled edits explicit undo semantics."],
+      ],
+      loopEyebrow: "01 / PRODUCT LOOP",
+      loopTitle: "A complete loop, from understanding to evidence.",
+      loopLead: "Awesome organizes context, execution, and proof around a real software task—not just a code completion.",
+      loop: [
+        ["01", "Understand", "Read the relevant code, constraints, docs, and current contracts into bounded context."],
+        ["02", "Plan", "Define the goal, affected surface, risks, and the lightest validation path."],
+        ["03", "Change", "Route every tool call through one Registry, Policy, and Executor."],
+        ["04", "Verify", "Run relevant checks, explain the result, and preserve a recovery path."],
+      ],
+      resourcesEyebrow: "02 / START HERE",
+      resourcesTitle: "Enter the docs by task.",
+      resourcesLead: "Choose the outcome you need instead of learning the whole documentation tree first.",
+      resources: [
+        ["GET STARTED", "Install and complete a first session", "Configure a model, trust the workspace, and begin with a read-only task.", "./getting-started/quickstart/"],
+        ["OPERATE", "Understand commands and change control", "Work with Threads, approvals, diff, undo, and recovery behavior.", "./user-guide/commands/"],
+        ["EXTEND", "Use Memory, Skills, and MCP", "Extend context and tools without bypassing the shared policy boundary.", "./user-guide/memory-skills-mcp/"],
+        ["UNDERSTAND", "Read the architecture and data flow", "Follow typed intent from Ink into Application, Agent, tools, and storage.", "./architecture/overview/"],
+      ],
+      closingTitle: "Start with one controlled, read-only task.",
+      closingLead: "Install Awesome, trust the current workspace, and use the first turn to understand the codebase.",
+      closingAction: "Open the quickstart",
+    };
+
+const installCommand =
+  "irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex";
+---
+
+<div class="awesome-home">
+  <section class="product-hero" aria-labelledby="product-title">
+    <div class="product-hero-copy">
+      <p class="home-kicker">{content.kicker}</p>
+      <h1 id="product-title">{content.title}</h1>
+      <p class="product-lead">{content.lead}</p>
+      <div class="home-actions">
+        <a class="home-action primary" href="./getting-started/quickstart/">
+          {content.primaryAction}<span aria-hidden="true">→</span>
+        </a>
+        <a class="home-action" href="#product-loop">{content.secondaryAction}</a>
+      </div>
+      <awesome-install-command
+        class="hero-install"
+        data-copy-label={content.copy}
+        data-copied-label={content.copied}
+      >
+        <code>{installCommand}</code>
+        <button type="button" aria-label={content.copy}>{content.copy}</button>
+      </awesome-install-command>
+      <div class="proof-pills" aria-label={content.boundariesLabel}>
+        <span>Request approval by default</span>
+        <span>One foreground operation</span>
+        <span>Change Journal</span>
+      </div>
+    </div>
+
+    <div class="product-terminal" role="img" aria-label={content.previewLabel}>
+      <div class="session-head">
+        <div aria-hidden="true"><i></i><i></i><i></i></div>
+        <span>awesome · E:/awesome_agent</span>
+        <strong>PRODUCT UI PREVIEW</strong>
+      </div>
+      <div class="terminal-body">
+        <div class="terminal-provenance">
+          <span>BASED ON CURRENT TUI</span><strong>DARK AURORA</strong>
+        </div>
+        <div class="terminal-line terminal-user"><b>❯</b><span>{content.userPrompt}</span></div>
+        <div class="terminal-activity"><span>│ </span><b>◆</b><span> Thought for 1.2 s · Ctrl+O to expand</span></div>
+        <div class="terminal-tool-summary">● 3 tool calls · 3.0 s · Ctrl+O to collapse</div>
+        <div class="terminal-detail">
+          <strong>● Read src/awesome_agent/core/tools/policy.py</strong>
+          <small>└ Completed · 0.2 s</small>
+        </div>
+        <div class="terminal-detail">
+          <strong>● Edit src/awesome_agent/core/tools/policy.py</strong>
+          <small>└ Completed · Path boundary updated · 0.4 s</small>
+        </div>
+        <div class="terminal-detail">
+          <strong>● Run pytest tests/unit/core/tools/test_path_policy.py</strong>
+          <small>└ Completed · 12 passed · 2.4 s</small>
+        </div>
+        <div class="terminal-change-summary">◇ 2 files changed · Ctrl+O to collapse</div>
+        <div class="terminal-change-row"><span>src/awesome_agent/core/tools/policy.py</span><span class="add">+18</span><span class="remove">−7</span></div>
+        <div class="terminal-change-row"><span>tests/unit/core/tools/test_path_policy.py</span><span class="add">+24</span><span class="remove">−1</span></div>
+        <div class="terminal-line terminal-assistant"><b>●</b><span>{content.assistantReply}</span></div>
+        <div class="terminal-worked"><span>│ </span><b>✻</b><span> Worked for 8.4 s</span></div>
+        <div class="terminal-composer"><span>Message</span><div><b>❯</b></div></div>
+        <div class="terminal-permission">◇ Request approval</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="product-proof-strip" aria-label={content.boundariesLabel}>
+    {content.boundaries.map(([eyebrow, title, description]) => (
+      <article>
+        <span>{eyebrow}</span>
+        <strong>{title}</strong>
+        <p>{description}</p>
+      </article>
+    ))}
+  </section>
+
+  <section class="home-section" id="product-loop">
+    <header class="home-section-head">
+      <span>{content.loopEyebrow}</span>
+      <div><h2>{content.loopTitle}</h2><p>{content.loopLead}</p></div>
+    </header>
+    <div class="product-loop">
+      {content.loop.map(([number, title, description]) => (
+        <article class="loop-step">
+          <span>{number}</span><h3>{title}</h3><p>{description}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+
+  <section class="home-section" id="documentation">
+    <header class="home-section-head">
+      <span>{content.resourcesEyebrow}</span>
+      <div><h2>{content.resourcesTitle}</h2><p>{content.resourcesLead}</p></div>
+    </header>
+    <div class="resource-grid">
+      {content.resources.map(([eyebrow, title, description, href]) => (
+        <a class="resource-card" href={href}>
+          <span>{eyebrow}</span>
+          <h3>{title}<i aria-hidden="true">→</i></h3>
+          <p>{description}</p>
+        </a>
+      ))}
+    </div>
+  </section>
+
+  <section class="home-closing">
+    <div><span>03 / FIRST SESSION</span><h2>{content.closingTitle}</h2></div>
+    <div><p>{content.closingLead}</p><a href="./getting-started/quickstart/">{content.closingAction}<span aria-hidden="true">→</span></a></div>
+  </section>
+</div>
+
+<script>
+  class AwesomeInstallCommand extends HTMLElement {
+    connectedCallback() {
+      if (this.dataset.ready === "true") return;
+      this.dataset.ready = "true";
+      const button = this.querySelector("button");
+      const code = this.querySelector("code");
+      if (!(button instanceof HTMLButtonElement) || !(code instanceof HTMLElement)) return;
+
+      button.addEventListener("click", async () => {
+        const command = code.textContent?.trim() || "";
+        let copied = false;
+        try {
+          await navigator.clipboard.writeText(command);
+          copied = true;
+        } catch {
+          const field = document.createElement("textarea");
+          field.value = command;
+          field.setAttribute("readonly", "");
+          field.style.position = "fixed";
+          field.style.opacity = "0";
+          document.body.append(field);
+          field.select();
+          const legacyCopy = Reflect.get(document, "execCommand");
+          copied = typeof legacyCopy === "function" && legacyCopy.call(document, "copy");
+          field.remove();
+        }
+
+        if (copied) {
+          button.textContent = this.dataset.copiedLabel || "Copied";
+          this.dataset.copied = "true";
+          window.setTimeout(() => {
+            button.textContent = this.dataset.copyLabel || "Copy";
+            delete this.dataset.copied;
+          }, 1800);
+        } else {
+          window.getSelection()?.selectAllChildren(code);
+        }
+      });
+    }
+  }
+
+  if (!customElements.get("awesome-install-command")) {
+    customElements.define("awesome-install-command", AwesomeInstallCommand);
+  }
+</script>

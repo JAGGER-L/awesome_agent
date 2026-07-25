@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Awesome Docs concept A — Signal">
+  <title>Quickstart — Awesome Docs / Signal</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="concept-a">
+  <div class="prototype-note">Concept A · Signal <span>—</span> <a href="index.html">Back to all directions</a></div>
+  <div class="signal-line" aria-hidden="true"></div>
+  <header class="site-top">
+    <a class="wordmark" href="concept-a-signal.html"><span class="mark">A_</span><span>Awesome Docs</span></a>
+    <span class="version-pill">v1.2</span>
+    <nav class="site-top-nav" aria-label="Primary"><a class="active" href="#">Docs</a><a href="#">Architecture</a><a href="#">Roadmap</a><a href="https://github.com/JAGGER-L/awesome_agent">GitHub ↗</a></nav>
+    <div class="top-actions">
+      <button class="search-button" data-search-open><span>⌕</span><span class="search-text">Search docs</span><kbd>Ctrl K</kbd></button>
+      <button class="language-button" data-language aria-label="Change language">EN</button>
+      <button class="icon-button" data-theme-toggle aria-label="Switch theme"><span class="theme-icon"></span></button>
+      <button class="menu-button" data-menu-toggle aria-label="Open navigation" aria-expanded="false">☰</button>
+    </div>
+  </header>
+
+  <aside class="sidebar" data-sidebar>
+    <div class="sidebar-label">Get started</div>
+    <a class="active" href="#">Quickstart</a><a href="#install">Install</a><a href="#model">Model setup</a>
+    <div class="sidebar-label">Use Awesome</div>
+    <a href="#">Commands</a><a href="#">Workspace &amp; tools</a><a href="#">Permissions &amp; safety</a><a href="#">Configuration</a><a href="#">Memory, Skills &amp; MCP</a><a href="#">Troubleshooting</a>
+    <div class="sidebar-label">Understand</div>
+    <a href="#">Architecture</a><a href="#">Protocol &amp; Ink</a><a href="#">Storage &amp; recovery</a>
+  </aside>
+
+  <div class="docs-grid">
+    <article class="doc-main">
+      <div class="breadcrumb"><span>Docs</span><span>/</span><span class="current">Quickstart</span></div>
+      <span class="article-label">5 minute setup</span>
+      <h1>Go from intent to a verified change.</h1>
+      <p class="lead">Install Awesome, open it inside a project, and complete your first safe session in five focused steps.</p>
+      <div class="article-divider"></div>
+
+      <h2 id="install">1. Install Awesome</h2>
+      <p>The release bundle includes the runtimes it needs. Choose the command for your platform, then open a new terminal.</p>
+      <div class="code-block"><div class="code-top">macOS or WSL2 Ubuntu<button class="copy-button" data-copy>Copy</button></div><pre><code><span class="prompt">$</span> curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh</code></pre></div>
+      <div class="code-block"><div class="code-top">Windows PowerShell<button class="copy-button" data-copy>Copy</button></div><pre><code><span class="prompt">PS&gt;</span> irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex</code></pre></div>
+      <div class="callout"><strong>Git is optional</strong><p>Awesome never installs Git automatically. Add it only when your workflow needs Git-aware operations.</p></div>
+
+      <h2 id="workspace">2. Start inside a project</h2>
+      <div class="code-block"><div class="code-top">Terminal<button class="copy-button" data-copy>Copy</button></div><pre><code><span class="prompt">$</span> cd &lt;project&gt;
+<span class="prompt">$</span> awesome</code></pre></div>
+      <p>The directory where you launch Awesome becomes the workspace. Awesome shows the resolved path before it loads project instructions or uses tools.</p>
+
+      <h2 id="model">3. Complete the first session</h2>
+      <div class="step-list">
+        <div class="step"><div><strong>Trust the workspace</strong><span>Choose Yes only when you recognize the directory and are comfortable allowing access.</span></div></div>
+        <div class="step"><div><strong>Configure a model</strong><span>Run <span class="mono">/model</span>, choose DeepSeek or Kimi, then enter the key in the masked input.</span></div></div>
+        <div class="step"><div><strong>Send a read-only first task</strong><span>Ask Awesome to analyze the project structure and recommend where to start reading.</span></div></div>
+      </div>
+
+      <a class="next-card" href="#"><div><span>Next guide</span><strong>Commands and keyboard workflow</strong></div><b>→</b></a>
+    </article>
+    <nav class="toc" aria-label="On this page"><strong>On this page</strong><a href="#install">Install Awesome</a><a href="#workspace">Start in a project</a><a href="#model">Complete the first session</a></nav>
+  </div>
+
+  <div class="search-overlay" data-search-overlay hidden>
+    <div class="search-dialog" role="dialog" aria-label="Search documentation">
+      <div class="search-row"><span>⌕</span><input placeholder="Search commands, config, errors…"><button data-search-close>Esc</button></div>
+      <div class="search-results"><div class="search-result"><div><strong>/permissions</strong><span>Commands · Request approval and Full access</span></div><span>↵</span></div><div class="search-result"><div><strong>Workspace trust</strong><span>Security · First-run boundary</span></div><span>↵</span></div></div>
+    </div>
+  </div>
+  <script src="assets/app.js"></script>
+</body>
+</html>

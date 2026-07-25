@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Awesome Docs refinement round 4">
+  <title>Awesome Docs — 成熟化设计选择</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/round-4.css">
+  <script src="assets/round-4.js" defer></script>
+</head>
+<body class="r4-lab">
+  <header class="r4-topbar">
+    <a class="brand-lockup brand-m1" href="index.html" aria-label="返回原型首页">
+      <span class="brand-symbol">A</span><span>Awesome Docs</span>
+    </a>
+    <div class="baseline"><span>已确定</span><strong>T2 · L1 · F2</strong></div>
+    <div class="choice-output" aria-live="polite">
+      <strong id="r4-selection">I2 · M1 · P4 · H1</strong>
+      <button id="r4-copy" type="button">复制组合</button>
+    </div>
+  </header>
+
+  <main class="r4-shell">
+    <section class="r4-hero">
+      <div>
+        <p class="r4-eyebrow">Refinement / round 04</p>
+        <h1>从“像文档”，<br>走向成熟产品。</h1>
+      </div>
+      <div class="r4-intro-copy">
+        <p>保留你选定的滑动主题、行内语言和思源黑体。本轮只解决图标、品牌、页内导航与主页信息架构。</p>
+        <nav aria-label="本轮选项">
+          <a href="#theme-icon">I / 主题图标</a>
+          <a href="#brand">M / 品牌标记</a>
+          <a href="#page-index">P / 页内导航</a>
+          <a href="#homepage">H / 主页</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="r4-section" id="theme-icon">
+      <header class="r4-section-head">
+        <span>01 / I</span>
+        <div><h2>T2 的月亮图标</h2><p>不再使用字体字符，全部改为 CSS 几何图形，避免不同平台出现难看的字形。</p></div>
+      </header>
+      <div class="r4-grid r4-grid-3">
+        <article class="r4-card" data-r4-card data-group="icon" data-value="I1">
+          <div class="r4-card-copy"><span>I1</span><h3>Outline Crescent</h3><p>细线月牙配几何太阳，最接近成熟工具栏图标，视觉重量与搜索、GitHub 按钮一致。</p></div>
+          <div class="icon-demo icon-demo-outline" data-theme-sample>
+            <div class="sample-toolbar"><i></i><i></i><i></i></div>
+            <button class="clean-theme-toggle" type="button" data-sample-theme-toggle aria-label="切换示例主题">
+              <span class="clean-sun" aria-hidden="true"></span>
+              <span class="clean-moon moon-outline" aria-hidden="true"></span>
+              <b></b>
+            </button>
+          </div>
+          <footer><span>线性 · 中性 · 识别稳定</span><button type="button" data-r4-choose>选择 I1</button></footer>
+        </article>
+
+        <article class="r4-card is-selected" data-r4-card data-group="icon" data-value="I2">
+          <div class="r4-card-copy"><span>I2 · 已确定</span><h3>Solid Crescent</h3><p>实心月牙与实心日轮，形状更醒目，适合按钮尺寸较小或高分屏显示。</p></div>
+          <div class="icon-demo icon-demo-solid" data-theme-sample>
+            <div class="sample-toolbar"><i></i><i></i><i></i></div>
+            <button class="clean-theme-toggle" type="button" data-sample-theme-toggle aria-label="切换示例主题">
+              <span class="solid-sun" aria-hidden="true"></span>
+              <span class="clean-moon moon-solid" aria-hidden="true"></span>
+              <b></b>
+            </button>
+          </div>
+          <footer><span>醒目 · 紧凑 · 对比更强</span><button type="button" data-r4-choose>已选择</button></footer>
+        </article>
+
+        <article class="r4-card" data-r4-card data-group="icon" data-value="I3">
+          <div class="r4-card-copy"><span>I3</span><h3>State Label</h3><p>完全移除日月隐喻，只显示 Light / Dark 和状态圆点，最明确，也不会有图标审美问题。</p></div>
+          <div class="icon-demo icon-demo-label" data-theme-sample>
+            <div class="sample-toolbar"><i></i><i></i><i></i></div>
+            <button class="label-theme-toggle" type="button" data-sample-theme-toggle aria-label="切换示例主题">
+              <i></i><span data-theme-state-label>Light</span><b></b>
+            </button>
+          </div>
+          <footer><span>最明确 · 无图标 · 占位略宽</span><button type="button" data-r4-choose>选择 I3</button></footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="r4-section" id="brand">
+      <header class="r4-section-head">
+        <span>02 / M</span>
+        <div><h2>左上角品牌标记</h2><p>去掉下划线，把标记从“终端提示符”调整为更稳定的产品识别。</p></div>
+      </header>
+      <div class="r4-grid r4-grid-3 logo-grid">
+        <article class="r4-card is-selected" data-r4-card data-group="mark" data-value="M1">
+          <div class="r4-card-copy"><span>M1 · 推荐</span><h3>Pure A / 纯 A 字标</h3><p>无方框、无下划线、无装饰，只用一个定制字重的 A；右侧 Awesome 与小号 Docs 建立产品层级。</p></div>
+          <div class="logo-demo"><div class="brand-showcase brand-m1"><span class="brand-symbol">A</span><strong>Awesome</strong><i>Docs</i></div></div>
+          <footer><span>稳定 · 清楚 · 小尺寸表现最好</span><button type="button" data-r4-choose>已选择</button></footer>
+        </article>
+
+        <article class="r4-card" data-r4-card data-group="mark" data-value="M2">
+          <div class="r4-card-copy"><span>M2</span><h3>Cut A / 切口字标</h3><p>在粗体 A 的横杠处加入一个小切口作为识别特征；亮暗主题只反转黑白，不依赖品牌色。</p></div>
+          <div class="logo-demo"><div class="brand-showcase brand-m2"><span class="brand-symbol">A</span><strong>Awesome</strong><em>Documentation</em></div></div>
+          <footer><span>独特但克制 · 适合 favicon</span><button type="button" data-r4-choose>选择 M2</button></footer>
+        </article>
+
+        <article class="r4-card" data-r4-card data-group="mark" data-value="M3">
+          <div class="r4-card-copy"><span>M3</span><h3>A / Docs / 产品区域</h3><p>左侧只显示 A，中间用细分隔线，右侧显示 Docs；参考成熟平台“母品牌标志 + 产品区域”的结构。</p></div>
+          <div class="logo-demo"><div class="brand-showcase brand-m3"><strong class="brand-symbol">A</strong><i></i><span>DOCS</span></div></div>
+          <footer><span>平台感最强 · 产品层级清楚</span><button type="button" data-r4-choose>选择 M3</button></footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="r4-section" id="page-index">
+      <header class="r4-section-head">
+        <span>03 / P</span>
+        <div><h2>五种新的页内导航</h2><p>参考热门文档站的克制做法，避免蓝色、荧光点和过强卡片感；每种都可以点击标题体验当前位置。</p></div>
+      </header>
+
+      <div class="toc-reference-strip">
+        <span>Pattern references</span>
+        <a href="https://nextjs.org/docs" target="_blank" rel="noreferrer">Next.js</a>
+        <a href="https://docs.github.com/en/get-started/using-git/about-git" target="_blank" rel="noreferrer">GitHub Docs</a>
+        <a href="https://ui.shadcn.com/docs/components" target="_blank" rel="noreferrer">shadcn/ui</a>
+        <a href="https://tailwindcss.com/docs/overflow" target="_blank" rel="noreferrer">Tailwind CSS</a>
+        <a href="https://vercel.com/docs" target="_blank" rel="noreferrer">Vercel</a>
+      </div>
+
+      <div class="r4-grid toc-options-grid">
+        <article class="r4-card is-selected" data-r4-card data-group="toc" data-value="P4">
+          <div class="r4-card-copy"><span>P4 · 推荐</span><h3>Quiet Outline</h3><p>参考 Next.js 与 shadcn：纯文字、无轨道、无色块，当前标题仅使用黑色和字重变化。</p></div>
+          <div class="new-toc-demo">
+            <div class="article-skeleton"><b></b><i></i><i></i><i></i></div>
+            <nav class="toc-quiet" aria-label="P4 页内导航">
+              <span>On this page</span>
+              <button class="active" type="button" data-new-toc-link>Overview</button>
+              <button type="button" data-new-toc-link>Install Awesome</button>
+              <button type="button" data-new-toc-link>Trust the workspace</button>
+              <button type="button" data-new-toc-link>First session</button>
+            </nav>
+          </div>
+          <footer><span>最克制 · 最像成熟开源项目</span><button type="button" data-r4-choose>已选择</button></footer>
+        </article>
+
+        <article class="r4-card" data-r4-card data-group="toc" data-value="P5">
+          <div class="r4-card-copy"><span>P5</span><h3>Article Summary</h3><p>参考 GitHub Docs 的“In this article”：顶部给出内容说明，链接用细分隔线形成清晰摘要。</p></div>
+          <div class="new-toc-demo">
+            <div class="article-skeleton"><b></b><i></i><i></i><i></i></div>
+            <nav class="toc-summary" aria-label="P5 页内导航">
+              <div><span>In this article</span><i>4 sections</i></div>
+              <button class="active" type="button" data-new-toc-link>Overview <b>↗</b></button>
+              <button type="button" data-new-toc-link>Install Awesome <b>↗</b></button>
+              <button type="button" data-new-toc-link>Trust workspace <b>↗</b></button>
+              <button type="button" data-new-toc-link>First session <b>↗</b></button>
+            </nav>
+          </div>
+          <footer><span>摘要明确 · 边界清楚 · 稍正式</span><button type="button" data-r4-choose>选择 P5</button></footer>
+        </article>
+
+        <article class="r4-card" data-r4-card data-group="toc" data-value="P6">
+          <div class="r4-card-copy"><span>P6</span><h3>Reading Position</h3><p>参考 Vercel 的内容密度与辅助信息：顶部只显示阅读进度，当前标题使用短横线定位。</p></div>
+          <div class="new-toc-demo">
+            <div class="article-skeleton"><b></b><i></i><i></i><i></i></div>
+            <nav class="toc-reading" aria-label="P6 页内导航">
+              <div><span>Reading</span><b data-reading-count>1 of 4</b></div><i class="reading-bar"><b data-reading-bar></b></i>
+              <button class="active" type="button" data-new-toc-link>Overview</button>
+              <button type="button" data-new-toc-link>Install Awesome</button>
+              <button type="button" data-new-toc-link>Trust workspace</button>
+              <button type="button" data-new-toc-link>First session</button>
+            </nav>
+          </div>
+          <footer><span>有进度 · 无色块 · 适合长文</span><button type="button" data-r4-choose>选择 P6</button></footer>
+        </article>
+
+        <article class="r4-card" data-r4-card data-group="toc" data-value="P7">
+          <div class="r4-card-copy"><span>P7</span><h3>Chapter List</h3><p>借鉴 Stripe 的任务导向：不强调“On this page”，直接把内容视为连续章节。</p></div>
+          <div class="new-toc-demo">
+            <div class="article-skeleton"><b></b><i></i><i></i><i></i></div>
+            <nav class="toc-chapters" aria-label="P7 页内导航">
+              <button class="active" type="button" data-new-toc-link><i>01</i><span>Overview<small>What Awesome does</small></span></button>
+              <button type="button" data-new-toc-link><i>02</i><span>Install<small>Choose a platform</small></span></button>
+              <button type="button" data-new-toc-link><i>03</i><span>Trust<small>Review the workspace</small></span></button>
+              <button type="button" data-new-toc-link><i>04</i><span>Run<small>Start a first task</small></span></button>
+            </nav>
+          </div>
+          <footer><span>任务化 · 信息多 · 适合教程</span><button type="button" data-r4-choose>选择 P7</button></footer>
+        </article>
+
+        <article class="r4-card" data-r4-card data-group="toc" data-value="P8">
+          <div class="r4-card-copy"><span>P8</span><h3>Compact Navigator</h3><p>默认只显示当前标题；点击后展开全部目录，适合希望正文更宽、右侧更安静的界面。</p></div>
+          <div class="new-toc-demo">
+            <div class="article-skeleton"><b></b><i></i><i></i><i></i></div>
+            <nav class="toc-compact" aria-label="P8 页内导航">
+              <button class="toc-compact-trigger" type="button" data-compact-toggle aria-expanded="false"><span>Current section</span><b data-current-section>Overview</b><i>+</i></button>
+              <div data-compact-menu hidden>
+                <button class="active" type="button" data-new-toc-link>Overview</button>
+                <button type="button" data-new-toc-link>Install Awesome</button>
+                <button type="button" data-new-toc-link>Trust workspace</button>
+                <button type="button" data-new-toc-link>First session</button>
+              </div>
+            </nav>
+          </div>
+          <footer><span>最安静 · 正文更宽 · 需要一次展开</span><button type="button" data-r4-choose>选择 P8</button></footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="r4-section" id="homepage">
+      <header class="r4-section-head">
+        <span>04 / H</span>
+        <div><h2>三套完整主页</h2><p>不是只换 Hero，而是重新组织产品定位、可信证据、快速入口和文档路径。点击预览可打开完整页面。</p></div>
+      </header>
+      <div class="homepage-grid">
+        <article class="home-choice is-selected" data-r4-card data-group="home" data-value="H1">
+          <a class="home-preview preview-product" href="homepage-g-product-proof.html" target="_blank">
+            <div class="preview-nav"><i>A</i><span></span><span></span><span></span></div>
+            <div class="preview-split"><div><i></i><b></b><b class="short"></b><span></span><span></span></div><div class="preview-console"><i></i><i></i><i></i><b></b></div></div>
+            <div class="preview-band"><i></i><i></i><i></i><i></i></div>
+          </a>
+          <div><span>H1 · 已确定</span><h3>Product Proof / 产品证据</h3><p>先讲清产品承诺，再用基于当前 TUI 还原的任务界面、架构边界和验证结果证明它。</p><a href="homepage-g-product-proof.html" target="_blank">打开完整主页 ↗</a><button type="button" data-r4-choose>已选择</button></div>
+        </article>
+
+        <article class="home-choice" data-r4-card data-group="home" data-value="H2">
+          <a class="home-preview preview-workflow" href="homepage-h-workflow.html" target="_blank">
+            <div class="preview-nav"><i>A</i><span></span><span></span></div>
+            <div class="preview-center"><i></i><b></b><b class="short"></b><span></span></div>
+            <div class="preview-flow"><i></i><i></i><i></i><i></i></div>
+          </a>
+          <div><span>H2</span><h3>Workflow System / 工作流系统</h3><p>把“Understand → Plan → Change → Verify”变成主页主视觉，工程气质最强。</p><a href="homepage-h-workflow.html" target="_blank">打开完整主页 ↗</a><button type="button" data-r4-choose>选择 H2</button></div>
+        </article>
+
+        <article class="home-choice" data-r4-card data-group="home" data-value="H3">
+          <a class="home-preview preview-hub" href="homepage-i-docs-hub.html" target="_blank">
+            <div class="preview-nav"><i>A</i><span></span><span></span></div>
+            <div class="preview-search"><b></b><i></i></div>
+            <div class="preview-categories"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          </a>
+          <div><span>H3</span><h3>Documentation Hub / 文档中心</h3><p>弱化营销，突出搜索、常见任务和内容分类；最适合作为纯文档入口。</p><a href="homepage-i-docs-hub.html" target="_blank">打开完整主页 ↗</a><button type="button" data-r4-choose>选择 H3</button></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="r4-final">
+      <span>Selected composition</span>
+      <h2>T2 + L1 + F2<br>I2 + M1 + P4 + H1</h2>
+      <p>组合已确认。主页右侧现在展示基于当前 TUI 组件还原的产品界面原型。</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Awesome Docs interface refinement options">
+  <title>Awesome Docs — 样式选择实验室</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/refinement-lab.css">
+  <script src="assets/refinement-lab.js" defer></script>
+</head>
+<body>
+  <header class="lab-topbar">
+    <a class="lab-brand" href="index.html" aria-label="返回原型首页">
+      <span class="lab-mark">A_</span>
+      <span>Awesome Docs</span>
+    </a>
+    <div class="selection-summary" aria-live="polite">
+      <span>当前组合</span>
+      <strong id="selection-code">T1 · L1 · F2 · P1</strong>
+      <button id="copy-selection" type="button">复制选择</button>
+    </div>
+  </header>
+
+  <main class="lab-shell">
+    <section class="lab-hero">
+      <div>
+        <p class="eyebrow">Interface refinement / round 03</p>
+        <h1>分别选择，<br>再组合成最终界面。</h1>
+      </div>
+      <div class="hero-note">
+        <p>每组都可以直接点击体验。点击卡片底部的“选择”后，顶部会生成组合编号。</p>
+        <nav aria-label="样式分类">
+          <a href="#theme">T / 主题</a>
+          <a href="#language">L / 语言</a>
+          <a href="#font">F / 中文字体</a>
+          <a href="#toc">P / 页内导航</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="option-section" id="theme">
+      <div class="section-heading">
+        <span class="section-index">01 / T</span>
+        <div>
+          <h2>主题切换</h2>
+          <p>全部改为点击切换，并展示真实的明暗过渡，不再使用下拉框。</p>
+        </div>
+      </div>
+
+      <div class="option-grid">
+        <article class="option-card is-selected" data-option-card data-group="theme" data-value="T1">
+          <header class="option-head">
+            <span class="option-code">T1</span>
+            <span class="recommendation">推荐</span>
+            <h3>Icon Morph / 图标变形</h3>
+            <p>最克制。单个按钮中太阳旋转退出、月亮缩放进入，页面颜色同步柔和过渡。</p>
+          </header>
+          <div class="demo-frame theme-canvas theme-orbit" data-theme-demo>
+            <div class="mini-doc">
+              <span class="mini-label">QUICKSTART</span>
+              <strong>Make the first change.</strong>
+              <i></i><i class="short"></i>
+            </div>
+            <button class="theme-control orbit-control" type="button" data-theme-toggle aria-label="切换此示例的主题">
+              <span class="sun-icon">☀</span>
+              <span class="moon-icon">☾</span>
+            </button>
+          </div>
+          <footer class="option-foot">
+            <span>安静 · 识别快 · 动效 240ms</span>
+            <button type="button" class="choose-button" data-choose>已选择</button>
+          </footer>
+        </article>
+
+        <article class="option-card" data-option-card data-group="theme" data-value="T2">
+          <header class="option-head">
+            <span class="option-code">T2</span>
+            <h3>Sliding Capsule / 滑动胶囊</h3>
+            <p>状态最明确。滑块在日月之间移动，适合希望用户一眼看到当前主题的界面。</p>
+          </header>
+          <div class="demo-frame theme-canvas theme-capsule" data-theme-demo>
+            <div class="mini-doc">
+              <span class="mini-label">ARCHITECTURE</span>
+              <strong>One Core, clear boundaries.</strong>
+              <i></i><i class="short"></i>
+            </div>
+            <button class="theme-control capsule-control" type="button" data-theme-toggle aria-label="切换此示例的主题">
+              <span>☀</span><span>☾</span><i></i>
+            </button>
+          </div>
+          <footer class="option-foot">
+            <span>状态明确 · 触控友好 · 动效 280ms</span>
+            <button type="button" class="choose-button" data-choose>选择 T2</button>
+          </footer>
+        </article>
+
+        <article class="option-card" data-option-card data-group="theme" data-value="T3">
+          <header class="option-head">
+            <span class="option-code">T3</span>
+            <h3>Spotlight / 聚光切换</h3>
+            <p>更有品牌感。点击后深色表面从按钮位置扩散，标题与内容分阶段淡入。</p>
+          </header>
+          <div class="demo-frame theme-canvas theme-spotlight" data-theme-demo>
+            <div class="spotlight-layer"></div>
+            <div class="mini-doc">
+              <span class="mini-label">TOOLS &amp; POLICY</span>
+              <strong>Visible, bounded, recoverable.</strong>
+              <i></i><i class="short"></i>
+            </div>
+            <button class="theme-control spotlight-control" type="button" data-theme-toggle aria-label="切换此示例的主题">
+              <span class="spotlight-icon">◐</span>
+              <span class="spotlight-label">Dark</span>
+            </button>
+          </div>
+          <footer class="option-foot">
+            <span>品牌感强 · 动效明显 · 约 420ms</span>
+            <button type="button" class="choose-button" data-choose>选择 T3</button>
+          </footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="option-section" id="language">
+      <div class="section-heading">
+        <span class="section-index">02 / L</span>
+        <div>
+          <h2>语言切换</h2>
+          <p>保留清晰的语言状态，但去掉浏览器原生下拉框的视觉感。</p>
+        </div>
+      </div>
+
+      <div class="option-grid">
+        <article class="option-card is-selected" data-option-card data-group="language" data-value="L1">
+          <header class="option-head">
+            <span class="option-code">L1</span>
+            <span class="recommendation">推荐</span>
+            <h3>Inline Switch / 行内双语</h3>
+            <p>中英文直接并列，点击即切换；滑动底色同时承担状态反馈。</p>
+          </header>
+          <div class="demo-frame language-demo" data-language-demo
+               data-title-zh="从目标到经过验证的修改。"
+               data-title-en="From intent to a verified change."
+               data-copy-zh="操作保持可见、有边界并可以恢复。"
+               data-copy-en="Keep operations visible, bounded, and recoverable.">
+            <div class="language-preview">
+              <strong data-demo-title>从目标到经过验证的修改。</strong>
+              <p data-demo-copy>操作保持可见、有边界并可以恢复。</p>
+            </div>
+            <div class="inline-language" role="group" aria-label="切换示例语言">
+              <i></i>
+              <button type="button" class="active" data-language-choice="zh">中</button>
+              <button type="button" data-language-choice="en">EN</button>
+            </div>
+          </div>
+          <footer class="option-foot">
+            <span>两种语言最佳 · 零弹层 · 一次点击</span>
+            <button type="button" class="choose-button" data-choose>已选择</button>
+          </footer>
+        </article>
+
+        <article class="option-card" data-option-card data-group="language" data-value="L2">
+          <header class="option-head">
+            <span class="option-code">L2</span>
+            <h3>Language Popover / 精致弹层</h3>
+            <p>适合未来增加更多语言。触发器显示当前语言，弹层使用自定义卡片与勾选状态。</p>
+          </header>
+          <div class="demo-frame language-demo popover-demo" data-language-demo
+               data-title-zh="从目标到经过验证的修改。"
+               data-title-en="From intent to a verified change."
+               data-copy-zh="操作保持可见、有边界并可以恢复。"
+               data-copy-en="Keep operations visible, bounded, and recoverable.">
+            <div class="language-preview">
+              <strong data-demo-title>从目标到经过验证的修改。</strong>
+              <p data-demo-copy>操作保持可见、有边界并可以恢复。</p>
+            </div>
+            <div class="language-popover">
+              <button class="popover-trigger" type="button" data-language-menu-toggle aria-expanded="false">
+                <span>文A</span><b data-language-label>简体中文</b><i>⌄</i>
+              </button>
+              <div class="popover-menu" data-language-menu hidden>
+                <button type="button" class="active" data-language-menu-choice="zh"><span>简体中文</span><b>当前</b></button>
+                <button type="button" data-language-menu-choice="en"><span>English</span><b>EN</b></button>
+              </div>
+            </div>
+          </div>
+          <footer class="option-foot">
+            <span>可扩展 · 信息完整 · 两次点击</span>
+            <button type="button" class="choose-button" data-choose>选择 L2</button>
+          </footer>
+        </article>
+
+        <article class="option-card" data-option-card data-group="language" data-value="L3">
+          <header class="option-head">
+            <span class="option-code">L3</span>
+            <h3>Flip Label / 翻页标签</h3>
+            <p>最小化占位。按钮文字上下翻转，适合导航栏空间紧张的场景。</p>
+          </header>
+          <div class="demo-frame language-demo" data-language-demo
+               data-title-zh="从目标到经过验证的修改。"
+               data-title-en="From intent to a verified change."
+               data-copy-zh="操作保持可见、有边界并可以恢复。"
+               data-copy-en="Keep operations visible, bounded, and recoverable.">
+            <div class="language-preview">
+              <strong data-demo-title>从目标到经过验证的修改。</strong>
+              <p data-demo-copy>操作保持可见、有边界并可以恢复。</p>
+            </div>
+            <button class="flip-language" type="button" data-language-toggle aria-label="切换示例语言">
+              <span data-flip-label>中</span><i>↔</i><b data-flip-target>EN</b>
+            </button>
+          </div>
+          <footer class="option-foot">
+            <span>最省空间 · 有动感 · 发现性略低</span>
+            <button type="button" class="choose-button" data-choose>选择 L3</button>
+          </footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="option-section" id="font">
+      <div class="section-heading">
+        <span class="section-index">03 / F</span>
+        <div>
+          <h2>中文字体</h2>
+          <p>不只换字体名称，同时校正中文字重、行高和字距，让中英文排版都稳定。</p>
+        </div>
+      </div>
+
+      <div class="option-grid font-grid">
+        <article class="option-card font-card" data-option-card data-group="font" data-value="F1">
+          <header class="option-head">
+            <span class="option-code">F1</span>
+            <h3>Native UI / 原生界面字体</h3>
+            <p>优先苹方、微软雅黑 UI 与系统字体；无额外下载，启动最快。</p>
+          </header>
+          <div class="font-sample font-native">
+            <span>快速开始 · QUICKSTART</span>
+            <strong>从自然语言目标，到经过验证的修改。</strong>
+            <p>Awesome 理解代码库、修改文件并运行命令，同时让每一步操作保持清晰、克制和可恢复。</p>
+            <small>中文 600 / 正文 400 / 行高 1.78</small>
+          </div>
+          <footer class="option-foot">
+            <span>0 KB · 平台观感略有差异</span>
+            <button type="button" class="choose-button" data-choose>选择 F1</button>
+          </footer>
+        </article>
+
+        <article class="option-card font-card is-selected" data-option-card data-group="font" data-value="F2">
+          <header class="option-head">
+            <span class="option-code">F2</span>
+            <span class="recommendation">推荐</span>
+            <h3>Noto Sans SC / 思源黑体路线</h3>
+            <p>跨平台形态最一致，中文字面舒展，适合代码文档的长时间阅读。</p>
+          </header>
+          <div class="font-sample font-noto">
+            <span>快速开始 · QUICKSTART</span>
+            <strong>从自然语言目标，到经过验证的修改。</strong>
+            <p>Awesome 理解代码库、修改文件并运行命令，同时让每一步操作保持清晰、克制和可恢复。</p>
+            <small>中文 600 / 正文 400 / 行高 1.82</small>
+          </div>
+          <footer class="option-foot">
+            <span>跨平台统一 · 需要字体子集资源</span>
+            <button type="button" class="choose-button" data-choose>已选择</button>
+          </footer>
+        </article>
+
+        <article class="option-card font-card" data-option-card data-group="font" data-value="F3">
+          <header class="option-head">
+            <span class="option-code">F3</span>
+            <h3>Editorial Mix / 宋黑混排</h3>
+            <p>中文大标题使用思源宋体，正文保留黑体；更有编辑感，但品牌表达更强。</p>
+          </header>
+          <div class="font-sample font-editorial">
+            <span>快速开始 · QUICKSTART</span>
+            <strong>从自然语言目标，到经过验证的修改。</strong>
+            <p>Awesome 理解代码库、修改文件并运行命令，同时让每一步操作保持清晰、克制和可恢复。</p>
+            <small>标题宋体 600 / 正文黑体 400 / 行高 1.82</small>
+          </div>
+          <footer class="option-foot">
+            <span>辨识度高 · 更偏编辑与出版气质</span>
+            <button type="button" class="choose-button" data-choose>选择 F3</button>
+          </footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="option-section" id="toc">
+      <div class="section-heading">
+        <span class="section-index">04 / P</span>
+        <div>
+          <h2>“On this page” 页内导航</h2>
+          <p>去掉默认蓝色高亮，让当前位置更自然地融入 Signal 的紫色、荧光绿和中性色体系。</p>
+        </div>
+      </div>
+
+      <div class="option-grid toc-grid">
+        <article class="option-card is-selected" data-option-card data-group="toc" data-value="P1">
+          <header class="option-head">
+            <span class="option-code">P1</span>
+            <span class="recommendation">推荐</span>
+            <h3>Signal Rail / 信号轨道</h3>
+            <p>细轨道配荧光绿定位点，当前标题使用正文黑色与中等字重，不再出现蓝色。</p>
+          </header>
+          <div class="demo-frame toc-stage">
+            <div class="article-ghost"><b></b><i></i><i></i><i class="short"></i></div>
+            <nav class="toc-demo toc-rail" aria-label="P1 页内导航">
+              <span>本页内容</span>
+              <button class="active" type="button" data-toc-link>概述</button>
+              <button type="button" data-toc-link>安装 Awesome</button>
+              <button type="button" data-toc-link>信任 Workspace</button>
+              <button type="button" data-toc-link>第一次会话</button>
+            </nav>
+          </div>
+          <footer class="option-foot">
+            <span>最轻量 · 当前位置明确 · Signal 一致</span>
+            <button type="button" class="choose-button" data-choose>已选择</button>
+          </footer>
+        </article>
+
+        <article class="option-card" data-option-card data-group="toc" data-value="P2">
+          <header class="option-head">
+            <span class="option-code">P2</span>
+            <h3>Progress Card / 进度卡片</h3>
+            <p>加入阅读进度和柔和紫色底，信息更完整，适合结构较长的架构文档。</p>
+          </header>
+          <div class="demo-frame toc-stage">
+            <div class="article-ghost"><b></b><i></i><i></i><i class="short"></i></div>
+            <nav class="toc-demo toc-card" aria-label="P2 页内导航">
+              <div><span>在本页</span><b data-toc-progress>01 / 04</b></div>
+              <button class="active" type="button" data-toc-link>概述</button>
+              <button type="button" data-toc-link>安装 Awesome</button>
+              <button type="button" data-toc-link>信任 Workspace</button>
+              <button type="button" data-toc-link>第一次会话</button>
+            </nav>
+          </div>
+          <footer class="option-foot">
+            <span>信息完整 · 卡片感更强 · 占位稍大</span>
+            <button type="button" class="choose-button" data-choose>选择 P2</button>
+          </footer>
+        </article>
+
+        <article class="option-card" data-option-card data-group="toc" data-value="P3">
+          <header class="option-head">
+            <span class="option-code">P3</span>
+            <h3>Margin Index / 页边目录</h3>
+            <p>使用章节编号与下划线强调当前位置，最有编辑感，也最接近纸质技术手册。</p>
+          </header>
+          <div class="demo-frame toc-stage">
+            <div class="article-ghost"><b></b><i></i><i></i><i class="short"></i></div>
+            <nav class="toc-demo toc-index" aria-label="P3 页内导航">
+              <span>CONTENTS</span>
+              <button class="active" type="button" data-toc-link><i>01</i>概述</button>
+              <button type="button" data-toc-link><i>02</i>安装 Awesome</button>
+              <button type="button" data-toc-link><i>03</i>信任 Workspace</button>
+              <button type="button" data-toc-link><i>04</i>第一次会话</button>
+            </nav>
+          </div>
+          <footer class="option-foot">
+            <span>编辑感强 · 无色块 · 章节感最强</span>
+            <button type="button" class="choose-button" data-choose>选择 P3</button>
+          </footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="lab-decision">
+      <span>Recommended baseline</span>
+      <h2>T1 + L1 + F2 + P1</h2>
+      <p>这是最克制、最适合文档长期阅读的组合。你也可以分别选择，例如回复：</p>
+      <code>T2 + L1 + F3 + P2</code>
+    </section>
+  </main>
+</body>
+</html>

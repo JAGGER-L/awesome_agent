@@ -1,0 +1,103 @@
+---
+const { locale } = Astro.locals.starlightRoute;
+const currentLocale = locale === "zh-cn" ? "zh" : "en";
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const currentPath = Astro.url.pathname.startsWith(base)
+  ? Astro.url.pathname.slice(base.length) || "/"
+  : Astro.url.pathname;
+const isNotFoundPage = Astro.locals.starlightRoute.entry.id === "404";
+const rootPath = isNotFoundPage
+  ? "/"
+  : currentPath.replace(/^\/zh-cn(?=\/|$)/, "") || "/";
+const englishHref = `${base}${rootPath}` || "/";
+const chineseHref = `${base}/zh-cn${rootPath === "/" ? "/" : rootPath}`;
+const label = currentLocale === "zh" ? "切换语言" : "Switch language";
+---
+
+<nav
+  class="awesome-language-switch"
+  data-current-locale={currentLocale}
+  aria-label={label}
+>
+  <i aria-hidden="true"></i>
+  <a
+    href={chineseHref}
+    lang="zh-CN"
+    hreflang="zh-CN"
+    aria-current={currentLocale === "zh" ? "page" : undefined}
+    title="简体中文"
+  >中</a>
+  <a
+    href={englishHref}
+    lang="en"
+    hreflang="en"
+    aria-current={currentLocale === "en" ? "page" : undefined}
+    title="English"
+  >EN</a>
+</nav>
+
+<style>
+  .awesome-language-switch {
+    position: relative;
+    width: 82px;
+    height: 34px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex: 0 0 auto;
+    padding: 3px;
+    border: 1px solid var(--sl-color-hairline);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--sl-color-bg) 92%, var(--sl-color-white) 8%);
+  }
+
+  .awesome-language-switch > i {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: calc(50% - 4px);
+    height: 26px;
+    border-radius: 7px;
+    background: var(--sl-color-white);
+    transition: transform 250ms cubic-bezier(0.2, 0.9, 0.2, 1);
+  }
+
+  .awesome-language-switch[data-current-locale="en"] > i {
+    transform: translateX(calc(100% + 1px));
+  }
+
+  .awesome-language-switch a {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    color: var(--sl-color-gray-2);
+    font-family: var(--sl-font-mono);
+    font-size: 0.65rem;
+    font-weight: 650;
+    line-height: 1;
+    text-decoration: none;
+  }
+
+  .awesome-language-switch a[aria-current="page"] {
+    color: var(--sl-color-bg);
+  }
+
+  .awesome-language-switch a:focus-visible {
+    outline: 2px solid var(--sl-color-accent);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .awesome-language-switch > i {
+      transition-duration: 0.01ms;
+    }
+  }
+
+
+  @media (max-width: 30rem) {
+    .awesome-language-switch {
+      width: 68px;
+    }
+  }
+</style>
