@@ -1,199 +1,91 @@
 # Quickstart
 
-Follow these five steps to install Awesome and complete your first successful
-session.
+Use these five steps to complete one successful, read-only Awesome session.
+For host requirements, installer behavior, upgrades, and repair, see
+[Installation](installation.md).
 
 ## 1. Install Awesome
 
-### macOS or WSL2 Ubuntu
+On Apple Silicon macOS or WSL2 Ubuntu 24.04 x64:
 
 ```bash
 curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-### Windows
+On Windows 11 x64:
 
 ```powershell
 irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
 ```
 
-Open a new terminal and verify the installation:
+Open a new terminal and verify the release:
 
 ```text
 awesome --version
 ```
 
-Git is optional. Awesome does not install it; use the
-[official Git installer](https://git-scm.com/downloads) if your work needs Git.
+Awesome includes its Python and Node.js runtimes. Git is optional and available
+from the [official Git installer](https://git-scm.com/downloads).
 
 ## 2. Start in a Project
+
+Choose a project you recognize, then start Awesome from its root:
 
 ```text
 cd <project>
 awesome
 ```
 
-The directory where you launch Awesome becomes the workspace.
+The launch directory becomes the Workspace. Use `awesome --continue` later to
+resume its most recent Thread, or `awesome --resume` to choose one.
 
 ## 3. Trust the Workspace
 
-Awesome shows the workspace path before using project instructions or tools.
-Choose Yes only when you recognize and trust the project. Choose No to exit.
-After trust, Awesome starts in Request approval mode and asks before edits,
-deletes, and shell commands. Run `/permissions` if you want to review the mode.
-Accept edits allows ordinary workspace writes but still asks before deletes or
-shell commands. Full access allows built-in local writes, deletes, and shell
-commands after a warning confirmation; MCP and unknown extensions always ask.
+Verify the displayed path before choosing **Yes**. Choosing **No** exits without
+loading project configuration, project instructions, or tools for that
+Workspace.
 
-If the trusted workspace has a plain root `AGENTS.md`, Awesome takes one bounded
-session snapshot and uses it as mandatory project instructions. A rejected file
-is ignored whole and reported in Welcome, the status line, and `/doctor`.
+After trust, Awesome starts in **Request approval** mode. Reads are allowed;
+writes, deletes, and shell commands ask first. `/permissions` shows the current
+mode. Trust is not an operating-system sandbox, so use external isolation for a
+project you do not trust.
+
+If a plain root `AGENTS.md` is accepted, Awesome snapshots it once for this
+session as mandatory project instructions. A rejected instruction file is
+ignored whole and reported in Welcome, the status line, and `/doctor`.
 
 ## 4. Configure a Model
 
-When no model Provider is configured, Awesome shows a setup notice. Press Enter
-or run `/model`. Choose DeepSeek or Kimi, paste the API key into the masked
-input, then choose a model. The key is validated before it is saved.
+When no model Provider is configured, press Enter on the setup notice or run:
 
-Use `/auth` later to add, replace, or remove Provider credentials. Never put an
-API key in a slash-command argument or chat message.
+```text
+/model
+```
+
+Choose DeepSeek or Kimi, paste the API key into the masked input, and select a
+model. Awesome validates the key before saving it. Use `/auth` later to add,
+replace, remove, or select a credential source. Never paste an API key into a
+chat message or slash-command argument.
+
+For official key pages, Kimi China/global selection, billing/network
+prerequisites, and the Provider data boundary, read
+[What You Need](README.md#what-you-need) before entering a production key.
 
 ## 5. Verify Your Setup
 
-Send one read-only request:
+Send a read-only request:
 
 ```text
 Analyze this project's structure and tell me where I should start reading.
 ```
 
-## Learn More
+A successful answer confirms the Workspace, Thread, model, context, streaming,
+and read-tool path without changing project files. Run `/context`, `/tools`,
+and `/status` to inspect what Awesome used.
 
-- [Commands](../user-guide/commands.md)
-- [Configuration](../user-guide/configuration.md)
-- [Troubleshooting](../user-guide/troubleshooting.md)
+## Where to Go Next
 
-## Develop from Source
-
-Use the source workflow when you want to change Awesome itself. It runs the
-same Python Core, private stdio protocol, and Ink TUI as an installed release,
-while keeping development data separate.
-
-### Prerequisites
-
-Install [Git](https://git-scm.com/downloads),
-[uv](https://docs.astral.sh/uv/getting-started/installation/), and
-[Node.js 22 or newer](https://nodejs.org/). npm is included with Node.js. You
-do not need to install Python separately; uv installs the required Python 3.12
-runtime for the project.
-
-### Clone the Repository
-
-```text
-git clone https://github.com/JAGGER-L/awesome_agent.git
-cd awesome_agent
-```
-
-### Install Development Dependencies
-
-```text
-uv sync --locked --extra memory
-npm ci --prefix tui
-```
-
-The first command creates `.venv`, installs the Python Core in editable mode,
-and installs the optional Mem0 Cloud integration. The second installs the
-locked TUI dependencies under `tui/node_modules`.
-
-### Start Awesome
-
-From the repository root, run:
-
-```text
-uv run awesome-dev
-```
-
-`awesome-dev` checks the local prerequisites, builds the current TUI source,
-adds the editable Python Core to the child process path, and starts Awesome in
-the current directory. The Core still runs as the TUI's private child process;
-you do not need to start a second terminal or server.
-
-To work on another project while running the Awesome source checkout:
-
-```text
-uv run awesome-dev --workspace <project-path>
-```
-
-The selected directory becomes the workspace and goes through the normal trust
-prompt. Development state is stored in the ignored `.awesome-dev/home`
-directory inside the Awesome repository, and development logs are reserved
-under `.awesome-dev/logs`. Nothing is written to the target workspace except
-changes you approve or request from the Agent.
-
-### Configure a Model
-
-Model setup is the same in development and installed builds. Start Awesome,
-run `/auth`, choose DeepSeek or Kimi, select an available credential source,
-and use the masked API-key input when needed. Credentials are stored under the
-development home, not in the repository or target workspace. Set
-`AWESOME_HOME` before launching only when you intentionally want a different
-development data directory.
-
-### Run Checks
-
-Start with checks that cover your change:
-
-```text
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy
-uv run pytest <relevant-test-paths> -q
-npm --prefix tui run format:check
-npm --prefix tui run lint
-npm --prefix tui run typecheck
-npm --prefix tui test -- --run <relevant-test-paths>
-```
-
-Before a release or a cross-component handoff, run the full Python and TUI
-suites described in the [testing guide](../development/testing.md).
-
-### Continue After Code Changes
-
-Stop the current session and run `uv run awesome-dev` again. The launcher
-rebuilds the TUI on every start, and editable Python imports use the latest
-source. Development mode intentionally has no hot reload because restarting a
-Core during an active Thread could leave operations in an ambiguous state.
-
-To build the production TUI without starting Awesome, run:
-
-```text
-npm --prefix tui run build
-```
-
-Release bundles and installers use a separate packaging flow; see the
-[release guide](../development/release.md).
-
-### Troubleshooting
-
-- `uv sync --locked --extra memory` fixes a missing `.venv` or
-  `awesome-core` entry point.
-- `npm ci --prefix tui` fixes a missing `tui/node_modules` directory.
-- Install Node.js 22 or newer when the launcher reports an unsupported Node
-  version or cannot find npm.
-- Pass an existing directory to `--workspace`; the launcher rejects missing
-  paths instead of creating them.
-- Run the command in an interactive terminal. The Ink interface cannot run
-  through a non-interactive pipe.
-
-After you update the source checkout, Awesome may detect an incompatible local
-data format and offer to reset its conversation state during startup. The panel
-lists exactly what will be removed and kept. Reset removes conversations,
-workspace trust, checkpoints, and undo history; API keys, configuration,
-Skills, and Local or Cloud Memory settings remain. Choose Exit to leave the
-data unchanged. If Awesome reports unknown, unavailable, or newer-version
-state instead, follow the displayed diagnostic rather than deleting files
-manually.
-
-Development mode does not replace or modify an installed `awesome` command.
-Installed Awesome uses its normal user data directory and prebuilt release
-files; `uv run awesome-dev` uses the current checkout, rebuilds the TUI, and
-defaults to the repository-local ignored `.awesome-dev` directory.
+- Learn the lifecycle in [Workspace, Thread, Turn, and Operation](../concepts/workspace-thread-turn.md).
+- Choose an approval posture in [Permissions and safety](../user-guide/permissions.md).
+- Learn the daily flow in the [User Guide](../user-guide/README.md).
+- Diagnose a failed step with [Troubleshooting](../user-guide/troubleshooting.md).

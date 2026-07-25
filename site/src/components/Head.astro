@@ -1,0 +1,86 @@
+---
+import { translatedRoutes } from "../../docs-navigation.mjs";
+
+const route = Astro.locals.starlightRoute;
+const basePath = import.meta.env.BASE_URL.endsWith("/")
+  ? import.meta.env.BASE_URL
+  : `${import.meta.env.BASE_URL}/`;
+const relativePath = Astro.url.pathname.startsWith(basePath)
+  ? Astro.url.pathname.slice(basePath.length).replace(/\/$/, "")
+  : Astro.url.pathname.replace(/^\/+|\/+$/g, "");
+const canonicalRoute =
+  relativePath === "zh-cn"
+    ? ""
+    : relativePath.startsWith("zh-cn/")
+      ? relativePath.slice("zh-cn/".length)
+      : relativePath;
+const is404 = canonicalRoute === "404";
+const isFallback = route.isFallback === true;
+const hasTranslation = translatedRoutes.has(canonicalRoute);
+const englishCanonical = new URL(
+  `${basePath}${canonicalRoute ? `${canonicalRoute}/` : ""}`,
+  Astro.site ?? Astro.url,
+).href;
+const chineseCanonical = new URL(
+  `${basePath}zh-cn/${canonicalRoute ? `${canonicalRoute}/` : ""}`,
+  Astro.site ?? Astro.url,
+).href;
+type HeadEntry = (typeof route.head)[number];
+
+const isCanonical = ({ tag, attrs }: HeadEntry) =>
+  tag === "link" && attrs?.rel === "canonical";
+const isAlternate = ({ tag, attrs }: HeadEntry) =>
+  tag === "link" && attrs?.rel === "alternate";
+const isChineseAlternate = ({ tag, attrs }: HeadEntry) =>
+  isAlternate({ tag, attrs }) && attrs?.hreflang === "zh-CN";
+const isOpenGraphUrl = ({ tag, attrs }: HeadEntry) =>
+  tag === "meta" && attrs?.property === "og:url";
+
+let head = [...route.head];
+if (is404) {
+  head = head.filter(
+    (entry) => !isCanonical(entry) && !isAlternate(entry) && !isOpenGraphUrl(entry),
+  );
+  head.push({
+    tag: "meta",
+    attrs: { name: "robots", content: "noindex,follow" },
+  });
+} else if (isFallback) {
+  head = head.filter(
+    (entry) => !isCanonical(entry) && !isAlternate(entry) && !isOpenGraphUrl(entry),
+  );
+  head.push(
+    { tag: "link", attrs: { rel: "canonical", href: englishCanonical } },
+    { tag: "meta", attrs: { property: "og:url", content: englishCanonical } },
+    { tag: "meta", attrs: { name: "robots", content: "noindex,follow" } },
+  );
+} else if (hasTranslation) {
+  head = head.filter((entry) => !isAlternate(entry));
+  head.push(
+    {
+      tag: "link",
+      attrs: { rel: "alternate", hreflang: "en", href: englishCanonical },
+    },
+    {
+      tag: "link",
+      attrs: {
+        rel: "alternate",
+        hreflang: "zh-CN",
+        href: chineseCanonical,
+      },
+    },
+    {
+      tag: "link",
+      attrs: {
+        rel: "alternate",
+        hreflang: "x-default",
+        href: englishCanonical,
+      },
+    },
+  );
+} else if (!hasTranslation) {
+  head = head.filter((entry) => !isChineseAlternate(entry));
+}
+---
+
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}

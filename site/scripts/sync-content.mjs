@@ -1,4 +1,5 @@
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,12 +40,37 @@ function plainText(markdown) {
     .trim();
 }
 
+function boundedDescription(text, limit = 180) {
+  if (text.length <= limit) return text;
+
+  const firstSentence = text.match(/^(.+?(?:[!?。！？]|\.(?=\s|$)))/u)?.[1];
+  if (firstSentence && firstSentence.length <= limit) return firstSentence;
+
+  const candidate = text.slice(0, limit - 1);
+  const boundaries = [
+    candidate.lastIndexOf(" "),
+    candidate.lastIndexOf(","),
+    candidate.lastIndexOf(";"),
+    candidate.lastIndexOf("，"),
+    candidate.lastIndexOf("；"),
+  ];
+  const boundary = Math.max(...boundaries);
+  const cutoff = boundary >= Math.floor(limit * 0.6) ? boundary : candidate.length;
+  return `${candidate.slice(0, cutoff).replace(/[\s,;，；]+$/u, "")}…`;
+}
+
 function findDescription(body) {
   const paragraphs = body.split(/\n\s*\n/);
   for (const paragraph of paragraphs) {
     if (/^\s*(?:#|```|[-*]\s|\d+\.\s)/.test(paragraph)) continue;
     const text = plainText(paragraph);
-    if (text.length >= 30) return text.slice(0, 180);
+    if (text.length >= 30) {
+      const description = boundedDescription(text);
+      if (description.length > 180) {
+        throw new Error("Generated description exceeds 180 characters.");
+      }
+      return description;
+    }
   }
   return "Awesome documentation.";
 }
@@ -64,8 +90,8 @@ function targetOutputPath(sourceRelativePath, markdownPath) {
   );
 
   if (normalizedSource === "ARCHITECTURE.md") {
-    if (normalizedTarget === "docs/architecture/README.md") {
-      return "architecture/index.md";
+    if (normalizedTarget.startsWith("docs/")) {
+      return outputPathFor(normalizedTarget.slice("docs/".length)).replace(/\\/g, "/");
     }
     return null;
   }
@@ -83,22 +109,40 @@ function targetOutputPath(sourceRelativePath, markdownPath) {
 
 function rewriteMarkdownLinks(body, sourceRelativePath, outputRelativePath) {
   const currentRoute = routeForOutput(outputRelativePath) || ".";
+  let fence = null;
 
-  return body.replace(
-    /\]\((?!https?:|mailto:|#)([^)\s]+?)\.md(#[^)]+)?\)/g,
-    (_match, path, hash = "") => {
-      const targetOutput = targetOutputPath(sourceRelativePath, `${path}.md`);
-      if (!targetOutput) return _match;
+  return body
+    .split("\n")
+    .map((line) => {
+      const marker = line.match(/^\s*(`{3,}|~{3,})/);
+      if (marker) {
+        const candidate = marker[1];
+        if (fence === null) {
+          fence = candidate;
+        } else if (candidate[0] === fence[0] && candidate.length >= fence.length) {
+          fence = null;
+        }
+        return line;
+      }
+      if (fence !== null) return line;
 
-      const targetRoute = routeForOutput(targetOutput) || ".";
-      const relativeRoute = posix.relative(currentRoute, targetRoute);
-      const href = `${relativeRoute || "."}/${hash}`;
-      return `](${href})`;
-    },
-  );
+      return line.replace(
+        /\]\((?!https?:|mailto:|#)([^)\s]+?)\.md(#[^)]+)?\)/g,
+        (_match, path, hash = "") => {
+          const targetOutput = targetOutputPath(sourceRelativePath, `${path}.md`);
+          if (!targetOutput) return _match;
+
+          const targetRoute = routeForOutput(targetOutput) || ".";
+          const relativeRoute = posix.relative(currentRoute, targetRoute);
+          const href = `${relativeRoute || "."}/${hash}`;
+          return `](${href})`;
+        },
+      );
+    })
+    .join("\n");
 }
 
-function withFrontmatter(raw, sourceRelativePath, outputRelativePath) {
+function withFrontmatter(raw, sourceRelativePath, outputRelativePath, lastUpdated) {
   const normalized = raw.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   const existing = normalized.match(/^---\n([\s\S]*?)\n---\n?/);
   let frontmatter = existing?.[1] ?? "";
@@ -115,6 +159,9 @@ function withFrontmatter(raw, sourceRelativePath, outputRelativePath) {
   if (!/^title\s*:/m.test(frontmatter)) fields.push(`title: ${JSON.stringify(title)}`);
   if (!/^description\s*:/m.test(frontmatter)) {
     fields.push(`description: ${JSON.stringify(findDescription(body))}`);
+  }
+  if (!/^lastUpdated\s*:/m.test(frontmatter)) {
+    fields.push(`lastUpdated: ${lastUpdated}`);
   }
   if (!/^editUrl\s*:/m.test(frontmatter)) {
     const sourcePath = sourceRelativePath === "ARCHITECTURE.md"
@@ -155,12 +202,27 @@ function outputPathFor(sourceRelativePath) {
 async function writeGeneratedPage(sourcePath, sourceRelativePath, outputRelativePath) {
   const targetPath = join(generatedDocs, outputRelativePath);
   const content = await readFile(sourcePath, "utf8");
+  const lastUpdated = await lastUpdatedFor(sourcePath);
   await mkdir(dirname(targetPath), { recursive: true });
   await writeFile(
     targetPath,
-    withFrontmatter(content, sourceRelativePath, outputRelativePath),
+    withFrontmatter(content, sourceRelativePath, outputRelativePath, lastUpdated),
     "utf8",
   );
+}
+
+async function lastUpdatedFor(sourcePath) {
+  try {
+    const committed = execFileSync(
+      "git",
+      ["log", "-1", "--format=%cI", "--", sourcePath],
+      { cwd: repositoryRoot, encoding: "utf8", windowsHide: true },
+    ).trim();
+    if (committed) return committed.slice(0, 10);
+  } catch {
+    // Source archives and fresh untracked pages have no usable Git history.
+  }
+  return (await stat(sourcePath)).mtime.toISOString().slice(0, 10);
 }
 
 async function main() {

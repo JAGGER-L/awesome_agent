@@ -1,0 +1,235 @@
+# Application and Agent
+
+Awesome separates product lifecycle from reasoning execution. Application
+answers “may this work start, and how does it become a durable product fact?”
+Agent answers “given an admitted Turn, what model/tool transition happens
+next?”
+
+Combining these roles would make protocol concerns leak into graph state and
+make graph routing a second product scheduler. Keeping them separate provides
+one cancellation point, one operation authority, and one checkpoint owner.
+
+## Ownership matrix
+
+| Concern | Application | Agent |
+| --- | --- | --- |
+| workspace trust and activation | owns | does not inspect |
+| selected Thread and effective config | owns | receives frozen values |
+| Turn creation and terminal status | owns | returns graph result |
+| foreground admission and cancellation | owns | cooperates with cancellation |
+| interaction presentation and resolution | owns | tool call waits through injected executor |
+| graph topology and routes | invokes | owns |
+| provider message/tool-chain validity | observes result | owns |
+| model/tool/compression budgets | supplies config | owns counters and routing |
+| graph checkpoints | reconciles lifecycle | LangGraph writes graph channels |
+| transcript and bounded activity | owns product records | produces facts to persist |
+| concrete providers/storage/extensions | composes | depends on neutral contracts |
+
+## Application boundary
+
+`LocalApplication` implements `ApplicationFacade`, the only surface-facing
+product API. It converts expected `ApplicationFailure` exceptions into typed
+`ApplicationResult` values. Concrete composition remains behind its backend;
+the protocol cannot reach repositories, providers, or tools directly.
+
+```text
+Protocol dispatcher
+  -> ApplicationFacade
+  -> LocalApplication
+  -> composed backend
+       -> lifecycle/command service
+       -> Conversation or Storage port
+       -> compiled Agent graph
+```
+
+Application responsibilities are deliberately split into focused modules:
+
+- `facade.py`: stable surface contract and expected failure envelope;
+- `composition.py`: activation and concrete dependency wiring;
+- `foreground.py` and `operations.py`: atomic foreground ownership;
+- `turns.py`: Turn execution, finalization, cancellation, and recovery;
+- `dispatcher.py` plus command services: deterministic slash commands;
+- `interactions.py`: typed decisions and authority bindings;
+- `context.py`: per-Turn context capture and frozen manifest projection;
+- `events.py`: product facts projected to the surface.
+
+`composition.py` may be large because it owns wiring and startup sequencing. It
+must not become a home for command semantics, graph routes, arbitrary result
+construction, or presentation formatting.
+
+## Foreground serialization
+
+`ForegroundArbiter` has three lease kinds: Operation, exclusive, and resolving
+interaction. It records the owning `asyncio.Task`, rejects any second owner,
+and refuses all new leases after closing begins.
+
+`OperationController.reserve()` acquires the lease synchronously before the
+Turn coordinator can persist a new Turn. `start_reserved()` emits
+`operation.started`, starts one task, and owns terminal event delivery and
+lease release in `finally`.
+
+This in-process arbiter is different from storage leases:
+
+- the foreground lease serializes semantic work inside one Core session;
+- the state lease coordinates state replacement across Core processes;
+- workspace path and entity leases prevent two sessions from treating the same
+  workspace generation as independent recovery domains.
+
+None is an OS sandbox.
+
+## Agent graph
+
+`agent/graph.py` is the only module that imports and builds a LangGraph
+`StateGraph`. The compiled topology is intentionally small:
+
+```text
+START
+  -> prepare_context
+       | enough context
+       +-----------------> call_model
+       | compression needed
+       +-> compress_context -> call_model | finalize
+
+call_model
+  | tool calls -> execute_one_tool --+
+  | compression ----------------------|-> compress_context
+  | answer or terminal budget --------+-> finalize -> END
+
+execute_one_tool
+  | more pending calls -> execute_one_tool
+  + next model step ----> call_model
+```
+
+The graph operates on `AgentState`, a strict checkpoint contract containing:
+
+- Thread, Turn, workspace, provider, model, and Thinking identity;
+- context manifest, token estimate, effective limit, and compression request;
+- provider-neutral messages and continuation state;
+- pending tool calls, next-call index, and results;
+- model/tool/retry/compression/active-time counters;
+- usage, recovery issue, final answer, and termination reason.
+
+Adding a channel changes checkpoint compatibility and recovery validation. It
+is not a convenient place for arbitrary UI or product state.
+
+## Model/tool loop invariants
+
+The Agent must preserve these properties for every route:
+
+1. Context is prepared before the first model request.
+2. Provider messages use only `awesome_agent.modeling` contracts.
+3. Tool calls from one assistant message are observed in order.
+4. Every emitted tool call receives exactly one observation before the next
+   assistant request.
+5. A budget-skipped call receives a deterministic non-executed error
+   observation; it is not silently dropped.
+6. Expected tool failures are observations; invariant failures stop the Turn.
+7. Compression preserves the active assistant/tool tail exactly once.
+8. Finalization reserves a model call when ordinary loop progress is exhausted.
+
+The one-tool-at-a-time node is a correctness choice. Parallel execution could
+reduce latency but would require defining ordering, approval concurrency,
+ChangeSet conflicts, cancellation fan-out, and deterministic replay. Awesome
+does not claim those semantics today.
+
+## Budgets
+
+`TurnBudget` defaults and hard ceilings are enforced in Agent code:
+
+| Budget | Default | Maximum |
+| --- | ---: | ---: |
+| model calls | 32 | 256 |
+| tool calls | 64 | 512 |
+| active execution | 1,800 seconds | 21,600 seconds |
+| provider retries | 2 | 6 |
+| compressions | 2 | 10 |
+
+Active execution time is charged around model, tool, and compression segments;
+it is not wall-clock age while the user considers an approval. The last model
+capacity can be reserved with tools disabled so a bounded final response is
+still possible.
+
+Budget counters are checkpointed. Recovery validates them against the product
+Turn and rejects impossible or open message chains rather than restarting from
+an inferred state.
+
+## Context capture and graph invocation
+
+Application captures explicit path snapshots and enabled local memory before
+graph execution, then Agent's `prepare_context` node calls the injected context
+service. The prepared manifest is recorded as a product projection and in graph
+state. Subsequent compression can rebuild bounded base context while preserving
+the active tool tail.
+
+```text
+Application accepts Turn
+  -> capture natural input / explicit paths / local memory
+  -> create initial AgentState
+  -> graph.ainvoke(..., thread_id=turn.id)
+  -> Agent prepare_context asks injected service
+  -> manifest + messages enter checkpoint
+```
+
+The Application service owns access to Conversation and workspace snapshots;
+Agent remains unaware of concrete SQLite repositories or filesystem discovery.
+
+## Completion and cancellation
+
+On normal graph completion, Application validates the returned state, appends
+the assistant answer, records bounded usage, and completes the Turn. It then
+attempts to seal the ChangeSet and remove the checkpoint. On failure or
+cancellation it records a stable terminal product fact and performs the same
+bounded finalization. Cleanup exceptions are deliberately suppressed after the
+primary terminal fact; startup reconciliation retries stale terminal
+checkpoints rather than changing the completed/cancelled/failed outcome.
+
+Cancellation may arrive while a model stream, tool, or finalization step is
+active. Cleanup is shielded only for bounded fact preservation; it must not
+swallow the original cancellation or leave foreground ownership active.
+
+## Recovery relationship
+
+Application does not deserialize a checkpoint and continue blindly. It
+validates identity, budgets, message roles, context anchors, active tool tail,
+and termination state. Valid graph state can be finalized or resumed; invalid
+state fails with a stable recovery code. Uncertain external operations require
+an explicit decision.
+
+The separate Application and checkpoint databases create a commit window.
+Recovery converges it with strict lineage and compare-and-swap, not with a
+second graph implementation. Details are in
+[Storage and recovery](storage-and-recovery.md).
+
+## Dependency rules
+
+Agent may import only Agent, Core, Memory, and Modeling packages. It cannot
+import Application, Storage, Protocol, providers, or the TUI. Application is
+the top Python composition layer and may depend on current adapters.
+`tests/structural/test_dependency_architecture.py` and
+`tests/structural/test_product_architecture.py` enforce these directions and
+the single `StateGraph` owner.
+
+## Tradeoffs
+
+- **One graph, more Application coordination:** lifecycle code is explicit,
+  but there is no ambiguous second runtime.
+- **One tool at a time, deterministic recovery:** lower concurrency, simpler
+  observations and ChangeSet ownership.
+- **Separate databases, clear owners:** no cross-database transaction; strict
+  recovery is required.
+- **Typed events, more contract work:** a new fact must update Python,
+  fixtures, TypeScript schemas, and presentation instead of falling through a
+  generic renderer.
+
+## Source and test map
+
+- Facade and composition: `application/facade.py`, `application/composition.py`
+- Admission: `application/foreground.py`, `application/operations.py`
+- Turns and recovery: `application/turns.py`
+- Graph and state: `agent/graph.py`, `agent/state.py`, `agent/nodes.py`
+- Budgets: `agent/budgets.py`
+- Unit tests: `tests/unit/application/`, `tests/unit/agent/`
+- Integration: `tests/integration/test_agent_turn.py`,
+  `tests/integration/test_agent_recovery.py`
+- Structural: `tests/structural/test_application_architecture.py`,
+  `tests/structural/test_agent_architecture.py`

@@ -1,82 +1,300 @@
-# Testing
+# Testing and CI
 
-Tests protect current user behavior, package boundaries, and public contracts.
-Choose the smallest validation set that covers the risk of each change.
+Testing is evidence for an invariant at the cheapest layer that can prove it.
+A passing reproduction is not enough when an equivalent input, cancellation,
+race, recovery, protocol peer, or platform can violate the same invariant.
 
-## Fast Development Gate
+## Test layers
 
-Run formatting and lint first, followed by affected type checks and unit tests.
-Stop when a lower-level gate fails instead of hiding it behind heavier output.
+| Layer | Proves | Location |
+| --- | --- | --- |
+| unit | one pure policy, state transition, adapter, or bounded failure | `tests/unit/`, `tui/tests/**` |
+| integration | real collaboration across a local component/persistence boundary | `tests/integration/` |
+| E2E | one complete user-facing process flow | `tests/e2e/`, `tui/tests/e2e/` |
+| structural | package ownership, inventory, dependency and source contracts | `tests/structural/`, `tui/tests/structural/` |
+| packaging | installed wheel/TUI/installer/release shape | `tests/packaging/`, `tui/tests/packaging/` |
+| external | explicitly enabled live provider/network evidence | `tests/external/` |
 
-## Structural Contracts
+Tests protect current product contracts, not discarded implementation details.
+If architecture intentionally removes a behavior, update the contract and its
+test instead of adding an adapter solely to preserve an obsolete shape.
 
-`tests/structural/` verifies package inventory, dependency direction, framework
-ownership, model and tool boundaries, commands, version authority,
-documentation links, packaging inputs, and repository shape.
+## Progressive local gate
 
-## Affected Integration Tests
+Run checks in increasing cost. Stop when a lower gate fails unless you have
+proved the failure is unrelated.
 
-Add the relevant integration path when work crosses workspace trust, SQLite or
-checkpoints, Agent Turns, tool execution, Memory, MCP, or the JSON-RPC stdio
-boundary. Documentation-only work normally runs Markdown link/inventory and
-product-copy checks.
+### 1. Python format and lint
 
-## Automated GitHub Gates
+```powershell
+uv run ruff format --check src tests scripts
+uv run ruff check src tests scripts
+```
 
-Pull requests, pushes to `main`, and merge-queue revisions run the tracked
-`Required CI` workflow. Its stable `Required` job aggregates Python quality,
-coverage, Windows-sensitive contracts, structural and packaging contracts, and
-the TUI matrix. Configure both `Required` and `Security required` as
-branch-ruleset status checks; do not require individual matrix-generated names.
+To format an intentional Python change:
 
-The security workflow runs CodeQL for Python and TypeScript, reviews new
-dependencies on pull requests, validates the exported Python lock through
-pip-audit's PyPI-backed pip hash-checking path, supplements that vulnerability
-result with OSV, and audits the locked npm dependency graph. The OSV pass consumes
-the already validated exact name/version graph; it does not independently
-validate artifact hashes. The nightly workflow runs the complete Python and TUI
-suites on Ubuntu, Windows, and macOS. Third-party Actions are pinned to full
-commit hashes, every job has a deadline, and pull-request runs cancel stale
-revisions. Required CI also downloads a checksum-pinned `actionlint` binary and
-validates every tracked workflow before running the language gates.
-Dependabot monitors the uv lock, TUI npm lock, and immutable GitHub Action
-references on separate weekly schedules.
+```powershell
+uv run ruff format src tests scripts
+```
 
-Platform-specific filesystem and process tests must use explicit platform
-markers or dialect parameters. A platform skip is evidence that remains to be
-collected on the corresponding runner; it is not a passing substitute.
+### 2. Strict type checking
 
-## Release Gate
+```powershell
+uv run mypy src tests scripts
+```
 
-Before a release candidate, run:
+Mypy is strict. Do not add an ignore to avoid modeling a boundary. The only
+current missing-import override is the optional Mem0 package contract declared
+in `pyproject.toml`.
+
+### 3. Focused tests
+
+Examples:
+
+```powershell
+uv run pytest -q tests/unit/core/tools/test_permissions.py
+uv run pytest -q tests/unit/application/test_operation_controller.py
+uv run pytest -q tests/integration/test_agent_turn.py
+uv run pytest -q -k "shutdown or cancellation"
+```
+
+Use the narrowest file or selection that exercises the changed owner. When a
+test needs the optional Memory implementation, run it as:
+
+```powershell
+uv run --extra memory pytest -q tests/integration/test_mem0_cloud.py
+```
+
+### 4. Structural and packaging contracts
+
+```powershell
+uv run pytest -q tests/structural tests/packaging
+uv build --wheel --no-build-isolation
+```
+
+Structural tests are executable architecture. A failure should trigger an
+ownership review, not a search-and-replace of the expected inventory.
+
+### 5. TUI gate
+
+```powershell
+npm --prefix tui run version:check
+npm --prefix tui run format:check
+npm --prefix tui run lint
+npm --prefix tui run typecheck
+npm --prefix tui test
+npm --prefix tui run build
+npm pack ./tui --dry-run
+```
+
+Run TUI tests whenever a Python payload, protocol method, event, command result,
+or thread-transition contract changes—even if no `.ts` file was initially
+edited. The packaging test is stronger than a bare dry-run: it performs a fresh
+build, packs, installs the tarball, and executes the installed CLI. Keep the
+explicit post-build `npm pack --dry-run` as a human-readable contents check;
+running it before build can inspect stale `dist` or fail to prove the bin target.
+
+### 6. Protocol v3 fixtures
+
+```powershell
+uv run python scripts/generate_protocol_fixtures.py --check
+```
+
+If the intentional contract changed, regenerate without `--check`, inspect all
+fixture and manifest changes, update strict TypeScript schemas/presenters, then
+rerun Python and TUI fixture tests. Do not hand-edit generated JSON.
+
+### 7. Documentation site
+
+```powershell
+npm ci --prefix site
+npm --prefix site run check:navigation
+npm --prefix site run check
+$env:SITE_URL = "https://jagger-l.github.io"
+$env:BASE_PATH = "/awesome_agent"
+npm --prefix site run build
+npm --prefix site run check:links
+Remove-Item Env:SITE_URL, Env:BASE_PATH -ErrorAction SilentlyContinue
+```
+
+`check` synchronizes source Markdown, validates the navigation manifest, and
+runs Astro checks. The production-base build also generates a base-aware
+`dist/llms.txt`; the built-link check catches deployment-path errors that a
+root-hosted dev server can hide.
+
+### 8. Complete deterministic suites
+
+```powershell
+uv run --extra memory pytest -q tests/unit
+uv run --extra memory pytest -q tests/integration
+uv run --extra memory pytest -q tests/e2e
+uv run --extra memory pytest -q tests/packaging tests/structural
+```
+
+Required CI combines unit, integration, and E2E coverage with branch coverage
+and a minimum of 80%. Do not chase the number with low-value assertions; cover
+decisions, failures, and state transitions.
+
+## Risk-to-test matrix
+
+| Change | Minimum focused evidence | Add when crossed |
+| --- | --- | --- |
+| pure parser or policy | unit normal/boundary/negative cases | dialect/platform parameterization |
+| Application state change | unit service test | integration with Conversation/Storage and foreground race |
+| Agent route/state | node/budget/state unit tests | compiled graph integration and recovery |
+| file mutation | tool + filesystem unit tests | Change Journal integration, conflict, Windows reparse |
+| shell process | command-policy + runner tests | real timeout/cancel/process-tree test per platform |
+| provider adapter | normalized stream/error unit tests | Gateway integration; live check only for release evidence |
+| MCP/Skill/Memory | package unit tests | atomic catalog/load integration and malformed/limit cases |
+| protocol/event/result | Python fixture tests | TypeScript schema, reducer, presenter, E2E stdio |
+| TUI keyboard/mode | reducer/router unit tests | component flow and terminal E2E |
+| storage schema/recovery | database unit tests | crash-window, lock, reset, and packaging verifier |
+| documentation/navigation | Markdown inventory/link tests | Astro check, production build, built-link validation |
+
+## Designing robust tests
+
+### Prove the invariant, not one spelling
+
+For a parser or safety boundary, test original input, case/path/suffix variants,
+nested wrappers, compound/newline forms, and a benign string containing similar
+words. A security fix that only matches one reproduction is incomplete.
+
+### Make concurrency deterministic
+
+Use `asyncio.Event`, barriers, injected fakes, and controlled task handoff.
+Exercise both orderings:
+
+```text
+Operation wins -> command/mutation is busy
+command/mutation wins -> Operation is busy
+```
+
+Also prove cleanup releases ownership and shutdown prevents new admission. Do
+not rely on arbitrary sleeps to “probably” create a race.
+
+### Treat cancellation separately
+
+Cancellation is not a normal failure. Assert that:
+
+- cleanup is bounded;
+- the original `CancelledError` propagates where required;
+- one terminal event and one audit activity exist;
+- durable state is terminal or explicitly resumable;
+- child processes/readers are reaped;
+- no automatic retry duplicates an uncertain effect.
+
+### Test limits at both sides
+
+For byte, token, page, depth, node, timeout, and queue limits, test just below,
+at, and above the boundary. Include malformed shapes that fail before expensive
+work or external I/O.
+
+### Keep deterministic suites offline
+
+Provider, Mem0, MCP, and process tests use fakes or local fixtures. Normal CI
+does not require credentials. Live behavior is separate release evidence so a
+network outage cannot redefine a code regression.
+
+## Platform evidence
+
+Filesystem and process semantics differ materially:
+
+- Windows: junctions/reparse points, path aliases, Job Objects, `taskkill`, and
+  locked database rename;
+- POSIX: symlinks, descriptor-relative paths, process groups, and detached
+  inode behavior;
+- shell policy: CMD, POSIX, and PowerShell should use explicit dialect
+  parameters on any host.
+
+A platform skip records missing evidence; it is not a passing substitute. Put
+real Windows-only reparse/process tests in the Windows contracts job and use the
+nightly three-OS matrix for broader system evidence.
+
+## Required CI
+
+`.github/workflows/ci.yml` runs on pull requests, pushes to `main`, merge-queue
+revisions, and manual dispatch. Its stable `Required` aggregator depends on:
+
+| Job | Evidence |
+| --- | --- |
+| Python quality | actionlint, lock check, Ruff, strict mypy, Protocol fixtures |
+| Python tests and coverage | unit + integration + E2E with branch coverage |
+| Windows contracts | Windows-sensitive Core/Application/Protocol/extension tests plus installer source/parse contracts; not a real download-and-install flow |
+| Structural and packaging contracts | ownership, inventory, wheel build and clean install |
+| TUI matrix | Node 22.23.1/24 on Ubuntu and 22.23.1 on Windows |
+| Docs site | navigation, Astro check, base-aware build, built-link check |
+
+Branch rules should require the stable `Required` check, not matrix-generated
+job display names.
+
+Pull-request revisions cancel stale Required CI runs. Jobs use explicit
+deadlines and third-party Actions pinned to full commit hashes. Required CI
+downloads a checksum-pinned actionlint binary before validating workflows.
+
+## Security and nightly CI
+
+`.github/workflows/security.yml` supplies the stable `Security required`
+aggregator:
+
+- dependency review for new pull-request dependencies;
+- CodeQL for Python and JavaScript/TypeScript;
+- locked Python export audited through pip-audit's hash-validating PyPI path;
+- supplemental OSV lookup over the validated name/version graph;
+- npm lock audits for TUI and documentation site.
+
+The OSV command uses `--disable-pip` only as a supplemental advisory lookup. It
+does not independently validate artifacts; the PyPI path performs the hash
+check first.
+
+`.github/workflows/nightly.yml` runs the complete Python suite and TUI/package
+tests on Ubuntu, Windows, and macOS, plus npm audits. Nightly evidence expands
+platform coverage but does not excuse a focused PR regression.
+
+## Known CI evidence gaps
+
+The current workflows still leave five useful additions. They should be added
+as focused jobs rather than overstating the existing gates:
+
+1. **Candidate-artifact installer smoke.** Install into a temporary installation
+   root/home on each supported OS, then verify `awesome --version`, one
+   TUI/Core Protocol handshake, and scoped uninstall cleanup. Current Windows
+   CI validates installer source contracts but does not perform a real install.
+2. **Source-derived documentation contracts.** Generate or compare reference
+   inventories from `COMMAND_OWNERS`, configuration models, Tool registration,
+   and Protocol method models so a new public contract cannot bypass docs by
+   forgetting to update a hand-copied test list.
+3. **Browser accessibility smoke.** Use Playwright plus axe against the built
+   homepage, one English guide, and the Chinese quickstart. Static contrast and
+   link checks cannot prove keyboard navigation, landmarks, ARIA, mobile menus,
+   search, language switching, or copy-button behavior.
+4. **Scheduled external-link check.** Run with bounded timeouts, retries, and an
+   allowlist as a non-PR-blocking scheduled workflow; the deterministic local
+   link checker intentionally skips other origins.
+5. **Post-deployment Pages smoke.** After deployment, fetch the real base URL,
+   representative pages, one legacy redirect, and `llms.txt`. Build success does
+   not prove the deployed origin and base-path routing are reachable.
+
+## Release gate
+
+The release workflow rebuilds from the exact revision, runs deterministic
+Python, TUI, Protocol, audit, and packaging gates, builds one release bundle on
+Ubuntu, and reverifies that downloaded artifact on Windows and macOS. Only a
+tag run that passes every unprivileged job reaches attestation.
+
+The local release-quality gate is:
 
 ```powershell
 uv sync --locked --extra memory --dev
 uv run ruff format --check src tests scripts
 uv run ruff check src tests scripts
 uv run mypy src tests scripts
-uv run --extra memory pytest -q tests/unit
-uv run --extra memory pytest -q tests/integration
-uv run --extra memory pytest -q tests/e2e
-uv run --extra memory pytest -q tests/packaging tests/structural
+uv run --extra memory pytest -q tests
 uv run python scripts/generate_protocol_fixtures.py --check
 uv lock --check
-$AuditRequirements = Join-Path ([System.IO.Path]::GetTempPath()) `
-  "awesome-agent-release-requirements-$PID.txt"
-try {
-  uv export --locked --extra memory --no-dev --no-emit-project `
-    --format requirements.txt --output-file $AuditRequirements
-  uv run pip-audit --require-hashes --progress-spinner off `
-    --vulnerability-service pypi --requirement $AuditRequirements
-  uv run pip-audit --require-hashes --disable-pip --progress-spinner off `
-    --vulnerability-service osv --requirement $AuditRequirements
-} finally {
-  Remove-Item -LiteralPath $AuditRequirements -ErrorAction SilentlyContinue
-}
 uv build --wheel --no-build-isolation
 
 npm --prefix tui ci
-node tui/scripts/sync-version.mjs --check
+npm --prefix tui run version:check
 npm --prefix tui run format:check
 npm --prefix tui run lint
 npm --prefix tui run typecheck
@@ -86,16 +304,12 @@ npm --prefix tui audit --package-lock-only --audit-level=high
 npm pack ./tui --dry-run
 ```
 
-The first pip-audit command must not use `--disable-pip`: its isolated pip
-resolution is what checks the exported hashes. The second command is the
-supplemental OSV lookup. Release CI then builds the bundle once on Ubuntu and
-runs the same verifier against that downloaded artifact on Windows and macOS
-before the tag-only attestation job can start.
+Dependency audits and release bundle verification are detailed in
+[Release](release.md).
 
-Live DeepSeek, Kimi, Mem0 Cloud, network, and installation checks are explicit
-release evidence. Normal deterministic tests do not require credentials.
+## Live release evidence
 
-Run the live service release checks only in a temporary process environment:
+With fresh credentials in a temporary environment:
 
 ```powershell
 $env:AWESOME_RUN_EXTERNAL = "1"
@@ -104,10 +318,19 @@ Remove-Item Env:AWESOME_RUN_EXTERNAL, Env:DEEPSEEK_API_KEY, `
   Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY -ErrorAction SilentlyContinue
 ```
 
-Set `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`, and `MEM0_API_KEY` outside the
-repository before running the command. Record only test status, duration, and
-redacted diagnostic codes. Never write credential values into project files or
-release evidence.
+Record provider/service, status, duration, and redacted diagnostic code only.
+If credentials, network, or a platform are unavailable, state the missing
+evidence and residual risk rather than reporting success.
 
-Record exact commands and outcomes. When an environmental gate is unavailable,
-state the reason and remaining risk rather than reporting it as passing.
+## Failure triage
+
+1. Read the first failing lower gate and its exact command.
+2. Reproduce that job's lockfile, OS, Node/Python version, and environment.
+3. Decide whether the failure is code, contract drift, generated-file drift,
+   packaging, platform behavior, external authorization, or infrastructure.
+4. Fix the owning layer; do not weaken the test or aggregator.
+5. Rerun the focused failure, then the next broader gate.
+
+For GitHub Actions, inspect the actual log before editing code. A maintainer
+approval, label gate, exhausted quota, or unavailable service is not a product
+test failure, but it still prevents claiming the required check passed.

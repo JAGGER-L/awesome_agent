@@ -183,12 +183,19 @@ Before ending:
 - `docs/README.md`: reader-oriented documentation index.
 - `ARCHITECTURE.md`: authoritative topology, data flow, package ownership,
   state, dependency direction, and extension boundaries.
-- `docs/getting-started/`: English and Chinese first-run guides.
-- `docs/user-guide/`: commands, configuration, workspace/tools,
-  Memory/Skills/MCP, and troubleshooting.
-- `docs/architecture/`: focused Agent, Application/LangGraph, protocol/Ink,
-  Storage, and security guides.
-- `docs/development/`: contributor setup, testing, and release guidance.
+- `docs/getting-started/`: product orientation, installation, and the English
+  and Chinese first-session path.
+- `docs/concepts/`: product mental model, lifecycle vocabulary, context,
+  changes, cancellation, and recovery.
+- `docs/user-guide/`: task-oriented commands, permissions, tools, changes,
+  configuration, and troubleshooting.
+- `docs/extensions/`: Memory, Skills, and MCP decision and usage guides.
+- `docs/reference/`: exact CLI, command, configuration, tool, permission,
+  file/state, and Protocol v3 contracts.
+- `docs/architecture/`: focused lifecycle, Application/Agent, context/model,
+  tool, storage, protocol/TUI, security, and dependency guides.
+- `docs/development/`: contributor setup, testing, extension, contract,
+  documentation, and release guidance.
 - `docs/roadmap.md`: current foundation and future product capabilities.
 
 ### Repository Map
