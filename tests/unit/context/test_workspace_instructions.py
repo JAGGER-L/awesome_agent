@@ -5,16 +5,19 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-import awesome_agent.context.workspace_instructions as workspace_instruction_module
+import awesome_agent.context._safe_files as safe_files_module
+import awesome_agent.core.filesystem as core_filesystem_module
 from awesome_agent.context import (
     WorkspaceInstructionDiagnostic,
     WorkspaceInstructionDiagnosticCode,
     load_workspace_instructions,
 )
-from awesome_agent.context._safe_files import (
-    BoundedFile,
-    FileFingerprint,
-    read_bounded_file,
+from awesome_agent.core.filesystem import (
+    DirectoryPin,
+    ReadRegularFile,
+)
+from awesome_agent.core.filesystem import (
+    FileIdentity as CoreFileIdentity,
 )
 
 
@@ -28,6 +31,13 @@ def _directory_link(target: Path, link: Path) -> None:
         )
         return
     os.symlink(target, link, target_is_directory=True)
+
+
+def _remove_directory_link(link: Path) -> None:
+    if os.name == "nt":
+        link.rmdir()
+    else:
+        link.unlink()
 
 
 def test_untrusted_or_missing_workspace_has_no_instruction_snapshot(
@@ -186,21 +196,47 @@ def test_agents_md_rejects_workspace_root_replaced_before_open(
     replacement.mkdir()
     (replacement / "AGENTS.md").write_text("replacement instructions", encoding="utf-8")
     original = tmp_path / "original"
-    real_read = read_bounded_file
+    real_read = safe_files_module._read_pinned_regular_child
+    replaced = False
+    observed: list[bytes] = []
 
     def replace_workspace_before_open(
-        path: Path,
+        parent: DirectoryPin,
+        name: str,
         *,
-        max_bytes: int,
-        expected: FileFingerprint | None = None,
-    ) -> BoundedFile:
-        workspace.rename(original)
+        max_bytes: int | None,
+        expected_identity: CoreFileIdentity | None = None,
+    ) -> ReadRegularFile:
+        nonlocal replaced
+        try:
+            workspace.rename(original)
+        except OSError:
+            result = real_read(
+                parent,
+                name,
+                max_bytes=max_bytes,
+                expected_identity=expected_identity,
+            )
+            observed.append(result.data)
+            return result
+        replaced = True
         replacement.rename(workspace)
-        return real_read(path, max_bytes=max_bytes, expected=expected)
+        try:
+            result = real_read(
+                parent,
+                name,
+                max_bytes=max_bytes,
+                expected_identity=expected_identity,
+            )
+            observed.append(result.data)
+            return result
+        finally:
+            workspace.rename(replacement)
+            original.rename(workspace)
 
     monkeypatch.setattr(
-        workspace_instruction_module,
-        "read_bounded_file",
+        safe_files_module,
+        "_read_pinned_regular_child",
         replace_workspace_before_open,
     )
 
@@ -210,9 +246,86 @@ def test_agents_md_rejects_workspace_root_replaced_before_open(
         effective_input_limit=100_000,
     )
 
-    assert snapshot.content is None
-    assert snapshot.diagnostic is not None
-    assert snapshot.diagnostic.code is WorkspaceInstructionDiagnosticCode.CHANGED
+    assert all(b"replacement instructions" not in data for data in observed)
+    if replaced:
+        assert snapshot.content is None
+        assert snapshot.diagnostic is not None
+        assert snapshot.diagnostic.code is WorkspaceInstructionDiagnosticCode.CHANGED
+    else:
+        assert snapshot.content == "trusted instructions"
+        assert snapshot.diagnostic is None
+
+
+def test_agents_md_never_reads_external_sentinel_during_workspace_root_aba(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "AGENTS.md").write_text("trusted instructions", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = "EXTERNAL-WORKSPACE-ROOT-ABA-SENTINEL"
+    (outside / "AGENTS.md").write_text(sentinel, encoding="utf-8")
+    original = tmp_path / "workspace.original"
+    real_read = safe_files_module._read_pinned_regular_child
+    observed: list[bytes] = []
+    replaced = False
+
+    def read_during_workspace_aba(
+        parent: DirectoryPin,
+        name: str,
+        *,
+        max_bytes: int | None,
+        expected_identity: CoreFileIdentity | None = None,
+    ) -> ReadRegularFile:
+        nonlocal replaced
+        try:
+            workspace.rename(original)
+        except OSError:
+            result = real_read(
+                parent,
+                name,
+                max_bytes=max_bytes,
+                expected_identity=expected_identity,
+            )
+            observed.append(result.data)
+            return result
+        replaced = True
+        _directory_link(outside, workspace)
+        try:
+            result = real_read(
+                parent,
+                name,
+                max_bytes=max_bytes,
+                expected_identity=expected_identity,
+            )
+            observed.append(result.data)
+            return result
+        finally:
+            _remove_directory_link(workspace)
+            original.rename(workspace)
+
+    monkeypatch.setattr(
+        safe_files_module,
+        "_read_pinned_regular_child",
+        read_during_workspace_aba,
+    )
+
+    snapshot = load_workspace_instructions(
+        workspace_root=workspace,
+        workspace_trusted=True,
+        effective_input_limit=100_000,
+    )
+
+    assert all(sentinel.encode() not in data for data in observed)
+    if replaced:
+        assert snapshot.content is None
+        assert snapshot.diagnostic is not None
+        assert snapshot.diagnostic.code is WorkspaceInstructionDiagnosticCode.CHANGED
+    else:
+        assert snapshot.content == "trusted instructions"
+        assert snapshot.diagnostic is None
 
 
 def test_agents_md_rejects_in_place_mutation_after_trusted_snapshot(
@@ -221,22 +334,31 @@ def test_agents_md_rejects_in_place_mutation_after_trusted_snapshot(
 ) -> None:
     agents_file = tmp_path / "AGENTS.md"
     agents_file.write_text("trusted instructions", encoding="utf-8")
-    real_read = read_bounded_file
+    original_identity = os.stat(agents_file)
+    real_read = core_filesystem_module.read_descriptor
+    mutated = False
 
     def mutate_file_before_open(
-        path: Path,
+        descriptor: int,
         *,
-        max_bytes: int,
-        expected: FileFingerprint | None = None,
-    ) -> BoundedFile:
-        agents_file.write_text(
-            "replacement instructions are not trusted", encoding="utf-8"
-        )
-        return real_read(path, max_bytes=max_bytes, expected=expected)
+        max_bytes: int | None,
+    ) -> bytes:
+        nonlocal mutated
+        opened = os.fstat(descriptor)
+        if (
+            not mutated
+            and opened.st_dev == original_identity.st_dev
+            and opened.st_ino == original_identity.st_ino
+        ):
+            mutated = True
+            agents_file.write_text(
+                "replacement instructions are not trusted", encoding="utf-8"
+            )
+        return real_read(descriptor, max_bytes=max_bytes)
 
     monkeypatch.setattr(
-        workspace_instruction_module,
-        "read_bounded_file",
+        core_filesystem_module,
+        "read_descriptor",
         mutate_file_before_open,
     )
 
@@ -247,6 +369,7 @@ def test_agents_md_rejects_in_place_mutation_after_trusted_snapshot(
     )
 
     assert snapshot.content is None
+    assert mutated is True
     assert snapshot.diagnostic is not None
     assert snapshot.diagnostic.code is WorkspaceInstructionDiagnosticCode.CHANGED
 
@@ -260,14 +383,26 @@ def test_agents_md_rejects_file_replaced_between_lstat_and_open(
     replacement = agents_file.with_suffix(".replacement")
     replacement.write_text("replacement instructions", encoding="utf-8")
     original = agents_file.with_suffix(".original")
-    real_open = os.open
+    real_lstat = core_filesystem_module.lstat_child
+    replaced = False
 
-    def replace_file_before_open(path: Path, flags: int) -> int:
-        agents_file.rename(original)
-        replacement.rename(agents_file)
-        return real_open(path, flags)
+    def replace_file_before_open(
+        parent: DirectoryPin,
+        name: str,
+    ) -> os.stat_result:
+        nonlocal replaced
+        result = real_lstat(parent, name)
+        if not replaced and name == "AGENTS.md":
+            replaced = True
+            agents_file.rename(original)
+            replacement.rename(agents_file)
+        return result
 
-    monkeypatch.setattr(os, "open", replace_file_before_open)
+    monkeypatch.setattr(
+        core_filesystem_module,
+        "lstat_child",
+        replace_file_before_open,
+    )
 
     snapshot = load_workspace_instructions(
         workspace_root=tmp_path,
@@ -276,5 +411,6 @@ def test_agents_md_rejects_file_replaced_between_lstat_and_open(
     )
 
     assert snapshot.content is None
+    assert replaced is True
     assert snapshot.diagnostic is not None
     assert snapshot.diagnostic.code is WorkspaceInstructionDiagnosticCode.CHANGED

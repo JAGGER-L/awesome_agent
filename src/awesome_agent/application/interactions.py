@@ -12,6 +12,7 @@ class InteractionKind(StrEnum):
     STATE_RESET = "state_reset"
     TOOL_APPROVAL = "tool_approval"
     FULL_ACCESS_CONFIRMATION = "full_access_confirmation"
+    RECOVERY_DECISION = "recovery_decision"
 
 
 class InteractionDecision(StrEnum):
@@ -20,6 +21,8 @@ class InteractionDecision(StrEnum):
     ALLOW_ONCE = "allow_once"
     ALLOW_THREAD_WRITES = "allow_thread_writes"
     ENABLE_FULL_ACCESS = "enable_full_access"
+    RETRY = "retry"
+    ABORT = "abort"
     DENY = "deny"
 
 
@@ -41,6 +44,7 @@ class PendingInteraction(BaseModel):
     target: str
     capability: str | None
     choices: tuple[InteractionChoice, ...]
+    generation: int = Field(ge=1)
     thread_id: str | None = Field(default=None, max_length=128)
     turn_id: str | None = Field(default=None, max_length=128)
     operation_id: str | None = Field(default=None, max_length=128)
@@ -56,6 +60,10 @@ class PendingInteraction(BaseModel):
             self.thread_id is None or self.turn_id is None or self.operation_id is None
         ):
             raise ValueError("Tool approval requires operation authority.")
+        if self.kind is InteractionKind.RECOVERY_DECISION and (
+            self.thread_id is None or self.turn_id is None
+        ):
+            raise ValueError("Recovery decision requires Turn authority.")
         return self
 
 
@@ -112,11 +120,34 @@ def full_access_confirmation_choices() -> tuple[InteractionChoice, ...]:
     )
 
 
+def recovery_decision_choices(
+    *,
+    uncertain: bool,
+) -> tuple[InteractionChoice, ...]:
+    retry_description = (
+        "The external action may run again because its previous outcome is unknown."
+        if uncertain
+        else "Continue the unfinished Turn from its verified checkpoint."
+    )
+    retry = InteractionChoice(
+        decision=InteractionDecision.RETRY,
+        label="Retry",
+        description=retry_description,
+    )
+    abort = InteractionChoice(
+        decision=InteractionDecision.ABORT,
+        label="Abort",
+        description="Mark the unfinished Turn as failed without continuing it.",
+    )
+    return (abort, retry) if uncertain else (retry, abort)
+
+
 class InteractionCoordinator:
     def __init__(self) -> None:
         self.pending: PendingInteraction | None = None
         self._future: asyncio.Future[InteractionDecision] | None = None
         self._resolved: InteractionDecision | None = None
+        self._generation = 0
 
     def create(
         self,
@@ -134,6 +165,7 @@ class InteractionCoordinator:
     ) -> PendingInteraction:
         if self.pending is not None:
             raise InteractionBusy("Another interaction is pending.")
+        generation = self._generation + 1
         pending = PendingInteraction(
             id=f"interaction_{uuid4().hex}",
             kind=kind,
@@ -142,11 +174,13 @@ class InteractionCoordinator:
             target=target,
             capability=capability,
             choices=choices,
+            generation=generation,
             thread_id=thread_id,
             turn_id=turn_id,
             operation_id=operation_id,
             permission_generation=permission_generation,
         )
+        self._generation = generation
         self.pending = pending
         self._future = None
         self._resolved = None

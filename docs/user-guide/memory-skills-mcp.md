@@ -69,7 +69,9 @@ Executor and always require a one-call approval, including in Full access.
 namespace before reconnecting.
 
 Before a server becomes connected, Core compiles its entire tool catalog
-atomically with JSON Schema Draft 2020-12 by default. Supported local schema
+atomically with JSON Schema Draft 2020-12 by default. Core follows pagination
+until completion, rejecting cursor cycles and catalogs above 128 pages while
+enforcing tool-count and byte limits during collection. Supported local schema
 constraints include combinations, conditions, ranges, patterns, arrays, and
 additional or unevaluated properties. `format` keeps JSON Schema's default
 annotation behavior. References must be fragments inside the same schema;
@@ -77,7 +79,18 @@ remote references, missing fragments, unknown dialects or required
 vocabularies, duplicate tool names, and resource-limit violations reject the
 whole catalog without network resolution or partial registration. Limits are
 128 tools per server, 256 KiB per schema, 1 MiB per catalog, and nesting depth
-64.
+64. Connection, initialization, listing, and cleanup are deadline-bounded; a
+late catalog result is never published after its deadline.
+
+Arguments are checked with the compiled input validator before approval and
+before any remote call. If a tool declares `outputSchema`, its
+`structuredContent` must be present and match that schema before Awesome shows
+the result. When a successful response has structured content but no text
+content, Awesome renders deterministic bounded JSON; invalid, missing, or
+unrepresentable output becomes a sanitized non-retryable failure instead of
+leaking the original arguments or schema. Structured JSON is preflighted at
+64 KiB, 4,096 nodes, and 64 levels; text and media results may contain at most
+1,024 content blocks before rendering.
 
 Every catalog and handler carries a generation. Restart, disconnect, timeout,
 or cancellation invalidates the old generation, so an old validator cannot

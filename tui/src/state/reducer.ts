@@ -311,6 +311,12 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
         },
       };
     case "interaction.resolved": {
+      if (
+        state.pending_interaction?.interaction_id !==
+        event.payload.interaction_id
+      ) {
+        return next;
+      }
       const {
         pending_interaction: _pendingInteraction,
         ...withoutInteraction

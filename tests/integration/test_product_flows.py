@@ -5,12 +5,13 @@ import json
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from pydantic import SecretStr
 
 from awesome_agent.application.command_results import (
+    CommandApplicationInteraction,
     CommandError,
     CommandInteractionResult,
     CommandResult,
@@ -32,7 +33,12 @@ from awesome_agent.application.facade import LocalApplication
 from awesome_agent.config import CredentialValidation, CredentialValidationStatus
 from awesome_agent.context import ContextManifestItem
 from awesome_agent.conversation import ThreadView
-from awesome_agent.core.events import CollectingEventSink, EventType
+from awesome_agent.core.events import (
+    CollectingEventSink,
+    EventEnvelope,
+    EventType,
+    InteractionResolvedPayload,
+)
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
@@ -172,6 +178,23 @@ class BlockingCredentialValidator:
             status=CredentialValidationStatus.VALID,
             code="credential_valid",
         )
+
+
+class FailOnceOnFullAccessResolvedSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures = 1
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if (
+            self.failures
+            and event.event_type is EventType.INTERACTION_RESOLVED
+            and isinstance(event.payload, InteractionResolvedPayload)
+            and event.payload.decision == "enable_full_access"
+        ):
+            self.failures -= 1
+            raise BrokenPipeError("protocol output closed")
+        await super().emit(event)
 
 
 def _unwrap[T](result: ApplicationResult[T]) -> T:
@@ -512,6 +535,77 @@ async def test_permission_mode_is_confirmed_and_resets_on_thread_switch(
         )
     )
     assert _unwrap(await application.get_state()).permission_mode == "request_approval"
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_full_access_resolution_event_failure_is_fail_closed_and_not_replayable(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    sink = FailOnceOnFullAccessResolvedSink()
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=sink,
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=lambda provider, model: cast(
+            ModelGateway, FakeGateway(provider, model)
+        ),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    _unwrap(await application.execute_command(CommandIntent(name=CommandName.NEW)))
+    session = cast(Any, application)._backend._permission_session
+    session.grant_thread_writes()
+    original_generation = session.generation
+    original_grants = set(session.granted_capabilities)
+
+    confirmation = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert isinstance(confirmation, CommandInteractionResult)
+    assert isinstance(confirmation.interaction, CommandApplicationInteraction)
+    interaction_id = confirmation.interaction.interaction_id
+    with pytest.raises(BrokenPipeError, match="protocol output closed"):
+        await application.respond_interaction(interaction_id, "enable_full_access")
+
+    state = _unwrap(await application.get_state())
+    assert state.permission_mode == "request_approval"
+    assert state.pending_interaction_id is None
+    assert session.generation == original_generation
+    assert session.granted_capabilities == original_grants
+    replay = _unwrap(
+        await application.respond_interaction(interaction_id, "enable_full_access")
+    )
+    assert (replay.accepted, replay.status) == (False, "not_found")
+
+    replacement = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert isinstance(replacement, CommandInteractionResult)
+    assert isinstance(replacement.interaction, CommandApplicationInteraction)
+    _unwrap(
+        await application.respond_interaction(
+            replacement.interaction.interaction_id,
+            "enable_full_access",
+        )
+    )
+    assert _unwrap(await application.get_state()).permission_mode == "full_access"
+    assert session.generation == original_generation + 1
+    assert session.granted_capabilities == set()
     await application.shutdown()
 
 

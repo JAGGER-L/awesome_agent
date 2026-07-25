@@ -4,11 +4,13 @@ from pathlib import Path
 
 import pytest
 
-import awesome_agent.extensions.skills.discovery as discovery_module
-from awesome_agent.context._safe_files import (
-    BoundedFile,
-    FileFingerprint,
-    read_bounded_file,
+import awesome_agent.context._safe_files as safe_files_module
+import awesome_agent.core.filesystem as core_filesystem_module
+from awesome_agent.core.filesystem import (
+    DirectoryPin,
+)
+from awesome_agent.core.filesystem import (
+    FileIdentity as CoreFileIdentity,
 )
 from awesome_agent.extensions.skills import SkillSource, discover_skills
 
@@ -18,6 +20,21 @@ def _skill(root: Path, name: str, description: str, extra: str = "") -> None:
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {description}\n{extra}---\nbody secret",
+        encoding="utf-8",
+    )
+
+
+def _skill_with_metadata(root: Path, name: str, metadata: str) -> None:
+    directory = root / name
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text(
+        "---\n"
+        f"name: {name}\n"
+        "description: metadata limits\n"
+        "metadata:\n"
+        f"{metadata}\n"
+        "---\n"
+        "body",
         encoding="utf-8",
     )
 
@@ -80,6 +97,69 @@ def test_invalid_packages_become_diagnostics_not_global_failure(tmp_path: Path) 
     assert {item.code for item in catalog.diagnostics()} == {"invalid_skill"}
 
 
+@pytest.mark.parametrize(
+    "source",
+    [SkillSource.BUNDLED, SkillSource.USER, SkillSource.WORKSPACE],
+)
+def test_deep_yaml_failure_is_isolated_to_one_skill_source(
+    tmp_path: Path,
+    source: SkillSource,
+) -> None:
+    workspace = tmp_path / "workspace"
+    if source is SkillSource.WORKSPACE:
+        root = workspace / ".awesome" / "skills"
+    else:
+        root = tmp_path / source.value
+    _skill(root, "good", "valid")
+    nested = "[" * 3_000 + "0" + "]" * 3_000
+    _skill_with_metadata(root, "bad", f"  x: {nested}")
+
+    catalog = discover_skills(
+        bundled_root=root if source is SkillSource.BUNDLED else None,
+        user_root=root if source is SkillSource.USER else None,
+        workspace_root=root if source is SkillSource.WORKSPACE else None,
+        workspace_anchor=workspace if source is SkillSource.WORKSPACE else None,
+        workspace_trusted=source is SkillSource.WORKSPACE,
+    )
+
+    assert [item.name for item in catalog.descriptors()] == ["good"]
+    assert [(item.code, item.name, item.source) for item in catalog.diagnostics()] == [
+        ("invalid_skill", "bad", source)
+    ]
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        ("  base: &base [0]\n  refs: [" + ", ".join("*base" for _ in range(100)) + "]"),
+        "  values: [" + ", ".join("0" for _ in range(5_000)) + "]",
+        "  recursive: &self [*self]",
+    ],
+    ids=["aliases", "nodes", "recursive-alias"],
+)
+def test_workspace_yaml_resource_limits_keep_good_skill(
+    tmp_path: Path,
+    metadata: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    root = workspace / ".awesome" / "skills"
+    _skill(root, "good", "valid")
+    _skill_with_metadata(root, "bad", metadata)
+
+    catalog = discover_skills(
+        bundled_root=None,
+        user_root=None,
+        workspace_root=root,
+        workspace_anchor=workspace,
+        workspace_trusted=True,
+    )
+
+    assert [item.name for item in catalog.descriptors()] == ["good"]
+    assert [(item.code, item.name, item.source) for item in catalog.diagnostics()] == [
+        ("invalid_skill", "bad", SkillSource.WORKSPACE)
+    ]
+
+
 def _directory_link(target: Path, link: Path) -> None:
     if os.name == "nt":
         subprocess.run(
@@ -90,6 +170,13 @@ def _directory_link(target: Path, link: Path) -> None:
         )
         return
     os.symlink(target, link, target_is_directory=True)
+
+
+def _remove_directory_link(link: Path) -> None:
+    if os.name == "nt":
+        link.rmdir()
+    else:
+        link.unlink()
 
 
 def test_workspace_root_reparse_point_is_rejected_without_reading_target(
@@ -169,6 +256,75 @@ def test_workspace_package_reparse_point_is_rejected_without_affecting_good_skil
     )
 
 
+def test_workspace_discovery_rejects_package_check_open_aba(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    root = workspace / ".awesome" / "skills"
+    _skill(root, "good", "valid")
+    _skill(root, "review", "trusted")
+    package = root / "review"
+    moved = root / "review.original"
+    outside = tmp_path / "outside"
+    _skill(outside, "review", "EXTERNAL-PACKAGE-ABA-SENTINEL")
+    original_open = safe_files_module._open_pinned_directory
+    attacked = False
+
+    def open_during_package_aba(
+        path: Path,
+        *,
+        parent: DirectoryPin | None = None,
+        name: str | None = None,
+        expected_identity: CoreFileIdentity | None = None,
+    ) -> DirectoryPin:
+        nonlocal attacked
+        if (
+            not attacked
+            and parent is not None
+            and parent.path == root
+            and name == "review"
+        ):
+            attacked = True
+            package.rename(moved)
+            _directory_link(outside / "review", package)
+            try:
+                return original_open(
+                    path,
+                    parent=parent,
+                    name=name,
+                    expected_identity=expected_identity,
+                )
+            finally:
+                _remove_directory_link(package)
+                moved.rename(package)
+        return original_open(
+            path,
+            parent=parent,
+            name=name,
+            expected_identity=expected_identity,
+        )
+
+    monkeypatch.setattr(
+        safe_files_module,
+        "_open_pinned_directory",
+        open_during_package_aba,
+    )
+
+    catalog = discover_skills(
+        bundled_root=None,
+        user_root=None,
+        workspace_root=root,
+        workspace_anchor=workspace,
+        workspace_trusted=True,
+    )
+
+    assert attacked is True
+    assert [item.name for item in catalog.descriptors()] == ["good"]
+    assert len(catalog.diagnostics()) == 1
+    assert catalog.diagnostics()[0].name == "review"
+
+
 def test_workspace_skill_md_is_bounded_during_discovery(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     root = workspace / ".awesome" / "skills"
@@ -186,6 +342,39 @@ def test_workspace_skill_md_is_bounded_during_discovery(tmp_path: Path) -> None:
 
     assert catalog.descriptors() == ()
     assert [item.code for item in catalog.diagnostics()] == ["invalid_skill"]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"---\nname: bad\ndescription: binary\n---\nbody\x00hidden",
+        b"---\nname: bad\ndescription: invalid utf8\n---\nbody\xff",
+    ],
+    ids=["binary", "invalid-utf8"],
+)
+def test_workspace_invalid_skill_text_isolated_from_good_package(
+    tmp_path: Path,
+    data: bytes,
+) -> None:
+    workspace = tmp_path / "workspace"
+    root = workspace / ".awesome" / "skills"
+    _skill(root, "good", "valid")
+    bad = root / "bad"
+    bad.mkdir()
+    (bad / "SKILL.md").write_bytes(data)
+
+    catalog = discover_skills(
+        bundled_root=None,
+        user_root=None,
+        workspace_root=root,
+        workspace_anchor=workspace,
+        workspace_trusted=True,
+    )
+
+    assert [item.name for item in catalog.descriptors()] == ["good"]
+    assert [(item.code, item.name) for item in catalog.diagnostics()] == [
+        ("invalid_skill", "bad")
+    ]
 
 
 def test_user_skill_md_is_also_bounded_during_discovery(tmp_path: Path) -> None:
@@ -211,6 +400,7 @@ def test_workspace_discovery_rejects_skill_file_replaced_before_open(
 ) -> None:
     workspace = tmp_path / "workspace"
     root = workspace / ".awesome" / "skills"
+    _skill(root, "good", "valid")
     _skill(root, "review", "trusted")
     skill_file = root / "review" / "SKILL.md"
     replacement = skill_file.with_suffix(".replacement")
@@ -220,20 +410,25 @@ def test_workspace_discovery_rejects_skill_file_replaced_before_open(
     )
     original = skill_file.with_suffix(".original")
 
-    def replace_skill_before_open(
-        path: Path,
-        *,
-        max_bytes: int,
-        expected: FileFingerprint | None = None,
-    ) -> BoundedFile:
-        skill_file.rename(original)
-        replacement.rename(skill_file)
-        return read_bounded_file(path, max_bytes=max_bytes, expected=expected)
+    real_lstat = core_filesystem_module.lstat_child
+    replaced = False
+
+    def replace_skill_between_lstat_and_open(
+        parent: DirectoryPin,
+        name: str,
+    ) -> os.stat_result:
+        nonlocal replaced
+        result = real_lstat(parent, name)
+        if not replaced and parent.path == skill_file.parent and name == "SKILL.md":
+            replaced = True
+            skill_file.rename(original)
+            replacement.rename(skill_file)
+        return result
 
     monkeypatch.setattr(
-        discovery_module,
-        "read_bounded_file",
-        replace_skill_before_open,
+        core_filesystem_module,
+        "lstat_child",
+        replace_skill_between_lstat_and_open,
     )
 
     catalog = discover_skills(
@@ -244,8 +439,11 @@ def test_workspace_discovery_rejects_skill_file_replaced_before_open(
         workspace_trusted=True,
     )
 
-    assert catalog.descriptors() == ()
-    assert [item.code for item in catalog.diagnostics()] == ["invalid_skill"]
+    assert replaced is True
+    assert [item.name for item in catalog.descriptors()] == ["good"]
+    assert [(item.code, item.name) for item in catalog.diagnostics()] == [
+        ("invalid_skill", "review")
+    ]
 
 
 def test_workspace_discovery_rejects_in_place_skill_mutation_after_snapshot(
@@ -254,25 +452,36 @@ def test_workspace_discovery_rejects_in_place_skill_mutation_after_snapshot(
 ) -> None:
     workspace = tmp_path / "workspace"
     root = workspace / ".awesome" / "skills"
+    _skill(root, "good", "valid")
     _skill(root, "review", "trusted")
     skill_file = root / "review" / "SKILL.md"
+    original_identity = os.stat(skill_file)
+    real_read = core_filesystem_module.read_descriptor
+    mutated = False
 
-    def mutate_skill_before_open(
-        path: Path,
+    def mutate_skill_after_open(
+        descriptor: int,
         *,
-        max_bytes: int,
-        expected: FileFingerprint | None = None,
-    ) -> BoundedFile:
-        skill_file.write_text(
-            "---\nname: review\ndescription: replacement\n---\nreplacement body",
-            encoding="utf-8",
-        )
-        return read_bounded_file(path, max_bytes=max_bytes, expected=expected)
+        max_bytes: int | None,
+    ) -> bytes:
+        nonlocal mutated
+        opened = os.fstat(descriptor)
+        if (
+            not mutated
+            and opened.st_dev == original_identity.st_dev
+            and opened.st_ino == original_identity.st_ino
+        ):
+            mutated = True
+            skill_file.write_text(
+                "---\nname: review\ndescription: replacement\n---\nreplacement body",
+                encoding="utf-8",
+            )
+        return real_read(descriptor, max_bytes=max_bytes)
 
     monkeypatch.setattr(
-        discovery_module,
-        "read_bounded_file",
-        mutate_skill_before_open,
+        core_filesystem_module,
+        "read_descriptor",
+        mutate_skill_after_open,
     )
 
     catalog = discover_skills(
@@ -283,5 +492,8 @@ def test_workspace_discovery_rejects_in_place_skill_mutation_after_snapshot(
         workspace_trusted=True,
     )
 
-    assert catalog.descriptors() == ()
-    assert [item.code for item in catalog.diagnostics()] == ["invalid_skill"]
+    assert mutated is True
+    assert [item.name for item in catalog.descriptors()] == ["good"]
+    assert [(item.code, item.name) for item in catalog.diagnostics()] == [
+        ("invalid_skill", "review")
+    ]

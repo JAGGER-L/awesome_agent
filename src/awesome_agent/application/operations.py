@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from awesome_agent.core.events import (
 )
 
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 type TerminalEventType = Literal[
     EventType.OPERATION_COMPLETED,
     EventType.OPERATION_FAILED,
@@ -166,31 +168,39 @@ class OperationController:
             try:
                 result = await factory(operation_id)
             except asyncio.CancelledError:
-                await self._terminal(
-                    EventType.OPERATION_CANCELLED,
-                    operation_id,
-                    thread_id,
-                    turn_id,
-                    client_message_id,
-                )
+                with suppress(Exception, asyncio.CancelledError):
+                    await self._terminal(
+                        EventType.OPERATION_CANCELLED,
+                        operation_id,
+                        thread_id,
+                        turn_id,
+                        client_message_id,
+                    )
                 raise
             except Exception:
-                await self._terminal(
-                    EventType.OPERATION_FAILED,
-                    operation_id,
-                    thread_id,
-                    turn_id,
-                    client_message_id,
-                )
+                with suppress(Exception, asyncio.CancelledError):
+                    await self._terminal(
+                        EventType.OPERATION_FAILED,
+                        operation_id,
+                        thread_id,
+                        turn_id,
+                        client_message_id,
+                    )
                 raise
             else:
-                await self._terminal(
-                    EventType.OPERATION_COMPLETED,
-                    operation_id,
-                    thread_id,
-                    turn_id,
-                    client_message_id,
-                )
+                try:
+                    await self._terminal(
+                        EventType.OPERATION_COMPLETED,
+                        operation_id,
+                        thread_id,
+                        turn_id,
+                        client_message_id,
+                    )
+                except (Exception, asyncio.CancelledError):
+                    logger.warning(
+                        "Operation completion event delivery failed.",
+                        exc_info=True,
+                    )
                 return result
             finally:
                 self._active_id = None

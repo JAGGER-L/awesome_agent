@@ -3,6 +3,7 @@ from typing import Any, cast
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import JsonValue
 
 from awesome_agent.agent import (
     AgentCompressionResult,
@@ -16,6 +17,7 @@ from awesome_agent.agent import (
 )
 from awesome_agent.context import (
     CODING_AGENT_PRODUCT_INSTRUCTIONS,
+    estimate_messages,
     model_identity_context_source,
 )
 from awesome_agent.modeling import (
@@ -86,10 +88,17 @@ class Compressor:
     def __init__(self, result: AgentCompressionResult) -> None:
         self.result = result
         self.calls = 0
+        self.retry_limits: list[int] = []
 
-    async def compress(self, state: object) -> AgentCompressionResult:
+    async def compress(
+        self,
+        state: object,
+        *,
+        max_provider_retries: int,
+    ) -> AgentCompressionResult:
         del state
         self.calls += 1
+        self.retry_limits.append(max_provider_retries)
         return self.result
 
 
@@ -141,10 +150,15 @@ async def _invoke(
     compressor: Compressor,
     prepared: PreparedAgentContext,
     projector: Projector,
+    snapshot_records: list[tuple[dict[str, JsonValue], ...]] | None = None,
 ) -> AgentState:
     async def builder(state: AgentState) -> PreparedAgentContext:
         del state
         return prepared
+
+    def record_snapshot(manifest: tuple[dict[str, JsonValue], ...]) -> None:
+        if snapshot_records is not None:
+            snapshot_records.append(manifest)
 
     runtime = AgentRuntimeContext(
         gateway=cast(Any, gateway),
@@ -156,6 +170,8 @@ async def _invoke(
         compressor=compressor,
         budget=TurnBudget(),
         monotonic=lambda: 1.0,
+        context_token_estimator=estimate_messages,
+        context_snapshot_recorder=record_snapshot,
     )
     graph = compile_agent_graph(InMemorySaver())
     return validate_agent_state(
@@ -181,18 +197,22 @@ async def test_automatic_compression_runs_at_threshold_not_below() -> None:
         AgentCompressionResult(completed=True, attempted=True, prepared=compressed)
     )
     projector = Projector()
+    snapshot_records: list[tuple[dict[str, JsonValue], ...]] = []
+    initial = _prepared(recommended=True)
 
     result = await _invoke(
         Gateway(((_completed("done"),),)),
         compressor,
-        _prepared(recommended=True),
+        initial,
         projector,
+        snapshot_records,
     )
 
     assert compressor.calls == 1
     assert result["compressions"] == 1
     assert result["messages"][0]["content"] == "compressed"
     assert projector.context == [False, True]
+    assert snapshot_records == [initial.manifest, compressed.manifest]
 
     below = Compressor(AgentCompressionResult(completed=False, attempted=False))
     await _invoke(
@@ -257,6 +277,29 @@ async def test_compression_failure_is_warning_when_context_fits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unrecoverable_compression_never_retries_without_the_tool_tail() -> None:
+    compressor = Compressor(
+        AgentCompressionResult(
+            completed=False,
+            attempted=True,
+            error_code="context_unrecoverable",
+        )
+    )
+    projector = Projector()
+
+    result = await _invoke(
+        Gateway(()),
+        compressor,
+        _prepared(recommended=True),
+        projector,
+    )
+
+    assert compressor.calls == 1
+    assert result["termination_reason"] == "context_unrecoverable"
+    assert projector.warnings == []
+
+
+@pytest.mark.asyncio
 async def test_automatic_compression_cannot_consume_reserved_final_model_call() -> None:
     compressor = Compressor(
         AgentCompressionResult(
@@ -281,6 +324,7 @@ async def test_automatic_compression_cannot_consume_reserved_final_model_call() 
         compressor=compressor,
         budget=TurnBudget(model_calls=1),
         monotonic=lambda: 1.0,
+        context_token_estimator=estimate_messages,
     )
     result = await compile_agent_graph(InMemorySaver()).ainvoke(
         new_agent_state(

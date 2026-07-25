@@ -33,15 +33,31 @@ class FileNodeType(StrEnum):
 class FileChange(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    mutation_id: str | None = None
     path: str = Field(min_length=1, max_length=1_000)
     kind: FileChangeKind
+    # Retained as the legacy/display type for existing Schema 7 JSON payloads.
     node_type: FileNodeType
+    before_node_type: FileNodeType | None = None
+    after_node_type: FileNodeType | None = None
     before_hash: str | None = None
     after_hash: str | None = None
     before_blob: str | None = None
     after_blob: str | None = None
     before_mode: int | None = None
     after_mode: int | None = None
+
+    @property
+    def resolved_before_node_type(self) -> FileNodeType | None:
+        if self.before_hash is None:
+            return None
+        return self.before_node_type or self.node_type
+
+    @property
+    def resolved_after_node_type(self) -> FileNodeType | None:
+        if self.after_hash is None:
+            return None
+        return self.after_node_type or self.node_type
 
 
 class ExecuteObservation(BaseModel):

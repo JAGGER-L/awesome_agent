@@ -68,6 +68,26 @@ def test_catalog_keeps_format_as_annotation_by_default() -> None:
     catalog.resolve("email").validator.validate("not-an-email")
 
 
+def test_catalog_compiles_and_keeps_output_validator() -> None:
+    output_tool = Tool(
+        name="structured",
+        inputSchema={"type": "object"},
+        outputSchema={
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        },
+    )
+
+    compiled = compile_mcp_catalog((output_tool,)).resolve("structured")
+
+    assert compiled.output_validator is not None
+    compiled.output_validator.validate({"answer": "yes"})
+    with pytest.raises(ValidationError):
+        compiled.output_validator.validate({"answer": 1})
+
+
 def test_catalog_does_not_treat_annotation_payloads_as_schema_references() -> None:
     catalog = compile_mcp_catalog(
         (
@@ -129,6 +149,86 @@ def test_catalog_rejects_external_and_missing_references(
 
     with pytest.raises(McpCatalogError, match=reason):
         compile_mcp_catalog((tool("unsafe", schema),))
+
+
+@pytest.mark.parametrize(
+    ("dialect", "keyword", "fragment"),
+    [
+        (None, "$ref", "#/allOf/-1"),
+        (None, "$ref", "#/allOf/+0"),
+        (None, "$ref", "#/allOf/00"),
+        (None, "$ref", "#/$defs/invalid~2escape"),
+        (None, "$ref", "#/$defs/trailing~"),
+        (None, "$dynamicRef", "#/allOf/-1"),
+        (
+            "https://json-schema.org/draft/2019-09/schema",
+            "$recursiveRef",
+            "#/allOf/-1",
+        ),
+    ],
+)
+def test_catalog_rejects_non_rfc6901_local_reference_tokens(
+    dialect: str | None,
+    keyword: str,
+    fragment: str,
+) -> None:
+    schema: dict[str, object] = {
+        "$defs": {"invalid~2escape": {"type": "string"}},
+        "allOf": [{"type": "string"}],
+        keyword: fragment,
+    }
+    if dialect is not None:
+        schema["$schema"] = dialect
+
+    with pytest.raises(McpCatalogError, match="reference"):
+        compile_mcp_catalog((tool("invalid_pointer", schema),))
+
+
+@pytest.mark.parametrize(
+    ("schema", "reason"),
+    [
+        ({"allOf": [{}], "$ref": "#/allOf/1"}, "missing"),
+        ({"examples": ["not-a-schema"], "$ref": "#/examples/0"}, "target"),
+    ],
+)
+def test_catalog_rejects_missing_and_non_schema_pointer_targets(
+    schema: Mapping[str, object],
+    reason: str,
+) -> None:
+    with pytest.raises(McpCatalogError, match=reason):
+        compile_mcp_catalog((tool("invalid_target", schema),))
+
+
+def test_catalog_accepts_rfc6901_escaped_tokens_and_canonical_array_index() -> None:
+    catalog = compile_mcp_catalog(
+        (
+            tool(
+                "escaped_pointer",
+                {
+                    "$defs": {
+                        "slash/key": {"type": "string"},
+                        "tilde~key": {"minLength": 1},
+                        "tilde~1key": {"maxLength": 10},
+                    },
+                    "allOf": [
+                        {"$ref": "#/$defs/slash~1key"},
+                        {"$ref": "#/$defs/tilde~0key"},
+                        {"$ref": "#/$defs/tilde~01key"},
+                    ],
+                },
+            ),
+            tool(
+                "array_index",
+                {
+                    "allOf": [{"type": "integer"}],
+                    "$ref": "#/allOf/0",
+                },
+            ),
+        )
+    )
+
+    catalog.resolve("escaped_pointer").validator.validate("value")
+    catalog.resolve("array_index").validator.validate(1)
 
 
 def test_catalog_rejects_unknown_dialect_and_required_vocabulary() -> None:

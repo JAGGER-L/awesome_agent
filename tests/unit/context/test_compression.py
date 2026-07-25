@@ -1,3 +1,5 @@
+import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -21,11 +23,18 @@ from awesome_agent.conversation import (
 )
 from awesome_agent.modeling import (
     AssistantMessage,
+    GatewayEvent,
+    ModelErrorCode,
+    ModelErrorInfo,
     ModelRequest,
     ModelTurn,
     ModelUsage,
+    ProviderRetrying,
     SelectedModel,
     StopReason,
+    TextDelta,
+    TurnCompleted,
+    TurnFailed,
 )
 
 
@@ -137,6 +146,77 @@ class FakeGateway:
         )
 
 
+class RetryingStreamGateway:
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def stream(
+        self,
+        selected: SelectedModel,
+        request: ModelRequest,
+    ) -> AsyncIterator[GatewayEvent]:
+        del request
+        self.attempts += 1
+        yield ProviderRetrying(
+            attempt=2,
+            maximum=2,
+            delay_seconds=0,
+            error_code=ModelErrorCode.RATE_LIMIT,
+        )
+        self.attempts += 1
+        yield TurnCompleted(
+            turn=ModelTurn(
+                provider=selected.provider,
+                model=selected.model,
+                assistant=AssistantMessage(content="retry summary"),
+                stop_reason=StopReason.COMPLETED,
+                usage=ModelUsage(provider_retries=1),
+            )
+        )
+
+    async def complete(self, selected: object, request: object) -> ModelTurn:
+        del selected, request
+        raise AssertionError("bounded compression must consume the event stream")
+
+
+class PartialFailureStreamGateway:
+    async def stream(
+        self,
+        selected: SelectedModel,
+        request: ModelRequest,
+    ) -> AsyncIterator[GatewayEvent]:
+        del request
+        yield TextDelta(text="partial summary must be ignored")
+        yield TurnFailed(
+            error=ModelErrorInfo(
+                code=ModelErrorCode.CONTEXT_LENGTH,
+                message="too long",
+                retryable=False,
+                provider=selected.provider,
+            )
+        )
+
+    async def complete(self, selected: object, request: object) -> ModelTurn:
+        del selected, request
+        raise AssertionError("bounded compression must consume the event stream")
+
+
+class CancellingStreamGateway:
+    async def stream(
+        self,
+        selected: SelectedModel,
+        request: ModelRequest,
+    ) -> AsyncIterator[GatewayEvent]:
+        del selected, request
+        raise asyncio.CancelledError
+        if False:
+            yield TextDelta(text="unreachable")
+
+    async def complete(self, selected: object, request: object) -> ModelTurn:
+        del selected, request
+        raise AssertionError("bounded compression must consume the event stream")
+
+
 @pytest.mark.asyncio
 async def test_compressor_uses_tools_disabled_and_returns_usage() -> None:
     gateway = FakeGateway()
@@ -171,3 +251,67 @@ async def test_failure_returns_no_summary_and_does_not_advance_coverage() -> Non
     assert result.status is CompressionStatus.FAILED
     assert result.summary is None
     assert result.error_code == "compression_failed"
+
+
+@pytest.mark.asyncio
+async def test_turn_compression_retry_budget_stops_before_the_next_attempt() -> None:
+    gateway = RetryingStreamGateway()
+
+    result = await ThreadCompressor(cast(Any, gateway)).compact(
+        CompressionRequest(
+            view=_view(5),
+            provider="deepseek",
+            model="deepseek/deepseek-v4-flash",
+            max_provider_retries=0,
+        )
+    )
+
+    assert result.status is CompressionStatus.FAILED
+    assert result.error_code == "compression_retry_budget_exhausted"
+    assert result.usage.provider_retries == 0
+    assert gateway.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_turn_compression_uses_only_the_reserved_retry_attempt() -> None:
+    gateway = RetryingStreamGateway()
+
+    result = await ThreadCompressor(cast(Any, gateway)).compact(
+        CompressionRequest(
+            view=_view(5),
+            provider="deepseek",
+            model="deepseek/deepseek-v4-flash",
+            max_provider_retries=1,
+        )
+    )
+
+    assert result.status is CompressionStatus.COMPLETED
+    assert result.summary is not None
+    assert result.summary.content == "retry summary"
+    assert result.usage.provider_retries == 1
+    assert gateway.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_bounded_compression_discards_partial_and_propagates_cancel() -> None:
+    partial = await ThreadCompressor(cast(Any, PartialFailureStreamGateway())).compact(
+        CompressionRequest(
+            view=_view(5),
+            provider="deepseek",
+            model="deepseek/deepseek-v4-flash",
+            max_provider_retries=0,
+        )
+    )
+    assert partial.status is CompressionStatus.FAILED
+    assert partial.summary is None
+    assert partial.error_code == "compression_failed"
+
+    with pytest.raises(asyncio.CancelledError):
+        await ThreadCompressor(cast(Any, CancellingStreamGateway())).compact(
+            CompressionRequest(
+                view=_view(5),
+                provider="deepseek",
+                model="deepseek/deepseek-v4-flash",
+                max_provider_retries=0,
+            )
+        )

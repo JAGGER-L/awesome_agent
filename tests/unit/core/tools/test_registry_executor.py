@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
+from awesome_agent.core.events import (
+    CollectingEventSink,
+    EventEmitter,
+    EventEnvelope,
+    EventType,
+)
 from awesome_agent.core.tools import (
     ExpectedToolFailure,
     ToolActivityDraft,
@@ -80,6 +85,61 @@ class CollectingActivityWriter(ToolActivityWriter):
 
     def finalize(self, activity: ToolActivityDraft) -> None:
         self.activities.setdefault((activity.operation_id, activity.call_id), activity)
+
+
+class FailingActivityWriter(ToolActivityWriter):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def finalize(self, activity: ToolActivityDraft) -> None:
+        del activity
+        self.calls += 1
+        raise RuntimeError("audit storage unavailable")
+
+
+class FailingToolTerminalSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.terminal_attempts = 0
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.TOOL_CANCELLED:
+            self.terminal_attempts += 1
+            raise BrokenPipeError("protocol output closed")
+        await super().emit(event)
+
+
+class BlockingToolTerminalSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.terminal_entered = asyncio.Event()
+        self.release_terminal = asyncio.Event()
+        self.terminal_attempts = 0
+
+    async def emit(self, event: EventEnvelope) -> None:
+        await super().emit(event)
+        if event.event_type is EventType.TOOL_CANCELLED:
+            self.terminal_attempts += 1
+            self.terminal_entered.set()
+            await self.release_terminal.wait()
+
+
+class PreDeliveryBlockingToolTerminalSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.terminal_entered = asyncio.Event()
+        self.release_terminal = asyncio.Event()
+        self.terminal_attempts = 0
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type in {
+            EventType.TOOL_COMPLETED,
+            EventType.TOOL_FAILED,
+        }:
+            self.terminal_attempts += 1
+            self.terminal_entered.set()
+            await self.release_terminal.wait()
+        await super().emit(event)
 
 
 def echo_registry(
@@ -455,6 +515,324 @@ async def test_executor_records_cancellation_then_reraises(
     [activity] = writer.activities.values()
     assert activity.outcome == "cancelled"
     assert activity.error_code == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_executor_preserves_cancellation_when_audit_finalization_fails(
+    tmp_path: Path,
+) -> None:
+    started = asyncio.Event()
+
+    async def cancellable(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancellation did not stop the handler.")
+
+    context, sink, _ = execution_context(tmp_path)
+    writer = FailingActivityWriter()
+    context = replace(context, activity_writer=writer)
+    executor = ToolExecutor(echo_registry(cancellable), timeout_seconds=30.0)
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await started.wait()
+
+    task.cancel("original cancellation")
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await task
+
+    assert captured.value.args == ("original cancellation",)
+    assert writer.calls == 1
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_executor_preserves_cancellation_when_terminal_delivery_fails(
+    tmp_path: Path,
+) -> None:
+    started = asyncio.Event()
+
+    async def cancellable(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancellation did not stop the handler.")
+
+    context, _, writer = execution_context(tmp_path)
+    sink = FailingToolTerminalSink()
+    context = replace(
+        context,
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=context.workspace.key,
+            sink=sink,
+        ),
+    )
+    executor = ToolExecutor(echo_registry(cancellable), timeout_seconds=30.0)
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await started.wait()
+
+    task.cancel("original cancellation")
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await task
+
+    assert captured.value.args == ("original cancellation",)
+    assert sink.terminal_attempts == 1
+    assert len(writer.activities) == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_repeated_cancel_finishes_terminalization_once(
+    tmp_path: Path,
+) -> None:
+    started = asyncio.Event()
+
+    async def cancellable(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancellation did not stop the handler.")
+
+    context, _, writer = execution_context(tmp_path)
+    sink = BlockingToolTerminalSink()
+    context = replace(
+        context,
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=context.workspace.key,
+            sink=sink,
+        ),
+    )
+    executor = ToolExecutor(echo_registry(cancellable), timeout_seconds=30.0)
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await started.wait()
+
+    task.cancel("original cancellation")
+    await sink.terminal_entered.wait()
+    task.cancel("second cancellation")
+    sink.release_terminal.set()
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await task
+
+    assert captured.value.args == ("original cancellation",)
+    assert sink.terminal_attempts == 1
+    assert [event.event_type for event in sink.events].count(
+        EventType.TOOL_CANCELLED
+    ) == 1
+    assert len(writer.activities) == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_bounds_cancelled_terminal_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+
+    async def cancellable(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancellation did not stop the handler.")
+
+    context, _, writer = execution_context(tmp_path)
+    sink = BlockingToolTerminalSink()
+    context = replace(
+        context,
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=context.workspace.key,
+            sink=sink,
+        ),
+    )
+    monkeypatch.setattr(
+        "awesome_agent.core.tools.executor._TERMINAL_CANCELLATION_CLEANUP_SECONDS",
+        0.01,
+    )
+    executor = ToolExecutor(echo_registry(cancellable), timeout_seconds=30.0)
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await started.wait()
+
+    task.cancel("original cancellation")
+    await sink.terminal_entered.wait()
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await asyncio.wait_for(task, timeout=1)
+
+    assert captured.value.args == ("original cancellation",)
+    assert sink.terminal_attempts == 1
+    assert [event.event_type for event in sink.events].count(
+        EventType.TOOL_CANCELLED
+    ) == 1
+    assert len(writer.activities) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_outcome", "terminal_type", "activity_outcome"),
+    (
+        ("success", EventType.TOOL_COMPLETED, "success"),
+        ("error", EventType.TOOL_FAILED, "error"),
+    ),
+)
+async def test_executor_finishes_handler_outcome_when_cancelled_during_terminal_emit(
+    tmp_path: Path,
+    handler_outcome: str,
+    terminal_type: EventType,
+    activity_outcome: str,
+) -> None:
+    handler_calls = 0
+
+    async def completed_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        if handler_outcome == "error":
+            raise ExpectedToolFailure(ToolErrorCode.NOT_FOUND, "Missing.")
+        return ToolOutput(content="ok")
+
+    context, _, writer = execution_context(tmp_path)
+    sink = PreDeliveryBlockingToolTerminalSink()
+    context = replace(
+        context,
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=context.workspace.key,
+            sink=sink,
+        ),
+    )
+    executor = ToolExecutor(echo_registry(completed_handler))
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await sink.terminal_entered.wait()
+
+    task.cancel("cancel during terminal emit")
+    await asyncio.sleep(0)
+    sink.release_terminal.set()
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await task
+
+    assert captured.value.args == ("cancel during terminal emit",)
+    assert handler_calls == 1
+    assert sink.terminal_attempts == 1
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        terminal_type,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == activity_outcome
+
+
+@pytest.mark.asyncio
+async def test_executor_bounds_unresponsive_success_terminal_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    handler_calls = 0
+
+    async def completed_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        return ToolOutput(content="ok")
+
+    context, _, writer = execution_context(tmp_path)
+    sink = PreDeliveryBlockingToolTerminalSink()
+    context = replace(
+        context,
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=context.workspace.key,
+            sink=sink,
+        ),
+    )
+    monkeypatch.setattr(
+        "awesome_agent.core.tools.executor._TERMINAL_CANCELLATION_CLEANUP_SECONDS",
+        0.01,
+    )
+    executor = ToolExecutor(echo_registry(completed_handler))
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await sink.terminal_entered.wait()
+
+    task.cancel("cancel during terminal emit")
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await asyncio.wait_for(task, timeout=1)
+
+    assert captured.value.args == ("cancel during terminal emit",)
+    assert handler_calls == 1
+    assert sink.terminal_attempts == 1
+    assert [event.event_type for event in sink.events] == [EventType.TOOL_STARTED]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "success"
+    assert "terminal event delivery is uncertain" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_executor_does_not_swallow_audit_failure_on_normal_completion(
+    tmp_path: Path,
+) -> None:
+    context, sink, _ = execution_context(tmp_path)
+    writer = FailingActivityWriter()
+    context = replace(context, activity_writer=writer)
+    executor = ToolExecutor(echo_registry())
+
+    with pytest.raises(ToolInvariantError, match="audit finalization"):
+        await executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+
+    assert writer.calls == 1
+    assert [event.event_type for event in sink.events] == [EventType.TOOL_STARTED]
 
 
 @pytest.mark.asyncio

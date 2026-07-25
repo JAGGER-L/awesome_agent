@@ -50,7 +50,7 @@ class _WorkspaceSkillBoundary:
     skills_root_identity: FileIdentity
     package_root: Path
     package_root_identity: FileIdentity
-    skill_file: Path
+    package_component_identities: tuple[FileIdentity, ...]
     skill_file_fingerprint: FileFingerprint
     skill_file_content_hash: str
 

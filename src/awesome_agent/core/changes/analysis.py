@@ -11,7 +11,7 @@ from awesome_agent.core.changes.errors import (
     ChangeLifecycleError,
     ChangeSetNotFound,
 )
-from awesome_agent.core.changes.journal import NodeSnapshot
+from awesome_agent.core.changes.filesystem import NodeSnapshot
 from awesome_agent.core.changes.models import (
     ChangeSet,
     FileChange,
@@ -79,7 +79,12 @@ def merge_file_changes(changes: list[FileChange]) -> tuple[FileChange, ...]:
     for change in changes:
         existing = merged.get(change.path)
         if existing is None:
-            merged[change.path] = change
+            merged[change.path] = change.model_copy(
+                update={
+                    "before_node_type": change.resolved_before_node_type,
+                    "after_node_type": change.resolved_after_node_type,
+                }
+            )
             order.append(change.path)
             continue
         before_exists = existing.before_hash is not None
@@ -94,10 +99,17 @@ def merge_file_changes(changes: list[FileChange]) -> tuple[FileChange, ...]:
             kind = FileChangeKind.DELETED
         else:
             kind = FileChangeKind.UPDATED
+        before_node_type = existing.resolved_before_node_type
+        after_node_type = change.resolved_after_node_type
+        display_node_type = after_node_type or before_node_type
+        if display_node_type is None:
+            raise ChangeLifecycleError("Merged file change has no node type.")
         merged[change.path] = existing.model_copy(
             update={
                 "kind": kind,
-                "node_type": change.node_type if after_exists else existing.node_type,
+                "node_type": display_node_type,
+                "before_node_type": before_node_type,
+                "after_node_type": after_node_type,
                 "after_hash": change.after_hash,
                 "after_blob": change.after_blob,
                 "after_mode": change.after_mode,
@@ -134,10 +146,17 @@ class ChangeAnalyzer:
         digest = change.before_hash if before else change.after_hash
         blob = change.before_blob if before else change.after_blob
         mode = change.before_mode if before else change.after_mode
+        node_type = (
+            change.resolved_before_node_type
+            if before
+            else change.resolved_after_node_type
+        )
         if digest is None:
             return None
-        if change.node_type is FileNodeType.DIRECTORY:
-            return NodeSnapshot(change.node_type, None, mode)
+        if node_type is None:
+            raise ChangeBlobCorrupt(f"Change node type is missing for {change.path}.")
+        if node_type is FileNodeType.DIRECTORY:
+            return NodeSnapshot(node_type, None, mode)
         if blob is None:
             raise ChangeBlobCorrupt(
                 f"Change blob reference is missing for {change.path}."
@@ -148,7 +167,7 @@ class ChangeAnalyzer:
                 "Change blob content does not match the recorded hash for "
                 f"{change.path}."
             )
-        return NodeSnapshot(change.node_type, content, mode)
+        return NodeSnapshot(node_type, content, mode)
 
     def analyze(self, change_set_id: str) -> ChangeAnalysis:
         change_set = self._get(change_set_id)
@@ -171,7 +190,12 @@ class ChangeAnalyzer:
                 else b""
             )
 
-            if change.node_type is FileNodeType.DIRECTORY:
+            display_node_type = (
+                change.resolved_after_node_type
+                or change.resolved_before_node_type
+                or change.node_type
+            )
+            if display_node_type is FileNodeType.DIRECTORY:
                 deltas.append(
                     DirectoryChange(path=change.path, change_kind=change.kind)
                 )
@@ -179,7 +203,7 @@ class ChangeAnalyzer:
                     f"Directory change: {change.path} ({change.kind.value})\n"
                 )
                 continue
-            if change.node_type is FileNodeType.SYMLINK:
+            if display_node_type is FileNodeType.SYMLINK:
                 deltas.append(SymlinkChange(path=change.path, change_kind=change.kind))
                 diff_parts.append(
                     f"Symlink change: {change.path} ({change.kind.value})\n"

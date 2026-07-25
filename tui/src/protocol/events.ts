@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { boundedText, safeIntegerSchema, utcTimestampSchema } from "./base.js";
+import {
+  boundedText,
+  interactionDecisionSchema,
+  safeIntegerSchema,
+  utcTimestampSchema,
+} from "./base.js";
 
 export const eventTypes = [
   "operation.started",
@@ -178,7 +183,7 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
     choices: z
       .array(
         z.strictObject({
-          decision: boundedText(1, 128),
+          decision: interactionDecisionSchema,
           label: boundedText(1, 200),
           description: boundedText(0, 1_000)
             .nullish()
@@ -191,7 +196,7 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("interaction.resolved"),
     interaction_id: boundedText(1, 128),
-    decision: boundedText(1, 128),
+    decision: interactionDecisionSchema,
   }),
   z.strictObject({
     kind: z.literal("warning"),

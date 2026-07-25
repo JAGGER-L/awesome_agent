@@ -25,6 +25,12 @@ class ShellDialect(StrEnum):
     POWERSHELL = "powershell"
 
 
+class _PowerShellExecutionOption(StrEnum):
+    COMMAND = "command"
+    ENCODED_COMMAND = "encoded_command"
+    UNSAFE = "unsafe"
+
+
 @dataclass(frozen=True, slots=True)
 class CommandPolicyDecision:
     action: CommandPolicyAction
@@ -35,6 +41,17 @@ class CommandPolicyDecision:
 class _InspectionState:
     nodes: int = 0
     outside_workspace: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _CompoundSegment:
+    command: str
+    following_separator: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SegmentInspection:
+    changed_cwds: tuple[Path, ...] | None = None
 
 
 class _DeniedCommand(Exception):
@@ -79,6 +96,16 @@ _DESTRUCTIVE_COMMANDS = {
 }
 _POSIX_SHELLS = {"ash", "bash", "dash", "ksh", "sh", "zsh"}
 _POWERSHELLS = {"powershell", "pwsh"}
+_POWERSHELL_DASHES = {"-", "\u2013", "\u2014", "\u2015"}
+_POWERSHELL_NON_EXECUTION_SWITCHES = (
+    ("configurationfile", "configurationfile"),
+    ("configurationname", "config"),
+    ("custompipename", "cus"),
+    ("executionpolicy", "ex"),
+    ("ep", "ep"),
+    ("encodedarguments", "encodeda"),
+    ("ea", "ea"),
+)
 _PYTHON_NAME = re.compile(r"(?:python(?:\d+(?:\.\d+)*)?|py)", re.IGNORECASE)
 _ENVIRONMENT_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
 _FORK_BOMB = re.compile(
@@ -127,8 +154,8 @@ def _command_name(token: str) -> str:
     return lowered
 
 
-def _split_compound(command: str, dialect: ShellDialect) -> list[str]:
-    segments: list[str] = []
+def _split_compound(command: str, dialect: ShellDialect) -> list[_CompoundSegment]:
+    segments: list[_CompoundSegment] = []
     current: list[str] = []
     quote: str | None = None
     escaped = False
@@ -152,6 +179,26 @@ def _split_compound(command: str, dialect: ShellDialect) -> list[str]:
             escaped = True
             index += 1
             continue
+        if quote != "'" and (
+            (
+                dialect is ShellDialect.POSIX
+                and (
+                    char == "`"
+                    or (quote is None and command[index : index + 2] in {"<(", ">("})
+                    or (
+                        command[index : index + 2] == "$("
+                        and command[index : index + 3] != "$(("
+                    )
+                )
+            )
+            or (
+                dialect is ShellDialect.POWERSHELL
+                and command[index : index + 2] == "$("
+            )
+        ):
+            raise _DeniedCommand(
+                "Shell command substitutions cannot be inspected safely."
+            )
         if quote is not None:
             current.append(char)
             if char == quote:
@@ -173,7 +220,8 @@ def _split_compound(command: str, dialect: ShellDialect) -> list[str]:
         if separator_length:
             rendered = "".join(current).strip()
             if rendered:
-                segments.append(rendered)
+                separator = pair if separator_length == 2 else char
+                segments.append(_CompoundSegment(rendered, separator))
             current = []
             index += separator_length
             continue
@@ -183,7 +231,7 @@ def _split_compound(command: str, dialect: ShellDialect) -> list[str]:
         raise _DeniedCommand("Command could not be parsed safely.")
     rendered = "".join(current).strip()
     if rendered:
-        segments.append(rendered)
+        segments.append(_CompoundSegment(rendered, None))
     return segments
 
 
@@ -255,8 +303,13 @@ def _glob_base(value: str) -> str:
     positions = [value.find(marker) for marker in "*?[" if marker in value]
     if not positions:
         return value
-    prefix = value[: min(positions)].rstrip("/\\")
-    return prefix or "."
+    raw_prefix = value[: min(positions)]
+    prefix = raw_prefix.rstrip("/\\")
+    if prefix:
+        return prefix
+    if raw_prefix.startswith(("/", "\\")):
+        return raw_prefix[0]
+    return "."
 
 
 def _native_path(value: str, cwd: Path) -> Path | None:
@@ -319,10 +372,22 @@ def _is_block_device(value: str) -> bool:
     )
 
 
-def _command_payload(tokens: list[str], switches: set[str]) -> str | None:
+def _command_payload(
+    tokens: list[str],
+    switches: set[str],
+    *,
+    allow_attached: bool = False,
+) -> str | None:
     for index, token in enumerate(tokens[1:], start=1):
-        if token.casefold() in switches:
-            return " ".join(tokens[index + 1 :]).strip() or None
+        lowered = token.casefold()
+        if lowered in switches:
+            return " ".join(tokens[index + 1 :]).strip()
+        if allow_attached:
+            for switch in switches:
+                if lowered.startswith(switch) and len(token) > len(switch):
+                    return " ".join(
+                        [token[len(switch) :], *tokens[index + 1 :]]
+                    ).strip()
     return None
 
 
@@ -486,6 +551,124 @@ def _inspect_python(
     ).visit(tree)
 
 
+def _python_command_source(
+    tokens: list[str],
+    index: int,
+    *,
+    dialect: ShellDialect,
+) -> str:
+    option = tokens[index]
+    if option == "-c":
+        if index + 1 >= len(tokens):
+            raise _DeniedCommand("Python command is missing its payload.")
+        return tokens[index + 1]
+
+    source = option[2:]
+    if not source:
+        raise _DeniedCommand("Python command is missing its payload.")
+    quote_characters = '"' if dialect is ShellDialect.CMD else "\"'"
+    if source[0] not in quote_characters:
+        return source
+    quote = source[0]
+    parts = [source]
+    cursor = index + 1
+    while not parts[-1].endswith(quote):
+        if cursor >= len(tokens):
+            raise _DeniedCommand("Python command payload could not be parsed safely.")
+        parts.append(tokens[cursor])
+        cursor += 1
+    return _strip_quotes(" ".join(parts))
+
+
+def _powershell_switch_key(token: str) -> str | None:
+    if len(token) < 2:
+        return None
+    first = token[0]
+    if first == "/":
+        return token[1:].casefold()
+    if first not in _POWERSHELL_DASHES:
+        return None
+    offset = 2 if len(token) > 1 and token[1] == first else 1
+    return token[offset:].casefold()
+
+
+def _powershell_switch_matches(
+    key: str,
+    canonical: str,
+    smallest_unambiguous: str,
+) -> bool:
+    return len(key) >= len(smallest_unambiguous) and canonical.startswith(key)
+
+
+def _known_non_execution_powershell_switch(key: str) -> bool:
+    return any(
+        _powershell_switch_matches(key, canonical, smallest)
+        for canonical, smallest in _POWERSHELL_NON_EXECUTION_SWITCHES
+    )
+
+
+def _powershell_execution_option(token: str) -> _PowerShellExecutionOption | None:
+    key = _powershell_switch_key(token)
+    if key is None:
+        return None
+    stem = re.split("[:=]", key, maxsplit=1)[0]
+    has_attached_separator = stem != key
+    if _powershell_switch_matches(
+        stem, "commandwithargs", "commandwithargs"
+    ) or _powershell_switch_matches(stem, "cwa", "cwa"):
+        return _PowerShellExecutionOption.UNSAFE
+    if _powershell_switch_matches(stem, "command", "c"):
+        return (
+            _PowerShellExecutionOption.UNSAFE
+            if has_attached_separator
+            else _PowerShellExecutionOption.COMMAND
+        )
+    if _powershell_switch_matches(stem, "executionpolicy", "ex") or (
+        _powershell_switch_matches(stem, "ep", "ep")
+    ):
+        return None
+    if _powershell_switch_matches(
+        stem, "encodedcommand", "e"
+    ) or _powershell_switch_matches(stem, "ec", "e"):
+        return (
+            _PowerShellExecutionOption.UNSAFE
+            if has_attached_separator
+            else _PowerShellExecutionOption.ENCODED_COMMAND
+        )
+    if _known_non_execution_powershell_switch(stem):
+        return None
+    if stem.startswith(("c", "e")):
+        return _PowerShellExecutionOption.UNSAFE
+    return None
+
+
+def _inspect_start_process(tokens: list[str]) -> None:
+    file_path_seen = False
+    for token in tokens[1:]:
+        key = (
+            _powershell_switch_key(token)
+            if token and token[0] in _POWERSHELL_DASHES
+            else None
+        )
+        if key is not None:
+            stem = re.split("[:=]", key, maxsplit=1)[0]
+            if _powershell_switch_matches(stem, "argumentlist", "a"):
+                raise _DeniedCommand(
+                    "PowerShell Start-Process arguments cannot be inspected safely."
+                )
+            continue
+        if token.startswith("@"):
+            raise _DeniedCommand(
+                "PowerShell Start-Process splatting cannot be inspected safely."
+            )
+        if not file_path_seen:
+            file_path_seen = True
+            continue
+        raise _DeniedCommand(
+            "PowerShell Start-Process positional arguments cannot be inspected safely."
+        )
+
+
 def _inspect_powershell(
     tokens: list[str],
     *,
@@ -495,8 +678,12 @@ def _inspect_powershell(
     depth: int,
 ) -> None:
     for index, token in enumerate(tokens[1:], start=1):
-        option = token.casefold()
-        if option in {"-encodedcommand", "-enc", "/encodedcommand", "/enc"}:
+        option = _powershell_execution_option(token)
+        if option is _PowerShellExecutionOption.UNSAFE:
+            raise _DeniedCommand(
+                "PowerShell execution option could not be parsed safely."
+            )
+        if option is _PowerShellExecutionOption.ENCODED_COMMAND:
             if index + 1 >= len(tokens):
                 raise _DeniedCommand(
                     "PowerShell encoded command is missing its payload."
@@ -517,7 +704,7 @@ def _inspect_powershell(
                 depth=depth + 1,
             )
             return
-        if option in {"-command", "-c", "/command", "/c"}:
+        if option is _PowerShellExecutionOption.COMMAND:
             payload = " ".join(tokens[index + 1 :]).strip()
             if not payload:
                 raise _DeniedCommand("PowerShell command is missing its payload.")
@@ -542,8 +729,9 @@ def _inspect_known_wrapper(
     workspace: Path,
     state: _InspectionState,
     depth: int,
-) -> bool:
+) -> _SegmentInspection | None:
     payload_tokens: list[str] | None = None
+    payload_cwd = cwd
     if name in {"builtin", "call", "command", "nohup"} or (
         name == "exec" and dialect is ShellDialect.POSIX
     ):
@@ -564,13 +752,64 @@ def _inspect_known_wrapper(
         payload_tokens = remaining
     elif name == "env":
         remaining = tokens[1:]
+        nested_cwd = cwd
+        cwd_changed = False
         while remaining:
             option = remaining[0].casefold()
             if option == "--":
                 remaining = remaining[1:]
                 break
-            if option in {"-u", "--unset", "-c", "--chdir"}:
+            if option in {"-u", "--unset"}:
+                if len(remaining) < 2:
+                    raise _DeniedCommand(
+                        "Environment wrapper is missing an option value."
+                    )
                 remaining = remaining[2:]
+                continue
+            chdir_target: str | None = None
+            consumed = 0
+            if option in {"-c", "--chdir"}:
+                if len(remaining) < 2:
+                    raise _DeniedCommand(
+                        "Environment wrapper is missing its working directory."
+                    )
+                chdir_target = remaining[1]
+                consumed = 2
+            elif option.startswith("--chdir="):
+                chdir_target = remaining[0].split("=", 1)[1]
+                consumed = 1
+            elif remaining[0].startswith("-C") and len(remaining[0]) > 2:
+                chdir_target = remaining[0][2:]
+                consumed = 1
+            if chdir_target is not None:
+                if cwd_changed:
+                    raise _DeniedCommand(
+                        "Multiple environment working directories cannot be inspected "
+                        "safely."
+                    )
+                resolved_cwd = _native_path(chdir_target, cwd)
+                if resolved_cwd is None:
+                    raise _DeniedCommand(
+                        "Environment working directory cannot be resolved safely."
+                    )
+                if _path_outside_workspace(chdir_target, cwd, workspace):
+                    state.outside_workspace = True
+                nested_cwd = resolved_cwd
+                cwd_changed = True
+                remaining = remaining[consumed:]
+                continue
+            if option in {"-a", "--argv0"}:
+                if len(remaining) < 2:
+                    raise _DeniedCommand(
+                        "Environment wrapper is missing its argv0 value."
+                    )
+                remaining = remaining[2:]
+                continue
+            if option.startswith("--argv0="):
+                remaining = remaining[1:]
+                continue
+            if remaining[0].startswith("-a") and len(remaining[0]) > 2:
+                remaining = remaining[1:]
                 continue
             split_payload: str | None = None
             if option in {"-s", "--split-string"}:
@@ -589,20 +828,38 @@ def _inspect_known_wrapper(
                 _inspect_command(
                     f"{split_payload} {suffix}".strip(),
                     dialect=dialect,
-                    cwd=cwd,
+                    cwd=nested_cwd,
                     workspace=workspace,
                     state=state,
                     depth=depth + 1,
                 )
-                return True
-            if (
-                option.startswith("-")
-                or _ENVIRONMENT_ASSIGNMENT.fullmatch(remaining[0]) is not None
+                return _SegmentInspection()
+            if _ENVIRONMENT_ASSIGNMENT.fullmatch(remaining[0]) is not None:
+                remaining = remaining[1:]
+                continue
+            if option in {
+                "-",
+                "-0",
+                "--debug",
+                "--help",
+                "--ignore-environment",
+                "--list-signal-handling",
+                "--null",
+                "--version",
+                "-i",
+                "-v",
+            } or option.startswith(
+                ("--block-signal", "--default-signal", "--ignore-signal")
             ):
                 remaining = remaining[1:]
                 continue
+            if option.startswith("-"):
+                raise _DeniedCommand(
+                    "Environment wrapper option cannot be inspected safely."
+                )
             break
         payload_tokens = remaining
+        payload_cwd = nested_cwd
     elif name == "nice":
         remaining = tokens[1:]
         while remaining:
@@ -701,7 +958,7 @@ def _inspect_known_wrapper(
     elif name in {"eval", "iex", "invoke-expression"}:
         payload = " ".join(tokens[1:]).strip()
         if payload:
-            _inspect_command(
+            changed_cwds = _inspect_command(
                 payload,
                 dialect=dialect,
                 cwd=cwd,
@@ -709,17 +966,106 @@ def _inspect_known_wrapper(
                 state=state,
                 depth=depth + 1,
             )
-        return True
+            return _SegmentInspection(changed_cwds=changed_cwds)
+        return _SegmentInspection()
     if payload_tokens:
-        _inspect_command(
+        changed_cwds = _inspect_command(
             _join_command_tokens(payload_tokens, dialect),
             dialect=dialect,
-            cwd=cwd,
+            cwd=payload_cwd,
             workspace=workspace,
             state=state,
             depth=depth + 1,
         )
-    return payload_tokens is not None
+        if name in {"builtin", "call", "command"}:
+            return _SegmentInspection(changed_cwds=changed_cwds)
+    return _SegmentInspection() if payload_tokens is not None else None
+
+
+def _directory_change_target(
+    name: str,
+    tokens: list[str],
+    *,
+    dialect: ShellDialect,
+) -> str | None:
+    if dialect is ShellDialect.CMD:
+        for prefix in ("chdir", "cd"):
+            if (
+                name.startswith(prefix)
+                and name != prefix
+                and len(tokens) == 1
+                and tokens[0][len(prefix) :].startswith((".", "/", "\\"))
+            ):
+                return tokens[0][len(prefix) :]
+        if name not in {"cd", "chdir"}:
+            return None
+        remaining = tokens[1:]
+        if remaining and remaining[0].casefold() == "/d":
+            remaining = remaining[1:]
+        if len(remaining) > 1:
+            raise _DeniedCommand("Directory change could not be parsed safely.")
+        return remaining[0] if remaining else ""
+    if dialect is ShellDialect.POSIX:
+        if name != "cd":
+            return None
+        remaining = tokens[1:]
+        while remaining and remaining[0] in {"-e", "-L", "-P"}:
+            remaining = remaining[1:]
+        if remaining and remaining[0] == "--":
+            remaining = remaining[1:]
+        if len(remaining) > 1:
+            raise _DeniedCommand("Directory change could not be parsed safely.")
+        return remaining[0] if remaining else ""
+    if name not in {"cd", "chdir", "set-location", "sl"}:
+        return None
+    remaining = tokens[1:]
+    target: str | None = None
+    index = 0
+    while index < len(remaining):
+        token = remaining[index]
+        lowered = token.casefold()
+        if lowered in {"-path", "-literalpath"}:
+            if target is not None or index + 1 >= len(remaining):
+                raise _DeniedCommand("Directory change could not be parsed safely.")
+            target = remaining[index + 1]
+            index += 2
+            continue
+        if lowered.startswith(("-path:", "-literalpath:")):
+            if target is not None:
+                raise _DeniedCommand("Directory change could not be parsed safely.")
+            target = token.split(":", 1)[1]
+            index += 1
+            continue
+        if token.startswith("-") or target is not None:
+            raise _DeniedCommand("Directory change could not be parsed safely.")
+        target = token
+        index += 1
+    return target or ""
+
+
+def _inspect_directory_change(
+    name: str,
+    tokens: list[str],
+    *,
+    dialect: ShellDialect,
+    cwd: Path,
+    workspace: Path,
+    state: _InspectionState,
+    has_following_segment: bool,
+) -> _SegmentInspection | None:
+    target = _directory_change_target(name, tokens, dialect=dialect)
+    if target is None:
+        return None
+    if not target:
+        if has_following_segment:
+            raise _DeniedCommand("Directory change target cannot be resolved safely.")
+        return _SegmentInspection()
+    changed_cwd = _native_path(target, cwd)
+    if changed_cwd is None:
+        raise _DeniedCommand("Directory change target cannot be resolved safely.")
+    if _path_outside_workspace(target, cwd, workspace):
+        state.outside_workspace = True
+    return _SegmentInspection(changed_cwds=(changed_cwd,))
 
 
 def _inspect_segment(
@@ -730,7 +1076,8 @@ def _inspect_segment(
     workspace: Path,
     state: _InspectionState,
     depth: int,
-) -> None:
+    has_following_segment: bool,
+) -> _SegmentInspection:
     tokens = _tokens(segment, dialect)
     if not tokens:
         raise _DeniedCommand("Command could not be parsed safely.")
@@ -744,6 +1091,15 @@ def _inspect_segment(
     if not tokens:
         raise _DeniedCommand("Command could not be parsed safely.")
 
+    executable = tokens[0]
+    if (
+        dialect is ShellDialect.CMD
+        and any(marker in executable for marker in ("%", "!"))
+    ) or (dialect is not ShellDialect.CMD and "$" in executable):
+        raise _DeniedCommand(
+            "Dynamically expanded executables cannot be inspected safely."
+        )
+
     name = _command_name(tokens[0])
     if name in _UNSUPPORTED_CONTROL_WORDS:
         raise _DeniedCommand("Shell control-flow commands cannot be inspected safely.")
@@ -754,9 +1110,27 @@ def _inspect_segment(
     if name in _DISK_COMMANDS or name.startswith("mkfs."):
         raise _DeniedCommand("Disk formatting and partition commands are not allowed.")
 
+    directory_change = _inspect_directory_change(
+        name,
+        tokens,
+        dialect=dialect,
+        cwd=cwd,
+        workspace=workspace,
+        state=state,
+        has_following_segment=has_following_segment,
+    )
+    if directory_change is not None:
+        return directory_change
+
     if name == "cmd":
-        payload = _command_payload(tokens, {"/c", "/k", "-c", "-k"})
+        payload = _command_payload(
+            tokens,
+            {"/c", "/k", "-c", "-k"},
+            allow_attached=True,
+        )
         if payload is not None:
+            if not payload:
+                raise _DeniedCommand("CMD command is missing its payload.")
             _inspect_command(
                 payload,
                 dialect=ShellDialect.CMD,
@@ -765,10 +1139,12 @@ def _inspect_segment(
                 state=state,
                 depth=depth + 1,
             )
-        return
+        return _SegmentInspection()
     if name in _POSIX_SHELLS:
         payload = _command_payload(tokens, {"-c", "-lc", "-cl"})
         if payload is not None:
+            if not payload:
+                raise _DeniedCommand("Shell command is missing its payload.")
             _inspect_command(
                 payload,
                 dialect=ShellDialect.POSIX,
@@ -777,7 +1153,7 @@ def _inspect_segment(
                 state=state,
                 depth=depth + 1,
             )
-        return
+        return _SegmentInspection()
     if name in _POWERSHELLS:
         _inspect_powershell(
             tokens,
@@ -786,22 +1162,20 @@ def _inspect_segment(
             state=state,
             depth=depth,
         )
-        return
+        return _SegmentInspection()
     if _PYTHON_NAME.fullmatch(name) is not None:
         for index, token in enumerate(tokens[1:], start=1):
-            if token == "-c":
-                if index + 1 >= len(tokens):
-                    raise _DeniedCommand("Python command is missing its payload.")
+            if token == "-c" or token.startswith("-c"):
                 _inspect_python(
-                    tokens[index + 1],
+                    _python_command_source(tokens, index, dialect=dialect),
                     dialect=dialect,
                     cwd=cwd,
                     workspace=workspace,
                     state=state,
                     depth=depth,
                 )
-                return
-    if _inspect_known_wrapper(
+                return _SegmentInspection()
+    wrapper = _inspect_known_wrapper(
         name,
         tokens,
         segment=segment,
@@ -810,14 +1184,18 @@ def _inspect_segment(
         workspace=workspace,
         state=state,
         depth=depth,
-    ):
-        return
+    )
+    if wrapper is not None:
+        return wrapper
 
     if name == "dd":
         for token in tokens[1:]:
             if token.casefold().startswith("of=/dev/"):
                 raise _DeniedCommand("Raw block-device writes are not allowed.")
-    if name == "start-process" and any(
+    is_start_process = name in {"saps", "start-process"} or (
+        dialect is ShellDialect.POWERSHELL and name == "start"
+    )
+    if is_start_process and any(
         token.casefold() in {"-verb", "-verb:runas"} for token in tokens[1:]
     ):
         for index, token in enumerate(tokens[1:], start=1):
@@ -828,6 +1206,8 @@ def _inspect_segment(
                     )
             elif token.casefold() == "-verb:runas":
                 raise _DeniedCommand("Privilege elevation commands are not allowed.")
+    if is_start_process and dialect is ShellDialect.POWERSHELL:
+        _inspect_start_process(tokens)
 
     for index, token in enumerate(tokens[1:], start=1):
         if token in {">", ">>"} and index + 1 < len(tokens):
@@ -873,6 +1253,7 @@ def _inspect_segment(
             and _path_outside_workspace(cleaned, cwd, workspace)
         ):
             state.outside_workspace = True
+    return _SegmentInspection()
 
 
 def _inspect_command(
@@ -883,7 +1264,7 @@ def _inspect_command(
     workspace: Path,
     state: _InspectionState,
     depth: int,
-) -> None:
+) -> tuple[Path, ...]:
     if depth > _MAX_INSPECTION_DEPTH:
         raise _DeniedCommand("Command wrapper nesting exceeds the safety limit.")
     if _FORK_BOMB.search(command):
@@ -891,18 +1272,46 @@ def _inspect_command(
     segments = _split_compound(command, dialect)
     if not segments:
         raise _DeniedCommand("Command could not be parsed safely.")
-    state.nodes += len(segments)
-    if state.nodes > _MAX_INSPECTION_NODES:
-        raise _DeniedCommand("Command complexity exceeds the safety limit.")
-    for segment in segments:
-        _inspect_segment(
-            segment,
-            dialect=dialect,
-            cwd=cwd,
-            workspace=workspace,
-            state=state,
-            depth=depth,
-        )
+    possible_cwds: tuple[Path, ...] = (cwd,)
+    for index, segment in enumerate(segments):
+        following_cwds: list[Path] = []
+        for active_cwd in possible_cwds:
+            state.nodes += 1
+            if state.nodes > _MAX_INSPECTION_NODES:
+                raise _DeniedCommand("Command complexity exceeds the safety limit.")
+            inspected = _inspect_segment(
+                segment.command,
+                dialect=dialect,
+                cwd=active_cwd,
+                workspace=workspace,
+                state=state,
+                depth=depth,
+                has_following_segment=index + 1 < len(segments),
+            )
+            changed_cwds = inspected.changed_cwds
+            if changed_cwds is None:
+                following_cwds.append(active_cwd)
+            elif segment.following_separator == "&&":
+                following_cwds.extend(changed_cwds)
+            elif segment.following_separator == "||":
+                following_cwds.append(active_cwd)
+            elif segment.following_separator == "|":
+                following_cwds.append(active_cwd)
+                if dialect is ShellDialect.POWERSHELL:
+                    following_cwds.extend(changed_cwds)
+            else:
+                following_cwds.append(active_cwd)
+                following_cwds.extend(changed_cwds)
+        possible_cwds = _unique_paths(following_cwds)
+    return possible_cwds
+
+
+def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
+    unique: dict[str, Path] = {}
+    for path in paths:
+        key = os.path.normcase(os.path.abspath(path))
+        unique.setdefault(key, path)
+    return tuple(unique.values())
 
 
 def evaluate_command(

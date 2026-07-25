@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,12 +54,88 @@ class Chunks:
         return self.chunks.pop(0) if self.chunks else b""
 
 
+class SlowThenControlRequests:
+    def __init__(self, slow_started: asyncio.Event) -> None:
+        self._slow_started = slow_started
+        self._step = 0
+
+    async def read(self, maximum: int) -> bytes:
+        del maximum
+        self._step += 1
+        if self._step == 1:
+            return _initialize_request(0) + _request(
+                1,
+                "command.execute",
+                {"name": "status", "arguments": []},
+            )
+        if self._step == 2:
+            await self._slow_started.wait()
+            return _request(
+                2,
+                "operation.cancel",
+                {"operation_id": "operation_1"},
+            ) + _request(3, "shutdown", {})
+        return b""
+
+
+class RequestThenOpenInput:
+    def __init__(self, request: bytes) -> None:
+        self._request = request
+        self._delivered = False
+        self.blocked = asyncio.Event()
+
+    async def read(self, maximum: int) -> bytes:
+        del maximum
+        if not self._delivered:
+            self._delivered = True
+            return self._request
+        self.blocked.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
 class Output:
     def __init__(self) -> None:
         self.frames: list[bytes] = []
 
     async def write(self, data: bytes) -> None:
         self.frames.append(data)
+
+
+class InvalidRequestOutput(Output):
+    def __init__(self) -> None:
+        super().__init__()
+        self.invalid_request_seen = asyncio.Event()
+
+    async def write(self, data: bytes) -> None:
+        await super().write(data)
+        frame = json.loads(data)
+        if frame.get("id") is None and frame.get("error", {}).get("code") == -32600:
+            self.invalid_request_seen.set()
+
+
+class FailingOutput:
+    def __init__(self, failure_gate: asyncio.Event) -> None:
+        self._failure_gate = failure_gate
+
+    async def write(self, data: bytes) -> None:
+        del data
+        await self._failure_gate.wait()
+        raise RuntimeError("protocol writer failed")
+
+
+class BlockingBinaryOutput:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def write(self, data: bytes) -> int:
+        self.entered.set()
+        self.release.wait(timeout=1)
+        return len(data)
+
+    def flush(self) -> None:
+        return None
 
 
 class Facade:
@@ -174,12 +252,254 @@ class Facade:
         return ApplicationResult.success(ShutdownResult())
 
 
+class SlowCommandFacade(Facade):
+    def __init__(self) -> None:
+        super().__init__()
+        self.slow_started = asyncio.Event()
+        self.release_slow = asyncio.Event()
+        self.slow_completed = asyncio.Event()
+        self.slow_cancelled = asyncio.Event()
+        self.cancel_seen = asyncio.Event()
+        self.shutdown_seen = asyncio.Event()
+
+    async def execute_command(
+        self, intent: CommandIntent
+    ) -> ApplicationResult[CommandOutcome]:
+        self.slow_started.set()
+        try:
+            await self.release_slow.wait()
+            return await super().execute_command(intent)
+        except asyncio.CancelledError:
+            self.slow_cancelled.set()
+            raise
+        finally:
+            self.slow_completed.set()
+
+    async def cancel_operation(
+        self, operation_id: str
+    ) -> ApplicationResult[CancelResult]:
+        self.cancel_seen.set()
+        return await super().cancel_operation(operation_id)
+
+    async def shutdown(self) -> ApplicationResult[ShutdownResult]:
+        self.shutdown_seen.set()
+        self.release_slow.set()
+        return await super().shutdown()
+
+
+class BlockingControlFacade(Facade):
+    def __init__(self, blocked_method: str) -> None:
+        super().__init__()
+        self._blocked_method = blocked_method
+        self.blocked_started = asyncio.Event()
+        self.blocked_cancelled = asyncio.Event()
+        self.release_blocked = asyncio.Event()
+        self.cancel_seen = asyncio.Event()
+
+    async def initialize(self) -> ApplicationResult[InitializeResult]:
+        if self._blocked_method == "initialize":
+            await self._block()
+        if self._blocked_method == "interaction.respond":
+            return ApplicationResult.success(
+                InitializeResult(
+                    product_version=PRODUCT_VERSION,
+                    protocol_version=3,
+                    status=InitializeStatus.TRUST_REQUIRED,
+                    session_id="session_1",
+                    interaction_id="interaction_1",
+                    workspace=WorkspacePresentation(display_path="C:\\workspace"),
+                )
+            )
+        return await super().initialize()
+
+    async def respond_interaction(
+        self, interaction_id: str, decision: str
+    ) -> ApplicationResult[InteractionResult]:
+        if self._blocked_method == "interaction.respond":
+            await self._block()
+        return await super().respond_interaction(interaction_id, decision)
+
+    async def cancel_operation(
+        self, operation_id: str
+    ) -> ApplicationResult[CancelResult]:
+        self.cancel_seen.set()
+        return await super().cancel_operation(operation_id)
+
+    async def _block(self) -> None:
+        self.blocked_started.set()
+        try:
+            await self.release_blocked.wait()
+        except asyncio.CancelledError:
+            self.blocked_cancelled.set()
+            raise
+
+
+class FailFirstShutdownFacade(Facade):
+    async def shutdown(self) -> ApplicationResult[ShutdownResult]:
+        self.shutdown_calls += 1
+        if self.shutdown_calls == 1:
+            raise RuntimeError("shutdown failed before cleanup")
+        return ApplicationResult.success(ShutdownResult())
+
+
+class HandshakeTrackingFacade(Facade):
+    def __init__(
+        self,
+        *,
+        initialize_status: InitializeStatus = InitializeStatus.READY,
+        block_initialize: bool = False,
+    ) -> None:
+        super().__init__()
+        self.initialize_status = initialize_status
+        self.block_initialize = block_initialize
+        self.initialize_calls = 0
+        self.initialize_started = asyncio.Event()
+        self.release_initialize = asyncio.Event()
+        self.business_calls: list[str] = []
+
+    async def initialize(self) -> ApplicationResult[InitializeResult]:
+        self.initialize_calls += 1
+        self.initialize_started.set()
+        if self.block_initialize:
+            await self.release_initialize.wait()
+        return ApplicationResult.success(
+            InitializeResult(
+                product_version=PRODUCT_VERSION,
+                protocol_version=3,
+                status=self.initialize_status,
+                session_id="session_1",
+                interaction_id=(
+                    "interaction_1"
+                    if self.initialize_status is not InitializeStatus.READY
+                    else None
+                ),
+                workspace=WorkspacePresentation(display_path="C:\\workspace"),
+            )
+        )
+
+    async def get_state(self) -> ApplicationResult[ApplicationState]:
+        self.business_calls.append("application.getState")
+        return await super().get_state()
+
+    async def submit_turn(
+        self, thread_id: str, content: str, client_message_id: str
+    ) -> ApplicationResult[OperationAccepted]:
+        self.business_calls.append("turn.submit")
+        return await super().submit_turn(thread_id, content, client_message_id)
+
+    async def execute_command(
+        self, intent: CommandIntent
+    ) -> ApplicationResult[CommandOutcome]:
+        self.business_calls.append("command.execute")
+        return await super().execute_command(intent)
+
+    async def set_provider_credential(
+        self, request: ProviderCredentialSetRequest
+    ) -> ApplicationResult[ProviderCredentialSetResult]:
+        self.business_calls.append("provider.credential.set")
+        return await super().set_provider_credential(request)
+
+
+class StateResetThenReadyFacade(HandshakeTrackingFacade):
+    def __init__(self) -> None:
+        super().__init__(initialize_status=InitializeStatus.STATE_RESET_REQUIRED)
+
+    async def initialize(self) -> ApplicationResult[InitializeResult]:
+        self.initialize_status = (
+            InitializeStatus.STATE_RESET_REQUIRED
+            if self.initialize_calls == 0
+            else InitializeStatus.READY
+        )
+        return await super().initialize()
+
+
+class InitializeThenPipeline:
+    def __init__(
+        self,
+        initialize_started: asyncio.Event,
+        initialize: bytes,
+        pipeline: bytes,
+    ) -> None:
+        self._initialize_started = initialize_started
+        self._initialize = initialize
+        self._pipeline = pipeline
+        self._step = 0
+
+    async def read(self, maximum: int) -> bytes:
+        del maximum
+        self._step += 1
+        if self._step == 1:
+            return self._initialize
+        if self._step == 2:
+            await self._initialize_started.wait()
+            return self._pipeline
+        return b""
+
+
+class InvalidShutdownDuringCommand:
+    def __init__(
+        self,
+        slow_started: asyncio.Event,
+        invalid_identifier: object,
+    ) -> None:
+        self._slow_started = slow_started
+        self._invalid_identifier = invalid_identifier
+        self._step = 0
+        self.continue_to_shutdown = asyncio.Event()
+
+    async def read(self, maximum: int) -> bytes:
+        del maximum
+        self._step += 1
+        if self._step == 1:
+            return _request(
+                1,
+                "initialize",
+                {
+                    "protocol_version": 3,
+                    "client_name": "awesome",
+                    "client_version": PRODUCT_VERSION,
+                },
+            ) + _request(2, "command.execute", {"name": "status", "arguments": []})
+        if self._step == 2:
+            await self._slow_started.wait()
+            return _request_with_id(self._invalid_identifier, "shutdown", {})
+        if self._step == 3:
+            await self.continue_to_shutdown.wait()
+            return _request(4, "shutdown", {})
+        return b""
+
+
 def _request(identifier: int, method: str, params: dict[str, object]) -> bytes:
     return (
         json.dumps(
             {"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}
         ).encode()
         + b"\n"
+    )
+
+
+def _request_with_id(
+    identifier: object,
+    method: str,
+    params: dict[str, object],
+) -> bytes:
+    return (
+        json.dumps(
+            {"jsonrpc": "2.0", "id": identifier, "method": method, "params": params}
+        ).encode()
+        + b"\n"
+    )
+
+
+def _initialize_request(identifier: int) -> bytes:
+    return _request(
+        identifier,
+        "initialize",
+        {
+            "protocol_version": 3,
+            "client_name": "awesome",
+            "client_version": PRODUCT_VERSION,
+        },
     )
 
 
@@ -213,7 +533,7 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
 
 @pytest.mark.asyncio
 async def test_event_and_response_share_one_serialized_protocol_writer() -> None:
-    request = _request(
+    request = _initialize_request(0) + _request(
         1,
         "turn.submit",
         {
@@ -229,9 +549,10 @@ async def test_event_and_response_share_one_serialized_protocol_writer() -> None
     await serve_stdio(facade, reader=Chunks(request), writer=writer)
 
     frames = [json.loads(frame) for frame in output.frames]
-    assert frames[0]["method"] == "event"
-    assert frames[0]["params"]["event_id"] == "event_1"
-    assert frames[1]["id"] == 1
+    assert frames[0]["id"] == 0
+    assert frames[1]["method"] == "event"
+    assert frames[1]["params"]["event_id"] == "event_1"
+    assert frames[2]["id"] == 1
     assert facade.shutdown_calls == 1
 
 
@@ -256,7 +577,8 @@ async def test_invalid_shutdown_does_not_terminate_before_valid_shutdown() -> No
     output = Output()
     facade = Facade()
     reader = Chunks(
-        _request(1, "shutdown", {"force": True})
+        _initialize_request(0)
+        + _request(1, "shutdown", {"force": True})
         + _request(2, "application.getState", {})
         + _request(3, "shutdown", {})
     )
@@ -264,11 +586,527 @@ async def test_invalid_shutdown_does_not_terminate_before_valid_shutdown() -> No
     await serve_stdio(facade, reader=reader, writer=JsonLineWriter(output))
 
     frames = [json.loads(frame) for frame in output.frames]
-    assert [frame["id"] for frame in frames] == [1, 2, 3]
-    assert frames[0]["error"]["code"] == -32602
-    assert frames[1]["result"]["ok"] is True
-    assert frames[2]["result"]["value"] == {"stopped": True}
+    assert [frame["id"] for frame in frames] == [0, 1, 2, 3]
+    assert frames[1]["error"]["code"] == -32602
+    assert frames[2]["result"]["ok"] is True
+    assert frames[3]["result"]["value"] == {"stopped": True}
     assert facade.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        (
+            "turn.submit",
+            {
+                "thread_id": "thread_1",
+                "content": "must not start",
+                "client_message_id": "client_pre_initialize",
+            },
+        ),
+        ("command.execute", {"name": "status", "arguments": []}),
+        (
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "action": "add",
+                "api_key": "must-not-reach-facade",
+            },
+        ),
+    ],
+)
+async def test_business_request_before_initialize_is_explicitly_rejected(
+    method: str,
+    params: dict[str, object],
+) -> None:
+    facade = HandshakeTrackingFacade()
+    output = Output()
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(_request(1, method, params) + _request(2, "shutdown", {})),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["error"] == {
+        "code": -32002,
+        "message": "Server not initialized",
+        "data": {"diagnostic_code": "server_not_initialized"},
+    }
+    assert facade.business_calls == []
+    assert facade.initialize_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_incompatible_initialize_does_not_open_business_request_gate() -> None:
+    facade = HandshakeTrackingFacade()
+    output = Output()
+    pipeline = (
+        _request(
+            1,
+            "initialize",
+            {
+                "protocol_version": 2,
+                "client_name": "awesome",
+                "client_version": PRODUCT_VERSION,
+            },
+        )
+        + _request(
+            2,
+            "turn.submit",
+            {
+                "thread_id": "thread_1",
+                "content": "must not start",
+                "client_message_id": "client_incompatible",
+            },
+        )
+        + _request(3, "command.execute", {"name": "status", "arguments": []})
+        + _request(
+            4,
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "action": "delete",
+            },
+        )
+        + _request(5, "shutdown", {})
+    )
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(pipeline),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["result"]["error"]["code"] == "protocol_version_incompatible"
+    assert all(
+        frames[identifier]["error"]["code"] == -32002 for identifier in (2, 3, 4)
+    )
+    assert facade.initialize_calls == 0
+    assert facade.business_calls == []
+
+
+@pytest.mark.asyncio
+async def test_blocked_initialize_rejects_pipeline_and_duplicate_initialize() -> None:
+    facade = HandshakeTrackingFacade(block_initialize=True)
+    output = Output()
+    initialize = _request(
+        1,
+        "initialize",
+        {
+            "protocol_version": 3,
+            "client_name": "awesome",
+            "client_version": PRODUCT_VERSION,
+        },
+    )
+    pipeline = (
+        _request(
+            2,
+            "turn.submit",
+            {
+                "thread_id": "thread_1",
+                "content": "must not start",
+                "client_message_id": "client_blocked_initialize",
+            },
+        )
+        + _request(3, "command.execute", {"name": "status", "arguments": []})
+        + _request(
+            4,
+            "provider.credential.set",
+            {"provider": "kimi", "action": "delete"},
+        )
+        + _request(
+            5,
+            "initialize",
+            {
+                "protocol_version": 3,
+                "client_name": "awesome",
+                "client_version": PRODUCT_VERSION,
+            },
+        )
+        + _request(6, "shutdown", {})
+    )
+
+    try:
+        await serve_stdio(
+            facade,
+            reader=InitializeThenPipeline(
+                facade.initialize_started,
+                initialize,
+                pipeline,
+            ),
+            writer=JsonLineWriter(output),
+        )
+    finally:
+        facade.release_initialize.set()
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert all(
+        frames[identifier]["error"]["code"] == -32002 for identifier in (2, 3, 4)
+    )
+    assert frames[5]["error"] == {
+        "code": -32002,
+        "message": "Server initialization is in progress",
+        "data": {"diagnostic_code": "initialization_in_progress"},
+    }
+    assert facade.initialize_calls == 1
+    assert facade.business_calls == []
+
+
+@pytest.mark.asyncio
+async def test_trust_bootstrap_only_opens_business_gate_after_trust_resolution() -> (
+    None
+):
+    facade = HandshakeTrackingFacade(initialize_status=InitializeStatus.TRUST_REQUIRED)
+    output = Output()
+    requests = (
+        _request(
+            1,
+            "initialize",
+            {
+                "protocol_version": 3,
+                "client_name": "awesome",
+                "client_version": PRODUCT_VERSION,
+            },
+        )
+        + _request(2, "application.getState", {})
+        + _request(
+            3,
+            "interaction.respond",
+            {"interaction_id": "interaction_1", "decision": "trust"},
+        )
+        + _request(4, "application.getState", {})
+        + _request(5, "shutdown", {})
+    )
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(requests),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["result"]["value"]["status"] == "trust_required"
+    assert frames[2]["error"]["data"]["diagnostic_code"] == "server_not_ready"
+    assert frames[3]["result"]["value"]["accepted"] is True
+    assert frames[4]["result"]["ok"] is True
+    assert facade.business_calls == ["application.getState"]
+
+
+@pytest.mark.asyncio
+async def test_state_reset_keeps_gate_closed_until_ready_initialize() -> None:
+    facade = StateResetThenReadyFacade()
+    output = Output()
+    requests = (
+        _initialize_request(1)
+        + _request(
+            2,
+            "interaction.respond",
+            {"interaction_id": "interaction_1", "decision": "reset_state"},
+        )
+        + _request(3, "application.getState", {})
+        + _initialize_request(4)
+        + _request(5, "application.getState", {})
+        + _request(6, "shutdown", {})
+    )
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(requests),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["result"]["value"]["status"] == "state_reset_required"
+    assert frames[2]["result"]["value"]["accepted"] is True
+    assert frames[3]["error"]["data"]["diagnostic_code"] == "server_not_ready"
+    assert frames[4]["result"]["value"]["status"] == "ready"
+    assert frames[5]["result"]["ok"] is True
+    assert facade.business_calls == ["application.getState"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_is_repeatable_after_ready() -> None:
+    facade = HandshakeTrackingFacade()
+    output = Output()
+    initialize_params = {
+        "protocol_version": 3,
+        "client_name": "awesome",
+        "client_version": PRODUCT_VERSION,
+    }
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(
+            _request(1, "initialize", initialize_params)
+            + _request(2, "initialize", initialize_params)
+            + _request(3, "application.getState", {})
+            + _request(4, "shutdown", {})
+        ),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["result"]["value"]["status"] == "ready"
+    assert frames[2]["result"]["value"]["status"] == "ready"
+    assert frames[3]["result"]["ok"] is True
+    assert facade.initialize_calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_identifier", [None, True, False, 1.5, [], {}])
+async def test_invalid_shutdown_id_does_not_cancel_legal_background_request(
+    invalid_identifier: object,
+) -> None:
+    facade = SlowCommandFacade()
+    output = InvalidRequestOutput()
+    reader = InvalidShutdownDuringCommand(
+        facade.slow_started,
+        invalid_identifier,
+    )
+    serving = asyncio.create_task(
+        serve_stdio(facade, reader=reader, writer=JsonLineWriter(output))
+    )
+
+    try:
+        await asyncio.wait_for(output.invalid_request_seen.wait(), timeout=0.5)
+        assert not facade.slow_cancelled.is_set()
+        facade.release_slow.set()
+        await asyncio.wait_for(facade.slow_completed.wait(), timeout=0.5)
+        reader.continue_to_shutdown.set()
+        await asyncio.wait_for(serving, timeout=0.5)
+    finally:
+        facade.release_slow.set()
+        reader.continue_to_shutdown.set()
+        if not serving.done():
+            serving.cancel()
+        await asyncio.gather(serving, return_exceptions=True)
+
+    assert not facade.slow_cancelled.is_set()
+    assert facade.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_control_requests_are_read_while_a_prior_request_is_slow() -> None:
+    facade = SlowCommandFacade()
+    output = Output()
+    serving = asyncio.create_task(
+        serve_stdio(
+            facade,
+            reader=SlowThenControlRequests(facade.slow_started),
+            writer=JsonLineWriter(output),
+        )
+    )
+
+    try:
+        await asyncio.wait_for(facade.shutdown_seen.wait(), timeout=0.5)
+        await asyncio.wait_for(serving, timeout=0.5)
+    finally:
+        facade.release_slow.set()
+        if not serving.done():
+            serving.cancel()
+        await asyncio.gather(serving, return_exceptions=True)
+
+    assert facade.cancel_seen.is_set()
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert set(frames) == {0, 2, 3}
+    assert frames[2]["result"]["value"]["cancelled"] is True
+    assert frames[3]["result"]["value"]["stopped"] is True
+
+
+@pytest.mark.asyncio
+async def test_background_request_failure_stops_while_stdin_remains_open() -> None:
+    facade = Facade()
+    reader = RequestThenOpenInput(_initialize_request(1))
+
+    with pytest.raises(RuntimeError, match="protocol writer failed"):
+        await asyncio.wait_for(
+            serve_stdio(
+                facade,
+                reader=reader,
+                writer=JsonLineWriter(FailingOutput(reader.blocked)),
+            ),
+            timeout=0.5,
+        )
+
+    assert reader.blocked.is_set()
+    assert facade.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocked_method", "blocked_params"),
+    [
+        (
+            "initialize",
+            {
+                "protocol_version": 3,
+                "client_name": "awesome",
+                "client_version": PRODUCT_VERSION,
+            },
+        ),
+        (
+            "interaction.respond",
+            {"interaction_id": "interaction_1", "decision": "allow_once"},
+        ),
+    ],
+)
+async def test_urgent_control_bypasses_blocked_control_request(
+    blocked_method: str,
+    blocked_params: dict[str, object],
+) -> None:
+    facade = BlockingControlFacade(blocked_method)
+    output = Output()
+    prefix = b"" if blocked_method == "initialize" else _initialize_request(0)
+    reader = Chunks(
+        prefix
+        + _request(1, blocked_method, blocked_params)
+        + _request(2, "operation.cancel", {"operation_id": "operation_1"})
+        + _request(3, "shutdown", {})
+    )
+    serving = asyncio.create_task(
+        serve_stdio(facade, reader=reader, writer=JsonLineWriter(output))
+    )
+
+    try:
+        await asyncio.wait_for(facade.blocked_started.wait(), timeout=0.5)
+        await asyncio.wait_for(facade.cancel_seen.wait(), timeout=0.5)
+        await asyncio.wait_for(serving, timeout=0.5)
+    finally:
+        facade.release_blocked.set()
+        if not serving.done():
+            serving.cancel()
+        await asyncio.gather(serving, return_exceptions=True)
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    expected_ids = {2, 3} if blocked_method == "initialize" else {0, 2, 3}
+    assert set(frames) == expected_ids
+    assert frames[2]["result"]["value"]["cancelled"] is True
+    assert frames[3]["result"]["value"]["stopped"] is True
+    assert facade.blocked_cancelled.is_set()
+    assert facade.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_is_not_repeated_when_its_response_write_fails() -> None:
+    facade = Facade()
+    failure_gate = asyncio.Event()
+    failure_gate.set()
+
+    with pytest.raises(RuntimeError, match="protocol writer failed"):
+        await serve_stdio(
+            facade,
+            reader=Chunks(_request(1, "shutdown", {})),
+            writer=JsonLineWriter(FailingOutput(failure_gate)),
+        )
+
+    assert facade.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_shutdown_notification_runs_final_cleanup() -> None:
+    facade = FailFirstShutdownFacade()
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(
+            json.dumps({"jsonrpc": "2.0", "method": "shutdown", "params": {}}).encode()
+            + b"\n"
+        ),
+        writer=JsonLineWriter(Output()),
+    )
+
+    assert facade.shutdown_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_background_control_lane_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(stdio, "_MAX_IN_FLIGHT_CONTROL_REQUESTS", 0)
+    output = Output()
+
+    await serve_stdio(
+        Facade(),
+        reader=Chunks(
+            _request(
+                1,
+                "initialize",
+                {
+                    "protocol_version": 3,
+                    "client_name": "awesome",
+                    "client_version": PRODUCT_VERSION,
+                },
+            )
+            + _request(2, "shutdown", {})
+        ),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = [json.loads(frame) for frame in output.frames]
+    assert [frame["id"] for frame in frames] == [1, 2]
+    assert frames[0]["error"] == {"code": -32000, "message": "Server busy"}
+    assert frames[1]["result"]["value"]["stopped"] is True
+
+
+@pytest.mark.asyncio
+async def test_overloaded_notification_is_dropped_without_a_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(stdio, "_MAX_IN_FLIGHT_REQUESTS", 0)
+    notification = (
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "command.execute",
+                "params": {"name": "status", "arguments": []},
+            }
+        ).encode()
+        + b"\n"
+    )
+    output = Output()
+
+    await serve_stdio(
+        Facade(),
+        reader=Chunks(notification + _request(1, "shutdown", {})),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = [json.loads(frame) for frame in output.frames]
+    assert [frame["id"] for frame in frames] == [1]
+
+
+def test_completed_request_id_history_is_bounded() -> None:
+    tracker = stdio._RequestIdTracker()
+    for identifier in range(stdio._MAX_RECENT_REQUEST_IDS + 10):
+        request = {"jsonrpc": "2.0", "id": identifier, "method": "status"}
+        assert tracker.accept(request) is None
+        tracker.complete(identifier)
+
+    oldest = {"jsonrpc": "2.0", "id": 0, "method": "status"}
+    newest_id = stdio._MAX_RECENT_REQUEST_IDS + 9
+    newest = {"jsonrpc": "2.0", "id": newest_id, "method": "status"}
+    assert tracker.accept(oldest) is None
+    assert tracker.accept(newest) == newest_id
+
+
+@pytest.mark.asyncio
+async def test_stdout_backpressure_has_a_bounded_async_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = BlockingBinaryOutput()
+    monkeypatch.setattr(stdio, "_OUTPUT_WRITE_TIMEOUT_SECONDS", 0.01)
+    writer = stdio._StdoutWriter(output)
+
+    try:
+        with pytest.raises(BrokenPipeError, match="not being consumed"):
+            await writer.write(b"frame\n")
+        assert output.entered.is_set()
+    finally:
+        output.release.set()
 
 
 @pytest.mark.asyncio

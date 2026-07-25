@@ -52,6 +52,12 @@ class ConversationCommandService:
     def current_thread_id(self) -> str | None:
         return self._current_thread_id
 
+    def select_recovery_thread(self, thread_id: str) -> None:
+        thread = self._conversation.read_thread(thread_id).thread
+        if thread.workspace_key != self._workspace_key:
+            raise ThreadNotFound(thread_id)
+        self._select(thread)
+
     async def new(self, intent: CommandIntent) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /new")

@@ -11,6 +11,35 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from awesome_agent.agent import AgentState, validate_agent_state
 
+_AGENT_STATE_KEYS = (
+    "thread_id",
+    "turn_id",
+    "workspace_key",
+    "provider",
+    "model",
+    "thinking_enabled",
+    "context_manifest",
+    "context_estimated_tokens",
+    "context_effective_limit",
+    "compression_requested",
+    "compression_reason",
+    "messages",
+    "continuation",
+    "pending_tool_calls",
+    "next_tool_index",
+    "tool_results",
+    "model_calls",
+    "tool_calls",
+    "provider_retries",
+    "compressions",
+    "active_execution_seconds",
+    "usage",
+    "recovery_issue",
+    "final_answer",
+    "termination_reason",
+)
+_AGENT_STATE_KEY_SET = frozenset(_AGENT_STATE_KEYS)
+
 
 class CheckpointCorrupt(RuntimeError):
     pass
@@ -35,7 +64,19 @@ class LangGraphCheckpointStore:
             return None
         try:
             values = checkpoint.checkpoint["channel_values"]
-            return validate_agent_state(values)
+            if not isinstance(values, dict):
+                raise TypeError("checkpoint channel values must be a mapping")
+            keys = frozenset(values)
+            if not _AGENT_STATE_KEY_SET.issubset(keys):
+                raise ValueError("checkpoint is missing AgentState channels")
+            unexpected = keys - _AGENT_STATE_KEY_SET
+            if any(
+                not isinstance(key, str) or not key.startswith("branch:to:")
+                for key in unexpected
+            ):
+                raise ValueError("checkpoint contains an unknown public channel")
+            projected = {key: values[key] for key in _AGENT_STATE_KEYS}
+            return validate_agent_state(projected)
         except (KeyError, TypeError, ValueError) as error:
             raise CheckpointCorrupt(turn_id) from error
 

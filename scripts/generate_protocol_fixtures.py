@@ -355,6 +355,18 @@ def _valid_methods() -> dict[str, object]:
             _success(InteractionResult(accepted=True, status="denied")),
         ),
         (
+            "interaction.respond.recovery_retry",
+            "interaction.respond",
+            {"interaction_id": "interaction_recovery", "decision": "retry"},
+            _success(InteractionResult(accepted=True, status="resolved")),
+        ),
+        (
+            "interaction.respond.recovery_abort",
+            "interaction.respond",
+            {"interaction_id": "interaction_recovery", "decision": "abort"},
+            _success(InteractionResult(accepted=True, status="resolved")),
+        ),
+        (
             "operation.cancel",
             "operation.cancel",
             {"operation_id": OPERATION_ID},
@@ -410,9 +422,36 @@ def _invalid_methods() -> dict[str, object]:
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
+                "name": "thread.list.limit_type",
+                "method": "thread.list",
+                "params": {"limit": "50"},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.list.explicit_null",
+                "method": "thread.list",
+                "params": {"cursor": None},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
                 "name": "thread.read.before_sequence",
                 "method": "thread.read",
                 "params": {"thread_id": THREAD_ID, "before_sequence": 0},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.read.before_sequence_type",
+                "method": "thread.read",
+                "params": {"thread_id": THREAD_ID, "before_sequence": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.read.before_sequence_unsafe",
+                "method": "thread.read",
+                "params": {
+                    "thread_id": THREAD_ID,
+                    "before_sequence": 9_007_199_254_740_992,
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -435,6 +474,27 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "direct.execute.empty",
                 "method": "direct.execute",
                 "params": {"thread_id": THREAD_ID, "command": ""},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "provider.credential.allow_unverified_type",
+                "method": "provider.credential.set",
+                "params": {
+                    "provider": "deepseek",
+                    "action": "add",
+                    "api_key": "fixture-request-secret",
+                    "allow_unverified": "true",
+                },
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "provider.credential.explicit_null",
+                "method": "provider.credential.set",
+                "params": {
+                    "provider": "deepseek",
+                    "action": "delete",
+                    "api_key": None,
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -677,7 +737,7 @@ def _commands() -> dict[str, object]:
 
 
 def _valid_command_results() -> dict[str, object]:
-    methods = _valid_methods()["cases"]
+    methods = cast(list[dict[str, Any]], _valid_methods()["cases"])
     status = next(
         case["result"]["value"]["payload"]["snapshot"]
         for case in methods
@@ -891,7 +951,7 @@ def _valid_command_results() -> dict[str, object]:
 
 
 def _invalid_command_results() -> dict[str, object]:
-    methods = _valid_methods()["cases"]
+    methods = cast(list[dict[str, Any]], _valid_methods()["cases"])
     application = next(
         case["result"]["value"]
         for case in methods

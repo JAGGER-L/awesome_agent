@@ -7,8 +7,19 @@ from pathlib import Path, PureWindowsPath
 from pydantic import BaseModel, ConfigDict, Field
 
 from awesome_agent.context.tokens import estimate_text
+from awesome_agent.core.filesystem import (
+    MutationTargetChanged,
+    PinnedWorkspacePath,
+    SafeDirectoryEntry,
+    UnsafeWorkspacePath,
+    WorkspaceFileTooLarge,
+    list_directory_entries,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure
-from awesome_agent.core.tools.policy import resolve_workspace_path
+from awesome_agent.core.tools.policy import (
+    is_sensitive_workspace_path,
+    resolve_workspace_path,
+)
 from awesome_agent.core.workspace import WorkspaceIdentity
 
 MAX_EXPLICIT_PATHS = 32
@@ -108,25 +119,56 @@ def _snapshot_one(
     reference: str,
 ) -> ExplicitPathSnapshot:
     _validate_literal_reference(reference)
-    current = workspace.canonical_path
-    for part in Path(reference).parts:
-        current /= part
-        if current.is_symlink():
-            raise ExplicitPathError("Explicit paths cannot traverse a symlink.")
     try:
         safe = resolve_workspace_path(workspace, reference, must_exist=True)
     except ExpectedToolFailure as error:
+        if "link" in error.message.casefold() or "reparse" in error.message.casefold():
+            raise ExplicitPathError(
+                "Explicit paths cannot traverse a symlink or reparse point."
+            ) from error
         raise ExplicitPathError(error.message) from error
-    if safe.resolved.suffix.casefold() in _NON_TEXT_SUFFIXES:
+    if safe.relative.suffix.casefold() in _NON_TEXT_SUFFIXES:
         raise ExplicitPathError("Explicit paths support text only.")
-    if safe.resolved.is_file():
-        content, truncated = _file_content(safe.resolved, safe.relative.as_posix())
-        kind = "file"
-    elif safe.resolved.is_dir():
-        content, truncated = _directory_content(safe.resolved, safe.relative.as_posix())
-        kind = "directory"
-    else:
-        raise ExplicitPathError("Explicit path is not a file or directory.")
+    try:
+        with PinnedWorkspacePath(
+            safe.workspace,
+            safe.workspace_root_identity,
+            safe.relative,
+            safe.target_existed,
+            safe.target_identity,
+        ) as reader:
+            kind = reader.kind()
+            if kind == "file":
+                opened = reader.read_regular(max_bytes=MAX_EXPLICIT_FILE_BYTES)
+                content, truncated = _file_content(
+                    opened.data,
+                    safe.relative.as_posix(),
+                )
+            else:
+                directory = reader.open_directory()
+                children = tuple(
+                    entry
+                    for entry in list_directory_entries(directory)
+                    if not is_sensitive_workspace_path(safe.relative / entry.name)
+                )
+                content, truncated = _directory_content(
+                    children,
+                    safe.relative.as_posix(),
+                )
+    except WorkspaceFileTooLarge as error:
+        raise ExplicitPathError("Explicit file exceeds the 1 MiB limit.") from error
+    except MutationTargetChanged as error:
+        raise ExplicitPathError(
+            "Explicit path changed while its content was being captured."
+        ) from error
+    except UnsafeWorkspacePath as error:
+        raise ExplicitPathError(
+            "Explicit paths cannot traverse a symlink, reparse point, or hard link."
+        ) from error
+    except FileNotFoundError as error:
+        raise ExplicitPathError("Explicit path was not found.") from error
+    except OSError as error:
+        raise ExplicitPathError("Explicit path could not be read safely.") from error
     return _snapshot(
         reference=reference,
         relative_path=safe.relative.as_posix(),
@@ -154,10 +196,7 @@ def _validate_literal_reference(reference: str) -> None:
         )
 
 
-def _file_content(path: Path, relative: str) -> tuple[str, bool]:
-    if path.stat().st_size > MAX_EXPLICIT_FILE_BYTES:
-        raise ExplicitPathError("Explicit file exceeds the 1 MiB limit.")
-    data = path.read_bytes()
+def _file_content(data: bytes, relative: str) -> tuple[str, bool]:
     if b"\x00" in data:
         raise ExplicitPathError("Binary files cannot be explicit context.")
     try:
@@ -170,13 +209,12 @@ def _file_content(path: Path, relative: str) -> tuple[str, bool]:
     return "\n".join(rendered), len(lines) > len(retained)
 
 
-def _directory_content(path: Path, relative: str) -> tuple[str, bool]:
-    children = sorted(path.iterdir(), key=lambda child: child.name.casefold())
+def _directory_content(
+    children: tuple[SafeDirectoryEntry, ...],
+    relative: str,
+) -> tuple[str, bool]:
     retained = children[:MAX_EXPLICIT_DIRECTORY_ENTRIES]
-    entries = [
-        f"{child.name}\t{'directory' if child.is_dir() else 'file'}"
-        for child in retained
-    ]
+    entries = [f"{child.name}\t{child.kind}" for child in retained]
     return "\n".join([f"[Directory: {relative}]", *entries]), len(children) > len(
         retained
     )

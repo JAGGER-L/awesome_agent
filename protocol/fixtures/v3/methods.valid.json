@@ -356,6 +356,36 @@
       }
     },
     {
+      "method": "interaction.respond",
+      "name": "interaction.respond.recovery_retry",
+      "params": {
+        "decision": "retry",
+        "interaction_id": "interaction_recovery"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.recovery_abort",
+      "params": {
+        "decision": "abort",
+        "interaction_id": "interaction_recovery"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
       "method": "operation.cancel",
       "name": "operation.cancel",
       "params": {

@@ -8,17 +8,20 @@ from typing import Any
 
 import yaml
 from pydantic import ValidationError
+from yaml.events import (
+    AliasEvent,
+    CollectionEndEvent,
+    CollectionStartEvent,
+    ScalarEvent,
+)
 
 from awesome_agent.context._safe_files import (
     FileChangedError,
     FileTooLargeError,
+    PinnedPlainDirectory,
     UnsafePathError,
-    ensure_identity,
+    file_identity,
     lexical_absolute,
-    plain_directory_identity,
-    plain_file_fingerprint,
-    read_bounded_file,
-    validate_plain_components,
 )
 from awesome_agent.extensions.skills.models import (
     SkillCatalog,
@@ -29,6 +32,9 @@ from awesome_agent.extensions.skills.models import (
 )
 
 _MAX_SKILL_FILE_BYTES = 1024 * 1024
+_MAX_YAML_DEPTH = 64
+_MAX_YAML_NODES = 4_096
+_MAX_YAML_ALIASES = 64
 _ALLOWED_FIELDS = frozenset(
     {
         "name",
@@ -112,12 +118,106 @@ def _discover_workspace_skills(
     anchor = lexical_absolute(workspace_anchor)
     root = lexical_absolute(workspace_root)
     try:
-        validate_plain_components(anchor, root, target_kind="directory")
-        anchor_identity = plain_directory_identity(anchor)
-        root_identity = plain_directory_identity(root)
+        with PinnedPlainDirectory(anchor, root) as pinned:
+            identities = pinned.identities
+            anchor_identity = identities[0]
+            root_identity = identities[-1]
+            try:
+                names = pinned.names()
+            except OSError:
+                diagnostics.append(
+                    _diagnostic(
+                        "invalid_skill",
+                        SkillSource.WORKSPACE,
+                        root,
+                        None,
+                        "Workspace Skill root could not be enumerated.",
+                    )
+                )
+                return
+
+            for name in names:
+                directory = root / name
+                try:
+                    entry_info = pinned.child_status(name)
+                    if _is_link_or_reparse(entry_info):
+                        raise UnsafePathError(
+                            "Workspace Skill package is a reparse point."
+                        )
+                    if not stat.S_ISDIR(entry_info.st_mode):
+                        continue
+                    package_identity = file_identity(entry_info)
+                    with pinned.descend(
+                        Path(name),
+                        expected_identities=(package_identity,),
+                    ):
+                        bounded = pinned.read_file(
+                            Path("SKILL.md"),
+                            max_bytes=_MAX_SKILL_FILE_BYTES,
+                        )
+                        component_identities = pinned.identities
+                        text = _decode_skill_text(bounded.data)
+                        descriptor = _descriptor_from_text(
+                            directory,
+                            SkillSource.WORKSPACE,
+                            text,
+                            root_path=directory,
+                        )
+                except UnsafePathError:
+                    diagnostics.append(
+                        _diagnostic(
+                            "unsafe_workspace_skill_path",
+                            SkillSource.WORKSPACE,
+                            directory,
+                            name,
+                            "Workspace Skill package uses a link or reparse point.",
+                        )
+                    )
+                    continue
+                except (
+                    FileChangedError,
+                    FileNotFoundError,
+                    FileTooLargeError,
+                    NotADirectoryError,
+                    OSError,
+                    RecursionError,
+                    UnicodeError,
+                    ValueError,
+                    ValidationError,
+                ) as error:
+                    diagnostics.append(
+                        _diagnostic(
+                            "invalid_skill",
+                            SkillSource.WORKSPACE,
+                            directory,
+                            name,
+                            f"Invalid Skill metadata: {type(error).__name__}",
+                        )
+                    )
+                    continue
+
+                boundary = _WorkspaceSkillBoundary(
+                    workspace_anchor=anchor,
+                    workspace_anchor_identity=anchor_identity,
+                    skills_root=root,
+                    skills_root_identity=root_identity,
+                    package_root=directory,
+                    package_root_identity=package_identity,
+                    package_component_identities=component_identities,
+                    skill_file_fingerprint=bounded.fingerprint,
+                    skill_file_content_hash=sha256(bounded.data).hexdigest(),
+                )
+                retained = _retain_descriptor(
+                    descriptor,
+                    disabled_names,
+                    discovered,
+                    diagnostics,
+                )
+                if retained:
+                    boundaries[descriptor.name] = boundary
     except FileNotFoundError:
         return
-    except (NotADirectoryError, OSError, UnsafePathError):
+    except (FileChangedError, NotADirectoryError, OSError, UnsafePathError):
         diagnostics.append(
             _diagnostic(
                 "unsafe_workspace_skill_path",
@@ -127,113 +227,6 @@ def _discover_workspace_skills(
                 "Workspace Skill root uses an unsafe path component.",
             )
         )
-        return
-
-    try:
-        with os.scandir(root) as scanner:
-            entries = sorted(scanner, key=lambda entry: entry.name)
-    except OSError:
-        diagnostics.append(
-            _diagnostic(
-                "invalid_skill",
-                SkillSource.WORKSPACE,
-                root,
-                None,
-                "Workspace Skill root could not be enumerated.",
-            )
-        )
-        return
-
-    for entry in entries:
-        directory = root / entry.name
-        try:
-            entry_info = entry.stat(follow_symlinks=False)
-            if not stat.S_ISDIR(entry_info.st_mode):
-                if _is_link_or_reparse(entry_info):
-                    raise UnsafePathError("Workspace Skill package is a reparse point.")
-                continue
-            validate_plain_components(anchor, directory, target_kind="directory")
-            package_identity = plain_directory_identity(directory)
-            skill_file = directory / "SKILL.md"
-            skill_components = validate_plain_components(
-                anchor,
-                skill_file,
-                target_kind="file",
-            )
-            skill_fingerprint = plain_file_fingerprint(skill_file)
-            if (
-                not skill_components
-                or skill_fingerprint.identity != skill_components[-1]
-            ):
-                raise FileChangedError("SKILL.md changed before its trusted snapshot.")
-            bounded = read_bounded_file(
-                skill_file,
-                max_bytes=_MAX_SKILL_FILE_BYTES,
-                expected=skill_fingerprint,
-            )
-            if bounded.fingerprint != skill_fingerprint:
-                raise FileChangedError("SKILL.md changed before it was opened.")
-            ensure_identity(anchor, anchor_identity)
-            ensure_identity(root, root_identity)
-            ensure_identity(directory, package_identity)
-            text = _decode_skill_text(bounded.data)
-            descriptor = _descriptor_from_text(
-                directory,
-                SkillSource.WORKSPACE,
-                text,
-                root_path=directory,
-            )
-        except UnsafePathError:
-            diagnostics.append(
-                _diagnostic(
-                    "unsafe_workspace_skill_path",
-                    SkillSource.WORKSPACE,
-                    directory,
-                    entry.name,
-                    "Workspace Skill package uses a link or reparse point.",
-                )
-            )
-            continue
-        except (
-            FileChangedError,
-            FileNotFoundError,
-            FileTooLargeError,
-            NotADirectoryError,
-            OSError,
-            UnicodeError,
-            ValueError,
-            ValidationError,
-        ) as error:
-            diagnostics.append(
-                _diagnostic(
-                    "invalid_skill",
-                    SkillSource.WORKSPACE,
-                    directory,
-                    entry.name,
-                    f"Invalid Skill metadata: {type(error).__name__}",
-                )
-            )
-            continue
-
-        boundary = _WorkspaceSkillBoundary(
-            workspace_anchor=anchor,
-            workspace_anchor_identity=anchor_identity,
-            skills_root=root,
-            skills_root_identity=root_identity,
-            package_root=directory,
-            package_root_identity=package_identity,
-            skill_file=skill_file,
-            skill_file_fingerprint=bounded.fingerprint,
-            skill_file_content_hash=sha256(bounded.data).hexdigest(),
-        )
-        retained = _retain_descriptor(
-            descriptor,
-            disabled_names,
-            discovered,
-            diagnostics,
-        )
-        if retained:
-            boundaries[descriptor.name] = boundary
 
 
 def _standard_descriptor_or_diagnostic(
@@ -243,7 +236,13 @@ def _standard_descriptor_or_diagnostic(
 ) -> SkillDescriptor | None:
     try:
         return _descriptor(directory, source)
-    except (OSError, UnicodeError, ValueError, ValidationError) as error:
+    except (
+        OSError,
+        RecursionError,
+        UnicodeError,
+        ValueError,
+        ValidationError,
+    ) as error:
         diagnostics.append(
             _diagnostic(
                 "invalid_skill",
@@ -348,10 +347,77 @@ def _frontmatter(text: str) -> dict[str, Any]:
     parts = text.split("---", 2)
     if len(parts) != 3:
         raise ValueError("SKILL.md frontmatter is incomplete")
-    parsed = yaml.safe_load(parts[1])
+    source = parts[1]
+    try:
+        _validate_yaml_events(source)
+        parsed = yaml.safe_load(source)
+        _validate_yaml_value(parsed)
+    except (RecursionError, yaml.YAMLError) as error:
+        raise ValueError("Skill frontmatter is not bounded valid YAML") from error
     if not isinstance(parsed, dict):
         raise ValueError("Skill frontmatter must be a mapping")
     return {str(key): value for key, value in parsed.items()}
+
+
+def _validate_yaml_events(source: str) -> None:
+    depth = 0
+    nodes = 0
+    aliases = 0
+    for event in yaml.parse(source, Loader=yaml.SafeLoader):
+        if isinstance(event, CollectionStartEvent):
+            depth += 1
+            nodes += 1
+            if depth > _MAX_YAML_DEPTH:
+                raise ValueError("Skill frontmatter exceeds the YAML depth limit")
+        elif isinstance(event, CollectionEndEvent):
+            depth -= 1
+        elif isinstance(event, ScalarEvent):
+            nodes += 1
+        elif isinstance(event, AliasEvent):
+            aliases += 1
+            nodes += 1
+            if aliases > _MAX_YAML_ALIASES:
+                raise ValueError("Skill frontmatter exceeds the YAML alias limit")
+        if nodes > _MAX_YAML_NODES:
+            raise ValueError("Skill frontmatter exceeds the YAML node limit")
+    if depth != 0:
+        raise ValueError("Skill frontmatter has unbalanced YAML collections")
+
+
+def _validate_yaml_value(value: object) -> None:
+    nodes = 0
+    active: set[int] = set()
+
+    def walk(current: object, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > _MAX_YAML_NODES:
+            raise ValueError("Skill frontmatter exceeds the YAML node limit")
+        if depth > _MAX_YAML_DEPTH:
+            raise ValueError("Skill frontmatter exceeds the YAML depth limit")
+        if isinstance(current, dict):
+            identity = id(current)
+            if identity in active:
+                raise ValueError("Skill frontmatter contains a recursive YAML alias")
+            active.add(identity)
+            try:
+                for key, item in current.items():
+                    walk(key, depth + 1)
+                    walk(item, depth + 1)
+            finally:
+                active.remove(identity)
+        elif isinstance(current, (list, set, tuple)):
+            identity = id(current)
+            if identity in active:
+                raise ValueError("Skill frontmatter contains a recursive YAML alias")
+            active.add(identity)
+            try:
+                for item in current:
+                    walk(item, depth + 1)
+            finally:
+                active.remove(identity)
+
+    walk(value, 0)
 
 
 def _decode_skill_text(data: bytes) -> str:

@@ -212,6 +212,7 @@ class ConversationService:
         context_manifest: tuple[dict[str, JsonValue], ...] = (),
     ) -> Turn:
         view, current = self._turn_view(turn_id)
+        recorded_manifest = context_manifest or current.context_manifest
         if current.status is TurnStatus.COMPLETED:
             entry = _entry_by_id(view, current.assistant_entry_id)
             if (
@@ -219,7 +220,7 @@ class ConversationService:
                 and entry.content == assistant_content
                 and current.usage == usage
                 and current.termination_reason == termination_reason
-                and current.context_manifest == context_manifest
+                and current.context_manifest == recorded_manifest
             ):
                 return current
             raise ConversationConflict("Completed Turn finalization differs.")
@@ -239,13 +240,67 @@ class ConversationService:
                 "assistant_entry_id": assistant.id,
                 "usage": usage,
                 "termination_reason": termination_reason,
-                "context_manifest": context_manifest,
+                "context_manifest": recorded_manifest,
                 "updated_at": now,
                 "completed_at": now,
             }
         )
         completed = Turn.model_validate(completed.model_dump())
         return self._store.complete_turn(assistant, completed)
+
+    def store_context_manifest(
+        self,
+        turn_id: str,
+        context_manifest: tuple[dict[str, JsonValue], ...],
+    ) -> Turn:
+        _, current = self._turn_view(turn_id)
+        if current.status is not TurnStatus.IN_PROGRESS:
+            raise ConversationConflict(
+                "Only an in-progress Turn can record a context snapshot."
+            )
+        if current.context_manifest == context_manifest:
+            return current
+        updated = current.model_copy(
+            update={
+                "context_manifest": context_manifest,
+                "updated_at": self._clock(),
+            }
+        )
+        return self._store.update_in_progress_turn(
+            updated,
+            expected_context_manifest=current.context_manifest,
+        )
+
+    def compare_and_swap_context_manifest(
+        self,
+        turn_id: str,
+        context_manifest: tuple[dict[str, JsonValue], ...],
+        *,
+        expected_context_manifest: tuple[dict[str, JsonValue], ...],
+    ) -> Turn:
+        _, current = self._turn_view(turn_id)
+        if current.status is not TurnStatus.IN_PROGRESS:
+            raise ConversationConflict(
+                "Only an in-progress Turn can reconcile a context snapshot."
+            )
+        if current.context_manifest != expected_context_manifest:
+            raise ConversationConflict(
+                "Turn context changed before the snapshot was reconciled."
+            )
+        if current.context_manifest == context_manifest:
+            return current
+        updated = Turn.model_validate(
+            current.model_copy(
+                update={
+                    "context_manifest": context_manifest,
+                    "updated_at": self._clock(),
+                }
+            ).model_dump()
+        )
+        return self._store.update_in_progress_turn(
+            updated,
+            expected_context_manifest=expected_context_manifest,
+        )
 
     def fail_turn(
         self,
@@ -259,11 +314,12 @@ class ConversationService:
             raise ValueError("error_code cannot be empty.")
         observed_usage = usage or UsageSummary()
         _, current = self._turn_view(turn_id)
+        recorded_manifest = context_manifest or current.context_manifest
         if current.status is TurnStatus.FAILED:
             if (
                 current.error_code == error_code
                 and current.usage == observed_usage
-                and current.context_manifest == context_manifest
+                and current.context_manifest == recorded_manifest
             ):
                 return current
             raise ConversationConflict("Failed Turn finalization differs.")
@@ -274,7 +330,7 @@ class ConversationService:
                 "status": TurnStatus.FAILED,
                 "error_code": error_code,
                 "usage": observed_usage,
-                "context_manifest": context_manifest,
+                "context_manifest": recorded_manifest,
                 "updated_at": now,
                 "completed_at": now,
             }
@@ -291,10 +347,11 @@ class ConversationService:
     ) -> Turn:
         observed_usage = usage or UsageSummary()
         _, current = self._turn_view(turn_id)
+        recorded_manifest = context_manifest or current.context_manifest
         if current.status is TurnStatus.CANCELLED:
             if (
                 current.usage == observed_usage
-                and current.context_manifest == context_manifest
+                and current.context_manifest == recorded_manifest
             ):
                 return current
             raise ConversationConflict("Cancelled Turn finalization differs.")
@@ -305,7 +362,7 @@ class ConversationService:
                 "status": TurnStatus.CANCELLED,
                 "termination_reason": "cancelled",
                 "usage": observed_usage,
-                "context_manifest": context_manifest,
+                "context_manifest": recorded_manifest,
                 "updated_at": now,
                 "completed_at": now,
             }

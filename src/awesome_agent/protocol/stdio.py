@@ -4,23 +4,142 @@ import asyncio
 import json
 import logging
 import os
+import queue
 import sys
+import threading
+from collections import OrderedDict
 from collections.abc import Mapping
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from awesome_agent.application.composition import compose_local_application
 from awesome_agent.application.facade import ApplicationFacade
 from awesome_agent.core.events import EventEnvelope, EventSink
+from awesome_agent.core.process_lifetime import (
+    ProcessTreeGuardError,
+    install_process_tree_guard,
+)
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.protocol.jsonrpc import (
     JsonRpcDispatcher,
     event_notification,
     jsonrpc_error,
+    parse_jsonrpc_request,
 )
 
 MAX_JSON_LINE_BYTES = 1_048_576
 _READ_CHUNK_BYTES = 65_536
+_MAX_IN_FLIGHT_REQUESTS = 128
+_MAX_IN_FLIGHT_CONTROL_REQUESTS = 16
+_MAX_RECENT_REQUEST_IDS = 4_096
+_OUTPUT_QUEUE_SIZE = 64
+_OUTPUT_WRITE_TIMEOUT_SECONDS = 5.0
+_BACKGROUND_CONTROL_METHODS = frozenset({"initialize", "interaction.respond"})
+_URGENT_CONTROL_METHODS = frozenset({"operation.cancel", "shutdown"})
+
+
+class _HandshakeState(Enum):
+    UNINITIALIZED = auto()
+    INITIALIZING = auto()
+    BOOTSTRAP_INTERACTION = auto()
+    READY = auto()
+
+
+class _HandshakeGate:
+    def __init__(self) -> None:
+        self._state = _HandshakeState.UNINITIALIZED
+        self._initializing_from = _HandshakeState.UNINITIALIZED
+        self._bootstrap_status: str | None = None
+
+    def rejection(
+        self,
+        request: tuple[str | int | None, bool, str, object] | None,
+    ) -> tuple[str, str] | None:
+        if request is None:
+            return None
+        _, _, method, _ = request
+        if method in _URGENT_CONTROL_METHODS or self._state is _HandshakeState.READY:
+            return None
+        if method == "initialize":
+            if self._state is _HandshakeState.INITIALIZING:
+                return (
+                    "Server initialization is in progress",
+                    "initialization_in_progress",
+                )
+            return None
+        if (
+            self._state is _HandshakeState.BOOTSTRAP_INTERACTION
+            and method == "interaction.respond"
+        ):
+            return None
+        if self._state is _HandshakeState.UNINITIALIZED:
+            return "Server not initialized", "server_not_initialized"
+        return "Server not ready", "server_not_ready"
+
+    def started(self, method: str | None) -> None:
+        if method != "initialize" or self._state is _HandshakeState.READY:
+            return
+        self._initializing_from = self._state
+        self._state = _HandshakeState.INITIALIZING
+
+    def completed(
+        self,
+        method: str | None,
+        value: object,
+        response: Mapping[str, object] | None,
+    ) -> None:
+        if method == "initialize":
+            self._complete_initialize(response)
+        elif method == "interaction.respond":
+            self._complete_bootstrap_interaction(value, response)
+
+    def _complete_initialize(self, response: Mapping[str, object] | None) -> None:
+        if self._state is not _HandshakeState.INITIALIZING:
+            return
+        self._state = self._initializing_from
+        value = _successful_result_value(response)
+        status = value.get("status") if value is not None else None
+        if status == "ready":
+            self._state = _HandshakeState.READY
+            self._bootstrap_status = None
+        elif status in {"trust_required", "state_reset_required"}:
+            self._state = _HandshakeState.BOOTSTRAP_INTERACTION
+            self._bootstrap_status = status
+
+    def _complete_bootstrap_interaction(
+        self,
+        request_value: object,
+        response: Mapping[str, object] | None,
+    ) -> None:
+        if (
+            self._state is not _HandshakeState.BOOTSTRAP_INTERACTION
+            or self._bootstrap_status != "trust_required"
+        ):
+            return
+        result = _successful_result_value(response)
+        request = parse_jsonrpc_request(request_value)
+        params = request[3] if request is not None else None
+        if (
+            result is not None
+            and result.get("accepted") is True
+            and isinstance(params, Mapping)
+            and params.get("decision") == "trust"
+        ):
+            self._state = _HandshakeState.READY
+            self._bootstrap_status = None
+
+
+def _successful_result_value(
+    response: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
+    if response is None:
+        return None
+    result = response.get("result")
+    if not isinstance(result, Mapping) or result.get("ok") is not True:
+        return None
+    value = result.get("value")
+    return value if isinstance(value, Mapping) else None
 
 
 class AsyncByteReader(Protocol):
@@ -29,6 +148,12 @@ class AsyncByteReader(Protocol):
 
 class AsyncByteWriter(Protocol):
     async def write(self, data: bytes) -> None: ...
+
+
+class SyncByteWriter(Protocol):
+    def write(self, data: bytes, /) -> object: ...
+
+    def flush(self) -> object: ...
 
 
 class JsonLineWriter:
@@ -114,13 +239,98 @@ async def serve_stdio(
     source = reader or _StdinReader()
     protocol_writer = writer or JsonLineWriter(_StdoutWriter())
     lines = _NdjsonReader(source)
-    dispatcher = JsonRpcDispatcher(facade)
-    seen_ids: set[str | int] = set()
-    shutdown_requested = False
+    shutdown_invoked = False
+
+    def method_completed(method: str) -> None:
+        nonlocal shutdown_invoked
+        if method == "shutdown":
+            shutdown_invoked = True
+
+    dispatcher = JsonRpcDispatcher(facade, method_completed=method_completed)
+    handshake = _HandshakeGate()
+    request_ids = _RequestIdTracker()
+    pending_requests: set[asyncio.Task[Mapping[str, object] | None]] = set()
+    pending_controls: set[asyncio.Task[Mapping[str, object] | None]] = set()
+    request_failures: list[BaseException] = []
+    request_failed = asyncio.Event()
+
+    def request_completed(
+        task: asyncio.Task[Mapping[str, object] | None],
+    ) -> None:
+        pending_requests.discard(task)
+        pending_controls.discard(task)
+        if task.cancelled():
+            return
+        failure = task.exception()
+        if failure is not None and not request_failures:
+            request_failures.append(failure)
+            request_failed.set()
+
+    def start_background_request(
+        value: object,
+        request_id: str | int | None,
+        method: str | None,
+        *,
+        control: bool,
+    ) -> None:
+        async def dispatch() -> Mapping[str, object] | None:
+            response: Mapping[str, object] | None = None
+            try:
+                response = await _dispatch_request(
+                    dispatcher,
+                    protocol_writer,
+                    request_ids,
+                    value,
+                    request_id,
+                )
+                return response
+            finally:
+                handshake.completed(method, value, response)
+
+        task = asyncio.create_task(
+            dispatch(),
+            name=f"protocol-request-{request_id}",
+        )
+        target = pending_controls if control else pending_requests
+        target.add(task)
+        task.add_done_callback(request_completed)
+
+    async def read_line_or_failure() -> bytes | None:
+        read_task = asyncio.create_task(
+            lines.read_line(),
+            name="protocol-read-line",
+        )
+        failure_task = asyncio.create_task(
+            request_failed.wait(),
+            name="protocol-request-failure",
+        )
+        try:
+            completed, _ = await asyncio.wait(
+                {read_task, failure_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if failure_task in completed:
+                raise request_failures[0]
+            return read_task.result()
+        finally:
+            for task in (read_task, failure_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(read_task, failure_task, return_exceptions=True)
+
+    async def cancel_background_requests() -> None:
+        pending = pending_requests | pending_controls
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     try:
         while True:
+            if request_failures:
+                raise request_failures[0]
             try:
-                raw = await lines.read_line()
+                raw = await read_line_or_failure()
             except _LineTooLarge:
                 await protocol_writer.send(jsonrpc_error(-32700, "Parse error"))
                 continue
@@ -133,7 +343,7 @@ async def serve_stdio(
             except (UnicodeDecodeError, json.JSONDecodeError):
                 await protocol_writer.send(jsonrpc_error(-32700, "Parse error"))
                 continue
-            duplicate = _duplicate_request_id(value, seen_ids)
+            duplicate = request_ids.accept(value)
             if duplicate is not None:
                 await protocol_writer.send(
                     jsonrpc_error(
@@ -143,45 +353,131 @@ async def serve_stdio(
                     )
                 )
                 continue
-            response = await dispatcher.dispatch(value)
-            if response is not None:
-                await protocol_writer.send(response)
-            if _shutdown_completed(value, response):
-                shutdown_requested = True
-                break
+            request_id = _request_id(value)
+            method = _method(value)
+            if method in _URGENT_CONTROL_METHODS:
+                if method == "shutdown" and _valid_shutdown_request(value):
+                    await cancel_background_requests()
+                response = await _dispatch_request(
+                    dispatcher,
+                    protocol_writer,
+                    request_ids,
+                    value,
+                    request_id,
+                )
+                if _shutdown_completed(value, response):
+                    break
+                continue
+            parsed_request = parse_jsonrpc_request(value)
+            handshake_rejection = handshake.rejection(parsed_request)
+            if handshake_rejection is not None:
+                message, diagnostic_code = handshake_rejection
+                if parsed_request is not None and parsed_request[1]:
+                    await protocol_writer.send(
+                        jsonrpc_error(
+                            -32002,
+                            message,
+                            request_id=parsed_request[0],
+                            data={"diagnostic_code": diagnostic_code},
+                        )
+                    )
+                request_ids.complete(request_id)
+                continue
+            is_control = method in _BACKGROUND_CONTROL_METHODS
+            pending = pending_controls if is_control else pending_requests
+            maximum = (
+                _MAX_IN_FLIGHT_CONTROL_REQUESTS
+                if is_control
+                else _MAX_IN_FLIGHT_REQUESTS
+            )
+            if len(pending) >= maximum:
+                if request_id is not None:
+                    await protocol_writer.send(
+                        jsonrpc_error(
+                            -32000,
+                            "Server busy",
+                            request_id=request_id,
+                        )
+                    )
+                request_ids.complete(request_id)
+                continue
+            handshake.started(method)
+            start_background_request(
+                value,
+                request_id,
+                method,
+                control=is_control,
+            )
+            # Let an accepted request enter the Application boundary before the
+            # reader consumes a following control request. The request may stay
+            # blocked there, but fast snapshots still preserve arrival order.
+            await asyncio.sleep(0)
     finally:
-        if not shutdown_requested:
+        await cancel_background_requests()
+        if not shutdown_invoked:
             await facade.shutdown()
+    if request_failures:
+        raise request_failures[0]
 
 
-def _duplicate_request_id(
+async def _dispatch_request(
+    dispatcher: JsonRpcDispatcher,
+    writer: JsonLineWriter,
+    request_ids: _RequestIdTracker,
     value: object,
-    seen: set[str | int],
-) -> str | int | None:
+    request_id: str | int | None,
+) -> Mapping[str, object] | None:
+    try:
+        response = await dispatcher.dispatch(value)
+        if response is not None:
+            await writer.send(response)
+        return response
+    finally:
+        request_ids.complete(request_id)
+
+
+class _RequestIdTracker:
+    def __init__(self) -> None:
+        self._active: set[str | int] = set()
+        self._recent: OrderedDict[str | int, None] = OrderedDict()
+
+    def accept(self, value: object) -> str | int | None:
+        identifier = _request_id(value)
+        if identifier is None:
+            return None
+        if identifier in self._active or identifier in self._recent:
+            return identifier
+        self._active.add(identifier)
+        return None
+
+    def complete(self, identifier: str | int | None) -> None:
+        if identifier is None or identifier not in self._active:
+            return
+        self._active.remove(identifier)
+        self._recent[identifier] = None
+        while len(self._recent) > _MAX_RECENT_REQUEST_IDS:
+            self._recent.popitem(last=False)
+
+
+def _request_id(value: object) -> str | int | None:
     if not isinstance(value, dict) or "id" not in value:
         return None
     identifier = value["id"]
     if isinstance(identifier, bool) or not isinstance(identifier, (str, int)):
         return None
-    if identifier in seen:
-        return identifier
-    seen.add(identifier)
-    return None
+    return identifier
+
+
+def _method(value: object) -> str | None:
+    method = value.get("method") if isinstance(value, dict) else None
+    return method if isinstance(method, str) else None
 
 
 def _shutdown_completed(
     value: object,
     response: Mapping[str, object] | None,
 ) -> bool:
-    if (
-        not isinstance(value, dict)
-        or set(value) - {"jsonrpc", "id", "method", "params"}
-        or value.get("jsonrpc") != "2.0"
-        or value.get("method") != "shutdown"
-    ):
-        return False
-    params = value.get("params", {})
-    if not isinstance(params, Mapping) or params:
+    if not _valid_shutdown_request(value) or not isinstance(value, dict):
         return False
     if "id" not in value:
         return True
@@ -191,6 +487,16 @@ def _shutdown_completed(
     return isinstance(result, Mapping) and result.get("ok") is True
 
 
+def _valid_shutdown_request(value: object) -> bool:
+    request = parse_jsonrpc_request(value)
+    if request is None:
+        return False
+    _, _, method, params = request
+    if method != "shutdown":
+        return False
+    return isinstance(params, Mapping) and not params
+
+
 class _StdinReader:
     async def read(self, maximum: int) -> bytes:
         stream = cast(Any, sys.stdin.buffer)
@@ -198,9 +504,64 @@ class _StdinReader:
 
 
 class _StdoutWriter:
+    def __init__(self, output: SyncByteWriter | None = None) -> None:
+        self._output = output or sys.stdout.buffer
+        self._queue: queue.Queue[
+            tuple[bytes, asyncio.AbstractEventLoop, asyncio.Future[None]]
+        ] = queue.Queue(maxsize=_OUTPUT_QUEUE_SIZE)
+        self._thread: threading.Thread | None = None
+
     async def write(self, data: bytes) -> None:
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+        self._ensure_thread()
+        loop = asyncio.get_running_loop()
+        completed = loop.create_future()
+        try:
+            self._queue.put_nowait((data, loop, completed))
+        except queue.Full as error:
+            raise BrokenPipeError("Protocol output queue is full.") from error
+        try:
+            await asyncio.wait_for(
+                completed,
+                timeout=_OUTPUT_WRITE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as error:
+            raise BrokenPipeError("Protocol output is not being consumed.") from error
+
+    def _ensure_thread(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._pump,
+            name="awesome-stdout",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _pump(self) -> None:
+        while True:
+            data, loop, completed = self._queue.get()
+            error: BaseException | None = None
+            try:
+                self._output.write(data)
+                self._output.flush()
+            except BaseException as caught:
+                error = caught
+            try:
+                loop.call_soon_threadsafe(_complete_output, completed, error)
+            except RuntimeError:
+                return
+
+
+def _complete_output(
+    completed: asyncio.Future[None],
+    error: BaseException | None,
+) -> None:
+    if completed.done():
+        return
+    if error is None:
+        completed.set_result(None)
+    else:
+        completed.set_exception(error)
 
 
 async def _run_main() -> None:
@@ -221,4 +582,12 @@ async def _run_main() -> None:
 
 
 def main() -> None:
+    try:
+        install_process_tree_guard()
+    except ProcessTreeGuardError as error:
+        print(
+            f"awesome-core: fatal process lifetime initialization failure: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from None
     asyncio.run(_run_main())

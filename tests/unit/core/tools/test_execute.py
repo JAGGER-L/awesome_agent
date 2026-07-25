@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import sqlite3
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -196,6 +197,7 @@ def execute_fixture(
     *,
     origin: ToolExecutionOrigin = ToolExecutionOrigin.AGENT,
     executor_timeout_seconds: float = 30.0,
+    workspace_name: str = "workspace",
 ) -> tuple[
     ToolExecutor,
     ToolExecutionContext,
@@ -203,7 +205,7 @@ def execute_fixture(
     Path,
     CollectingEventSink,
 ]:
-    workspace = tmp_path / "workspace"
+    workspace = tmp_path / workspace_name
     workspace.mkdir()
     identity = resolve_workspace(workspace)
     journal = ChangeJournal(
@@ -383,6 +385,179 @@ def test_command_policy_decodes_powershell_encoded_command(tmp_path: Path) -> No
     assert decision.action is CommandPolicyAction.DENY
 
 
+_DANGEROUS_POWERSHELL_SOURCE = "Remove-Item -Recurse -Force C:\\"
+_DANGEROUS_POWERSHELL_ENCODED = base64.b64encode(
+    _DANGEROUS_POWERSHELL_SOURCE.encode("utf-16-le")
+).decode("ascii")
+_BENIGN_POWERSHELL_SOURCE = "Write-Output 'Remove-Item -Recurse -Force C:\\'"
+_BENIGN_POWERSHELL_ENCODED = base64.b64encode(
+    _BENIGN_POWERSHELL_SOURCE.encode("utf-16-le")
+).decode("ascii")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "command"),
+    [
+        (
+            ShellDialect.CMD,
+            f"powershell.exe -EncodedCom {_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (ShellDialect.CMD, f"pwsh -EC {_DANGEROUS_POWERSHELL_ENCODED}"),
+        (
+            ShellDialect.POWERSHELL,
+            f"PWSh.ExE -eNcOdEdCoM {_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            f"powershell.exe /EncodedCom {_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (ShellDialect.CMD, f"pwsh /EC {_DANGEROUS_POWERSHELL_ENCODED}"),
+        (
+            ShellDialect.CMD,
+            f"pwsh \u2013EC {_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.POSIX,
+            f"pwsh --EncodedCom {_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            'powershell.exe -Com "Remove-Item -Recurse -Force C:\\"',
+        ),
+        (
+            ShellDialect.POWERSHELL,
+            "pwsh /cOm 'Remove-Item -Recurse -Force C:\\'",
+        ),
+        (
+            ShellDialect.POSIX,
+            "pwsh --Com 'Remove-Item -Recurse -Force C:\\'",
+        ),
+        (
+            ShellDialect.CMD,
+            f"pwsh -EncodedCommand:{_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            f"pwsh -EC:{_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            f"pwsh -EncodedCommand{_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            f"pwsh -EC{_DANGEROUS_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            "pwsh -Command:Remove-Item -Recurse -Force C:\\",
+        ),
+        (
+            ShellDialect.CMD,
+            "pwsh -Com:Remove-Item -Recurse -Force C:\\",
+        ),
+        (
+            ShellDialect.CMD,
+            "pwsh -CommandRemove-Item -Recurse -Force C:\\",
+        ),
+        (
+            ShellDialect.CMD,
+            "pwsh -cRemove-Item -Recurse -Force C:\\",
+        ),
+        (
+            ShellDialect.CMD,
+            "pwsh -CWA 'Remove-Item -Recurse -Force C:\\'",
+        ),
+        (
+            ShellDialect.CMD,
+            f"pwsh -EC:{_BENIGN_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            "pwsh -Command:Write-Output safe",
+        ),
+        (ShellDialect.CMD, "pwsh -EncodedCom"),
+        (ShellDialect.CMD, "pwsh -Com"),
+    ],
+)
+def test_command_policy_denies_powershell_execution_option_bypasses(
+    tmp_path: Path,
+    dialect: ShellDialect,
+    command: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=dialect,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.DENY
+
+
+@pytest.mark.parametrize(
+    ("dialect", "command"),
+    [
+        (
+            ShellDialect.CMD,
+            f"powershell.exe -EncodedCom {_BENIGN_POWERSHELL_ENCODED}",
+        ),
+        (ShellDialect.CMD, f"pwsh -EC {_BENIGN_POWERSHELL_ENCODED}"),
+        (
+            ShellDialect.POWERSHELL,
+            f"PWSh.ExE /eNcOdEdCoM {_BENIGN_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            f"pwsh \u2014EC {_BENIGN_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.POSIX,
+            f"pwsh --EncodedCom {_BENIGN_POWERSHELL_ENCODED}",
+        ),
+        (
+            ShellDialect.CMD,
+            'powershell.exe -Com "Write-Output safe"',
+        ),
+        (
+            ShellDialect.POWERSHELL,
+            "pwsh /cOm 'Write-Output safe'",
+        ),
+        (
+            ShellDialect.POSIX,
+            "pwsh --Com 'Write-Output safe'",
+        ),
+        (
+            ShellDialect.CMD,
+            'pwsh -Ex Bypass -Com "Write-Output safe"',
+        ),
+        (
+            ShellDialect.CMD,
+            'pwsh -EP Bypass -Com "Write-Output safe"',
+        ),
+    ],
+)
+def test_command_policy_allows_benign_powershell_execution_prefixes(
+    tmp_path: Path,
+    dialect: ShellDialect,
+    command: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=dialect,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.ALLOW
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -456,6 +631,278 @@ def test_command_policy_resolves_relative_delete_targets_from_actual_cwd(
         ).action
         is CommandPolicyAction.ALLOW
     )
+
+
+_CWD_TRANSITION_DELETE_CASES = [
+    (ShellDialect.CMD, "cd .. && rmdir /s /q awesome_agent"),
+    (ShellDialect.CMD, "cd.. && rmdir /s /q awesome_agent"),
+    (ShellDialect.CMD, "call cd .. && rd /s /q awesome_agent"),
+    (ShellDialect.CMD, 'cmd /c "chdir .. && rd /s /q awesome_agent"'),
+    (ShellDialect.POSIX, "cd .. && rm -rf awesome_agent"),
+    (ShellDialect.POSIX, "builtin cd .. && rm -rf awesome_agent"),
+    (ShellDialect.POSIX, "sh -c 'cd .. && rm -rf awesome_agent'"),
+    (ShellDialect.POSIX, "env --chdir .. rm -rf awesome_agent"),
+    (ShellDialect.POSIX, "env --chdir=.. rm -rf awesome_agent"),
+    (ShellDialect.POSIX, "env -C .. rm -rf awesome_agent"),
+    (ShellDialect.POSIX, "env -C.. rm -rf awesome_agent"),
+    (
+        ShellDialect.POWERSHELL,
+        "Set-Location ..; Remove-Item -Recurse awesome_agent",
+    ),
+    (
+        ShellDialect.POWERSHELL,
+        "Set-Location .. | Remove-Item -Recurse awesome_agent",
+    ),
+    (
+        ShellDialect.POWERSHELL,
+        'pwsh -Command "Set-Location ..; Remove-Item -Recurse awesome_agent"',
+    ),
+    (
+        ShellDialect.POWERSHELL,
+        "Invoke-Expression 'Set-Location ..'; Remove-Item -Recurse awesome_agent",
+    ),
+]
+
+
+@pytest.mark.parametrize(("dialect", "command"), _CWD_TRANSITION_DELETE_CASES)
+def test_command_policy_tracks_cwd_across_compound_segments(
+    tmp_path: Path,
+    dialect: ShellDialect,
+    command: str,
+) -> None:
+    workspace = tmp_path / "awesome_agent"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=dialect,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.DENY
+
+
+@pytest.mark.parametrize(
+    ("dialect", "command"),
+    (
+        (ShellDialect.CMD, "cd child && echo ok"),
+        (ShellDialect.POSIX, "cd child && echo ok"),
+        (ShellDialect.POWERSHELL, "Set-Location child; Write-Output ok"),
+        (
+            ShellDialect.CMD,
+            "echo cd .. ^&^& rmdir /s /q awesome_agent",
+        ),
+        (
+            ShellDialect.POSIX,
+            "printf '%s\\n' 'cd .. && rm -rf awesome_agent'",
+        ),
+        (
+            ShellDialect.POWERSHELL,
+            "Write-Output 'Set-Location ..; Remove-Item -Recurse awesome_agent'",
+        ),
+        (
+            ShellDialect.POSIX,
+            "rg 'cd .. && rm -rf awesome_agent' docs",
+        ),
+    ),
+)
+def test_command_policy_allows_benign_directory_changes_and_literal_data(
+    tmp_path: Path,
+    dialect: ShellDialect,
+    command: str,
+) -> None:
+    workspace = tmp_path / "awesome_agent"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=dialect,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.ALLOW
+
+
+_UNINSPECTABLE_EXECUTION_CASES = (
+    (ShellDialect.CMD, r"cd .. && del /s /q \*"),
+    (ShellDialect.POSIX, "cd .. && rm -rf /*"),
+    (
+        ShellDialect.POWERSHELL,
+        r"Set-Location .. && Remove-Item -Recurse -Force \*",
+    ),
+    (
+        ShellDialect.CMD,
+        "python -c\"import shutil; shutil.rmtree('.')\"",
+    ),
+    (
+        ShellDialect.POSIX,
+        "python -c\"import shutil; shutil.rmtree('.')\"",
+    ),
+    (
+        ShellDialect.POWERSHELL,
+        "python -c\"import shutil; shutil.rmtree('.')\"",
+    ),
+    (ShellDialect.POSIX, "echo $(rm -rf .)"),
+    (ShellDialect.POSIX, "echo `rm -rf .`"),
+    (
+        ShellDialect.POWERSHELL,
+        "Write-Output $(Remove-Item -Recurse -Force .)",
+    ),
+    (
+        ShellDialect.POWERSHELL,
+        "Start-Process cmd -ArgumentList '/c','rmdir /s /q .'",
+    ),
+    (
+        ShellDialect.POWERSHELL,
+        "Start-Process cmd '/c rmdir /s /q .'",
+    ),
+    (ShellDialect.POSIX, "env --argv0 harmless rm -rf /"),
+    (ShellDialect.POSIX, "env -a harmless rm -rf /"),
+    (ShellDialect.CMD, "cmd /cshutdown /s /t 0"),
+    (ShellDialect.CMD, "%COMSPEC% /c shutdown /s /t 0"),
+    (ShellDialect.POSIX, "$SHELL -c 'rm -rf /'"),
+    (ShellDialect.POWERSHELL, "& $env:COMSPEC /c shutdown /s /t 0"),
+)
+
+
+@pytest.mark.parametrize(
+    ("dialect", "command"),
+    _UNINSPECTABLE_EXECUTION_CASES,
+)
+def test_command_policy_fails_closed_for_uninspectable_execution_forms(
+    tmp_path: Path,
+    dialect: ShellDialect,
+    command: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=dialect,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.DENY
+
+
+@pytest.mark.parametrize(
+    ("dialect", "command"),
+    (
+        (ShellDialect.CMD, r"echo del /s /q \*"),
+        (ShellDialect.POSIX, "printf '%s\\n' 'rm -rf /*'"),
+        (ShellDialect.POSIX, "printf '%s\\n' '$(rm -rf /)'"),
+        (ShellDialect.POSIX, "printf '%s\\n' \"<(rm -rf /)\""),
+        (
+            ShellDialect.POWERSHELL,
+            r"Write-Output 'Remove-Item -Recurse -Force \*'",
+        ),
+        (
+            ShellDialect.POWERSHELL,
+            r"Write-Output '$(Remove-Item -Recurse -Force C:\)'",
+        ),
+        (ShellDialect.CMD, "python -c\"print('shutdown /s')\""),
+        (ShellDialect.POSIX, "python -c\"print('shutdown /s')\""),
+        (ShellDialect.POWERSHELL, "python -c\"print('shutdown /s')\""),
+        (ShellDialect.POWERSHELL, "Start-Process pytest"),
+        (ShellDialect.POWERSHELL, "Start-Process pytest -Wait"),
+        (ShellDialect.POSIX, "env --argv0 harmless echo shutdown"),
+        (ShellDialect.CMD, "cmd /cecho shutdown /s"),
+        (ShellDialect.CMD, "echo %COMSPEC% /c shutdown /s /t 0"),
+        (ShellDialect.POSIX, "printf '%s\\n' '$SHELL -c rm -rf /'"),
+        (
+            ShellDialect.POWERSHELL,
+            "Write-Output '$env:COMSPEC /c shutdown /s /t 0'",
+        ),
+    ),
+)
+def test_command_policy_keeps_literal_data_and_benign_attached_python(
+    tmp_path: Path,
+    dialect: ShellDialect,
+    command: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=dialect,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.ALLOW
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "saps pytest -Verb RunAs",
+        "SAPS -FilePath pytest -Verb:RunAs",
+        "start pytest -Verb RunAs",
+    ),
+)
+def test_command_policy_denies_powershell_start_process_alias_elevation(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    workspace = tmp_path / "awesome_agent"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=ShellDialect.POWERSHELL,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.DENY
+
+
+def _nested_powershell(payload: str, depth: int) -> str:
+    for _ in range(depth):
+        encoded = base64.b64encode(payload.encode("utf-16-le")).decode("ascii")
+        payload = f"pwsh -EncodedCommand {encoded}"
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("dialect", "command", "reason"),
+    (
+        (
+            ShellDialect.POSIX,
+            " && ".join("echo ok" for _ in range(65)),
+            "complexity",
+        ),
+        (
+            ShellDialect.POWERSHELL,
+            _nested_powershell("Write-Output ok", 9),
+            "nesting",
+        ),
+    ),
+    ids=("node-limit", "depth-limit"),
+)
+def test_command_policy_keeps_bounded_segment_and_wrapper_inspection(
+    tmp_path: Path,
+    dialect: ShellDialect,
+    command: str,
+    reason: str,
+) -> None:
+    workspace = tmp_path / "awesome_agent"
+    workspace.mkdir()
+
+    decision = evaluate_command(
+        command,
+        dialect=dialect,
+        cwd=workspace,
+        workspace=workspace,
+    )
+
+    assert decision.action is CommandPolicyAction.DENY
+    assert reason in decision.reason.casefold()
 
 
 def test_python_subprocess_policy_uses_literal_child_cwd(tmp_path: Path) -> None:
@@ -556,6 +1003,35 @@ async def test_agent_execute_requires_allow_once_for_simple_command(
 
 
 @pytest.mark.asyncio
+async def test_benign_powershell_prefix_uses_normal_approval_flow(
+    tmp_path: Path,
+) -> None:
+    command = 'pwsh -Com "Write-Output safe"'
+    runner = RecordingProcessRunner()
+    executor, context, _, _, _ = execute_fixture(tmp_path, runner)
+    approvals: list[ToolApprovalRequest] = []
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        assert runner.calls == []
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_powershell_prefix",
+            tool_name="execute",
+            arguments={"command": command},
+        ),
+        context=replace(context, approval_resolver=approve),
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert len(approvals) == 1
+    assert approvals[0].target == command
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_direct_execute_is_already_explicit_user_authority(
     tmp_path: Path,
 ) -> None:
@@ -645,8 +1121,16 @@ _HARD_DENY_REGRESSION_CASES = [
     (ShellDialect.CMD, 'start "title" shutdown.exe /s /t 0'),
     (ShellDialect.CMD, "^s^h^u^t^d^o^w^n.exe /s /t 0"),
     (ShellDialect.CMD, "cmd /c echo safe ^& shutdown.exe /s /t 0"),
+    (
+        ShellDialect.CMD,
+        f"pwsh -EC {_DANGEROUS_POWERSHELL_ENCODED}",
+    ),
     (ShellDialect.POWERSHELL, "shut`down.exe /s /t 0"),
     (ShellDialect.POWERSHELL, "Invoke-Expression 'shutdown.exe /s /t 0'"),
+    *_CWD_TRANSITION_DELETE_CASES,
+    (ShellDialect.POWERSHELL, "saps pytest -Verb RunAs"),
+    (ShellDialect.POWERSHELL, "start pytest -Verb RunAs"),
+    *_UNINSPECTABLE_EXECUTION_CASES,
 ]
 
 
@@ -662,7 +1146,15 @@ async def test_execute_hard_denial_never_starts_process(
 ) -> None:
     monkeypatch.setattr(executor_module, "host_shell_dialect", lambda: dialect)
     runner = RecordingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = execute_fixture(
+        tmp_path,
+        runner,
+        workspace_name=(
+            "awesome_agent"
+            if (dialect, command) in _CWD_TRANSITION_DELETE_CASES
+            else "workspace"
+        ),
+    )
 
     result = await executor.execute(
         ToolRequest(
@@ -699,6 +1191,11 @@ async def test_direct_execute_cannot_bypass_hard_denial(
         tmp_path,
         runner,
         origin=ToolExecutionOrigin.DIRECT,
+        workspace_name=(
+            "awesome_agent"
+            if (dialect, command) in _CWD_TRANSITION_DELETE_CASES
+            else "workspace"
+        ),
     )
 
     result = await executor.execute(
@@ -856,6 +1353,49 @@ async def test_execute_records_attempt_before_backend_failure(tmp_path: Path) ->
     assert len(runner.calls) == 1
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
+
+
+@pytest.mark.asyncio
+async def test_execute_redacts_persisted_command_but_runs_original(
+    tmp_path: Path,
+) -> None:
+    command = (
+        "echo API_KEY=api-secret Authorization: Bearer bearer-secret token=token-secret"
+    )
+    runner = RecordingProcessRunner()
+    executor, context, journal, _, _ = execute_fixture(
+        tmp_path,
+        runner,
+        origin=ToolExecutionOrigin.DIRECT,
+    )
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_execute",
+            tool_name="execute",
+            arguments={"command": command},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert len(runner.calls) == 1
+    argv, _, environment = runner.calls[0]
+    assert command in argv or environment.get("AWESOME_EXEC_COMMAND") == command
+    sealed = journal.seal(context.change_set_id or "")
+    [observation] = sealed.execute
+    assert observation.command.startswith("echo ")
+    assert "[REDACTED:api_key]" in observation.command
+    assert "[REDACTED:auth_header]" in observation.command
+    assert "[REDACTED:token]" in observation.command
+
+    with sqlite3.connect(tmp_path / "application.db") as connection:
+        [payload] = connection.execute(
+            "SELECT payload_json FROM change_sets WHERE change_set_id = ?",
+            (context.change_set_id,),
+        ).fetchone()
+    for secret in ("api-secret", "bearer-secret", "token-secret"):
+        assert secret not in payload
 
 
 @pytest.mark.asyncio

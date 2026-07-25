@@ -53,6 +53,13 @@ a second Operation, persist queued input, or pre-bind queued input to a Thread.
 Each item re-enters the ordinary parser and controller only after the foreground
 Operation and any exclusive interaction have ended.
 
+`InteractionResolved` acknowledges that Core accepted the user's decision; it
+does not claim that later workspace activation has completed. Security-upgrade
+decisions fail closed: Core delivers the resolution while holding the resolving
+lease, then applies Workspace Trust or Full access. If delivery fails, neither
+trust nor the permission mode is elevated, and the consumed interaction ID
+cannot be replayed.
+
 Synchronous command progress uses one replaceable transcript block. For
 example, `/compact` creates a pending presentation before its RPC and replaces
 that same block identity on success or failure; neither Core nor LangGraph gains
@@ -72,6 +79,17 @@ detail mode.
 `awesome_agent.storage.checkpoints` adapts LangGraph's SQLite saver and validates
 the latest `AgentState`. Application SQLite stores product lifecycle and
 transcript records; it does not copy internal graph channels.
+
+For an unfinished Turn, the latest structurally and semantically validated
+checkpoint is the recovery fact source for its frozen context; the manifest in
+Application SQLite is a product projection and later a terminal fact. Because
+the two SQLite databases cannot share one transaction, recovery validates the
+checkpoint's identity, budgets, message hashes, token accounting, tool tail,
+and immutable-source lineage before reconciling a projection mismatch with an
+expected-manifest compare-and-swap. A concurrent projection change, changed
+mandatory anchor, or invalid checkpoint fails closed rather than being
+overwritten. If no durable checkpoint exists, there is no graph position to
+resume and the Turn is failed with a stable recovery code.
 
 Recovery reconciles one local product Turn with its checkpoint. A finished
 state is finalized, an unfinished state can resume, missing or corrupt state

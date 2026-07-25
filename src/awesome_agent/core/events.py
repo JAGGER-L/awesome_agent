@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -8,6 +9,19 @@ from typing import Annotated, Literal, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+_MAX_LIFECYCLE_HISTORY = 4_096
+
+type InteractionDecisionValue = Literal[
+    "trust",
+    "reset_state",
+    "allow_once",
+    "allow_thread_writes",
+    "enable_full_access",
+    "retry",
+    "abort",
+    "deny",
+]
 
 
 class EventType(StrEnum):
@@ -158,7 +172,7 @@ class MemoryStatusPayload(BaseModel):
 class InteractionChoicePayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    decision: str = Field(min_length=1, max_length=128)
+    decision: InteractionDecisionValue
     label: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1_000)
 
@@ -190,7 +204,7 @@ class InteractionResolvedPayload(BaseModel):
 
     kind: Literal[EventType.INTERACTION_RESOLVED] = EventType.INTERACTION_RESOLVED
     interaction_id: str = Field(min_length=1, max_length=128)
-    decision: str = Field(min_length=1, max_length=128)
+    decision: InteractionDecisionValue
 
 
 class WarningPayload(BaseModel):
@@ -308,9 +322,9 @@ class EventEmitter:
         self._sequence = 0
         self._lock = asyncio.Lock()
         self._started_operations: set[str] = set()
-        self._terminal_operations: set[str] = set()
+        self._terminal_operations: OrderedDict[str, None] = OrderedDict()
         self._started_turns: set[str] = set()
-        self._terminal_turns: set[str] = set()
+        self._terminal_turns: OrderedDict[str, None] = OrderedDict()
 
     async def emit(
         self,
@@ -338,8 +352,14 @@ class EventEmitter:
                 timestamp=self._clock(),
                 payload=payload,
             )
+            terminal = (
+                event_type in _OPERATION_TERMINALS or event_type in _TURN_TERMINALS
+            )
+            if terminal:
+                self._record_transition(event_type, turn_id, operation_id)
             await self._sink.emit(event)
-            self._record_transition(event_type, turn_id, operation_id)
+            if not terminal:
+                self._record_transition(event_type, turn_id, operation_id)
             return event
 
     def _validate_transition(
@@ -352,22 +372,25 @@ class EventEmitter:
             if operation_id is None:
                 raise EventLifecycleError("operation events require operation_id")
             if event_type is EventType.OPERATION_STARTED:
-                if operation_id in self._started_operations:
+                if (
+                    operation_id in self._started_operations
+                    or operation_id in self._terminal_operations
+                ):
                     raise EventLifecycleError("operation already started")
-            elif operation_id not in self._started_operations:
-                raise EventLifecycleError("operation terminal requires a start")
             elif operation_id in self._terminal_operations:
                 raise EventLifecycleError("operation already has a terminal event")
+            elif operation_id not in self._started_operations:
+                raise EventLifecycleError("operation terminal requires a start")
         if event_type in _TURN_TYPES:
             if turn_id is None:
                 raise EventLifecycleError("turn events require turn_id")
             if event_type is EventType.TURN_STARTED:
-                if turn_id in self._started_turns:
+                if turn_id in self._started_turns or turn_id in self._terminal_turns:
                     raise EventLifecycleError("turn already started")
-            elif turn_id not in self._started_turns:
-                raise EventLifecycleError("turn terminal requires a start")
             elif turn_id in self._terminal_turns:
                 raise EventLifecycleError("turn already has a terminal event")
+            elif turn_id not in self._started_turns:
+                raise EventLifecycleError("turn terminal requires a start")
 
     def _record_transition(
         self,
@@ -380,10 +403,18 @@ class EventEmitter:
             self._started_operations.add(operation_id)
         elif event_type in _OPERATION_TERMINALS:
             assert operation_id is not None
-            self._terminal_operations.add(operation_id)
+            self._started_operations.remove(operation_id)
+            self._record_terminal(self._terminal_operations, operation_id)
         if event_type is EventType.TURN_STARTED:
             assert turn_id is not None
             self._started_turns.add(turn_id)
         elif event_type in _TURN_TERMINALS:
             assert turn_id is not None
-            self._terminal_turns.add(turn_id)
+            self._started_turns.remove(turn_id)
+            self._record_terminal(self._terminal_turns, turn_id)
+
+    @staticmethod
+    def _record_terminal(history: OrderedDict[str, None], identifier: str) -> None:
+        history[identifier] = None
+        while len(history) > _MAX_LIFECYCLE_HISTORY:
+            history.popitem(last=False)

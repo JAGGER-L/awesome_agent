@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -58,6 +60,8 @@ from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
+    PendingInteraction,
+    recovery_decision_choices,
     state_reset_choices,
     tool_approval_choices,
     workspace_trust_choices,
@@ -68,7 +72,12 @@ from awesome_agent.application.provider_configuration import (
     CredentialValidator,
     ProviderConfigurationService,
 )
-from awesome_agent.application.turns import TurnCoordinator
+from awesome_agent.application.turns import (
+    RecoveryResult,
+    RecoveryStatus,
+    TurnCoordinator,
+    TurnExecutionFailed,
+)
 from awesome_agent.config import (
     ApplicationConfig,
     LoadedConfigSources,
@@ -88,6 +97,7 @@ from awesome_agent.context import (
     ThreadCompressor,
     WorkspaceInstructionSnapshot,
     calculate_context_budget,
+    estimate_messages,
     load_workspace_instructions,
     mem0_context_source,
 )
@@ -99,6 +109,7 @@ from awesome_agent.conversation import (
     Turn,
     TurnBusy,
     TurnNotFound,
+    TurnStatus,
     UsageSummary,
 )
 from awesome_agent.core.changes import (
@@ -135,8 +146,11 @@ from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import (
     TrustStatus,
     WorkspaceIdentity,
+    WorkspaceIdentityChanged,
     WorkspaceTrustService,
+    require_workspace_identity,
     resolve_workspace,
+    workspace_runtime_key,
 )
 from awesome_agent.extensions.mcp import (
     McpConnectionState,
@@ -163,6 +177,7 @@ from awesome_agent.memory import (
 from awesome_agent.memory.mem0_cloud import Mem0Client
 from awesome_agent.modeling import (
     GatewayEvent,
+    ModelCatalog,
     ModelGateway,
     ModelIdentitySnapshot,
     ModelProvider,
@@ -210,7 +225,54 @@ from awesome_agent.version import PRODUCT_VERSION
 type GatewayFactory = Callable[[ProviderId, str], ModelGateway]
 type McpClientFactory = Callable[[McpServerConfig], McpClient]
 
+logger = logging.getLogger(__name__)
+
 _MAX_THREAD_RESULT_BYTES = 900_000
+_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS = 5.0
+_RECOVERY_EVENT_DELIVERY_ATTEMPTS = 2
+_RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class _RecoveryResolutionDelivery:
+    interaction_id: str
+    decision: InteractionDecision
+    thread_id: str
+    turn_id: str
+    operation_id: str | None = None
+    client_message_id: str | None = None
+
+
+_ACTIVATION_STATE_FIELDS = (
+    "_sources",
+    "_application_config",
+    "_initialized",
+    "_commands",
+    "_command_dispatcher",
+    "_diagnostic_commands",
+    "_change_commands",
+    "_permission_commands",
+    "_provider_configuration",
+    "_turns",
+    "_direct",
+    "_extensions",
+    "_context",
+    "_registry",
+    "_local_memory",
+    "_mem0_adapter",
+    "_mem0_diagnostic",
+    "_mem0_session",
+    "_mcp",
+    "_change_scope",
+    "_change_store",
+    "_change_analyzer",
+    "_change_operations",
+    "_workspace_branch",
+    "_workspace_instruction_snapshot",
+    "_recovery_queue",
+    "_recovery_resolution_delivery",
+    "_recovery_required_delivery_id",
+)
 
 _CAPABILITIES = (
     "threads",
@@ -385,11 +447,18 @@ class _LocalApplicationBackend:
         self._change_operations: ChangeOperations | None = None
         self._workspace_branch: str | None = None
         self._workspace_instruction_snapshot: WorkspaceInstructionSnapshot | None = None
+        self._recovery_queue: list[RecoveryResult] = []
+        self._recovery_resolution_delivery: _RecoveryResolutionDelivery | None = None
+        self._recovery_required_delivery_id: str | None = None
+        self._recovery_required_delivery_lock = asyncio.Lock()
         self._permission_session = PermissionSession()
         self._state_lease: StateLease | None = None
+        self._workspace_path_lease: StateLease | None = None
+        self._workspace_entity_lease: StateLease | None = None
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._resources.callback(self._close_state_lease)
+        self._resources.callback(self._close_workspace_leases)
 
     async def initialize_application(self) -> InitializeResult:
         async with self._bootstrap_lock:
@@ -402,6 +471,7 @@ class _LocalApplicationBackend:
 
     async def _initialize_application_locked(self) -> InitializeResult:
         if self._initialized:
+            await self._flush_recovery_notifications()
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
                 protocol_version=3,
@@ -475,7 +545,7 @@ class _LocalApplicationBackend:
                 workspace=self._workspace_presentation(include_branch=False),
                 capabilities=_CAPABILITIES,
             )
-        await self._activate()
+        await self._activate_workspace()
         return InitializeResult(
             product_version=PRODUCT_VERSION,
             protocol_version=3,
@@ -811,6 +881,12 @@ class _LocalApplicationBackend:
             parsed = InteractionDecision(decision)
         except ValueError:
             return InteractionResult(accepted=False, status="invalid_decision")
+        if pending.kind is InteractionKind.RECOVERY_DECISION:
+            async with self._bootstrap_lock:
+                return await self._resolve_recovery_interaction(
+                    pending,
+                    parsed,
+                )
         if pending.kind is InteractionKind.STATE_RESET:
             try:
                 lease = self._foreground.acquire_interaction_resolution()
@@ -834,18 +910,22 @@ class _LocalApplicationBackend:
                     or current.kind is not InteractionKind.WORKSPACE_TRUST
                 ):
                     return InteractionResult(accepted=False, status="not_found")
+                if parsed is InteractionDecision.TRUST:
+                    self._prepare_workspace_activation()
                 if not self._interactions.resolve(interaction_id, parsed):
                     return InteractionResult(accepted=False, status="rejected")
                 resolved = await self._interactions.wait(interaction_id)
-                if resolved is InteractionDecision.TRUST:
-                    self._trust.accept(self._workspace)
-                    await self._activate()
+                # The event acknowledges the decision. Apply the security upgrade only
+                # after successful delivery so a broken client channel fails closed.
                 await self._emitter.emit(
                     InteractionResolvedPayload(
                         interaction_id=interaction_id,
                         decision=resolved.value,
                     ),
                 )
+                if resolved is InteractionDecision.TRUST:
+                    self._trust.accept(self._workspace)
+                    await self._activate_workspace()
                 return InteractionResult(
                     accepted=True,
                     status=(
@@ -902,8 +982,6 @@ class _LocalApplicationBackend:
                 if not self._interactions.resolve(interaction_id, parsed):
                     return InteractionResult(accepted=False, status="rejected")
                 resolved = await self._interactions.wait(interaction_id)
-                if resolved is InteractionDecision.ENABLE_FULL_ACCESS:
-                    self._permission_session.set_mode(PermissionMode.FULL_ACCESS)
                 await self._emitter.emit(
                     InteractionResolvedPayload(
                         interaction_id=interaction_id,
@@ -911,6 +989,8 @@ class _LocalApplicationBackend:
                     ),
                     thread_id=current_thread_id,
                 )
+                if resolved is InteractionDecision.ENABLE_FULL_ACCESS:
+                    self._permission_session.set_mode(PermissionMode.FULL_ACCESS)
                 return InteractionResult(
                     accepted=True,
                     status=(
@@ -920,6 +1000,390 @@ class _LocalApplicationBackend:
                     ),
                 )
         return InteractionResult(accepted=False, status="rejected")
+
+    async def _resolve_recovery_interaction(
+        self,
+        pending: PendingInteraction,
+        decision: InteractionDecision,
+    ) -> InteractionResult:
+        if decision is InteractionDecision.RETRY:
+            return await self._retry_recovery(pending)
+        if decision is not InteractionDecision.ABORT:
+            return InteractionResult(accepted=False, status="rejected")
+        try:
+            lease = self._foreground.acquire_interaction_resolution()
+        except ForegroundBusy:
+            return InteractionResult(accepted=False, status="operation_busy")
+        async with lease:
+            recovery = self._bound_recovery(pending)
+            if recovery is None:
+                self._interactions.discard(pending.id)
+                return InteractionResult(accepted=False, status="stale")
+            assert self._turns is not None
+            try:
+                await self._turns.abort_recovery(
+                    recovery.thread_id,
+                    recovery.turn_id,
+                )
+            except TurnExecutionFailed:
+                self._discard_recovery(pending, recovery)
+                await self._present_next_recovery()
+                return InteractionResult(accepted=False, status="stale")
+            self._discard_recovery(pending, recovery)
+            delivery = _RecoveryResolutionDelivery(
+                interaction_id=pending.id,
+                decision=InteractionDecision.ABORT,
+                thread_id=recovery.thread_id,
+                turn_id=recovery.turn_id,
+            )
+            self._recovery_resolution_delivery = delivery
+            (
+                delivered,
+                cancellation,
+                failure,
+            ) = await self._flush_recovery_resolution_delivery()
+            if delivered:
+                await self._present_next_recovery()
+            if cancellation is not None:
+                raise cancellation
+            if failure is not None:
+                raise failure
+            if not delivered:
+                raise RuntimeError("Recovery resolution delivery did not complete.")
+            return InteractionResult(accepted=True, status="resolved")
+
+    async def _retry_recovery(
+        self,
+        pending: PendingInteraction,
+    ) -> InteractionResult:
+        recovery = self._bound_recovery(pending)
+        if recovery is None:
+            self._interactions.discard(pending.id)
+            return InteractionResult(accepted=False, status="stale")
+        assert self._turns is not None
+        assert self._commands is not None
+        turns = self._turns
+        commands = self._commands
+        claimed = False
+        resolution_published = asyncio.Event()
+
+        def claim(turn: Turn) -> None:
+            nonlocal claimed
+            current = self._bound_recovery(pending)
+            if current != recovery or turn.id != recovery.turn_id:
+                raise TurnExecutionFailed("recovery_stale")
+            commands.select_recovery_thread(recovery.thread_id)
+            if not self._interactions.discard(pending.id):
+                raise TurnExecutionFailed("recovery_stale")
+            if self._recovery_required_delivery_id == pending.id:
+                self._recovery_required_delivery_id = None
+            self._recovery_queue.pop(0)
+            claimed = True
+
+        async def finished() -> None:
+            await resolution_published.wait()
+            if self._recovery_resolution_delivery is None:
+                await self._present_next_recovery()
+
+        resume_task = asyncio.create_task(
+            turns.resume_unfinished(
+                recovery.thread_id,
+                expected_turn_id=recovery.turn_id,
+                claim=claim,
+                finished=finished,
+            )
+        )
+
+        async def finish_claimed_resume() -> OperationAccepted:
+            while not resume_task.done():
+                try:
+                    await asyncio.shield(resume_task)
+                except asyncio.CancelledError:
+                    continue
+            return resume_task.result()
+
+        response_cancellation: asyncio.CancelledError | None = None
+        try:
+            try:
+                accepted = await asyncio.shield(resume_task)
+            except asyncio.CancelledError as cancellation:
+                response_cancellation = cancellation
+                if claimed:
+                    accepted = await finish_claimed_resume()
+                else:
+                    resume_task.cancel()
+                    accepted = await resume_task
+        except OperationBusy:
+            resolution_published.set()
+            if response_cancellation is not None:
+                raise response_cancellation from None
+            return InteractionResult(accepted=False, status="operation_busy")
+        except TurnExecutionFailed:
+            resolution_published.set()
+            if claimed and self._recovery_is_in_progress(recovery):
+                self._recovery_queue.insert(0, recovery)
+            elif not claimed:
+                self._discard_recovery(pending, recovery)
+            await self._present_next_recovery()
+            if response_cancellation is not None:
+                raise response_cancellation from None
+            return InteractionResult(accepted=False, status="stale")
+        except asyncio.CancelledError:
+            resolution_published.set()
+            if claimed and self._recovery_is_in_progress(recovery):
+                self._recovery_queue.insert(0, recovery)
+                await self._present_next_recovery()
+            if response_cancellation is not None:
+                raise response_cancellation from None
+            raise
+        except BaseException:
+            resolution_published.set()
+            if claimed and self._recovery_is_in_progress(recovery):
+                self._recovery_queue.insert(0, recovery)
+                await self._present_next_recovery()
+            raise
+
+        delivery = _RecoveryResolutionDelivery(
+            interaction_id=pending.id,
+            decision=InteractionDecision.RETRY,
+            thread_id=recovery.thread_id,
+            turn_id=recovery.turn_id,
+            operation_id=accepted.operation_id,
+            client_message_id=accepted.client_message_id,
+        )
+        self._recovery_resolution_delivery = delivery
+        try:
+            (
+                delivered,
+                delivery_cancellation,
+                failure,
+            ) = await self._flush_recovery_resolution_delivery()
+        finally:
+            resolution_published.set()
+        pending_cancellation = response_cancellation or delivery_cancellation
+        if pending_cancellation is not None:
+            raise pending_cancellation
+        if failure is not None:
+            raise failure
+        if not delivered:
+            raise RuntimeError("Recovery resolution delivery did not complete.")
+        return InteractionResult(accepted=True, status="resolved")
+
+    async def _flush_recovery_notifications(self) -> None:
+        if self._recovery_resolution_delivery is not None:
+            (
+                delivered,
+                cancellation,
+                failure,
+            ) = await self._flush_recovery_resolution_delivery()
+            if cancellation is not None:
+                raise cancellation
+            if failure is not None:
+                raise failure
+            if not delivered:
+                return
+        await self._present_next_recovery()
+
+    async def _flush_recovery_resolution_delivery(
+        self,
+    ) -> tuple[bool, asyncio.CancelledError | None, BaseException | None]:
+        delivery = self._recovery_resolution_delivery
+        if delivery is None:
+            return True, None, None
+
+        async def emit() -> None:
+            await self._emitter.emit(
+                InteractionResolvedPayload(
+                    interaction_id=delivery.interaction_id,
+                    decision=delivery.decision.value,
+                ),
+                thread_id=delivery.thread_id,
+                turn_id=delivery.turn_id,
+                operation_id=delivery.operation_id,
+                client_message_id=delivery.client_message_id,
+            )
+
+        delivered, cancellation, failure = await self._deliver_recovery_event(emit)
+        if delivered and self._recovery_resolution_delivery == delivery:
+            self._recovery_resolution_delivery = None
+        return delivered, cancellation, failure
+
+    async def _deliver_recovery_event(
+        self,
+        emit: Callable[[], Coroutine[Any, Any, None]],
+    ) -> tuple[bool, asyncio.CancelledError | None, BaseException | None]:
+        cancellation: asyncio.CancelledError | None = None
+        failure: BaseException | None = None
+        for _ in range(_RECOVERY_EVENT_DELIVERY_ATTEMPTS):
+            if self._closed or self._foreground.closing:
+                break
+            delivery_task: asyncio.Task[None] = asyncio.create_task(emit())
+            deadline = (
+                asyncio.get_running_loop().time()
+                + _RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS
+            )
+            while not delivery_task.done():
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    delivery_task.cancel()
+                    await asyncio.gather(delivery_task, return_exceptions=True)
+                    failure = TimeoutError("Recovery event delivery timed out.")
+                    break
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(delivery_task),
+                        timeout=remaining,
+                    )
+                except asyncio.CancelledError as caught:
+                    if cancellation is None:
+                        cancellation = caught
+                    if self._closed or self._foreground.closing:
+                        delivery_task.cancel()
+                        await asyncio.gather(delivery_task, return_exceptions=True)
+                        return False, cancellation, failure
+                    continue
+                except TimeoutError:
+                    delivery_task.cancel()
+                    await asyncio.gather(delivery_task, return_exceptions=True)
+                    failure = TimeoutError("Recovery event delivery timed out.")
+                    break
+                except Exception as caught:
+                    failure = caught
+                    break
+            if delivery_task.done() and not delivery_task.cancelled():
+                try:
+                    delivery_task.result()
+                except Exception as caught:
+                    failure = caught
+                else:
+                    return True, cancellation, None
+            if self._closed or self._foreground.closing:
+                break
+        return False, cancellation, failure
+
+    def _bound_recovery(
+        self,
+        expected: PendingInteraction,
+    ) -> RecoveryResult | None:
+        current = self._interactions.pending
+        if (
+            current is None
+            or current.id != expected.id
+            or current.kind is not InteractionKind.RECOVERY_DECISION
+            or current.generation != expected.generation
+            or current.thread_id != expected.thread_id
+            or current.turn_id != expected.turn_id
+            or current.operation != expected.operation
+            or not self._recovery_queue
+        ):
+            return None
+        recovery = self._recovery_queue[0]
+        if (
+            recovery.thread_id != current.thread_id
+            or recovery.turn_id != current.turn_id
+        ):
+            return None
+        return recovery
+
+    def _discard_recovery(
+        self,
+        pending: PendingInteraction,
+        recovery: RecoveryResult,
+    ) -> None:
+        self._interactions.discard(pending.id)
+        if self._recovery_required_delivery_id == pending.id:
+            self._recovery_required_delivery_id = None
+        if self._recovery_queue and self._recovery_queue[0] == recovery:
+            self._recovery_queue.pop(0)
+
+    def _recovery_is_in_progress(self, recovery: RecoveryResult) -> bool:
+        try:
+            view = self._conversation.read_thread(recovery.thread_id)
+        except ThreadNotFound:
+            return False
+        return any(
+            turn.id == recovery.turn_id and turn.status is TurnStatus.IN_PROGRESS
+            for turn in view.turns
+        )
+
+    async def _present_next_recovery(self) -> None:
+        async with self._recovery_required_delivery_lock:
+            await self._present_next_recovery_locked()
+
+    async def _present_next_recovery_locked(self) -> None:
+        if (
+            self._closed
+            or self._foreground.closing
+            or self._recovery_resolution_delivery is not None
+            or not self._recovery_queue
+        ):
+            return
+        recovery = self._recovery_queue[0]
+        pending = self._interactions.pending
+        if pending is None:
+            uncertain = recovery.status is RecoveryStatus.INTERACTION_REQUIRED
+            pending = self._interactions.create(
+                kind=InteractionKind.RECOVERY_DECISION,
+                prompt=(
+                    "A tool may have produced external side effects. Retry or abort "
+                    "this unfinished Turn?"
+                    if uncertain
+                    else "Resume this unfinished Turn from its verified checkpoint?"
+                ),
+                operation=(
+                    "recover_uncertain_turn" if uncertain else "recover_unfinished_turn"
+                ),
+                target=(
+                    "uncertain external tool call"
+                    if uncertain
+                    else f"unfinished Turn {recovery.turn_id}"
+                ),
+                capability=None,
+                choices=recovery_decision_choices(uncertain=uncertain),
+                thread_id=recovery.thread_id,
+                turn_id=recovery.turn_id,
+            )
+            self._recovery_required_delivery_id = pending.id
+        elif (
+            pending.kind is not InteractionKind.RECOVERY_DECISION
+            or pending.id != self._recovery_required_delivery_id
+            or pending.thread_id != recovery.thread_id
+            or pending.turn_id != recovery.turn_id
+        ):
+            return
+
+        async def emit() -> None:
+            await self._emitter.emit(
+                InteractionRequiredPayload(
+                    interaction_id=pending.id,
+                    interaction_kind=InteractionKind.RECOVERY_DECISION.value,
+                    prompt=pending.prompt,
+                    operation=pending.operation,
+                    target=pending.target,
+                    capability=pending.capability,
+                    choices=tuple(
+                        InteractionChoicePayload(
+                            decision=choice.decision.value,
+                            label=choice.label,
+                            description=choice.description,
+                        )
+                        for choice in pending.choices
+                    ),
+                ),
+                thread_id=recovery.thread_id,
+                turn_id=recovery.turn_id,
+            )
+
+        delivered, cancellation, failure = await self._deliver_recovery_event(emit)
+        if delivered and self._recovery_required_delivery_id == pending.id:
+            self._recovery_required_delivery_id = None
+        if cancellation is not None:
+            raise cancellation
+        if failure is not None and not delivered:
+            logger.warning(
+                "Recovery interaction delivery remains pending.",
+                exc_info=(type(failure), failure, failure.__traceback__),
+            )
 
     async def _resolve_state_reset_interaction(
         self,
@@ -1122,9 +1586,86 @@ class _LocalApplicationBackend:
         if lease is not None:
             lease.close()
 
+    def _ensure_workspace_leases(self) -> None:
+        if (
+            self._workspace_path_lease is not None
+            and self._workspace_path_lease.active
+            and self._workspace_entity_lease is not None
+            and self._workspace_entity_lease.active
+        ):
+            return
+        self._close_workspace_leases()
+        path_lease = StateLease.acquire(
+            self._paths.home / ".workspace-leases" / self._workspace.key,
+            StateLeaseMode.EXCLUSIVE,
+        )
+        try:
+            entity_lease = StateLease.acquire(
+                self._paths.home
+                / ".workspace-entity-leases"
+                / workspace_runtime_key(self._workspace),
+                StateLeaseMode.EXCLUSIVE,
+            )
+        except BaseException:
+            path_lease.close()
+            raise
+        self._workspace_path_lease = path_lease
+        self._workspace_entity_lease = entity_lease
+
+    def _close_workspace_leases(self) -> None:
+        entity_lease = self._workspace_entity_lease
+        path_lease = self._workspace_path_lease
+        self._workspace_entity_lease = None
+        self._workspace_path_lease = None
+        if entity_lease is not None:
+            entity_lease.close()
+        if path_lease is not None:
+            path_lease.close()
+
+    def _prepare_workspace_activation(self) -> None:
+        try:
+            self._ensure_workspace_leases()
+        except StateLeaseUnavailable as error:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "This workspace is active in another Awesome session.",
+                retryable=True,
+                data={"workspace_key": self._workspace.key},
+            ) from error
+        try:
+            require_workspace_identity(self._workspace)
+        except WorkspaceIdentityChanged as error:
+            self._close_workspace_leases()
+            raise _application_failure(
+                ProductErrorCode.WORKSPACE_NOT_TRUSTED,
+                "The workspace root changed after this session started. "
+                "Restart Awesome.",
+                data={"workspace_key": self._workspace.key},
+            ) from error
+
+    async def _activate_workspace(self) -> None:
+        self._prepare_workspace_activation()
+        try:
+            await self._activate()
+        except BaseException:
+            self._close_workspace_leases()
+            raise
+
     async def _activate(self) -> None:
         if self._initialized:
             return
+        snapshot = {field: getattr(self, field) for field in _ACTIVATION_STATE_FIELDS}
+        try:
+            await self._activate_candidate()
+        except BaseException:
+            candidate_mcp = self._mcp
+            for field, value in snapshot.items():
+                setattr(self, field, value)
+            if candidate_mcp is not None and candidate_mcp is not snapshot["_mcp"]:
+                await self._close_activation_candidate(candidate_mcp)
+            raise
+
+    async def _activate_candidate(self) -> None:
         if self._saver is None:
             self._saver = await self._resources.enter_async_context(
                 sqlite_checkpoint_saver(self._paths.checkpoint_db)
@@ -1180,7 +1721,14 @@ class _LocalApplicationBackend:
             workspace_root=self._workspace.canonical_path / ".awesome" / "skills",
             workspace_trusted=True,
             workspace_anchor=self._workspace.canonical_path,
-            disabled=set(),
+            disabled={
+                skill.name
+                for skill in (
+                    *self._application_config.user_skills,
+                    *self._application_config.workspace_skills,
+                )
+                if not skill.enabled
+            },
         )
         skill_loader = SkillLoader(catalog)
         register_skill_tools(registry, skill_loader)
@@ -1217,9 +1765,13 @@ class _LocalApplicationBackend:
             diagnostic=self._mem0_diagnostic,
         )
 
+        model_catalog = ModelCatalog.from_application(self._application_config)
+        context_model_limit = min(
+            profile.context_limit for profile in model_catalog.models
+        )
         context_budget = calculate_context_budget(
             self._application_config.budgets.total_context_tokens,
-            self._application_config.budgets.total_context_tokens,
+            context_model_limit,
         )
         self._workspace_instruction_snapshot = load_workspace_instructions(
             workspace_root=self._workspace.canonical_path,
@@ -1232,7 +1784,7 @@ class _LocalApplicationBackend:
             builder=ContextBuilder(),
             compressor=ThreadCompressor(gateway_router),
             configured_total_tokens=self._application_config.budgets.total_context_tokens,
-            model_context_limit=self._application_config.budgets.total_context_tokens,
+            model_context_limit=context_model_limit,
             product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
             workspace_instructions=(self._workspace_instruction_snapshot.content or ""),
             workspace_instruction_source_id=(
@@ -1324,6 +1876,11 @@ class _LocalApplicationBackend:
                     approval_resolver=resolve_tool_interaction,
                 )
 
+            def record_context_snapshot(
+                manifest: tuple[dict[str, JsonValue], ...],
+            ) -> None:
+                self._conversation.store_context_manifest(turn.id, manifest)
+
             post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
             if (
                 self._mem0_session is not None
@@ -1354,8 +1911,10 @@ class _LocalApplicationBackend:
                     active_execution_seconds=budgets.active_execution_seconds,
                 ),
                 monotonic=monotonic,
+                context_token_estimator=estimate_messages,
                 compressor=context_service,
-                current_user_text=context_service.current_input(turn_id),
+                current_user_text=context_service.runtime_current_input(turn),
+                context_snapshot_recorder=record_context_snapshot,
                 post_answer_memory=post_answer_memory,
             )
 
@@ -1372,6 +1931,7 @@ class _LocalApplicationBackend:
             reconcile_changes=self._change_scope.reconcile,
             turn_input_preparer=context_service.prepare_turn,
             turn_extension_preparer=self._prepare_turn_extensions,
+            context_snapshot_validator=context_service.validate_frozen_snapshot,
         )
 
         def direct_context(
@@ -1502,8 +2062,34 @@ class _LocalApplicationBackend:
             foreground=self._foreground,
             has_pending_interaction=lambda: self._interactions.pending is not None,
         )
-        await self._turns.reconcile_startup()
+        recovery_results = await self._turns.reconcile_startup()
+        self._recovery_queue = [
+            result
+            for result in recovery_results
+            if result.status
+            in {RecoveryStatus.RESUMABLE, RecoveryStatus.INTERACTION_REQUIRED}
+        ]
+        await self._present_next_recovery()
         self._initialized = True
+
+    async def _close_activation_candidate(self, candidate: McpManager) -> None:
+        close_task = asyncio.create_task(candidate.aclose())
+        try:
+            done, _ = await asyncio.wait(
+                (close_task,),
+                timeout=_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS,
+            )
+        except BaseException:
+            close_task.cancel()
+            close_task.add_done_callback(_consume_background_task_result)
+            return
+        if close_task not in done:
+            close_task.cancel()
+            close_task.add_done_callback(_consume_background_task_result)
+            await asyncio.sleep(0)
+            return
+        with suppress(Exception, asyncio.CancelledError):
+            close_task.result()
 
     def _load_sources(self, *, workspace_trusted: bool) -> LoadedConfigSources:
         return load_config_sources(
@@ -1561,6 +2147,20 @@ class _LocalApplicationBackend:
         return build
 
     def _turn_config(self, thread: Thread) -> TurnConfig:
+        selected = resolve_turn_config(
+            self._application_config,
+            thread=ThreadConfigState(
+                model=thread.current_model,
+                thinking_enabled=thread.thinking_enabled,
+                skill_mode=thread.skill_mode,
+            ),
+            environ={},
+        )
+        model_context_limit = (
+            ModelCatalog.from_application(self._application_config)
+            .profile(selected.model)
+            .context_limit
+        )
         return resolve_turn_config(
             self._application_config,
             thread=ThreadConfigState(
@@ -1569,6 +2169,7 @@ class _LocalApplicationBackend:
                 skill_mode=thread.skill_mode,
             ),
             environ={},
+            model_context_limit=model_context_limit,
         )
 
     def _model_identity(self, thread: Thread) -> ModelIdentitySnapshot | None:
@@ -1703,7 +2304,7 @@ class _LocalApplicationBackend:
                 ContextManifestItem.model_validate(item).estimated_tokens
                 for item in self._conversation.latest_context_manifest(thread_id)
             ),
-            context_budget_tokens=self._application_config.budgets.total_context_tokens,
+            context_budget_tokens=config.budgets.total_context_tokens,
             changed_file_count=0,
         )
 
@@ -1830,6 +2431,13 @@ async def _finish_cancelled_worker(worker: asyncio.Task[None]) -> None:
             worker.result()
 
 
+def _consume_background_task_result(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    with suppress(Exception):
+        task.result()
+
+
 def _mcp_configs(config: ApplicationConfig) -> tuple[McpServerConfig, ...]:
     user = tuple(
         McpServerConfig(
@@ -1885,6 +2493,7 @@ def _git_branch(workspace: Path) -> str | None:
                 "HEAD",
             ],
             check=False,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=2,

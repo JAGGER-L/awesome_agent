@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from pydantic import JsonValue
+
 from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
@@ -45,9 +47,15 @@ class SQLiteConversationRepositories:
         self.tool_activities = SQLiteToolActivityRepository(path)
 
     @contextmanager
-    def transaction(self) -> Iterator[sqlite3.Connection]:
-        with application_connection(self.path) as connection, connection:
-            yield connection
+    def transaction(
+        self,
+        *,
+        immediate: bool = True,
+    ) -> Iterator[sqlite3.Connection]:
+        with application_connection(self.path) as connection:
+            connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+            with connection:
+                yield connection
 
     def create_thread(self, thread: Thread) -> Thread:
         return self.threads.create(thread)
@@ -86,7 +94,7 @@ class SQLiteConversationRepositories:
         return ThreadListPage(threads=threads, has_more=has_more)
 
     def read_thread(self, thread_id: str) -> ThreadView:
-        with self.transaction() as connection:
+        with self.transaction(immediate=False) as connection:
             thread = self.threads.get(thread_id, connection=connection)
             if thread is None:
                 raise ThreadNotFound(thread_id)
@@ -107,7 +115,7 @@ class SQLiteConversationRepositories:
         before_sequence: int | None,
         limit: int,
     ) -> ThreadPage:
-        with self.transaction() as connection:
+        with self.transaction(immediate=False) as connection:
             thread = self.threads.get(thread_id, connection=connection)
             if thread is None:
                 raise ThreadNotFound(thread_id)
@@ -183,6 +191,13 @@ class SQLiteConversationRepositories:
             if current is None:
                 raise TurnNotFound(turn.id)
             require_turn_transition(current.status, TurnStatus.COMPLETED)
+            if (
+                current.context_manifest
+                and current.context_manifest != turn.context_manifest
+            ):
+                raise ConversationConflict(
+                    "Turn context changed before completion was committed."
+                )
             if current.thread_id != assistant_entry.thread_id:
                 raise ConversationConflict("Assistant Entry belongs to another Thread.")
             self._require_next_sequence(assistant_entry, connection)
@@ -197,12 +212,47 @@ class SQLiteConversationRepositories:
             )
         return turn
 
+    def update_in_progress_turn(
+        self,
+        turn: Turn,
+        *,
+        expected_context_manifest: tuple[dict[str, JsonValue], ...],
+    ) -> Turn:
+        with self.transaction() as connection:
+            current = self.turns.get(turn.id, connection=connection)
+            if current is None:
+                raise TurnNotFound(turn.id)
+            if (
+                current.status is not TurnStatus.IN_PROGRESS
+                or turn.status is not TurnStatus.IN_PROGRESS
+                or current.context_manifest != expected_context_manifest
+                or turn
+                != current.model_copy(
+                    update={
+                        "context_manifest": turn.context_manifest,
+                        "updated_at": turn.updated_at,
+                    }
+                )
+            ):
+                raise ConversationConflict(
+                    "In-progress Turn context update conflicts with stored state."
+                )
+            self.turns.update(turn, connection=connection)
+        return turn
+
     def update_terminal_turn(self, turn: Turn) -> Turn:
         with self.transaction() as connection:
             current = self.turns.get(turn.id, connection=connection)
             if current is None:
                 raise TurnNotFound(turn.id)
             require_turn_transition(current.status, turn.status)
+            if (
+                current.context_manifest
+                and current.context_manifest != turn.context_manifest
+            ):
+                raise ConversationConflict(
+                    "Turn context changed before terminal state was committed."
+                )
             self.turns.update(turn, connection=connection)
             thread = self.threads.get(turn.thread_id, connection=connection)
             if thread is None:

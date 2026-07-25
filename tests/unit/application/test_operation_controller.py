@@ -55,6 +55,13 @@ class CancelAfterStartedEventSink:
             asyncio.get_running_loop().call_soon(owner.cancel)
 
 
+class FailOnOperationCancelledSink(CollectingEventSink):
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.OPERATION_CANCELLED:
+            raise BrokenPipeError("protocol output closed")
+        await super().emit(event)
+
+
 @pytest.mark.asyncio
 async def test_operation_serialization_and_completed_terminal_event() -> None:
     sink = CollectingEventSink()
@@ -227,6 +234,27 @@ async def test_cancel_by_id_emits_one_cancelled_terminal_event() -> None:
         EventType.OPERATION_STARTED,
         EventType.OPERATION_CANCELLED,
     ]
+    assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_preserves_cancelled_error_when_event_delivery_fails() -> None:
+    controller = OperationController(_emitter(FailOnOperationCancelledSink()))
+    started = asyncio.Event()
+
+    async def blocked(operation_id: str) -> None:
+        del operation_id
+        started.set()
+        await asyncio.Event().wait()
+
+    running = asyncio.create_task(controller.run(blocked))
+    await started.wait()
+    operation_id = controller.active_operation_id
+    assert operation_id is not None
+
+    assert await controller.cancel(operation_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await running
     assert controller.active_operation_id is None
 
 

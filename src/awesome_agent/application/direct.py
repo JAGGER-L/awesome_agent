@@ -117,6 +117,7 @@ class DirectCommandService:
             self._operations.abort(reservation)
             raise
         self._tasks[handle.operation_id] = handle.task
+        handle.task.add_done_callback(self._task_completed)
         return OperationAccepted(
             operation_id=handle.operation_id,
             thread_id=thread_id,
@@ -130,6 +131,15 @@ class DirectCommandService:
             await task
         finally:
             self._tasks.pop(operation_id, None)
+
+    def _trim_tasks(self) -> None:
+        while len(self._tasks) > 64:
+            self._tasks.pop(next(iter(self._tasks)))
+
+    def _task_completed(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled():
+            task.exception()
+        self._trim_tasks()
 
     def _persist_result(
         self,

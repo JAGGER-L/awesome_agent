@@ -85,6 +85,10 @@ awesome --version
 awesome --help
 ```
 
+If startup finds an unfinished Turn, Awesome asks before continuing it. A
+verified local checkpoint offers Retry first; a shell or MCP call whose outcome
+is uncertain offers Abort first and is never replayed automatically.
+
 ## First Task
 
 Try a read-only introduction to the project:
@@ -118,5 +122,9 @@ not disable hard safety denials. MCP and unknown extension capabilities still
 ask every time. None of the permission modes provides an operating-system
 sandbox, and the command circuit breaker is a defense against recognizable
 accidents rather than a detector for arbitrary hostile obfuscation.
+Controlled workspace file operations bind checked directory/file identities
+and refuse links, reparse points, hard-link aliases, and ambiguous Windows path
+spellings; bounded process-tree cleanup limits orphaned children but does not
+isolate host execution.
 Process-environment variables and `<AWESOME_HOME>/.env` remain advanced
 configuration options; never put credentials in project files.

@@ -27,6 +27,7 @@ MAX_MCP_CATALOG_BYTES = 1024 * 1024
 MAX_MCP_SCHEMA_DEPTH = 64
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
+_JSON_POINTER_ARRAY_INDEX = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _REFERENCE_KEYWORDS = frozenset({"$ref", "$dynamicRef", "$recursiveRef"})
 _ROOT_RESOURCE_URI = "https://awesome-agent.invalid/mcp/catalog/root"
 
@@ -141,6 +142,7 @@ class McpCatalogError(ValueError):
 class CompiledMcpTool:
     tool: Tool
     validator: Validator
+    output_validator: Validator | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,16 +179,23 @@ def compile_mcp_catalog(
     catalog_bytes = 0
     for tool in tools:
         _validate_tool_contract(tool, names)
-        catalog_bytes += _serialized_size(
-            tool.model_dump(by_alias=True, exclude_none=True)
-        )
+        catalog_bytes += mcp_tool_contract_size(tool)
         if catalog_bytes > MAX_MCP_CATALOG_BYTES:
             raise McpCatalogError("MCP catalog exceeds the 1 MiB limit")
         schema = cast(dict[str, object], dict(tool.inputSchema))
         validator = _compile_schema(schema)
-        if tool.outputSchema is not None:
-            _compile_schema(cast(dict[str, object], dict(tool.outputSchema)))
-        compiled.append(CompiledMcpTool(tool=tool, validator=validator))
+        output_validator = (
+            None
+            if tool.outputSchema is None
+            else _compile_schema(cast(dict[str, object], dict(tool.outputSchema)))
+        )
+        compiled.append(
+            CompiledMcpTool(
+                tool=tool,
+                validator=validator,
+                output_validator=output_validator,
+            )
+        )
 
     by_name = MappingProxyType({item.tool.name: item for item in compiled})
     return McpCatalog(
@@ -194,6 +203,12 @@ def compile_mcp_catalog(
         compiled_tools=tuple(compiled),
         _by_name=by_name,
     )
+
+
+def mcp_tool_contract_size(tool: Tool) -> int:
+    """Measure one wire catalog entry using the compiler's canonical encoding."""
+
+    return _serialized_size(tool.model_dump(by_alias=True, exclude_none=True))
 
 
 def _validate_tool_contract(tool: Tool, names: set[str]) -> None:
@@ -529,18 +544,40 @@ def _validate_local_reference(
 
     current: object = schema
     for encoded_part in fragment[1:].split("/"):
-        part = encoded_part.replace("~1", "/").replace("~0", "~")
+        part = _decode_json_pointer_token(encoded_part)
         if isinstance(current, dict) and part in current:
             current = current[part]
             continue
-        if isinstance(current, list):
+        if (
+            isinstance(current, list)
+            and _JSON_POINTER_ARRAY_INDEX.fullmatch(part) is not None
+        ):
             try:
                 index = int(part)
+            except ValueError:
+                index = len(current)
+            if index < len(current):
                 current = current[index]
                 continue
-            except (ValueError, IndexError):
-                pass
         raise McpCatalogError("MCP JSON Schema reference points to a missing value")
     if not isinstance(current, dict | bool):
         raise McpCatalogError("MCP JSON Schema reference target is not a schema")
     return current
+
+
+def _decode_json_pointer_token(encoded: str) -> str:
+    decoded: list[str] = []
+    index = 0
+    while index < len(encoded):
+        character = encoded[index]
+        if character != "~":
+            decoded.append(character)
+            index += 1
+            continue
+        if index + 1 >= len(encoded) or encoded[index + 1] not in {"0", "1"}:
+            raise McpCatalogError(
+                "MCP JSON Schema reference contains an invalid JSON Pointer token"
+            )
+        decoded.append("~" if encoded[index + 1] == "0" else "/")
+        index += 2
+    return "".join(decoded)

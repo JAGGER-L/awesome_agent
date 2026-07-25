@@ -68,6 +68,17 @@ class Executor:
         )
 
 
+class FailingExecutor(Executor):
+    async def execute(
+        self,
+        request: ToolRequest,
+        *,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        self.requests.append(request)
+        raise RuntimeError("executor failed")
+
+
 def _service(
     tmp_path: Path,
     executor: Executor,
@@ -161,3 +172,77 @@ async def test_persisted_direct_result_is_bounded_and_redacted(tmp_path: Path) -
     assert "[REDACTED:token]" in entry.content
     assert entry.metadata["exit_code"] == 0
     assert entry.metadata["managed_side_effects"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["completed", "failed", "cancelled"])
+async def test_terminal_direct_task_is_retained_for_late_wait(
+    tmp_path: Path,
+    terminal: str,
+) -> None:
+    gate = asyncio.Event() if terminal == "cancelled" else None
+    executor = (
+        FailingExecutor("unused")
+        if terminal == "failed"
+        else Executor("done", gate=gate)
+    )
+    service, _, thread_id = _service(tmp_path, executor)
+
+    accepted = await service.start(thread_id, "echo done")
+    if terminal == "cancelled":
+        assert await service._operations.cancel(accepted.operation_id) is True
+    for _ in range(4):
+        await asyncio.sleep(0)
+
+    assert accepted.operation_id in service._tasks
+
+    if terminal == "failed":
+        with pytest.raises(RuntimeError, match="executor failed"):
+            await service.wait(accepted.operation_id)
+    elif terminal == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await service.wait(accepted.operation_id)
+    else:
+        await service.wait(accepted.operation_id)
+    assert service._tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_wait_can_observe_a_direct_task_that_completed_before_lookup(
+    tmp_path: Path,
+) -> None:
+    service, _, thread_id = _service(tmp_path, Executor("done"))
+
+    accepted = await service.start(thread_id, "echo done")
+    for _ in range(4):
+        await asyncio.sleep(0)
+
+    await service.wait(accepted.operation_id)
+
+    assert service._tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_direct_task_history_is_bounded(tmp_path: Path) -> None:
+    service, _, thread_id = _service(tmp_path, Executor("done"))
+
+    for index in range(70):
+        accepted = await service.start(thread_id, f"echo {index}")
+        while not service._tasks[accepted.operation_id].done():
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    assert len(service._tasks) == 64
+
+
+@pytest.mark.asyncio
+async def test_wait_still_propagates_direct_failure_and_releases_task(
+    tmp_path: Path,
+) -> None:
+    service, _, thread_id = _service(tmp_path, FailingExecutor("unused"))
+
+    accepted = await service.start(thread_id, "false")
+
+    with pytest.raises(RuntimeError, match="executor failed"):
+        await service.wait(accepted.operation_id)
+    assert service._tasks == {}

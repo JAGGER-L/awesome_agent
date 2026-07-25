@@ -102,7 +102,7 @@ def create_execute_handler(
             environment["AWESOME_EXEC_COMMAND"] = options.command
         journal.record_execute(
             change_set_id=context.change_set_id,
-            command=options.command,
+            command=redact_text(options.command).text,
             observed_paths=[],
         )
         result = await process_runner.run(

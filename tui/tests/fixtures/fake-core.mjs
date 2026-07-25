@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const mode = process.env.AWESOME_FAKE_CORE_MODE ?? "normal";
@@ -10,6 +12,20 @@ let startupPhase =
 const stderr = process.env.AWESOME_FAKE_CORE_STDERR_BASE64;
 if (stderr) process.stderr.write(Buffer.from(stderr, "base64"));
 if (mode === "exit-before-handshake") process.exit(23);
+
+const descendantPidFile = process.env.AWESOME_FAKE_CORE_DESCENDANT_PID_FILE;
+if (descendantPidFile) {
+  const descendant = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1_000)"],
+    { detached: process.platform === "win32", stdio: "ignore" },
+  );
+  if (descendant.pid === undefined) {
+    throw new Error("Unable to spawn fake Core descendant");
+  }
+  if (process.platform === "win32") descendant.unref();
+  writeFileSync(descendantPidFile, String(descendant.pid), "utf8");
+}
 
 const output = (value) => {
   const bytes = Buffer.from(`${JSON.stringify(value)}\n`);

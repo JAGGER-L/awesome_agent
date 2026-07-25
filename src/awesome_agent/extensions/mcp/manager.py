@@ -22,6 +22,7 @@ from awesome_agent.extensions.mcp.models import (
 from awesome_agent.extensions.mcp.stdio import McpStdioClient
 
 _MCP_CALL_TIMEOUT_SECONDS = 30.0
+_MCP_CATALOG_TIMEOUT_SECONDS = 30.0
 _MCP_CLOSE_TIMEOUT_SECONDS = 5.0
 
 
@@ -86,19 +87,24 @@ class McpManager:
         enablements: McpEnablementReader,
         client_factory: Callable[[McpServerConfig], McpClient] = McpStdioClient,
         call_timeout_seconds: float = _MCP_CALL_TIMEOUT_SECONDS,
+        catalog_timeout_seconds: float = _MCP_CATALOG_TIMEOUT_SECONDS,
     ) -> None:
         self._configs = {config.id: config for config in configs}
         if len(self._configs) != len(configs):
             raise ValueError("MCP server IDs must be unique")
         if call_timeout_seconds <= 0:
             raise ValueError("MCP call timeout must be positive")
+        if catalog_timeout_seconds <= 0:
+            raise ValueError("MCP catalog timeout must be positive")
         self._workspace_key = workspace_key
         self._workspace_trusted = workspace_trusted
         self._enablements = enablements
         self._client_factory = client_factory
         self._call_timeout_seconds = call_timeout_seconds
+        self._catalog_timeout_seconds = catalog_timeout_seconds
         self._clients: dict[str, McpClient] = {}
         self._catalogs: dict[str, McpCatalog] = {}
+        self._catalog_tasks: dict[str, asyncio.Task[McpCatalog]] = {}
         self._generations = {server_id: 0 for server_id in self._configs}
         self._statuses: dict[str, McpServerStatus] = {}
         self._locks = {server_id: asyncio.Lock() for server_id in self._configs}
@@ -142,14 +148,9 @@ class McpManager:
         self._catalog_invalidators[server_id] = invalidator
 
     async def start_enabled(self) -> tuple[McpServerStatus, ...]:
-        for config in self._configs.values():
-            async with self._locks[config.id]:
-                if not self._is_effective(config):
-                    await self._drop_client_locked(config.id)
-                    self._statuses[config.id] = self._inactive_status(config)
-                    continue
-                if config.id not in self._clients:
-                    await self._connect_one_locked(config)
+        await asyncio.gather(
+            *(self._start_one(config) for config in self._configs.values())
+        )
         return self.statuses()
 
     async def restart(self, server_id: str) -> McpServerStatus:
@@ -240,29 +241,83 @@ class McpManager:
                 ) from error
 
     async def aclose(self) -> None:
-        for server_id in self._configs:
-            async with self._locks[server_id]:
-                await self._drop_client_locked(server_id)
-                self._statuses[server_id] = self._inactive_status(
-                    self._configs[server_id]
-                )
+        await asyncio.gather(
+            *(self._close_one(server_id) for server_id in self._configs)
+        )
+
+    async def _start_one(self, config: McpServerConfig) -> None:
+        async with self._locks[config.id]:
+            if not self._is_effective(config):
+                await self._drop_client_locked(config.id)
+                self._statuses[config.id] = self._inactive_status(config)
+                return
+            if config.id not in self._clients:
+                await self._connect_one_locked(config)
+
+    async def _close_one(self, server_id: str) -> None:
+        async with self._locks[server_id]:
+            await self._drop_client_locked(server_id)
+            self._statuses[server_id] = self._inactive_status(self._configs[server_id])
 
     async def _connect_one_locked(self, config: McpServerConfig) -> None:
+        previous = self._catalog_tasks.get(config.id)
+        if previous is not None:
+            if previous.done():
+                self._catalog_task_completed(config.id, previous)
+            else:
+                self._invalidate_catalog(config.id)
+                self._statuses[config.id] = McpServerStatus(
+                    config.id,
+                    McpConnectionState.ERROR,
+                    "Previous MCP connection cleanup is still pending.",
+                )
+                return
         client = self._client_factory(config)
+        generation = self._generations[config.id] + 1
+        catalog_task = asyncio.create_task(
+            self._load_catalog(client, generation=generation),
+            name=f"mcp-{config.id}-catalog",
+        )
+        self._catalog_tasks[config.id] = catalog_task
+        catalog_task.add_done_callback(
+            lambda task: self._catalog_task_completed(config.id, task)
+        )
         try:
-            await client.connect()
-            tools = await client.list_tools()
-            generation = self._generations[config.id] + 1
-            catalog = compile_mcp_catalog(tools, generation=generation)
+            done, _ = await asyncio.wait(
+                (catalog_task,),
+                timeout=self._catalog_timeout_seconds,
+            )
+            if catalog_task not in done:
+                catalog_task.cancel()
+                raise TimeoutError
+            catalog = catalog_task.result()
         except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            caller_cancelled = caller is not None and caller.cancelling() > 0
+            catalog_task.cancel()
             await self._close_client(client)
             self._invalidate_catalog(config.id)
             self._statuses[config.id] = McpServerStatus(
                 config.id,
                 McpConnectionState.ERROR,
-                "MCP server connection was cancelled.",
+                (
+                    "MCP server connection was cancelled."
+                    if caller_cancelled
+                    else "MCP server connection failed."
+                ),
             )
-            raise
+            if caller_cancelled:
+                raise
+            return
+        except TimeoutError:
+            await self._close_client(client)
+            self._invalidate_catalog(config.id)
+            self._statuses[config.id] = McpServerStatus(
+                config.id,
+                McpConnectionState.ERROR,
+                "MCP server connection timed out.",
+            )
+            return
         except McpCatalogError:
             await self._close_client(client)
             self._invalidate_catalog(config.id)
@@ -288,6 +343,26 @@ class McpManager:
             config.id,
             McpConnectionState.CONNECTED,
         )
+
+    def _catalog_task_completed(
+        self,
+        server_id: str,
+        task: asyncio.Task[McpCatalog],
+    ) -> None:
+        if self._catalog_tasks.get(server_id) is task:
+            self._catalog_tasks.pop(server_id, None)
+        with suppress(Exception, asyncio.CancelledError):
+            task.result()
+
+    @staticmethod
+    async def _load_catalog(
+        client: McpClient,
+        *,
+        generation: int,
+    ) -> McpCatalog:
+        await client.connect()
+        tools = await client.list_tools()
+        return compile_mcp_catalog(tools, generation=generation)
 
     async def _invalidate_call_locked(self, server_id: str, detail: str) -> None:
         client = self._clients.pop(server_id, None)

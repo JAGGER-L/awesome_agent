@@ -67,6 +67,8 @@ export const interactionDecisionSchema = z.enum([
   "allow_once",
   "allow_thread_writes",
   "enable_full_access",
+  "retry",
+  "abort",
   "deny",
 ]);
 

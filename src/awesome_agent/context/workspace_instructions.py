@@ -9,11 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from awesome_agent.context._safe_files import (
     FileChangedError,
     FileTooLargeError,
+    PinnedPlainDirectory,
     UnsafePathError,
     lexical_absolute,
-    plain_file_fingerprint,
-    read_bounded_file,
-    validate_plain_components,
 )
 from awesome_agent.context.tokens import estimate_text
 
@@ -74,38 +72,15 @@ def load_workspace_instructions(
         return empty
 
     root = lexical_absolute(workspace_root)
-    path = root / WORKSPACE_INSTRUCTION_FILE
     try:
-        root_components = validate_plain_components(
-            root,
-            root,
-            target_kind="directory",
-        )
-        try:
-            before_components = validate_plain_components(
-                root,
-                path,
-                target_kind="file",
-            )
-        except FileNotFoundError:
-            return empty
-        if not root_components or before_components[:1] != root_components:
-            raise FileChangedError("Workspace root changed before AGENTS.md opened.")
-        file_fingerprint = plain_file_fingerprint(path)
-        if not before_components or file_fingerprint.identity != before_components[-1]:
-            raise FileChangedError("AGENTS.md changed before its trusted snapshot.")
-        bounded = read_bounded_file(
-            path,
-            max_bytes=WORKSPACE_INSTRUCTION_MAX_BYTES,
-            expected=file_fingerprint,
-        )
-        after_components = validate_plain_components(
-            root,
-            path,
-            target_kind="file",
-        )
-        if after_components != before_components:
-            raise FileChangedError("Workspace path changed while AGENTS.md was read.")
+        with PinnedPlainDirectory(root, root) as pinned:
+            try:
+                bounded = pinned.read_file(
+                    Path(WORKSPACE_INSTRUCTION_FILE),
+                    max_bytes=WORKSPACE_INSTRUCTION_MAX_BYTES,
+                )
+            except FileNotFoundError:
+                return empty
     except FileNotFoundError:
         return empty
     except UnsafePathError:

@@ -9,10 +9,8 @@ from awesome_agent.context import estimate_text
 from awesome_agent.context._safe_files import (
     FileChangedError,
     FileTooLargeError,
+    PinnedPlainDirectory,
     UnsafePathError,
-    ensure_identity,
-    read_bounded_file,
-    validate_plain_components,
 )
 from awesome_agent.extensions.skills.models import (
     SkillCatalog,
@@ -57,16 +55,20 @@ class SkillLoader:
             text = _read_text(descriptor.root / "SKILL.md", descriptor.root)
         else:
             try:
-                _validate_workspace_boundary(boundary)
-                bounded = read_bounded_file(
-                    boundary.skill_file,
-                    max_bytes=_MAX_RESOURCE_BYTES,
-                    expected=boundary.skill_file_fingerprint,
-                )
-                if sha256(bounded.data).hexdigest() != boundary.skill_file_content_hash:
-                    raise FileChangedError("SKILL.md content changed after discovery.")
-                _validate_workspace_boundary(boundary)
-                text = _decode_text(bounded.data)
+                with _pinned_workspace_package(boundary) as pinned:
+                    bounded = pinned.read_file(
+                        Path("SKILL.md"),
+                        max_bytes=_MAX_RESOURCE_BYTES,
+                        expected=boundary.skill_file_fingerprint,
+                    )
+                    if (
+                        sha256(bounded.data).hexdigest()
+                        != boundary.skill_file_content_hash
+                    ):
+                        raise FileChangedError(
+                            "SKILL.md content changed after discovery."
+                        )
+                    text = _decode_text(bounded.data)
             except FileChangedError as error:
                 raise SkillResourceError(
                     "Workspace Skill changed after discovery."
@@ -109,7 +111,7 @@ class SkillLoader:
         if boundary is None:
             content = _read_text(target, descriptor.root)
         else:
-            content = _read_workspace_resource(target, boundary)
+            content = _read_workspace_resource(requested, boundary)
         bounded, truncated = _bounded(content, token_limit)
         return SkillResource(
             skill_name=name,
@@ -148,26 +150,16 @@ def _read_text(path: Path, root: Path) -> str:
 
 
 def _read_workspace_resource(
-    path: Path,
+    relative: Path,
     boundary: _WorkspaceSkillBoundary,
 ) -> str:
     try:
-        _validate_workspace_boundary(boundary)
-        before = validate_plain_components(
-            boundary.package_root,
-            path,
-            target_kind="file",
-        )
-        bounded = read_bounded_file(path, max_bytes=_MAX_RESOURCE_BYTES)
-        after = validate_plain_components(
-            boundary.package_root,
-            path,
-            target_kind="file",
-        )
-        if after != before:
-            raise FileChangedError("Skill resource changed while being read.")
-        _validate_workspace_boundary(boundary)
-        return _decode_text(bounded.data)
+        with _pinned_workspace_package(boundary) as pinned:
+            bounded = pinned.read_file(
+                relative,
+                max_bytes=_MAX_RESOURCE_BYTES,
+            )
+            return _decode_text(bounded.data)
     except FileChangedError as error:
         raise SkillResourceError("Workspace Skill changed after discovery.") from error
     except FileTooLargeError as error:
@@ -182,21 +174,29 @@ def _read_workspace_resource(
         ) from error
 
 
-def _validate_workspace_boundary(boundary: _WorkspaceSkillBoundary) -> None:
+def _pinned_workspace_package(
+    boundary: _WorkspaceSkillBoundary,
+) -> PinnedPlainDirectory:
     try:
-        validate_plain_components(
-            boundary.workspace_anchor,
-            boundary.package_root,
-            target_kind="directory",
-        )
-        ensure_identity(
-            boundary.workspace_anchor,
-            boundary.workspace_anchor_identity,
-        )
-        ensure_identity(boundary.skills_root, boundary.skills_root_identity)
-        ensure_identity(boundary.package_root, boundary.package_root_identity)
-    except (FileNotFoundError, NotADirectoryError, OSError, UnsafePathError) as error:
-        raise FileChangedError("Workspace Skill changed after discovery.") from error
+        root_relative = boundary.skills_root.relative_to(boundary.workspace_anchor)
+        package_relative = boundary.package_root.relative_to(boundary.workspace_anchor)
+        boundary.package_root.relative_to(boundary.skills_root)
+    except ValueError as error:
+        raise UnsafePathError("Workspace Skill escapes its trusted anchor.") from error
+    identities = boundary.package_component_identities
+    root_index = len(root_relative.parts)
+    if (
+        len(identities) != len(package_relative.parts) + 1
+        or identities[0] != boundary.workspace_anchor_identity
+        or identities[root_index] != boundary.skills_root_identity
+        or identities[-1] != boundary.package_root_identity
+    ):
+        raise FileChangedError("Workspace Skill boundary is inconsistent.")
+    return PinnedPlainDirectory(
+        boundary.workspace_anchor,
+        boundary.package_root,
+        expected_identities=identities,
+    )
 
 
 def _decode_text(data: bytes) -> str:

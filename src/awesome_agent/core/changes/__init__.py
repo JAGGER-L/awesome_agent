@@ -8,7 +8,11 @@ from awesome_agent.core.changes.analysis import (
     TextFileChange,
     merge_file_changes,
 )
-from awesome_agent.core.changes.journal import ChangeJournal, NodeSnapshot
+from awesome_agent.core.changes.filesystem import (
+    BoundFileMutation,
+    NodeSnapshot,
+)
+from awesome_agent.core.changes.journal import ChangeJournal
 from awesome_agent.core.changes.models import (
     ChangeLifecycle,
     ChangeReversibility,
@@ -25,6 +29,7 @@ from awesome_agent.core.changes.operations import (
 
 __all__ = [
     "BinaryFileChange",
+    "BoundFileMutation",
     "ChangeAnalysis",
     "ChangeAnalyzer",
     "ChangeDelta",

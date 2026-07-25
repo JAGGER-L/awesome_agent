@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Iterator
 from pathlib import Path
 from threading import Event
@@ -9,7 +10,10 @@ from unittest.mock import Mock
 
 import pytest
 
+import awesome_agent.core.filesystem as core_filesystem_module
+import awesome_agent.core.tools.builtins.file_enumerator as file_enumerator_module
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.filesystem import DirectoryPin, FileIdentity, open_regular_file
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
@@ -201,6 +205,53 @@ async def test_glob_uses_fixed_prefix_and_stops_after_truncation_probe(
     assert visited == ["src"]
     assert yielded == ["a.py", "b.py"]
     assert result.metadata == {"matches": ["src/a.py"], "truncated": True}
+
+
+@pytest.mark.asyncio
+async def test_glob_does_not_open_files_after_its_truncation_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in ("a.py", "b.py", "c.py"):
+        (workspace / name).write_text(name, encoding="utf-8")
+    opened_names: list[str] = []
+
+    def record_open(
+        parent: DirectoryPin,
+        name: str,
+        *,
+        expected_identity: FileIdentity | None = None,
+    ) -> tuple[int, os.stat_result]:
+        opened_names.append(name)
+        return open_regular_file(
+            parent,
+            name,
+            expected_identity=expected_identity,
+        )
+
+    monkeypatch.setattr(
+        core_filesystem_module,
+        "open_regular_file",
+        record_open,
+    )
+    monkeypatch.setattr(
+        file_enumerator_module,
+        "open_regular_file",
+        record_open,
+    )
+
+    result = await glob_files(
+        GlobArguments(pattern="*.py", max_results=1),
+        _context(workspace),
+    )
+
+    assert result.metadata == {"matches": ["a.py"], "truncated": True}
+    assert opened_names == ["a.py", "a.py", "b.py", "b.py"]
+    renamed = tmp_path / "workspace-renamed"
+    workspace.rename(renamed)
+    renamed.rename(workspace)
 
 
 @pytest.mark.asyncio

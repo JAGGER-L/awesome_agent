@@ -1,3 +1,5 @@
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,11 @@ def test_resolve_workspace_keeps_startup_directory(tmp_path: Path) -> None:
     assert identity.canonical_path == nested.resolve(strict=True)
     assert identity.display_path == nested
     assert identity.key.startswith("ws_")
+    root_status = os.lstat(nested)
+    assert identity.root_identity.device == root_status.st_dev
+    assert identity.root_identity.inode == root_status.st_ino
+    assert identity.root_identity.file_type == stat.S_IFMT(root_status.st_mode)
+    assert identity.root_identity.reparse is False
 
 
 def test_missing_workspace_fails_with_typed_code(tmp_path: Path) -> None:

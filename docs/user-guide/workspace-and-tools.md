@@ -7,6 +7,13 @@ to a canonical path and asks for trust on first use. A trusted workspace may
 provide `.awesome/config.yaml`, `.awesome/skills/`, project instructions, and
 MCP declarations. Declining exits before those sources or tools are loaded.
 
+One active session holds both a canonical-path lease and a physical
+filesystem-identity lease for the workspace. The first prevents a replacement
+directory from reusing an active path; the second makes different path aliases
+to the same directory share one runtime owner. User-facing aliases remain
+valid, but two Awesome processes cannot concurrently recover or mutate the same
+workspace through different spellings.
+
 After trust, Core reads only a plain root `AGENTS.md` and freezes it for the
 session. The read is limited to 32 KiB and to the smaller of 8,192 tokens or
 10% of the effective input budget. Links and reparse points, path escapes,
@@ -66,12 +73,35 @@ registry and executor.
 All model-driven tools pass through one registry and executor for input
 validation, workspace policy, normalized results, events, and change capture.
 File tools reject absolute paths, workspace escapes, unsafe symlink results,
-and sensitive paths such as secret files and private keys.
+and sensitive paths such as secret files and private keys. On Windows they also
+reject alternate data-stream syntax, trailing dots or spaces, reserved device
+names, 8.3-style aliases, control characters, and invalid filename characters.
+Those platform-specific spellings are not rejected merely for having the same
+text on POSIX.
+
+Before a built-in file operation reads or changes anything, Core binds the
+workspace, parent directories, and the resolved target's existence and identity.
+Opening performs a no-follow `lstat -> open -> fstat` comparison; bounded reads
+also verify the opened file again after reading. `@path`, `read_file`, `ls`,
+`glob`, and `grep` use the same primitives rather than reopening a checked
+pathname. Regular files with multiple hard links are refused because reading or
+modifying one name could affect an alias outside the visible workspace. Write
+and edit use an atomic sibling replacement, but portable host filesystems do
+not provide the required identity compare-and-swap. A replacement observed
+before the final identity check is rejected; a same-privilege host process can
+still replace a same-name target between that check and replace/remove, causing
+the new in-workspace generation to be overwritten or deleted. Pinned parents
+and no-follow operations keep that race inside the bound workspace and do not
+follow the replacement as a link to an external target. On POSIX, another host
+process can also move an already-open directory after the final reachability
+check. Workloads requiring protection from a hostile concurrent process need
+an external sandbox or mount boundary.
 
 Before approval and again before process start, one dialect-aware command
 policy examines the command, actual working directory, and workspace. It
 handles known CMD, POSIX-shell, and PowerShell wrappers, compound commands,
-pipelines, newlines, PowerShell encoded commands, and selected literal Python
+pipelines, newlines, directory-changing segments, PowerShell encoded commands
+and `Start-Process` elevation aliases, and selected literal Python
 `-c` filesystem/process calls within bounded parser limits. Unparseable input is
 denied. Privilege elevation, shutdown/reboot, disk formatting, block-device
 overwrite, fork bombs, and recursive filesystem-root or workspace-root deletion
@@ -81,9 +111,16 @@ This hard-deny layer is a non-disableable circuit breaker for recognizable
 accidents. It does not claim to detect arbitrary malicious obfuscation and is
 not an operating-system sandbox. `execute` runs on the local host. Its requested
 command timeout governs the process lifecycle, with a bounded cleanup budget
-for process-tree termination and pipe draining. A timed-out or disconnected
-external side effect may have an uncertain outcome and is never replayed
-transparently.
+for process-tree termination and pipe draining. Core waits for the root command
+separately from stdout/stderr EOF, so a descendant that inherits an output pipe
+can make that output truncated but cannot keep the call open forever. On
+Windows a Core-level kill-on-close Job Object covers Core exit, while every
+`execute` uses a nested command job whose waiting supervisor is assigned before
+the target can spawn. On POSIX a lease-bound supervisor owns each command
+process group. A command that intentionally daemonizes into a new session can
+escape the POSIX group. These are cleanup guarantees, not restrictions on host
+access. A timed-out or disconnected external side effect may have an uncertain
+outcome and is never replayed transparently.
 
 File tools never accept an absolute path or workspace escape. Before recursive
 delete builds its inventory, it rejects any nested symlink, junction, or other
@@ -107,6 +144,20 @@ a terminal remains visible as source text rather than disappearing.
 `write_file`, `edit_file`, and `delete` record before/after data in one change
 set per modifying turn. `/diff`, `/undo`, and `/redo` operate on those change
 sets and refuse to overwrite later conflicting edits.
+
+Undo and redo preflight every affected path before restoring any of them. Core
+records all pending restore intents, applies them through the same bound
+workspace tree, and changes the ChangeSet state only after every path matches.
+An error before that commit rolls already-restored paths back; if that cannot
+be verified, pending evidence remains. If Core exits mid-operation, startup
+recovery either verifies the committed result or rolls an uncommitted partial
+result back; ambiguous identities, content, or lifecycle leave the pending
+record intact instead of guessing.
+
+The journal records the before and after node types separately, so replacing a
+directory or symlink with a file remains reversible. Sealing one completed Turn
+only reconciles that Turn's ChangeSet; an unrelated pending ChangeSet is left
+for its own recovery path.
 
 Shell effects are not snapshots. A mixed file/shell turn may be only partially
 reversible, and an execute-only turn may have no reversible change. Workspace

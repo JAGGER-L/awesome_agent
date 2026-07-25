@@ -18,6 +18,13 @@ the command controller routes only their discriminators. An exhaustive
 Presenter converts typed semantic payloads into terminal blocks; it has no
 generic JSON or object-stringification fallback.
 
+Request integers use the JSON/JavaScript interoperable safe range. Core accepts
+an integral JSON number such as `3` or `3.0`, but rejects strings, booleans,
+non-integral numbers, non-finite values, and integers outside
+`-(2^53 - 1)..2^53 - 1`. Optional request fields are omitted when absent;
+explicit `null` is accepted only where the v3 schema declares a nullable value.
+The Python fixtures and strict TypeScript schemas exercise the same boundary.
+
 The presentation path has four deliberately small layers:
 
 ```text
@@ -71,6 +78,55 @@ Presentation state such as theme, composer history, expanded reasoning, and
 selection remains in the TUI. The host terminal owns scrollback and mouse
 selection. Any additional surface must adapt the same facade/event contracts
 rather than becoming another execution authority.
+
+## Bounded dispatch and process ownership
+
+The Host has one sequential NDJSON reader, but an accepted ordinary request is
+dispatched in its own task. At most 128 ordinary requests may be in flight;
+additional requests receive a stable busy error, while overloaded
+notifications are dropped because JSON-RPC notifications have no response.
+Active and recently completed request IDs are tracked in a bounded 4,096-entry
+window so duplicate work is rejected without unbounded history.
+
+Each stdio connection starts behind a handshake gate. Before a compatible
+`initialize` returns `ready`, ordinary requests receive JSON-RPC `-32002` and
+never enter the Application facade. A malformed or v2 initialize does not open
+the gate. While initialize is in flight, a second initialize receives the
+stable `initialization_in_progress` diagnostic. A `trust_required` or
+`state_reset_required` result opens only the matching startup
+`interaction.respond`, another initialize, and urgent controls. Successful
+workspace trust moves the connection to ready; successful state reset still
+requires a later initialize that returns ready. Once ready, initialize remains
+repeatable so startup retries observe the current ready snapshot.
+
+`initialize` and `interaction.respond` use a separate bounded background
+control lane. `operation.cancel` and `shutdown` are urgent controls that bypass
+both request ceilings, so they remain readable while ordinary or startup work
+is blocked. Only a shutdown request that passes the same JSON-RPC shape and ID
+validation as normal dispatch may cancel background requests; `null`, Boolean,
+floating-point, array, or object IDs receive `Invalid Request` without changing
+legal in-flight work. Accepted ordinary work yields once into the Application
+boundary before the next control request is read, so arrival order remains
+observable. Application's foreground arbiter, not the wire dispatcher, remains
+the authority that serializes Turns, direct commands, mutations, interaction
+resolution, and shutdown.
+
+All responses and events share one writer lock. The production stdout adapter
+uses a 64-item worker queue and a five-second completion deadline; a full queue,
+blocked consumer, or write failure closes the transport path instead of
+allowing unbounded memory growth. Lines remain individually serialized, so
+concurrent request completion cannot interleave JSON bytes.
+
+The TUI owns Core as a process tree, not just as one PID. On POSIX it launches
+Core in a detached session and termination signals the negative process-group
+ID. On Windows it invokes the system `taskkill.exe` with `/T /F` while Core
+independently installs a kill-on-close lifetime Job Object before async startup.
+Core fails closed if it cannot join that job. Each Windows shell command also
+gets a nested kill-on-close job: a waiting supervisor is assigned before it is
+released to spawn the target. POSIX shell commands use a lease-bound session
+supervisor instead. These lifetime guarantees prevent a root process or
+inherited pipe from leaving cleanup unbounded; they do not sandbox Core or its
+children.
 
 ## Input and mode ownership
 
@@ -213,6 +269,16 @@ restore Composer mode and allow the next pending input to advance. Approval and
 Auth failures remain visible and retryable; a Core exit is fatal, renders a
 dedicated screen, and disables normal input rather than pretending the
 operation recovered.
+
+Startup recovery is a typed `recovery_decision` interaction bound to its Thread,
+Turn, operation meaning, and interaction generation. Verified unfinished work
+offers Retry first; a potentially repeated shell or MCP side effect offers
+Abort first. A claimed decision is exactly-once even if the response request is
+cancelled. Core publishes a successful `interaction.resolved` before the next
+`interaction.required`; both notifications have bounded delivery attempts.
+When delivery remains unavailable, Core retains the same pending notification
+and interaction ID for an explicit initialize retry instead of advancing the
+queue or replaying the Turn.
 
 ## Request and fatal boundaries
 

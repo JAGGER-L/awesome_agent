@@ -8,6 +8,7 @@ from awesome_agent.core.changes import (
     ChangeLifecycle,
     ChangeReversibility,
     ChangeSet,
+    FileChange,
     FileChangeKind,
     FileNodeType,
 )
@@ -113,3 +114,135 @@ def test_change_set_and_pending_mutation_survive_reopen(tmp_path: Path) -> None:
     assert reopened.list_pending() == [pending]
     reopened.delete_pending(pending.id)
     assert reopened.list_pending() == []
+
+
+def test_pending_distinct_node_types_survive_reopen_without_a_schema_change(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "application.db"
+    created_at = datetime.now(UTC)
+    change_set = ChangeSet(
+        id="change_type_transition",
+        session_id="session_1",
+        turn_id="turn_1",
+        workspace_key="ws_1",
+        lifecycle=ChangeLifecycle.APPLIED,
+        reversibility=ChangeReversibility.FULL,
+        created_at=created_at,
+        sealed_at=created_at,
+    )
+    pending = PendingMutation(
+        id="undo_type_transition_0000",
+        change_set_id=change_set.id,
+        workspace_key=change_set.workspace_key,
+        relative_path="node",
+        kind=FileChangeKind.UPDATED,
+        node_type=FileNodeType.DIRECTORY,
+        before_node_type=FileNodeType.FILE,
+        intended_after_node_type=FileNodeType.DIRECTORY,
+        before_hash="a" * 64,
+        before_blob="a" * 64,
+        before_mode=0o644,
+        intended_after_hash="b" * 64,
+        intended_after_blob=None,
+        intended_after_mode=0o755,
+        created_at=created_at,
+    )
+    store = SQLiteChangeSetStore(database)
+    store.save(change_set)
+    store.save_pending(pending)
+
+    reopened = SQLiteChangeSetStore(database)
+
+    assert APPLICATION_SCHEMA_VERSION == 7
+    assert reopened.list_pending() == [pending]
+    assert reopened.list_pending()[0].before_node_type is FileNodeType.FILE
+    assert reopened.list_pending()[0].intended_after_node_type is FileNodeType.DIRECTORY
+
+
+def test_list_open_is_scoped_to_the_workspace(tmp_path: Path) -> None:
+    store = SQLiteChangeSetStore(tmp_path / "application.db")
+    created_at = datetime.now(UTC)
+    open_change = ChangeSet(
+        id="change_open",
+        session_id="session_1",
+        turn_id="turn_1",
+        workspace_key="ws_1",
+        lifecycle=ChangeLifecycle.OPEN,
+        reversibility=ChangeReversibility.FULL,
+        created_at=created_at,
+    )
+    applied_change = open_change.model_copy(
+        update={
+            "id": "change_applied",
+            "lifecycle": ChangeLifecycle.APPLIED,
+            "sealed_at": created_at,
+        }
+    )
+    foreign_change = open_change.model_copy(
+        update={"id": "change_foreign", "workspace_key": "ws_2"}
+    )
+    for change_set in (open_change, applied_change, foreign_change):
+        store.save(change_set)
+
+    assert store.list_open("ws_1") == [open_change]
+
+
+def test_file_change_mutation_identity_survives_reopen(tmp_path: Path) -> None:
+    database = tmp_path / "application.db"
+    created_at = datetime.now(UTC)
+    change_set = ChangeSet(
+        id="change_1",
+        session_id="session_1",
+        turn_id="turn_1",
+        workspace_key="ws_1",
+        lifecycle=ChangeLifecycle.OPEN,
+        reversibility=ChangeReversibility.FULL,
+        files=[
+            FileChange(
+                mutation_id="operation_1",
+                path="src/node",
+                kind=FileChangeKind.UPDATED,
+                node_type=FileNodeType.FILE,
+                before_node_type=FileNodeType.DIRECTORY,
+                after_node_type=FileNodeType.FILE,
+                before_hash="b" * 64,
+                after_hash="a" * 64,
+                after_blob="a" * 64,
+                before_mode=0o755,
+                after_mode=0o644,
+            )
+        ],
+        created_at=created_at,
+    )
+
+    SQLiteChangeSetStore(database).save(change_set)
+
+    reopened = SQLiteChangeSetStore(database).get(change_set.id)
+    assert reopened == change_set
+    assert reopened is not None
+    assert reopened.files[0].mutation_id == "operation_1"
+    assert reopened.files[0].before_node_type is FileNodeType.DIRECTORY
+    assert reopened.files[0].after_node_type is FileNodeType.FILE
+
+
+def test_schema_seven_file_change_without_optional_recovery_fields_is_readable() -> (
+    None
+):
+    legacy = FileChange.model_validate(
+        {
+            "path": "src/app.py",
+            "kind": FileChangeKind.UPDATED,
+            "node_type": FileNodeType.FILE,
+            "before_hash": "a" * 64,
+            "after_hash": "b" * 64,
+            "before_blob": "a" * 64,
+            "after_blob": "b" * 64,
+        }
+    )
+
+    assert legacy.mutation_id is None
+    assert legacy.before_node_type is None
+    assert legacy.after_node_type is None
+    assert legacy.resolved_before_node_type is FileNodeType.FILE
+    assert legacy.resolved_after_node_type is FileNodeType.FILE

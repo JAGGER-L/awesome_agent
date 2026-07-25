@@ -78,6 +78,10 @@ awesome --version
 awesome --help
 ```
 
+如果启动时发现未完成的 Turn，Awesome 会先询问再继续。已验证的本地 checkpoint
+默认提供 Retry；如果 shell 或 MCP 调用结果不确定，则默认提供 Abort，并且绝不会
+自动重放该外部操作。
+
 ## 第一个任务
 
 可以先让 Awesome 只阅读并介绍项目：
@@ -107,5 +111,7 @@ awesome --help
 `/model` 或 `/auth` 遮罩输入流程输入凭据。Full access 仅对当前 Thread 有效，
 只提升内置本地能力，且不会绕过硬性安全拒绝；MCP 和未知扩展能力仍会逐次询问。
 任何权限模式都不提供操作系统沙箱，命令 circuit breaker 只用于拦截可识别的误操作，
-不能识别任意恶意混淆。进程环境变量和 `<AWESOME_HOME>/.env`
-仍是高级配置方式；不要把凭据写入项目文件。
+不能识别任意恶意混淆。受控的 Workspace 文件操作会绑定已检查的目录与文件身份，
+并拒绝链接、reparse point、hard-link 别名和有歧义的 Windows 路径写法；有界的
+进程树清理会减少遗留子进程，但不会隔离宿主机执行。进程环境变量和
+`<AWESOME_HOME>/.env` 仍是高级配置方式；不要把凭据写入项目文件。

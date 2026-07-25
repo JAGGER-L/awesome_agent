@@ -1,20 +1,29 @@
 from datetime import UTC
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
 from awesome_agent.core.events import (
+    _MAX_LIFECYCLE_HISTORY,
     AssistantTextDeltaPayload,
     CollectingEventSink,
     EventEmitter,
     EventEnvelope,
     EventLifecycleError,
     EventType,
+    InteractionChoicePayload,
+    InteractionResolvedPayload,
     OperationLifecyclePayload,
     ToolResultPayload,
     ToolStartedPayload,
     TurnLifecyclePayload,
 )
+
+
+class DiscardingEventSink:
+    async def emit(self, event: EventEnvelope) -> None:
+        del event
 
 
 @pytest.mark.asyncio
@@ -67,6 +76,17 @@ def test_event_type_must_match_payload_kind() -> None:
         )
 
 
+def test_interaction_event_decisions_are_closed() -> None:
+    invalid = cast(Any, "future")
+    with pytest.raises(ValidationError):
+        InteractionChoicePayload(decision=invalid, label="Future")
+    with pytest.raises(ValidationError):
+        InteractionResolvedPayload(
+            interaction_id="interaction_1",
+            decision=invalid,
+        )
+
+
 @pytest.mark.asyncio
 async def test_lifecycle_events_require_identity_and_one_terminal() -> None:
     sink = CollectingEventSink()
@@ -109,6 +129,30 @@ async def test_lifecycle_events_require_identity_and_one_terminal() -> None:
             thread_id="thread_1",
             turn_id="turn_1",
         )
+
+
+@pytest.mark.asyncio
+async def test_completed_lifecycle_identity_history_is_bounded() -> None:
+    emitter = EventEmitter(
+        session_id="session_1",
+        workspace_key="workspace_1",
+        sink=DiscardingEventSink(),
+    )
+
+    for index in range(_MAX_LIFECYCLE_HISTORY + 10):
+        operation_id = f"operation_{index}"
+        await emitter.emit(
+            OperationLifecyclePayload(kind=EventType.OPERATION_STARTED),
+            operation_id=operation_id,
+        )
+        await emitter.emit(
+            OperationLifecyclePayload(kind=EventType.OPERATION_COMPLETED),
+            operation_id=operation_id,
+        )
+
+    assert emitter._started_operations == set()
+    assert len(emitter._terminal_operations) == _MAX_LIFECYCLE_HISTORY
+    assert "operation_0" not in emitter._terminal_operations
 
 
 def test_payloads_reject_unbounded_or_unknown_metadata() -> None:

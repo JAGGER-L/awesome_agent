@@ -58,6 +58,45 @@ function harness(response: Promise<unknown>) {
 }
 
 describe("InteractionController", () => {
+  it.each([
+    "retry",
+    "abort",
+  ] as const)("sends the typed recovery decision %s", async (decision) => {
+    const response = Promise.resolve({
+      ok: true,
+      value: { accepted: true, status: "resolved" },
+    });
+    const state: SurfaceState = {
+      ...pendingState(),
+      pending_interaction: {
+        interaction_id: "interaction_recovery",
+        interaction_kind: "recovery_decision",
+        prompt: "Resume the unfinished Turn?",
+        operation: "recover",
+        target: "unfinished Turn",
+        choices: [
+          { decision: "retry", label: "Retry" },
+          { decision: "abort", label: "Abort" },
+        ],
+      },
+    };
+    const calls: unknown[] = [];
+    const controller = new InteractionController({
+      getState: () => state,
+      subscribe: () => () => undefined,
+      request(params) {
+        calls.push(params);
+        return response as never;
+      },
+    });
+
+    await controller.respond(decision);
+
+    expect(calls).toEqual([
+      { interaction_id: "interaction_recovery", decision },
+    ]);
+  });
+
   it("sends one exact protocol choice and waits for resolved Event", async () => {
     const response = deferred<unknown>();
     const value = harness(response.promise);

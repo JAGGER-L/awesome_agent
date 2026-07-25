@@ -32,6 +32,8 @@ class FakeClient:
         self.call_count = 0
         self.connect_started: asyncio.Event | None = None
         self.connect_release: asyncio.Event | None = None
+        self.list_started: asyncio.Event | None = None
+        self.list_release: asyncio.Event | None = None
         self.call_started: asyncio.Event | None = None
         self.call_release: asyncio.Event | None = None
         self._tools = tools or (
@@ -48,6 +50,10 @@ class FakeClient:
             raise RuntimeError("secret server detail")
 
     async def list_tools(self) -> tuple[Tool, ...]:
+        if self.list_started is not None:
+            self.list_started.set()
+        if self.list_release is not None:
+            await self.list_release.wait()
         return self._tools
 
     async def call_tool(
@@ -125,6 +131,48 @@ async def test_manager_is_lazy_reuses_sessions_and_isolates_failure(
     assert clients["user"].connect_count == 1
     await manager.aclose()
     assert clients["user"].closed is True
+
+
+@pytest.mark.asyncio
+async def test_enabled_servers_connect_independently(tmp_path: Path) -> None:
+    slow_config = McpServerConfig(
+        id="slow",
+        command="slow-server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    fast_config = McpServerConfig(
+        id="fast",
+        command="fast-server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    slow = FakeClient("slow")
+    slow.connect_started = asyncio.Event()
+    slow.connect_release = asyncio.Event()
+    fast = FakeClient("fast")
+    fast.list_started = asyncio.Event()
+    clients = {"slow": slow, "fast": fast}
+    manager = McpManager(
+        configs=(slow_config, fast_config),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        client_factory=lambda config: clients[config.id],
+    )
+
+    starting = asyncio.create_task(manager.start_enabled())
+    try:
+        await slow.connect_started.wait()
+        await asyncio.wait_for(fast.list_started.wait(), timeout=0.2)
+        async with asyncio.timeout(0.2):
+            while manager.status("fast").state is not McpConnectionState.CONNECTED:
+                await asyncio.sleep(0)
+    finally:
+        slow.connect_release.set()
+    statuses = await asyncio.wait_for(starting, timeout=0.2)
+    assert all(status.connected for status in statuses)
+    await manager.aclose()
 
 
 @pytest.mark.asyncio
@@ -309,6 +357,215 @@ async def test_invalid_catalog_is_never_committed_and_is_sanitized(
     assert manager.tools("user") == ()
     with pytest.raises(McpUnavailable):
         manager.catalog("user")
+
+
+@pytest.mark.asyncio
+async def test_restart_with_invalid_json_pointer_atomically_removes_old_catalog(
+    tmp_path: Path,
+) -> None:
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    valid = FakeClient("user")
+    invalid = FakeClient(
+        "user",
+        tools=(
+            Tool(
+                name="unsafe",
+                inputSchema={
+                    "allOf": [{"type": "string"}],
+                    "$ref": "#/allOf/-1",
+                },
+            ),
+        ),
+    )
+    clients = [valid, invalid]
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        client_factory=lambda _: clients.pop(0),
+    )
+    invalidations: list[str] = []
+    manager.bind_catalog_invalidator("user", lambda: invalidations.append("user"))
+    await manager.start_enabled()
+
+    status = await manager.restart("user")
+
+    assert status.state is McpConnectionState.ERROR
+    assert status.detail == "MCP server returned an invalid tool catalog."
+    assert valid.closed is True
+    assert invalid.closed is True
+    assert invalidations == ["user"]
+    assert manager.tools("user") == ()
+    with pytest.raises(McpUnavailable):
+        manager.catalog("user")
+
+
+@pytest.mark.asyncio
+async def test_catalog_connection_deadline_closes_client_without_publication(
+    tmp_path: Path,
+) -> None:
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    client = FakeClient("user")
+    client.list_started = asyncio.Event()
+    client.list_release = asyncio.Event()
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        client_factory=lambda _: client,
+        catalog_timeout_seconds=0.01,
+    )
+
+    statuses = await asyncio.wait_for(manager.start_enabled(), timeout=0.2)
+
+    assert client.list_started.is_set()
+    assert statuses[0].state is McpConnectionState.ERROR
+    assert statuses[0].detail == "MCP server connection timed out."
+    assert client.closed is True
+    assert manager.tools("user") == ()
+    with pytest.raises(McpUnavailable):
+        manager.catalog("user")
+
+
+@pytest.mark.asyncio
+async def test_catalog_deadline_never_accepts_late_backend_success(
+    tmp_path: Path,
+) -> None:
+    class LateCatalogClient(FakeClient):
+        async def list_tools(self) -> tuple[Tool, ...]:
+            if self.list_started is not None:
+                self.list_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                return self._tools
+            raise AssertionError("catalog wait returned without cancellation")
+
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    client = LateCatalogClient("user")
+    client.list_started = asyncio.Event()
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        client_factory=lambda _: client,
+        catalog_timeout_seconds=0.01,
+    )
+
+    statuses = await asyncio.wait_for(manager.start_enabled(), timeout=0.2)
+    await asyncio.sleep(0)
+
+    assert client.list_started.is_set()
+    assert client.closed is True
+    assert statuses[0].state is McpConnectionState.ERROR
+    assert manager.tools("user") == ()
+
+
+@pytest.mark.asyncio
+async def test_catalog_timeout_cannot_accumulate_cancellation_ignoring_tasks(
+    tmp_path: Path,
+) -> None:
+    release_stuck = asyncio.Event()
+
+    class StuckCatalogClient(FakeClient):
+        async def list_tools(self) -> tuple[Tool, ...]:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await release_stuck.wait()
+                return self._tools
+            raise AssertionError("catalog wait returned without cancellation")
+
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    clients: list[FakeClient] = []
+
+    def factory(_: McpServerConfig) -> FakeClient:
+        client: FakeClient = (
+            StuckCatalogClient("user") if not clients else FakeClient("user")
+        )
+        clients.append(client)
+        return client
+
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        client_factory=factory,
+        catalog_timeout_seconds=0.01,
+    )
+
+    first = await asyncio.wait_for(manager.start_enabled(), timeout=0.2)
+    second = await asyncio.wait_for(manager.restart("user"), timeout=0.2)
+
+    assert first[0].state is McpConnectionState.ERROR
+    assert second.state is McpConnectionState.ERROR
+    assert second.detail == "Previous MCP connection cleanup is still pending."
+    assert len(clients) == 1
+    assert manager.tools("user") == ()
+
+    release_stuck.set()
+    for _ in range(4):
+        await asyncio.sleep(0)
+    recovered = await asyncio.wait_for(manager.restart("user"), timeout=0.2)
+
+    assert recovered.state is McpConnectionState.CONNECTED
+    assert len(clients) == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_load_cancellation_closes_client_and_preserves_cancel(
+    tmp_path: Path,
+) -> None:
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    client = FakeClient("user")
+    client.connect_started = asyncio.Event()
+    client.connect_release = asyncio.Event()
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        client_factory=lambda _: client,
+    )
+    start = asyncio.create_task(manager.start_enabled())
+    await client.connect_started.wait()
+
+    start.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await start
+
+    assert client.closed is True
+    assert manager.status("user").state is McpConnectionState.ERROR
+    assert manager.tools("user") == ()
 
 
 @pytest.mark.asyncio
