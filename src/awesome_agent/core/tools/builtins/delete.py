@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -10,7 +7,13 @@ from pydantic import BaseModel
 
 from awesome_agent.core.changes import ChangeJournal
 from awesome_agent.core.changes.errors import ChangeCapacityExceeded
-from awesome_agent.core.changes.models import FileChangeKind, FileNodeType
+from awesome_agent.core.changes.journal import (
+    MAX_CHANGESET_BYTES,
+    MAX_CHANGESET_FILES,
+)
+from awesome_agent.core.changes.models import FileChangeKind
+from awesome_agent.core.filesystem import MutationTargetChanged, lstat_child
+from awesome_agent.core.filesystem import identity as filesystem_identity
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
     ToolErrorCode,
@@ -18,21 +21,20 @@ from awesome_agent.core.tools.contracts import (
     ToolPresentation,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
+from awesome_agent.core.tools.filesystem import (
+    WorkspaceDeleteTransaction,
+    WorkspaceDirectoryTransaction,
+)
 from awesome_agent.core.tools.policy import (
+    SafeWorkspacePath,
     is_sensitive_workspace_path,
     resolve_workspace_path,
+    validate_workspace_path_syntax,
 )
 
 
 class DeleteArguments(BaseModel):
     path: str
-
-
-@dataclass(frozen=True, slots=True)
-class _DeleteNode:
-    path: Path
-    node_type: FileNodeType
-    content_bytes: int
 
 
 def _deny_protected(relative: Path) -> None:
@@ -45,44 +47,6 @@ def _deny_protected(relative: Path) -> None:
         )
 
 
-def _inventory(path: Path, workspace: Path) -> list[_DeleteNode]:
-    relative = path.relative_to(workspace)
-    _deny_protected(relative)
-    if path.is_symlink():
-        return [
-            _DeleteNode(
-                path,
-                FileNodeType.SYMLINK,
-                len(os.fsencode(os.readlink(path))),
-            )
-        ]
-    if path.is_file():
-        return [_DeleteNode(path, FileNodeType.FILE, path.stat().st_size)]
-    if not path.is_dir():
-        raise ExpectedToolFailure(
-            ToolErrorCode.INVALID_ARGUMENTS,
-            "Unsupported filesystem node.",
-            metadata={"path": relative.as_posix()},
-        )
-
-    nodes: list[_DeleteNode] = []
-    with os.scandir(path) as entries:
-        children = sorted(
-            entries, key=lambda entry: (entry.name.casefold(), entry.name)
-        )
-    for child in children:
-        nodes.extend(_inventory(Path(child.path), workspace))
-    nodes.append(_DeleteNode(path, FileNodeType.DIRECTORY, 0))
-    return nodes
-
-
-def _delete_node(node: _DeleteNode) -> None:
-    if node.node_type is FileNodeType.DIRECTORY:
-        node.path.rmdir()
-    else:
-        node.path.unlink()
-
-
 def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
     async def delete(
         arguments: BaseModel,
@@ -91,13 +55,8 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
         options = cast(DeleteArguments, arguments)
         if context.change_set_id is None:
             raise ToolInvariantError("delete requires an open ChangeSet.")
+        validate_workspace_path_syntax(options.path)
         requested = Path(options.path)
-        if requested.is_absolute() or ".." in requested.parts:
-            raise ExpectedToolFailure(
-                ToolErrorCode.WORKSPACE_ESCAPE,
-                "Delete path escapes the workspace boundary.",
-                metadata={"path": options.path},
-            )
         if requested in {Path("."), Path()}:
             raise ExpectedToolFailure(
                 ToolErrorCode.PERMISSION_DENIED,
@@ -110,37 +69,68 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
             must_exist=True,
             expected_kind="directory",
         )
-        target = parent.resolved / requested.name
-        if not target.exists() and not target.is_symlink():
+        relative = parent.relative / requested.name
+        _deny_protected(relative)
+        try:
+            with WorkspaceDirectoryTransaction(parent) as parent_transaction:
+                target_status = lstat_child(
+                    parent_transaction.directory,
+                    requested.name,
+                )
+        except FileNotFoundError as error:
             raise ExpectedToolFailure(
                 ToolErrorCode.NOT_FOUND,
                 "Path was not found.",
-                metadata={"path": options.path},
-            )
-        relative = target.relative_to(context.workspace.canonical_path)
-        _deny_protected(relative)
-        nodes = _inventory(target, context.workspace.canonical_path)
-        try:
-            journal.preflight_batch(
-                change_set_id=context.change_set_id,
-                additional_nodes=len(nodes),
-                additional_bytes=sum(node.content_bytes for node in nodes),
-            )
-        except ChangeCapacityExceeded as error:
-            raise ExpectedToolFailure(
-                ToolErrorCode.EXECUTION_FAILED,
-                str(error),
                 metadata={"path": relative.as_posix()},
             ) from error
+        except OSError as error:
+            raise ExpectedToolFailure(
+                ToolErrorCode.PERMISSION_DENIED,
+                "Workspace path could not be inspected safely.",
+                metadata={"path": relative.as_posix()},
+            ) from error
+        target = SafeWorkspacePath(
+            requested=options.path,
+            relative=relative,
+            resolved=context.workspace.canonical_path / relative,
+            workspace=context.workspace.canonical_path,
+            workspace_root_identity=context.workspace.root_identity,
+            target_existed=True,
+            target_identity=filesystem_identity(target_status),
+        )
+        try:
+            with WorkspaceDeleteTransaction(target) as transaction:
+                nodes = transaction.inventory(
+                    validate_relative=_deny_protected,
+                    max_nodes=MAX_CHANGESET_FILES,
+                    max_bytes=MAX_CHANGESET_BYTES,
+                )
+                try:
+                    journal.preflight_batch(
+                        change_set_id=context.change_set_id,
+                        additional_nodes=len(nodes),
+                        additional_bytes=sum(node.content_bytes for node in nodes),
+                    )
+                except ChangeCapacityExceeded as error:
+                    raise ExpectedToolFailure(
+                        ToolErrorCode.EXECUTION_FAILED,
+                        str(error),
+                        metadata={"path": relative.as_posix()},
+                    ) from error
 
-        for node in nodes:
-            journal.apply_file_mutation(
-                change_set_id=context.change_set_id,
-                path=node.path,
-                kind=FileChangeKind.DELETED,
-                intended_after=None,
-                mutate=partial(_delete_node, node),
-            )
+                for node in nodes:
+                    journal.apply_file_mutation(
+                        change_set_id=context.change_set_id,
+                        kind=FileChangeKind.DELETED,
+                        intended_after=None,
+                        target=node.mutation,
+                    )
+        except MutationTargetChanged as error:
+            raise ExpectedToolFailure(
+                ToolErrorCode.CONFLICT,
+                "Workspace path changed before deletion could complete.",
+                metadata={"path": relative.as_posix()},
+            ) from error
         return ToolOutput(
             content=f"Deleted {relative.as_posix()}.",
             metadata={

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Awesome Docs homepage concept H2 — Workflow System">
+  <title>Awesome Docs — Workflow System</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/round-4.css">
+  <script src="assets/round-4.js" defer></script>
+</head>
+<body class="homepage workflow-page">
+  <header class="home-nav">
+    <div class="nav-inner">
+      <a class="home-brand brand-m1" href="homepage-h-workflow.html"><span class="brand-symbol">A</span><span>Awesome Docs</span></a>
+      <nav class="home-nav-links" aria-label="主导航"><a class="active" href="#system">系统</a><a href="#invariants">原则</a><a href="#docs">文档</a><a href="refinement-round-4.html">返回选择</a></nav>
+      <div class="home-nav-actions">
+        <div class="nav-search"><span>搜索文档</span><kbd>Ctrl K</kbd></div>
+        <button class="clean-theme-toggle" type="button" data-global-theme-toggle aria-label="切换主题"><span class="solid-sun"></span><span class="clean-moon moon-solid"></span><b></b></button>
+        <div class="global-language" role="group" aria-label="切换语言"><i></i><button class="active" type="button" data-global-language-choice="zh">中</button><button type="button" data-global-language-choice="en">EN</button></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="home-shell">
+    <section class="workflow-hero" id="system">
+      <div class="home-kicker">A controlled system for software work</div>
+      <h1 data-copy-zh="让软件修改的过程，和结果一样可信。" data-copy-en="Make the process as trustworthy as the result.">让软件修改的过程，和结果一样可信。</h1>
+      <p data-copy-zh="Awesome 把理解、计划、修改和验证组织成一条可观察的工作流。模型负责推理，Core 负责产品行为，工具始终服从同一套策略。" data-copy-en="Awesome turns understanding, planning, changing, and verification into one observable workflow. Models reason; Core owns behavior; tools follow one policy path.">Awesome 把理解、计划、修改和验证组织成一条可观察的工作流。模型负责推理，Core 负责产品行为，工具始终服从同一套策略。</p>
+      <div class="home-actions"><a class="home-action primary" href="#docs">开始使用 <span>→</span></a><a class="home-action" href="#invariants">查看核心原则</a></div>
+    </section>
+
+    <section class="workflow-board" aria-label="Awesome 工作流系统图">
+      <header class="workflow-board-head"><span>WORKFLOW / foreground operation 01</span><span>workspace: trusted · mode: request</span></header>
+      <div class="workflow-lanes">
+        <article class="workflow-lane"><span>01 / UNDERSTAND</span><h2>Build bounded context</h2><div class="lane-event"><strong>Read call chain</strong><small>application → agent → modeling</small></div><div class="lane-event"><strong>Load contracts</strong><small>docs, tests, current behavior</small></div></article>
+        <article class="workflow-lane"><span>02 / PLAN</span><h2>Choose the safe path</h2><div class="lane-event active"><strong>Define scope</strong><small>3 files · 1 public behavior</small></div><div class="lane-event"><strong>Set validation</strong><small>lint → types → unit</small></div></article>
+        <article class="workflow-lane"><span>03 / CHANGE</span><h2>Act through policy</h2><div class="lane-event"><strong>Request approval</strong><small>modifying tool · workspace scope</small></div><div class="lane-event done"><strong>Apply change</strong><small>journal entry recorded</small></div></article>
+        <article class="workflow-lane"><span>04 / VERIFY</span><h2>Prove the result</h2><div class="lane-event done"><strong>Run checks</strong><small>12 passed · 0 failed</small></div><div class="lane-event done"><strong>Explain outcome</strong><small>diff, evidence, recovery</small></div></article>
+      </div>
+    </section>
+
+    <section class="home-section" id="invariants">
+      <header class="home-section-head"><span>01 / INVARIANTS</span><div><h2>不是更多自动化，而是更好的控制。</h2><p>用少数稳定原则解释产品差异，而不是堆叠模糊的 AI 能力描述。</p></div></header>
+      <div class="invariant-grid">
+        <article class="invariant-card"><span>ONE CORE</span><h3>行为只有一个权威</h3><p>Ink 负责表达意图和渲染事件；Python Core 负责所有产品行为。</p></article>
+        <article class="invariant-card"><span>ONE TOOL PATH</span><h3>工具不能绕过策略</h3><p>Registry、Policy、Executor 与规范化结果共享一条执行路径。</p></article>
+        <article class="invariant-card"><span>ONE RECOVERY MODEL</span><h3>恢复不是事后补丁</h3><p>取消、失败、重启与 Change Journal 都拥有明确语义。</p></article>
+      </div>
+    </section>
+
+    <section class="home-section" id="docs">
+      <header class="home-section-head"><span>02 / DOCUMENTATION</span><div><h2>从你要完成的工作开始。</h2><p>快速开始、日常控制、扩展机制和架构参考形成四条清晰路径。</p></div></header>
+      <div class="resource-grid">
+        <a class="resource-card" href="#"><span>PATH 01</span><h3>完成第一个受控任务 →</h3><p>安装、模型配置、Workspace 信任与第一次会话。</p></a>
+        <a class="resource-card" href="#"><span>PATH 02</span><h3>管理命令、权限和恢复 →</h3><p>理解 Thread、审批、变更检查和撤销。</p></a>
+        <a class="resource-card" href="#"><span>PATH 03</span><h3>扩展上下文与工具 →</h3><p>Memory、Skills、MCP 和安全边界。</p></a>
+        <a class="resource-card" href="#"><span>PATH 04</span><h3>进入完整系统架构 →</h3><p>边界、数据流、协议、存储和安全模型。</p></a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="home-footer"><div class="home-footer-inner"><span>Awesome Docs · Workflow System concept H2</span><span>Understand → Plan → Change → Verify</span></div></footer>
+</body>
+</html>

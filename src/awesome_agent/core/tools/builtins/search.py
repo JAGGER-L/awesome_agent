@@ -9,6 +9,7 @@ from typing import cast
 
 from pydantic import BaseModel, Field, JsonValue
 
+from awesome_agent.core.filesystem import WorkspaceFileTooLarge
 from awesome_agent.core.tools.builtins.file_enumerator import (
     EnumeratedFile,
     ScanCancellation,
@@ -45,13 +46,6 @@ def _search_root(
     context: ToolExecutionContext,
     requested: str,
 ) -> SafeWorkspacePath:
-    lexical = context.workspace.canonical_path / Path(requested)
-    if lexical.is_symlink():
-        raise ExpectedToolFailure(
-            ToolErrorCode.PERMISSION_DENIED,
-            "Directory symlinks are not traversed.",
-            metadata={"path": requested},
-        )
     return resolve_workspace_path(
         context.workspace,
         requested,
@@ -225,10 +219,8 @@ async def grep_files(
 
 def _read_searchable_text(item: EnumeratedFile) -> str | None:
     try:
-        if item.resolved.stat().st_size > MAX_FILE_BYTES:
-            return None
-        data = item.resolved.read_bytes()
-    except OSError:
+        data = item.read_bytes(max_bytes=MAX_FILE_BYTES)
+    except WorkspaceFileTooLarge:
         return None
     if b"\x00" in data:
         return None

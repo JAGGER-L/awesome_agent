@@ -29,6 +29,16 @@ from awesome_agent.modeling import (
 )
 
 _SOURCE_ORDER = {kind: index for index, kind in enumerate(ContextSourceKind)}
+_CONVERSATION_TIMELINE_KINDS = frozenset(
+    {ContextSourceKind.RECENT_TURNS, ContextSourceKind.DIRECT_COMMAND}
+)
+_LONG_TERM_MEMORY_KINDS = frozenset(
+    {
+        ContextSourceKind.USER_MEMORY,
+        ContextSourceKind.WORKSPACE_MEMORY,
+        ContextSourceKind.MEM0,
+    }
+)
 _ALWAYS_MANDATORY = frozenset(
     {
         ContextSourceKind.PRODUCT_INSTRUCTIONS,
@@ -97,20 +107,26 @@ class ContextBuilder:
             request.configured_total_tokens,
             request.model_context_limit,
         )
+        available_input_limit = (
+            budget.effective_input_limit - request.reserved_input_tokens
+        )
+        if available_input_limit < 0:
+            raise ContextOverflow("Reserved context exceeds the effective input limit.")
         sources = _apply_memory_budgets(
             _ordered_unique(request.sources),
-            budget.effective_input_limit,
+            available_input_limit,
         )
         mandatory_estimate = sum(
             _message_estimate(source, source.content)
             for source in sources
             if _mandatory(source)
         )
-        if mandatory_estimate > budget.effective_input_limit:
+        if mandatory_estimate > available_input_limit:
             raise ContextOverflow(
-                "Mandatory context exceeds the effective input limit."
+                "Mandatory context and reserved context exceed the effective input "
+                "limit."
             )
-        optional_remaining = budget.effective_input_limit - mandatory_estimate
+        optional_remaining = available_input_limit - mandatory_estimate
         messages: list[ModelMessage] = []
         manifest: list[ContextManifestItem] = []
         for source in sources:
@@ -151,14 +167,17 @@ class ContextBuilder:
                 )
             )
         estimated = estimate_messages(tuple(messages))
-        if estimated > budget.effective_input_limit:
+        if estimated + request.reserved_input_tokens > budget.effective_input_limit:
             raise ContextOverflow("Prepared context exceeds the effective input limit.")
         return PreparedContext(
             messages=tuple(messages),
             manifest=tuple(manifest),
             estimated_input_tokens=estimated,
             effective_input_limit=budget.effective_input_limit,
-            compression_recommended=estimated >= budget.compression_threshold,
+            compression_recommended=(
+                estimated + request.reserved_input_tokens
+                >= budget.compression_threshold
+            ),
         )
 
 
@@ -315,18 +334,43 @@ def _normalized_digest(content: str) -> str:
 def _ordered_unique(sources: tuple[ContextSource, ...]) -> tuple[ContextSource, ...]:
     indexed = sorted(
         enumerate(sources),
-        key=lambda item: (_SOURCE_ORDER[item[1].kind], item[0]),
+        key=_source_order_key,
     )
-    seen: set[str] = set()
+    seen: set[tuple[object, ...]] = set()
     result: list[ContextSource] = []
     for _, source in indexed:
+        if _mandatory(source):
+            result.append(source)
+            continue
+        if source.kind in _CONVERSATION_TIMELINE_KINDS:
+            result.append(source)
+            continue
         normalized = " ".join(source.content.split())
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-        if digest in seen:
+        key: tuple[object, ...] = (
+            ("long_term_memory", digest)
+            if source.kind in _LONG_TERM_MEMORY_KINDS
+            else (source.kind, source.role, digest)
+        )
+        if key in seen:
             continue
-        seen.add(digest)
+        seen.add(key)
         result.append(source)
     return tuple(result)
+
+
+def _source_order_key(item: tuple[int, ContextSource]) -> tuple[int, int, int]:
+    index, source = item
+    if (
+        source.kind in _CONVERSATION_TIMELINE_KINDS
+        and source.covered_sequence_start is not None
+    ):
+        return (
+            _SOURCE_ORDER[ContextSourceKind.RECENT_TURNS],
+            source.covered_sequence_start,
+            index,
+        )
+    return (_SOURCE_ORDER[source.kind], 0, index)
 
 
 def _mandatory(source: ContextSource) -> bool:

@@ -173,6 +173,9 @@ export function App({
           state.application?.thinking_enabled ?? welcome.thinkingEnabled,
         permissionMode:
           state.application?.permission_mode ?? welcome.permissionMode,
+        workspaceInstructionDiagnostic: state.application
+          ? (state.application.workspace_instruction_diagnostic ?? null)
+          : (welcome.workspaceInstructionDiagnostic ?? null),
         localMemoryEnabled: memoryStateEnabled(
           state.application?.memory_status,
           "local",

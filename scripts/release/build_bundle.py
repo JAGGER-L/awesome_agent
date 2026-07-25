@@ -5,9 +5,20 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.release.contracts import (
+    MAX_RELEASE_REQUIREMENTS_BYTES,
+    ReleaseContractError,
+    validate_locked_requirements,
+    validate_release_wheel,
+)
 
 _VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\n\Z")
 _ZIP_TIME = (1980, 1, 1, 0, 0, 0)
@@ -54,15 +65,13 @@ def validate_version_files(root: Path, version: str) -> None:
 
 
 def _validate_wheel(path: Path, version: str) -> None:
-    if not path.is_file():
-        raise BundleError(f"required wheel is missing: {path.name}")
-    metadata_suffix = f"awesome_agent-{version}.dist-info/METADATA"
-    with ZipFile(path) as wheel:
-        names = wheel.namelist()
-        if metadata_suffix not in names:
-            raise BundleError("wheel metadata version does not match VERSION")
-        if any(_is_forbidden(PurePosixPath(name)) for name in names):
-            raise BundleError("wheel contains forbidden development content")
+    try:
+        validate_release_wheel(path, version)
+        with ZipFile(path) as wheel:
+            if any(_is_forbidden(PurePosixPath(name)) for name in wheel.namelist()):
+                raise BundleError("wheel contains forbidden development content")
+    except ReleaseContractError as error:
+        raise BundleError(f"release wheel is invalid: {error}") from error
 
 
 def _is_forbidden(path: PurePosixPath) -> bool:
@@ -119,19 +128,18 @@ def _installer_assets(root: Path, version: str) -> dict[str, bytes]:
 def _locked_requirements(root: Path) -> bytes:
     path = root / "dist" / _RELEASE_REQUIREMENTS
     try:
+        if path.stat().st_size > MAX_RELEASE_REQUIREMENTS_BYTES:
+            raise BundleError("locked release requirements are too large")
         content = path.read_bytes()
-        rendered = content.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as error:
+        validate_locked_requirements(content)
+    except ReleaseContractError as error:
+        raise BundleError(
+            f"locked release requirements are invalid: {error}"
+        ) from error
+    except OSError as error:
         raise BundleError(
             "locked release requirements are missing or invalid"
         ) from error
-    required = ("langgraph==", "mcp==", "mem0ai==", "openai==")
-    if not content or any(name not in rendered for name in required):
-        raise BundleError("locked release requirements are incomplete")
-    if "--hash=sha256:" not in rendered:
-        raise BundleError("locked release requirements must include hashes")
-    if any(marker in rendered for marker in ("file://", "-e ", "--editable")):
-        raise BundleError("locked release requirements contain local dependencies")
     return content
 
 
@@ -179,9 +187,16 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
         for name in sorted(members):
             _write_member(archive, name, members[name])
 
-    digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
     checksums = release / "SHA256SUMS"
-    checksums.write_text(f"{digest}  {archive_path.name}\n", encoding="ascii")
+    published_assets = {
+        **installers,
+        archive_path.name: archive_path.read_bytes(),
+    }
+    checksum_lines = (
+        f"{hashlib.sha256(content).hexdigest()}  {name}\n"
+        for name, content in sorted(published_assets.items())
+    )
+    checksums.write_bytes("".join(checksum_lines).encode("ascii"))
     return BundleResult(archive=archive_path, checksums=checksums)
 
 
@@ -199,7 +214,7 @@ def build_bundle(root: Path) -> BundleResult:
     version = read_version(root)
     validate_version_files(root, version)
     _run(root, "node", "tui/scripts/sync-version.mjs", "--check")
-    _run(root, "uv", "build", "--wheel")
+    _run(root, "uv", "build", "--wheel", "--no-build-isolation")
     _run(
         root,
         "uv",

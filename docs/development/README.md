@@ -40,7 +40,7 @@ behavior.
 uv run python scripts/generate_protocol_fixtures.py --check
 node tui/scripts/sync-version.mjs --check
 uv lock --check
-uv build --wheel
+uv build --wheel --no-build-isolation
 npm pack ./tui --dry-run
 ```
 

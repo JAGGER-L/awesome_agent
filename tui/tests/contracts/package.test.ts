@@ -9,7 +9,7 @@ describe("package identity", () => {
   it("uses the product version exported to the protocol", async () => {
     const packageJson = JSON.parse(
       await readFile(new URL("../../package.json", import.meta.url), "utf8"),
-    ) as { version: string };
+    ) as { version: string; scripts: Record<string, string> };
     const packageLock = JSON.parse(
       await readFile(
         new URL("../../package-lock.json", import.meta.url),
@@ -24,6 +24,8 @@ describe("package identity", () => {
     expect(repositoryVersion).toBe("1.2.1\n");
     expect(PRODUCT_VERSION).toBe("1.2.1");
     expect(packageJson.version).toBe(PRODUCT_VERSION);
+    expect(packageJson.scripts.build).toContain("version:check");
+    expect(packageJson.scripts.build).not.toContain("version:sync");
     expect(packageLock.version).toBe(PRODUCT_VERSION);
     expect(packageLock.packages[""]?.version).toBe(PRODUCT_VERSION);
   });

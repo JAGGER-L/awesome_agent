@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 import hashlib
-import os
-import stat
-import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 
 from awesome_agent.core.changes.analysis import ChangeAnalyzer, merge_file_changes
 from awesome_agent.core.changes.errors import (
+    ChangeBlobCorrupt,
     ChangeConflict,
     ChangeLifecycleError,
     ChangeNotReversible,
     ChangeSetNotFound,
 )
-from awesome_agent.core.changes.journal import NodeSnapshot
+from awesome_agent.core.changes.filesystem import (
+    BoundWorkspaceNode,
+    NodeSnapshot,
+    WorkspaceTreeTransaction,
+    normalize_workspace_relative,
+    snapshot_digest,
+    snapshots_match,
+)
 from awesome_agent.core.changes.models import (
     ChangeLifecycle,
     ChangeReversibility,
@@ -31,6 +36,7 @@ from awesome_agent.core.changes.ports import (
     ChangeSetStore,
     PendingMutation,
 )
+from awesome_agent.core.filesystem import MutationTargetChanged, UnsafeWorkspacePath
 from awesome_agent.core.workspace import WorkspaceIdentity
 
 
@@ -44,33 +50,12 @@ class ChangeOperationResult(BaseModel):
     warning: str | None = None
 
 
-def _capture(path: Path) -> NodeSnapshot | None:
-    if not path.exists() and not path.is_symlink():
-        return None
-    status = path.lstat()
-    mode = stat.S_IMODE(status.st_mode)
-    if path.is_symlink():
-        return NodeSnapshot(FileNodeType.SYMLINK, os.fsencode(os.readlink(path)), mode)
-    if path.is_dir():
-        return NodeSnapshot(FileNodeType.DIRECTORY, None, mode)
-    return NodeSnapshot(FileNodeType.FILE, path.read_bytes(), mode)
-
-
-def _digest(snapshot: NodeSnapshot | None) -> str | None:
-    if snapshot is None:
-        return None
-    return hashlib.sha256(snapshot.content or b"").hexdigest()
-
-
-def _matches(snapshot: NodeSnapshot | None, expected: NodeSnapshot | None) -> bool:
-    if expected is None:
-        return snapshot is None
-    return (
-        snapshot is not None
-        and snapshot.node_type is expected.node_type
-        and _digest(snapshot) == _digest(expected)
-        and snapshot.mode == expected.mode
-    )
+@dataclass(frozen=True, slots=True)
+class _PreparedRestore:
+    change: FileChange
+    target: BoundWorkspaceNode
+    desired: NodeSnapshot | None
+    pending: PendingMutation
 
 
 def _kind(before: NodeSnapshot | None, after: NodeSnapshot | None) -> FileChangeKind:
@@ -79,56 +64,6 @@ def _kind(before: NodeSnapshot | None, after: NodeSnapshot | None) -> FileChange
     if after is None:
         return FileChangeKind.DELETED
     return FileChangeKind.UPDATED
-
-
-def _atomic_write(path: Path, content: bytes, mode: int | None) -> None:
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            delete=False,
-        ) as temporary:
-            temporary.write(content)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-            temporary_path = Path(temporary.name)
-        if mode is not None:
-            os.chmod(temporary_path, mode)
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            temporary_path.unlink()
-
-
-def _remove(path: Path, snapshot: NodeSnapshot) -> None:
-    if snapshot.node_type is FileNodeType.DIRECTORY:
-        path.rmdir()
-    else:
-        path.unlink()
-
-
-def _write_snapshot(path: Path, snapshot: NodeSnapshot | None) -> None:
-    current = _capture(path)
-    if snapshot is None:
-        if current is not None:
-            _remove(path, current)
-        return
-    if current is not None and current.node_type is not snapshot.node_type:
-        _remove(path, current)
-    if snapshot.node_type is FileNodeType.DIRECTORY:
-        path.mkdir(exist_ok=True)
-        if snapshot.mode is not None:
-            os.chmod(path, snapshot.mode)
-        return
-    if snapshot.node_type is FileNodeType.SYMLINK:
-        if path.exists() or path.is_symlink():
-            path.unlink()
-        target = os.fsdecode(snapshot.content or b"")
-        target_path = (path.parent / target).resolve(strict=False)
-        path.symlink_to(target, target_is_directory=target_path.is_dir())
-        return
-    _atomic_write(path, snapshot.content or b"", snapshot.mode)
 
 
 class ChangeOperations:
@@ -161,58 +96,65 @@ class ChangeOperations:
         digest = change.before_hash if before else change.after_hash
         blob = change.before_blob if before else change.after_blob
         mode = change.before_mode if before else change.after_mode
+        node_type = (
+            change.resolved_before_node_type
+            if before
+            else change.resolved_after_node_type
+        )
         if digest is None:
             return None
-        content = self._blobs.get(blob) if blob is not None else None
-        return NodeSnapshot(change.node_type, content, mode)
+        if node_type is None:
+            raise ChangeBlobCorrupt(f"Change node type is missing for {change.path}.")
+        if node_type is FileNodeType.DIRECTORY:
+            return NodeSnapshot(node_type, None, mode)
+        if blob is None:
+            raise ChangeBlobCorrupt(
+                f"Change blob reference is missing for {change.path}."
+            )
+        try:
+            content = self._blobs.get(blob)
+        except (KeyError, FileNotFoundError, OSError) as error:
+            raise ChangeBlobCorrupt(
+                f"Change blob could not be read for {change.path}."
+            ) from error
+        if hashlib.sha256(content).hexdigest() != digest:
+            raise ChangeBlobCorrupt(
+                f"Change blob content does not match the record for {change.path}."
+            )
+        return NodeSnapshot(node_type, content, mode)
 
     def diff(self, change_set_id: str) -> str:
         return self._analyzer.analyze(change_set_id).diff
 
-    def _preflight(
-        self,
-        changes: list[FileChange],
-        *,
-        before: bool,
-    ) -> None:
-        conflicts: list[str] = []
-        for change in changes:
-            path = self._workspace.canonical_path / change.path
-            expected = self._snapshot(change, before=before)
-            if not _matches(_capture(path), expected):
-                conflicts.append(change.path)
-        if conflicts:
-            raise ChangeConflict(
-                "Workspace changed after the recorded operation: "
-                + ", ".join(sorted(conflicts))
-            )
-
-    def _apply_one(
+    def _pending(
         self,
         *,
-        action: str,
+        pending_id: str,
         change_set: ChangeSet,
         change: FileChange,
+        current: NodeSnapshot | None,
         desired: NodeSnapshot | None,
-    ) -> None:
-        path = self._workspace.canonical_path / change.path
-        current = _capture(path)
-        node_type = desired.node_type if desired is not None else change.node_type
-        pending = PendingMutation(
-            id=f"{action}_{uuid4().hex}",
+    ) -> PendingMutation:
+        before_node_type = current.node_type if current is not None else None
+        intended_after_node_type = desired.node_type if desired is not None else None
+        node_type = intended_after_node_type or before_node_type or change.node_type
+        return PendingMutation(
+            id=pending_id,
             change_set_id=change_set.id,
             workspace_key=change_set.workspace_key,
-            relative_path=change.path,
+            relative_path=normalize_workspace_relative(change.path).as_posix(),
             kind=_kind(current, desired),
             node_type=node_type,
-            before_hash=_digest(current),
+            before_node_type=before_node_type,
+            intended_after_node_type=intended_after_node_type,
+            before_hash=snapshot_digest(current),
             before_blob=(
                 self._blobs.put(current.content)
                 if current is not None and current.content is not None
                 else None
             ),
             before_mode=current.mode if current is not None else None,
-            intended_after_hash=_digest(desired),
+            intended_after_hash=snapshot_digest(desired),
             intended_after_blob=(
                 self._blobs.put(desired.content)
                 if desired is not None and desired.content is not None
@@ -221,11 +163,80 @@ class ChangeOperations:
             intended_after_mode=desired.mode if desired is not None else None,
             created_at=datetime.now(UTC),
         )
-        self._store.save_pending(pending)
-        _write_snapshot(path, desired)
-        if not _matches(_capture(path), desired):
-            raise ChangeConflict(f"Could not restore {change.path} exactly.")
-        self._store.delete_pending(pending.id)
+
+    def _prepare(
+        self,
+        *,
+        tree: WorkspaceTreeTransaction,
+        change_set: ChangeSet,
+        changes: list[FileChange],
+        undo: bool,
+    ) -> list[_PreparedRestore]:
+        targets: dict[str, BoundWorkspaceNode] = {}
+        conflicts: list[str] = []
+        for change in changes:
+            relative = normalize_workspace_relative(change.path).as_posix()
+            target = tree.bind(relative)
+            expected = self._snapshot(change, before=not undo)
+            targets[relative] = target
+            if not snapshots_match(target.snapshot, expected):
+                conflicts.append(relative)
+        if conflicts:
+            raise ChangeConflict(
+                "Workspace changed after the recorded operation: "
+                + ", ".join(sorted(conflicts))
+            )
+
+        action = "undo" if undo else "redo"
+        operation_id = uuid4().hex
+        ordered = list(reversed(changes)) if undo else changes
+        prepared: list[_PreparedRestore] = []
+        for index, change in enumerate(ordered):
+            relative = normalize_workspace_relative(change.path).as_posix()
+            target = targets[relative]
+            desired = self._snapshot(change, before=undo)
+            prepared.append(
+                _PreparedRestore(
+                    change=change,
+                    target=target,
+                    desired=desired,
+                    pending=self._pending(
+                        pending_id=f"{action}_{operation_id}_{index:04d}",
+                        change_set=change_set,
+                        change=change,
+                        current=target.snapshot,
+                        desired=desired,
+                    ),
+                )
+            )
+        return prepared
+
+    def _rollback(
+        self,
+        tree: WorkspaceTreeTransaction,
+        prepared: list[_PreparedRestore],
+        applied: list[_PreparedRestore],
+    ) -> bool:
+        try:
+            for item in reversed(applied):
+                current = tree.bind(item.pending.relative_path)
+                if not snapshots_match(current.snapshot, item.desired):
+                    return False
+                restored = tree.restore(current, item.target.snapshot)
+                if not snapshots_match(restored, item.target.snapshot):
+                    return False
+            for item in prepared:
+                current = tree.bind(item.pending.relative_path)
+                if not snapshots_match(current.snapshot, item.target.snapshot):
+                    return False
+        except (MutationTargetChanged, UnsafeWorkspacePath, OSError):
+            return False
+        try:
+            for item in prepared:
+                self._store.delete_pending(item.pending.id)
+        except Exception:
+            return False
+        return True
 
     def _operate(
         self,
@@ -244,24 +255,64 @@ class ChangeOperations:
             raise ChangeNotReversible("ChangeSet contains only unmanaged effects.")
 
         changes = list(merge_file_changes(change_set.files))
-        self._preflight(changes, before=not undo)
-        ordered = list(reversed(changes)) if undo else changes
-        for change in ordered:
-            self._apply_one(
-                action="undo" if undo else "redo",
-                change_set=change_set,
-                change=change,
-                desired=self._snapshot(change, before=undo),
-            )
-        updated = change_set.model_copy(update={"lifecycle": target_lifecycle})
-        self._store.save(updated)
+        prepared: list[_PreparedRestore] = []
+        applied: list[_PreparedRestore] = []
+        committed = False
+        try:
+            with WorkspaceTreeTransaction(self._workspace) as tree:
+                try:
+                    prepared = self._prepare(
+                        tree=tree,
+                        change_set=change_set,
+                        changes=changes,
+                        undo=undo,
+                    )
+                    for item in prepared:
+                        self._store.save_pending(item.pending)
+                    for item in prepared:
+                        actual = tree.restore(item.target, item.desired)
+                        if not snapshots_match(actual, item.desired):
+                            raise ChangeConflict(
+                                f"Could not restore {item.pending.relative_path} "
+                                "exactly."
+                            )
+                        applied.append(item)
+                    updated = change_set.model_copy(
+                        update={"lifecycle": target_lifecycle}
+                    )
+                    self._store.save(updated)
+                    committed = True
+                    for item in prepared:
+                        self._store.delete_pending(item.pending.id)
+                except Exception:
+                    if prepared and not committed:
+                        try:
+                            persisted = self._store.get(change_set.id)
+                        except Exception:
+                            persisted = None
+                        if (
+                            persisted is not None
+                            and persisted.lifecycle is target_lifecycle
+                        ):
+                            committed = True
+                        elif (
+                            persisted is not None
+                            and persisted.lifecycle is expected_lifecycle
+                        ):
+                            self._rollback(tree, prepared, applied)
+                    raise
+        except (MutationTargetChanged, UnsafeWorkspacePath, OSError) as error:
+            raise ChangeConflict(
+                "Workspace changed while the change operation was in progress."
+            ) from error
+
         warning = None
         if change_set.reversibility is ChangeReversibility.PARTIAL:
             warning = "Unmanaged execute effects were not restored."
         return ChangeOperationResult(
             change_set_id=change_set.id,
             lifecycle=target_lifecycle,
-            restored_paths=tuple(change.path for change in ordered),
+            restored_paths=tuple(item.pending.relative_path for item in prepared),
             unmanaged_effects_restored=False,
             warning=warning,
         )

@@ -38,12 +38,24 @@ from awesome_agent.context.tokens import (
     estimate_messages,
     estimate_text,
 )
+from awesome_agent.context.workspace_instructions import (
+    WORKSPACE_INSTRUCTION_FILE,
+    WORKSPACE_INSTRUCTION_MAX_BYTES,
+    WORKSPACE_INSTRUCTION_MAX_TOKENS,
+    WorkspaceInstructionDiagnostic,
+    WorkspaceInstructionDiagnosticCode,
+    WorkspaceInstructionSnapshot,
+    load_workspace_instructions,
+)
 
 __all__ = [
     "CODING_AGENT_PRODUCT_INSTRUCTIONS",
     "COMPRESSION_THRESHOLD_FRACTION",
     "OUTPUT_RESERVE_TOKENS",
     "SAFETY_RESERVE_FRACTION",
+    "WORKSPACE_INSTRUCTION_FILE",
+    "WORKSPACE_INSTRUCTION_MAX_BYTES",
+    "WORKSPACE_INSTRUCTION_MAX_TOKENS",
     "CompressionPlan",
     "CompressionRequest",
     "CompressionResult",
@@ -61,9 +73,13 @@ __all__ = [
     "ParsedExplicitPaths",
     "PreparedContext",
     "ThreadCompressor",
+    "WorkspaceInstructionDiagnostic",
+    "WorkspaceInstructionDiagnosticCode",
+    "WorkspaceInstructionSnapshot",
     "calculate_context_budget",
     "estimate_messages",
     "estimate_text",
+    "load_workspace_instructions",
     "local_memory_context_sources",
     "mem0_context_source",
     "model_identity_context_source",

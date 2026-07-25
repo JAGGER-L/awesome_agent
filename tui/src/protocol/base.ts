@@ -32,6 +32,13 @@ export const safeIntegerSchema = z
   .min(Number.MIN_SAFE_INTEGER)
   .max(Number.MAX_SAFE_INTEGER);
 
+export const permissionModeSchema = z.enum([
+  "request_approval",
+  "accept_edits",
+  "full_access",
+]);
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
+
 export function boundedText(minimum: number, maximum: number) {
   return z.string().superRefine((value, context) => {
     const length = Array.from(value).length;
@@ -60,6 +67,8 @@ export const interactionDecisionSchema = z.enum([
   "allow_once",
   "allow_thread_writes",
   "enable_full_access",
+  "retry",
+  "abort",
   "deny",
 ]);
 

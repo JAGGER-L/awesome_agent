@@ -20,6 +20,7 @@ from awesome_agent.application.command_results import (
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import StatusSnapshot
 from awesome_agent.config.credentials import ProviderCredentialStatuses
+from awesome_agent.context import WorkspaceInstructionDiagnostic
 from awesome_agent.conversation.models import UsageSummary
 from awesome_agent.core.tools.permissions import (
     PermissionPolicy,
@@ -32,6 +33,9 @@ from awesome_agent.core.tools.registry import ToolRegistry
 type StatusReader = Callable[[], StatusSnapshot | None]
 type UsageReader = Callable[[], UsageSummary | None]
 type ProviderDoctor = Callable[[], Awaitable[dict[str, str]]]
+type WorkspaceInstructionDiagnosticReader = Callable[
+    [], WorkspaceInstructionDiagnostic | None
+]
 
 
 class DiagnosticCommandService:
@@ -47,6 +51,7 @@ class DiagnosticCommandService:
         usage_reader: UsageReader,
         credential_statuses: Callable[[], ProviderCredentialStatuses],
         provider_doctor: ProviderDoctor,
+        workspace_instruction_diagnostic: WorkspaceInstructionDiagnosticReader,
     ) -> None:
         self._workspace_path = workspace_path
         self._registry = registry
@@ -55,6 +60,7 @@ class DiagnosticCommandService:
         self._usage_reader = usage_reader
         self._credential_statuses = credential_statuses
         self._provider_doctor = provider_doctor
+        self._workspace_instruction_diagnostic = workspace_instruction_diagnostic
         self._policy = PermissionPolicy()
 
     async def workspace(self, intent: CommandIntent) -> CommandOutcome:
@@ -116,6 +122,15 @@ class DiagnosticCommandService:
             DoctorCheck(name="SQLite", status="ok"),
             DoctorCheck(name="Checkpoints", status="ok"),
         ]
+        workspace_diagnostic = self._workspace_instruction_diagnostic()
+        if workspace_diagnostic is not None:
+            checks.append(
+                DoctorCheck(
+                    name="Workspace instructions",
+                    status="error",
+                    detail=workspace_diagnostic.message,
+                )
+            )
         for provider in ("deepseek", "kimi"):
             raw_status = providers.get(provider, "unverified")
             status = (

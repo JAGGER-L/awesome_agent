@@ -1,0 +1,78 @@
+name: Nightly cross-platform
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-suite:
+    name: Full suite (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: |
+            tui/package-lock.json
+            site/package-lock.json
+
+      - name: Install Python dependencies
+        run: uv sync --locked --extra memory --dev
+
+      - name: Install TUI dependencies
+        working-directory: tui
+        run: npm ci
+
+      - name: Run complete Python suite
+        run: uv run --extra memory pytest -q tests
+
+      - name: Test
+        working-directory: tui
+        run: npm test -- --exclude tests/packaging/package.test.ts
+
+      - name: Test installed TUI package
+        working-directory: tui
+        run: npm test -- tests/packaging/package.test.ts
+
+      - name: Build TUI
+        working-directory: tui
+        run: npm run build
+
+      - name: Audit TUI dependencies
+        working-directory: tui
+        run: npm audit --package-lock-only --audit-level=high
+
+      - name: Audit docs-site dependencies
+        working-directory: site
+        run: npm audit --package-lock-only --audit-level=high

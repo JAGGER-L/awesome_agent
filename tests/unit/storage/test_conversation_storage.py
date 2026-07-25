@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -244,6 +245,132 @@ def test_repository_transaction_rolls_back_multirow_failure(tmp_path: Path) -> N
         raise RuntimeError("rollback")
 
     assert repositories.threads.get("thread_1") is None
+
+
+@pytest.mark.parametrize("reader", ("full", "page"))
+def test_thread_snapshot_reads_do_not_compete_for_the_sqlite_writer_lock(
+    tmp_path: Path,
+    reader: str,
+) -> None:
+    path = tmp_path / f"snapshot-{reader}.db"
+    writer = SQLiteConversationRepositories(path)
+    snapshot = SQLiteConversationRepositories(path)
+    writer.threads.create(_thread())
+    completed = threading.Event()
+    observed: list[object] = []
+    errors: list[BaseException] = []
+
+    def read_snapshot() -> None:
+        try:
+            if reader == "full":
+                observed.append(snapshot.read_thread("thread_1"))
+            else:
+                observed.append(
+                    snapshot.read_thread_page(
+                        "thread_1",
+                        before_sequence=None,
+                        limit=10,
+                    )
+                )
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            completed.set()
+
+    with writer.transaction():
+        reader_thread = threading.Thread(target=read_snapshot)
+        reader_thread.start()
+        completed_while_writer_reserved = completed.wait(timeout=0.5)
+
+    reader_thread.join(timeout=5)
+
+    assert completed_while_writer_reserved
+    assert not reader_thread.is_alive()
+    assert errors == []
+    assert len(observed) == 1
+
+
+@pytest.mark.parametrize("winner", ("manifest", "cancel"))
+def test_turn_manifest_and_terminal_writes_are_monotonic_across_connections(
+    tmp_path: Path,
+    winner: str,
+) -> None:
+    path = tmp_path / f"turn-race-{winner}.db"
+    first = SQLiteConversationRepositories(path)
+    second = SQLiteConversationRepositories(path)
+    first.threads.create(_thread())
+    first.entries.append(_entry("entry_1", sequence=1))
+    original = first.turns.create(_turn())
+    updated_manifest = ({"kind": "current_input", "order": 2},)
+    manifest_update = original.model_copy(
+        update={
+            "context_manifest": updated_manifest,
+            "updated_at": original.updated_at + timedelta(seconds=1),
+        }
+    )
+    cancelled = Turn.model_validate(
+        original.model_copy(
+            update={
+                "status": TurnStatus.CANCELLED,
+                "termination_reason": "cancelled",
+                "updated_at": original.updated_at + timedelta(seconds=2),
+                "completed_at": original.updated_at + timedelta(seconds=2),
+            }
+        ).model_dump()
+    )
+    winner_locked = threading.Event()
+    release_winner = threading.Event()
+    loser_started = threading.Event()
+    loser_finished = threading.Event()
+    loser_errors: list[BaseException] = []
+
+    def commit_winner() -> None:
+        with first.transaction() as connection:
+            winner_locked.set()
+            assert release_winner.wait(timeout=5)
+            first.turns.update(
+                manifest_update if winner == "manifest" else cancelled,
+                connection=connection,
+            )
+
+    def commit_loser() -> None:
+        loser_started.set()
+        try:
+            if winner == "manifest":
+                second.update_terminal_turn(cancelled)
+            else:
+                second.update_in_progress_turn(
+                    manifest_update,
+                    expected_context_manifest=original.context_manifest,
+                )
+        except BaseException as error:
+            loser_errors.append(error)
+        finally:
+            loser_finished.set()
+
+    winner_thread = threading.Thread(target=commit_winner)
+    loser_thread = threading.Thread(target=commit_loser)
+    winner_thread.start()
+    assert winner_locked.wait(timeout=5)
+    loser_thread.start()
+    assert loser_started.wait(timeout=5)
+    assert not loser_finished.wait(timeout=0.1)
+    release_winner.set()
+    winner_thread.join(timeout=5)
+    loser_thread.join(timeout=5)
+
+    assert not winner_thread.is_alive()
+    assert not loser_thread.is_alive()
+    assert len(loser_errors) == 1
+    assert isinstance(loser_errors[0], ConversationConflict)
+    stored = first.turns.get(original.id)
+    assert stored is not None
+    if winner == "manifest":
+        assert stored.status is TurnStatus.IN_PROGRESS
+        assert stored.context_manifest == updated_manifest
+    else:
+        assert stored.status is TurnStatus.CANCELLED
+        assert stored.context_manifest == original.context_manifest
 
 
 def test_begin_turn_rolls_back_title_and_entry_when_turn_write_fails(

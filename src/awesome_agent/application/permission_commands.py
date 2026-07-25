@@ -46,6 +46,9 @@ class PermissionCommandService:
         self._current_thread_id = current_thread_id
 
     async def permissions(self, intent: CommandIntent) -> CommandOutcome:
+        thread_id = self._current_thread_id()
+        if thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
         if not intent.arguments:
             payload = PermissionCommandPayload(mode=self._session.mode)
             return interaction(
@@ -62,10 +65,20 @@ class PermissionCommandService:
                             is PermissionMode.REQUEST_APPROVAL,
                         ),
                         CommandOption(
+                            value=PermissionMode.ACCEPT_EDITS.value,
+                            label="Accept edits",
+                            description=(
+                                "Allow file creation and modification; ask before "
+                                "deletes and shell commands."
+                            ),
+                            selected=self._session.mode is PermissionMode.ACCEPT_EDITS,
+                        ),
+                        CommandOption(
                             value=PermissionMode.FULL_ACCESS.value,
                             label="Full access",
                             description=(
-                                "Allow edits and shell commands for this thread."
+                                "Allow built-in local changes and shell commands "
+                                "without approval."
                             ),
                             selected=self._session.mode is PermissionMode.FULL_ACCESS,
                         ),
@@ -76,14 +89,14 @@ class PermissionCommandService:
         if len(intent.arguments) != 1:
             return error(
                 "invalid_arguments",
-                "Usage: /permissions [request_approval|full_access]",
+                "Usage: /permissions [request_approval|accept_edits|full_access]",
             )
         try:
             requested = PermissionMode(intent.arguments[0])
         except ValueError:
             return error(
                 "invalid_arguments",
-                "Usage: /permissions [request_approval|full_access]",
+                "Usage: /permissions [request_approval|accept_edits|full_access]",
             )
         if self._operations.active_operation_id is not None:
             return error(
@@ -95,8 +108,11 @@ class PermissionCommandService:
                 "interaction_busy",
                 "Resolve the pending interaction before changing permission mode.",
             )
-        if requested is PermissionMode.REQUEST_APPROVAL:
-            self._session.reset()
+        if requested in {
+            PermissionMode.REQUEST_APPROVAL,
+            PermissionMode.ACCEPT_EDITS,
+        }:
+            self._session.set_mode(requested)
             return result(PermissionCommandPayload(mode=requested))
         if self._session.mode is PermissionMode.FULL_ACCESS:
             return result(PermissionCommandPayload(mode=requested))
@@ -107,24 +123,30 @@ class PermissionCommandService:
             target="full access",
             capability=None,
             choices=full_access_confirmation_choices(),
+            thread_id=thread_id,
+            permission_generation=self._session.generation,
         )
-        await self._emitter.emit(
-            InteractionRequiredPayload(
-                interaction_id=pending.id,
-                interaction_kind="full_access_confirmation",
-                prompt=pending.prompt,
-                operation=pending.operation,
-                target=pending.target,
-                capability=pending.capability,
-                choices=tuple(
-                    InteractionChoicePayload(
-                        decision=choice.decision.value,
-                        label=choice.label,
-                        description=choice.description,
-                    )
-                    for choice in pending.choices
+        try:
+            await self._emitter.emit(
+                InteractionRequiredPayload(
+                    interaction_id=pending.id,
+                    interaction_kind="full_access_confirmation",
+                    prompt=pending.prompt,
+                    operation=pending.operation,
+                    target=pending.target,
+                    capability=pending.capability,
+                    choices=tuple(
+                        InteractionChoicePayload(
+                            decision=choice.decision.value,
+                            label=choice.label,
+                            description=choice.description,
+                        )
+                        for choice in pending.choices
+                    ),
                 ),
-            ),
-            thread_id=self._current_thread_id(),
-        )
+                thread_id=thread_id,
+            )
+        except BaseException:
+            self._interactions.discard(pending.id)
+            raise
         return interaction(CommandApplicationInteraction(interaction_id=pending.id))

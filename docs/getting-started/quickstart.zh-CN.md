@@ -39,7 +39,13 @@ awesome
 Awesome 会在使用项目指令或工具前显示 workspace 路径。只有在你认识并
 信任该项目时才选择 Yes；选择 No 会直接退出。
 信任后默认进入 Request approval 模式，编辑、删除和 shell 命令执行前会询问。
-可运行 `/permissions` 查看当前模式。
+可运行 `/permissions` 查看当前模式。Accept edits 会自动允许普通 Workspace 写入，
+但删除和 shell 仍需询问；Full access 经警告确认后允许内置本地写入、删除和 shell，
+MCP 与未知扩展能力始终逐次询问。
+
+如果可信 Workspace 根目录包含普通的 `AGENTS.md`，Awesome 会读取一次有界会话快照，
+作为强制项目指令。被安全规则拒绝的文件不会截断使用，而是整份忽略，并在 Welcome、
+状态栏和 `/doctor` 中显示诊断。
 
 ## 4. 配置模型
 

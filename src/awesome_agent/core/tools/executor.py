@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
+from awesome_agent.core.cancellation import finish_bounded_cancellation_cleanup
 from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedPayload
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
     evaluate_command,
+    host_shell_dialect,
 )
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
     ToolError,
     ToolErrorCode,
+    ToolOutput,
     ToolPresentation,
     ToolRequest,
     ToolResult,
@@ -33,7 +37,17 @@ from awesome_agent.core.tools.permissions import (
     ToolApprovalRequest,
     ToolCapability,
 )
-from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.tools.policy import (
+    validate_workspace_path_syntax,
+)
+from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
+from awesome_agent.core.workspace.path_syntax import workspace_path_platform
+
+_HANDLER_CANCELLATION_GRACE_SECONDS = 10.0
+_HANDLER_TIMEOUT_MAX_CANCELLATION_GRACE_SECONDS = 0.5
+_TERMINAL_CANCELLATION_CLEANUP_SECONDS = 10.0
+
+logger = logging.getLogger(__name__)
 
 type ToolOutcome = Literal["success", "error", "cancelled"]
 type ToolTerminalEventType = Literal[
@@ -41,6 +55,10 @@ type ToolTerminalEventType = Literal[
     EventType.TOOL_FAILED,
     EventType.TOOL_CANCELLED,
 ]
+
+_WORKSPACE_PATH_TOOLS = frozenset(
+    {"delete", "edit_file", "glob", "grep", "ls", "read_file", "write_file"}
+)
 
 
 class ToolExecutor:
@@ -87,6 +105,7 @@ class ToolExecutor:
             )
         try:
             arguments = registered.input_model.model_validate(request.arguments)
+            self._validate_builtin_workspace_path(request.tool_name, arguments)
             hard_deny_reason = self._hard_deny_reason(
                 registered.spec.capability,
                 arguments,
@@ -103,20 +122,14 @@ class ToolExecutor:
                 )
             )
             if decision.action is PolicyAction.DENY:
-                return await self._error_result(
-                    request,
-                    context,
-                    started,
+                raise ExpectedToolFailure(
                     ToolErrorCode.PERMISSION_DENIED,
                     decision.reason,
                 )
             if decision.action is PolicyAction.ASK:
                 resolver = context.approval_resolver
                 if resolver is None:
-                    return await self._error_result(
-                        request,
-                        context,
-                        started,
+                    raise ExpectedToolFailure(
                         ToolErrorCode.PERMISSION_DENIED,
                         "This tool operation requires approval.",
                     )
@@ -128,10 +141,7 @@ class ToolExecutor:
                     )
                 )
                 if approval is ToolApprovalDecision.DENY:
-                    return await self._error_result(
-                        request,
-                        context,
-                        started,
+                    raise ExpectedToolFailure(
                         ToolErrorCode.PERMISSION_DENIED,
                         "Tool operation was denied.",
                     )
@@ -141,23 +151,38 @@ class ToolExecutor:
                             "Thread write approval cannot grant another capability."
                         )
                     context.permission_session.grant_thread_writes()
-            async with asyncio.timeout(self._timeout_seconds):
-                output = await registered.handler(arguments, context)
-        except asyncio.CancelledError:
-            await self._finalize(
-                request,
-                context,
-                started,
-                outcome="cancelled",
-                presentation=self._request_presentation(
-                    request,
-                    outcome="Cancelled",
-                    summary="Cancelled",
-                ),
-                error_code=ToolErrorCode.CANCELLED.value,
-                event_type=EventType.TOOL_CANCELLED,
+            total_timeout = (
+                registered.timeout_resolver(arguments)
+                if registered.timeout_resolver is not None
+                else self._timeout_seconds
             )
-            raise
+            if total_timeout <= 0:
+                raise ToolInvariantError("Tool timeout must be positive.")
+            output = await self._invoke_with_deadline(
+                registered,
+                arguments,
+                context,
+                timeout_seconds=total_timeout,
+            )
+        except asyncio.CancelledError as cancellation:
+            await finish_bounded_cancellation_cleanup(
+                self._finalize(
+                    request,
+                    context,
+                    started,
+                    outcome="cancelled",
+                    presentation=self._request_presentation(
+                        request,
+                        outcome="Cancelled",
+                        summary="Cancelled",
+                    ),
+                    error_code=ToolErrorCode.CANCELLED.value,
+                    event_type=EventType.TOOL_CANCELLED,
+                    best_effort=True,
+                ),
+                timeout_seconds=_TERMINAL_CANCELLATION_CLEANUP_SECONDS,
+            )
+            raise cancellation
         except ValidationError:
             return await self._error_result(
                 request,
@@ -185,7 +210,7 @@ class ToolExecutor:
                 metadata=error.metadata,
             )
         except Exception as error:
-            await self._finalize(
+            await self._finalize_handler_outcome(
                 request,
                 context,
                 started,
@@ -207,7 +232,7 @@ class ToolExecutor:
             summary="Completed",
             detail=output.content[:4_000] or None,
         )
-        presentation = await self._finalize(
+        presentation = await self._finalize_handler_outcome(
             request,
             context,
             started,
@@ -227,6 +252,109 @@ class ToolExecutor:
         return result
 
     @staticmethod
+    async def _invoke_with_deadline(
+        registered: RegisteredTool,
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+        *,
+        timeout_seconds: float,
+    ) -> ToolOutput:
+        loop = asyncio.get_running_loop()
+        overall_deadline = loop.time() + timeout_seconds
+        timeout_cleanup_grace = min(
+            _HANDLER_TIMEOUT_MAX_CANCELLATION_GRACE_SECONDS,
+            timeout_seconds / 2,
+        )
+        execution_deadline = overall_deadline - timeout_cleanup_grace
+        completed_at: float | None = None
+
+        async def invoke() -> ToolOutput:
+            nonlocal completed_at
+            try:
+                return await registered.handler(arguments, context)
+            finally:
+                completed_at = loop.time()
+
+        handler_task: asyncio.Task[ToolOutput] = asyncio.create_task(
+            invoke(),
+            name=f"tool-handler:{registered.spec.name}",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (handler_task,),
+                timeout=max(0.0, execution_deadline - loop.time()),
+            )
+        except asyncio.CancelledError:
+            await ToolExecutor._cancel_handler_task(
+                handler_task,
+                grace_seconds=_HANDLER_CANCELLATION_GRACE_SECONDS,
+                propagate_caller_cancellation=False,
+            )
+            raise
+        completed_within_deadline = (
+            handler_task in done
+            and completed_at is not None
+            and completed_at <= execution_deadline
+        )
+        if not completed_within_deadline:
+            await ToolExecutor._cancel_handler_task(
+                handler_task,
+                grace_seconds=max(0.0, overall_deadline - loop.time()),
+                propagate_caller_cancellation=True,
+            )
+            raise TimeoutError
+        return handler_task.result()
+
+    @staticmethod
+    def _validate_builtin_workspace_path(
+        tool_name: str,
+        arguments: BaseModel,
+    ) -> None:
+        if tool_name not in _WORKSPACE_PATH_TOOLS:
+            return
+        requested = getattr(arguments, "path", None)
+        if isinstance(requested, str):
+            validate_workspace_path_syntax(
+                requested,
+                platform=workspace_path_platform(),
+            )
+
+    @staticmethod
+    async def _cancel_handler_task(
+        handler_task: asyncio.Task[ToolOutput],
+        *,
+        grace_seconds: float,
+        propagate_caller_cancellation: bool,
+    ) -> None:
+        handler_task.cancel()
+        deadline = asyncio.get_running_loop().time() + grace_seconds
+        caller_cancellation: asyncio.CancelledError | None = None
+        while not handler_task.done():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait((handler_task,), timeout=remaining)
+            except asyncio.CancelledError as error:
+                caller_cancellation = caller_cancellation or error
+                continue
+        if not handler_task.done():
+            handler_task.add_done_callback(ToolExecutor._consume_handler_task)
+        else:
+            ToolExecutor._consume_handler_task(handler_task)
+        if propagate_caller_cancellation and caller_cancellation is not None:
+            raise caller_cancellation
+
+    @staticmethod
+    def _consume_handler_task(handler_task: asyncio.Task[ToolOutput]) -> None:
+        if handler_task.cancelled():
+            return
+        try:
+            handler_task.exception()
+        except Exception:
+            return
+
+    @staticmethod
     def _hard_deny_reason(
         capability: str,
         arguments: BaseModel,
@@ -237,7 +365,15 @@ class ToolExecutor:
         command = getattr(arguments, "command", None)
         if not isinstance(command, str):
             return "Shell tool arguments do not contain a valid command."
-        decision = evaluate_command(command, context.workspace.canonical_path)
+        requested_cwd = getattr(arguments, "cwd", None)
+        if not isinstance(requested_cwd, str):
+            return "Shell tool arguments do not contain a valid working directory."
+        decision = evaluate_command(
+            command,
+            dialect=host_shell_dialect(),
+            cwd=context.workspace.canonical_path / requested_cwd,
+            workspace=context.workspace.canonical_path,
+        )
         return decision.reason if decision.action is CommandPolicyAction.DENY else None
 
     @staticmethod
@@ -286,7 +422,7 @@ class ToolExecutor:
     ) -> ToolResult:
         bounded = message[:2_000]
         error = ToolError(code=code, message=bounded, retryable=retryable)
-        presentation = await self._finalize(
+        presentation = await self._finalize_handler_outcome(
             request,
             context,
             started,
@@ -310,6 +446,83 @@ class ToolExecutor:
             presentation=presentation,
         )
 
+    async def _finalize_handler_outcome(
+        self,
+        request: ToolRequest,
+        context: ToolExecutionContext,
+        started: float,
+        *,
+        outcome: ToolOutcome,
+        presentation: ToolPresentation,
+        error_code: str | None,
+        event_type: ToolTerminalEventType,
+    ) -> ToolPresentation:
+        finalization_task = asyncio.create_task(
+            self._finalize(
+                request,
+                context,
+                started,
+                outcome=outcome,
+                presentation=presentation,
+                error_code=error_code,
+                event_type=event_type,
+            ),
+            name=f"tool-finalize:{request.call_id}",
+        )
+        try:
+            return await asyncio.shield(finalization_task)
+        except asyncio.CancelledError as cancellation:
+            await self._finish_handler_outcome_finalization(finalization_task)
+            raise cancellation
+
+    @staticmethod
+    async def _finish_handler_outcome_finalization(
+        finalization_task: asyncio.Task[ToolPresentation],
+    ) -> None:
+        deadline = (
+            asyncio.get_running_loop().time() + _TERMINAL_CANCELLATION_CLEANUP_SECONDS
+        )
+        while not finalization_task.done():
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait((finalization_task,), timeout=remaining)
+            except asyncio.CancelledError:
+                continue
+
+        if not finalization_task.done():
+            finalization_task.cancel()
+            finalization_task.add_done_callback(ToolExecutor._consume_finalization_task)
+            logger.warning(
+                "Tool finalization exceeded its bounded cancellation deadline; "
+                "terminal event delivery is uncertain."
+            )
+            return
+        if finalization_task.cancelled():
+            logger.warning(
+                "Tool finalization was cancelled after handler completion; "
+                "terminal event delivery is uncertain."
+            )
+            return
+        error = finalization_task.exception()
+        if error is not None:
+            logger.warning(
+                "Tool finalization failed after caller cancellation.",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    @staticmethod
+    def _consume_finalization_task(
+        finalization_task: asyncio.Task[ToolPresentation],
+    ) -> None:
+        if finalization_task.cancelled():
+            return
+        try:
+            finalization_task.exception()
+        except Exception:
+            return
+
     async def _finalize(
         self,
         request: ToolRequest,
@@ -320,6 +533,7 @@ class ToolExecutor:
         presentation: ToolPresentation,
         error_code: str | None,
         event_type: ToolTerminalEventType,
+        best_effort: bool = False,
     ) -> ToolPresentation:
         duration_ms = max(0, round((context.monotonic() - started) * 1_000))
         measured = presentation.model_copy(update={"duration_ms": duration_ms})
@@ -347,25 +561,38 @@ class ToolExecutor:
                 )
             )
         except Exception as error:
-            raise ToolInvariantError("Tool audit finalization failed.") from error
-        await context.emitter.emit(
-            ToolResultPayload(
-                kind=event_type,
-                call_id=request.call_id,
-                tool_name=request.tool_name,
-                verb=measured.verb,
-                target=measured.target,
-                outcome=measured.outcome or outcome.title(),
-                summary=measured.summary,
-                detail=measured.detail,
-                detail_truncated_count=measured.detail_truncated_count,
-                duration_ms=duration_ms,
-                error_code=error_code,
-            ),
-            thread_id=context.thread_id,
-            turn_id=context.turn_id,
-            operation_id=context.operation_id,
-        )
+            if not best_effort:
+                raise ToolInvariantError("Tool audit finalization failed.") from error
+            logger.warning(
+                "Tool audit finalization failed after cancellation.",
+                exc_info=True,
+            )
+        try:
+            await context.emitter.emit(
+                ToolResultPayload(
+                    kind=event_type,
+                    call_id=request.call_id,
+                    tool_name=request.tool_name,
+                    verb=measured.verb,
+                    target=measured.target,
+                    outcome=measured.outcome or outcome.title(),
+                    summary=measured.summary,
+                    detail=measured.detail,
+                    detail_truncated_count=measured.detail_truncated_count,
+                    duration_ms=duration_ms,
+                    error_code=error_code,
+                ),
+                thread_id=context.thread_id,
+                turn_id=context.turn_id,
+                operation_id=context.operation_id,
+            )
+        except Exception:
+            if not best_effort:
+                raise
+            logger.warning(
+                "Tool terminal event delivery failed after cancellation.",
+                exc_info=True,
+            )
         return measured
 
     def _request_presentation(

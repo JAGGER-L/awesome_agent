@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
+from contextlib import suppress
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
@@ -16,12 +18,16 @@ from awesome_agent.conversation import (
     TurnStatus,
 )
 from awesome_agent.modeling import (
+    GatewayEvent,
     ModelRequest,
     ModelTurn,
     ModelUsage,
     ProviderId,
+    ProviderRetrying,
     SelectedModel,
     SystemMessage,
+    TurnCompleted,
+    TurnFailed,
     UserMessage,
 )
 
@@ -51,6 +57,7 @@ class CompressionRequest(BaseModel):
     view: ThreadView
     provider: ProviderId
     model: str = Field(min_length=1, max_length=200)
+    max_provider_retries: int | None = Field(default=None, ge=0, le=6)
 
 
 class CompressionResult(BaseModel):
@@ -68,6 +75,12 @@ class CompletionGateway(Protocol):
         selected: SelectedModel,
         request: ModelRequest,
     ) -> ModelTurn: ...
+
+    def stream(
+        self,
+        selected: SelectedModel,
+        request: ModelRequest,
+    ) -> AsyncIterator[GatewayEvent]: ...
 
 
 def plan_compression(view: ThreadView) -> CompressionPlan:
@@ -130,11 +143,24 @@ class ThreadCompressor:
             tools=(),
             thinking_enabled=False,
         )
+        selected = SelectedModel(provider=request.provider, model=request.model)
         try:
-            turn = await self._gateway.complete(
-                SelectedModel(provider=request.provider, model=request.model),
-                model_request,
-            )
+            if request.max_provider_retries is None:
+                turn = await self._gateway.complete(selected, model_request)
+            else:
+                bounded_turn, usage, error_code = await _complete_bounded(
+                    self._gateway,
+                    selected,
+                    model_request,
+                    max_provider_retries=request.max_provider_retries,
+                )
+                if bounded_turn is None:
+                    return CompressionResult(
+                        status=CompressionStatus.FAILED,
+                        usage=usage,
+                        error_code=error_code,
+                    )
+                turn = bounded_turn
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -165,3 +191,63 @@ class ThreadCompressor:
             summary=summary,
             usage=turn.usage,
         )
+
+
+async def _complete_bounded(
+    gateway: CompletionGateway,
+    selected: SelectedModel,
+    request: ModelRequest,
+    *,
+    max_provider_retries: int,
+) -> tuple[ModelTurn | None, ModelUsage, str]:
+    events = gateway.stream(selected, request)
+    completed: list[ModelTurn] = []
+    observed_retries = 0
+    error_code: str | None = None
+    try:
+        async for event in events:
+            if isinstance(event, ProviderRetrying):
+                if observed_retries >= max_provider_retries:
+                    error_code = "compression_retry_budget_exhausted"
+                    break
+                observed_retries += 1
+            elif isinstance(event, TurnCompleted):
+                completed.append(event.turn)
+            elif isinstance(event, TurnFailed):
+                error_code = "compression_failed"
+                break
+    except asyncio.CancelledError as cancellation:
+        with suppress(BaseException):
+            await _close_event_stream(events)
+        raise cancellation
+    except Exception:
+        error_code = "compression_failed"
+    try:
+        await _close_event_stream(events)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return (
+            None,
+            ModelUsage(provider_retries=observed_retries),
+            "compression_failed",
+        )
+    if error_code is not None:
+        return None, ModelUsage(provider_retries=observed_retries), error_code
+    if len(completed) != 1:
+        return (
+            None,
+            ModelUsage(provider_retries=observed_retries),
+            "compression_invalid",
+        )
+    turn = completed[0]
+    if turn.usage.provider_retries != observed_retries:
+        usage = turn.usage.model_copy(update={"provider_retries": observed_retries})
+        return None, usage, "compression_invalid"
+    return turn, turn.usage, ""
+
+
+async def _close_event_stream(events: AsyncIterator[GatewayEvent]) -> None:
+    close = getattr(events, "aclose", None)
+    if close is not None:
+        await close()

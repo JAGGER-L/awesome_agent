@@ -4,6 +4,10 @@ from typing import cast
 
 from pydantic import BaseModel, Field
 
+from awesome_agent.core.filesystem import (
+    MutationTargetChanged,
+    WorkspaceFileTooLarge,
+)
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
     ToolErrorCode,
@@ -11,6 +15,7 @@ from awesome_agent.core.tools.contracts import (
     ToolPresentation,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure
+from awesome_agent.core.tools.filesystem import WorkspaceFileTransaction
 from awesome_agent.core.tools.policy import resolve_workspace_path
 
 MAX_FILE_BYTES = 1024 * 1024
@@ -35,13 +40,23 @@ async def read_file(
         must_exist=True,
         expected_kind="file",
     )
-    if safe.resolved.stat().st_size > MAX_FILE_BYTES:
+    try:
+        with WorkspaceFileTransaction(safe) as transaction:
+            opened = transaction.read_regular(max_bytes=MAX_FILE_BYTES)
+    except WorkspaceFileTooLarge as error:
         raise ExpectedToolFailure(
             ToolErrorCode.EXECUTION_FAILED,
             "File exceeds the 1 MiB read limit.",
             metadata={"path": safe.relative.as_posix()},
-        )
-    data = safe.resolved.read_bytes()
+        ) from error
+    except MutationTargetChanged as error:
+        raise ExpectedToolFailure(
+            ToolErrorCode.CONFLICT,
+            "Workspace path changed while the file was being read.",
+            metadata={"path": safe.relative.as_posix()},
+        ) from error
+    assert opened is not None
+    data = opened.data
     if b"\x00" in data:
         raise ExpectedToolFailure(
             ToolErrorCode.EXECUTION_FAILED,

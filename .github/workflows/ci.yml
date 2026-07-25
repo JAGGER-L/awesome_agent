@@ -1,0 +1,331 @@
+name: Required CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.11.28"
+
+jobs:
+  python-quality:
+    name: Python quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Lint GitHub Actions workflows
+        shell: bash
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          binary="${RUNNER_TEMP}/actionlint"
+          curl --fail --location --silent --show-error \
+            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --proto '=https' --tlsv1.2 \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            --output "${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}" actionlint
+          shopt -s nullglob
+          workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+          test "${#workflows[@]}" -gt 0
+          "${binary}" "${workflows[@]}"
+
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Check formatting
+        run: uv run ruff format --check src tests scripts
+
+      - name: Lint
+        run: uv run ruff check src tests scripts
+
+      - name: Type check
+        run: uv run mypy src tests scripts
+
+      - name: Check protocol fixtures
+        run: uv run python scripts/generate_protocol_fixtures.py --check
+
+  python-tests:
+    name: Python tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked --extra memory --dev
+
+      - name: Run unit, integration, and end-to-end tests
+        run: >-
+          uv run --extra memory pytest -q
+          tests/unit tests/integration tests/e2e
+          --cov=awesome_agent --cov-branch
+          --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-coverage
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-contracts:
+    name: Windows contracts
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Run Windows-sensitive contracts
+        run: >-
+          uv run pytest -q
+          tests/unit/core
+          tests/unit/protocol
+          tests/unit/extensions
+          tests/unit/application
+          tests/unit/context/test_workspace_instructions.py
+          tests/unit/storage/test_state_recovery.py
+          tests/integration/test_read_tools.py
+          tests/integration/test_product_flows.py
+          tests/integration/test_skills_mcp.py
+          tests/e2e/test_stdio_product.py
+          tests/packaging/test_install_contract.py
+
+  python-contracts:
+    name: Structural and packaging contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Run structural and packaging tests
+        run: uv run pytest -q tests/structural tests/packaging
+
+      - name: Build wheel
+        run: uv build --wheel --no-build-isolation
+
+      - name: Install wheel in a clean environment
+        shell: bash
+        run: |
+          uv venv --python 3.12 .ci-wheel
+          uv pip install --python .ci-wheel/bin/python dist/*.whl
+          .ci-wheel/bin/python -c \
+            "from importlib.metadata import version; import awesome_agent.protocol.stdio; assert version('awesome-agent')"
+          test -x .ci-wheel/bin/awesome-core
+
+  tui:
+    name: TUI (${{ matrix.os }}, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: "22.23.1"
+          - os: ubuntu-latest
+            node: "24"
+          - os: windows-latest
+            node: "22.23.1"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: tui/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install locked Core test dependencies
+        run: uv sync --locked --dev
+
+      - name: Install locked dependencies
+        working-directory: tui
+        run: npm ci
+
+      - name: Check generated version
+        working-directory: tui
+        run: npm run version:check
+
+      - name: Check formatting
+        working-directory: tui
+        run: npm run format:check
+
+      - name: Lint
+        working-directory: tui
+        run: npm run lint
+
+      - name: Type check
+        working-directory: tui
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: tui
+        run: npm test -- --exclude tests/packaging/package.test.ts
+
+      - name: Test installed TUI package
+        working-directory: tui
+        run: npm test -- tests/packaging/package.test.ts
+
+      - name: Build
+        working-directory: tui
+        run: npm run build
+
+      - name: Inspect package contents
+        working-directory: tui
+        run: npm pack --dry-run
+
+  docs-site:
+    name: Docs site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: site
+        run: npm ci
+
+      - name: Check site
+        working-directory: site
+        run: npm run check
+
+      - name: Build site
+        working-directory: site
+        env:
+          SITE_URL: https://jagger-l.github.io
+          BASE_PATH: /awesome_agent
+        run: npm run build
+
+      - name: Check built links
+        working-directory: site
+        env:
+          BASE_PATH: /awesome_agent
+        run: npm run check:links
+
+  required:
+    name: Required
+    if: always()
+    needs:
+      - python-quality
+      - python-tests
+      - windows-contracts
+      - python-contracts
+      - tui
+      - docs-site
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every gate
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          test "$RESULTS" = "success success success success success success"

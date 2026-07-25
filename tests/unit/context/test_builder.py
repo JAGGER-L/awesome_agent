@@ -6,6 +6,7 @@ from awesome_agent.context import (
     ContextRequest,
     ContextSource,
     ContextSourceKind,
+    calculate_context_budget,
 )
 
 
@@ -71,6 +72,85 @@ async def test_exact_normalized_duplicate_keeps_higher_priority_label() -> None:
 
 
 @pytest.mark.asyncio
+async def test_conversation_sources_keep_sequence_roles_and_duplicate_text() -> None:
+    prepared = await ContextBuilder().prepare(
+        ContextRequest(
+            sources=(
+                ContextSource(
+                    kind=ContextSourceKind.DIRECT_COMMAND,
+                    source_id="direct-2",
+                    content="command result",
+                    role="assistant",
+                    covered_sequence_start=2,
+                    covered_sequence_end=2,
+                ),
+                ContextSource(
+                    kind=ContextSourceKind.RECENT_TURNS,
+                    source_id="assistant-3",
+                    content="same transcript text",
+                    role="assistant",
+                    covered_sequence_start=3,
+                    covered_sequence_end=3,
+                ),
+                ContextSource(
+                    kind=ContextSourceKind.RECENT_TURNS,
+                    source_id="user-1",
+                    content="same transcript text",
+                    role="user",
+                    covered_sequence_start=1,
+                    covered_sequence_end=1,
+                ),
+            ),
+            configured_total_tokens=262_144,
+            model_context_limit=262_144,
+        )
+    )
+
+    assert [item.covered_sequence_start for item in prepared.manifest] == [1, 2, 3]
+    assert [message.role for message in prepared.messages] == [
+        "user",
+        "assistant",
+        "assistant",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mandatory_instruction_sources_are_not_deduplicated() -> None:
+    prepared = await ContextBuilder().prepare(
+        ContextRequest(
+            sources=(
+                _source(
+                    ContextSourceKind.PRODUCT_INSTRUCTIONS,
+                    "same instructions",
+                    mandatory=True,
+                    source_id="product",
+                ),
+                _source(
+                    ContextSourceKind.WORKSPACE_INSTRUCTIONS,
+                    " same  instructions ",
+                    mandatory=True,
+                    source_id="AGENTS.md",
+                ),
+                _source(
+                    ContextSourceKind.SKILL,
+                    "same instructions",
+                    mandatory=True,
+                    source_id="review",
+                ),
+            ),
+            configured_total_tokens=262_144,
+            model_context_limit=262_144,
+        )
+    )
+
+    assert [(item.kind, item.source_id) for item in prepared.manifest] == [
+        (ContextSourceKind.PRODUCT_INSTRUCTIONS, "product"),
+        (ContextSourceKind.WORKSPACE_INSTRUCTIONS, "AGENTS.md"),
+        (ContextSourceKind.SKILL, "review"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_optional_sources_truncate_but_mandatory_sources_are_preserved() -> None:
     prepared = await ContextBuilder().prepare(
         ContextRequest(
@@ -109,6 +189,55 @@ async def test_mandatory_overflow_is_explicit() -> None:
                 ),
                 configured_total_tokens=40_000,
                 model_context_limit=40_000,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_reserved_tool_tail_reduces_base_context_capacity() -> None:
+    budget = calculate_context_budget(40_000, 40_000)
+    reserved = budget.effective_input_limit - 200
+
+    prepared = await ContextBuilder().prepare(
+        ContextRequest(
+            sources=(
+                _source(
+                    ContextSourceKind.THREAD_SUMMARY,
+                    "\n".join(f"history {index}" for index in range(1_000)),
+                ),
+                _source(
+                    ContextSourceKind.CURRENT_INPUT,
+                    "question",
+                    mandatory=True,
+                ),
+            ),
+            configured_total_tokens=40_000,
+            model_context_limit=40_000,
+            reserved_input_tokens=reserved,
+        )
+    )
+
+    assert prepared.estimated_input_tokens + reserved <= budget.effective_input_limit
+    assert prepared.manifest[0].truncated is True
+
+
+@pytest.mark.asyncio
+async def test_mandatory_base_plus_reserved_tool_tail_overflow_is_explicit() -> None:
+    budget = calculate_context_budget(40_000, 40_000)
+
+    with pytest.raises(ContextOverflow):
+        await ContextBuilder().prepare(
+            ContextRequest(
+                sources=(
+                    _source(
+                        ContextSourceKind.CURRENT_INPUT,
+                        "question",
+                        mandatory=True,
+                    ),
+                ),
+                configured_total_tokens=40_000,
+                model_context_limit=40_000,
+                reserved_input_tokens=budget.effective_input_limit,
             )
         )
 

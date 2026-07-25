@@ -22,7 +22,7 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 实现功能、调试问题、重构代码和运行测试；
 - 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
 - 继续最近的 Thread，或通过 ID 恢复指定 Thread；
-- 在逐项审批和 Thread 范围的 Full access 之间切换；
+- 在 Request approval、Accept edits 和 Thread 范围的 Full access 之间切换；
 - 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
 - 使用 DeepSeek 和 Kimi 模型。
 
@@ -61,6 +61,10 @@ awesome
 并愿意让 Awesome 读取和操作其中内容时才选择 Yes。Awesome 默认使用 Request
 approval 模式；可通过 `/permissions` 查看或切换当前 Thread 的权限模式。
 
+信任后，Awesome 会把根目录中普通的 `AGENTS.md` 读取一次，作为本次会话的项目
+指令快照。使用链接、非 UTF-8、二进制、读取时变化或超限的文件会被整份忽略，
+并在 Welcome、状态栏和 `/doctor` 中持续显示警告。
+
 尚未配置模型 Provider 时，按 Enter 或运行 `/model`。选择 DeepSeek 或 Kimi，
 在遮罩输入框中粘贴 API Key，再选择模型。之后可使用 `/auth` 添加、替换或删除凭据。
 
@@ -73,6 +77,10 @@ awesome --resume <thread_id>
 awesome --version
 awesome --help
 ```
+
+如果启动时发现未完成的 Turn，Awesome 会先询问再继续。已验证的本地 checkpoint
+默认提供 Retry；如果 shell 或 MCP 调用结果不确定，则默认提供 Abort，并且绝不会
+自动重放该外部操作。
 
 ## 第一个任务
 
@@ -101,5 +109,9 @@ awesome --help
 
 只信任你了解的项目，保留修改前先检查 `/diff`。只通过 Awesome 的
 `/model` 或 `/auth` 遮罩输入流程输入凭据。Full access 仅对当前 Thread 有效，
-且不会绕过硬性安全拒绝。进程环境变量和 `<AWESOME_HOME>/.env`
-仍是高级配置方式；不要把凭据写入项目文件。
+只提升内置本地能力，且不会绕过硬性安全拒绝；MCP 和未知扩展能力仍会逐次询问。
+任何权限模式都不提供操作系统沙箱，命令 circuit breaker 只用于拦截可识别的误操作，
+不能识别任意恶意混淆。受控的 Workspace 文件操作会绑定已检查的目录与文件身份，
+并拒绝链接、reparse point、hard-link 别名和有歧义的 Windows 路径写法；有界的
+进程树清理会减少遗留子进程，但不会隔离宿主机执行。进程环境变量和
+`<AWESOME_HOME>/.env` 仍是高级配置方式；不要把凭据写入项目文件。

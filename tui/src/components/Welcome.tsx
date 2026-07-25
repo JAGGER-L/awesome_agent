@@ -2,6 +2,8 @@ import { Box, Text } from "ink";
 
 import { terminalDisplayWidth } from "../layout/width.js";
 import type { Theme } from "../preferences/theme.js";
+import type { PermissionMode } from "../protocol/base.js";
+import type { WorkspaceInstructionDiagnostic } from "../protocol/product-projections.js";
 import { COMPACT_LOGO_ROWS, FULL_LOGO_ROWS } from "./welcome-logo.js";
 
 export interface WelcomeProps {
@@ -15,7 +17,8 @@ export interface WelcomeProps {
   readonly thinkingEnabled: boolean;
   readonly localMemoryEnabled: boolean;
   readonly mem0Enabled: boolean;
-  readonly permissionMode: "request_approval" | "full_access";
+  readonly permissionMode: PermissionMode;
+  readonly workspaceInstructionDiagnostic?: WorkspaceInstructionDiagnostic | null;
   readonly theme: Theme;
 }
 
@@ -67,6 +70,11 @@ export function Welcome(props: WelcomeProps) {
           {details}
         </Box>
       </Box>
+      {props.workspaceInstructionDiagnostic ? (
+        <Text color={props.theme.warning}>
+          ⚠ {props.workspaceInstructionDiagnostic.message}
+        </Text>
+      ) : null}
       <Text color={props.theme.muted}>/ commands · @ files · ! shell</Text>
     </Box>
   );
@@ -87,12 +95,7 @@ function WelcomeDetails(props: WelcomeProps) {
     ["Local memory", props.localMemoryEnabled ? "On" : "Off"],
     ["Cloud memory", props.mem0Enabled ? "On" : "Off"],
     ["Provider", "Mem0 Cloud"],
-    [
-      "Permission",
-      props.permissionMode === "full_access"
-        ? "Full access"
-        : "Request approval",
-    ],
+    ["Permission", permissionModeLabel(props.permissionMode)],
   ] as const;
   return values.map(([label, value]) => (
     <Text key={label}>
@@ -100,4 +103,15 @@ function WelcomeDetails(props: WelcomeProps) {
       {value}
     </Text>
   ));
+}
+
+function permissionModeLabel(mode: PermissionMode): string {
+  switch (mode) {
+    case "request_approval":
+      return "Request approval";
+    case "accept_edits":
+      return "Accept edits";
+    case "full_access":
+      return "Full access";
+  }
 }

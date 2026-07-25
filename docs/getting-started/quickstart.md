@@ -41,6 +41,13 @@ Awesome shows the workspace path before using project instructions or tools.
 Choose Yes only when you recognize and trust the project. Choose No to exit.
 After trust, Awesome starts in Request approval mode and asks before edits,
 deletes, and shell commands. Run `/permissions` if you want to review the mode.
+Accept edits allows ordinary workspace writes but still asks before deletes or
+shell commands. Full access allows built-in local writes, deletes, and shell
+commands after a warning confirmation; MCP and unknown extensions always ask.
+
+If the trusted workspace has a plain root `AGENTS.md`, Awesome takes one bounded
+session snapshot and uses it as mandatory project instructions. A rejected file
+is ignored whole and reported in Welcome, the status line, and `/doctor`.
 
 ## 4. Configure a Model
 

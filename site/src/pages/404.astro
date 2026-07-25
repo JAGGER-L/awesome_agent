@@ -1,0 +1,27 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+
+const home = import.meta.env.BASE_URL;
+---
+
+<StarlightPage
+  frontmatter={{
+    title: "404",
+    description: "Page not found.",
+    template: "splash",
+    editUrl: false,
+    hero: {
+      title: "Signal lost.",
+      tagline:
+        "This documentation page could not be found. Check the URL, use search, or return to the docs home.",
+      actions: [
+        {
+          text: "Back to Awesome Docs",
+          link: home,
+          icon: "left-arrow",
+          variant: "primary",
+        },
+      ],
+    },
+  }}
+/>

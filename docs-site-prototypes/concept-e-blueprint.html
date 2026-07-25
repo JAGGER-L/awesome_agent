@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Awesome Docs concept E — Blueprint"><title>Architecture — Awesome Docs / Blueprint</title><link rel="stylesheet" href="assets/styles.css"></head>
+<body class="concept-e">
+  <div class="prototype-note">Concept E · Blueprint <span>—</span> <a href="index.html">Back to round two</a></div>
+  <header class="site-top">
+    <a class="wordmark" href="concept-e-blueprint.html"><span class="mark">A_</span><span>Awesome Reference</span></a>
+    <nav class="site-top-nav" aria-label="Primary"><a href="#">Get started</a><a href="#">Operate</a><a class="active" href="#">System</a><a href="https://github.com/JAGGER-L/awesome_agent">GitHub ↗</a></nav>
+    <div class="top-actions"><button class="search-button" data-search-open><span>⌕</span><span class="search-text">Search reference</span><kbd>Ctrl K</kbd></button><button class="language-button" data-language aria-label="Change language">EN</button><button class="menu-button" data-menu-toggle aria-label="Open navigation" aria-expanded="false">☰</button></div>
+  </header>
+  <aside class="sidebar" data-sidebar>
+    <div class="sidebar-label">00 / Orientation</div><a href="#">Product overview</a><a href="#">Quickstart</a>
+    <div class="sidebar-label">01 / Operation</div><a href="#">Commands</a><a href="#">Workspace</a><a href="#">Permissions</a><a href="#">Configuration</a>
+    <div class="sidebar-label">02 / System</div><a class="active" href="#">Architecture map</a><a href="#">Agent loop</a><a href="#">Protocol</a><a href="#">Storage</a>
+  </aside>
+  <div class="docs-grid">
+    <article class="doc-main">
+      <div class="breadcrumb"><span>Reference</span><span>/</span><span>System</span><span>/</span><span class="current">Architecture map</span></div>
+      <div class="blueprint-stamp"><span>Drawing 02-A</span><span>Current system</span></div>
+      <h1>Understand the system before you extend it.</h1>
+      <p class="lead">One authority for product behavior, explicit owners for lifecycle and reasoning, and a typed event path to the terminal.</p>
+      <div class="blueprint-map" role="img" aria-label="High-level Awesome architecture"><div class="blueprint-node"><span>01 / INPUT</span><strong>Ink TUI</strong></div><div class="blueprint-node"><span>02 / LIFECYCLE</span><strong>Application</strong></div><div class="blueprint-node"><span>03 / REASONING</span><strong>Agent</strong></div><div class="blueprint-node"><span>04 / EFFECT</span><strong>Tools + storage</strong></div></div>
+      <h2 id="invariant">The governing invariant</h2>
+      <p><strong>Python Core is the only authority for product behavior.</strong> Ink submits typed intent and renders events; it never calls models, executes graphs, runs tools, or writes product state.</p>
+      <div class="callout"><strong>Why this boundary exists</strong><p>A second surface can adapt the same Application facade without recreating Thread, Turn, policy, or recovery semantics.</p></div>
+      <h2 id="ownership">Ownership at a glance</h2>
+      <div class="step-list"><div class="step"><div><strong>Application owns lifecycle</strong><span>Workspace initialization, commands, interactions, cancellation, recovery, Thread and Turn.</span></div></div><div class="step"><div><strong>Agent owns the loop</strong><span>Context, model calls, tool routing, budgets, compression, and finalization.</span></div></div><div class="step"><div><strong>Tool policy owns authority</strong><span>Every built-in and MCP tool follows the same registry, policy, and executor path.</span></div></div></div>
+    </article>
+    <nav class="toc" aria-label="On this drawing"><strong>Drawing index</strong><a href="#invariant">Governing invariant</a><a href="#ownership">Ownership at a glance</a></nav>
+  </div>
+  <div class="search-overlay" data-search-overlay hidden><div class="search-dialog" role="dialog" aria-label="Search documentation"><div class="search-row"><span>⌕</span><input placeholder="Search symbols, owners, files…"><button data-search-close>Esc</button></div><div class="search-results"><div class="search-result"><div><strong>ApplicationFacade</strong><span>02 System · Lifecycle boundary</span></div><span>↵</span></div><div class="search-result"><div><strong>Tool Executor</strong><span>02 System · Effect boundary</span></div><span>↵</span></div></div></div></div>
+  <script src="assets/app.js"></script>
+</body></html>

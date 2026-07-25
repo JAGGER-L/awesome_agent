@@ -22,6 +22,7 @@ from awesome_agent.config.credentials import (
     missing_provider_credential_statuses,
 )
 from awesome_agent.config.models import CredentialSource, SecretStatus
+from awesome_agent.context.workspace_instructions import WorkspaceInstructionDiagnostic
 from awesome_agent.conversation.models import Thread, ThreadView
 from awesome_agent.core.changes import ChangeDelta
 from awesome_agent.core.tools.permissions import PermissionMode
@@ -145,7 +146,7 @@ class InitializeStatus(StrEnum):
 class InitializeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol_version: Literal[2]
+    protocol_version: Literal[3]
     client_name: Literal["awesome"]
     client_version: str = Field(min_length=1, max_length=64)
 
@@ -161,7 +162,7 @@ class InitializeResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     product_version: str = Field(min_length=1, max_length=64)
-    protocol_version: Literal[2]
+    protocol_version: Literal[3]
     status: InitializeStatus
     session_id: str = Field(min_length=1, max_length=128)
     interaction_id: str | None = Field(default=None, max_length=128)
@@ -208,6 +209,7 @@ class ApplicationState(BaseModel):
     mcp_status: tuple[dict[str, JsonValue], ...] = ()
     usage: dict[str, int | float] = Field(default_factory=dict)
     configuration_diagnostics: tuple[str, ...] = ()
+    workspace_instruction_diagnostic: WorkspaceInstructionDiagnostic | None = None
 
 
 class ThreadListQuery(BaseModel):

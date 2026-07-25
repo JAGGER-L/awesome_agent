@@ -6,7 +6,7 @@
       "params": {
         "client_name": "awesome",
         "client_version": "1.2.1",
-        "protocol_version": 2
+        "protocol_version": 3
       },
       "result": {
         "ok": true,
@@ -17,7 +17,7 @@
             "commands"
           ],
           "product_version": "1.2.1",
-          "protocol_version": 2,
+          "protocol_version": 3,
           "session_id": "session_11111111111111111111111111111111",
           "status": "ready",
           "workspace": {
@@ -33,7 +33,7 @@
       "params": {
         "client_name": "awesome",
         "client_version": "1.2.1",
-        "protocol_version": 2
+        "protocol_version": 3
       },
       "result": {
         "ok": true,
@@ -45,7 +45,7 @@
           ],
           "interaction_id": "interaction_state_reset",
           "product_version": "1.2.1",
-          "protocol_version": 2,
+          "protocol_version": 3,
           "session_id": "session_11111111111111111111111111111111",
           "status": "state_reset_required",
           "workspace": {
@@ -74,7 +74,7 @@
             "provider": "deepseek",
             "runtime_name": "Awesome Agent"
           },
-          "permission_mode": "request_approval",
+          "permission_mode": "accept_edits",
           "provider_credentials": {
             "deepseek": {
               "awesome_configured": false,
@@ -109,6 +109,11 @@
           "workspace": {
             "branch": "feature/fixtures",
             "display_path": "C:\\workspace"
+          },
+          "workspace_instruction_diagnostic": {
+            "code": "workspace_instructions_too_large",
+            "message": "AGENTS.md was ignored because it exceeds the 32 KiB limit.",
+            "source_id": "AGENTS.md"
           },
           "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "workspace_trusted": true
@@ -347,6 +352,36 @@
         "value": {
           "accepted": true,
           "status": "denied"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.recovery_retry",
+      "params": {
+        "decision": "retry",
+        "interaction_id": "interaction_recovery"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.recovery_abort",
+      "params": {
+        "decision": "abort",
+        "interaction_id": "interaction_recovery"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
         }
       }
     },

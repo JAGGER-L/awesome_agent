@@ -24,14 +24,14 @@ const clientMessageIdentifierSchema = identifierSchema.regex(
 );
 
 export const initializeParamsSchema = z.strictObject({
-  protocol_version: safeIntegerSchema,
-  client_name: boundedText(1, 128),
+  protocol_version: z.literal(3),
+  client_name: z.literal("awesome"),
   client_version: boundedText(1, 64),
 });
 
 export const initializeResultSchema = z.strictObject({
   product_version: boundedText(1, 64),
-  protocol_version: z.literal(2),
+  protocol_version: z.literal(3),
   status: z.enum(["ready", "trust_required", "state_reset_required"]),
   session_id: identifierSchema,
   interaction_id: identifierSchema.optional(),

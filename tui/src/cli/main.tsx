@@ -760,6 +760,8 @@ function RunningCliApplication({
                 "mem0",
               ),
               permissionMode: startup.application.permission_mode,
+              workspaceInstructionDiagnostic:
+                startup.application.workspace_instruction_diagnostic ?? null,
               theme,
             }}
           />

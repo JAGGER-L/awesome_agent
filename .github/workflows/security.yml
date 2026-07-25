@@ -1,0 +1,144 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Reject vulnerable dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  dependency-audit:
+    name: Locked dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install locked Python audit tooling
+        run: uv sync --locked --dev
+
+      - name: Validate lock hashes and audit PyPI advisories
+        shell: bash
+        run: |
+          requirements="${RUNNER_TEMP}/awesome-requirements.txt"
+          uv export --locked --extra memory --no-dev --no-emit-project \
+            --format requirements.txt --output-file "${requirements}"
+          uv run pip-audit --require-hashes \
+            --progress-spinner off --timeout 20 --vulnerability-service pypi \
+            --requirement "${requirements}"
+
+      - name: Supplement the Python audit with OSV advisories
+        shell: bash
+        run: |
+          requirements="${RUNNER_TEMP}/awesome-requirements.txt"
+          test -f "${requirements}"
+          uv run pip-audit --require-hashes --disable-pip \
+            --progress-spinner off --timeout 20 --vulnerability-service osv \
+            --requirement "${requirements}"
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.1"
+          cache: npm
+          cache-dependency-path: |
+            tui/package-lock.json
+            site/package-lock.json
+
+      - name: Audit locked TUI dependencies
+        working-directory: tui
+        run: npm audit --package-lock-only --audit-level=high
+
+      - name: Audit locked docs-site dependencies
+        working-directory: site
+        run: npm audit --package-lock-only --audit-level=high
+
+  security-required:
+    name: Security required
+    if: always()
+    needs: [dependency-review, codeql, dependency-audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require security gates
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          DEPENDENCY_AUDIT_RESULT: ${{ needs.dependency-audit.result }}
+        run: |
+          test "${CODEQL_RESULT}" = "success"
+          test "${DEPENDENCY_AUDIT_RESULT}" = "success"
+          if test "${EVENT_NAME}" = "pull_request"; then
+            test "${DEPENDENCY_REVIEW_RESULT}" = "success"
+          fi

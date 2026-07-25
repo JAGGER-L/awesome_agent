@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
+from pydantic import JsonValue
+
 from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
@@ -103,6 +105,12 @@ class ConversationStore(Protocol):
         user_entry: ThreadEntry,
         turn: Turn,
         updated_thread: Thread,
+    ) -> Turn: ...
+    def update_in_progress_turn(
+        self,
+        turn: Turn,
+        *,
+        expected_context_manifest: tuple[dict[str, JsonValue], ...],
     ) -> Turn: ...
     def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn: ...
     def update_terminal_turn(self, turn: Turn) -> Turn: ...

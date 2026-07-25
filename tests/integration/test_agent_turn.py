@@ -17,9 +17,15 @@ from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.operations import OperationController
 from awesome_agent.application.turns import TurnCoordinator
 from awesome_agent.config import BudgetConfig, TurnConfig
+from awesome_agent.context import estimate_messages
 from awesome_agent.conversation import ConversationService, Turn, TurnStatus
 from awesome_agent.core.changes import ChangeJournal, ChangeLifecycle
-from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.events import (
+    CollectingEventSink,
+    EventEmitter,
+    EventEnvelope,
+    EventType,
+)
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
@@ -100,6 +106,36 @@ class SuccessfulProcessRunner:
             stderr_truncated=False,
             duration_ms=1.0,
         )
+
+
+class CompletedGraph:
+    async def ainvoke(
+        self,
+        state: object,
+        config: dict[str, object],
+        *,
+        context: object,
+    ) -> object:
+        del config, context
+        assert isinstance(state, dict)
+        result = dict(state)
+        result["final_answer"] = "done"
+        result["termination_reason"] = "completed"
+        return result
+
+
+class RecordingCheckpoints:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+
+    async def delete(self, turn_id: str) -> None:
+        self.deleted.append(turn_id)
+
+
+class FailOnTurnCompletedSink:
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.TURN_COMPLETED:
+            raise BrokenPipeError("protocol output closed")
 
 
 def _completed(
@@ -254,6 +290,7 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                 context_builder=context_builder,
                 budget=TurnBudget(),
                 monotonic=time.monotonic,
+                context_token_estimator=estimate_messages,
             )
 
         def seal_changes(turn_id: str) -> None:
@@ -365,6 +402,7 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
                 context_builder=context_builder,
                 budget=TurnBudget(),
                 monotonic=time.monotonic,
+                context_token_estimator=estimate_messages,
             )
 
         coordinator = TurnCoordinator(
@@ -393,3 +431,62 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
         assert await checkpoint_store.exists(accepted.turn_id) is False
 
     assert conversation.read_thread(thread.id).turns[0].status is TurnStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_failure_cannot_skip_turn_resource_cleanup(
+    tmp_path: Path,
+) -> None:
+    workspace = resolve_workspace(tmp_path)
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    conversation = ConversationService(store=repositories)
+    thread = conversation.create_thread(workspace.key)
+    config = TurnConfig(
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+        budgets=BudgetConfig(),
+    )
+    turn = conversation.begin_turn(
+        thread.id,
+        "inspect",
+        config,
+        client_message_id="client_terminal_failure",
+    )
+    checkpoints = RecordingCheckpoints()
+    sealed: list[str] = []
+    emitter = EventEmitter(
+        session_id="session_1",
+        workspace_key=workspace.key,
+        sink=FailOnTurnCompletedSink(),
+    )
+    coordinator = TurnCoordinator(
+        workspace_key=workspace.key,
+        conversation=conversation,
+        config_resolver=lambda current: config,
+        graph=cast(Any, CompletedGraph()),
+        runtime_context_factory=lambda current, operation, projector: cast(
+            AgentRuntimeContext,
+            None,
+        ),
+        operations=OperationController(emitter),
+        emitter=emitter,
+        checkpoints=cast(Any, checkpoints),
+        seal_changes=sealed.append,
+    )
+    projector = ApplicationEventProjector(
+        emitter=emitter,
+        thread_id=thread.id,
+        turn_id=turn.id,
+        operation_id="operation_1",
+        client_message_id="client_terminal_failure",
+    )
+    await projector.turn_started()
+
+    await coordinator._execute_turn(turn, "operation_1", projector)
+
+    stored = conversation.read_thread(thread.id).turns[0]
+    assert stored.status is TurnStatus.COMPLETED
+    assert sealed == [turn.id]
+    assert checkpoints.deleted == [turn.id]
+    assert emitter._started_turns == set()
+    assert turn.id in emitter._terminal_turns

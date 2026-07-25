@@ -47,12 +47,22 @@ class AgentCompressionResult:
 
 
 class AgentContextCompressor(Protocol):
-    async def compress(self, state: AgentState) -> AgentCompressionResult: ...
+    async def compress(
+        self,
+        state: AgentState,
+        *,
+        max_provider_retries: int,
+    ) -> AgentCompressionResult: ...
 
 
 class DisabledAgentContextCompressor:
-    async def compress(self, state: AgentState) -> AgentCompressionResult:
-        del state
+    async def compress(
+        self,
+        state: AgentState,
+        *,
+        max_provider_retries: int,
+    ) -> AgentCompressionResult:
+        del state, max_provider_retries
         return AgentCompressionResult(completed=False, attempted=False)
 
 
@@ -125,6 +135,12 @@ class DisabledPostAnswerMemory:
             workspace_key,
         )
         return MemoryFinalizationResult(enabled=False, status="disabled")
+
+
+def discard_context_snapshot(
+    manifest: tuple[dict[str, JsonValue], ...],
+) -> None:
+    del manifest
 
 
 class CloudPostAnswerMemory:
@@ -225,7 +241,12 @@ class AgentRuntimeContext:
     context_builder: AgentContextBuilder
     budget: TurnBudget
     monotonic: Callable[[], float]
+    context_token_estimator: Callable[[tuple[ModelMessage, ...]], int]
     current_user_text: str = ""
+    context_snapshot_recorder: Callable[
+        [tuple[dict[str, JsonValue], ...]],
+        None,
+    ] = discard_context_snapshot
     compressor: AgentContextCompressor = field(
         default_factory=DisabledAgentContextCompressor
     )

@@ -31,7 +31,7 @@
                 "provider": "deepseek",
                 "runtime_name": "Awesome Agent"
               },
-              "permission_mode": "request_approval",
+              "permission_mode": "accept_edits",
               "provider_credentials": {
                 "deepseek": {
                   "awesome_configured": false,
@@ -66,6 +66,11 @@
               "workspace": {
                 "branch": "feature/fixtures",
                 "display_path": "C:\\workspace"
+              },
+              "workspace_instruction_diagnostic": {
+                "code": "workspace_instructions_too_large",
+                "message": "AGENTS.md was ignored because it exceeds the 32 KiB limit.",
+                "source_id": "AGENTS.md"
               },
               "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "workspace_trusted": true
@@ -264,7 +269,7 @@
         "kind": "result",
         "payload": {
           "kind": "tools",
-          "permission_mode": "request_approval",
+          "permission_mode": "accept_edits",
           "tools": [
             {
               "approval_required": false,
@@ -483,7 +488,7 @@
         "kind": "result",
         "payload": {
           "kind": "permissions",
-          "mode": "request_approval"
+          "mode": "accept_edits"
         }
       }
     },

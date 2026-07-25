@@ -3,6 +3,7 @@ import pytest
 from awesome_agent.core.tools.permissions import (
     PermissionMode,
     PermissionPolicy,
+    PermissionSession,
     PolicyAction,
     PolicyRequest,
     ToolCapability,
@@ -49,6 +50,26 @@ def test_full_access_allows_known_capabilities(capability: ToolCapability) -> No
     assert decision.action is PolicyAction.ALLOW
 
 
+@pytest.mark.parametrize(
+    ("capability", "expected"),
+    [
+        (ToolCapability.WORKSPACE_READ, PolicyAction.ALLOW),
+        (ToolCapability.WORKSPACE_WRITE, PolicyAction.ALLOW),
+        (ToolCapability.WORKSPACE_DELETE, PolicyAction.ASK),
+        (ToolCapability.SHELL_EXECUTE, PolicyAction.ASK),
+    ],
+)
+def test_accept_edits_only_allows_workspace_creation_and_modification(
+    capability: ToolCapability,
+    expected: PolicyAction,
+) -> None:
+    decision = PermissionPolicy().evaluate(
+        PolicyRequest(capability=capability, mode=PermissionMode.ACCEPT_EDITS)
+    )
+
+    assert decision.action is expected
+
+
 def test_thread_write_grant_only_allows_workspace_writes() -> None:
     policy = PermissionPolicy()
 
@@ -81,7 +102,7 @@ def test_thread_write_grant_only_allows_workspace_writes() -> None:
 
 @pytest.mark.parametrize(
     "mode",
-    [PermissionMode.REQUEST_APPROVAL, PermissionMode.FULL_ACCESS],
+    list(PermissionMode),
 )
 def test_unknown_extension_capability_is_never_implicitly_allowed(
     mode: PermissionMode,
@@ -126,3 +147,14 @@ def test_hard_denial_wins_in_every_permission_mode(reason: str) -> None:
 
         assert decision.action is PolicyAction.DENY
         assert decision.reason == reason
+
+
+def test_mode_transition_clears_grants_and_advances_generation() -> None:
+    session = PermissionSession()
+    session.grant_thread_writes()
+
+    session.set_mode(PermissionMode.ACCEPT_EDITS)
+
+    assert session.mode is PermissionMode.ACCEPT_EDITS
+    assert session.granted_capabilities == set()
+    assert session.generation == 1

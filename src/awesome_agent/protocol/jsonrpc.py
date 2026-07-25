@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import logging
+import math
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    model_validator,
+)
 
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
@@ -25,12 +34,45 @@ from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
 JSONRPC_VERSION = "2.0"
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 logger = logging.getLogger(__name__)
 
 type JsonObject = dict[str, Any]
 type MethodHandler = Callable[[Mapping[str, object]], Awaitable[object]]
+_MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
+
+
+def _normalize_json_safe_integer(value: object) -> int:
+    if type(value) is int:
+        normalized = value
+    elif type(value) is float:
+        observed = value
+        if not math.isfinite(observed) or not observed.is_integer():
+            raise ValueError("Expected an integral JSON number.")
+        normalized = int(observed)
+    else:
+        raise ValueError("Expected an integral JSON number.")
+    if abs(normalized) > _MAX_JSON_SAFE_INTEGER:
+        raise ValueError("JSON integer exceeds the interoperable safe range.")
+    return normalized
+
+
+type _JsonSafeInteger = Annotated[
+    int,
+    BeforeValidator(_normalize_json_safe_integer),
+]
+
+
+def _reject_explicit_nulls(
+    value: object,
+    fields: frozenset[str],
+) -> object:
+    if isinstance(value, Mapping) and any(
+        field in value and value[field] is None for field in fields
+    ):
+        raise ValueError("Optional wire fields cannot be null.")
+    return value
 
 
 class _EmptyParams(BaseModel):
@@ -40,7 +82,7 @@ class _EmptyParams(BaseModel):
 class _InitializeWireParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol_version: int = Field(strict=True)
+    protocol_version: _JsonSafeInteger
     client_name: str = Field(min_length=1, max_length=128, strict=True)
     client_version: str = Field(min_length=1, max_length=64, strict=True)
 
@@ -49,6 +91,31 @@ class _ThreadParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     thread_id: str = Field(min_length=1, max_length=128)
+
+
+class _ThreadListParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
+    limit: _JsonSafeInteger = Field(default=50, ge=1, le=200)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_fields(cls, value: object) -> object:
+        return _reject_explicit_nulls(value, frozenset({"cursor", "limit"}))
+
+
+class _ThreadReadParams(_ThreadParams):
+    before_sequence: _JsonSafeInteger | None = Field(default=None, ge=1)
+    limit: _JsonSafeInteger = Field(default=100, ge=1, le=500)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_fields(cls, value: object) -> object:
+        return _reject_explicit_nulls(
+            value,
+            frozenset({"before_sequence", "limit"}),
+        )
 
 
 class _TurnParams(_ThreadParams):
@@ -82,12 +149,23 @@ class _ProviderCredentialParams(BaseModel):
     provider: Literal["deepseek", "kimi", "mem0"]
     action: Literal["add", "replace", "delete"]
     api_key: str | None = Field(default=None, min_length=1, max_length=20_000)
-    allow_unverified: bool = False
+    allow_unverified: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_fields(cls, value: object) -> object:
+        return _reject_explicit_nulls(value, frozenset({"api_key"}))
 
 
 class JsonRpcDispatcher:
-    def __init__(self, facade: ApplicationFacade) -> None:
+    def __init__(
+        self,
+        facade: ApplicationFacade,
+        *,
+        method_completed: Callable[[str], None] | None = None,
+    ) -> None:
         self._facade = facade
+        self._method_completed = method_completed
         self._methods: dict[str, MethodHandler] = {
             "initialize": self._initialize,
             "application.getState": self._get_state,
@@ -107,7 +185,7 @@ class JsonRpcDispatcher:
         return tuple(self._methods)
 
     async def dispatch(self, value: object) -> JsonObject | None:
-        request = _request(value)
+        request = parse_jsonrpc_request(value)
         if request is None:
             return jsonrpc_error(-32600, "Invalid Request")
         request_id, has_id, method, params = request
@@ -148,6 +226,8 @@ class JsonRpcDispatcher:
                 if has_id
                 else None
             )
+        if self._method_completed is not None:
+            self._method_completed(method)
         if not has_id:
             return None
         return {
@@ -180,11 +260,17 @@ class JsonRpcDispatcher:
         return await self._facade.get_state()
 
     async def _list_threads(self, params: Mapping[str, object]) -> object:
-        query = ThreadListQuery.model_validate(params)
+        wire = _ThreadListParams.model_validate(params)
+        query = ThreadListQuery(cursor=wire.cursor, limit=wire.limit)
         return await self._facade.list_threads(query)
 
     async def _read_thread(self, params: Mapping[str, object]) -> object:
-        query = ThreadReadQuery.model_validate(params)
+        wire = _ThreadReadParams.model_validate(params)
+        query = ThreadReadQuery(
+            thread_id=wire.thread_id,
+            before_sequence=wire.before_sequence,
+            limit=wire.limit,
+        )
         return await self._facade.read_thread(query)
 
     async def _submit_turn(self, params: Mapping[str, object]) -> object:
@@ -273,7 +359,7 @@ def _log_unexpected_request_failure(
     )
 
 
-def _request(
+def parse_jsonrpc_request(
     value: object,
 ) -> tuple[str | int | None, bool, str, object] | None:
     if not isinstance(value, Mapping):

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Awesome Docs concept B — Terminal Native">
+  <title>Awesome Docs / Terminal Native</title>
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body class="concept-b">
+  <div class="prototype-note">Concept B · Terminal Native <span>—</span> <a href="index.html">Back to all directions</a></div>
+  <header class="terminal-top">
+    <a class="terminal-brand" href="concept-b-terminal.html"><span class="ascii">A///</span><strong>AWESOME</strong></a>
+    <nav class="terminal-nav"><a class="active" href="#">docs</a><a href="#">commands</a><a href="#">architecture</a><a href="#">changelog</a></nav>
+    <div class="terminal-actions"><button class="terminal-search" data-search-open><span>search_docs</span><span>⌘ K</span></button><button class="language-button" data-language>EN</button></div>
+  </header>
+
+  <main>
+    <section class="terminal-hero">
+      <div class="terminal-copy">
+        <div class="terminal-kicker">Documentation for Awesome 1.2</div>
+        <h1>Your terminal,<br>with a <em>teammate.</em></h1>
+        <p>Awesome understands your codebase, edits files, runs commands, and verifies the result—while keeping every operation visible, cancellable, and recoverable.</p>
+        <div class="terminal-ctas"><a class="terminal-cta primary" href="#start">start_quickstart →</a><a class="terminal-cta" href="#architecture">explore_architecture</a></div>
+      </div>
+
+      <div class="terminal-window" aria-label="Example Awesome terminal session">
+        <div class="terminal-window-head"><i></i><i></i><i></i><span>awesome — E:/project</span></div>
+        <div class="terminal-body">
+          <div><span class="t-green">awesome</span> <span class="t-muted">workspace trusted · request approval</span></div>
+          <br>
+          <div><span class="t-orange">you ›</span> Analyze this project and tell me where to start.</div>
+          <div class="terminal-task"><div class="row"><span><span class="t-green">●</span> Reading workspace</span><span class="t-muted">8 files</span></div><div class="bar"></div></div>
+          <div><span class="t-green">awesome ›</span> This project has two product surfaces:</div>
+          <div class="t-muted">│</div>
+          <div><span class="t-muted">├─</span> <span class="t-orange">Python Core</span> owns product behavior</div>
+          <div><span class="t-muted">└─</span> <span class="t-orange">Ink TUI</span> owns interaction and rendering</div>
+          <br>
+          <div class="t-muted">Start with application/facade.py, then follow the typed event path.</div>
+          <br>
+          <div><span class="t-green">›</span> <span class="t-muted">Type your next goal…</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="terminal-cards" id="start">
+      <a class="terminal-card" href="#"><span class="index">01 / BEGIN</span><h2>Install &amp; first session</h2><p>Go from a clean terminal to a successful read-only task in five minutes.</p></a>
+      <a class="terminal-card" href="#"><span class="index">02 / OPERATE</span><h2>Commands &amp; permissions</h2><p>Control Threads, models, changes, approval boundaries, undo, and recovery.</p></a>
+      <a class="terminal-card" id="architecture" href="#"><span class="index">03 / UNDERSTAND</span><h2>Architecture map</h2><p>Trace intent from Ink through Application and LangGraph to tools and storage.</p></a>
+    </section>
+  </main>
+
+  <div class="search-overlay" data-search-overlay hidden>
+    <div class="search-dialog" role="dialog" aria-label="Search documentation"><div class="search-row"><span class="t-green">⌕</span><input placeholder="search docs…"><button data-search-close>Esc</button></div><div class="search-results"><div class="search-result"><div><strong>awesome --resume</strong><span>Launch options · Continue a Thread</span></div><span>↵</span></div><div class="search-result"><div><strong>Change Journal</strong><span>Architecture · Diff, undo, redo</span></div><span>↵</span></div></div></div>
+  </div>
+  <script src="assets/app.js"></script>
+</body>
+</html>

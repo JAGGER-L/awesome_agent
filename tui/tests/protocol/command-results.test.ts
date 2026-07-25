@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { commandOutcomeSchema } from "../../src/protocol/commands.js";
 import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
 
-describe("Protocol v2 command outcomes", () => {
+describe("Protocol v3 command outcomes", () => {
   it("accepts every Python valid outcome and rejects every invalid outcome", async () => {
     const corpus = await loadFixtureCorpus();
     const valid = corpus.files["command-results.valid.json"] as {

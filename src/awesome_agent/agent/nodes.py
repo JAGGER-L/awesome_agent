@@ -5,7 +5,7 @@ import json
 from typing import cast
 
 from langgraph.runtime import Runtime
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from awesome_agent.agent.budgets import (
     BudgetDecision,
@@ -37,6 +37,7 @@ from awesome_agent.modeling import (
     ProviderRetrying,
     SelectedModel,
     TextDelta,
+    ToolCall,
     ToolChoice,
     ToolChoiceMode,
     ToolDefinition,
@@ -65,6 +66,7 @@ async def prepare_context(
     updated["compression_reason"] = (
         "automatic" if prepared.compression_recommended else None
     )
+    context.context_snapshot_recorder(prepared.manifest)
     await context.event_projector.project_context(
         source_count=len(prepared.manifest),
         estimated_tokens=prepared.estimated_input_tokens,
@@ -102,7 +104,14 @@ async def compress_context(
                 message="Context compression budget is exhausted.",
             )
         return updated
-    result = await context.compressor.compress(updated)
+    max_provider_retries = min(
+        max(0, context.budget.provider_retries - updated["provider_retries"]),
+        max(0, context.budget.model_calls - updated["model_calls"] - 2),
+    )
+    result = await context.compressor.compress(
+        updated,
+        max_provider_retries=max_provider_retries,
+    )
     if result.attempted:
         updated = charge_compression(updated)
         updated = charge_model_attempt(
@@ -118,6 +127,7 @@ async def compress_context(
         updated["context_manifest"] = list(prepared.manifest)
         updated["context_estimated_tokens"] = prepared.estimated_input_tokens
         updated["context_effective_limit"] = prepared.effective_input_limit
+        context.context_snapshot_recorder(prepared.manifest)
         await context.event_projector.project_context(
             source_count=len(prepared.manifest),
             estimated_tokens=prepared.estimated_input_tokens,
@@ -125,9 +135,13 @@ async def compress_context(
         )
         return updated
     error_code = result.error_code or "compression_unavailable"
-    if reason == "context_length" or (
-        updated["context_effective_limit"] > 0
-        and updated["context_estimated_tokens"] > updated["context_effective_limit"]
+    if (
+        error_code == "context_unrecoverable"
+        or reason == "context_length"
+        or (
+            updated["context_effective_limit"] > 0
+            and updated["context_estimated_tokens"] > updated["context_effective_limit"]
+        )
     ):
         updated["termination_reason"] = "context_unrecoverable"
         return updated
@@ -144,6 +158,9 @@ async def call_model(
 ) -> AgentState:
     context = _context(runtime)
     updated = _copy(state)
+    if updated["next_tool_index"] >= len(updated["pending_tool_calls"]):
+        updated["pending_tool_calls"] = []
+        updated["next_tool_index"] = 0
     exhaustion = loop_exhaustion(updated, context.budget)
     decision = model_call_decision(
         updated,
@@ -245,6 +262,13 @@ async def call_model(
         updated["final_answer"] = "".join(visible_text) or updated["final_answer"]
         updated["termination_reason"] = "model_provider_protocol"
         return updated
+    if not _tool_calls_are_dispatchable_and_fresh(
+        turn.assistant.tool_calls,
+        updated["tool_results"],
+    ):
+        updated["final_answer"] = "".join(visible_text) or updated["final_answer"]
+        updated["termination_reason"] = "model_provider_protocol"
+        return updated
     updated["usage"] = _merge_usage(updated["usage"], turn.usage)
     updated["continuation"] = (
         cast(dict[str, JsonValue], turn.continuation.model_dump(mode="json"))
@@ -252,6 +276,9 @@ async def call_model(
         else None
     )
     updated["messages"].append(_message_dict(turn.assistant))
+    updated["context_estimated_tokens"] += context.context_token_estimator(
+        (turn.assistant,)
+    )
     if decision.reserved_final:
         updated["pending_tool_calls"] = []
         updated["next_tool_index"] = 0
@@ -277,56 +304,65 @@ async def execute_one_tool(
     index = updated["next_tool_index"]
     if index >= len(updated["pending_tool_calls"]):
         return updated
-    exhaustion = loop_exhaustion(updated, context.budget)
-    if exhaustion is not None:
-        updated["pending_tool_calls"] = []
-        updated["next_tool_index"] = 0
-        updated["termination_reason"] = exhaustion
-        return updated
     raw_call = updated["pending_tool_calls"][index]
     call_id = str(raw_call.get("call_id") or "")
     tool_name = str(raw_call.get("name") or "")
-    arguments_json = str(raw_call.get("arguments_json") or "")
-    try:
-        arguments = json.loads(arguments_json)
-        if not isinstance(arguments, dict):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
+    exhaustion = loop_exhaustion(updated, context.budget)
+    if exhaustion is not None:
+        updated["termination_reason"] = exhaustion
         result = ToolResult(
             call_id=call_id,
             tool_name=tool_name,
             status=ToolStatus.ERROR,
-            content="Tool arguments must be a JSON object.",
+            content=f"Tool call was not executed: {exhaustion}.",
+            metadata={"executed": False, "reason": exhaustion},
             error=ToolError(
-                code=ToolErrorCode.INVALID_ARGUMENTS,
-                message="Tool arguments must be a JSON object.",
+                code=ToolErrorCode.EXECUTION_FAILED,
+                message=f"Tool call was not executed: {exhaustion}.",
             ),
         )
     else:
+        arguments_json = str(raw_call.get("arguments_json") or "")
         updated = charge_tool_call(updated)
-        started = context.monotonic()
-        request = ToolRequest(
-            call_id=call_id,
-            tool_name=tool_name,
-            arguments=cast(dict[str, JsonValue], arguments),
-        )
-        result = await context.executor.execute(
-            request,
-            context=context.tool_context_factory(updated, request),
-        )
-        ended = context.monotonic()
-        updated = add_active_segment(updated, started_at=started, ended_at=ended)
+        try:
+            arguments = json.loads(arguments_json)
+            if not isinstance(arguments, dict):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError):
+            result = ToolResult(
+                call_id=call_id,
+                tool_name=tool_name,
+                status=ToolStatus.ERROR,
+                content="Tool arguments must be a JSON object.",
+                error=ToolError(
+                    code=ToolErrorCode.INVALID_ARGUMENTS,
+                    message="Tool arguments must be a JSON object.",
+                ),
+            )
+        else:
+            started = context.monotonic()
+            request = ToolRequest(
+                call_id=call_id,
+                tool_name=tool_name,
+                arguments=cast(dict[str, JsonValue], arguments),
+            )
+            result = await context.executor.execute(
+                request,
+                context=context.tool_context_factory(updated, request),
+            )
+            ended = context.monotonic()
+            updated = add_active_segment(updated, started_at=started, ended_at=ended)
     updated["tool_results"].append(
         cast(dict[str, JsonValue], result.model_dump(mode="json"))
     )
-    updated["messages"].append(
-        _message_dict(
-            ToolResultMessage(
-                call_id=result.call_id,
-                content=result.content,
-                is_error=result.status is ToolStatus.ERROR,
-            )
-        )
+    observation = ToolResultMessage(
+        call_id=result.call_id,
+        content=result.content,
+        is_error=result.status is ToolStatus.ERROR,
+    )
+    updated["messages"].append(_message_dict(observation))
+    updated["context_estimated_tokens"] += context.context_token_estimator(
+        (observation,)
     )
     updated["next_tool_index"] += 1
     return updated
@@ -431,6 +467,26 @@ def _copy(state: AgentState) -> AgentState:
     updated["tool_results"] = list(state["tool_results"])
     updated["usage"] = dict(state["usage"])
     return updated
+
+
+def _tool_calls_are_dispatchable_and_fresh(
+    calls: tuple[ToolCall, ...],
+    prior_results: list[dict[str, JsonValue]],
+) -> bool:
+    try:
+        for call in calls:
+            ToolRequest(call_id=call.call_id, tool_name=call.name)
+    except ValidationError:
+        return False
+    call_ids = tuple(call.call_id for call in calls)
+    if len(set(call_ids)) != len(call_ids):
+        return False
+    completed_ids = {
+        call_id
+        for result in prior_results
+        if isinstance((call_id := result.get("call_id")), str)
+    }
+    return completed_ids.isdisjoint(call_ids)
 
 
 def _message_dict(message: ModelMessage) -> dict[str, JsonValue]:

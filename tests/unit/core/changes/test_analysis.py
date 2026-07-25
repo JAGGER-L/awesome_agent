@@ -20,6 +20,7 @@ from awesome_agent.core.changes import (
     FileNodeType,
     SymlinkChange,
     TextFileChange,
+    merge_file_changes,
 )
 from awesome_agent.core.changes.errors import ChangeBlobCorrupt
 from awesome_agent.core.workspace import resolve_workspace
@@ -69,6 +70,53 @@ def _fixture(
     analyzer = ChangeAnalyzer(store, blobs, identity)
     operations = ChangeOperations(store, blobs, identity, analyzer=analyzer)
     return analyzer, operations, store, blobs
+
+
+@pytest.mark.parametrize(
+    ("before_type", "after_type", "before_content", "after_content"),
+    [
+        (FileNodeType.DIRECTORY, FileNodeType.FILE, b"", b"file"),
+        (FileNodeType.SYMLINK, FileNodeType.FILE, b"old-target", b"file"),
+        (FileNodeType.FILE, FileNodeType.DIRECTORY, b"file", b""),
+        (FileNodeType.FILE, FileNodeType.SYMLINK, b"file", b"new-target"),
+    ],
+)
+def test_merge_preserves_distinct_before_and_after_node_types(
+    tmp_path: Path,
+    before_type: FileNodeType,
+    after_type: FileNodeType,
+    before_content: bytes,
+    after_content: bytes,
+) -> None:
+    blobs = FileChangeBlobStore(tmp_path / "change-journal")
+    deleted = FileChange(
+        path="node",
+        kind=FileChangeKind.DELETED,
+        node_type=before_type,
+        before_node_type=before_type,
+        after_node_type=None,
+        before_hash=_digest(before_content),
+        before_blob=(
+            None if before_type is FileNodeType.DIRECTORY else blobs.put(before_content)
+        ),
+    )
+    created = FileChange(
+        path="node",
+        kind=FileChangeKind.CREATED,
+        node_type=after_type,
+        before_node_type=None,
+        after_node_type=after_type,
+        after_hash=_digest(after_content),
+        after_blob=(
+            None if after_type is FileNodeType.DIRECTORY else blobs.put(after_content)
+        ),
+    )
+
+    merged = merge_file_changes([deleted, created])
+
+    assert len(merged) == 1
+    assert merged[0].before_node_type is before_type
+    assert merged[0].after_node_type is after_type
 
 
 def test_analysis_returns_text_counts_and_the_same_unified_diff(

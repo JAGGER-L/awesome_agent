@@ -4,8 +4,70 @@ import { commandOutcomeSchema } from "../../src/protocol/commands.js";
 import { productErrorSchema } from "../../src/protocol/base.js";
 import { eventEnvelopeSchema } from "../../src/protocol/events.js";
 import { methodSchemas } from "../../src/protocol/methods.js";
+import { workspaceInstructionDiagnosticSchema } from "../../src/protocol/product-projections.js";
 import { PRODUCT_VERSION } from "../../src/version.js";
 import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
+
+describe("protocol v3 handshake", () => {
+  const params = {
+    protocol_version: 3,
+    client_name: "awesome",
+    client_version: PRODUCT_VERSION,
+  } as const;
+  const value = {
+    product_version: PRODUCT_VERSION,
+    protocol_version: 3,
+    status: "ready",
+    session_id: "session_11111111111111111111111111111111",
+    workspace: { display_path: "C:\\workspace" },
+    capabilities: ["threads", "turns", "commands"],
+  } as const;
+
+  it("accepts v3 and rejects old v2 values in both handshake directions", () => {
+    expect(methodSchemas.initialize.params.safeParse(params).success).toBe(
+      true,
+    );
+    expect(
+      methodSchemas.initialize.params.safeParse({
+        ...params,
+        protocol_version: 2,
+      }).success,
+    ).toBe(false);
+    expect(methodSchemas.initialize.value.safeParse(value).success).toBe(true);
+    expect(
+      methodSchemas.initialize.value.safeParse({
+        ...value,
+        protocol_version: 2,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("workspace instruction diagnostic protocol", () => {
+  const diagnostic = {
+    code: "workspace_instructions_too_large",
+    source_id: "AGENTS.md",
+    message: "AGENTS.md was ignored because it is too large.",
+  } as const;
+
+  it("rejects unknown diagnostic codes and sources", () => {
+    expect(
+      workspaceInstructionDiagnosticSchema.safeParse(diagnostic).success,
+    ).toBe(true);
+    expect(
+      workspaceInstructionDiagnosticSchema.safeParse({
+        ...diagnostic,
+        code: "workspace_instructions_future",
+      }).success,
+    ).toBe(false);
+    expect(
+      workspaceInstructionDiagnosticSchema.safeParse({
+        ...diagnostic,
+        source_id: "PROJECT.md",
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("provider credential protocol", () => {
   it("accepts a dedicated credential request and rejects unknown fields", () => {
@@ -104,7 +166,7 @@ describe("startup state recovery protocol", () => {
         capabilities: ["threads", "turns", "commands"],
         interaction_id: "interaction_state_reset",
         product_version: PRODUCT_VERSION,
-        protocol_version: 2,
+        protocol_version: 3,
         session_id: "session_11111111111111111111111111111111",
         status: "state_reset_required",
         workspace: { display_path: "C:\\workspace" },

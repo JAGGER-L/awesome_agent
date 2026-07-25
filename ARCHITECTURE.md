@@ -69,7 +69,9 @@ awesome_agent/
 │   ├── core/
 │   │   ├── changes/    # Change Journal and undo/redo contracts
 │   │   ├── tools/      # tool registry, policy, executor, built-ins
-│   │   └── workspace/  # workspace identity and trust models
+│   │   ├── workspace/  # workspace identity and trust models
+│   │   ├── filesystem.py       # identity-bound filesystem primitives
+│   │   └── process_lifetime.py # Core process-tree ownership
 │   ├── extensions/
 │   │   ├── mcp/        # MCP stdio client and tool adapter
 │   │   └── skills/     # Skill discovery, loading, and tool exposure
@@ -132,6 +134,7 @@ Application resolves canonical workspace
         ├── state newer ─────────► stop and ask user to upgrade
         │
         ├── trusted ─────────────► load user/workspace configuration
+        │                          snapshot bounded root AGENTS.md
         │                          load Skills and MCP declarations
         │                          create or resume a Thread
         │
@@ -142,6 +145,18 @@ Application resolves canonical workspace
 
 Project-controlled configuration, instructions, Skills, and MCP declarations
 are not loaded before trust is accepted.
+
+Activation also acquires two exclusive session leases: one for the canonical
+workspace path key and one for the opened root directory's physical identity.
+The path lease survives replacement of that pathname, while the entity lease
+collapses alternate spellings of the same directory. This prevents a second
+Core from treating a live Turn as crash recovery through either a replacement
+root or a path alias.
+
+The root `AGENTS.md` is an immutable session source loaded only after trust. A
+bounded identity-checked read either supplies the whole mandatory instruction
+source or supplies no content plus a structured diagnostic; it is never
+meaning-changing truncation. That diagnostic does not invalidate configuration.
 
 Application state preflight is read-only and runs before trust, checkpoints,
 or writable storage. The current format is Schema 7. Product and schema
@@ -158,9 +173,9 @@ User Message
     ▼
 turn.submit -> ApplicationFacade.submit_turn
     │
+    ├── atomically acquire the foreground Operation lease
     ├── resolve Thread configuration
-    ├── create Turn and user transcript entry
-    └── acquire the single foreground operation
+    └── create Turn and user transcript entry
              │
              ▼
        LangGraph Agent
@@ -198,12 +213,26 @@ Model ToolCall
     -> bounded activity summary + Agent observation
 ```
 
-File-changing built-ins write through the Change Journal. `execute` runs on the
-host and is not a sandbox. Request approval mode asks before edits, deletes,
-shell execution, and unknown extension capabilities; confirmed Full access
-allows ordinary operations for the current Thread. Hard denials always run
-first. A command entered directly with `!` is already explicit user authority.
-Shell effects may escape the workspace and cannot be reversed by the journal.
+File-changing built-ins write through the Change Journal and shared
+identity-bound filesystem primitives. Lexical containment is only admission:
+the actual mutation pins the workspace and parent directory chain, verifies
+the opened object's identity, and refuses link/reparse or hard-link aliases
+that cannot be proven to name one workspace object. This narrows
+path-replacement races but is not a filesystem compare-and-swap: a
+same-privilege host process can replace an in-workspace target after the final
+identity check and before replace/remove, and on POSIX can move an already-open
+directory after its reachability check. Pinned parents and no-follow operations
+prevent those races from following a link to an external target, but the
+stronger concurrent-host threat model requires an OS sandbox or mount boundary.
+`execute` runs on the host
+and is not a sandbox. Request approval asks before writes, deletes, shell, MCP,
+and unknown capabilities. Accept edits allows ordinary workspace writes only.
+Confirmed Full access allows known built-in local writes, deletes, and shell
+for its bound Thread; MCP and unknown capabilities still ask. Hard denials
+always run first for Agent and direct `!` commands. The dialect-aware command
+circuit breaker is designed to stop recognizable accidents, not to detect
+arbitrary hostile obfuscation. Shell effects may escape the workspace and
+cannot be reversed by the journal.
 
 ### Slash command
 
@@ -218,7 +247,7 @@ The authoritative Core command path is:
 
 ```text
 Ink command controller
-    -> Protocol v2 command.execute
+    -> Protocol v3 command.execute
     -> LocalApplication facade
     -> complete CommandDispatcher
     -> one focused command service
@@ -234,8 +263,9 @@ results. Slash commands are deterministic product operations and never submit
 hidden model prompts; natural-language input is the only path that starts an
 Agent Turn.
 
-`LocalApplication` is the only surface-facing Application host. Python produces Protocol v2
-discriminated outcomes that TypeScript validates and presents exhaustively.
+`LocalApplication` is the only surface-facing Application host. Python produces
+Protocol v3 discriminated outcomes that TypeScript validates and presents
+exhaustively.
 Command progress is pending Surface lifecycle state, not a second durable
 operation model.
 
@@ -249,8 +279,17 @@ with LangGraph checkpoints:
 - a valid unfinished checkpoint is resumable;
 - a missing or corrupt checkpoint fails the Turn with a stable error code;
 - an uncertain shell or MCP side effect requires an explicit retry/abort
-  interaction;
+  interaction whose safe default is Abort;
 - checkpoints left behind by terminal product Turns are removed.
+
+The latest strictly validated checkpoint is the recovery fact source for an
+unfinished Turn. Its frozen manifest may repair the Application SQLite
+projection only when that projection is empty or its immutable source anchors
+share lineage, and the old projection still matches an explicit
+compare-and-swap expectation. This
+converges the unavoidable commit window between the separate Application and
+LangGraph databases without treating a self-consistent but unrelated snapshot
+as authority.
 
 ## Major Subsystems
 
@@ -265,6 +304,15 @@ with LangGraph checkpoints:
   `application/turns.py`, `application/operations.py`.
 - **Dependencies:** Agent Core, current adapters, Conversation, Storage, Core,
   Context, Extensions, and Memory.
+
+A shared foreground arbiter grants one atomic lease to Agent Turns, direct
+commands, state-changing commands, credential mutation, non-Tool interaction
+resolution, or shutdown. Admission happens before Turn persistence. Read-only
+snapshot commands are the explicit exception during an active Operation; a
+pending interaction blocks new Operations and mutations, while matching Tool
+approval continues the Operation that owns it. Shutdown closes admission,
+cancels active work, and waits for leases to clean up before closing processes
+or databases.
 
 ### Agent Core and LangGraph
 
@@ -285,6 +333,13 @@ with LangGraph checkpoints:
 - **Does not own:** graph routing or hidden persistence.
 - **Primary files:** `context/builder.py`, `context/compression.py`,
   `context/path_refs.py`, `context/tokens.py`.
+
+Compression may replace only the bounded base context. The active Turn's
+assistant/tool tail is validated as one protocol chain, reserved in the input
+budget, and appended exactly once with its pending-call and result indices
+unchanged. Every emitted tool call receives one ordered observation before the
+next model request, including deterministic non-executed observations for calls
+skipped when a loop budget is exhausted.
 
 ### Model Gateway
 
@@ -324,13 +379,40 @@ routes the decision. Configuration, credentials, Skills, Memory, UI
 preferences, and workspace files live outside that boundary and survive a
 confirmed reset.
 
+Here, atomic replacement describes the filesystem namespace transition, not
+revocation of arbitrary handles opened outside Awesome's lease protocol. An
+open database handle prevents the rename on Windows. POSIX permits the rename
+and unlink; such a pre-existing handle remains attached to the detached old
+inode until it closes, while the canonical path names the fresh state.
+
 ### Change Journal
 
 - **Responsibility:** controlled before/after snapshots, conflict detection,
-  diff, undo, redo, and reversibility classification.
+  crash reconciliation, diff, undo, redo, and reversibility classification.
 - **Does not own:** arbitrary host effects created by `execute`.
-- **Primary files:** `core/changes/journal.py`, `core/changes/operations.py`,
+- **Primary files:** `core/filesystem.py`, `core/changes/filesystem.py`,
+  `core/changes/journal.py`, `core/changes/operations.py`,
   `storage/changes.py`.
+
+Undo and redo are multi-path restore transactions. They bind and preflight all
+targets first, persist every pending intent before the first restore, apply the
+restore through the same pinned workspace tree, then change the ChangeSet
+lifecycle once. A failure before that lifecycle commit rolls already-applied
+paths back while the original directory identities are still held; if that
+rollback cannot be proven, pending evidence remains. Startup reconciliation
+treats a committed operation as something to verify and finalize, and an
+uncommitted operation as something to roll back completely; an identity,
+content, or lifecycle conflict preserves the pending evidence instead of
+guessing.
+
+Each ordinary file mutation carries a durable mutation identity and distinct
+before/after node types, so a directory, file, or symlink transition remains
+representable after merge and through undo/redo recovery. Turn and direct
+finalization reconcile only their own ChangeSet and release the in-memory owner
+only after sealing succeeds. Schema 7 histories created before these optional
+JSON fields remain readable; if a legacy record without mutation identity is
+indistinguishable from an interrupted pending mutation, recovery preserves the
+pending evidence and fails closed.
 
 Workspace files and their diffs are the generated work product; there is no
 parallel output object for ordinary file changes.
@@ -344,6 +426,18 @@ parallel output object for ordinary file changes.
 - **Primary files:** `extensions/skills/discovery.py`,
   `extensions/skills/loader.py`, `extensions/mcp/manager.py`,
   `extensions/mcp/adapter.py`.
+
+Workspace Skill paths and opened identities are revalidated without following
+links or reparse points; one invalid package remains an isolated diagnostic.
+MCP consumes the complete paginated catalog under page, tool-count, byte, and
+deadline bounds, then compiles its JSON Schemas before atomically publishing
+the client, generation, namespace, and `CONNECTED` state. References remain
+local to one schema. Input arguments are validated before approval or remote
+I/O; a declared `outputSchema` validates `structuredContent`, and structured
+output without text is rendered as bounded JSON. Restart removes the previous
+namespace first, and timeout, disconnect, or cancellation invalidates the
+generation; calls never lazily reconnect or replay an uncertain external
+action in the same Turn.
 
 ### Memory
 
@@ -372,6 +466,36 @@ competing component listeners. Optimistic user messages are keyed by
 The active Turn is one ordered Thinking/tool/answer timeline, and completed
 answers use terminal Markdown rendering.
 
+The stdio Host reads one bounded NDJSON stream but dispatches ordinary requests
+as independent tasks. A fixed in-flight ceiling, bounded recent request-ID
+history, and a bounded, deadline-protected stdout queue cap memory and stalled
+consumer exposure. Initialize, interaction response, cancellation, and
+shutdown remain control requests that bypass ordinary saturation. This wire
+concurrency does not create a second mutation scheduler: the Application
+foreground arbiter still serializes state-changing work.
+
+Process lifetime has two owners. On POSIX, the TUI starts Core in its own
+session/process group and termination targets that group. Each `execute` is
+launched by a separate session supervisor whose lease pipe is owned by Core;
+Core exit closes that lease and the supervisor terminates its remaining group.
+On Windows, Core installs a kill-on-close lifetime Job Object and assigns
+itself before asynchronous startup; failure to establish that invariant aborts
+startup. Each `execute` also creates a nested kill-on-close Job Object and a
+private supervisor that waits on an event. Core assigns that waiting supervisor
+to the command job before releasing it to create the target, so the target and
+all descendants inherit the command job without a spawn race. Root completion,
+timeout, cancellation, or setup failure terminates that command job; normal or
+abnormal Core exit remains covered by the outer lifetime job. The runner waits
+for the root process independently from
+stdout/stderr EOF, then gives inherited pipes a bounded drain phase; a
+descendant holding a pipe open can truncate captured output but cannot keep the
+Tool call pending forever.
+
+The POSIX guarantee covers descendants that remain in the supervisor's session
+and process group. A command that intentionally daemonizes with `setsid()` or a
+similar escape is outside this cleanup boundary; neither platform mechanism is
+an execution sandbox.
+
 The TUI may queue at most three terminal inputs while the single Core Operation
 is active. The queue is session-only and outside Thread Surface state: it
 survives `/new` and `/resume`, parses each head only when promoted, executes
@@ -382,10 +506,16 @@ database record, or second execution authority.
 ### Safety
 
 - **Responsibility:** workspace containment for file tools, sensitive-path
-  rejection, explicit approval for Agent shell execution, command policy,
-  redaction, and tool output bounds.
-- **Primary files:** `core/tools/policy.py`, `core/tools/command_policy.py`,
-  `safety/redaction.py`.
+  rejection, identity-bound mutation, process-tree cleanup, explicit approval
+  for Agent shell execution, command policy, redaction, and tool output bounds.
+- **Primary files:** `core/filesystem.py`, `core/process_lifetime.py`,
+  `core/tools/policy.py`, `core/tools/command_policy.py`,
+  `core/tools/process.py`, `safety/redaction.py`.
+
+Full access is an approval mode, not an isolation boundary. The current product
+does not provide an operating-system sandbox; workspace trust, permissions,
+and the command circuit breaker remain distinct policy layers above host
+execution.
 
 ## Design Principles
 

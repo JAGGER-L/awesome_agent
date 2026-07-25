@@ -21,6 +21,7 @@ from awesome_agent.agent import (
     new_agent_state,
     validate_agent_state,
 )
+from awesome_agent.context import estimate_messages
 from awesome_agent.core.tools import ToolExecutionContext, ToolResult
 from awesome_agent.memory import (
     CloudWriteOutcome,
@@ -153,6 +154,7 @@ async def _run(
         context_builder=context_builder,
         budget=TurnBudget(),
         monotonic=lambda: 1.0,
+        context_token_estimator=estimate_messages,
         current_user_text="current user text",
         post_answer_memory=finalizer,
     )

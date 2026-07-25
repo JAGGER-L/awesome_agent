@@ -9,7 +9,7 @@
       "name": "initialize.missing_client_version",
       "params": {
         "client_name": "awesome",
-        "protocol_version": 2
+        "protocol_version": 3
       }
     },
     {
@@ -22,7 +22,7 @@
       "params": {
         "client_name": "awesome",
         "client_version": "1.2.1",
-        "protocol_version": 1
+        "protocol_version": 2
       }
     },
     {
@@ -52,10 +52,56 @@
         "code": -32602,
         "kind": "jsonrpc_error"
       },
+      "method": "thread.list",
+      "name": "thread.list.limit_type",
+      "params": {
+        "limit": "50"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.list",
+      "name": "thread.list.explicit_null",
+      "params": {
+        "cursor": null
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
       "method": "thread.read",
       "name": "thread.read.before_sequence",
       "params": {
         "before_sequence": 0,
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.read",
+      "name": "thread.read.before_sequence_type",
+      "params": {
+        "before_sequence": true,
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.read",
+      "name": "thread.read.before_sequence_unsafe",
+      "params": {
+        "before_sequence": 9007199254740992,
         "thread_id": "thread_11111111111111111111111111111111"
       }
     },
@@ -94,6 +140,33 @@
       "params": {
         "command": "",
         "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "provider.credential.set",
+      "name": "provider.credential.allow_unverified_type",
+      "params": {
+        "action": "add",
+        "allow_unverified": "true",
+        "api_key": "fixture-request-secret",
+        "provider": "deepseek"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "provider.credential.set",
+      "name": "provider.credential.explicit_null",
+      "params": {
+        "action": "delete",
+        "api_key": null,
+        "provider": "deepseek"
       }
     },
     {

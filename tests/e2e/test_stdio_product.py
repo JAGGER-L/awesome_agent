@@ -179,7 +179,7 @@ async def test_stdio_full_flow_and_restart(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -203,6 +203,34 @@ async def test_stdio_full_flow_and_restart(
         {"name": "model", "arguments": [provider, model]},
     )
     assert _value(model_selected)["payload"]["model"] == model
+    second_thread_id = _transition_thread_id(
+        await client.request("command.execute", {"name": "new"})
+    )
+    mismatched_turn = await client.request(
+        "turn.submit",
+        {
+            "thread_id": thread_id,
+            "content": "must not run on an unselected thread",
+            "client_message_id": "client_e2e_cross_thread",
+        },
+    )
+    assert mismatched_turn["result"]["ok"] is False
+    assert mismatched_turn["result"]["error"]["code"] == "invalid_arguments"
+    mismatched_direct = await client.request(
+        "direct.execute",
+        {"thread_id": thread_id, "command": "echo must-not-run"},
+    )
+    assert mismatched_direct["result"]["ok"] is False
+    assert mismatched_direct["result"]["error"]["code"] == "invalid_arguments"
+    assert (
+        _transition_thread_id(
+            await client.request(
+                "command.execute",
+                {"name": "resume", "arguments": [thread_id]},
+            )
+        )
+        == thread_id
+    )
     submitted = await client.request(
         "turn.submit",
         {
@@ -243,7 +271,10 @@ async def test_stdio_full_flow_and_restart(
     assert cancel_events[-1]["event_type"] == "operation.cancelled"
 
     listed = await client.request("thread.list")
-    assert _value(listed)["threads"][0]["id"] == thread_id
+    assert {item["id"] for item in _value(listed)["threads"]} == {
+        thread_id,
+        second_thread_id,
+    }
     shutdown = await client.request("shutdown")
     assert _value(shutdown) == {"stopped": True}
     await asyncio.wait_for(client.process.wait(), timeout=10)
@@ -257,7 +288,7 @@ async def test_stdio_full_flow_and_restart(
     ready = await restarted.request(
         "initialize",
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -298,7 +329,7 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -325,7 +356,7 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
     after_reset = await client.request(
         "initialize",
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -367,7 +398,7 @@ async def test_stdio_rejects_newer_state_without_offering_reset(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 2,
+            "protocol_version": 3,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },

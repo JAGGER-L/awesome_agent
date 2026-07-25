@@ -75,7 +75,7 @@ describe("workspace, status, and doctor presenters", () => {
     );
   });
 
-  it("maps doctor states without leaking diagnostic detail into the status column", () => {
+  it("maps doctor states and renders each bounded diagnostic detail", () => {
     const result = presentCommandPayload("doctor", {
       kind: "doctor",
       checks: [
@@ -91,9 +91,13 @@ describe("workspace, status, and doctor presenters", () => {
     expect(result).toMatchObject({
       kind: "panel",
       rows: [
-        { label: "Python", value: "OK" },
-        { label: "DeepSeek", value: "Missing" },
-        { label: "Configuration", value: "Invalid", status: "danger" },
+        { label: "Python", value: "OK · 3.12.10" },
+        { label: "DeepSeek", value: "Missing · DEEPSEEK_API_KEY" },
+        {
+          label: "Configuration",
+          value: "Invalid · private diagnostic",
+          status: "danger",
+        },
       ],
     });
   });

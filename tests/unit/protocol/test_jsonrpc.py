@@ -41,7 +41,7 @@ from awesome_agent.protocol.jsonrpc import (
 from awesome_agent.version import PRODUCT_VERSION
 
 INITIALIZE_PARAMS = {
-    "protocol_version": 2,
+    "protocol_version": 3,
     "client_name": "awesome",
     "client_version": PRODUCT_VERSION,
 }
@@ -56,7 +56,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=2,
+                protocol_version=3,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -284,9 +284,10 @@ async def test_credential_rpc_is_strict_and_never_echoes_secret() -> None:
 
 
 @pytest.mark.asyncio
-async def test_interaction_decision_contract_accepts_reset_and_rejects_unknown() -> (
-    None
-):
+@pytest.mark.parametrize("decision", ["retry", "abort"])
+async def test_interaction_decision_contract_accepts_recovery_and_rejects_unknown(
+    decision: str,
+) -> None:
     facade = Facade()
     dispatcher = JsonRpcDispatcher(facade)
 
@@ -296,8 +297,8 @@ async def test_interaction_decision_contract_accepts_reset_and_rejects_unknown()
             "id": 1,
             "method": "interaction.respond",
             "params": {
-                "interaction_id": "interaction_state_reset",
-                "decision": "reset_state",
+                "interaction_id": "interaction_recovery",
+                "decision": decision,
             },
         }
     )
@@ -314,7 +315,7 @@ async def test_interaction_decision_contract_accepts_reset_and_rejects_unknown()
     )
 
     assert accepted is not None and accepted["result"]["ok"] is True
-    assert facade.calls == [("interaction", ("interaction_state_reset", "reset_state"))]
+    assert facade.calls == [("interaction", ("interaction_recovery", decision))]
     assert invalid is not None and invalid["error"]["code"] == -32602
 
 
@@ -323,7 +324,7 @@ async def test_interaction_decision_contract_accepts_reset_and_rejects_unknown()
     ("params", "error_code"),
     [
         (
-            {**INITIALIZE_PARAMS, "protocol_version": 1},
+            {**INITIALIZE_PARAMS, "protocol_version": 2},
             "protocol_version_incompatible",
         ),
         (
@@ -362,9 +363,9 @@ async def test_initialize_rejects_incompatible_identity_before_facade_work(
     "params",
     [
         {},
-        {"protocol_version": 2, "client_name": "awesome"},
+        {"protocol_version": 3, "client_name": "awesome"},
         {**INITIALIZE_PARAMS, "extra": True},
-        {**INITIALIZE_PARAMS, "protocol_version": "2"},
+        {**INITIALIZE_PARAMS, "protocol_version": "3"},
     ],
 )
 async def test_initialize_rejects_malformed_identity_as_invalid_params(
@@ -479,6 +480,107 @@ async def test_thread_query_params_are_typed_and_bounded_before_facade_work() ->
     assert facade.calls == [("list", ThreadListQuery(cursor="opaque", limit=200))]
     assert invalid_list is not None and invalid_list["error"]["code"] == -32602
     assert invalid_read is not None and invalid_read["error"]["code"] == -32602
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    (
+        ("thread.list", {"limit": "10"}),
+        ("thread.list", {"limit": True}),
+        ("thread.list", {"cursor": None}),
+        ("thread.list", {"limit": None}),
+        (
+            "thread.read",
+            {"thread_id": "thread_1", "before_sequence": "10"},
+        ),
+        (
+            "thread.read",
+            {"thread_id": "thread_1", "before_sequence": True},
+        ),
+        (
+            "thread.read",
+            {"thread_id": "thread_1", "before_sequence": None},
+        ),
+        (
+            "thread.read",
+            {"thread_id": "thread_1", "limit": None},
+        ),
+        (
+            "thread.read",
+            {
+                "thread_id": "thread_1",
+                "before_sequence": 9_007_199_254_740_992,
+            },
+        ),
+        (
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "action": "add",
+                "api_key": "secret",
+                "allow_unverified": "true",
+            },
+        ),
+        (
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "action": "add",
+                "api_key": "secret",
+                "allow_unverified": 1,
+            },
+        ),
+        (
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "action": "delete",
+                "api_key": None,
+            },
+        ),
+    ),
+)
+async def test_wire_scalars_reject_coercion_before_facade_work(
+    method: str,
+    params: dict[str, object],
+) -> None:
+    facade = Facade()
+
+    response = await JsonRpcDispatcher(facade).dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32602
+    assert facade.calls == []
+
+
+@pytest.mark.asyncio
+async def test_wire_integral_json_numbers_match_javascript_semantics() -> None:
+    facade = Facade()
+    dispatcher = JsonRpcDispatcher(facade)
+
+    initialized = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {**INITIALIZE_PARAMS, "protocol_version": 3.0},
+        }
+    )
+    listed = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "thread.list",
+            "params": {"limit": 10.0},
+        }
+    )
+
+    assert initialized is not None and initialized["result"]["ok"] is True
+    assert listed is not None and listed["result"]["ok"] is True
+    assert facade.calls[-1] == ("list", ThreadListQuery(limit=10))
 
 
 @pytest.mark.asyncio

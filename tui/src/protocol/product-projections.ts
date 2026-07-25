@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   boundedText,
   jsonValueSchema,
+  permissionModeSchema,
   safeIntegerSchema,
   utcTimestampSchema,
 } from "./base.js";
@@ -47,6 +48,23 @@ export const workspacePresentationSchema = z.strictObject({
   branch: boundedText(1, 255).optional(),
 });
 
+export const workspaceInstructionDiagnosticSchema = z.strictObject({
+  code: z.enum([
+    "workspace_instructions_unsafe_path",
+    "workspace_instructions_too_large",
+    "workspace_instructions_token_limit",
+    "workspace_instructions_binary",
+    "workspace_instructions_not_utf8",
+    "workspace_instructions_changed",
+    "workspace_instructions_unreadable",
+  ]),
+  source_id: z.literal("AGENTS.md"),
+  message: boundedText(1, 500),
+});
+export type WorkspaceInstructionDiagnostic = z.infer<
+  typeof workspaceInstructionDiagnosticSchema
+>;
+
 const secretStatusSchema = z.strictObject({
   deepseek_api_key: z.boolean(),
   moonshot_api_key: z.boolean(),
@@ -65,7 +83,10 @@ export const applicationStateSchema = z.strictObject({
   skill_mode: boundedText(1, 64),
   active_operation_id: identifierSchema.optional(),
   pending_interaction_id: identifierSchema.optional(),
-  permission_mode: z.enum(["request_approval", "full_access"]),
+  permission_mode: permissionModeSchema,
+  workspace_instruction_diagnostic: workspaceInstructionDiagnosticSchema
+    .nullable()
+    .optional(),
   configuration_valid: z.boolean(),
   secret_status: secretStatusSchema,
   provider_credentials: providerCredentialStatusesSchema,

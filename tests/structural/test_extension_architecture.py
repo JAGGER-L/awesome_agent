@@ -6,7 +6,14 @@ from pathlib import Path
 from awesome_agent.extensions.skills.models import SkillDescriptor
 
 EXTENSION_ENTRIES = {"__init__.py", "mcp", "skills"}
-MCP_MODULES = {"__init__.py", "adapter.py", "manager.py", "models.py", "stdio.py"}
+MCP_MODULES = {
+    "__init__.py",
+    "adapter.py",
+    "catalog.py",
+    "manager.py",
+    "models.py",
+    "stdio.py",
+}
 SKILL_MODEL_FIELDS = {
     "allowed_tools",
     "compatibility",

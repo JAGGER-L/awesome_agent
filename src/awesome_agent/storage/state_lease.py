@@ -3,9 +3,10 @@ from __future__ import annotations
 import ctypes
 import importlib
 import os
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 
 class StateLeaseMode(StrEnum):
@@ -128,6 +129,31 @@ class _WindowsOverlapped(ctypes.Structure):
     ]
 
 
+class _WindowsDllLoader(Protocol):
+    def __call__(self, name: str, *, use_last_error: bool) -> object: ...
+
+
+class _WindowsFileLockApi(Protocol):
+    def LockFileEx(
+        self,
+        handle: ctypes.c_void_p,
+        flags: int,
+        reserved: int,
+        bytes_low: int,
+        bytes_high: int,
+        overlapped: object,
+    ) -> int: ...
+
+    def UnlockFileEx(
+        self,
+        handle: ctypes.c_void_p,
+        reserved: int,
+        bytes_low: int,
+        bytes_high: int,
+        overlapped: object,
+    ) -> int: ...
+
+
 def _lock(descriptor: int, mode: StateLeaseMode) -> object | None:
     if os.name == "nt":
         return _lock_windows(descriptor, mode)
@@ -154,14 +180,12 @@ def _lock_windows(
     descriptor: int,
     mode: StateLeaseMode,
 ) -> _WindowsOverlapped:
-    import msvcrt
-
-    kernel32 = cast(Any, ctypes).WinDLL("kernel32", use_last_error=True)
+    kernel32 = _windows_file_lock_api()
     overlapped = _WindowsOverlapped()
     flags = 0x00000001
     if mode is StateLeaseMode.EXCLUSIVE:
         flags |= 0x00000002
-    handle = msvcrt.get_osfhandle(descriptor)
+    handle = _windows_os_handle(descriptor)
     if not kernel32.LockFileEx(
         ctypes.c_void_p(handle),
         flags,
@@ -170,15 +194,13 @@ def _lock_windows(
         0,
         ctypes.byref(overlapped),
     ):
-        raise ctypes.WinError(ctypes.get_last_error())
+        raise _last_windows_error()
     return overlapped
 
 
 def _unlock_windows(descriptor: int, token: _WindowsOverlapped) -> None:
-    import msvcrt
-
-    kernel32 = cast(Any, ctypes).WinDLL("kernel32", use_last_error=True)
-    handle = msvcrt.get_osfhandle(descriptor)
+    kernel32 = _windows_file_lock_api()
+    handle = _windows_os_handle(descriptor)
     if not kernel32.UnlockFileEx(
         ctypes.c_void_p(handle),
         0,
@@ -186,4 +208,36 @@ def _unlock_windows(descriptor: int, token: _WindowsOverlapped) -> None:
         0,
         ctypes.byref(token),
     ):
-        raise ctypes.WinError(ctypes.get_last_error())
+        raise _last_windows_error()
+
+
+def _windows_file_lock_api() -> _WindowsFileLockApi:
+    load_library = cast(
+        _WindowsDllLoader,
+        vars(ctypes)["WinDLL"],
+    )
+    return cast(
+        _WindowsFileLockApi,
+        load_library("kernel32", use_last_error=True),
+    )
+
+
+def _windows_os_handle(descriptor: int) -> int:
+    runtime = importlib.import_module("msvcrt")
+    get_osfhandle = cast(
+        "Callable[[int], int]",
+        vars(runtime)["get_osfhandle"],
+    )
+    return get_osfhandle(descriptor)
+
+
+def _last_windows_error() -> OSError:
+    get_last_error = cast(
+        "Callable[[], int]",
+        vars(ctypes)["get_last_error"],
+    )
+    win_error = cast(
+        "Callable[[int], OSError]",
+        vars(ctypes)["WinError"],
+    )
+    return win_error(get_last_error())

@@ -102,6 +102,74 @@ def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -
     assert view.turns == (turn,)
 
 
+def test_in_progress_turn_persists_context_snapshot_descriptor(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    turn = service.begin_turn(
+        thread.id,
+        "Inspect repository",
+        _turn_config(),
+        client_message_id="client_context",
+    )
+    manifest: tuple[dict[str, JsonValue], ...] = (
+        {
+            "kind": "product_instructions",
+            "source_id": "product",
+            "order": 0,
+        },
+        {
+            "kind": "current_input",
+            "source_id": turn.user_entry_id,
+            "order": 1,
+        },
+    )
+
+    recorded = service.store_context_manifest(turn.id, manifest)
+    repeated = service.store_context_manifest(turn.id, manifest)
+
+    assert recorded.context_manifest == manifest
+    assert repeated == recorded
+    assert service.read_thread(thread.id).turns[0].context_manifest == manifest
+
+    service.cancel_turn(turn.id, context_manifest=manifest)
+    with pytest.raises(ConversationConflict):
+        service.store_context_manifest(turn.id, manifest)
+
+
+def test_context_manifest_reconciliation_rejects_stale_compare_and_swap(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path / "application.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    turn = service.begin_turn(
+        thread.id,
+        "Inspect repository",
+        _turn_config(),
+        client_message_id="client_context_cas",
+    )
+    first: tuple[dict[str, JsonValue], ...] = ({"kind": "current_input", "order": 0},)
+    stale: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "product_instructions", "order": 0},
+    )
+
+    service.compare_and_swap_context_manifest(
+        turn.id,
+        first,
+        expected_context_manifest=(),
+    )
+
+    with pytest.raises(ConversationConflict):
+        service.compare_and_swap_context_manifest(
+            turn.id,
+            stale,
+            expected_context_manifest=(),
+        )
+
+    assert service.read_thread(thread.id).turns[0].context_manifest == first
+
+
 def test_first_accepted_message_names_an_automatic_thread(tmp_path: Path) -> None:
     service = _service(tmp_path / "application.db")
     thread = service.create_thread("workspace_1")
@@ -331,6 +399,39 @@ def test_latest_context_manifest_skips_newest_empty_terminal_turn(
     service.cancel_turn(latest.id)
 
     assert service.latest_context_manifest(thread.id) == manifest
+
+
+@pytest.mark.parametrize("terminal", ("completed", "failed", "cancelled"))
+def test_terminalization_preserves_durable_in_progress_context_snapshot(
+    tmp_path: Path,
+    terminal: str,
+) -> None:
+    service = _service(tmp_path / f"preserved-{terminal}.db")
+    thread = service.create_thread("workspace_1", "Thread")
+    turn = service.begin_turn(
+        thread.id,
+        "question",
+        _turn_config(),
+        client_message_id=f"client_{terminal}",
+    )
+    manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "current_input", "estimated_tokens": 3},
+    )
+    service.store_context_manifest(turn.id, manifest)
+
+    if terminal == "completed":
+        result = service.complete_turn(
+            turn.id,
+            "answer",
+            UsageSummary(),
+            "completed",
+        )
+    elif terminal == "failed":
+        result = service.fail_turn(turn.id, "model_failed")
+    else:
+        result = service.cancel_turn(turn.id)
+
+    assert result.context_manifest == manifest
 
 
 def test_append_direct_command_uses_next_durable_sequence(tmp_path: Path) -> None:

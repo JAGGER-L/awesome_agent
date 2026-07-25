@@ -100,6 +100,8 @@ describe("shared Python fixture corpus", () => {
         methodSchemas[fixture.method as keyof typeof methodSchemas];
       if (fixture.expected?.code === -32601) {
         expect(schema, fixture.name).toBeUndefined();
+      } else if (fixture.name === "initialize.protocol_incompatible") {
+        expect(schema?.params.safeParse(fixture.params).success).toBe(false);
       } else if (fixture.expected?.kind === "product_error") {
         expect(
           schema?.params.safeParse(fixture.params).success,

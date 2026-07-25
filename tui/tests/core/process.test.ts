@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { CoreSpawnError, startCore, StderrRing } from "../../src/core/index.js";
 import { startCoreProcess } from "../../src/core/process.js";
+import { RpcClosedError } from "../../src/protocol/index.js";
 
 const fixture = pathToFileURL(
   join(process.cwd(), "tests", "fixtures", "fake-core.mjs"),
@@ -22,6 +23,49 @@ async function options(extra: Record<string, string | undefined> = {}) {
 
 async function startFakeCore(extra: Record<string, string | undefined> = {}) {
   return await startCoreProcess(await options(extra), [fileURLToPath(fixture)]);
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitFor<T>(read: () => Promise<T | undefined>): Promise<T> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const value = await read();
+    if (value !== undefined) return value;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Timed out waiting for fake Core process state");
+}
+
+async function readPid(path: string): Promise<number | undefined> {
+  try {
+    const pid = Number.parseInt(await readFile(path, "utf8"), 10);
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  await waitFor(async () => (processExists(pid) ? undefined : true));
+}
+
+function forceKill(pid: number): void {
+  if (!processExists(pid)) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
 }
 
 describe("StderrRing", () => {
@@ -64,7 +108,7 @@ describe("CoreProcess", () => {
     });
     const session = await startCoreProcess(value, [fileURLToPath(fixture)]);
     const initialized = await session.rpc.request("initialize", {
-      protocol_version: 2,
+      protocol_version: 3,
       client_name: "awesome",
       client_version: "0.1.0",
     });
@@ -107,7 +151,7 @@ describe("CoreProcess", () => {
       AWESOME_FAKE_CORE_STDERR_BASE64: Buffer.from(bytes).toString("base64"),
     });
     await session.rpc.request("initialize", {
-      protocol_version: 2,
+      protocol_version: 3,
       client_name: "awesome",
       client_version: "0.1.0",
     });
@@ -134,4 +178,94 @@ describe("CoreProcess", () => {
     expect(exit.shutdown_requested).toBe(true);
     expect(exit.signal ?? exit.code).not.toBeNull();
   });
+
+  it("terminates the Core process tree", async () => {
+    const value = await options();
+    const descendantPidFile = join(value.cwd, "descendant.pid");
+    let descendantPid: number | undefined;
+    let session: Awaited<ReturnType<typeof startCoreProcess>> | undefined;
+    try {
+      session = await startCoreProcess(
+        {
+          ...value,
+          env: {
+            ...value.env,
+            AWESOME_FAKE_CORE_DESCENDANT_PID_FILE: descendantPidFile,
+          },
+        },
+        [fileURLToPath(fixture)],
+      );
+      descendantPid = await waitFor(() => readPid(descendantPidFile));
+      expect(processExists(descendantPid)).toBe(true);
+
+      const termination = session.terminate();
+      expect(session.terminate()).toBe(termination);
+      await termination;
+      expect(processExists(descendantPid)).toBe(false);
+      await session.exit;
+      const requestAfterTermination = session.rpc.request("operation.cancel", {
+        operation_id: "operation_after_termination",
+      });
+      await expect(requestAfterTermination).rejects.toBeInstanceOf(
+        RpcClosedError,
+      );
+      await expect(requestAfterTermination).rejects.toMatchObject({
+        name: "RpcClosedError",
+        message: "Core process terminated",
+      });
+    } finally {
+      if (session) {
+        await session.terminate().catch(() => undefined);
+      }
+      if (descendantPid !== undefined) {
+        forceKill(descendantPid);
+        await waitForProcessExit(descendantPid).catch(() => undefined);
+      }
+      await rm(value.cwd, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 50,
+      });
+    }
+  }, 15_000);
+
+  it("terminates the original POSIX group after the Core root exits", async () => {
+    if (process.platform === "win32") return;
+
+    const value = await options();
+    const descendantPidFile = join(value.cwd, "orphaned-descendant.pid");
+    const source = [
+      'const { spawn } = require("node:child_process")',
+      'const { writeFileSync } = require("node:fs")',
+      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" })',
+      `writeFileSync(${JSON.stringify(descendantPidFile)}, String(child.pid), "utf8")`,
+      "child.unref()",
+      "process.exit(0)",
+    ].join(";");
+    let descendantPid: number | undefined;
+    let session: Awaited<ReturnType<typeof startCoreProcess>> | undefined;
+    try {
+      session = await startCoreProcess(value, ["-e", source]);
+      descendantPid = await waitFor(() => readPid(descendantPidFile));
+      await session.exit;
+      expect(processExists(descendantPid)).toBe(true);
+
+      await session.terminate();
+
+      expect(processExists(descendantPid)).toBe(false);
+    } finally {
+      if (session) await session.terminate().catch(() => undefined);
+      if (descendantPid !== undefined) {
+        forceKill(descendantPid);
+        await waitForProcessExit(descendantPid).catch(() => undefined);
+      }
+      await rm(value.cwd, {
+        recursive: true,
+        force: true,
+        maxRetries: 20,
+        retryDelay: 50,
+      });
+    }
+  }, 15_000);
 });

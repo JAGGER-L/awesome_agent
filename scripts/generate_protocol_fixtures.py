@@ -42,6 +42,10 @@ from awesome_agent.config import (
     SecretStatus,
     missing_provider_credential_statuses,
 )
+from awesome_agent.context import (
+    WorkspaceInstructionDiagnostic,
+    WorkspaceInstructionDiagnosticCode,
+)
 from awesome_agent.conversation import (
     Thread,
     ThreadTitleSource,
@@ -74,11 +78,12 @@ from awesome_agent.core.events import (
     UsageUpdatedPayload,
     WarningPayload,
 )
+from awesome_agent.core.tools.permissions import PermissionMode
 from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "protocol" / "fixtures" / "v2"
+TARGET = ROOT / "protocol" / "fixtures" / "v3"
 FIXED_TIME = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
 WORKSPACE_KEY = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 THREAD_ID = "thread_11111111111111111111111111111111"
@@ -164,14 +169,14 @@ def _valid_methods() -> dict[str, object]:
             "initialize.ready",
             "initialize",
             {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=2,
+                    protocol_version=3,
                     status=InitializeStatus.READY,
                     session_id="session_11111111111111111111111111111111",
                     workspace=workspace,
@@ -183,14 +188,14 @@ def _valid_methods() -> dict[str, object]:
             "initialize.state_reset_required",
             "initialize",
             {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=2,
+                    protocol_version=3,
                     status=InitializeStatus.STATE_RESET_REQUIRED,
                     session_id="session_11111111111111111111111111111111",
                     interaction_id="interaction_state_reset",
@@ -216,8 +221,18 @@ def _valid_methods() -> dict[str, object]:
                         effective_model="deepseek/deepseek-v4-flash",
                     ),
                     configuration_valid=True,
+                    permission_mode=PermissionMode.ACCEPT_EDITS,
                     secret_status=SecretStatus(deepseek_api_key=True),
                     usage={"active_execution_seconds": 0.5},
+                    workspace_instruction_diagnostic=(
+                        WorkspaceInstructionDiagnostic(
+                            code=WorkspaceInstructionDiagnosticCode.TOO_LARGE,
+                            message=(
+                                "AGENTS.md was ignored because it exceeds the "
+                                "32 KiB limit."
+                            ),
+                        )
+                    ),
                 )
             ),
         ),
@@ -340,6 +355,18 @@ def _valid_methods() -> dict[str, object]:
             _success(InteractionResult(accepted=True, status="denied")),
         ),
         (
+            "interaction.respond.recovery_retry",
+            "interaction.respond",
+            {"interaction_id": "interaction_recovery", "decision": "retry"},
+            _success(InteractionResult(accepted=True, status="resolved")),
+        ),
+        (
+            "interaction.respond.recovery_abort",
+            "interaction.respond",
+            {"interaction_id": "interaction_recovery", "decision": "abort"},
+            _success(InteractionResult(accepted=True, status="resolved")),
+        ),
+        (
             "operation.cancel",
             "operation.cancel",
             {"operation_id": OPERATION_ID},
@@ -366,14 +393,14 @@ def _invalid_methods() -> dict[str, object]:
             {
                 "name": "initialize.missing_client_version",
                 "method": "initialize",
-                "params": {"protocol_version": 2, "client_name": "awesome"},
+                "params": {"protocol_version": 3, "client_name": "awesome"},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
                 "name": "initialize.protocol_incompatible",
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -395,9 +422,36 @@ def _invalid_methods() -> dict[str, object]:
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
+                "name": "thread.list.limit_type",
+                "method": "thread.list",
+                "params": {"limit": "50"},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.list.explicit_null",
+                "method": "thread.list",
+                "params": {"cursor": None},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
                 "name": "thread.read.before_sequence",
                 "method": "thread.read",
                 "params": {"thread_id": THREAD_ID, "before_sequence": 0},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.read.before_sequence_type",
+                "method": "thread.read",
+                "params": {"thread_id": THREAD_ID, "before_sequence": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.read.before_sequence_unsafe",
+                "method": "thread.read",
+                "params": {
+                    "thread_id": THREAD_ID,
+                    "before_sequence": 9_007_199_254_740_992,
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -420,6 +474,27 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "direct.execute.empty",
                 "method": "direct.execute",
                 "params": {"thread_id": THREAD_ID, "command": ""},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "provider.credential.allow_unverified_type",
+                "method": "provider.credential.set",
+                "params": {
+                    "provider": "deepseek",
+                    "action": "add",
+                    "api_key": "fixture-request-secret",
+                    "allow_unverified": "true",
+                },
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "provider.credential.explicit_null",
+                "method": "provider.credential.set",
+                "params": {
+                    "provider": "deepseek",
+                    "action": "delete",
+                    "api_key": None,
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -662,7 +737,7 @@ def _commands() -> dict[str, object]:
 
 
 def _valid_command_results() -> dict[str, object]:
-    methods = _valid_methods()["cases"]
+    methods = cast(list[dict[str, Any]], _valid_methods()["cases"])
     status = next(
         case["result"]["value"]["payload"]["snapshot"]
         for case in methods
@@ -737,7 +812,7 @@ def _valid_command_results() -> dict[str, object]:
         },
         {
             "kind": "tools",
-            "permission_mode": "request_approval",
+            "permission_mode": "accept_edits",
             "tools": [
                 {
                     "name": "read_file",
@@ -806,7 +881,7 @@ def _valid_command_results() -> dict[str, object]:
             "checks": [{"name": "SQLite", "status": "ok", "detail": None}],
         },
         {"kind": "config", "sources": ["user"], "credentials": credentials},
-        {"kind": "permissions", "mode": "request_approval"},
+        {"kind": "permissions", "mode": "accept_edits"},
     ]
     cases: list[dict[str, object]] = []
     for payload in payloads:
@@ -876,7 +951,7 @@ def _valid_command_results() -> dict[str, object]:
 
 
 def _invalid_command_results() -> dict[str, object]:
-    methods = _valid_methods()["cases"]
+    methods = cast(list[dict[str, Any]], _valid_methods()["cases"])
     application = next(
         case["result"]["value"]
         for case in methods
@@ -908,6 +983,46 @@ def _invalid_command_results() -> dict[str, object]:
                                 "current_thread_id": (
                                     "thread_22222222222222222222222222222222"
                                 ),
+                            },
+                            "thread": thread,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "workspace_instruction_unknown_code",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_transition",
+                        "transition": {
+                            "reason": "resume",
+                            "application": {
+                                **application,
+                                "workspace_instruction_diagnostic": {
+                                    **application["workspace_instruction_diagnostic"],
+                                    "code": "workspace_instructions_future",
+                                },
+                            },
+                            "thread": thread,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "workspace_instruction_unknown_source",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_transition",
+                        "transition": {
+                            "reason": "resume",
+                            "application": {
+                                **application,
+                                "workspace_instruction_diagnostic": {
+                                    **application["workspace_instruction_diagnostic"],
+                                    "source_id": "PROJECT.md",
+                                },
                             },
                             "thread": thread,
                         },
@@ -961,7 +1076,7 @@ def build_files() -> dict[str, bytes]:
     manifest = {
         "fixture_version": 1,
         "product_version": PRODUCT_VERSION,
-        "protocol_version": 2,
+        "protocol_version": 3,
         "methods": list(METHODS),
         "event_types": [event_type.value for event_type in EventType],
         "command_owners": {

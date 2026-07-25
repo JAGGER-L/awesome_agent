@@ -386,7 +386,7 @@ function startupHarness({
             ok: true,
             value: {
               product_version: "0.1.0",
-              protocol_version: 2,
+              protocol_version: 3,
               status,
               session_id: "session_1",
               ...(status === "ready"

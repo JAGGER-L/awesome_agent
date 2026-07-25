@@ -14,10 +14,10 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.23.1"
   },
   "scripts": {
-    "build": "npm run version:sync && node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
+    "build": "npm run version:check && node scripts/clean-dist.mjs && tsc -p tsconfig.build.json",
     "format:check": "biome format --no-errors-on-unmatched .",
     "lint": "biome lint --no-errors-on-unmatched .",
     "test": "vitest run",

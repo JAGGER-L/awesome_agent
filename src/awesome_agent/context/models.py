@@ -65,3 +65,4 @@ class ContextRequest(BaseModel):
     sources: tuple[ContextSource, ...]
     configured_total_tokens: int = Field(gt=0)
     model_context_limit: int = Field(gt=0)
+    reserved_input_tokens: int = Field(default=0, ge=0)

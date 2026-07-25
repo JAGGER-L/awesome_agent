@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import ast
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from awesome_agent.storage.database import initialize_application_database
 
@@ -47,6 +51,33 @@ def test_storage_module_inventory_is_current() -> None:
     assert {
         path.name for path in Path("src/awesome_agent/storage").glob("*.py")
     } == STORAGE_MODULES
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_state_lease_platform_bindings_type_check(
+    platform: str,
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--no-incremental",
+            "--cache-dir",
+            str(tmp_path / "mypy-cache"),
+            "--strict",
+            "--platform",
+            platform,
+            "src/awesome_agent/storage/state_lease.py",
+        ],
+        cwd=Path(__file__).parents[2],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_composition_uses_embedded_state_owners() -> None:

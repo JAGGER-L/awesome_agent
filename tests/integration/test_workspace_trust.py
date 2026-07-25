@@ -1,4 +1,8 @@
+import asyncio
+import os
 import sqlite3
+import subprocess
+import threading
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock
@@ -13,7 +17,13 @@ from awesome_agent.application.contracts import (
     ThreadListQuery,
 )
 from awesome_agent.config import load_config_sources
-from awesome_agent.core.events import CollectingEventSink, InteractionRequiredPayload
+from awesome_agent.core.events import (
+    CollectingEventSink,
+    EventEnvelope,
+    EventType,
+    InteractionRequiredPayload,
+    InteractionResolvedPayload,
+)
 from awesome_agent.core.workspace import (
     TrustStatus,
     WorkspaceTrustService,
@@ -29,6 +39,23 @@ def _unwrap[T](result: ApplicationResult[T]) -> T:
     assert result.ok is True
     assert result.value is not None
     return result.value
+
+
+class FailOnceOnTrustResolvedSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures = 1
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if (
+            self.failures
+            and event.event_type is EventType.INTERACTION_RESOLVED
+            and isinstance(event.payload, InteractionResolvedPayload)
+            and event.payload.decision == "trust"
+        ):
+            self.failures -= 1
+            raise BrokenPipeError("protocol output closed")
+        await super().emit(event)
 
 
 def _file_snapshot(root: Path) -> dict[str, bytes]:
@@ -57,6 +84,30 @@ def test_accept_survives_reopen_and_revoke(tmp_path: Path) -> None:
     assert reopened.status(identity) is TrustStatus.UNKNOWN
 
 
+def test_git_branch_probe_never_inherits_application_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    observed: dict[str, object] = {}
+
+    def run_probe(*args: object, **kwargs: object) -> object:
+        del args
+        observed.update(kwargs)
+        return subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout="feature/safe-stdin\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", run_probe)
+
+    assert composition._git_branch(workspace) == "feature/safe-stdin"
+    assert observed["stdin"] is subprocess.DEVNULL
+
+
 def test_decline_is_represented_by_not_calling_accept(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -83,14 +134,28 @@ def test_moved_workspace_requires_new_trust(tmp_path: Path) -> None:
     assert service.status(resolve_workspace(moved)) is TrustStatus.UNKNOWN
 
 
-def test_symlink_and_real_path_share_identity_and_trust(tmp_path: Path) -> None:
+def test_link_and_real_path_share_identity_and_trust(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     link = tmp_path / "workspace-link"
-    try:
+    if os.name == "nt":
+        completed = subprocess.run(
+            [
+                os.environ.get("COMSPEC", "cmd.exe"),
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                str(link),
+                str(workspace),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+    else:
         link.symlink_to(workspace, target_is_directory=True)
-    except OSError:
-        pytest.skip("Directory symlinks are not available on this platform.")
 
     real_identity = resolve_workspace(workspace)
     link_identity = resolve_workspace(link)
@@ -100,6 +165,7 @@ def test_symlink_and_real_path_share_identity_and_trust(tmp_path: Path) -> None:
     service.accept(real_identity)
 
     assert link_identity.key == real_identity.key
+    assert link_identity.root_identity == real_identity.root_identity
     assert service.status(link_identity) is TrustStatus.TRUSTED
 
 
@@ -157,6 +223,184 @@ async def test_branch_is_not_read_before_trust_and_is_cached_afterward(
     assert skill_discovery.call_count == 1
     assert mcp_config_builder.call_count == 1
     _unwrap(await application.shutdown())
+
+
+@pytest.mark.asyncio
+async def test_trust_resolution_event_failure_is_fail_closed_and_not_replayable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_loader = Mock(wraps=load_config_sources)
+    monkeypatch.setattr(composition, "load_config_sources", config_loader)
+    sink = FailOnceOnTrustResolvedSink()
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=sink,
+        environ={},
+    )
+    pending = _unwrap(await application.initialize())
+    assert pending.status is InitializeStatus.TRUST_REQUIRED
+    assert pending.interaction_id is not None
+
+    with pytest.raises(BrokenPipeError, match="protocol output closed"):
+        await application.respond_interaction(pending.interaction_id, "trust")
+
+    state = _unwrap(await application.get_state())
+    assert state.workspace_trusted is False
+    assert state.initialized is False
+    assert state.pending_interaction_id is None
+    assert [
+        call.kwargs["workspace_trusted"] for call in config_loader.call_args_list
+    ] == [False]
+    assert (
+        WorkspaceTrustService(
+            SQLiteWorkspaceTrustStore(home / "state" / "application.db")
+        ).status(resolve_workspace(workspace))
+        is TrustStatus.UNKNOWN
+    )
+    replay = _unwrap(
+        await application.respond_interaction(pending.interaction_id, "trust")
+    )
+    assert (replay.accepted, replay.status) == (False, "not_found")
+
+    replacement = _unwrap(await application.initialize())
+    assert replacement.status is InitializeStatus.TRUST_REQUIRED
+    assert replacement.interaction_id is not None
+    assert replacement.interaction_id != pending.interaction_id
+    _unwrap(await application.respond_interaction(replacement.interaction_id, "trust"))
+    assert _unwrap(await application.initialize()).status is InitializeStatus.READY
+    assert [
+        call.kwargs["workspace_trusted"] for call in config_loader.call_args_list
+    ] == [False, True]
+    _unwrap(await application.shutdown())
+
+
+@pytest.mark.asyncio
+async def test_trust_response_rejects_workspace_root_replacement_before_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    config_loader = Mock(wraps=load_config_sources)
+    monkeypatch.setattr(composition, "load_config_sources", config_loader)
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    pending = _unwrap(await application.initialize())
+    assert pending.status is InitializeStatus.TRUST_REQUIRED
+    assert pending.interaction_id is not None
+
+    original = tmp_path / "workspace-original"
+    workspace.rename(original)
+    (workspace / ".awesome").mkdir(parents=True)
+    (workspace / ".awesome" / "config.yaml").write_text(
+        "budgets:\n  total_context_tokens: 50000\n",
+        encoding="utf-8",
+    )
+
+    response = await application.respond_interaction(pending.interaction_id, "trust")
+
+    assert response.ok is False
+    assert response.error is not None
+    assert response.error.code is ProductErrorCode.WORKSPACE_NOT_TRUSTED
+    assert [
+        call.kwargs["workspace_trusted"] for call in config_loader.call_args_list
+    ] == [False]
+    assert (
+        WorkspaceTrustService(
+            SQLiteWorkspaceTrustStore(home / "state" / "application.db")
+        ).status(resolve_workspace(workspace))
+        is TrustStatus.UNKNOWN
+    )
+    _unwrap(await application.shutdown())
+
+
+@pytest.mark.asyncio
+async def test_trusted_initialize_rejects_workspace_root_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    WorkspaceTrustService(
+        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
+    ).accept(resolve_workspace(workspace))
+    config_loader = Mock(wraps=load_config_sources)
+    monkeypatch.setattr(composition, "load_config_sources", config_loader)
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    original = tmp_path / "workspace-original"
+    workspace.rename(original)
+    (workspace / ".awesome").mkdir(parents=True)
+    (workspace / ".awesome" / "config.yaml").write_text(
+        "budgets:\n  total_context_tokens: 50000\n",
+        encoding="utf-8",
+    )
+
+    initialized = await application.initialize()
+
+    assert initialized.ok is False
+    assert initialized.error is not None
+    assert initialized.error.code is ProductErrorCode.WORKSPACE_NOT_TRUSTED
+    assert [
+        call.kwargs["workspace_trusted"] for call in config_loader.call_args_list
+    ] == [False]
+    _unwrap(await application.shutdown())
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_workspace_trust_activation_before_closing_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_branch_reader(path: Path) -> str | None:
+        del path
+        entered.set()
+        release.wait(timeout=2)
+        return None
+
+    monkeypatch.setattr(composition, "_git_branch", blocked_branch_reader)
+    application = await composition.compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    pending = _unwrap(await application.initialize())
+    assert pending.interaction_id is not None
+    response = asyncio.create_task(
+        application.respond_interaction(pending.interaction_id, "trust")
+    )
+    assert await asyncio.to_thread(entered.wait, 1)
+
+    shutdown = asyncio.create_task(application.shutdown())
+    shutdown_result = await asyncio.wait_for(shutdown, timeout=1)
+    response_was_done = response.done()
+    release.set()
+
+    assert _unwrap(shutdown_result).stopped is True
+    assert response_was_done is True
+    with pytest.raises(asyncio.CancelledError):
+        await response
 
 
 @pytest.mark.asyncio
@@ -263,6 +507,69 @@ async def test_confirmed_reset_preserves_nonstate_data_and_continues_to_trust(
     assert config.read_bytes() == b"providers: {}\n"
     assert memory.read_bytes() == b"remember"
     _unwrap(await application.shutdown())
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_cancelled_state_reset_worker_before_releasing_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    database = home / "state" / "application.db"
+    database.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("PRAGMA user_version = 6")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocked_reset(lease: StateLease) -> None:
+        del lease
+        entered.set()
+        release.wait(timeout=2)
+        finished.set()
+
+    monkeypatch.setattr(composition, "reset_local_state", blocked_reset)
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    pending = _unwrap(await application.initialize())
+    assert pending.interaction_id is not None
+    response = asyncio.create_task(
+        application.respond_interaction(pending.interaction_id, "reset_state")
+    )
+    assert await asyncio.to_thread(entered.wait, 1)
+
+    shutdown = asyncio.create_task(application.shutdown())
+    await asyncio.sleep(0.05)
+    completed_before_worker = shutdown.done()
+    closing_state = await application.get_state()
+    release.set()
+    shutdown_result = await asyncio.wait_for(shutdown, timeout=1)
+
+    assert completed_before_worker is False
+    assert closing_state.ok is False
+    assert closing_state.error is not None
+    assert closing_state.error.code is ProductErrorCode.OPERATION_BUSY
+    assert finished.is_set()
+    assert _unwrap(shutdown_result).stopped is True
+    with pytest.raises(asyncio.CancelledError):
+        await response
+    closed_state = await application.get_state()
+    assert closed_state.ok is False
+    assert closed_state.error is not None
+    assert closed_state.error.code is ProductErrorCode.OPERATION_BUSY
+    closed_threads = await application.list_threads(ThreadListQuery())
+    assert closed_threads.ok is False
+    assert closed_threads.error is not None
+    assert closed_threads.error.code is ProductErrorCode.OPERATION_BUSY
+    probe = StateLease.acquire(home, StateLeaseMode.EXCLUSIVE)
+    probe.close()
 
 
 @pytest.mark.asyncio

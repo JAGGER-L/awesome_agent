@@ -1,3 +1,7 @@
 """Local-first observable coding agent runtime."""
 
-__version__ = "0.1.0"
+from awesome_agent.version import PRODUCT_VERSION
+
+__version__ = PRODUCT_VERSION
+
+__all__ = ["__version__"]

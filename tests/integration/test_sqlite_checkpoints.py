@@ -44,6 +44,7 @@ async def test_checkpoint_store_reads_valid_state_rejects_corrupt_and_deletes(
     database_path = tmp_path / "checkpoints.db"
     valid_id = "turn_valid"
     corrupt_id = "turn_corrupt"
+    public_extra_id = "turn_public_extra"
     valid = empty_checkpoint()
     state = new_agent_state(
         thread_id="thread_1",
@@ -54,9 +55,12 @@ async def test_checkpoint_store_reads_valid_state_rejects_corrupt_and_deletes(
         thinking_enabled=False,
     )
     channel_values: dict[str, Any] = dict(state)
+    channel_values["branch:to:call_model"] = None
     valid["channel_values"] = channel_values
     corrupt = empty_checkpoint()
     corrupt["channel_values"] = {"unexpected": True}
+    public_extra = empty_checkpoint()
+    public_extra["channel_values"] = {**state, "unexpected": True}
 
     async with sqlite_checkpoint_saver(database_path) as saver:
         await saver.aput(
@@ -71,10 +75,23 @@ async def test_checkpoint_store_reads_valid_state_rejects_corrupt_and_deletes(
             {},
             {},
         )
+        await saver.aput(
+            {
+                "configurable": {
+                    "thread_id": public_extra_id,
+                    "checkpoint_ns": "",
+                }
+            },
+            public_extra,
+            {},
+            {},
+        )
         store = LangGraphCheckpointStore(saver)
 
         assert await store.latest_state(valid_id) == state
         with pytest.raises(CheckpointCorrupt):
             await store.latest_state(corrupt_id)
+        with pytest.raises(CheckpointCorrupt):
+            await store.latest_state(public_extra_id)
         await store.delete(valid_id)
         assert await store.exists(valid_id) is False

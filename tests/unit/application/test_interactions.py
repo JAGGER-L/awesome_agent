@@ -8,6 +8,8 @@ from awesome_agent.application.interactions import (
     InteractionCoordinator,
     InteractionDecision,
     InteractionKind,
+    full_access_confirmation_choices,
+    recovery_decision_choices,
     state_reset_choices,
     tool_approval_choices,
 )
@@ -33,6 +35,9 @@ async def test_create_file_interaction_is_structured_and_resolves_once() -> None
             ),
             InteractionChoice(decision=InteractionDecision.DENY, label="No"),
         ),
+        thread_id="thread_1",
+        turn_id="turn_1",
+        operation_id="operation_1",
     )
     assert pending.operation == "create"
     assert pending.target == "circle_area.py"
@@ -79,6 +84,102 @@ def test_state_reset_choices_are_explicit_and_can_be_validated_without_resolving
     assert coordinator.pending is pending
 
 
+def test_full_access_confirmation_is_thread_bound_and_safe_by_default() -> None:
+    coordinator = InteractionCoordinator()
+    pending = coordinator.create(
+        kind=InteractionKind.FULL_ACCESS_CONFIRMATION,
+        prompt="Enable Full access?",
+        operation="enable",
+        target="full access",
+        capability=None,
+        choices=full_access_confirmation_choices(),
+        thread_id="thread_1",
+        permission_generation=3,
+    )
+
+    assert pending.thread_id == "thread_1"
+    assert pending.permission_generation == 3
+    assert pending.choices[0].decision is InteractionDecision.DENY
+
+
+def test_recovery_decision_is_turn_bound_and_generation_changes() -> None:
+    coordinator = InteractionCoordinator()
+    first = coordinator.create(
+        kind=InteractionKind.RECOVERY_DECISION,
+        prompt="Resume unfinished Turn?",
+        operation="recover",
+        target="unfinished Turn",
+        capability=None,
+        choices=recovery_decision_choices(uncertain=False),
+        thread_id="thread_1",
+        turn_id="turn_1",
+    )
+
+    assert first.generation == 1
+    assert [choice.decision for choice in first.choices] == [
+        InteractionDecision.RETRY,
+        InteractionDecision.ABORT,
+    ]
+    assert coordinator.discard(first.id) is True
+
+    second = coordinator.create(
+        kind=InteractionKind.RECOVERY_DECISION,
+        prompt="A tool outcome is uncertain.",
+        operation="recover",
+        target="uncertain external tool call",
+        capability=None,
+        choices=recovery_decision_choices(uncertain=True),
+        thread_id="thread_2",
+        turn_id="turn_2",
+    )
+
+    assert second.generation == 2
+    assert second.thread_id == "thread_2"
+    assert second.turn_id == "turn_2"
+    assert [choice.decision for choice in second.choices] == [
+        InteractionDecision.ABORT,
+        InteractionDecision.RETRY,
+    ]
+
+
+def test_recovery_decision_requires_thread_and_turn_authority() -> None:
+    coordinator = InteractionCoordinator()
+
+    with pytest.raises(ValueError, match="Recovery decision requires Turn authority"):
+        coordinator.create(
+            kind=InteractionKind.RECOVERY_DECISION,
+            prompt="Resume?",
+            operation="recover",
+            target="unfinished Turn",
+            capability=None,
+            choices=recovery_decision_choices(uncertain=False),
+            thread_id="thread_1",
+        )
+
+
+@pytest.mark.asyncio
+async def test_second_response_is_rejected_before_waiter_clears_pending() -> None:
+    coordinator = InteractionCoordinator()
+    pending = coordinator.create(
+        kind=InteractionKind.TOOL_APPROVAL,
+        prompt="Approve?",
+        operation="write",
+        target="file.txt",
+        capability="workspace.write",
+        choices=tool_approval_choices("workspace.write"),
+        thread_id="thread_1",
+        turn_id="turn_1",
+        operation_id="operation_1",
+    )
+    waiter = asyncio.create_task(coordinator.wait(pending.id))
+    await asyncio.sleep(0)
+
+    assert coordinator.resolve(pending.id, InteractionDecision.ALLOW_ONCE) is True
+    assert coordinator.resolve(pending.id, InteractionDecision.DENY) is False
+    assert await waiter is InteractionDecision.ALLOW_ONCE
+    assert coordinator.pending is None
+
+
 def test_only_one_interaction_can_be_pending() -> None:
     coordinator = InteractionCoordinator()
     coordinator.create(
@@ -106,6 +207,9 @@ def test_only_one_interaction_can_be_pending() -> None:
                 ),
                 InteractionChoice(decision=InteractionDecision.DENY, label="No"),
             ),
+            thread_id="thread_1",
+            turn_id="turn_1",
+            operation_id="operation_1",
         )
 
 

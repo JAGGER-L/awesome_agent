@@ -1,28 +1,142 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 from collections.abc import Sequence
 from contextlib import closing
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from types import ModuleType
 from zipfile import ZipFile
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.release.contracts import (
+    MAX_RELEASE_REQUIREMENTS_BYTES,
+    ReleaseContractError,
+    validate_locked_requirements,
+    validate_release_wheel,
+)
 
 
 class BundleVerificationError(RuntimeError):
     """The release bundle does not satisfy its upgrade contract."""
 
 
+_MAX_CHECKSUM_MANIFEST_BYTES = 4 * 1024
+
+
+def _is_plain_file(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(path.stat(follow_symlinks=False).st_mode)
+    except OSError:
+        return False
+
+
+def verify_release_assets(release: Path, expected_version: str) -> None:
+    expected_assets = {
+        f"awesome-{expected_version}.zip",
+        "install.ps1",
+        "install.sh",
+    }
+    expected_inventory = {*expected_assets, "SHA256SUMS"}
+    try:
+        if not stat.S_ISDIR(release.stat(follow_symlinks=False).st_mode):
+            raise BundleVerificationError("release asset directory is invalid")
+        entries = tuple(release.iterdir())
+    except BundleVerificationError:
+        raise
+    except OSError as error:
+        raise BundleVerificationError("release asset directory is invalid") from error
+    if {entry.name for entry in entries} != expected_inventory or any(
+        not _is_plain_file(entry) for entry in entries
+    ):
+        raise BundleVerificationError("release asset inventory is invalid")
+
+    manifest = release / "SHA256SUMS"
+    try:
+        if manifest.stat().st_size > _MAX_CHECKSUM_MANIFEST_BYTES:
+            raise BundleVerificationError("release checksum manifest is invalid")
+        content = manifest.read_bytes()
+        rendered = content.decode("ascii")
+    except BundleVerificationError:
+        raise
+    except (OSError, UnicodeDecodeError) as error:
+        raise BundleVerificationError("release checksum manifest is invalid") from error
+    if not rendered or "\r" in rendered or not rendered.endswith("\n"):
+        raise BundleVerificationError("release checksum manifest is invalid")
+
+    observed: dict[str, str] = {}
+    for line in rendered.splitlines():
+        fields = line.split("  ")
+        if len(fields) != 2:
+            raise BundleVerificationError("release checksum manifest is invalid")
+        digest, name = fields
+        if (
+            name in observed
+            or name not in expected_assets
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise BundleVerificationError("release checksum manifest is invalid")
+        observed[name] = digest
+    if set(observed) != expected_assets:
+        raise BundleVerificationError("release checksum manifest is incomplete")
+
+    for name, expected_digest in observed.items():
+        try:
+            with (release / name).open("rb") as stream:
+                actual_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        except OSError as error:
+            raise BundleVerificationError("release asset is unreadable") from error
+        if actual_digest != expected_digest:
+            raise BundleVerificationError("release asset checksum does not match")
+
+
 def find_payload(archive: ZipFile, expected_version: str) -> str:
     prefix = f"awesome-{expected_version}/"
-    names = archive.namelist()
-    if not names or any(not name.startswith(prefix) for name in names):
-        raise BundleVerificationError("bundle prefix is invalid")
+    infos = archive.infolist()
+    names = tuple(info.filename for info in infos)
+    required = {
+        "VERSION",
+        f"core/awesome_agent-{expected_version}-py3-none-any.whl",
+        "core/requirements.lock",
+        "tui/LICENSE",
+        "tui/package-lock.json",
+        "tui/package.json",
+    }
+    relatives = tuple(name.removeprefix(prefix) for name in names)
+    if (
+        not names
+        or len(names) != len(set(names))
+        or not required.issubset(relatives)
+        or any(
+            not relative.startswith("tui/dist/")
+            for relative in set(relatives) - required
+        )
+        or any(
+            not name.startswith(prefix)
+            or "\\" in name
+            or ":" in name
+            or "\x00" in name
+            or PurePosixPath(name).is_absolute()
+            or any(part in {"", ".", ".."} for part in PurePosixPath(name).parts)
+            for name in names
+        )
+        or any(
+            info.is_dir()
+            or (info.create_system == 3 and stat.S_ISLNK(info.external_attr >> 16))
+            for info in infos
+        )
+    ):
+        raise BundleVerificationError("bundle member inventory is invalid")
     return prefix
 
 
@@ -149,6 +263,24 @@ def _load_wheel_modules(
         version_module = importlib.import_module("awesome_agent.version")
         storage_module = importlib.import_module("awesome_agent.storage")
         paths_module = importlib.import_module("awesome_agent.paths")
+        expected_origins = {
+            version_module: import_root / "awesome_agent" / "version.py",
+            storage_module: import_root / "awesome_agent" / "storage" / "__init__.py",
+            paths_module: import_root / "awesome_agent" / "paths.py",
+        }
+        for module, expected_origin in expected_origins.items():
+            module_file = getattr(module, "__file__", None)
+            module_spec = getattr(module, "__spec__", None)
+            spec_origin = getattr(module_spec, "origin", None)
+            if not isinstance(module_file, str) or not isinstance(spec_origin, str):
+                raise BundleVerificationError("wheel module origin is unavailable")
+            if (
+                Path(module_file).resolve() != expected_origin.resolve()
+                or Path(spec_origin).resolve() != expected_origin.resolve()
+            ):
+                raise BundleVerificationError("wheel module escaped extraction root")
+    except BundleVerificationError:
+        raise
     except Exception as error:
         raise BundleVerificationError("wheel import failed") from error
     finally:
@@ -158,6 +290,113 @@ def _load_wheel_modules(
                 del sys.modules[name]
         sys.modules.update(previous_modules)
     return version_module, storage_module, paths_module
+
+
+def _run_core_check(command: list[str], cwd: Path, diagnostic: str) -> None:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise BundleVerificationError(diagnostic) from error
+    if result.returncode != 0:
+        raise BundleVerificationError(diagnostic)
+
+
+def _verify_core_install(
+    core: Path,
+    wheel: Path,
+    requirements: Path,
+    expected_version: str,
+) -> None:
+    environment = core / ".verification-environment"
+    uv = resolve_executable("uv")
+    _run_core_check(
+        [uv, "venv", "--python", sys.executable, str(environment)],
+        core,
+        "clean Core environment creation failed",
+    )
+    python = (
+        environment / "Scripts" / "python.exe"
+        if sys.platform == "win32"
+        else environment / "bin" / "python"
+    )
+    _run_core_check(
+        [
+            uv,
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--require-hashes",
+            "--no-deps",
+            "--requirement",
+            str(requirements),
+        ],
+        core,
+        "locked Core dependency installation failed",
+    )
+    _run_core_check(
+        [
+            uv,
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--no-deps",
+            str(wheel),
+        ],
+        core,
+        "Core wheel installation failed",
+    )
+    _run_core_check(
+        [uv, "pip", "check", "--python", str(python)],
+        core,
+        "Core dependency consistency check failed",
+    )
+    smoke = """
+from importlib.metadata import version
+from importlib.metadata import entry_points
+from pathlib import Path
+import sys
+import awesome_agent
+import awesome_agent.paths as paths
+import awesome_agent.protocol.stdio as stdio
+import awesome_agent.storage as storage
+import awesome_agent.version as product
+
+expected_version, environment = sys.argv[1:]
+assert version("awesome-agent") == expected_version
+assert awesome_agent.__version__ == expected_version
+assert product.PRODUCT_VERSION == expected_version
+root = Path(environment).resolve()
+for module in (paths, stdio, storage, product):
+    assert Path(module.__file__).resolve().is_relative_to(root)
+scripts_by_name = {
+    item.name: item.value for item in entry_points(group="console_scripts")
+}
+assert scripts_by_name["awesome-core"] == "awesome_agent.protocol.stdio:main"
+assert scripts_by_name["awesome-dev"] == "awesome_agent.development.launcher:main"
+scripts = Path(sys.executable).resolve().parent
+entrypoints = ("awesome-core", "awesome-core.exe", "awesome-core.cmd")
+assert any((scripts / name).is_file() for name in entrypoints)
+"""
+    _run_core_check(
+        [
+            str(python),
+            "-I",
+            "-c",
+            smoke,
+            expected_version,
+            str(environment),
+        ],
+        core,
+        "installed Core smoke check failed",
+    )
 
 
 def resolve_executable(name: str) -> str:
@@ -197,6 +436,7 @@ def _verify_tui(tui: Path, expected_version: str) -> None:
 
 
 def verify_release_bundle(bundle: Path, expected_version: str) -> None:
+    verify_release_assets(bundle.parent, expected_version)
     if not bundle.is_file():
         raise BundleVerificationError("bundle is missing")
     with TemporaryDirectory(prefix="awesome-release-verify-") as temporary:
@@ -212,9 +452,22 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
 
         payload = root / prefix.rstrip("/")
         wheels = list((payload / "core").glob("*.whl"))
-        expected_fragment = f"awesome_agent-{expected_version}"
-        if len(wheels) != 1 or expected_fragment not in wheels[0].name:
+        expected_wheel = f"awesome_agent-{expected_version}-py3-none-any.whl"
+        if len(wheels) != 1 or wheels[0].name != expected_wheel:
             raise BundleVerificationError("bundle wheel identity is invalid")
+        requirements = payload / "core" / "requirements.lock"
+        try:
+            if requirements.stat().st_size > MAX_RELEASE_REQUIREMENTS_BYTES:
+                raise BundleVerificationError("bundle requirements are too large")
+            validate_locked_requirements(requirements.read_bytes())
+            validate_release_wheel(wheels[0], expected_version)
+        except ReleaseContractError as error:
+            subject = "requirements" if "requirement" in str(error) else "wheel"
+            raise BundleVerificationError(
+                f"bundle {subject} contract is invalid: {error}"
+            ) from error
+        except OSError as error:
+            raise BundleVerificationError("bundle requirements are missing") from error
         with ZipFile(wheels[0]) as wheel_archive:
             module_paths = {
                 Path(name).as_posix().casefold()
@@ -226,6 +479,13 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
             for path in module_paths
         ):
             raise BundleVerificationError("wheel contains a migration module")
+
+        _verify_core_install(
+            payload / "core",
+            wheels[0],
+            requirements,
+            expected_version,
+        )
 
         version_module, storage_module, paths_module = _load_wheel_modules(
             wheels[0], root / "wheel-import"

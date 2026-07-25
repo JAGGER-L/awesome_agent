@@ -606,6 +606,53 @@ describe("surfaceReducer", () => {
     expect(state.active_operation?.id).toBe("operation_1");
   });
 
+  it("does not let an old resolution clear the next recovery interaction", () => {
+    const required = (sequence: number, interactionId: string): EventEnvelope =>
+      ({
+        ...lifecycle(sequence, "warning"),
+        event_type: "interaction.required",
+        payload: {
+          kind: "interaction.required",
+          interaction_id: interactionId,
+          interaction_kind: "recovery_decision",
+          prompt: "Resume?",
+          operation: "recover_unfinished_turn",
+          target: "unfinished Turn",
+          choices: [
+            { decision: "retry", label: "Retry" },
+            { decision: "abort", label: "Abort" },
+          ],
+        },
+      }) as EventEnvelope;
+    let state = surfaceReducer(initialSurfaceState(), {
+      type: "event.received",
+      generation: 0,
+      event: required(1, "interaction_first"),
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: required(2, "interaction_second"),
+    });
+    state = surfaceReducer(state, {
+      type: "event.received",
+      generation: 0,
+      event: {
+        ...lifecycle(3, "warning"),
+        event_type: "interaction.resolved",
+        payload: {
+          kind: "interaction.resolved",
+          interaction_id: "interaction_first",
+          decision: "abort",
+        },
+      } as EventEnvelope,
+    });
+
+    expect(state.pending_interaction?.interaction_id).toBe(
+      "interaction_second",
+    );
+  });
+
   it("resets reconnect projection and closes", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "connection.start",

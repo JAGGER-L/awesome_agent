@@ -6,6 +6,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from awesome_agent.core.filesystem import FileIdentity
+
 
 class WorkspaceErrorCode(StrEnum):
     NOT_FOUND = "workspace_not_found"
@@ -20,12 +22,17 @@ class WorkspaceResolutionError(ValueError):
         self.path = path
 
 
+class WorkspaceIdentityChanged(RuntimeError):
+    """The path no longer names the filesystem object bound at composition."""
+
+
 class WorkspaceIdentity(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     key: str
     canonical_path: Path
     display_path: Path
+    root_identity: FileIdentity
 
 
 class TrustStatus(StrEnum):
