@@ -107,6 +107,14 @@ original directory if initialization fails. Normal Awesome processes retain a
 shared state lease; reset requires exclusive ownership, so it cannot race an
 active session.
 
+The lease is the cross-process product contract; the rename does not revoke
+uncoordinated operating-system handles. Windows sharing rules make an open
+Application database handle fail before replacement. On POSIX, rename and
+unlink can succeed while a handle is open: that handle continues to observe
+the detached old inode until close, and a new connection through
+`<AWESOME_HOME>/state/application.db` observes only the fresh database. This
+platform difference does not allow the two generations to share one pathname.
+
 Reset removes conversations, Threads, trust, checkpoints, and Change Journal
 history. It preserves `config.yaml`, `.env`, `skills/`, `memory/`,
 `workspaces/`, `ui.json`, and every workspace file because those paths are

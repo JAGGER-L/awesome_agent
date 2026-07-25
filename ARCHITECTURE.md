@@ -379,6 +379,12 @@ routes the decision. Configuration, credentials, Skills, Memory, UI
 preferences, and workspace files live outside that boundary and survive a
 confirmed reset.
 
+Here, atomic replacement describes the filesystem namespace transition, not
+revocation of arbitrary handles opened outside Awesome's lease protocol. An
+open database handle prevents the rename on Windows. POSIX permits the rename
+and unlink; such a pre-existing handle remains attached to the detached old
+inode until it closes, while the canonical path names the fresh state.
+
 ### Change Journal
 
 - **Responsibility:** controlled before/after snapshots, conflict detection,

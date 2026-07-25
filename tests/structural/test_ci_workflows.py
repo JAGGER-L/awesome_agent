@@ -123,6 +123,42 @@ def test_required_ci_covers_every_product_boundary() -> None:
     )
 
 
+def test_tui_job_provisions_locked_python_core_before_e2e_tests() -> None:
+    workflow = _workflow(PRIMARY_WORKFLOWS[0])
+    jobs = workflow["jobs"]
+    assert isinstance(jobs, dict)
+    tui = jobs["tui"]
+    assert isinstance(tui, dict)
+    steps = tui["steps"]
+    assert isinstance(steps, list)
+    named_steps = {step.get("name"): step for step in steps if isinstance(step, dict)}
+    required = {
+        "Setup Python",
+        "Setup uv",
+        "Install locked Core test dependencies",
+        "Test",
+    }
+    assert required <= set(named_steps)
+
+    python_setup = named_steps["Setup Python"]
+    uv_setup = named_steps["Setup uv"]
+    core_install = named_steps["Install locked Core test dependencies"]
+    assert python_setup["with"] == {"python-version": "${{ env.PYTHON_VERSION }}"}
+    assert uv_setup["with"] == {
+        "version": "${{ env.UV_VERSION }}",
+        "enable-cache": "true",
+    }
+    assert core_install["run"] == "uv sync --locked --dev"
+    assert "working-directory" not in core_install
+
+    names = [step.get("name") for step in steps if isinstance(step, dict)]
+    assert names.index("Setup Python") < names.index("Setup uv")
+    assert names.index("Setup uv") < names.index(
+        "Install locked Core test dependencies"
+    )
+    assert names.index("Install locked Core test dependencies") < names.index("Test")
+
+
 def test_workflows_use_bounded_jobs_and_immutable_action_references() -> None:
     for path in WORKFLOWS:
         workflow = _workflow(path)

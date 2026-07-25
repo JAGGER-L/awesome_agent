@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -115,22 +116,48 @@ def test_reset_requires_matching_exclusive_lease_without_mutation(
     assert _inventory(paths.home) == before
 
 
-def test_reset_fails_before_mutation_when_database_handle_is_open(
+def test_reset_with_open_database_handle_obeys_platform_contract(
     tmp_path: Path,
 ) -> None:
     paths = _build_home(tmp_path)
     lease = StateLease.acquire(paths.home, StateLeaseMode.EXCLUSIVE)
     before = _inventory(paths.home)
+    old_identity = os.stat(paths.application_db)
     connection = sqlite3.connect(paths.application_db)
     try:
-        with pytest.raises(StateResetError) as raised:
-            reset_local_state(lease)
+        if os.name == "nt":
+            with pytest.raises(StateResetError) as raised:
+                reset_local_state(lease)
+
+            assert raised.value.code == "state_replacement_failed"
+            assert _inventory(paths.home) == before
+            return
+
+        reset_local_state(lease)
+        new_identity = os.stat(paths.application_db)
+        old_values = connection.execute("SELECT value FROM legacy_state").fetchall()
+        with closing(sqlite3.connect(paths.application_db)) as fresh_connection:
+            fresh_tables = {
+                row[0]
+                for row in fresh_connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+
+        assert (new_identity.st_dev, new_identity.st_ino) != (
+            old_identity.st_dev,
+            old_identity.st_ino,
+        )
+        assert old_values == [("old",)]
+        assert "legacy_state" not in fresh_tables
+        assert (
+            inspect_application_state(paths.application_db).compatibility
+            is StateCompatibility.CURRENT
+        )
+        assert not list(paths.home.glob(".state-reset-*"))
     finally:
         connection.close()
         lease.close()
-
-    assert raised.value.code == "state_replacement_failed"
-    assert _inventory(paths.home) == before
 
 
 def test_reset_restores_original_state_when_fresh_initialization_fails(
