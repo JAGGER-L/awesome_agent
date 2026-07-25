@@ -32,7 +32,7 @@ Local memory 与 Mem0 Cloud 相互独立，二者默认关闭。
 
 ## 安装
 
-### macOS 或 WSL2 Ubuntu
+### Apple Silicon macOS 或 WSL2 Ubuntu 24.04 x64
 
 ```bash
 curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
@@ -92,18 +92,23 @@ awesome --help
 
 ## 文档
 
+- [浏览文档网站](https://jagger-l.github.io/awesome_agent/zh-cn/)
+- [文档总览](docs/README.md)
 - [快速开始](docs/getting-started/quickstart.zh-CN.md)
-- [命令](docs/user-guide/commands.md)
-- [配置](docs/user-guide/configuration.md)
-- [Workspace 与工具](docs/user-guide/workspace-and-tools.md)
-- [Memory、Skills 与 MCP](docs/user-guide/memory-skills-mcp.md)
-- [故障排查](docs/user-guide/troubleshooting.md)
+- [建立日常工作流](docs/user-guide/README.md)
+- [理解权限与安全修改](docs/user-guide/permissions.md)
+- [选择 Memory、Skills 或 MCP](docs/extensions/README.md)
+- [查询命令、配置、工具和协议的精确契约](docs/reference/README.md)
 - [架构](ARCHITECTURE.md)
-- [开发](docs/development/README.md)
+- [贡献与开发](docs/development/README.md)
+- [故障排查](docs/user-guide/troubleshooting.md)
 - [Roadmap](docs/roadmap.md)
 
+除中文首页和快速开始外，深入文档目前以英文为权威版本；文档网站会明确显示
+英文回退，不会把尚未翻译的路由标记为已翻译。
+
 开发者可以通过 `uv run awesome-dev` 运行当前源码；完整的环境准备、启动和故障排查流程请参阅
-[从源码启动](docs/getting-started/quickstart.zh-CN.md#从源码启动)。
+[开发环境](docs/development/setup.md)（英文）。
 
 ## 安全
 
@@ -112,6 +117,7 @@ awesome --help
 只提升内置本地能力，且不会绕过硬性安全拒绝；MCP 和未知扩展能力仍会逐次询问。
 任何权限模式都不提供操作系统沙箱，命令 circuit breaker 只用于拦截可识别的误操作，
 不能识别任意恶意混淆。受控的 Workspace 文件操作会绑定已检查的目录与文件身份，
-并拒绝链接、reparse point、hard-link 别名和有歧义的 Windows 路径写法；有界的
-进程树清理会减少遗留子进程，但不会隔离宿主机执行。进程环境变量和
+且不会沿链接或 reparse point 访问外部目标。递归清单会拒绝嵌套 reparse 目录，
+修改操作会拒绝有歧义或 hard-link 别名；有界的进程树清理会减少遗留子进程，
+但不会隔离宿主机执行。进程环境变量和
 `<AWESOME_HOME>/.env` 仍是高级配置方式；不要把凭据写入项目文件。

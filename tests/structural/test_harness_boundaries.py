@@ -34,8 +34,8 @@ def test_development_coordination_and_product_state_are_separate() -> None:
     for path in (
         ROOT / "docs/development/testing.md",
         ROOT / "docs/development/release.md",
-        ROOT / "docs/architecture/agent-core.md",
-        ROOT / "docs/architecture/application-and-langgraph.md",
+        ROOT / "docs/architecture/application-and-agent.md",
+        ROOT / "docs/architecture/request-lifecycles.md",
     ):
         assert path.is_file()
 

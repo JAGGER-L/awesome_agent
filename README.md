@@ -34,7 +34,7 @@ Local memory and Mem0 Cloud are independent and default off.
 
 ## Install
 
-### macOS or WSL2 Ubuntu
+### Apple Silicon macOS or WSL2 Ubuntu 24.04 x64
 
 ```bash
 curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
@@ -99,19 +99,21 @@ Analyze this project's structure and tell me where I should start reading.
 
 ## Documentation
 
-- [Quickstart](docs/getting-started/quickstart.md)
-- [Commands](docs/user-guide/commands.md)
-- [Configuration](docs/user-guide/configuration.md)
-- [Workspace and tools](docs/user-guide/workspace-and-tools.md)
-- [Memory, Skills, and MCP](docs/user-guide/memory-skills-mcp.md)
-- [Troubleshooting](docs/user-guide/troubleshooting.md)
+- [Browse the documentation site](https://jagger-l.github.io/awesome_agent/)
+- [Documentation map](docs/README.md)
+- [Install and complete the quickstart](docs/getting-started/quickstart.md)
+- [Build a daily workflow](docs/user-guide/README.md)
+- [Understand permissions and safe changes](docs/user-guide/permissions.md)
+- [Choose Memory, Skills, or MCP](docs/extensions/README.md)
+- [Look up exact commands, configuration, tools, and protocol](docs/reference/README.md)
 - [Architecture](ARCHITECTURE.md)
-- [Development](docs/development/README.md)
+- [Contributing and development](docs/development/README.md)
+- [Troubleshooting](docs/user-guide/troubleshooting.md)
 - [Roadmap](docs/roadmap.md)
 
 Contributors can run the current checkout with `uv run awesome-dev`; see
-[Develop from Source](docs/getting-started/quickstart.md#develop-from-source)
-for the complete setup and troubleshooting flow.
+[Development setup](docs/development/setup.md) for the complete environment,
+startup, and troubleshooting flow.
 
 ## Security
 
@@ -123,8 +125,9 @@ ask every time. None of the permission modes provides an operating-system
 sandbox, and the command circuit breaker is a defense against recognizable
 accidents rather than a detector for arbitrary hostile obfuscation.
 Controlled workspace file operations bind checked directory/file identities
-and refuse links, reparse points, hard-link aliases, and ambiguous Windows path
-spellings; bounded process-tree cleanup limits orphaned children but does not
-isolate host execution.
+and do not follow links or reparse points to external targets. Recursive
+inventory rejects nested reparse directories, while mutations reject ambiguous
+or hard-link aliases. Bounded process-tree cleanup limits orphaned children but
+does not isolate host execution.
 Process-environment variables and `<AWESOME_HOME>/.env` remain advanced
 configuration options; never put credentials in project files.

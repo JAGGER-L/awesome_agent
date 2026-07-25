@@ -2,30 +2,63 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+DOCS = ROOT / "docs"
 LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
-FINAL_DOCS = {
-    "README.md",
-    "roadmap.md",
+DOCS_SECTIONS = {
+    "getting-started",
+    "concepts",
+    "user-guide",
+    "extensions",
+    "reference",
+    "architecture",
+    "development",
+}
+REQUIRED_PAGES = {
+    "getting-started/README.md",
+    "getting-started/installation.md",
     "getting-started/quickstart.md",
     "getting-started/quickstart.zh-CN.md",
+    "concepts/README.md",
+    "concepts/workspace-thread-turn.md",
+    "concepts/context-and-instructions.md",
+    "concepts/changes-and-recovery.md",
+    "user-guide/README.md",
     "user-guide/commands.md",
+    "user-guide/permissions.md",
+    "user-guide/tools-and-shell.md",
+    "user-guide/changes.md",
     "user-guide/configuration.md",
-    "user-guide/workspace-and-tools.md",
-    "user-guide/memory-skills-mcp.md",
     "user-guide/troubleshooting.md",
+    "extensions/README.md",
+    "extensions/memory.md",
+    "extensions/skills.md",
+    "extensions/mcp.md",
+    "reference/README.md",
+    "reference/cli.md",
+    "reference/commands.md",
+    "reference/configuration.md",
+    "reference/built-in-tools.md",
+    "reference/permission-modes.md",
+    "reference/files-and-state.md",
+    "reference/protocol.md",
     "architecture/README.md",
-    "architecture/agent-core.md",
-    "architecture/application-and-langgraph.md",
-    "architecture/protocol-and-ink.md",
-    "architecture/security.md",
-    "architecture/storage.md",
+    "architecture/request-lifecycles.md",
+    "architecture/application-and-agent.md",
+    "architecture/context-model-and-extensions.md",
+    "architecture/tools-and-changes.md",
+    "architecture/storage-and-recovery.md",
+    "architecture/protocol-and-tui.md",
+    "architecture/security-and-dependencies.md",
     "development/README.md",
-    "development/command-regression.md",
+    "development/setup.md",
     "development/testing.md",
+    "development/extending-awesome.md",
+    "development/contracts-and-documentation.md",
     "development/release.md",
+    "README.md",
+    "roadmap.md",
 }
-
 ARCHITECTURE_HEADINGS = {
     "## System Overview",
     "## Directory Structure",
@@ -47,18 +80,6 @@ ARCHITECTURE_DIAGRAM_LABELS = {
     "Tool System",
     "Workspace & Host",
 }
-ROADMAP_HEADINGS = (
-    "Documentation and Documentation Site",
-    "One-command Skills Installation",
-    "Multi-Agent",
-    "More Model Providers",
-    "Search Tools",
-    "More Memory Providers",
-    "Cron Tasks",
-    "Gateway Messaging",
-    "Optional Docker Tool Backend",
-)
-
 INSTALL_SH = (
     "curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/"
     "download/install.sh | sh"
@@ -67,20 +88,38 @@ INSTALL_PS1 = (
     "irm https://github.com/JAGGER-L/awesome_agent/releases/latest/"
     "download/install.ps1 | iex"
 )
-ENGLISH_QUICKSTART_STEPS = (
-    "## 1. Install Awesome",
-    "## 2. Start in a Project",
-    "## 3. Trust the Workspace",
-    "## 4. Configure a Model",
-    "## 5. Verify Your Setup",
+COMMANDS = (
+    "new",
+    "rename",
+    "resume",
+    "context",
+    "compact",
+    "model",
+    "auth",
+    "thinking",
+    "workspace",
+    "diff",
+    "undo",
+    "redo",
+    "tools",
+    "skills",
+    "mcp",
+    "memory",
+    "status",
+    "usage",
+    "doctor",
+    "config",
+    "permissions",
+    "help",
+    "theme",
+    "copy",
+    "quit",
 )
-CHINESE_QUICKSTART_STEPS = (
-    "## 1. 安装 Awesome",
-    "## 2. 在项目中启动",
-    "## 3. 信任 Workspace",
-    "## 4. 配置模型",
-    "## 5. 快速验证",
-)
+
+
+def _is_generated_site_markdown(path: Path) -> bool:
+    relative = path.relative_to(ROOT).as_posix()
+    return relative.startswith("site/src/content/docs/")
 
 
 def test_relative_markdown_links_resolve() -> None:
@@ -88,7 +127,8 @@ def test_relative_markdown_links_resolve() -> None:
     markdown_files = [
         path
         for path in ROOT.rglob("*.md")
-        if not any(
+        if not _is_generated_site_markdown(path)
+        and not any(
             part
             in {
                 ".codex",
@@ -110,7 +150,7 @@ def test_relative_markdown_links_resolve() -> None:
                 or "://" in target
             ):
                 continue
-            relative = target.split("#", 1)[0]
+            relative = target.split("#", 1)[0].strip("<>")
             if not relative:
                 continue
             resolved = (source.parent / relative).resolve()
@@ -120,12 +160,26 @@ def test_relative_markdown_links_resolve() -> None:
     assert not failures, "Broken Markdown links:\n" + "\n".join(failures)
 
 
-def test_final_documentation_inventory_is_exact() -> None:
-    actual = {
-        path.relative_to(ROOT / "docs").as_posix()
-        for path in (ROOT / "docs").rglob("*.md")
-    }
-    assert actual == FINAL_DOCS
+def test_documentation_has_intent_based_sections_and_required_pages() -> None:
+    actual_sections = {path.name for path in DOCS.iterdir() if path.is_dir()}
+    actual_pages = {path.relative_to(DOCS).as_posix() for path in DOCS.rglob("*.md")}
+
+    assert actual_sections == DOCS_SECTIONS
+    assert not (REQUIRED_PAGES - actual_pages)
+    assert (DOCS / "README.md").is_file()
+    assert (DOCS / "roadmap.md").is_file()
+
+
+def test_every_translation_has_an_english_canonical_page() -> None:
+    failures: list[str] = []
+    for translated in DOCS.rglob("*.zh-CN.md"):
+        canonical = translated.with_name(translated.name.replace(".zh-CN.md", ".md"))
+        if not canonical.is_file():
+            failures.append(str(translated.relative_to(ROOT)))
+
+    assert not failures, "Translations without an English source:\n" + "\n".join(
+        failures
+    )
 
 
 def test_architecture_is_the_complete_technical_entrypoint() -> None:
@@ -139,7 +193,7 @@ def test_entry_docs_present_the_current_product() -> None:
     english = (ROOT / "README.md").read_text(encoding="utf-8")
     chinese = (ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
     quickstarts = "\n".join(
-        (ROOT / "docs" / "getting-started" / name).read_text(encoding="utf-8")
+        (DOCS / "getting-started" / name).read_text(encoding="utf-8")
         for name in ("quickstart.md", "quickstart.zh-CN.md")
     )
     combined = "\n".join((english, chinese, quickstarts))
@@ -180,94 +234,141 @@ def test_entry_docs_present_the_current_product() -> None:
     assert "默认关闭" in chinese
 
 
-def test_quickstarts_are_exactly_five_onboarding_steps() -> None:
-    english = (ROOT / "docs/getting-started/quickstart.md").read_text(encoding="utf-8")
-    chinese = (ROOT / "docs/getting-started/quickstart.zh-CN.md").read_text(
-        encoding="utf-8"
-    )
+def test_quickstarts_are_five_step_product_tutorials() -> None:
+    english = (DOCS / "getting-started/quickstart.md").read_text(encoding="utf-8")
+    chinese = (DOCS / "getting-started/quickstart.zh-CN.md").read_text(encoding="utf-8")
 
-    assert tuple(re.findall(r"^## \d+\..+$", english, re.MULTILINE)) == (
-        ENGLISH_QUICKSTART_STEPS
-    )
-    assert tuple(re.findall(r"^## \d+\..+$", chinese, re.MULTILINE)) == (
-        CHINESE_QUICKSTART_STEPS
-    )
     for content in (english, chinese):
+        steps = re.findall(r"^## (\d+)\..+$", content, re.MULTILINE)
+        assert steps == ["1", "2", "3", "4", "5"]
         assert "/model" in content
-        assert "/auth" in content
+        assert "/permissions" in content
+        assert "--version" in content
         assert ".env" not in content
-        assert not re.search(r"^## [6-9]\d*\.", content, re.MULTILINE)
-    assert "Press Enter" in english
-    assert "按 Enter" in chinese
+        assert "uv run" not in content
+        assert "rm -rf" not in content
+        assert "Remove-Item" not in content
 
 
 def test_state_recovery_docs_use_the_product_flow() -> None:
-    storage = (ROOT / "docs/architecture/storage.md").read_text(encoding="utf-8")
-    troubleshooting = (ROOT / "docs/user-guide/troubleshooting.md").read_text(
+    storage = (DOCS / "architecture/storage-and-recovery.md").read_text(
         encoding="utf-8"
     )
-    quickstarts = "\n".join(
-        (ROOT / "docs/getting-started" / name).read_text(encoding="utf-8")
-        for name in ("quickstart.md", "quickstart.zh-CN.md")
+    troubleshooting = (DOCS / "user-guide/troubleshooting.md").read_text(
+        encoding="utf-8"
+    )
+    files_and_state = (DOCS / "reference/files-and-state.md").read_text(
+        encoding="utf-8"
     )
 
     assert "Schema 7" in storage
-    assert "exclusive state lease" in storage
+    assert "exclusive" in storage and "lease" in storage
     assert "Reset local state and continue" in troubleshooting
     assert "API keys" in troubleshooting
-    assert "Remove-Item" not in quickstarts
-    assert "rm -rf" not in quickstarts
+    assert "state/application.db" in files_and_state
+    assert "state/checkpoints.db" in files_and_state
 
 
-def test_roadmap_has_the_approved_product_order() -> None:
-    roadmap = (ROOT / "docs/roadmap.md").read_text(encoding="utf-8")
-    positions = [roadmap.index(f"## {heading}") for heading in ROADMAP_HEADINGS]
+def test_roadmap_separates_current_behavior_from_future_directions() -> None:
+    roadmap = (DOCS / "roadmap.md").read_text(encoding="utf-8")
 
-    assert positions == sorted(positions)
+    current = roadmap.index("## Current foundation")
+    near_term = roadmap.index("## Near-term product directions")
+    later = roadmap.index("## Later directions")
+    assert current < near_term < later
+    assert "GitHub Pages documentation site" in roadmap[current:near_term]
+    for direction in (
+        "One-command Skills installation",
+        "Multi-Agent delegation",
+        "More model providers",
+        "Search tools",
+        "More memory providers",
+        "Scheduled tasks",
+        "Gateway messaging",
+        "Optional isolated tool backend",
+    ):
+        assert direction in roadmap[near_term:]
 
 
-def test_public_command_and_configuration_contract_is_documented() -> None:
-    commands = (ROOT / "docs/user-guide/commands.md").read_text(encoding="utf-8")
-    configuration = (ROOT / "docs/user-guide/configuration.md").read_text(
+def test_public_reference_covers_runtime_contracts() -> None:
+    commands = (DOCS / "reference/commands.md").read_text(encoding="utf-8")
+    configuration = (DOCS / "reference/configuration.md").read_text(encoding="utf-8")
+    tools = (DOCS / "reference/built-in-tools.md").read_text(encoding="utf-8")
+    permissions = (DOCS / "reference/permission-modes.md").read_text(encoding="utf-8")
+    protocol = (DOCS / "reference/protocol.md").read_text(encoding="utf-8")
+
+    for command in COMMANDS:
+        assert f"`/{command}" in commands
+    for field in (
+        "default_model",
+        "kimi_region",
+        "model_calls",
+        "tool_calls",
+        "provider_retries",
+        "compressions",
+        "active_execution_seconds",
+        "total_context_tokens",
+        "mcp_servers",
+        "AWESOME_MODEL",
+        "AWESOME_HOME",
+        "AWESOME_INSTALL_DIR",
+        "DEEPSEEK_API_KEY",
+        "MOONSHOT_API_KEY",
+        "MEM0_API_KEY",
+    ):
+        assert field in configuration
+    for tool in (
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "delete",
+        "glob",
+        "grep",
+        "execute",
+    ):
+        assert f"`{tool}`" in tools
+    for value in (
+        "Request approval",
+        "Accept edits",
+        "Full access",
+        "workspace.read",
+        "workspace.write",
+        "workspace.delete",
+        "shell.execute",
+        "MCP",
+    ):
+        assert value in permissions
+    for method in (
+        "initialize",
+        "application.getState",
+        "thread.list",
+        "thread.read",
+        "turn.submit",
+        "direct.execute",
+        "command.execute",
+        "provider.credential.set",
+        "interaction.respond",
+        "operation.cancel",
+        "shutdown",
+    ):
+        assert f"`{method}`" in protocol
+    assert "protocol v3" in protocol.casefold()
+
+
+def test_documentation_explains_ownership_and_validation() -> None:
+    index = (DOCS / "README.md").read_text(encoding="utf-8")
+    development = (DOCS / "development/contracts-and-documentation.md").read_text(
         encoding="utf-8"
     )
 
+    assert "## Canonical ownership" in index
+    assert "## Language policy" in index
     for command in (
-        "new",
-        "resume",
-        "context",
-        "compact",
-        "auth",
-        "model",
-        "thinking",
-        "workspace",
-        "diff",
-        "undo",
-        "redo",
-        "tools",
-        "skills",
-        "mcp",
-        "memory",
-        "status",
-        "usage",
-        "doctor",
-        "config",
-        "permissions",
-        "help",
-        "theme",
-        "copy",
-        "quit",
+        "npm --prefix site run check:navigation",
+        "npm --prefix site run check",
+        "npm --prefix site run build",
+        "npm --prefix site run check:links",
     ):
-        assert f"`/{command}" in commands
-    for value in (
-        "262,144",
-        "model calls: 256",
-        "tool calls: 512",
-        "active execution: 21,600 seconds",
-        "provider retries: 6",
-        "compressions: 10",
-        "AWESOME_MODEL",
-        "AWESOME_THINKING",
-        "AWESOME_SKILL",
-    ):
-        assert value in configuration
+        assert command in development
+    assert "llms.txt" in development

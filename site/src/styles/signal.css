@@ -8,12 +8,12 @@
     "Microsoft YaHei UI", ui-sans-serif, system-ui, sans-serif;
   --sl-font-mono: "DM Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --sl-color-accent-low: #e9e5ff;
-  --sl-color-accent: #6858ff;
+  --sl-color-accent: #6658e8;
   --sl-color-accent-high: #30258f;
   --sl-color-white: #16171b;
   --sl-color-gray-1: #303137;
   --sl-color-gray-2: #5e6168;
-  --sl-color-gray-3: #777a81;
+  --sl-color-gray-3: #696c73;
   --sl-color-gray-4: #a4a5a6;
   --sl-color-gray-5: #d7d6cf;
   --sl-color-gray-6: #ebeae5;
@@ -362,13 +362,25 @@ main:has(.awesome-home) {
   width: min(100%, 41rem);
   min-height: 3.25rem;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   margin-top: 1.15rem;
   overflow: hidden;
   border: 1px solid var(--sl-color-hairline);
   border-radius: 0.7rem;
   background: color-mix(in srgb, var(--sl-color-bg) 86%, var(--sl-color-white) 14%);
+}
+
+.hero-install small {
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  padding: 0 0.75rem;
+  border-inline-end: 1px solid var(--sl-color-hairline);
+  color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.55rem;
+  white-space: nowrap;
 }
 
 .hero-install code {
@@ -399,6 +411,22 @@ main:has(.awesome-home) {
 .hero-install[data-copied="true"] button {
   color: var(--sl-color-white);
   background: var(--sl-color-gray-6);
+}
+
+.install-review {
+  width: min(100%, 41rem);
+  margin: -0.45rem 0 0;
+  font-size: 0.78rem;
+}
+
+.install-review a {
+  color: var(--sl-color-gray-2);
+  text-decoration-color: color-mix(in srgb, var(--sl-color-gray-3) 65%, transparent);
+  text-underline-offset: 0.2em;
+}
+
+.install-review a:hover {
+  color: var(--sl-color-white);
 }
 
 .proof-pills {

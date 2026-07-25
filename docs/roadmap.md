@@ -1,64 +1,180 @@
 # Roadmap
 
-Awesome's roadmap focuses on making terminal coding workflows more useful while
-keeping one shared Python Core and one consistent tool-policy boundary.
+This roadmap separates what Awesome does today from product directions that
+still require design and implementation. It describes intent and architectural
+constraints, not release dates or compatibility promises.
 
-## Current Foundation
+For current behavior, use the [user guide](user-guide/README.md) and
+[reference](reference/README.md). A roadmap item must not be documented as an
+available command, configuration key, or subsystem until its implementation and
+tests land.
 
-- terminal interaction through the Ink + React TUI;
-- workspace file and command tools with visible results;
-- DeepSeek and Kimi model providers;
-- resumable Threads and local checkpoints;
-- Skills and MCP extensions;
-- independently optional local file Memory and Mem0 Cloud;
-- Change Journal support for diff, undo, and redo.
+## Current foundation
 
-## Documentation and Documentation Site
+Awesome currently provides:
 
-Improve task-oriented guides, examples, troubleshooting, and architecture
-references, then publish them through a searchable documentation site.
+- one terminal product surface backed by one private Python Core;
+- DeepSeek and Kimi through provider-neutral model contracts;
+- trusted Workspace startup, root `AGENTS.md` instructions, Threads, Turns,
+  cancellation, checkpoints, and recovery;
+- workspace file tools and bounded local command execution through one Registry,
+  Policy, and Executor path;
+- three permission modes, single-use approval, a Thread-bound temporary
+  `workspace.write` grant, and a non-disableable command circuit breaker;
+- visible ChangeSets with diff, undo, redo, and conservative crash recovery;
+- independently optional local Memory and Mem0 Cloud;
+- bundled, user, and trusted Workspace Skills;
+- configured MCP stdio servers with validated, generation-bound catalogs;
+- a versioned Protocol v3 boundary between Python Core and the Ink TUI;
+- a searchable GitHub Pages documentation site generated from this directory.
 
-## One-command Skills Installation
+The [architecture overview](../ARCHITECTURE.md) defines the current component
+boundaries. The rest of this page discusses possible additions.
 
-Let users discover and install Skills with one command while preserving the
-current manifest validation, source precedence, workspace trust, and tool
-policy.
+## Current known limitations
 
-## Multi-Agent
+These are implemented behaviors or contract gaps in the current release, not
+future features and not guarantees that the limitation is desirable:
 
-Add scoped delegation for tasks that benefit from parallel or specialized work.
-Sub-Agents will receive explicit context and tool boundaries while the current
-Agent Core remains responsible for the user-facing Turn.
+- The trusted-workspace `.awesome/config.yaml` reader is trust-gated but not
+  size-bounded, no-follow, or identity-pinned like `AGENTS.md` and Workspace
+  Skills. See [configuration](reference/configuration.md#workspace-configuration).
+- Most built-in and Skill-support tool argument models ignore unknown fields
+  and coerce compatible scalars; configuration and Skill frontmatter also have
+  documented coercion/grammar mismatches. See the
+  [tool contract](reference/built-in-tools.md#common-request-and-result-contract),
+  [configuration](reference/configuration.md), and
+  [Skills](extensions/skills.md#create-a-skill).
+- MCP Manager publication and Registry replacement are two all-or-none commits,
+  not one transaction. The compiler does not yet reject a complete namespaced
+  tool name that exceeds the 128-character `/tools` payload limit or the
+  200-character model/event limit. See
+  [MCP publication](extensions/mcp.md#catalog-and-registry-publication).
+- Invalid enabled local Memory can fail after a Turn record is created but
+  before the coordinator terminalizes it, leaving startup recovery to reconcile
+  that Turn. See [Memory context](extensions/memory.md#what-reaches-the-model).
+- Skill modes `auto` and `off` currently have the same observable behavior; no
+  automatic selector exists. See [Skill selection](extensions/skills.md#select-and-load-skills).
+- Core and TUI do not yet enforce identical JSON-RPC request-ID bounds, and
+  `direct.execute` accepts a 30,000-character transport field before delegating
+  to an 8,000-character tool field. See the
+  [Protocol request contract](reference/protocol.md#json-rpc-request-shape) and
+  [method table](reference/protocol.md#method-catalog).
+- Core bounds request lines but does not preflight its own serialized output
+  against the TUI's 1 MiB frame limit. A large `thread.read` page or unpaginated
+  `/tools` result can therefore make the TUI close an otherwise valid channel.
+  See [protocol framing](reference/protocol.md#process-and-transport).
+- A Direct Operation does not preserve its primary cancellation/failure if
+  ChangeSet finalization itself raises; cancellation can surface as
+  `operation.failed`. See the
+  [Direct lifecycle](architecture/request-lifecycles.md#direct-shell-command).
+- `/auth mem0` stores locally valid input without remotely verifying the Mem0
+  credential; failure appears on the first cloud operation. See
+  [Memory configuration](extensions/memory.md#configuration).
 
-## More Model Providers
+Closing one of these gaps requires runtime regression tests and synchronized
+reference/architecture updates. Removing a bullet from this list without that
+evidence would turn documentation into an unsupported promise.
 
-Add providers that implement the shared model contract without moving
-provider-specific behavior into Agent nodes, tools, or the TUI.
+## Near-term product directions
 
-## Search Tools
+### One-command Skills installation
 
-Add optional Web Search and Web Fetch tools through the same Registry, Policy,
-Executor, result, and event path as every other tool.
+**User need:** finding and installing a Skill should not require manually
+constructing package directories.
 
-## More Memory Providers
+**Invariant:** installation must preserve manifest validation, source
+precedence, Workspace trust, bounded reads, and the existing tool-policy path.
+Discovery convenience must not turn a Skill into executable authority.
 
-Introduce additional external memory services after a second concrete adapter
-justifies a shared provider contract. Local Memory remains independent.
+**Open decisions:** registry ownership, package authenticity, update behavior,
+version pinning, removal, and offline installation.
 
-## Cron Tasks
+### Multi-Agent delegation
 
-Support scheduled tasks that reuse the same Agent Core, Tools, Skills, Memory,
-workspace trust, and execution budgets rather than creating a separate task
-engine.
+**User need:** some investigations and independent work packages benefit from
+parallel or specialized execution.
 
-## Gateway Messaging
+**Invariant:** one user-facing Turn remains accountable for the result. Each
+delegate needs explicit context, budgets, tool boundaries, cancellation, and
+evidence; delegation must not create a hidden second permission or persistence
+system.
 
-Allow messaging platforms to submit work and receive progress or results through
-an adapter around Application contracts and events. Gateway integrations will
-not duplicate Agent behavior.
+**Open decisions:** scheduling, result aggregation, nested delegation, shared
+workspace conflicts, per-Agent budgets, and how the foreground-operation model
+should evolve.
 
-## Optional Docker Tool Backend
+### More model providers
 
-Add Docker as an optional Tool Executor backend for users who want stronger
-process isolation. Workspace trust and tool policy remain mandatory above the
-backend, and normal local execution stays available.
+**User need:** model choice should not be limited to the two initial adapters.
+
+**Invariant:** a provider implements the shared message, streaming, usage,
+reasoning, tool, error, and cancellation contracts. Provider-specific payloads
+must not leak into Agent nodes, tools, storage, protocol, or the TUI.
+
+**Open decisions:** the next concrete provider, model-catalog ownership,
+capability negotiation, context limits, and credential validation.
+
+### Search tools
+
+**User need:** coding work often requires current web or documentation facts
+that are not present in the Workspace.
+
+**Invariant:** Web Search and Web Fetch would enter the same Registry, Policy,
+Executor, result, event, timeout, and approval path as every other tool. Remote
+content remains untrusted context.
+
+**Open decisions:** provider choice, network allowlists, citation preservation,
+privacy, caching, output limits, and uncertain-result handling.
+
+## Later directions
+
+### More memory providers
+
+A second external memory adapter may justify a provider abstraction. Until then,
+Awesome deliberately keeps local Memory and Mem0 Cloud explicit rather than
+inventing a framework around one implementation. Any new provider must define
+consent, identity, retention, deletion, failure isolation, and what data leaves
+the machine.
+
+### Scheduled tasks
+
+Scheduled work should reuse Agent, tool, Skill, Memory, trust, budget, and
+recovery contracts. A scheduler must not become a second execution engine.
+Unattended approvals, credential availability, missed schedules, concurrent
+Workspace changes, and result delivery require a separate threat and product
+model before implementation.
+
+### Gateway messaging
+
+Messaging platforms could adapt typed Application intents and events so users
+can submit work and receive progress outside the terminal. The adapter must not
+duplicate Agent behavior, hold a hidden transcript, or weaken Workspace and
+permission boundaries. Identity, tenancy, delivery ordering, and secret
+handling remain open.
+
+### Optional isolated tool backend
+
+An optional Docker or equivalent backend could provide stronger process and
+filesystem isolation for users who need it. It would sit below Tool Executor
+policy; trust, approvals, command hard-deny, output bounds, and auditing remain
+required above it.
+
+The current local backend is not an operating-system sandbox. Adding an
+isolated backend requires explicit platform support, mount and network policy,
+image lifecycle, performance, and recovery semantics rather than a simple
+configuration switch.
+
+## How roadmap items become product contracts
+
+A direction moves into current documentation only after:
+
+1. the user need and non-goals are written down;
+2. architecture ownership and dependency direction are decided;
+3. public configuration, protocol, storage, and security changes are explicit;
+4. failure, cancellation, recovery, and compatibility behavior is tested;
+5. user guides, reference pages, architecture pages, and release notes agree;
+6. packaging and cross-platform evidence is available for the supported scope.
+
+This rule keeps aspirational design out of runtime documentation and prevents a
+prototype from becoming an accidental public contract.

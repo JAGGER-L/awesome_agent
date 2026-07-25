@@ -1,5 +1,11 @@
 import { defineConfig } from "astro/config";
+import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
+import {
+  docsSidebar,
+  redirectsForBase,
+  translatedRoutes,
+} from "./docs-navigation.mjs";
 
 const siteOrigin = process.env.SITE_URL ?? "https://jagger-l.github.io";
 const basePath =
@@ -8,19 +14,28 @@ const socialImage = new URL(
   `${basePath === "/" ? "" : basePath.replace(/\/$/, "")}/og-v2.png`,
   siteOrigin,
 ).href;
+const basePrefix = basePath === "/" ? "/" : `${basePath.replace(/\/$/, "")}/`;
 
-const group = (label, translation, items, collapsed = false) => ({
-  label,
-  translations: { "zh-CN": translation },
-  items,
-  collapsed,
-});
+function routeWithinBase(page) {
+  const pathname = new URL(page).pathname;
+  if (!pathname.startsWith(basePrefix)) return null;
+  return pathname.slice(basePrefix.length).replace(/\/$/, "");
+}
 
 export default defineConfig({
   site: siteOrigin,
   base: basePath,
   trailingSlash: "always",
+  redirects: redirectsForBase(basePath),
   integrations: [
+    sitemap({
+      filter(page) {
+        const route = routeWithinBase(page);
+        if (route === null || route === "404") return false;
+        if (!route.startsWith("zh-cn/")) return true;
+        return translatedRoutes.has(route.slice("zh-cn/".length));
+      },
+    }),
     starlight({
       title: {
         en: "Awesome Docs",
@@ -50,6 +65,7 @@ export default defineConfig({
       ],
       customCss: ["./src/styles/signal.css"],
       components: {
+        Head: "./src/components/Head.astro",
         Hero: "./src/components/Hero.astro",
         LanguageSelect: "./src/components/LanguageSelect.astro",
         SiteTitle: "./src/components/SiteTitle.astro",
@@ -57,42 +73,7 @@ export default defineConfig({
       },
       lastUpdated: true,
       tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 3 },
-      sidebar: [
-        group("Get started", "快速开始", ["getting-started/quickstart"]),
-        group("Use Awesome", "使用 Awesome", [
-          "user-guide/commands",
-          "user-guide/configuration",
-          "user-guide/workspace-and-tools",
-          "user-guide/memory-skills-mcp",
-          "user-guide/troubleshooting",
-        ]),
-        group(
-          "Understand Awesome",
-          "理解 Awesome",
-          [
-            "architecture",
-            "architecture/overview",
-            "architecture/agent-core",
-            "architecture/application-and-langgraph",
-            "architecture/protocol-and-ink",
-            "architecture/storage",
-            "architecture/security",
-          ],
-          true,
-        ),
-        group(
-          "Contribute",
-          "参与贡献",
-          [
-            "development",
-            "development/testing",
-            "development/command-regression",
-            "development/release",
-          ],
-          true,
-        ),
-        { slug: "roadmap" },
-      ],
+      sidebar: docsSidebar,
     }),
   ],
 });

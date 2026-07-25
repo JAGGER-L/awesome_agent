@@ -1,163 +1,212 @@
-# Commands
+# Commands and Interaction
 
-## Launch flags
+This page explains how to launch Awesome, control a live session, and interpret
+command behavior. It is a task-oriented guide; use the
+[command reference](../reference/commands.md) for the canonical inventory and
+argument grammar.
+
+## Launch Commands
+
+Run Awesome from the project directory that should become the Workspace:
 
 | Invocation | Result |
 | --- | --- |
-| `awesome` | Start a new thread in the current workspace. |
-| `awesome --continue` | Resume the most recent thread in this workspace. |
-| `awesome --resume` | Choose a recent thread. |
-| `awesome --resume <thread_id>` | Resume the specified thread. |
-| `awesome -V`, `awesome --version` | Print the numeric product version. |
-| `awesome -h`, `awesome --help` | Print command-line help. |
+| `awesome` | Start a new Thread in the current directory. |
+| `awesome --continue` | Resume the most recently updated Thread for this Workspace. |
+| `awesome --resume` | Open a picker of recent Workspace Threads. |
+| `awesome --resume <thread_id>` | Resume one matching Thread. |
+| `awesome -V` or `awesome --version` | Print the numeric product version and exit. |
+| `awesome -h` or `awesome --help` | Print launch help and exit. |
 
-No other public launch flags are supported.
+No other public launch flags are supported. The released `awesome` command
+always starts the Ink TUI, which launches one private Python Core process. The
+Core is not a separately managed service.
 
-## Application commands
+## Three Kinds of Input
 
-| Command | Purpose |
+The Composer trims leading whitespace and routes text by its first
+non-whitespace character:
+
+```text
+natural language       -> Agent Turn
+/command               -> slash command
+! shell command        -> direct execute Operation
+```
+
+An `@path` inside natural language adds an explicit Workspace path reference:
+
+```text
+Compare @src/config.py with @tests/test_config.py and explain the mismatch.
+```
+
+`!` does not ask the model to choose or rewrite the command. It represents
+explicit user authority, skips normal shell approval, and still passes through
+Core's hard-deny policy, bounded process runner, redaction, audit, and Change
+Journal observation.
+
+## Conversation Commands
+
+| Command | What it does |
 | --- | --- |
-| `/new` | Start a new thread. |
-| `/rename <title>` | Rename the current thread. A title is required. |
-| `/resume [thread_id]` | Choose or resume a previous workspace thread. |
-| `/context` | Show the active context manifest and budget. |
-| `/compact` | Compact the current context now. |
-| `/auth [deepseek\|kimi\|mem0]` | Select or manage model and Memory Provider credentials. |
-| `/model [deepseek\|kimi]` | Choose a Provider, then choose one of its models. |
-| `/thinking [on\|off]` | Show the current mode with a selector, or set it explicitly. |
-| `/permissions [request_approval\|accept_edits\|full_access]` | Show or choose the active Thread's permission mode. |
-| `/workspace` | Show the current workspace path. |
-| `/diff` | Show the latest or selected Change Journal change set. |
-| `/undo` | Undo the latest or selected reversible change set. |
-| `/redo` | Redo the latest or selected undone change set. |
-| `/tools` | List the effective built-in and extension tools. |
-| `/skills [auto\|off\|name]` | List Skills or select thread Skill mode. |
-| `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | Show or manage MCP server status. |
-| `/memory` | Choose Local or Cloud Memory, then switch it On or Off. |
-| `/status` | Show the current product and thread status. |
-| `/usage` | Show cumulative token and operation usage for the current thread. |
-| `/doctor` | Check configuration, embedded state, checkpoints, and Provider readiness. |
-| `/config` | Show effective source and credential-presence diagnostics, never secret values. |
+| `/new` | Create and select a new Thread in this Workspace. |
+| `/rename <title>` | Persist a user-selected title for the current Thread. |
+| `/resume [thread_id]` | Pick or select a previous Thread from this Workspace. |
+| `/thinking [on\|off]` | Inspect or set Thinking for future Turns in this Thread. |
+| `/model [deepseek\|kimi]` | Choose a Provider and model for this Thread and the user default. |
+| `/skills [auto\|off\|name]` | Inspect or select the Skill mode for future Turns. |
 
-New threads default to Thinking On. A resumed thread retains its saved setting.
-A bare `/thinking` reports the current value and offers on/off choices.
-Request approval asks before writes, deletes, and shell commands. Accept edits
-allows ordinary workspace writes but keeps delete, shell, MCP, and unknown
-extensions behind approval. Full access allows known built-in local writes,
-deletes, and shell commands only after a Thread-bound warning confirmation;
-MCP and unknown extensions still ask.
+The first accepted natural-language message supplies a bounded automatic title
+for a new Thread. `/rename` requires a nonempty title and rejects an overlong
+title instead of silently changing it. `/new` takes no title argument.
 
-The first accepted natural-language message names a new thread automatically,
-using at most 48 visible characters. `/rename <title>` replaces that name,
-marks it as user-selected, and rejects titles longer than 100 visible
-characters instead of truncating them. `/new` accepts no title argument.
+Selecting a Thread restores its durable messages, Turns, model, Thinking, and
+Skill choices. It also resets session permission authority to Request approval
+and clears temporary grants. The previous Thread remains available through
+`/resume`.
 
-## Provider and model commands
+## Context and Inspection Commands
 
-Run `/model` to choose DeepSeek or Kimi. If that Provider has no credential,
-Awesome opens a masked API-key input before showing its model picker. Selecting
-a model updates the current Thread and the user default for future Threads; it
-does not rewrite other existing Threads.
-
-Run `/auth`, `/auth deepseek`, or `/auth kimi` to manage credentials. Keys are
-never accepted as command arguments. A rejected key is not saved. When the
-Provider cannot be reached, Awesome asks whether to save the key unverified.
-Removing a local credential does not revoke it at the Provider.
-
-## Ink-local commands
-
-| Command | Purpose |
+| Command | What it shows or changes |
 | --- | --- |
-| `/help [command]` | Show command help. |
-| `/theme [system\|dark\|light]` | Show or select the TUI theme. |
-| `/copy` | Copy the latest assistant answer. |
-| `/quit` | Shut down Core and exit. |
+| `/context` | Latest meaningful context manifest, estimates, and budget. |
+| `/compact` | Summarize eligible older completed Turns for this Thread. |
+| `/workspace` | Display path used to start the active Workspace; Core tracks canonical path and physical identity internally. |
+| `/status` | Product, Thread, model, permission, extension, operation, and change summary. |
+| `/usage` | Cumulative observed token, model, tool, retry, compression, and active-time usage. |
+| `/config` | Configuration-source and credential-presence diagnostics; never secret values. |
+| `/doctor` | Local state checks, Workspace-instruction diagnostics, and on-demand Provider validation. |
+| `/tools` | Effective built-in and extension tool catalog and approval state. |
 
-`@path` adds a workspace path reference to a message. `! command` runs the
-command directly through Awesome's normal Core shell policy, without asking the
-model to decide how to run it. Ink never executes tools itself.
+`/context` and `/usage` answer different questions. The former explains what
+was assembled for the model; the latter accounts for what the Thread has
+consumed. `/config` is intentionally not a raw configuration dump. `/doctor`
+may make Provider network requests and renders bounded detail for failed
+checks.
 
-## Keyboard behavior
+`/compact` can return a no-op when there is not enough completed history. While
+it is running, the TUI keeps one pending result row and replaces that row with
+the terminal outcome.
 
-- Typing `/` opens command candidates. Up/Down changes the selection, Tab
-  completes only the canonical `/command` text, Enter executes the selected
-  command once, and Escape closes the candidates without changing the draft.
-  Search covers the complete catalog; the menu displays a scrolling ten-row
-  window, so Up/Down can reach every matching command.
-- Pickers, Trust, Approval, and Auth exclusively own input while visible.
-  Up/Down selects, Enter confirms, and Escape cancels or denies according to
-  the prompt.
-- Ctrl+C cancels an active operation. Input returns after the terminal event;
-  a failed cancellation remains visible and can be retried.
-- Ctrl+O expands or folds bounded details globally, including Tool sequences,
-  Thinking, and Undo/Redo paths. Details are folded by default.
-- While a task is running, Awesome queues up to three inputs. Natural-language
-  messages, Slash Commands, and `! shell` run in submission order. Pending
-  inputs appear between the active task and the Composer.
-- With an empty Composer, Up recalls the newest pending input back into the
-  draft. Repeated recall therefore moves from newest to oldest, one draft at a
-  time. A non-empty draft, Command Menu, Picker, Approval, Trust, or Auth keeps
-  ownership of Up instead.
-- A queued `/quit` prevents additional queue entries. Recall it before adding
-  more input, or let it exit at its ordered position.
+## Change Commands
 
-Core atomically admits one foreground Operation or state-changing command. A
-request that loses a race receives `operation_busy` before it writes a Turn or
-changes state. During an active Operation, only `/context`, `/workspace`,
-`/tools`, `/mcp`, `/mcp status [id]`, `/status`, `/usage`, and `/config` are
-side-effect-free snapshot exceptions. `/diff` reads a changing ChangeSet and
-`/doctor` may contact Providers, so neither is an exception. A pending
-interaction blocks new Operations and state changes until it is resolved or
-cancelled; matching Tool approval continues its existing Operation.
+| Command | What it does |
+| --- | --- |
+| `/diff [change_set_id]` | Render the latest or selected recorded file delta. |
+| `/undo [change_set_id]` | Restore the selected applied ChangeSet's recorded file state. |
+| `/redo [change_set_id]` | Reapply a successfully undone ChangeSet. |
 
-`/help` is written into normal transcript history rather than opening a modal.
-It renders one command per aligned row with usage and description. Use
-`/help <command>` for one focused row; internal command ownership is not shown.
-`/new` starts a clean conversation and redraws Awesome from the Welcome panel.
-The previous conversation remains available through `/resume`. `/resume`
-redraws Awesome with only the selected conversation's saved messages. When
-queued behind a running task, either command completes its Thread switch before
-the next queued input starts. A new Thread also resets Thread-scoped permission
-grants.
+These commands use exact ChangeSet lifecycles and conflict checks. They do not
+claim to reverse arbitrary shell or MCP effects. See
+[Review, undo, and redo](changes.md).
 
-`/rename <title>` follows the same queue ordering as every other Slash Command.
-The exact submitted command remains visible in transcript history, and the new
-title appears only after Core has persisted it successfully.
+## Provider and Credential Commands
 
-## Context and change lifecycles
+Run `/model` to choose DeepSeek or Kimi. If the Provider has no selected usable
+credential, Awesome opens a masked secret input before the model picker. A
+successful model choice updates the current Thread and the user default for
+future Threads; it does not rewrite existing other Threads.
 
-`/compact` writes one `Compressing context...` result while the request is
-pending, then replaces that same result with `Context compressed` or the exact
-failure. It never emits both pending and terminal lines.
+Use:
 
-`/diff` renders the ChangeSet ID and bounded terminal Diff. When the workspace
-has no recorded changes, it shows an explicit empty result. `/undo` and `/redo`
-show the action, affected file count, and resulting lifecycle on one folded
-line; Ctrl+O reveals the ChangeSet ID, each affected path, and any warning.
-Missing ChangeSets, workspace conflicts, irreversible changes, and invalid
-lifecycles remain distinct errors.
+```text
+/auth
+/auth deepseek
+/auth kimi
+/auth mem0
+```
 
-## `/status` fields
+`/auth` shows Environment and Awesome-managed credential sources separately.
+Keys are never accepted as command arguments. A known-invalid Provider key is
+not saved. When validation cannot reach a Provider, the TUI asks whether to
+save the key as unverified. Deleting an Awesome-managed key does not revoke it
+at the Provider and does not silently select an Environment value.
 
-`/status` renders:
+## Permission and Extension Commands
 
-- `Version`: one numeric value such as `1.1.0`;
-- `Workspace`: the workspace path, without trust or Git-branch suffixes;
-- `Thread`: the title and resumable Thread ID;
-- `Model`: the full Provider/model ID;
-- `Credentials`: the selected credential source and its availability;
-- `Permissions`: the current Thread permission mode;
-- `Context`: used Tokens and the active budget;
-- `Thinking` and `Skill`: their current modes;
-- `Memory`: Local memory and Mem0 Cloud on/off states;
-- `MCP`: ready and degraded server counts;
-- `Operation`: idle or the active operation ID;
-- `Changes`: the number of modified files, when present.
+| Command | What it does |
+| --- | --- |
+| `/permissions [request_approval\|accept_edits\|full_access]` | Inspect or select session authority for the active Thread. |
+| `/memory` | Choose Local Memory or Mem0 Cloud and inspect its state. |
+| `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | Inspect or manage configured MCP servers. |
 
-Context details and token/operation usage are intentionally separate in
-`/context` and `/usage`. `/context` shows the latest meaningful active Context;
-`/usage` shows cumulative observed Usage for the current Thread.
+Full access requires a second Thread-bound confirmation. Memory's explicit
+list/add/replace/remove and Mem0 search/remove forms are documented in
+[Memory](../extensions/memory.md). Workspace MCP enablement and user-configured
+server rules are documented in [MCP](../extensions/mcp.md).
 
-`/doctor` renders each check's bounded detail rather than hiding it behind the
-status label. A rejected root `AGENTS.md` therefore shows its stable reason in
-the doctor panel as well as Welcome and the status line.
+## TUI-Local Commands
+
+These commands are implemented by Ink and do not ask Core to mutate product
+state:
+
+| Command | What it does |
+| --- | --- |
+| `/help [command]` | Render the whole command catalog or one matching row in transcript. |
+| `/theme [system\|dark\|light]` | Inspect or set the local presentation theme. |
+| `/copy` | Copy the latest assistant answer to the clipboard. |
+| `/quit` | Coordinate Core shutdown and exit the TUI. |
+
+`/help` is transcript content rather than a modal, so it does not hide the
+conversation. `/copy` copies the latest completed assistant answer, not an
+active stream or Tool detail.
+
+## Keyboard Ownership
+
+- Typing `/` opens command candidates. Up/Down changes selection, Tab completes
+  the canonical command, Enter submits once, and Escape closes the menu without
+  replacing the draft.
+- A visible picker, Trust prompt, Approval prompt, or Auth prompt owns the
+  keyboard. Up/Down selects, Enter confirms, and Escape cancels or denies as
+  defined by that interaction.
+- Ctrl+C requests cancellation of the active Operation. Input returns after a
+  terminal event; if cleanup fails, the error remains visible.
+- Ctrl+O expands or folds bounded details for Thinking, Tool sequences, and
+  Undo/Redo paths. Details start folded.
+- With an empty Composer, Up recalls the newest queued input into the draft.
+  Repeated recall moves from newest to oldest.
+
+## Queueing and Foreground Ordering
+
+The TUI queues up to three later inputs while an Operation runs. Natural
+language, slash commands, and direct commands start in submission order. A
+queued `/quit` rejects additional queue entries until it is recalled or reaches
+the front.
+
+Core itself admits one mutable foreground owner atomically. If two operations
+race, the loser receives `operation_busy` before a Turn or state mutation is
+persisted. A pending interaction blocks new Operations and state changes with
+`interaction_busy` until it is resolved.
+
+At the private Core command boundary, only the following side-effect-free
+snapshots are allowed during an active Operation:
+
+```text
+/context  /workspace  /tools  /mcp  /mcp status [id]
+/status   /usage      /config
+```
+
+`/diff` is excluded because the active ChangeSet may still be changing.
+`/doctor` is excluded because it can contact Providers. The current Ink TUI
+does not submit this exception concurrently: it queues every later input,
+including these commands, and displays the result after the Operation finishes.
+The Core allowlist is a protocol/concurrency contract, not a live-monitoring
+promise for the current user interface.
+
+## Status as a Starting Point
+
+When behavior is surprising, run `/status`. It identifies the product version,
+Workspace, Thread and ID, model, selected credential availability, permission
+mode, context use, Thinking and Skill modes, Memory state, MCP readiness,
+foreground Operation, and recorded file-change count when present.
+
+Then narrow the question:
+
+- context mismatch: `/context`;
+- exhausted budget: `/usage`;
+- unexpected approval: `/tools` and `/permissions`;
+- extension failure: `/mcp` or `/memory`;
+- environment or Provider problem: `/config` and `/doctor`;
+- file effects: `/diff`.
+
+For exact syntax and ownership, see the [CLI reference](../reference/cli.md)
+and [command reference](../reference/commands.md).

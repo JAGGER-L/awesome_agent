@@ -98,6 +98,18 @@ part of the product source tree.
 
 ## Recommended Reading Order
 
+Start with the level of detail needed for the question:
+
+1. [How Awesome works](docs/concepts/README.md) for the product mental model.
+2. [Request lifecycles](docs/architecture/request-lifecycles.md) for startup,
+   Turn, direct-command, approval, cancellation, and recovery sequences.
+3. [Architecture reading path](docs/architecture/README.md) to choose a focused
+   subsystem guide.
+4. This document for the complete topology, dependency direction, and state
+   ownership contract.
+
+For source study, continue in dependency order:
+
 1. `src/awesome_agent/application/facade.py` — surface-facing product API.
 2. `src/awesome_agent/application/composition.py` — concrete dependency wiring.
 3. `src/awesome_agent/application/turns.py` — Turn lifecycle and recovery.
@@ -197,8 +209,10 @@ turn.submit -> ApplicationFacade.submit_turn
 ```
 
 When the graph returns a final answer, Application completes the Turn, appends
-the assistant transcript entry, records bounded usage, seals its ChangeSet,
-deletes the finished checkpoint, and emits completion events.
+the assistant transcript entry, and records bounded usage. It then attempts to
+seal the ChangeSet and delete the finished checkpoint before emitting completion
+events. Cleanup failure does not overwrite the already-persisted primary Turn
+terminal state; startup reconciliation retries stale terminal evidence.
 
 ### Tool call
 
@@ -224,23 +238,27 @@ identity check and before replace/remove, and on POSIX can move an already-open
 directory after its reachability check. Pinned parents and no-follow operations
 prevent those races from following a link to an external target, but the
 stronger concurrent-host threat model requires an OS sandbox or mount boundary.
-`execute` runs on the host
-and is not a sandbox. Request approval asks before writes, deletes, shell, MCP,
-and unknown capabilities. Accept edits allows ordinary workspace writes only.
-Confirmed Full access allows known built-in local writes, deletes, and shell
-for its bound Thread; MCP and unknown capabilities still ask. Hard denials
-always run first for Agent and direct `!` commands. The dialect-aware command
-circuit breaker is designed to stop recognizable accidents, not to detect
-arbitrary hostile obfuscation. Shell effects may escape the workspace and
-cannot be reversed by the journal.
+`execute` runs on the host and is not a sandbox. For Agent tool calls, Request
+approval asks before writes, deletes, shell, MCP, and unknown capabilities.
+Accept edits allows ordinary workspace writes only. Confirmed Full access
+allows known built-in local writes, deletes, and shell for its bound Thread;
+MCP and unknown capabilities still ask.
+
+Direct `! command` is a deliberate exception to that prompt matrix: the user's
+exact input is the authorization, so Application gives that one Direct
+Operation an independent Full-access permission session and does not open the
+ordinary shell approval interaction. It still follows the same schema,
+lexical/pre-spawn circuit-breaker checks, Process Runner, journal, redaction,
+timeout, cancellation, and terminal-event path. The circuit breaker is designed
+to stop recognizable accidents, not arbitrary hostile obfuscation. Shell
+effects may escape the workspace and cannot be reversed by the journal.
 
 ### Slash command
 
 ```text
 /command
    ├── Ink-owned presentation command -> local UI state
-   ├── Application command -> command.execute -> typed result
-   └── Skill command -> shared Skill/Application boundary
+   └── Application command -> command.execute -> typed result
 ```
 
 The authoritative Core command path is:
@@ -271,9 +289,10 @@ operation model.
 
 ### Resume and recovery
 
-`--continue` selects the most recent workspace Thread; `--resume` selects a
-specific Thread. On startup, Application reconciles unfinished product Turns
-with LangGraph checkpoints:
+`--continue` selects the most recent workspace Thread; `--resume <id>` selects
+an exact or unambiguous-prefix Thread, while bare `--resume` opens the recent
+Thread picker. On startup, Application reconciles unfinished product Turns with
+LangGraph checkpoints:
 
 - a completed graph state is finalized into product records;
 - a valid unfinished checkpoint is resumable;
@@ -430,14 +449,25 @@ parallel output object for ordinary file changes.
 Workspace Skill paths and opened identities are revalidated without following
 links or reparse points; one invalid package remains an isolated diagnostic.
 MCP consumes the complete paginated catalog under page, tool-count, byte, and
-deadline bounds, then compiles its JSON Schemas before atomically publishing
-the client, generation, namespace, and `CONNECTED` state. References remain
-local to one schema. Input arguments are validated before approval or remote
-I/O; a declared `outputSchema` validates `structuredContent`, and structured
-output without text is rendered as bounded JSON. Restart removes the previous
-namespace first, and timeout, disconnect, or cancellation invalidates the
-generation; calls never lazily reconnect or replay an uncertain external
-action in the same Turn.
+deadline bounds, then compiles its JSON Schemas before the Manager atomically
+publishes the client, generation, and `CONNECTED` state. Application next builds
+the entire generation and atomically replaces its Registry namespace. Those are
+two atomic commits, not one transaction: Manager `CONNECTED` alone does not
+prove Registry installation. References remain local to one schema. Input
+arguments are validated before approval or remote I/O; a declared
+`outputSchema` validates `structuredContent`, and structured output without text
+is rendered as bounded JSON. Restart removes the previous namespace first, and
+timeout, disconnect, or cancellation invalidates the generation; calls never
+lazily reconnect or replay an uncertain external action in the same Turn.
+
+The current catalog-name regex has no component-length bound although `/tools`
+payload names are capped at 128 characters and model/event tool names at 200.
+An excessively long namespaced name can therefore compile and leave Manager
+state connected while Registry adaptation, model exposure, or `/tools`
+presentation fails. This is a known runtime contract gap; the compiler must
+validate the complete `mcp.<server>.<tool>` name against the strictest downstream
+consumer before the two publication steps can be described as a closed
+end-to-end transaction.
 
 ### Memory
 
@@ -535,33 +565,30 @@ execution.
 
 ## File Dependency Chain
 
-```text
-core contracts / workspace / events
-                 │
-                 ▼
- modeling     conversation      config
-     │             │              │
-     ├─────────────┼──────────────┤
-     ▼             ▼              ▼
- providers       storage      extensions / memory
-          \         │         /
-           \        │        /
-            ▼       ▼       ▼
-              context + agent
-                     │
-                     ▼
-                application
-                     │
-                     ▼
-             protocol / stdio Host
-                     │
-                     ▼
-                Ink + React TUI
-```
+The Python package graph is an explicit importer-to-allowed-dependency
+contract. It is not a simple vertical DAG: adapters such as Storage implement
+contracts owned by Agent, Conversation, Core, and Extensions, while Application
+is the composition root and may depend on all concrete owners it wires.
 
-This is the architectural dependency direction, not a claim that every Python
-file imports the layer immediately above it. Structural tests maintain the
-current allowed package edges and framework owners.
+| Importing package | May import these Awesome package roots |
+| --- | --- |
+| `agent` | `agent`, `core`, `memory`, `modeling` |
+| `application` | `agent`, `application`, `config`, `context`, `conversation`, `core`, `extensions`, `memory`, `modeling`, `paths`, `providers`, `safety`, `storage`, `version` |
+| `config` | `config`, `paths` |
+| `context` | `context`, `conversation`, `core`, `memory`, `modeling` |
+| `conversation` | `config`, `conversation` |
+| `core` | `core`, `safety` |
+| `extensions` | `context`, `core`, `extensions` |
+| `memory` | `config`, `core`, `memory`, `modeling`, `paths`, `safety` |
+| `modeling` | `config`, `modeling` |
+| `protocol` | `application`, `core`, `paths`, `protocol`, `version` |
+| `providers` | `config`, `modeling`, `providers` |
+| `safety` | `modeling`, `safety` |
+| `storage` | `agent`, `conversation`, `core`, `extensions`, `storage` |
+
+`tests/structural/test_dependency_architecture.py` is the executable source for
+this exact adjacency table and for external-framework ownership. The TUI is a
+separate TypeScript process and reaches Python only through Protocol v3.
 
 Concrete providers and storage adapters are wired in
 `application/composition.py`. The Agent imports provider-neutral contracts, and
@@ -597,8 +624,10 @@ history stores bounded summaries.
 - Provider adapters classify errors and report retry usage; the Agent enforces
   configured retry and model-call limits.
 - Cancellation propagates through the foreground operation, model call, and
-  tool execution. Application marks the Turn cancelled, seals known changes,
-  and removes its checkpoint.
+  tool execution. Application marks the Turn cancelled, then attempts to seal
+  known changes and remove its checkpoint. Bounded cleanup failure preserves
+  the primary cancelled fact; startup reconciliation retries stale terminal
+  checkpoint evidence.
 - A terminal event permits the TUI to promote one pending input. Typed busy
   races requeue the same identity at the head without duplicate failure text.
 - TUI cancellation and interaction controllers release completed request
@@ -624,8 +653,8 @@ Current extension points are deliberately narrow:
 - a future surface adapts `ApplicationFacade` and typed events instead of
   reimplementing Core behavior.
 
-The product roadmap also identifies documentation tooling, one-command Skills
-installation, Multi-Agent delegation, search tools, Cron tasks, Gateway
+The product roadmap also identifies one-command Skills installation,
+Multi-Agent delegation, search tools, Cron tasks, Gateway
 messaging, and an optional Docker tool backend. These are future capabilities,
 not components in the current-system diagram. A Docker backend would sit below
 Tool Executor policy; it would not replace workspace trust.
