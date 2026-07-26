@@ -20,6 +20,7 @@ from awesome_agent.memory.mem0_cloud import (
     Mem0CloudAdapter,
     Mem0CloudError,
     create_mem0_client,
+    managed_mem0_client,
 )
 from awesome_agent.memory.models import (
     CloudDeleteOutcome,
@@ -86,6 +87,7 @@ __all__ = [
     "cloud_fact_hash",
     "create_mem0_client",
     "ensure_mem0_user_id",
+    "managed_mem0_client",
     "new_mem0_user_id",
     "refresh_local_memory_tools",
     "render_memory_document",

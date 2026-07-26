@@ -108,6 +108,7 @@ def test_workspace_runtime_is_one_immutable_service_graph_snapshot() -> None:
         "change_operations",
         "workspace_branch",
         "workspace_instruction_snapshot",
+        "resources",
     )
     assert not hasattr(application_composition, "_ACTIVATION_STATE_FIELDS")
     assert "runtime = self._require_runtime()" in composition

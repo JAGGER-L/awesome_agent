@@ -62,7 +62,8 @@ construction, or presentation formatting.
 Successful trusted activation publishes one immutable `WorkspaceRuntime`.
 The snapshot contains resolved configuration plus the stable workspace service
 graph: Conversation, Turn coordination, command services, Tool Registry, Model
-Catalog, context and extensions, memory and MCP, and Change Journal services.
+Catalog, context and extensions, memory and MCP, Change Journal services, and
+one `RuntimeResources` owner.
 Mutable lifecycle coordination such as foreground ownership, pending
 interactions, permission grants, recovery delivery, and process shutdown stays
 on the Application backend.
@@ -79,18 +80,25 @@ then runs against the published candidate; notification failure is reported but
 does not restore the old runtime.
 
 Requests admitted before publication continue to see the old runtime while new
-requests see the new one. Application tracks those readers against the runtime's
-owned MCP resource and drains them before a bounded close, so publication never
-closes a resource beneath a paused reader. Candidate construction failure or
-cancellation closes the candidate MCP exactly once and leaves the old runtime
-and request authority unchanged. Candidate construction clears the caller's
-runtime binding before it starts long-lived resources, so new resource tasks do
-not retain the previous generation. Provider and credential mutations build a
+requests see the new one. `RuntimeResources` gives each candidate an independent
+generation identity and reader count; retirement drains that generation before
+its `AsyncExitStack` closes, so publication never closes a resource beneath a
+paused reader. The stack owns reusable provider clients, an internally created
+Mem0 client, and MCP. Registration order makes shutdown run exactly once in the
+reverse order MCP, Mem0, provider. Injected gateway and Mem0 objects are borrowed
+and are never closed by Awesome. Candidate construction failure or cancellation
+closes the whole candidate stack while leaving the old runtime and request
+authority unchanged. Candidate construction clears the caller's runtime
+binding, while retirement and close tasks start in a clean context, so
+long-lived resources do not retain the previous generation.
+Provider and credential mutations build a
 complete candidate from the committed snapshot without repeating startup
 reconciliation, carry the selected Thread into that candidate without firing a
 selection callback, publish it atomically, and retire the old runtime only after
-the bound mutation request exits. The checkpoint saver remains owned by the
-Application `AsyncExitStack` across runtime generations.
+the bound mutation request exits. Cleanup failures are reported without hiding
+the candidate's primary failure or skipping process cleanup. The checkpoint
+saver and state leases remain owned by a separate process-lifetime Application
+`AsyncExitStack` across runtime generations.
 
 ## Foreground serialization
 

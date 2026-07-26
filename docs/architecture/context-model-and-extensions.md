@@ -150,6 +150,15 @@ only by Application composition. They translate SDK payloads into neutral
 events and normalize errors; Agent and Context never import the OpenAI client
 or a provider adapter.
 
+Provider resource composition also stays in `providers/`. One managed factory
+captures the candidate configuration and creates at most one reusable async SDK
+client per configured provider. `RuntimeResources` caches the neutral
+`ModelGateway` by provider and model, so multiple models share their provider
+client without reading mutable Application state. Candidate retirement closes
+the owned clients; an injected gateway factory remains borrowed. Credential
+validation uses a separate client per attempt and closes it on success, error,
+timeout, or cancellation within a bounded cleanup deadline.
+
 `ModelGateway` freezes one catalog selection and enforces stream behavior. It
 retries only a retryable failure that occurs before any visible output or
 completion, reports retry events, preserves cancellation, and requires exactly
@@ -210,6 +219,14 @@ Recall is query-bounded, identity-scoped, deduplicated against local memory,
 and represented as untrusted context. Cloud failure becomes a diagnostic; it
 does not make the whole Turn configuration invalid. Post-answer distillation
 uses a separate policy and never uploads raw transcript by implication.
+
+The Mem0 SDK currently performs synchronous credential validation in its async
+client constructor. Awesome runs that constructor in a cancellation-aware worker
+instead of blocking the event loop, then registers only an internally created
+client with the runtime exit stack. An injected client is borrowed. If the SDK
+constructor outlives the bounded cancellation cleanup, Python cannot stop that
+worker, so Awesome returns cancellation without waiting indefinitely and closes
+the eventual client through a late-completion cleanup hook.
 
 Memory tools have their own memory policy. Enabling Memory does not grant
 workspace, shell, or MCP capabilities.

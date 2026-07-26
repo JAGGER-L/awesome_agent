@@ -4,8 +4,8 @@ import asyncio
 import gc
 import os
 import weakref
-from collections.abc import Mapping
-from contextlib import suppress
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager, suppress
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -53,6 +53,7 @@ from awesome_agent.core.events import CollectingEventSink
 from awesome_agent.core.workspace import WorkspaceTrustService, resolve_workspace
 from awesome_agent.extensions.mcp import McpServerConfig, McpServerStatus
 from awesome_agent.extensions.skills import SkillCatalog, discover_skills
+from awesome_agent.modeling import ModelGateway
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage import StateLease, StateLeaseMode, StateLeaseUnavailable
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
@@ -721,6 +722,27 @@ class _TrackingMcpManager:
                 raise
 
 
+class _BorrowedResource:
+    def __init__(self) -> None:
+        self.close_calls = 0
+        self.exit_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+    async def __aexit__(self, *args: object) -> None:
+        del args
+        self.exit_calls += 1
+
+
+class _FailingCloseMcpManager(_TrackingMcpManager):
+    instances: ClassVar[list[_TrackingMcpManager]] = []
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        raise RuntimeError("resource close failed")
+
+
 _REMOVED_ACTIVATION_FIELDS = (
     "_initialized",
     "_sources",
@@ -796,12 +818,214 @@ async def test_activation_failure_closes_candidate_and_retry_does_not_leak(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_activation_bounds_candidate_cleanup_and_rolls_back(
+async def test_injected_gateway_and_mem0_resources_are_borrowed(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    WorkspaceTrustService(
+        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
+    ).accept(resolve_workspace(workspace))
+    gateway = _BorrowedResource()
+    model_gateway = cast(ModelGateway, gateway)
+    mem0 = _BorrowedResource()
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+        gateway_factory=cast(Any, lambda _provider, _model: model_gateway),
+        mem0_client=mem0,
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+
+    assert (await application.initialize()).ok is True
+    runtime = backend._runtime
+    assert runtime is not None
+    assert (
+        runtime.resources.gateway("deepseek", "deepseek/deepseek-v4-flash")
+        is model_gateway
+    )
+    assert (await application.shutdown()).ok is True
+
+    assert gateway.close_calls == 0
+    assert gateway.exit_calls == 0
+    assert mem0.close_calls == 0
+    assert mem0.exit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_candidate_cleanup_failure_preserves_primary_build_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _FailingCloseMcpManager.instances = []
+
+    async def fail_reconcile(self: TurnCoordinator) -> tuple[object, ...]:
+        del self
+        raise RuntimeError("primary candidate failure")
+
+    monkeypatch.setattr(composition, "McpManager", _FailingCloseMcpManager)
+    monkeypatch.setattr(TurnCoordinator, "reconcile_startup", fail_reconcile)
+    application, _ = await _trusted_application(tmp_path)
+
+    with (
+        caplog.at_level("WARNING"),
+        pytest.raises(RuntimeError, match="primary candidate failure"),
+    ):
+        await application.initialize()
+
+    assert _FailingCloseMcpManager.instances[0].close_calls == 1
+    assert "cleanup failed during retirement" in caplog.text
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_retirement_failure_does_not_skip_process_resource_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _FailingCloseMcpManager.instances = []
+    monkeypatch.setattr(composition, "McpManager", _FailingCloseMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+
+    stopped = await application.shutdown()
+
+    assert stopped.ok is True
+    assert _FailingCloseMcpManager.instances[0].close_calls == 1
+    assert backend._state_lease is None
+    assert backend._workspace_path_lease is None
+    assert backend._workspace_entity_lease is None
+
+
+@pytest.mark.asyncio
+async def test_mem0_candidate_failure_closes_provider_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[str] = []
+
+    @asynccontextmanager
+    async def provider_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        try:
+            yield cast(Any, lambda _provider, _model: object())
+        finally:
+            closed.append("provider")
+
+    @asynccontextmanager
+    async def fail_mem0(*_: object, **__: object) -> AsyncIterator[Any]:
+        should_fail = True
+        if should_fail:
+            raise RuntimeError("mem0 candidate failed")
+        yield object()
+
+    monkeypatch.setattr(composition, "managed_gateway_factory", provider_resources)
+    monkeypatch.setattr(composition, "managed_mem0_client", fail_mem0)
+    application, backend = await _trusted_application(tmp_path)
+
+    with pytest.raises(RuntimeError, match="mem0 candidate failed"):
+        await application.initialize()
+
+    assert closed == ["provider"]
+    assert backend._runtime is None
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_mcp_construction_failure_closes_mem0_then_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[str] = []
+
+    @asynccontextmanager
+    async def provider_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        try:
+            yield cast(Any, lambda _provider, _model: object())
+        finally:
+            closed.append("provider")
+
+    @asynccontextmanager
+    async def mem0_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        try:
+            yield object()
+        finally:
+            closed.append("mem0")
+
+    def fail_mcp(**_: object) -> None:
+        raise RuntimeError("mcp candidate failed")
+
+    monkeypatch.setattr(composition, "managed_gateway_factory", provider_resources)
+    monkeypatch.setattr(composition, "managed_mem0_client", mem0_resources)
+    monkeypatch.setattr(composition, "McpManager", fail_mcp)
+    application, backend = await _trusted_application(tmp_path)
+
+    with pytest.raises(RuntimeError, match="mcp candidate failed"):
+        await application.initialize()
+
+    assert closed == ["mem0", "provider"]
+    assert backend._runtime is None
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_candidate_failure_closes_mcp_mem0_provider_in_reverse_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[str] = []
+
+    @asynccontextmanager
+    async def provider_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        try:
+            yield cast(Any, lambda _provider, _model: object())
+        finally:
+            closed.append("provider")
+
+    @asynccontextmanager
+    async def mem0_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        try:
+            yield object()
+        finally:
+            closed.append("mem0")
+
+    class OrderedMcpManager(_TrackingMcpManager):
+        instances: ClassVar[list[_TrackingMcpManager]] = []
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            closed.append("mcp")
+
+    async def fail_reconcile(self: TurnCoordinator) -> tuple[object, ...]:
+        del self
+        raise RuntimeError("candidate reconcile failed")
+
+    monkeypatch.setattr(composition, "managed_gateway_factory", provider_resources)
+    monkeypatch.setattr(composition, "managed_mem0_client", mem0_resources)
+    monkeypatch.setattr(composition, "McpManager", OrderedMcpManager)
+    monkeypatch.setattr(TurnCoordinator, "reconcile_startup", fail_reconcile)
+    application, backend = await _trusted_application(tmp_path)
+
+    with pytest.raises(RuntimeError, match="candidate reconcile failed"):
+        await application.initialize()
+
+    assert closed == ["mcp", "mem0", "provider"]
+    assert OrderedMcpManager.instances[0].close_calls == 1
+    assert backend._runtime is None
+    await application.shutdown()
+    assert closed == ["mcp", "mem0", "provider"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_activation_closes_candidate_and_rolls_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _TrackingMcpManager.instances = []
-    _TrackingMcpManager.hang_first_close = True
+    _TrackingMcpManager.hang_first_close = False
     entered = asyncio.Event()
 
     async def block_reconcile(self: TurnCoordinator) -> tuple[object, ...]:
@@ -812,7 +1036,6 @@ async def test_cancelled_activation_bounds_candidate_cleanup_and_rolls_back(
 
     monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
     monkeypatch.setattr(TurnCoordinator, "reconcile_startup", block_reconcile)
-    monkeypatch.setattr(composition, "_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS", 0.01)
     application, backend = await _trusted_application(tmp_path)
     initializing = asyncio.create_task(application.initialize())
     await asyncio.wait_for(entered.wait(), timeout=1)
@@ -823,7 +1046,7 @@ async def test_cancelled_activation_bounds_candidate_cleanup_and_rolls_back(
 
     candidate = _TrackingMcpManager.instances[0]
     assert candidate.close_calls == 1
-    assert candidate.close_cancelled is True
+    assert candidate.close_cancelled is False
     _assert_activation_rolled_back(backend)
     await application.shutdown()
 
@@ -1088,7 +1311,7 @@ async def test_published_runtime_waits_for_bound_reader_before_old_close(
     assert seen_by_old_request == [original, original]
     assert _TrackingMcpManager.instances[0].close_calls == 1
     assert backend._request_runtime.get() is None
-    assert backend._runtime_readers == {}
+    assert original.resources.reader_count == 0
     await application.shutdown()
     assert _TrackingMcpManager.instances[0].close_calls == 1
     assert _TrackingMcpManager.instances[1].close_calls == 1
@@ -1111,7 +1334,7 @@ async def test_runtime_request_scope_resets_after_exception_and_cancellation(
     with pytest.raises(RuntimeError, match="request failed"):
         await backend.run_command(CommandIntent(name=CommandName.STATUS))
     assert backend._request_runtime.get() is None
-    assert backend._runtime_readers == {}
+    assert runtime.resources.reader_count == 0
 
     entered = asyncio.Event()
 
@@ -1131,7 +1354,7 @@ async def test_runtime_request_scope_resets_after_exception_and_cancellation(
         await request
     assert cancelled.value.args == ("request-cancelled",)
     assert backend._request_runtime.get() is None
-    assert backend._runtime_readers == {}
+    assert runtime.resources.reader_count == 0
     await application.shutdown()
 
 
@@ -1183,6 +1406,56 @@ async def test_shutdown_releases_bootstrap_lock_before_reader_drain(
     assert resolved.status == "not_found"
     assert stopped.ok is True
     assert backend._runtime is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_shutdown_finishes_resource_and_process_cleanup_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    runtime = backend._runtime
+    assert runtime is not None
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_handler = runtime.command_dispatcher._handlers[CommandName.STATUS]
+
+    async def pause_request(intent: CommandIntent) -> CommandOutcome:
+        entered.set()
+        await release.wait()
+        return await original_handler(intent)
+
+    runtime.command_dispatcher._handlers[CommandName.STATUS] = pause_request
+    request = asyncio.create_task(
+        application.execute_command(CommandIntent(name=CommandName.STATUS))
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    shutdown = asyncio.create_task(application.shutdown())
+    while backend._runtime is not None:
+        await asyncio.sleep(0)
+
+    shutdown.cancel("cancel-shutdown-caller")
+    await asyncio.sleep(0)
+    assert shutdown.done() is False
+    release.set()
+    assert (await request).ok is True
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await asyncio.wait_for(shutdown, timeout=1)
+    assert cancelled.value.args == ("cancel-shutdown-caller",)
+    assert backend._closed is True
+    assert runtime.resources.closed is True
+    assert _TrackingMcpManager.instances[0].close_calls == 1
+    assert backend._state_lease is None
+    assert backend._workspace_path_lease is None
+    assert backend._workspace_entity_lease is None
+
+    assert (await application.shutdown()).ok is True
+    assert _TrackingMcpManager.instances[0].close_calls == 1
 
 
 @pytest.mark.asyncio
@@ -1240,7 +1513,7 @@ async def test_shutdown_prevents_cancelled_provider_child_from_publishing(
     stopped = await asyncio.wait_for(shutdown, timeout=1)
     assert stopped.ok is True
     assert backend._runtime is None
-    assert len(_TrackingMcpManager.instances) == 2
+    assert len(_TrackingMcpManager.instances) == 1
     assert all(manager.close_calls == 1 for manager in _TrackingMcpManager.instances)
     with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
         provider_configuration.require_consistent()
@@ -1259,9 +1532,14 @@ async def test_repeated_runtime_rebuilds_release_close_registrations(
     monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
     application, backend = await _trusted_application(tmp_path)
     assert (await application.initialize()).ok is True
+    runtime_generations: list[composition.WorkspaceRuntime] = []
+    assert backend._runtime is not None
+    runtime_generations.append(backend._runtime)
 
     for generation in range(1, 6):
         await backend._activate()
+        assert backend._runtime is not None
+        runtime_generations.append(backend._runtime)
         assert len(_TrackingMcpManager.instances) == generation + 1
         assert all(
             manager.close_calls == 1
@@ -1269,12 +1547,12 @@ async def test_repeated_runtime_rebuilds_release_close_registrations(
         )
         assert _TrackingMcpManager.instances[-1].close_calls == 0
         assert len(backend._runtime_retirements) == 0
-        assert len(backend._mcp_close_tasks) == 0
+        assert all(runtime.resources.closed for runtime in runtime_generations[:-1])
 
     await application.shutdown()
     assert all(manager.close_calls == 1 for manager in _TrackingMcpManager.instances)
+    assert all(runtime.resources.closed for runtime in runtime_generations)
     assert len(backend._runtime_retirements) == 0
-    assert len(backend._mcp_close_tasks) == 0
 
 
 @pytest.mark.asyncio

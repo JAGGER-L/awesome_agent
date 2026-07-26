@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
+from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import AsyncExitStack, contextmanager, suppress
-from contextvars import ContextVar
+from contextvars import Context, ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
-from weakref import WeakKeyDictionary, WeakSet
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import JsonValue
@@ -83,6 +82,7 @@ from awesome_agent.application.provider_configuration import (
     reconcile_provider_credential_transaction,
     reconcile_provider_model_transaction,
 )
+from awesome_agent.application.runtime_resources import RuntimeResources
 from awesome_agent.application.turns import (
     RecoveryResult,
     RecoveryStatus,
@@ -134,6 +134,7 @@ from awesome_agent.conversation import (
     TurnStatus,
     UsageSummary,
 )
+from awesome_agent.core.cancellation import finish_bounded_cancellation_cleanup
 from awesome_agent.core.changes import (
     ChangeAnalyzer,
     ChangeJournal,
@@ -196,27 +197,20 @@ from awesome_agent.memory import (
     Mem0Diagnostic,
     Mem0Identity,
     MemoryDistiller,
-    create_mem0_client,
+    managed_mem0_client,
     refresh_local_memory_tools,
 )
 from awesome_agent.memory.mem0_cloud import Mem0Client
 from awesome_agent.modeling import (
-    GatewayEvent,
+    GatewayFactory,
     ModelCatalog,
-    ModelGateway,
     ModelIdentitySnapshot,
-    ModelProvider,
-    ModelRequest,
-    ModelTurn,
     ProviderId,
-    RetryPolicy,
-    SelectedModel,
 )
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.providers import (
-    DeepSeekProvider,
-    KimiProvider,
     ProviderCredentialValidator,
+    managed_gateway_factory,
 )
 from awesome_agent.storage import (
     ApplicationSchemaMismatch,
@@ -248,13 +242,12 @@ from awesome_agent.storage.pagination import (
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 from awesome_agent.version import PRODUCT_VERSION
 
-type GatewayFactory = Callable[[ProviderId, str], ModelGateway]
 type McpClientFactory = Callable[[McpServerConfig], McpClient]
 
 logger = logging.getLogger(__name__)
 
 _MAX_THREAD_RESULT_BYTES = 900_000
-_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS = 5.0
+_APPLICATION_SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 45.0
 _RECOVERY_EVENT_DELIVERY_ATTEMPTS = 2
 _RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS = 5.0
 
@@ -308,32 +301,6 @@ async def compose_local_application(
         credential_validator=credential_validator,
     )
     return LocalApplication(backend)
-
-
-class _GatewayRouter:
-    def __init__(self, factory: GatewayFactory) -> None:
-        self._factory = factory
-
-    async def complete(
-        self,
-        selected: SelectedModel,
-        request: ModelRequest,
-    ) -> ModelTurn:
-        return await self._factory(selected.provider, selected.model).complete(
-            selected,
-            request,
-        )
-
-    async def stream(
-        self,
-        selected: SelectedModel,
-        request: ModelRequest,
-    ) -> AsyncIterator[GatewayEvent]:
-        async for event in self._factory(selected.provider, selected.model).stream(
-            selected,
-            request,
-        ):
-            yield event
 
 
 class _Mem0Session:
@@ -404,13 +371,7 @@ class WorkspaceRuntime:
     change_operations: ChangeOperations
     workspace_branch: str | None
     workspace_instruction_snapshot: WorkspaceInstructionSnapshot
-
-
-@dataclass(slots=True)
-class _RuntimeReaderState:
-    resources: McpManager
-    count: int
-    idle: asyncio.Event
+    resources: RuntimeResources
 
 
 class _LocalApplicationBackend:
@@ -429,7 +390,7 @@ class _LocalApplicationBackend:
     ) -> None:
         self._paths = paths
         self._workspace = workspace
-        self._resources = resources
+        self._process_resources = resources
         self._environ = dict(environ or {})
         self._injected_gateway_factory = gateway_factory
         self._mcp_client_factory = mcp_client_factory
@@ -480,27 +441,22 @@ class _LocalApplicationBackend:
             f"awesome_workspace_runtime_{id(self)}",
             default=None,
         )
-        self._runtime_readers: dict[int, _RuntimeReaderState] = {}
-        self._runtime_retirements: WeakKeyDictionary[
-            McpManager, asyncio.Task[None]
-        ] = WeakKeyDictionary()
-        self._mcp_close_tasks: WeakKeyDictionary[
-            McpManager, asyncio.Task[None]
-        ] = WeakKeyDictionary()
-        self._closed_mcp_resources: WeakSet[McpManager] = WeakSet()
+        self._runtime_retirements: dict[RuntimeResources, asyncio.Task[None]] = {}
+        self._shutdown_task: asyncio.Task[None] | None = None
         self._closed = False
         self._recovery_queue: list[RecoveryResult] = []
         self._recovery_resolution_delivery: _RecoveryResolutionDelivery | None = None
         self._recovery_required_delivery_id: str | None = None
         self._recovery_required_delivery_lock = asyncio.Lock()
+        self._recovery_event_deliveries: set[asyncio.Task[None]] = set()
         self._permission_session = PermissionSession()
         self._state_lease: StateLease | None = None
         self._workspace_path_lease: StateLease | None = None
         self._workspace_entity_lease: StateLease | None = None
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
-        self._resources.callback(self._close_state_lease)
-        self._resources.callback(self._close_workspace_leases)
+        self._process_resources.callback(self._close_state_lease)
+        self._process_resources.callback(self._close_workspace_leases)
 
     async def initialize_application(self) -> InitializeResult:
         async with self._bootstrap_lock:
@@ -1411,6 +1367,8 @@ class _LocalApplicationBackend:
             if self._closed or self._foreground.closing:
                 break
             delivery_task: asyncio.Task[None] = asyncio.create_task(emit())
+            self._recovery_event_deliveries.add(delivery_task)
+            delivery_task.add_done_callback(self._recovery_event_deliveries.discard)
             deadline = (
                 asyncio.get_running_loop().time()
                 + _RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS
@@ -1740,7 +1698,28 @@ class _LocalApplicationBackend:
         async with self._close_lock:
             if self._closed:
                 return
-            self._foreground.begin_closing()
+            shutdown_task = self._shutdown_task
+            if shutdown_task is None:
+                self._foreground.begin_closing()
+                shutdown_task = asyncio.create_task(
+                    self._close_application_once(),
+                    name="local-application-close",
+                    context=Context(),
+                )
+                self._shutdown_task = shutdown_task
+        try:
+            await asyncio.shield(shutdown_task)
+        except asyncio.CancelledError:
+            await finish_bounded_cancellation_cleanup(
+                _await_shielded_task(shutdown_task),
+                timeout_seconds=_APPLICATION_SHUTDOWN_CLEANUP_TIMEOUT_SECONDS,
+            )
+            raise
+
+    async def _close_application_once(self) -> None:
+        try:
+            for delivery in tuple(self._recovery_event_deliveries):
+                delivery.cancel()
             await self._operations.shutdown()
             self._foreground.cancel_exclusive()
             await self._foreground.wait_idle()
@@ -1751,10 +1730,21 @@ class _LocalApplicationBackend:
                 if runtime is not None:
                     self._schedule_workspace_runtime_retirement(runtime)
                 retirements = tuple(self._runtime_retirements.values())
-            for retirement in retirements:
-                await asyncio.shield(retirement)
-            await self._resources.aclose()
-            self._closed = True
+            outcomes = await asyncio.gather(
+                *(asyncio.shield(retirement) for retirement in retirements),
+                return_exceptions=True,
+            )
+            for outcome in outcomes:
+                if isinstance(outcome, BaseException):
+                    logger.warning(
+                        "Workspace runtime retirement failed during shutdown.",
+                        exc_info=(type(outcome), outcome, outcome.__traceback__),
+                    )
+        finally:
+            try:
+                await self._process_resources.aclose()
+            finally:
+                self._closed = True
 
     async def _reconcile_provider_credentials_before_state(self) -> None:
         if self._provider_credential_reconciled:
@@ -1958,10 +1948,11 @@ class _LocalApplicationBackend:
         configuration: ProviderConfigurationSnapshot | None,
         selected_thread_id: str | None,
     ) -> WorkspaceRuntime:
+        runtime_resources = RuntimeResources()
         candidate_mcp: McpManager | None = None
         try:
             if self._saver is None:
-                self._saver = await self._resources.enter_async_context(
+                self._saver = await self._process_resources.enter_async_context(
                     sqlite_checkpoint_saver(self._paths.checkpoint_db)
                 )
                 self._checkpoints = LangGraphCheckpointStore(self._saver)
@@ -1992,8 +1983,15 @@ class _LocalApplicationBackend:
                 application_config = resolve_application_config(sources)
             else:
                 sources, application_config = configuration
-            gateway_factory = self._injected_gateway_factory or self._provider_factory()
-            gateway_router = _GatewayRouter(gateway_factory)
+            base_gateway_factory = self._injected_gateway_factory
+            if base_gateway_factory is None:
+                base_gateway_factory = await runtime_resources.enter_async_context(
+                    managed_gateway_factory(application_config, sources.secrets)
+                )
+            gateway_factory = runtime_resources.bind_gateway_factory(
+                base_gateway_factory
+            )
+            gateway_router = runtime_resources
 
             change_store = SQLiteChangeSetStore(self._paths.application_db)
             change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
@@ -2042,6 +2040,24 @@ class _LocalApplicationBackend:
             skill_loader = SkillLoader(catalog)
             register_skill_tools(registry, skill_loader)
 
+            local_memory = LocalMemoryService(
+                paths=self._paths,
+                workspace_key=self._workspace.key,
+                enabled=application_config.memory.local_file_memory,
+            )
+            refresh_local_memory_tools(registry, local_memory)
+            mem0_identity = self._mem0_identity(application_config)
+            mem0_adapter, mem0_diagnostic = await self._create_mem0_adapter(
+                sources,
+                resources=runtime_resources,
+            )
+            mem0_session = _Mem0Session(
+                enabled=application_config.memory.mem0_cloud,
+                adapter=mem0_adapter,
+                identity=mem0_identity,
+                diagnostic=mem0_diagnostic,
+            )
+
             enablements = SQLiteMcpEnablementStore(self._paths.application_db)
             if self._mcp_client_factory is None:
                 candidate_mcp = McpManager(
@@ -2060,20 +2076,8 @@ class _LocalApplicationBackend:
                     registry=registry,
                     client_factory=self._mcp_client_factory,
                 )
-
-            local_memory = LocalMemoryService(
-                paths=self._paths,
-                workspace_key=self._workspace.key,
-                enabled=application_config.memory.local_file_memory,
-            )
-            refresh_local_memory_tools(registry, local_memory)
-            mem0_identity = self._mem0_identity(application_config)
-            mem0_adapter, mem0_diagnostic = self._create_mem0_adapter(sources)
-            mem0_session = _Mem0Session(
-                enabled=application_config.memory.mem0_cloud,
-                adapter=mem0_adapter,
-                identity=mem0_identity,
-                diagnostic=mem0_diagnostic,
+            runtime_resources.push_async_callback(
+                candidate_mcp.aclose,
             )
 
             model_catalog = ModelCatalog.from_application(application_config)
@@ -2411,10 +2415,13 @@ class _LocalApplicationBackend:
                 change_operations=change_operations,
                 workspace_branch=workspace_branch,
                 workspace_instruction_snapshot=workspace_instruction_snapshot,
+                resources=runtime_resources,
             )
         except BaseException:
-            if candidate_mcp is not None:
-                await self._close_mcp_bounded(candidate_mcp)
+            await self._close_runtime_resources_best_effort(
+                runtime_resources,
+                reason="candidate construction",
+            )
             raise
 
     def _validate_workspace_runtime(self, candidate: WorkspaceRuntime) -> None:
@@ -2460,59 +2467,49 @@ class _LocalApplicationBackend:
         self,
         runtime: WorkspaceRuntime,
     ) -> asyncio.Task[None] | None:
-        if runtime.mcp in self._closed_mcp_resources:
+        resources = runtime.resources
+        if resources.closed:
             return None
-        retirement = self._runtime_retirements.get(runtime.mcp)
+        retirement = self._runtime_retirements.get(resources)
         if retirement is None:
             retirement = asyncio.create_task(
-                self._drain_and_close_workspace_runtime(runtime),
+                self._retire_workspace_runtime(resources),
                 name="workspace-runtime-retirement",
+                context=Context(),
             )
-            self._runtime_retirements[runtime.mcp] = retirement
+            self._runtime_retirements[resources] = retirement
         return retirement
 
-    async def _drain_and_close_workspace_runtime(
+    async def _retire_workspace_runtime(
         self,
-        runtime: WorkspaceRuntime,
+        resources: RuntimeResources,
     ) -> None:
         try:
-            await self._wait_for_runtime_readers(runtime)
-            await self._close_mcp_bounded(runtime.mcp)
+            await resources.aclose()
+        except BaseException as error:
+            logger.warning(
+                "Workspace runtime resource cleanup failed during retirement.",
+                exc_info=(type(error), error, error.__traceback__),
+            )
         finally:
-            retirement = self._runtime_retirements.get(runtime.mcp)
+            retirement = self._runtime_retirements.get(resources)
             if retirement is asyncio.current_task():
-                self._runtime_retirements.pop(runtime.mcp, None)
+                self._runtime_retirements.pop(resources, None)
 
-    async def _close_mcp_bounded(self, candidate: McpManager) -> None:
-        if candidate in self._closed_mcp_resources:
-            return
-        close_task = self._mcp_close_tasks.get(candidate)
-        if close_task is None:
-            close_task = asyncio.create_task(
-                self._run_mcp_close_bounded(candidate),
-                name="workspace-mcp-close",
-            )
-            self._mcp_close_tasks[candidate] = close_task
-        await asyncio.shield(close_task)
-
-    async def _run_mcp_close_bounded(self, candidate: McpManager) -> None:
-        close_task = asyncio.create_task(candidate.aclose())
+    async def _close_runtime_resources_best_effort(
+        self,
+        resources: RuntimeResources,
+        *,
+        reason: str,
+    ) -> None:
         try:
-            await asyncio.wait_for(
-                asyncio.shield(close_task),
-                timeout=_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS,
+            await resources.aclose()
+        except BaseException as error:
+            logger.warning(
+                "Workspace runtime resource cleanup failed after %s.",
+                reason,
+                exc_info=(type(error), error, error.__traceback__),
             )
-        except TimeoutError:
-            close_task.cancel()
-            close_task.add_done_callback(_consume_background_task_result)
-            await asyncio.sleep(0)
-        except (Exception, asyncio.CancelledError):
-            pass
-        finally:
-            self._closed_mcp_resources.add(candidate)
-            owned_close = self._mcp_close_tasks.get(candidate)
-            if owned_close is asyncio.current_task():
-                self._mcp_close_tasks.pop(candidate, None)
 
     def _load_sources(self, *, workspace_trusted: bool) -> LoadedConfigSources:
         return load_config_sources(
@@ -2566,36 +2563,6 @@ class _LocalApplicationBackend:
     async def _prepare_turn_extensions(self) -> None:
         runtime = self._require_runtime()
         await runtime.extensions.prepare_turn_extensions()
-
-    def _provider_factory(self) -> GatewayFactory:
-        def build(provider: ProviderId, model: str) -> ModelGateway:
-            runtime = self._require_runtime()
-            secrets = runtime.sources.secrets
-            retries = runtime.application_config.budgets.provider_retries
-            if provider == "deepseek":
-                secret = secrets.deepseek_api_key
-                if secret is None:
-                    raise AssertionError("DeepSeek credential preflight was bypassed.")
-                adapter: ModelProvider = DeepSeekProvider(
-                    api_key=secret.get_secret_value(),
-                    model=model,
-                )
-            else:
-                secret = secrets.moonshot_api_key
-                if secret is None:
-                    raise AssertionError("Kimi credential preflight was bypassed.")
-                adapter = KimiProvider(
-                    api_key=secret.get_secret_value(),
-                    model=model,
-                    region=runtime.application_config.providers.kimi_region,
-                )
-            return ModelGateway(
-                {provider: adapter},
-                retry_policy=RetryPolicy(max_retries=retries),
-                sleeper=asyncio.sleep,
-            )
-
-        return build
 
     def _turn_config(
         self,
@@ -2818,16 +2785,20 @@ class _LocalApplicationBackend:
             return None
         return Mem0Identity(user_id=user_id, workspace_key=self._workspace.key)
 
-    def _create_mem0_adapter(
+    async def _create_mem0_adapter(
         self,
         sources: LoadedConfigSources,
+        *,
+        resources: RuntimeResources,
     ) -> tuple[Mem0CloudAdapter | None, Mem0Diagnostic | None]:
         client = self._injected_mem0_client
         if client is None:
             secret = sources.secrets.mem0_api_key
             try:
-                client = create_mem0_client(
-                    secret.get_secret_value() if secret is not None else None
+                client = await resources.enter_async_context(
+                    managed_mem0_client(
+                        secret.get_secret_value() if secret is not None else None
+                    )
                 )
             except Mem0CloudError as error:
                 return None, error.diagnostic
@@ -2892,38 +2863,12 @@ class _LocalApplicationBackend:
         if bound is not None:
             yield bound
             return
-        key = id(runtime.mcp)
-        readers = self._runtime_readers.get(key)
-        if readers is None:
-            idle = asyncio.Event()
-            idle.set()
-            readers = _RuntimeReaderState(
-                resources=runtime.mcp,
-                count=0,
-                idle=idle,
-            )
-            self._runtime_readers[key] = readers
-        elif readers.resources is not runtime.mcp:
-            raise RuntimeError("Workspace runtime resource identity collision.")
-        readers.count += 1
-        readers.idle.clear()
-        token = self._request_runtime.set(runtime)
-        try:
-            yield runtime
-        finally:
-            self._request_runtime.reset(token)
-            readers.count -= 1
-            if readers.count == 0:
-                readers.idle.set()
-                self._runtime_readers.pop(key, None)
-
-    async def _wait_for_runtime_readers(self, runtime: WorkspaceRuntime) -> None:
-        readers = self._runtime_readers.get(id(runtime.mcp))
-        if readers is None:
-            return
-        if readers.resources is not runtime.mcp:
-            raise RuntimeError("Workspace runtime resource identity collision.")
-        await readers.idle.wait()
+        with runtime.resources.reader():
+            token = self._request_runtime.set(runtime)
+            try:
+                yield runtime
+            finally:
+                self._request_runtime.reset(token)
 
     def _require_open(self) -> None:
         if self._closed or self._foreground.closing:
@@ -3013,6 +2958,10 @@ class _LocalApplicationBackend:
                 )
             )
         return tuple(summaries)
+
+
+async def _await_shielded_task(task: asyncio.Task[None]) -> None:
+    await asyncio.shield(task)
 
 
 async def _finish_cancelled_worker(worker: asyncio.Task[None]) -> None:

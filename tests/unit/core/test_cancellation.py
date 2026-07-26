@@ -172,6 +172,43 @@ async def test_late_worker_success_does_not_commit_after_cleanup_deadline() -> N
 
 
 @pytest.mark.asyncio
+async def test_late_worker_result_can_be_released_on_event_loop_thread() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    late_results: list[tuple[int, int]] = []
+    event_loop_thread = threading.get_ident()
+
+    def complete_late() -> int:
+        entered.set()
+        if not release.wait(1.0):
+            raise RuntimeError("worker release was not scheduled")
+        return 42
+
+    operation = asyncio.create_task(
+        run_cancellation_safe_blocking_call(
+            complete_late,
+            on_late_completed=lambda value: late_results.append(
+                (value, threading.get_ident())
+            ),
+            cleanup_timeout_seconds=0.02,
+        )
+    )
+    assert await asyncio.to_thread(entered.wait, 1.0)
+    operation.cancel("shutdown")
+
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    release.set()
+    deadline = asyncio.get_running_loop().time() + 1.0
+    while not late_results:
+        assert asyncio.get_running_loop().time() < deadline
+        await asyncio.sleep(0)
+
+    assert late_results == [(42, event_loop_thread)]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_deadline_calls_abandonment_fence_once_before_late_success() -> (
     None
 ):

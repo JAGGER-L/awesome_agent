@@ -58,8 +58,9 @@ Application 的职责被有意拆分到聚焦的模块中：
 受信激活成功后会发布唯一的不可变 `WorkspaceRuntime`。该快照包含解析后的配置与稳定的
 workspace service graph：Conversation、Turn coordination、command service、Tool
 Registry、Model Catalog、context 与 extension、memory 与 MCP，以及 Change Journal
-service。Foreground ownership、pending interaction、permission grant、recovery delivery
-和进程 shutdown 等可变生命周期协调仍保留在 Application backend 上。
+service 和一个 `RuntimeResources` owner。Foreground ownership、pending interaction、
+permission grant、recovery delivery 和进程 shutdown 等可变生命周期协调仍保留在
+Application backend 上。
 
 顶层请求会在 Application 持有的 request context 中只绑定一次 `_runtime`。被 await 的
 callback 和由 foreground 持有的子 task 会继承这份不可变快照，不会通过多个 backend 字段
@@ -69,14 +70,18 @@ callback 和由 foreground 持有的子 task 会继承这份不可变快照，�
 确认没有前台 Operation，再通过一次赋值更新 runtime 指针。随后针对已发布 candidate 发送
 recovery 通知；通知失败会被报告，但不会恢复旧 runtime。
 
-发布前已准入的请求继续看到旧 runtime，新请求则看到新 runtime。Application 按 runtime
-持有的 MCP 资源跟踪这些 reader，并在有界关闭前等待它们退出，因此不会在暂停的 reader
-下方关闭资源。Candidate 构建失败或取消只会关闭一次候选 MCP，不改变旧 runtime 或请求
-权威。Candidate 构建会在启动长期资源前清除调用方的 runtime binding，避免新资源 task
-保留旧 generation。Provider 与 credential mutation 会从已提交快照构建完整 candidate，但不重复
+发布前已准入的请求继续看到旧 runtime，新请求则看到新 runtime。`RuntimeResources` 为每个
+candidate 提供独立的 generation identity 和 reader 计数；retirement 会先排空该 generation，
+再关闭其 `AsyncExitStack`，因此不会在暂停的 reader 下方关闭资源。退出栈持有可复用的
+provider client、内部创建的 Mem0 client 和 MCP；注册顺序保证按 MCP、Mem0、provider 的
+逆序恰好关闭一次。注入的 gateway 和 Mem0 对象只借用，Awesome 绝不关闭。Candidate 构建
+失败或取消会关闭整个候选退出栈，但不改变旧 runtime 或请求权威。Candidate 构建会清除调用
+方的 runtime binding，而 retirement 与 close task 使用干净 context，因此长期资源不会保留
+旧 generation。Provider 与 credential mutation 会从已提交快照构建完整 candidate，但不重复
 startup reconciliation；它把已选择的 Thread 静默带入 candidate，不触发 selection callback，
-完成原子发布后，等绑定旧 runtime 的 mutation 请求退出再回收旧 runtime。跨 runtime
-generation 复用的 checkpoint saver 始终由 Application `AsyncExitStack` 持有。
+完成原子发布后，等绑定旧 runtime 的 mutation 请求退出再回收旧 runtime。资源关闭失败会被
+报告，但不会覆盖 candidate 的主要失败或跳过进程清理。跨 runtime generation 复用的
+checkpoint saver 和 state lease 始终由另一套进程生命周期 Application `AsyncExitStack` 持有。
 
 ## 前台串行化
 

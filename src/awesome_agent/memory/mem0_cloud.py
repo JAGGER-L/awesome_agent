@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Mapping
-from typing import Protocol, cast
+import contextvars
+import logging
+from collections.abc import AsyncIterator, Awaitable, Mapping
+from contextlib import asynccontextmanager
+from types import TracebackType
+from typing import Protocol, Self, cast
 
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
 from awesome_agent.memory.identity import Mem0Identity
 from awesome_agent.memory.models import (
     CloudDeleteOutcome,
@@ -17,6 +22,10 @@ from awesome_agent.memory.models import (
 
 MEM0_TIMEOUT_SECONDS = 3.0
 MEM0_MAX_RESULTS = 8
+_MEM0_CONSTRUCTION_CLEANUP_TIMEOUT_SECONDS = 5.0
+_LATE_MEM0_CLEANUP_TASKS: set[asyncio.Task[None]] = set()
+
+logger = logging.getLogger(__name__)
 
 
 class Mem0Client(Protocol):
@@ -29,20 +38,95 @@ class Mem0Client(Protocol):
     async def delete(self, memory_id: str) -> object: ...
 
 
+class ManagedMem0Client(Mem0Client, Protocol):
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+
 class Mem0CloudError(RuntimeError):
     def __init__(self, diagnostic: Mem0Diagnostic) -> None:
         self.diagnostic = diagnostic
         super().__init__(diagnostic.code)
 
 
-def create_mem0_client(api_key: str | None) -> Mem0Client:
+def create_mem0_client(api_key: str | None) -> ManagedMem0Client:
     if api_key is None or not api_key.strip():
         raise _error("mem0_credential_missing", "initialize")
     try:
         from mem0 import AsyncMemoryClient
     except ImportError as error:
         raise _error("mem0_dependency_missing", "initialize") from error
-    return cast(Mem0Client, AsyncMemoryClient(api_key=api_key))
+    return cast(ManagedMem0Client, AsyncMemoryClient(api_key=api_key))
+
+
+@asynccontextmanager
+async def managed_mem0_client(api_key: str | None) -> AsyncIterator[Mem0Client]:
+    """Own the async transport created for one Mem0 runtime generation."""
+
+    # Deliver a cancellation already requested by shutdown before starting the
+    # SDK's synchronous constructor in a worker that Python cannot stop.
+    await asyncio.sleep(0)
+    completed: list[ManagedMem0Client] = []
+
+    def construction_abandoned() -> None:
+        # The current SDK performs an unbounded synchronous validation request in
+        # its constructor. Python cannot stop that worker, so return cancellation
+        # promptly and release any eventual client through the late-result hook.
+        logger.warning("Mem0 client construction cleanup exceeded its deadline.")
+
+    def close_late_client(client: ManagedMem0Client) -> None:
+        cleanup = asyncio.create_task(
+            _close_late_mem0_client(client),
+            name="late-mem0-client-close",
+            context=contextvars.Context(),
+        )
+        _LATE_MEM0_CLEANUP_TASKS.add(cleanup)
+        cleanup.add_done_callback(_late_mem0_cleanup_completed)
+
+    try:
+        client = await run_cancellation_safe_blocking_call(
+            lambda: create_mem0_client(api_key),
+            on_completed=completed.append,
+            on_abandoned=construction_abandoned,
+            on_late_completed=close_late_client,
+            cleanup_timeout_seconds=_MEM0_CONSTRUCTION_CLEANUP_TIMEOUT_SECONDS,
+        )
+    except asyncio.CancelledError:
+        if completed:
+            try:
+                await completed[0].__aexit__(None, None, None)
+            except BaseException:
+                logger.warning(
+                    "Mem0 client cleanup failed after cancelled construction.",
+                    exc_info=True,
+                )
+        raise
+    async with client:
+        yield client
+
+
+async def _close_late_mem0_client(client: ManagedMem0Client) -> None:
+    try:
+        async with asyncio.timeout(_MEM0_CONSTRUCTION_CLEANUP_TIMEOUT_SECONDS):
+            await client.__aexit__(None, None, None)
+    except BaseException:
+        logger.warning("Late Mem0 client cleanup failed.", exc_info=True)
+
+
+def _late_mem0_cleanup_completed(task: asyncio.Task[None]) -> None:
+    _LATE_MEM0_CLEANUP_TASKS.discard(task)
+    if task.cancelled():
+        return
+    try:
+        task.exception()
+    except Exception:
+        return
 
 
 class Mem0CloudAdapter:

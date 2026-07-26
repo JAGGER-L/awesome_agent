@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -28,6 +29,10 @@ class FakeModels:
 class FakeClient:
     def __init__(self, outcome: object) -> None:
         self.models = FakeModels(outcome)
+        self.close_calls = 0
+
+    async def close(self) -> None:
+        self.close_calls += 1
 
 
 def _response(status: int) -> httpx.Response:
@@ -40,10 +45,14 @@ def _response(status: int) -> httpx.Response:
 def _factory(
     outcome: object,
     captured: list[dict[str, object]],
+    clients: list[FakeClient] | None = None,
 ) -> Callable[..., FakeClient]:
     def create(**kwargs: object) -> FakeClient:
         captured.append(dict(kwargs))
-        return FakeClient(outcome)
+        client = FakeClient(outcome)
+        if clients is not None:
+            clients.append(client)
+        return client
 
     return create
 
@@ -130,8 +139,9 @@ async def test_transient_and_unknown_failures_are_unverified(error: Exception) -
 
 @pytest.mark.asyncio
 async def test_cancellation_is_not_converted_to_validation_result() -> None:
+    clients: list[FakeClient] = []
     validator = ProviderCredentialValidator(
-        client_factory=_factory(asyncio.CancelledError(), [])
+        client_factory=_factory(asyncio.CancelledError(), [], clients)
     )
 
     with pytest.raises(asyncio.CancelledError):
@@ -140,6 +150,109 @@ async def test_cancellation_is_not_converted_to_validation_result() -> None:
             SecretStr("secret"),
             kimi_region=KimiRegion.CN,
         )
+    assert clients[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_close_failure_is_logged_without_replacing_validation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class CloseFailureClient(FakeClient):
+        async def close(self) -> None:
+            self.close_calls += 1
+            raise RuntimeError("private close detail")
+
+    client = CloseFailureClient(object())
+    validator = ProviderCredentialValidator(client_factory=lambda **_: client)
+
+    with caplog.at_level(logging.WARNING):
+        result = await validator.validate(
+            "deepseek",
+            SecretStr("secret"),
+            kimi_region=KimiRegion.CN,
+        )
+
+    assert result.status is CredentialValidationStatus.VALID
+    assert client.close_calls == 1
+    assert "Credential validation client cleanup failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_second_cancellation_during_close_preserves_primary_cancellation(
+) -> None:
+    class BlockingCloseClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__(asyncio.CancelledError("primary-cancellation"))
+            self.close_entered = asyncio.Event()
+            self.close_release = asyncio.Event()
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            self.close_entered.set()
+            await self.close_release.wait()
+
+    client = BlockingCloseClient()
+    validator = ProviderCredentialValidator(client_factory=lambda **_: client)
+    validating = asyncio.create_task(
+        validator.validate(
+            "deepseek",
+            SecretStr("secret"),
+            kimi_region=KimiRegion.CN,
+        )
+    )
+    await asyncio.wait_for(client.close_entered.wait(), timeout=1)
+
+    validating.cancel("secondary-cancellation")
+    await asyncio.sleep(0)
+    client.close_release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await validating
+    assert cancelled.value.args == ("primary-cancellation",)
+    assert client.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_primary_cancellation_bounds_hanging_client_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import awesome_agent.providers.credential_validation as validation_module
+
+    class HangingCloseClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__(asyncio.CancelledError("primary-cancellation"))
+            self.close_cancelled = False
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.close_cancelled = True
+                raise
+
+    monkeypatch.setattr(
+        validation_module,
+        "_CREDENTIAL_CLIENT_CLOSE_TIMEOUT_SECONDS",
+        0.01,
+    )
+    client = HangingCloseClient()
+    validator = ProviderCredentialValidator(client_factory=lambda **_: client)
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await asyncio.wait_for(
+            validator.validate(
+                "deepseek",
+                SecretStr("secret"),
+                kimi_region=KimiRegion.CN,
+            ),
+            timeout=0.5,
+        )
+
+    assert cancelled.value.args == ("primary-cancellation",)
+    assert client.close_calls == 1
+    await asyncio.sleep(0)
+    assert client.close_cancelled is True
 
 
 def test_validator_rejects_invalid_timeout() -> None:

@@ -327,21 +327,24 @@ as authority.
 After trusted activation, the backend publishes one frozen, slotted
 `WorkspaceRuntime`. It is the request-visible snapshot of resolved
 configuration and the composed Conversation, Turn, command, tool, model
-catalog, context, extension, memory, MCP, and Change Journal services. Each
-request binds that object once and continues through the same service graph,
-including awaited callbacks and foreground-owned child tasks. A replacement is
-assembled entirely
-as a local candidate, validated, checked against foreground Operation ownership,
-and published by one pointer assignment. New requests then bind the new runtime;
-already admitted readers finish against the old runtime before its owned MCP
-resources close. Startup recovery notification happens after publication and
-cannot roll a ready runtime back. Candidate failure or cancellation closes only
-candidate resources and leaves the previously published runtime untouched.
+catalog, context, extension, memory, MCP, Change Journal, and
+`RuntimeResources`. Each request binds that object once and continues through
+the same service graph, including awaited callbacks and foreground-owned child
+tasks. A replacement is assembled entirely as a local candidate, validated,
+checked against foreground Operation ownership, and published by one pointer
+assignment. New requests then bind the new runtime; already admitted readers
+finish against the old resource generation before it closes. Each generation's
+`AsyncExitStack` owns reusable provider clients, an internally created Mem0
+client, and MCP, and closes them exactly once in reverse order: MCP, Mem0, then
+provider clients. Injected gateways and Mem0 clients are borrowed and never
+registered for close. Startup recovery notification happens after publication
+and cannot roll a ready runtime back. Candidate failure or cancellation closes
+only candidate resources and leaves the previously published runtime untouched.
 Provider and credential mutations use the same complete-candidate publication
 path, without repeating startup recovery, and preserve the selected Thread.
 Foreground ownership, interactions, permission session, recovery delivery,
-checkpoint saver, and process-lifetime resources remain Application lifecycle
-state rather than fields of the workspace snapshot.
+checkpoint saver, state leases, and other process-lifetime resources remain in
+a separate Application `AsyncExitStack` rather than the workspace snapshot.
 
 A shared foreground arbiter grants one atomic lease to Agent Turns, direct
 commands, state-changing commands, credential mutation, non-Tool interaction

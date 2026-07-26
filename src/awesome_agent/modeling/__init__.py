@@ -22,6 +22,7 @@ from awesome_agent.modeling.errors import (
 from awesome_agent.modeling.gateway import (
     AsyncSleeper,
     GatewayEvent,
+    GatewayFactory,
     ModelGateway,
     ProviderRetrying,
     RetryPolicy,
@@ -67,6 +68,7 @@ __all__ = [
     "ContextLengthModelError",
     "ContinuationState",
     "GatewayEvent",
+    "GatewayFactory",
     "InvalidRequestModelError",
     "ModelCatalog",
     "ModelCatalogError",

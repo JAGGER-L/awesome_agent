@@ -26,6 +26,7 @@ SDK_PROVIDER_FILES = {
     "credential_validation.py",
     "deepseek.py",
     "errors.py",
+    "factory.py",
     "kimi.py",
 }
 
@@ -64,6 +65,19 @@ def test_modeling_contracts_are_provider_neutral() -> None:
     }
 
     assert {path: imports for path, imports in violations.items() if imports} == {}
+
+
+def test_runtime_resource_owner_depends_only_on_provider_neutral_contracts() -> None:
+    imports = _imports(Path("src/awesome_agent/application/runtime_resources.py"))
+
+    assert {
+        imported
+        for imported in imports
+        if imported == "openai"
+        or imported.startswith("openai.")
+        or imported == "awesome_agent.providers"
+        or imported.startswith("awesome_agent.providers.")
+    } == set()
 
 
 def test_provider_sdk_is_confined_to_concrete_adapters() -> None:

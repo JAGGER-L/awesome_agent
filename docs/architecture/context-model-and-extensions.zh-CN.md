@@ -128,6 +128,13 @@ stream(ModelRequest) -> async ModelStreamEvent sequence
 它们将 SDK payload 转换为中立事件并规范化错误；Agent 和 Context 绝不导入 OpenAI
 client 或提供商适配器。
 
+Provider 资源组装也保留在 `providers/`。一个 managed factory 会捕获 candidate 配置，并为
+每个已配置 provider 最多创建一个可复用的异步 SDK client。`RuntimeResources` 按 provider
+和 model 缓存中立的 `ModelGateway`，因此多个模型可以共享 provider client，而无需读取可变
+Application 状态。Candidate retirement 会关闭内部持有的 client；注入的 gateway factory
+只借用。Credential validation 每次尝试使用独立 client，并在成功、错误、超时或取消时于
+有界清理期限内关闭。
+
 `ModelGateway` 冻结一次 catalog 选择，并强制执行流行为。它只会重试在任何可见输出或
 完成之前发生的可重试失败，会报告重试事件、保留取消，并要求恰好一个匹配的、已完成的
 模型 Turn。一旦文本、reasoning 或工具调用已经可见，透明重放会复制可观察工作，因此
@@ -176,6 +183,12 @@ Mem0 Cloud 是可选适配器，也是目前唯一的外部 memory 提供商。R
 身份范围约束，会与本地 memory 去重，并作为不受信上下文表示。云端失败会成为诊断，
 不会导致整个 Turn 配置无效。回答后的 distillation 使用独立策略，绝不会默认上传原始
 transcript。
+
+Mem0 SDK 当前会在异步 client 构造函数中执行同步 credential validation。Awesome 在支持
+取消的 worker 中运行该构造函数，避免阻塞事件循环，并且只把内部创建的 client 注册到
+runtime 退出栈；注入 client 只借用。如果 SDK 构造函数超过有界取消清理期限，Python 无法
+停止该 worker，因此 Awesome 会及时返回取消、避免无限等待，并通过 late-completion 清理
+hook 关闭它最终生成的 client。
 
 Memory 工具有自己的 memory policy。启用 Memory 不会授予工作区、shell 或 MCP 能力。
 
