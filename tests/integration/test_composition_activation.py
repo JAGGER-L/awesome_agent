@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 from pydantic import SecretStr
@@ -33,6 +34,7 @@ from awesome_agent.config import (
     UserConfigWriter,
     UserSecretStore,
     load_config_sources,
+    resolve_application_config,
 )
 from awesome_agent.conversation import TurnStatus
 from awesome_agent.core.events import CollectingEventSink
@@ -578,6 +580,89 @@ async def test_selected_model_context_limit_clamps_turn_and_context_budgets(
     await application.shutdown()
 
 
+@pytest.mark.asyncio
+async def test_activation_publishes_one_immutable_workspace_runtime(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+
+    initialized = await application.initialize()
+
+    assert initialized.ok is True
+    runtime = backend._runtime
+    assert runtime is not None
+    assert runtime.conversation is backend._conversation
+    assert runtime.turns is backend._turns
+    assert runtime.commands is backend._commands
+    assert runtime.command_dispatcher is backend._command_dispatcher
+    assert runtime.tool_registry is backend._registry
+    assert runtime.context is backend._context
+    assert runtime.mcp is backend._mcp
+    assert not hasattr(runtime, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        cast(Any, runtime).workspace_branch = "changed"
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_requests_read_the_published_runtime_not_candidate_fields(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    runtime = backend._runtime
+    assert runtime is not None
+    backend._commands = None
+    backend._command_dispatcher = None
+    backend._conversation = cast(Any, object())
+
+    created = await application.execute_command(
+        CommandIntent(name=CommandName.NEW, arguments=())
+    )
+    state = await application.get_state()
+
+    assert created.ok is True
+    assert state.ok is True
+    assert state.value is not None
+    assert state.value.current_thread_id == runtime.commands.current_thread_id
+    assert state.value.current_thread_id is not None
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_provider_configuration_replaces_the_runtime_snapshot(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    original = backend._runtime
+    assert original is not None
+    updated_user = original.sources.user.model_copy(
+        update={
+            "providers": original.sources.user.providers.model_copy(
+                update={"default_model": "kimi/kimi-k2.6"}
+            )
+        }
+    )
+    updated_sources = replace(original.sources, user=updated_user)
+    updated_config = resolve_application_config(updated_sources)
+
+    backend._apply_provider_configuration((updated_sources, updated_config))
+
+    current = backend._runtime
+    assert current is not None
+    assert current is not original
+    assert current.sources is updated_sources
+    assert current.application_config is updated_config
+    assert current.model_catalog.default_model == "kimi/kimi-k2.6"
+    assert original.application_config.providers.default_model is None
+    assert current.turns is original.turns
+    assert current.command_dispatcher is original.command_dispatcher
+    assert backend._sources is updated_sources
+    assert backend._application_config is updated_config
+    await application.shutdown()
+
+
 class _TrackingMcpManager:
     instances: ClassVar[list[_TrackingMcpManager]] = []
     hang_first_close: ClassVar[bool] = False
@@ -636,6 +721,7 @@ def _assert_activation_rolled_back(
     backend: composition._LocalApplicationBackend,
 ) -> None:
     assert backend._initialized is False
+    assert backend._runtime is None
     assert all(getattr(backend, name) is None for name in _ROLLED_BACK_FIELDS)
 
 

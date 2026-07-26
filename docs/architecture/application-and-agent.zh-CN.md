@@ -53,6 +53,20 @@ Application 的职责被有意拆分到聚焦的模块中：
 `composition.py` 可能较大，因为它负责装配和启动顺序。它不能成为命令语义、图路由、
 任意结果构造或展示格式化的容器。
 
+### Workspace runtime 快照
+
+受信激活成功后会发布唯一的不可变 `WorkspaceRuntime`。该快照包含解析后的配置与稳定的
+workspace service graph：Conversation、Turn coordination、command service、Tool
+Registry、Model Catalog、context 与 extension、memory 与 MCP，以及 Change Journal
+service。Foreground ownership、pending interaction、permission grant、recovery delivery
+和进程 shutdown 等可变生命周期协调仍保留在 Application backend 上。
+
+普通请求会在跨越异步边界前只捕获一次 `_runtime`，不会在同一请求后续通过多个 backend
+字段重新拼装依赖。Provider 配置 mutation 会保留 service graph，并通过
+`dataclasses.replace` 在一次赋值中发布新的配置与 Model Catalog 快照。本阶段的
+activation candidate 字段与逐字段 rollback 仍是私有构造机制；失败的构造结果不会成为
+请求可见 runtime。
+
 ## 前台串行化
 
 `ForegroundArbiter` 有三类 lease：Operation、exclusive 和 resolving

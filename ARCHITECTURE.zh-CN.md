@@ -294,6 +294,14 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 - **依赖：** Agent Core、当前 adapter、Conversation、Storage、Core、Context、Extensions
   和 Memory。
 
+受信激活完成后，backend 会发布一个 frozen、slotted 的 `WorkspaceRuntime`。它是请求可见
+的快照，统一包含已解析配置以及组装后的 Conversation、Turn、command、tool、model
+catalog、context、extension、memory、MCP 和 Change Journal service。每个请求只捕获一次
+该对象，并始终沿同一 service graph 执行；provider 配置变化通过 `dataclasses.replace`
+发布新快照。前台所有权、interaction、permission session、recovery delivery 和进程生命
+周期资源仍属于 Application 生命周期状态，而不是 workspace snapshot 字段。Candidate
+字段及其 rollback 仍只是私有激活机制，不是请求权威。
+
 共享 foreground arbiter 向 Agent Turn、直接命令、改变状态的命令、credential mutation、
 非 Tool interaction resolution 或 shutdown 授予唯一原子 lease。准入发生在 Turn 持久化
 之前。活动 Operation 期间，显式例外是只读 snapshot command；pending interaction 会

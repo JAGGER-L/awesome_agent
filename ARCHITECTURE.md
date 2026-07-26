@@ -324,6 +324,17 @@ as authority.
 - **Dependencies:** Agent Core, current adapters, Conversation, Storage, Core,
   Context, Extensions, and Memory.
 
+After trusted activation, the backend publishes one frozen, slotted
+`WorkspaceRuntime`. It is the request-visible snapshot of resolved
+configuration and the composed Conversation, Turn, command, tool, model
+catalog, context, extension, memory, MCP, and Change Journal services. Each
+request captures that object once and continues through the same service graph;
+provider configuration changes publish a new snapshot with
+`dataclasses.replace`. Foreground ownership, interactions, permission session,
+recovery delivery, and process-lifetime resources remain Application lifecycle
+state rather than fields of the workspace snapshot. Candidate fields and their
+rollback are still private activation machinery and are not request authority.
+
 A shared foreground arbiter grants one atomic lease to Agent Turns, direct
 commands, state-changing commands, credential mutation, non-Tool interaction
 resolution, or shutdown. Admission happens before Turn persistence. Read-only

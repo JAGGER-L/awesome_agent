@@ -5,7 +5,7 @@ import logging
 import subprocess
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -404,6 +404,36 @@ class _Mem0Session:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceRuntime:
+    """One immutable snapshot of the activated workspace service graph."""
+
+    sources: LoadedConfigSources
+    application_config: ApplicationConfig
+    conversation: ConversationService
+    turns: TurnCoordinator
+    commands: ConversationCommandService
+    command_dispatcher: CommandDispatcher
+    diagnostic_commands: DiagnosticCommandService
+    change_commands: ChangeCommandService
+    permission_commands: PermissionCommandService
+    provider_configuration: ProviderConfigurationService
+    direct: DirectCommandService
+    extensions: ApplicationExtensionService
+    context: ApplicationContextService
+    tool_registry: ToolRegistry
+    model_catalog: ModelCatalog
+    local_memory: LocalMemoryService
+    mem0_session: _Mem0Session
+    mcp: McpManager
+    change_scope: ChangeScope
+    change_store: SQLiteChangeSetStore
+    change_analyzer: ChangeAnalyzer
+    change_operations: ChangeOperations
+    workspace_branch: str | None
+    workspace_instruction_snapshot: WorkspaceInstructionSnapshot
+
+
 class _LocalApplicationBackend:
     def __init__(
         self,
@@ -464,6 +494,7 @@ class _LocalApplicationBackend:
             provider_credentials=missing_provider_credential_statuses(),
         )
         self._application_config = resolve_application_config(self._sources)
+        self._runtime: WorkspaceRuntime | None = None
         self._initialized = False
         self._closed = False
         self._commands: ConversationCommandService | None = None
@@ -661,30 +692,42 @@ class _LocalApplicationBackend:
 
     async def application_state(self) -> ApplicationState:
         self._require_open()
-        current_id = (
-            self._commands.current_thread_id
-            if self._initialized and self._commands
-            else None
+        runtime = self._runtime
+        conversation = (
+            runtime.conversation if runtime is not None else self._conversation
         )
+        sources = runtime.sources if runtime is not None else self._sources
+        application_config = (
+            runtime.application_config
+            if runtime is not None
+            else self._application_config
+        )
+        current_id = runtime.commands.current_thread_id if runtime is not None else None
         current = (
-            self._conversation.read_thread(current_id).thread
+            conversation.read_thread(current_id).thread
             if current_id is not None
             else None
         )
         usage = (
-            self._conversation.thread_usage(current_id)
+            conversation.thread_usage(current_id)
             if current_id is not None
             else UsageSummary()
         )
-        local_enabled = self._local_memory.enabled if self._local_memory else False
+        local_enabled = runtime.local_memory.enabled if runtime is not None else False
+        mem0_session = runtime.mem0_session if runtime is not None else None
         return ApplicationState(
-            initialized=self._initialized,
+            initialized=runtime is not None,
             session_id=self._session_id,
             workspace_key=self._workspace.key,
-            workspace=self._workspace_presentation(include_branch=True),
-            workspace_trusted=self._initialized,
+            workspace=self._workspace_presentation(
+                include_branch=True,
+                runtime=runtime,
+            ),
+            workspace_trusted=runtime is not None,
             current_thread_id=current_id,
-            model_identity=self._model_identity(current) if current else None,
+            model_identity=(
+                self._model_identity(current, runtime=runtime) if current else None
+            ),
             thinking_enabled=current.thinking_enabled if current else True,
             skill_mode=current.skill_mode if current else "auto",
             active_operation_id=self._operations.active_operation_id,
@@ -693,17 +736,21 @@ class _LocalApplicationBackend:
             ),
             permission_mode=self._permission_session.mode,
             configuration_valid=True,
-            secret_status=self._sources.secret_status,
-            provider_credentials=self._sources.provider_credentials,
+            secret_status=sources.secret_status,
+            provider_credentials=sources.provider_credentials,
             memory_status={
                 "local": {"enabled": local_enabled},
                 "mem0": {
                     "enabled": (
-                        self._mem0_session.enabled
-                        if self._mem0_session is not None
-                        else self._application_config.memory.mem0_cloud
+                        mem0_session.enabled
+                        if mem0_session is not None
+                        else application_config.memory.mem0_cloud
                     ),
-                    "available": self._mem0_adapter is not None,
+                    "available": (
+                        mem0_session.adapter is not None
+                        if mem0_session is not None
+                        else False
+                    ),
                 },
             },
             mcp_status=tuple(
@@ -711,27 +758,27 @@ class _LocalApplicationBackend:
                     "server_id": status.server_id,
                     "state": status.state.value,
                 }
-                for status in (self._mcp.statuses() if self._mcp else ())
+                for status in (runtime.mcp.statuses() if runtime is not None else ())
             ),
             usage=usage.model_dump(mode="json"),
             configuration_diagnostics=(
-                (self._mem0_diagnostic.code,)
+                (mem0_session.diagnostic.code,)
                 if (
-                    self._mem0_diagnostic is not None
-                    and self._mem0_session is not None
-                    and self._mem0_session.enabled
+                    mem0_session is not None
+                    and mem0_session.diagnostic is not None
+                    and mem0_session.enabled
                 )
                 else ()
             ),
             workspace_instruction_diagnostic=(
-                self._workspace_instruction_snapshot.diagnostic
-                if self._workspace_instruction_snapshot is not None
+                runtime.workspace_instruction_snapshot.diagnostic
+                if runtime is not None
                 else None
             ),
         )
 
     async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
-        self._require_active()
+        runtime = self._require_runtime()
         try:
             cursor = (
                 decode_thread_cursor(query.cursor) if query.cursor is not None else None
@@ -741,7 +788,7 @@ class _LocalApplicationBackend:
                 ProductErrorCode.INVALID_ARGUMENTS,
                 "Thread cursor is invalid.",
             ) from error
-        page = self._conversation.list_thread_page(
+        page = runtime.conversation.list_thread_page(
             self._workspace.key,
             cursor=cursor,
             limit=query.limit,
@@ -758,11 +805,11 @@ class _LocalApplicationBackend:
         )
 
     async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
-        self._require_active()
+        runtime = self._require_runtime()
         limit = query.limit
         while True:
             try:
-                page = self._conversation.read_thread_page(
+                page = runtime.conversation.read_thread_page(
                     query.thread_id,
                     before_sequence=query.before_sequence,
                     limit=limit,
@@ -779,7 +826,10 @@ class _LocalApplicationBackend:
                 )
             result = ThreadReadResult(
                 view=page.view,
-                change_sets=self._page_change_summaries(page.view.tool_activities),
+                change_sets=self._page_change_summaries(
+                    page.view.tool_activities,
+                    runtime=runtime,
+                ),
                 has_more=page.has_more,
                 next_before_sequence=page.next_before_sequence,
             )
@@ -801,9 +851,8 @@ class _LocalApplicationBackend:
         content: str,
         client_message_id: str,
     ) -> OperationAccepted:
-        self._require_active()
-        self._require_selected_thread(thread_id)
-        assert self._turns is not None
+        runtime = self._require_runtime()
+        self._require_selected_thread(thread_id, runtime=runtime)
         if not content.strip():
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
@@ -816,11 +865,11 @@ class _LocalApplicationBackend:
                 retryable=True,
             )
         try:
-            await self._require_runtime_consistent()
-            thread = self._conversation.read_thread(thread_id).thread
-            config = self._turn_config(thread)
-            self._require_provider_configured(config.provider)
-            return await self._turns.submit_turn(
+            await self._require_runtime_consistent(runtime)
+            thread = runtime.conversation.read_thread(thread_id).thread
+            config = self._turn_config(thread, runtime=runtime)
+            self._require_provider_configured(config.provider, runtime=runtime)
+            return await runtime.turns.submit_turn(
                 thread_id,
                 content,
                 client_message_id=client_message_id,
@@ -857,9 +906,8 @@ class _LocalApplicationBackend:
             ) from error
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
-        self._require_active()
-        self._require_selected_thread(thread_id)
-        assert self._direct is not None
+        runtime = self._require_runtime()
+        self._require_selected_thread(thread_id, runtime=runtime)
         if not command.strip():
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
@@ -872,8 +920,8 @@ class _LocalApplicationBackend:
                 retryable=True,
             )
         try:
-            await self._require_runtime_consistent()
-            return await self._direct.start(thread_id, command)
+            await self._require_runtime_consistent(runtime)
+            return await runtime.direct.start(thread_id, command)
         except ApplicationFailure:
             raise
         except OperationBusy as error:
@@ -889,10 +937,9 @@ class _LocalApplicationBackend:
             ) from error
 
     async def run_command(self, intent: CommandIntent) -> CommandOutcome:
-        self._require_active()
-        assert self._command_dispatcher is not None
+        runtime = self._require_runtime()
         try:
-            return await self._command_dispatcher.dispatch(intent)
+            return await runtime.command_dispatcher.dispatch(intent)
         except ProviderConfigurationRecoveryRequired as error:
             raise _application_failure(
                 ProductErrorCode.RECOVERY_REQUIRED,
@@ -909,8 +956,7 @@ class _LocalApplicationBackend:
         self,
         request: ProviderCredentialSetRequest,
     ) -> ProviderCredentialSetResult:
-        self._require_active()
-        assert self._provider_configuration is not None
+        runtime = self._require_runtime()
         if self._interactions.pending is not None:
             raise _application_failure(
                 ProductErrorCode.OPERATION_BUSY,
@@ -927,8 +973,8 @@ class _LocalApplicationBackend:
             ) from error
         async with lease:
             try:
-                await self._require_runtime_consistent()
-                return await self._provider_configuration.set_credential(request)
+                await self._require_runtime_consistent(runtime)
+                return await runtime.provider_configuration.set_credential(request)
             except ApplicationFailure:
                 raise
             except ProviderConfigurationRecoveryRequired as error:
@@ -957,8 +1003,9 @@ class _LocalApplicationBackend:
         decision: str,
     ) -> InteractionResult:
         self._require_open()
-        if self._initialized:
-            await self._require_runtime_consistent()
+        runtime = self._runtime
+        if runtime is not None:
+            await self._require_runtime_consistent(runtime)
         pending = self._interactions.pending
         if pending is None or pending.id != interaction_id:
             return InteractionResult(accepted=False, status="not_found")
@@ -968,9 +1015,11 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="invalid_decision")
         if pending.kind is InteractionKind.RECOVERY_DECISION:
             async with self._bootstrap_lock:
+                runtime = self._require_runtime()
                 return await self._resolve_recovery_interaction(
                     pending,
                     parsed,
+                    runtime=runtime,
                 )
         if pending.kind is InteractionKind.STATE_RESET:
             try:
@@ -1021,7 +1070,7 @@ class _LocalApplicationBackend:
                 )
         if pending.kind is InteractionKind.TOOL_APPROVAL:
             current_thread_id = (
-                self._commands.current_thread_id if self._commands is not None else None
+                runtime.commands.current_thread_id if runtime is not None else None
             )
             if (
                 pending.operation_id != self._operations.active_operation_id
@@ -1051,9 +1100,7 @@ class _LocalApplicationBackend:
             async with lease:
                 current = self._interactions.pending
                 current_thread_id = (
-                    self._commands.current_thread_id
-                    if self._commands is not None
-                    else None
+                    runtime.commands.current_thread_id if runtime is not None else None
                 )
                 if (
                     current is None
@@ -1090,9 +1137,11 @@ class _LocalApplicationBackend:
         self,
         pending: PendingInteraction,
         decision: InteractionDecision,
+        *,
+        runtime: WorkspaceRuntime,
     ) -> InteractionResult:
         if decision is InteractionDecision.RETRY:
-            return await self._retry_recovery(pending)
+            return await self._retry_recovery(pending, runtime=runtime)
         if decision is not InteractionDecision.ABORT:
             return InteractionResult(accepted=False, status="rejected")
         try:
@@ -1104,9 +1153,8 @@ class _LocalApplicationBackend:
             if recovery is None:
                 self._interactions.discard(pending.id)
                 return InteractionResult(accepted=False, status="stale")
-            assert self._turns is not None
             try:
-                await self._turns.abort_recovery(
+                await runtime.turns.abort_recovery(
                     recovery.thread_id,
                     recovery.turn_id,
                 )
@@ -1140,15 +1188,15 @@ class _LocalApplicationBackend:
     async def _retry_recovery(
         self,
         pending: PendingInteraction,
+        *,
+        runtime: WorkspaceRuntime,
     ) -> InteractionResult:
         recovery = self._bound_recovery(pending)
         if recovery is None:
             self._interactions.discard(pending.id)
             return InteractionResult(accepted=False, status="stale")
-        assert self._turns is not None
-        assert self._commands is not None
-        turns = self._turns
-        commands = self._commands
+        turns = runtime.turns
+        commands = runtime.commands
         claimed = False
         resolution_published = asyncio.Event()
 
@@ -1211,7 +1259,7 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="operation_busy")
         except TurnExecutionFailed:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery):
+            if claimed and self._recovery_is_in_progress(recovery, runtime=runtime):
                 self._recovery_queue.insert(0, recovery)
             elif not claimed:
                 self._discard_recovery(pending, recovery)
@@ -1221,7 +1269,7 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="stale")
         except asyncio.CancelledError:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery):
+            if claimed and self._recovery_is_in_progress(recovery, runtime=runtime):
                 self._recovery_queue.insert(0, recovery)
                 await self._present_next_recovery()
             if response_cancellation is not None:
@@ -1229,7 +1277,7 @@ class _LocalApplicationBackend:
             raise
         except BaseException:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery):
+            if claimed and self._recovery_is_in_progress(recovery, runtime=runtime):
                 self._recovery_queue.insert(0, recovery)
                 await self._present_next_recovery()
             raise
@@ -1408,9 +1456,14 @@ class _LocalApplicationBackend:
         if self._recovery_queue and self._recovery_queue[0] == recovery:
             self._recovery_queue.pop(0)
 
-    def _recovery_is_in_progress(self, recovery: RecoveryResult) -> bool:
+    def _recovery_is_in_progress(
+        self,
+        recovery: RecoveryResult,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> bool:
         try:
-            view = self._conversation.read_thread(recovery.thread_id)
+            view = runtime.conversation.read_thread(recovery.thread_id)
         except ThreadNotFound:
             return False
         return any(
@@ -1956,6 +2009,7 @@ class _LocalApplicationBackend:
             operation_id: str,
             projector: ApplicationEventProjector,
         ) -> AgentRuntimeContext:
+            runtime = self._require_runtime()
             turn_id = turn.id
             budgets = turn.budgets
 
@@ -2006,7 +2060,6 @@ class _LocalApplicationBackend:
                 request: ToolRequest,
             ) -> ToolExecutionContext:
                 del state
-                assert self._change_scope is not None
                 return ToolExecutionContext(
                     workspace=self._workspace,
                     thread_id=turn.thread_id,
@@ -2016,7 +2069,7 @@ class _LocalApplicationBackend:
                     emitter=self._emitter,
                     activity_writer=self._repositories.tool_activities,
                     monotonic=monotonic,
-                    change_set_id=self._change_scope.change_set_for_tool(
+                    change_set_id=runtime.change_scope.change_set_for_tool(
                         tool_name=request.tool_name,
                         owner=turn_id,
                         turn_id=turn_id,
@@ -2028,19 +2081,18 @@ class _LocalApplicationBackend:
             def record_context_snapshot(
                 manifest: tuple[dict[str, JsonValue], ...],
             ) -> None:
-                self._conversation.store_context_manifest(turn.id, manifest)
+                runtime.conversation.store_context_manifest(turn.id, manifest)
 
             post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
             if (
-                self._mem0_session is not None
-                and self._mem0_session.enabled
-                and self._mem0_session.adapter is not None
-                and self._mem0_session.identity is not None
+                runtime.mem0_session.enabled
+                and runtime.mem0_session.adapter is not None
+                and runtime.mem0_session.identity is not None
             ):
                 post_answer_memory = CloudPostAnswerMemory(
                     distiller=MemoryDistiller(gateway_router),
-                    adapter=self._mem0_session.adapter,
-                    identity=self._mem0_session.identity,
+                    adapter=runtime.mem0_session.adapter,
+                    identity=runtime.mem0_session.identity,
                 )
             return AgentRuntimeContext(
                 gateway=gateway_factory(
@@ -2088,7 +2140,7 @@ class _LocalApplicationBackend:
             operation_id: str,
             request: ToolRequest,
         ) -> ToolExecutionContext:
-            assert self._change_scope is not None
+            runtime = self._require_runtime()
             return ToolExecutionContext(
                 workspace=self._workspace,
                 thread_id=thread_id,
@@ -2098,7 +2150,7 @@ class _LocalApplicationBackend:
                 emitter=self._emitter,
                 activity_writer=self._repositories.tool_activities,
                 monotonic=monotonic,
-                change_set_id=self._change_scope.change_set_for_tool(
+                change_set_id=runtime.change_scope.change_set_for_tool(
                     tool_name=request.tool_name,
                     owner=operation_id,
                     turn_id=None,
@@ -2133,9 +2185,11 @@ class _LocalApplicationBackend:
             workspace_key=self._workspace.key,
             registry=registry,
             current_thread_id=lambda: (
-                self._commands.current_thread_id if self._commands is not None else None
+                self._require_runtime().commands.current_thread_id
             ),
-            credential_statuses=lambda: self._sources.provider_credentials,
+            credential_statuses=lambda: (
+                self._require_runtime().sources.provider_credentials
+            ),
             local_memory=self._local_memory,
             config_writer=UserConfigWriter(self._paths.config_file),
             mem0_cloud=self._mem0_adapter,
@@ -2151,7 +2205,7 @@ class _LocalApplicationBackend:
             config_writer=UserConfigWriter(self._paths.config_file),
             secret_store=UserSecretStore(self._paths.env_file),
             validator=self._credential_validator,
-            sources=lambda: self._sources,
+            sources=lambda: self._require_runtime().sources,
             load_configuration=self._load_provider_configuration,
             apply_configuration=self._apply_provider_configuration,
             model_transaction_journal=self._provider_model_journal,
@@ -2163,17 +2217,15 @@ class _LocalApplicationBackend:
             permission_session=self._permission_session,
             status_reader=self._command_status_snapshot,
             usage_reader=self._command_usage,
-            credential_statuses=lambda: self._sources.provider_credentials,
-            provider_doctor=self._provider_configuration.doctor,
-            configuration_ready=lambda: self._initialized,
-            sqlite_ready=lambda: sqlite_database_health(self._paths.application_db),
-            checkpoints_ready=lambda: sqlite_database_health(
-                self._paths.checkpoint_db
+            credential_statuses=lambda: (
+                self._require_runtime().sources.provider_credentials
             ),
+            provider_doctor=self._provider_configuration.doctor,
+            configuration_ready=lambda: self._runtime is not None,
+            sqlite_ready=lambda: sqlite_database_health(self._paths.application_db),
+            checkpoints_ready=lambda: sqlite_database_health(self._paths.checkpoint_db),
             workspace_instruction_diagnostic=lambda: (
-                self._workspace_instruction_snapshot.diagnostic
-                if self._workspace_instruction_snapshot is not None
-                else None
+                self._require_runtime().workspace_instruction_snapshot.diagnostic
             ),
         )
         assert self._change_operations is not None
@@ -2189,7 +2241,7 @@ class _LocalApplicationBackend:
             interactions=self._interactions,
             emitter=self._emitter,
             current_thread_id=lambda: (
-                self._commands.current_thread_id if self._commands is not None else None
+                self._require_runtime().commands.current_thread_id
             ),
         )
         self._command_dispatcher = CommandDispatcher(
@@ -2227,8 +2279,80 @@ class _LocalApplicationBackend:
             if result.status
             in {RecoveryStatus.RESUMABLE, RecoveryStatus.INTERACTION_REQUIRED}
         ]
+        runtime = self._capture_workspace_runtime(model_catalog=model_catalog)
         await self._present_next_recovery()
+        self._runtime = runtime
         self._initialized = True
+
+    def _capture_workspace_runtime(
+        self,
+        *,
+        model_catalog: ModelCatalog,
+    ) -> WorkspaceRuntime:
+        turns = self._turns
+        commands = self._commands
+        command_dispatcher = self._command_dispatcher
+        diagnostic_commands = self._diagnostic_commands
+        change_commands = self._change_commands
+        permission_commands = self._permission_commands
+        provider_configuration = self._provider_configuration
+        direct = self._direct
+        extensions = self._extensions
+        context = self._context
+        tool_registry = self._registry
+        local_memory = self._local_memory
+        mem0_session = self._mem0_session
+        mcp = self._mcp
+        change_scope = self._change_scope
+        change_store = self._change_store
+        change_analyzer = self._change_analyzer
+        change_operations = self._change_operations
+        workspace_instruction_snapshot = self._workspace_instruction_snapshot
+        assert turns is not None
+        assert commands is not None
+        assert command_dispatcher is not None
+        assert diagnostic_commands is not None
+        assert change_commands is not None
+        assert permission_commands is not None
+        assert provider_configuration is not None
+        assert direct is not None
+        assert extensions is not None
+        assert context is not None
+        assert tool_registry is not None
+        assert local_memory is not None
+        assert mem0_session is not None
+        assert mcp is not None
+        assert change_scope is not None
+        assert change_store is not None
+        assert change_analyzer is not None
+        assert change_operations is not None
+        assert workspace_instruction_snapshot is not None
+        return WorkspaceRuntime(
+            sources=self._sources,
+            application_config=self._application_config,
+            conversation=self._conversation,
+            turns=turns,
+            commands=commands,
+            command_dispatcher=command_dispatcher,
+            diagnostic_commands=diagnostic_commands,
+            change_commands=change_commands,
+            permission_commands=permission_commands,
+            provider_configuration=provider_configuration,
+            direct=direct,
+            extensions=extensions,
+            context=context,
+            tool_registry=tool_registry,
+            model_catalog=model_catalog,
+            local_memory=local_memory,
+            mem0_session=mem0_session,
+            mcp=mcp,
+            change_scope=change_scope,
+            change_store=change_store,
+            change_analyzer=change_analyzer,
+            change_operations=change_operations,
+            workspace_branch=self._workspace_branch,
+            workspace_instruction_snapshot=workspace_instruction_snapshot,
+        )
 
     async def _close_activation_candidate(self, candidate: McpManager) -> None:
         close_task = asyncio.create_task(candidate.aclose())
@@ -2266,8 +2390,21 @@ class _LocalApplicationBackend:
         snapshot: ProviderConfigurationSnapshot,
     ) -> None:
         sources, application_config = snapshot
+        runtime = self._runtime
+        if runtime is None:
+            raise RuntimeError("Workspace runtime is not initialized.")
+        replacement = replace(
+            runtime,
+            sources=sources,
+            application_config=application_config,
+            model_catalog=ModelCatalog.from_application(application_config),
+        )
+        # Candidate assembly still reads these fields until the activation
+        # transaction is replaced in the next architecture step. Publish the
+        # immutable request snapshot last, without an await in between.
         self._sources = sources
         self._application_config = application_config
+        self._runtime = replacement
 
     def _on_thread_selected(self) -> None:
         pending = self._interactions.pending
@@ -2279,14 +2416,14 @@ class _LocalApplicationBackend:
         self._permission_session.reset()
 
     async def _prepare_turn_extensions(self) -> None:
-        if self._extensions is None:
-            raise RuntimeError("Application extensions are not initialized.")
-        await self._extensions.prepare_turn_extensions()
+        runtime = self._require_runtime()
+        await runtime.extensions.prepare_turn_extensions()
 
     def _provider_factory(self) -> GatewayFactory:
         def build(provider: ProviderId, model: str) -> ModelGateway:
-            secrets = self._sources.secrets
-            retries = self._application_config.budgets.provider_retries
+            runtime = self._require_runtime()
+            secrets = runtime.sources.secrets
+            retries = runtime.application_config.budgets.provider_retries
             if provider == "deepseek":
                 secret = secrets.deepseek_api_key
                 if secret is None:
@@ -2302,7 +2439,7 @@ class _LocalApplicationBackend:
                 adapter = KimiProvider(
                     api_key=secret.get_secret_value(),
                     model=model,
-                    region=self._application_config.providers.kimi_region,
+                    region=runtime.application_config.providers.kimi_region,
                 )
             return ModelGateway(
                 {provider: adapter},
@@ -2312,9 +2449,15 @@ class _LocalApplicationBackend:
 
         return build
 
-    def _turn_config(self, thread: Thread) -> TurnConfig:
+    def _turn_config(
+        self,
+        thread: Thread,
+        *,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> TurnConfig:
+        runtime = runtime or self._require_runtime()
         selected = resolve_turn_config(
-            self._application_config,
+            runtime.application_config,
             thread=ThreadConfigState(
                 model=thread.current_model,
                 thinking_enabled=thread.thinking_enabled,
@@ -2322,13 +2465,11 @@ class _LocalApplicationBackend:
             ),
             environ={},
         )
-        model_context_limit = (
-            ModelCatalog.from_application(self._application_config)
-            .profile(selected.model)
-            .context_limit
-        )
+        model_context_limit = runtime.model_catalog.profile(
+            selected.model
+        ).context_limit
         return resolve_turn_config(
-            self._application_config,
+            runtime.application_config,
             thread=ThreadConfigState(
                 model=thread.current_model,
                 thinking_enabled=thread.thinking_enabled,
@@ -2338,9 +2479,14 @@ class _LocalApplicationBackend:
             model_context_limit=model_context_limit,
         )
 
-    def _model_identity(self, thread: Thread) -> ModelIdentitySnapshot | None:
+    def _model_identity(
+        self,
+        thread: Thread,
+        *,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> ModelIdentitySnapshot | None:
         try:
-            model = self._turn_config(thread).model
+            model = self._turn_config(thread, runtime=runtime).model
         except ValueError:
             return None
         return ModelIdentitySnapshot.from_models(
@@ -2349,15 +2495,16 @@ class _LocalApplicationBackend:
         )
 
     def _initial_thread_model(self) -> str | None:
+        runtime = self._require_runtime()
         selected = self._environ.get("AWESOME_MODEL")
         if selected is not None:
             return selected
-        selected = self._application_config.providers.default_model
+        selected = runtime.application_config.providers.default_model
         if selected is not None:
             return selected
         try:
             return resolve_turn_config(
-                self._application_config,
+                runtime.application_config,
                 thread=ThreadConfigState(),
                 environ={},
             ).model
@@ -2365,20 +2512,20 @@ class _LocalApplicationBackend:
             return None
 
     async def _context_command(self, intent: CommandIntent) -> CommandOutcome:
-        thread_id = self._selected_thread_id()
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
-        assert self._context is not None
-        return await self._context.context_command(intent, thread_id=thread_id)
+        return await runtime.context.context_command(intent, thread_id=thread_id)
 
     async def _compact_command(self, intent: CommandIntent) -> CommandOutcome:
-        thread_id = self._selected_thread_id()
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
-        assert self._context is not None
-        thread = self._conversation.read_thread(thread_id).thread
-        config = self._turn_config(thread)
-        return await self._context.compact_command(
+        thread = runtime.conversation.read_thread(thread_id).thread
+        config = self._turn_config(thread, runtime=runtime)
+        return await runtime.context.compact_command(
             intent,
             thread_id=thread_id,
             provider=config.provider,
@@ -2386,41 +2533,50 @@ class _LocalApplicationBackend:
         )
 
     async def _model_command(self, intent: CommandIntent) -> CommandOutcome:
-        thread_id = self._selected_thread_id()
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
-        assert self._provider_configuration is not None
-        return await self._provider_configuration.model_command(
+        return await runtime.provider_configuration.model_command(
             intent,
             thread_id=thread_id,
         )
 
-    def _selected_thread_id(self) -> str | None:
-        return self._commands.current_thread_id if self._commands is not None else None
+    def _selected_thread_id(
+        self,
+        *,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> str | None:
+        runtime = runtime or self._runtime
+        return runtime.commands.current_thread_id if runtime is not None else None
 
     def _command_usage(self) -> UsageSummary | None:
-        thread_id = self._selected_thread_id()
-        return None if thread_id is None else self._conversation.thread_usage(thread_id)
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
+        return (
+            None if thread_id is None else runtime.conversation.thread_usage(thread_id)
+        )
 
     def _command_status_snapshot(self) -> StatusSnapshot | None:
-        thread_id = self._selected_thread_id()
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return None
-        thread = self._conversation.read_thread(thread_id).thread
-        config = self._turn_config(thread)
-        candidates = self._conversation.match_thread_prefix(
+        thread = runtime.conversation.read_thread(thread_id).thread
+        config = self._turn_config(thread, runtime=runtime)
+        candidates = runtime.conversation.match_thread_prefix(
             self._workspace.key,
             prefix=thread_display_id(thread.id),
             limit=200,
         )
-        statuses = self._mcp.statuses() if self._mcp is not None else ()
-        model_identity = self._model_identity(thread)
+        statuses = runtime.mcp.statuses()
+        model_identity = self._model_identity(thread, runtime=runtime)
         if model_identity is None:
             return None
         credential = (
-            self._sources.provider_credentials.deepseek
+            runtime.sources.provider_credentials.deepseek
             if config.provider == "deepseek"
-            else self._sources.provider_credentials.kimi
+            else runtime.sources.provider_credentials.kimi
         )
         return StatusSnapshot(
             version=PRODUCT_VERSION,
@@ -2434,17 +2590,13 @@ class _LocalApplicationBackend:
             model_identity=model_identity,
             model_status=(
                 "configured"
-                if self._provider_is_configured(config.provider)
+                if self._provider_is_configured(config.provider, runtime=runtime)
                 else "not_configured"
             ),
             thinking_enabled=thread.thinking_enabled,
             skill_mode=thread.skill_mode,
-            local_memory_enabled=(
-                self._local_memory.enabled if self._local_memory is not None else False
-            ),
-            mem0_enabled=(
-                self._mem0_session.enabled if self._mem0_session is not None else False
-            ),
+            local_memory_enabled=(runtime.local_memory.enabled),
+            mem0_enabled=(runtime.mem0_session.enabled),
             mcp_ready=sum(
                 item.state is McpConnectionState.CONNECTED for item in statuses
             ),
@@ -2458,9 +2610,8 @@ class _LocalApplicationBackend:
             configuration_valid=True,
             configuration_diagnostic_count=(
                 1
-                if self._mem0_diagnostic is not None
-                and self._mem0_session is not None
-                and self._mem0_session.enabled
+                if runtime.mem0_session.diagnostic is not None
+                and runtime.mem0_session.enabled
                 else 0
             ),
             permission_mode=self._permission_session.mode,
@@ -2468,16 +2619,22 @@ class _LocalApplicationBackend:
             credential_source_available=credential.source_available,
             context_used_tokens=sum(
                 ContextManifestItem.model_validate(item).estimated_tokens
-                for item in self._conversation.latest_context_manifest(thread_id)
+                for item in runtime.conversation.latest_context_manifest(thread_id)
             ),
             context_budget_tokens=config.budgets.total_context_tokens,
-            changed_file_count=self._latest_agent_change_file_count(thread_id),
+            changed_file_count=self._latest_agent_change_file_count(
+                thread_id,
+                runtime=runtime,
+            ),
         )
 
-    def _latest_agent_change_file_count(self, thread_id: str) -> int:
-        if self._change_store is None:
-            return 0
-        activities = self._conversation.read_thread(thread_id).tool_activities
+    def _latest_agent_change_file_count(
+        self,
+        thread_id: str,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> int:
+        activities = runtime.conversation.read_thread(thread_id).tool_activities
         seen: set[str] = set()
         for activity in reversed(activities):
             identifier = activity.change_set_id
@@ -2488,7 +2645,7 @@ class _LocalApplicationBackend:
             ):
                 continue
             seen.add(identifier)
-            change_set = self._change_store.get(identifier)
+            change_set = runtime.change_store.get(identifier)
             if (
                 change_set is None
                 or change_set.workspace_key != self._workspace.key
@@ -2524,17 +2681,22 @@ class _LocalApplicationBackend:
         return Mem0CloudAdapter(cast(Mem0Client, client))
 
     def _seal_turn(self, turn_id: str) -> None:
-        if self._change_scope is not None:
-            self._change_scope.seal(turn_id)
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.change_scope.seal(turn_id)
 
     def _seal_direct(self, operation_id: str) -> None:
-        if self._change_scope is not None:
-            self._change_scope.seal(operation_id)
+        runtime = self._runtime
+        if runtime is not None:
+            runtime.change_scope.seal(operation_id)
 
-    async def _require_runtime_consistent(self) -> None:
-        assert self._provider_configuration is not None
+    async def _require_runtime_consistent(
+        self,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> None:
+        runtime = runtime or self._require_runtime()
         try:
-            await self._provider_configuration.ensure_consistent()
+            await runtime.provider_configuration.ensure_consistent()
         except ProviderConfigurationRecoveryRequired as error:
             raise _application_failure(
                 ProductErrorCode.RECOVERY_REQUIRED,
@@ -2555,13 +2717,15 @@ class _LocalApplicationBackend:
                 data={"state_directory": str(self._paths.state_dir.resolve())},
             ) from error
 
-    def _require_active(self) -> None:
+    def _require_runtime(self) -> WorkspaceRuntime:
         self._require_open()
-        if not self._initialized:
+        runtime = self._runtime
+        if runtime is None:
             raise _application_failure(
                 ProductErrorCode.WORKSPACE_NOT_TRUSTED,
                 "Trust the workspace before using project capabilities.",
             )
+        return runtime
 
     def _require_open(self) -> None:
         if self._closed or self._foreground.closing:
@@ -2570,23 +2734,38 @@ class _LocalApplicationBackend:
                 "Application is shutting down.",
             )
 
-    def _require_provider_configured(self, provider: ProviderId) -> None:
-        if not self._provider_is_configured(provider):
+    def _require_provider_configured(
+        self,
+        provider: ProviderId,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> None:
+        if not self._provider_is_configured(provider, runtime=runtime):
             raise _application_failure(
                 ProductErrorCode.PROVIDER_NOT_CONFIGURED,
                 f"{provider} credentials are not configured.",
                 data={"provider": provider},
             )
 
-    def _require_selected_thread(self, thread_id: str) -> None:
-        if self._selected_thread_id() != thread_id:
+    def _require_selected_thread(
+        self,
+        thread_id: str,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> None:
+        if self._selected_thread_id(runtime=runtime) != thread_id:
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
                 "Select the target Thread before starting an operation.",
             )
 
-    def _provider_is_configured(self, provider: ProviderId) -> bool:
-        status = self._sources.secret_status
+    def _provider_is_configured(
+        self,
+        provider: ProviderId,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> bool:
+        status = runtime.sources.secret_status
         return (
             status.deepseek_api_key
             if provider == "deepseek"
@@ -2597,18 +2776,28 @@ class _LocalApplicationBackend:
         self,
         *,
         include_branch: bool,
+        runtime: WorkspaceRuntime | None = None,
     ) -> WorkspacePresentation:
+        runtime = runtime or self._runtime
         return WorkspacePresentation(
             display_path=str(self._workspace.display_path),
-            branch=self._workspace_branch if include_branch else None,
+            branch=(
+                (
+                    runtime.workspace_branch
+                    if runtime is not None
+                    else self._workspace_branch
+                )
+                if include_branch
+                else None
+            ),
         )
 
     def _page_change_summaries(
         self,
         activities: tuple[ToolActivity, ...],
+        *,
+        runtime: WorkspaceRuntime,
     ) -> tuple[ChangeSetSummary, ...]:
-        if self._change_store is None or self._change_analyzer is None:
-            return ()
         summaries: list[ChangeSetSummary] = []
         seen: set[str] = set()
         for activity in activities:
@@ -2616,10 +2805,10 @@ class _LocalApplicationBackend:
             if change_set_id is None or change_set_id in seen:
                 continue
             seen.add(change_set_id)
-            change_set = self._change_store.get(change_set_id)
+            change_set = runtime.change_store.get(change_set_id)
             if change_set is None:
                 continue
-            analysis = self._change_analyzer.analyze(change_set_id)
+            analysis = runtime.change_analyzer.analyze(change_set_id)
             if not analysis.changes:
                 continue
             summaries.append(

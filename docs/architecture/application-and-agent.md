@@ -57,6 +57,24 @@ Application responsibilities are deliberately split into focused modules:
 must not become a home for command semantics, graph routes, arbitrary result
 construction, or presentation formatting.
 
+### Workspace runtime snapshot
+
+Successful trusted activation publishes one immutable `WorkspaceRuntime`.
+The snapshot contains resolved configuration plus the stable workspace service
+graph: Conversation, Turn coordination, command services, Tool Registry, Model
+Catalog, context and extensions, memory and MCP, and Change Journal services.
+Mutable lifecycle coordination such as foreground ownership, pending
+interactions, permission grants, recovery delivery, and process shutdown stays
+on the Application backend.
+
+A normal request captures `_runtime` once before it crosses an asynchronous
+boundary. It does not assemble dependencies by reading independent backend
+fields later in the same request. Provider configuration mutation preserves
+the service graph and uses `dataclasses.replace` to publish a new configuration
+and Model Catalog snapshot in one assignment. Activation candidate fields and
+field-by-field rollback remain private construction machinery at this stage;
+failed construction never becomes the request-visible runtime.
+
 ## Foreground serialization
 
 `ForegroundArbiter` has three lease kinds: Operation, exclusive, and resolving

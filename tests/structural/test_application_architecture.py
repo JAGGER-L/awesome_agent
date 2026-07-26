@@ -1,5 +1,7 @@
 from pathlib import Path
+from typing import Any, cast
 
+from awesome_agent.application import composition as application_composition
 from awesome_agent.application.command_results import ThreadTransitionSnapshot
 from awesome_agent.application.commands import COMMAND_OWNERS, CommandOwner
 
@@ -21,7 +23,7 @@ def test_dispatcher_inventory_is_complete_and_composition_only_wires_it() -> Non
     )
 
     assert len(core_commands) == 21
-    assert "return await self._command_dispatcher.dispatch(intent)" in composition
+    assert "return await runtime.command_dispatcher.dispatch(intent)" in composition
     assert "CommandResult(" not in composition
     assert "CommandInteractionResult(" not in composition
     assert "CommandError(" not in composition
@@ -72,3 +74,41 @@ def test_application_owns_the_authoritative_thread_transition() -> None:
     assert "thread=page" in conversation_commands
     assert "application_snapshot=self.application_state" in composition
     assert "thread_snapshot=self.thread_state" in composition
+
+
+def test_workspace_runtime_is_one_immutable_service_graph_snapshot() -> None:
+    runtime = application_composition.WorkspaceRuntime
+    composition = Path("src/awesome_agent/application/composition.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert cast(Any, runtime).__dataclass_params__.frozen is True
+    assert tuple(runtime.__slots__) == (
+        "sources",
+        "application_config",
+        "conversation",
+        "turns",
+        "commands",
+        "command_dispatcher",
+        "diagnostic_commands",
+        "change_commands",
+        "permission_commands",
+        "provider_configuration",
+        "direct",
+        "extensions",
+        "context",
+        "tool_registry",
+        "model_catalog",
+        "local_memory",
+        "mem0_session",
+        "mcp",
+        "change_scope",
+        "change_store",
+        "change_analyzer",
+        "change_operations",
+        "workspace_branch",
+        "workspace_instruction_snapshot",
+    )
+    assert "_runtime" not in application_composition._ACTIVATION_STATE_FIELDS
+    assert "runtime = self._require_runtime()" in composition
+    assert "self._runtime = replacement" in composition
