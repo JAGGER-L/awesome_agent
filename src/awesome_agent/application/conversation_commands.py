@@ -38,6 +38,7 @@ class ConversationCommandService:
         has_active_operation: Callable[[], bool],
         default_model: Callable[[], str | None] = lambda: None,
         on_thread_selected: Callable[[], None] = lambda: None,
+        selected_thread_id: str | None = None,
     ) -> None:
         self._conversation = conversation
         self._workspace_key = workspace_key
@@ -46,7 +47,7 @@ class ConversationCommandService:
         self._has_active_operation = has_active_operation
         self._default_model = default_model
         self._on_thread_selected = on_thread_selected
-        self._current_thread_id: str | None = None
+        self._current_thread_id = selected_thread_id
 
     @property
     def current_thread_id(self) -> str | None:

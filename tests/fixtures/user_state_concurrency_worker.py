@@ -14,6 +14,7 @@ from awesome_agent.application.command_results import CommandResult, ModelComman
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import ProviderCredentialSetRequest
 from awesome_agent.application.provider_configuration import (
+    ProviderConfigurationPublication,
     ProviderConfigurationService,
     reconcile_provider_credential_transaction,
     reconcile_provider_model_transaction,
@@ -44,6 +45,14 @@ from awesome_agent.memory.local_file import LocalMemoryFile
 from awesome_agent.memory.models import MemoryScope
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+
+async def _ignore_configuration(
+    _: tuple[LoadedConfigSources, ApplicationConfig],
+    publication: ProviderConfigurationPublication,
+) -> None:
+    publication.require_active()
+    return None
 
 
 def _wait_for(path: Path, *, timeout_seconds: float = 10.0) -> None:
@@ -453,7 +462,7 @@ def _provider_transaction(
         validator=_UnexpectedCredentialValidator(),
         sources=sources,
         load_configuration=load_configuration,
-        apply_configuration=lambda _: None,
+        apply_configuration=_ignore_configuration,
         model_transaction_journal=ProviderModelTransactionJournal(
             paths.provider_model_transaction_file
         ),
@@ -500,9 +509,11 @@ def _provider_configuration_race(
         loaded = sources()
         return loaded, resolve_application_config(loaded)
 
-    def apply_configuration(
+    async def apply_configuration(
         snapshot: tuple[LoadedConfigSources, ApplicationConfig],
+        publication: ProviderConfigurationPublication,
     ) -> None:
+        publication.require_active()
         applied.append(snapshot)
 
     writer: UserConfigWriter
@@ -652,7 +663,7 @@ def _provider_model_crash(
         validator=_UnexpectedCredentialValidator(),
         sources=sources,
         load_configuration=load_configuration,
-        apply_configuration=lambda _: None,
+        apply_configuration=_ignore_configuration,
         model_transaction_journal=_PhaseBlockingJournal(
             paths.provider_model_transaction_file,
             crash_phase=phase,
@@ -737,7 +748,7 @@ def _provider_credential_crash(
         validator=_UnexpectedCredentialValidator(),
         sources=sources,
         load_configuration=load_configuration,
-        apply_configuration=lambda _: None,
+        apply_configuration=_ignore_configuration,
         model_transaction_journal=ProviderModelTransactionJournal(
             paths.provider_model_transaction_file
         ),

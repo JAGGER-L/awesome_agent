@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
-from contextlib import AsyncExitStack, suppress
-from dataclasses import dataclass, replace
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
+from contextlib import AsyncExitStack, contextmanager, suppress
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
+from weakref import WeakKeyDictionary, WeakSet
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import JsonValue
@@ -74,6 +76,7 @@ from awesome_agent.application.operations import (
 from awesome_agent.application.permission_commands import PermissionCommandService
 from awesome_agent.application.provider_configuration import (
     CredentialValidator,
+    ProviderConfigurationPublication,
     ProviderConfigurationRecoveryRequired,
     ProviderConfigurationService,
     ProviderConfigurationSnapshot,
@@ -266,37 +269,6 @@ class _RecoveryResolutionDelivery:
     client_message_id: str | None = None
 
 
-_ACTIVATION_STATE_FIELDS = (
-    "_sources",
-    "_application_config",
-    "_initialized",
-    "_commands",
-    "_command_dispatcher",
-    "_diagnostic_commands",
-    "_change_commands",
-    "_permission_commands",
-    "_provider_configuration",
-    "_turns",
-    "_direct",
-    "_extensions",
-    "_context",
-    "_registry",
-    "_local_memory",
-    "_mem0_adapter",
-    "_mem0_diagnostic",
-    "_mem0_session",
-    "_mcp",
-    "_change_scope",
-    "_change_store",
-    "_change_analyzer",
-    "_change_operations",
-    "_workspace_branch",
-    "_workspace_instruction_snapshot",
-    "_recovery_queue",
-    "_recovery_resolution_delivery",
-    "_recovery_required_delivery_id",
-)
-
 _CAPABILITIES = (
     "threads",
     "turns",
@@ -434,6 +406,13 @@ class WorkspaceRuntime:
     workspace_instruction_snapshot: WorkspaceInstructionSnapshot
 
 
+@dataclass(slots=True)
+class _RuntimeReaderState:
+    resources: McpManager
+    count: int
+    idle: asyncio.Event
+
+
 class _LocalApplicationBackend:
     def __init__(
         self,
@@ -486,39 +465,30 @@ class _LocalApplicationBackend:
         self._provider_credential_reconciled = False
         self._saver: BaseCheckpointSaver[str] | None = None
         self._checkpoints: LangGraphCheckpointStore | None = None
-        self._sources = LoadedConfigSources(
+        self._bootstrap_sources = LoadedConfigSources(
             user=UserConfigDocument(),
             workspace=None,
             secrets=SecretValues(),
             secret_status=SecretStatus(),
             provider_credentials=missing_provider_credential_statuses(),
         )
-        self._application_config = resolve_application_config(self._sources)
+        self._bootstrap_application_config = resolve_application_config(
+            self._bootstrap_sources
+        )
         self._runtime: WorkspaceRuntime | None = None
-        self._initialized = False
+        self._request_runtime = ContextVar[WorkspaceRuntime | None](
+            f"awesome_workspace_runtime_{id(self)}",
+            default=None,
+        )
+        self._runtime_readers: dict[int, _RuntimeReaderState] = {}
+        self._runtime_retirements: WeakKeyDictionary[
+            McpManager, asyncio.Task[None]
+        ] = WeakKeyDictionary()
+        self._mcp_close_tasks: WeakKeyDictionary[
+            McpManager, asyncio.Task[None]
+        ] = WeakKeyDictionary()
+        self._closed_mcp_resources: WeakSet[McpManager] = WeakSet()
         self._closed = False
-        self._commands: ConversationCommandService | None = None
-        self._command_dispatcher: CommandDispatcher | None = None
-        self._diagnostic_commands: DiagnosticCommandService | None = None
-        self._change_commands: ChangeCommandService | None = None
-        self._permission_commands: PermissionCommandService | None = None
-        self._provider_configuration: ProviderConfigurationService | None = None
-        self._turns: TurnCoordinator | None = None
-        self._direct: DirectCommandService | None = None
-        self._extensions: ApplicationExtensionService | None = None
-        self._context: ApplicationContextService | None = None
-        self._registry: ToolRegistry | None = None
-        self._local_memory: LocalMemoryService | None = None
-        self._mem0_adapter: Mem0CloudAdapter | None = None
-        self._mem0_diagnostic: Mem0Diagnostic | None = None
-        self._mem0_session: _Mem0Session | None = None
-        self._mcp: McpManager | None = None
-        self._change_scope: ChangeScope | None = None
-        self._change_store: SQLiteChangeSetStore | None = None
-        self._change_analyzer: ChangeAnalyzer | None = None
-        self._change_operations: ChangeOperations | None = None
-        self._workspace_branch: str | None = None
-        self._workspace_instruction_snapshot: WorkspaceInstructionSnapshot | None = None
         self._recovery_queue: list[RecoveryResult] = []
         self._recovery_resolution_delivery: _RecoveryResolutionDelivery | None = None
         self._recovery_required_delivery_id: str | None = None
@@ -542,7 +512,7 @@ class _LocalApplicationBackend:
             return await self._initialize_application_locked()
 
     async def _initialize_application_locked(self) -> InitializeResult:
-        if self._initialized:
+        if self._runtime is not None:
             await self._flush_recovery_notifications()
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
@@ -692,15 +662,24 @@ class _LocalApplicationBackend:
 
     async def application_state(self) -> ApplicationState:
         self._require_open()
-        runtime = self._runtime
+        runtime = self._request_runtime.get() or self._runtime
+        if runtime is not None:
+            with self._runtime_request_scope(runtime) as bound_runtime:
+                return self._application_state_in_runtime(bound_runtime)
+        return self._application_state_in_runtime(None)
+
+    def _application_state_in_runtime(
+        self,
+        runtime: WorkspaceRuntime | None,
+    ) -> ApplicationState:
         conversation = (
             runtime.conversation if runtime is not None else self._conversation
         )
-        sources = runtime.sources if runtime is not None else self._sources
+        sources = runtime.sources if runtime is not None else self._bootstrap_sources
         application_config = (
             runtime.application_config
             if runtime is not None
-            else self._application_config
+            else self._bootstrap_application_config
         )
         current_id = runtime.commands.current_thread_id if runtime is not None else None
         current = (
@@ -779,6 +758,15 @@ class _LocalApplicationBackend:
 
     async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
         runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime) as bound_runtime:
+            return self._workspace_threads_in_runtime(query, runtime=bound_runtime)
+
+    def _workspace_threads_in_runtime(
+        self,
+        query: ThreadListQuery,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> ThreadListResult:
         try:
             cursor = (
                 decode_thread_cursor(query.cursor) if query.cursor is not None else None
@@ -806,6 +794,15 @@ class _LocalApplicationBackend:
 
     async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
         runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime) as bound_runtime:
+            return self._thread_state_in_runtime(query, runtime=bound_runtime)
+
+    def _thread_state_in_runtime(
+        self,
+        query: ThreadReadQuery,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> ThreadReadResult:
         limit = query.limit
         while True:
             try:
@@ -852,6 +849,21 @@ class _LocalApplicationBackend:
         client_message_id: str,
     ) -> OperationAccepted:
         runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime):
+            return await self._start_turn_in_runtime(
+                runtime,
+                thread_id,
+                content,
+                client_message_id,
+            )
+
+    async def _start_turn_in_runtime(
+        self,
+        runtime: WorkspaceRuntime,
+        thread_id: str,
+        content: str,
+        client_message_id: str,
+    ) -> OperationAccepted:
         self._require_selected_thread(thread_id, runtime=runtime)
         if not content.strip():
             raise _application_failure(
@@ -907,6 +919,15 @@ class _LocalApplicationBackend:
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
         runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime):
+            return await self._start_direct_in_runtime(runtime, thread_id, command)
+
+    async def _start_direct_in_runtime(
+        self,
+        runtime: WorkspaceRuntime,
+        thread_id: str,
+        command: str,
+    ) -> OperationAccepted:
         self._require_selected_thread(thread_id, runtime=runtime)
         if not command.strip():
             raise _application_failure(
@@ -938,25 +959,34 @@ class _LocalApplicationBackend:
 
     async def run_command(self, intent: CommandIntent) -> CommandOutcome:
         runtime = self._require_runtime()
-        try:
-            return await runtime.command_dispatcher.dispatch(intent)
-        except ProviderConfigurationRecoveryRequired as error:
-            raise _application_failure(
-                ProductErrorCode.RECOVERY_REQUIRED,
-                "Provider configuration recovery is required. Restart Awesome.",
-                retryable=False,
-            ) from error
-        except ThreadNotFound as error:
-            raise _application_failure(
-                ProductErrorCode.THREAD_NOT_FOUND,
-                "Thread was not found.",
-            ) from error
+        with self._runtime_request_scope(runtime):
+            try:
+                return await runtime.command_dispatcher.dispatch(intent)
+            except ProviderConfigurationRecoveryRequired as error:
+                raise _application_failure(
+                    ProductErrorCode.RECOVERY_REQUIRED,
+                    "Provider configuration recovery is required. Restart Awesome.",
+                    retryable=False,
+                ) from error
+            except ThreadNotFound as error:
+                raise _application_failure(
+                    ProductErrorCode.THREAD_NOT_FOUND,
+                    "Thread was not found.",
+                ) from error
 
     async def set_provider_credential(
         self,
         request: ProviderCredentialSetRequest,
     ) -> ProviderCredentialSetResult:
         runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime):
+            return await self._set_provider_credential_in_runtime(runtime, request)
+
+    async def _set_provider_credential_in_runtime(
+        self,
+        runtime: WorkspaceRuntime,
+        request: ProviderCredentialSetRequest,
+    ) -> ProviderCredentialSetResult:
         if self._interactions.pending is not None:
             raise _application_failure(
                 ProductErrorCode.OPERATION_BUSY,
@@ -1003,7 +1033,27 @@ class _LocalApplicationBackend:
         decision: str,
     ) -> InteractionResult:
         self._require_open()
-        runtime = self._runtime
+        runtime = self._request_runtime.get() or self._runtime
+        if runtime is None:
+            return await self._resolve_interaction_in_runtime(
+                interaction_id,
+                decision,
+                runtime=None,
+            )
+        with self._runtime_request_scope(runtime):
+            return await self._resolve_interaction_in_runtime(
+                interaction_id,
+                decision,
+                runtime=runtime,
+            )
+
+    async def _resolve_interaction_in_runtime(
+        self,
+        interaction_id: str,
+        decision: str,
+        *,
+        runtime: WorkspaceRuntime | None,
+    ) -> InteractionResult:
         if runtime is not None:
             await self._require_runtime_consistent(runtime)
         pending = self._interactions.pending
@@ -1014,8 +1064,12 @@ class _LocalApplicationBackend:
         except ValueError:
             return InteractionResult(accepted=False, status="invalid_decision")
         if pending.kind is InteractionKind.RECOVERY_DECISION:
+            if runtime is None:
+                raise _application_failure(
+                    ProductErrorCode.WORKSPACE_NOT_TRUSTED,
+                    "Trust the workspace before resolving recovery.",
+                )
             async with self._bootstrap_lock:
-                runtime = self._require_runtime()
                 return await self._resolve_recovery_interaction(
                     pending,
                     parsed,
@@ -1690,10 +1744,16 @@ class _LocalApplicationBackend:
             await self._operations.shutdown()
             self._foreground.cancel_exclusive()
             await self._foreground.wait_idle()
+            retirements: tuple[asyncio.Task[None], ...]
             async with self._bootstrap_lock:
-                if self._mcp is not None:
-                    await self._mcp.aclose()
-                await self._resources.aclose()
+                runtime = self._runtime
+                self._runtime = None
+                if runtime is not None:
+                    self._schedule_workspace_runtime_retirement(runtime)
+                retirements = tuple(self._runtime_retirements.values())
+            for retirement in retirements:
+                await asyncio.shield(retirement)
+            await self._resources.aclose()
             self._closed = True
 
     async def _reconcile_provider_credentials_before_state(self) -> None:
@@ -1713,8 +1773,10 @@ class _LocalApplicationBackend:
                 retryable=False,
                 data={"state_directory": str(self._paths.home.resolve())},
             ) from error
-        self._sources = self._load_sources(workspace_trusted=False)
-        self._application_config = resolve_application_config(self._sources)
+        self._bootstrap_sources = self._load_sources(workspace_trusted=False)
+        self._bootstrap_application_config = resolve_application_config(
+            self._bootstrap_sources
+        )
         self._provider_credential_reconciled = True
 
     def _ensure_state_lease(self) -> None:
@@ -1830,548 +1892,627 @@ class _LocalApplicationBackend:
             ) from error
 
     async def _activate_workspace(self) -> None:
+        previous_runtime = self._runtime
         self._prepare_workspace_activation()
         try:
             await self._activate()
         except BaseException:
-            self._close_workspace_leases()
+            if previous_runtime is None and self._runtime is None:
+                self._close_workspace_leases()
             raise
 
     async def _activate(self) -> None:
-        if self._initialized:
-            return
-        snapshot = {field: getattr(self, field) for field in _ACTIVATION_STATE_FIELDS}
+        previous_runtime = self._runtime
+        candidate = await self._build_workspace_runtime(
+            selected_thread_id=(
+                previous_runtime.commands.current_thread_id
+                if previous_runtime is not None
+                else None
+            )
+        )
+        published = False
         try:
-            await self._activate_candidate()
+            self._validate_workspace_runtime(candidate)
+            recovery_results = await candidate.turns.reconcile_startup()
+            recovery_queue = [
+                result
+                for result in recovery_results
+                if result.status
+                in {RecoveryStatus.RESUMABLE, RecoveryStatus.INTERACTION_REQUIRED}
+            ]
+            self._require_runtime_publication_idle()
+            self._publish_workspace_runtime(
+                candidate,
+                expected_previous=previous_runtime,
+            )
+            published = True
+            self._recovery_queue = recovery_queue
+            try:
+                await self._present_next_recovery()
+            finally:
+                if previous_runtime is not None:
+                    await self._close_workspace_runtime(previous_runtime)
         except BaseException:
-            candidate_mcp = self._mcp
-            for field, value in snapshot.items():
-                setattr(self, field, value)
-            if candidate_mcp is not None and candidate_mcp is not snapshot["_mcp"]:
-                await self._close_activation_candidate(candidate_mcp)
+            if not published:
+                await self._close_workspace_runtime(candidate)
             raise
 
-    async def _activate_candidate(self) -> None:
-        if self._saver is None:
-            self._saver = await self._resources.enter_async_context(
-                sqlite_checkpoint_saver(self._paths.checkpoint_db)
-            )
-            self._checkpoints = LangGraphCheckpointStore(self._saver)
-        saver = self._saver
-        checkpoints = self._checkpoints
-        assert saver is not None
-        assert checkpoints is not None
-        self._workspace_branch = await asyncio.to_thread(
-            _git_branch,
-            self._workspace.canonical_path,
-        )
+    async def _build_workspace_runtime(
+        self,
+        *,
+        configuration: ProviderConfigurationSnapshot | None = None,
+        selected_thread_id: str | None = None,
+    ) -> WorkspaceRuntime:
+        token = self._request_runtime.set(None)
         try:
-            await asyncio.to_thread(
-                reconcile_provider_model_transaction,
-                journal=self._provider_model_journal,
-                config_writer=UserConfigWriter(self._paths.config_file),
-                conversation=self._conversation,
+            return await self._build_workspace_runtime_candidate(
+                configuration=configuration,
+                selected_thread_id=selected_thread_id,
             )
-        except ProviderConfigurationRecoveryRequired as error:
-            raise _application_failure(
-                ProductErrorCode.RECOVERY_REQUIRED,
-                "Provider configuration recovery could not be completed.",
-                retryable=False,
-                data={"state_directory": str(self._paths.state_dir.resolve())},
-            ) from error
-        self._sources = self._load_sources(workspace_trusted=True)
-        self._application_config = resolve_application_config(self._sources)
-        gateway_factory = self._injected_gateway_factory or self._provider_factory()
-        gateway_router = _GatewayRouter(gateway_factory)
+        finally:
+            self._request_runtime.reset(token)
 
-        change_store = SQLiteChangeSetStore(self._paths.application_db)
-        self._change_store = change_store
-        change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
-        journal = ChangeJournal(change_store, change_blobs, self._workspace)
-        self._change_analyzer = ChangeAnalyzer(
-            change_store,
-            change_blobs,
-            self._workspace,
-        )
-        self._change_operations = ChangeOperations(
-            change_store,
-            change_blobs,
-            self._workspace,
-            analyzer=self._change_analyzer,
-        )
-
-        registry = ToolRegistry()
-        register_read_tools(registry)
-        register_modifying_tools(registry, journal, ProcessRunner())
-        self._registry = registry
-        executor = ToolExecutor(registry)
-        self._change_scope = ChangeScope(
-            journal=journal,
-            store=change_store,
-            registry=registry,
-            session_id=self._session_id,
-            workspace=self._workspace,
-        )
-        self._change_scope.reconcile()
-
-        bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
-        catalog = discover_skills(
-            bundled_root=bundled,
-            user_root=self._paths.skills_dir,
-            workspace_root=self._workspace.canonical_path / ".awesome" / "skills",
-            workspace_trusted=True,
-            workspace_anchor=self._workspace.canonical_path,
-            disabled={
-                skill.name
-                for skill in (
-                    *self._application_config.user_skills,
-                    *self._application_config.workspace_skills,
+    async def _build_workspace_runtime_candidate(
+        self,
+        *,
+        configuration: ProviderConfigurationSnapshot | None,
+        selected_thread_id: str | None,
+    ) -> WorkspaceRuntime:
+        candidate_mcp: McpManager | None = None
+        try:
+            if self._saver is None:
+                self._saver = await self._resources.enter_async_context(
+                    sqlite_checkpoint_saver(self._paths.checkpoint_db)
                 )
-                if not skill.enabled
-            },
-        )
-        skill_loader = SkillLoader(catalog)
-        register_skill_tools(registry, skill_loader)
-
-        enablements = SQLiteMcpEnablementStore(self._paths.application_db)
-        if self._mcp_client_factory is None:
-            self._mcp = McpManager(
-                configs=_mcp_configs(self._application_config),
-                workspace_key=self._workspace.key,
-                workspace_trusted=True,
-                enablements=enablements,
-                registry=registry,
+                self._checkpoints = LangGraphCheckpointStore(self._saver)
+            saver = self._saver
+            checkpoints = self._checkpoints
+            assert saver is not None
+            assert checkpoints is not None
+            workspace_branch = await asyncio.to_thread(
+                _git_branch,
+                self._workspace.canonical_path,
             )
-        else:
-            self._mcp = McpManager(
-                configs=_mcp_configs(self._application_config),
-                workspace_key=self._workspace.key,
-                workspace_trusted=True,
-                enablements=enablements,
-                registry=registry,
-                client_factory=self._mcp_client_factory,
-            )
-
-        self._local_memory = LocalMemoryService(
-            paths=self._paths,
-            workspace_key=self._workspace.key,
-            enabled=self._application_config.memory.local_file_memory,
-        )
-        refresh_local_memory_tools(registry, self._local_memory)
-        mem0_identity = self._mem0_identity()
-        self._mem0_adapter = self._create_mem0_adapter()
-        self._mem0_session = _Mem0Session(
-            enabled=self._application_config.memory.mem0_cloud,
-            adapter=self._mem0_adapter,
-            identity=mem0_identity,
-            diagnostic=self._mem0_diagnostic,
-        )
-
-        model_catalog = ModelCatalog.from_application(self._application_config)
-        context_model_limit = min(
-            profile.context_limit for profile in model_catalog.models
-        )
-        context_budget = calculate_context_budget(
-            self._application_config.budgets.total_context_tokens,
-            context_model_limit,
-        )
-        self._workspace_instruction_snapshot = load_workspace_instructions(
-            workspace_root=self._workspace.canonical_path,
-            workspace_trusted=True,
-            effective_input_limit=context_budget.effective_input_limit,
-        )
-        context_service = ApplicationContextService(
-            conversation=self._conversation,
-            workspace=self._workspace,
-            builder=ContextBuilder(),
-            compressor=ThreadCompressor(gateway_router),
-            configured_total_tokens=self._application_config.budgets.total_context_tokens,
-            model_context_limit=context_model_limit,
-            product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
-            workspace_instructions=(self._workspace_instruction_snapshot.content or ""),
-            workspace_instruction_source_id=(
-                self._workspace_instruction_snapshot.source_id
-            ),
-            model_identity=lambda turn: ModelIdentitySnapshot.from_models(
-                configured_model=turn.model,
-                effective_model=turn.model,
-            ),
-            skill_loader=skill_loader,
-            local_memory=self._local_memory,
-            mem0_recall=self._mem0_session.recall,
-        )
-        self._context = context_service
-
-        graph = compile_agent_graph(saver)
-
-        def runtime_factory(
-            turn: Turn,
-            operation_id: str,
-            projector: ApplicationEventProjector,
-        ) -> AgentRuntimeContext:
-            runtime = self._require_runtime()
-            turn_id = turn.id
-            budgets = turn.budgets
-
-            async def resolve_tool_interaction(
-                request: ToolApprovalRequest,
-            ) -> ToolApprovalDecision:
-                pending = self._interactions.create(
-                    kind=InteractionKind.TOOL_APPROVAL,
-                    prompt=request.prompt,
-                    operation=request.operation,
-                    target=request.target,
-                    capability=request.capability,
-                    choices=tool_approval_choices(request.capability),
-                    thread_id=turn.thread_id,
-                    turn_id=turn_id,
-                    operation_id=operation_id,
-                )
+            if configuration is None:
                 try:
-                    await self._emitter.emit(
-                        InteractionRequiredPayload(
-                            interaction_id=pending.id,
-                            interaction_kind="tool_approval",
-                            prompt=pending.prompt,
-                            operation=pending.operation,
-                            target=pending.target,
-                            capability=pending.capability,
-                            choices=tuple(
-                                InteractionChoicePayload(
-                                    decision=choice.decision.value,
-                                    label=choice.label,
-                                    description=choice.description,
-                                )
-                                for choice in pending.choices
-                            ),
-                        ),
+                    await asyncio.to_thread(
+                        reconcile_provider_model_transaction,
+                        journal=self._provider_model_journal,
+                        config_writer=UserConfigWriter(self._paths.config_file),
+                        conversation=self._conversation,
+                    )
+                except ProviderConfigurationRecoveryRequired as error:
+                    raise _application_failure(
+                        ProductErrorCode.RECOVERY_REQUIRED,
+                        "Provider configuration recovery could not be completed.",
+                        retryable=False,
+                        data={"state_directory": str(self._paths.state_dir.resolve())},
+                    ) from error
+                sources = self._load_sources(workspace_trusted=True)
+                application_config = resolve_application_config(sources)
+            else:
+                sources, application_config = configuration
+            gateway_factory = self._injected_gateway_factory or self._provider_factory()
+            gateway_router = _GatewayRouter(gateway_factory)
+
+            change_store = SQLiteChangeSetStore(self._paths.application_db)
+            change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
+            journal = ChangeJournal(change_store, change_blobs, self._workspace)
+            change_analyzer = ChangeAnalyzer(
+                change_store,
+                change_blobs,
+                self._workspace,
+            )
+            change_operations = ChangeOperations(
+                change_store,
+                change_blobs,
+                self._workspace,
+                analyzer=change_analyzer,
+            )
+
+            registry = ToolRegistry()
+            register_read_tools(registry)
+            register_modifying_tools(registry, journal, ProcessRunner())
+            executor = ToolExecutor(registry)
+            change_scope = ChangeScope(
+                journal=journal,
+                store=change_store,
+                registry=registry,
+                session_id=self._session_id,
+                workspace=self._workspace,
+            )
+            change_scope.reconcile()
+
+            bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
+            catalog = discover_skills(
+                bundled_root=bundled,
+                user_root=self._paths.skills_dir,
+                workspace_root=self._workspace.canonical_path / ".awesome" / "skills",
+                workspace_trusted=True,
+                workspace_anchor=self._workspace.canonical_path,
+                disabled={
+                    skill.name
+                    for skill in (
+                        *application_config.user_skills,
+                        *application_config.workspace_skills,
+                    )
+                    if not skill.enabled
+                },
+            )
+            skill_loader = SkillLoader(catalog)
+            register_skill_tools(registry, skill_loader)
+
+            enablements = SQLiteMcpEnablementStore(self._paths.application_db)
+            if self._mcp_client_factory is None:
+                candidate_mcp = McpManager(
+                    configs=_mcp_configs(application_config),
+                    workspace_key=self._workspace.key,
+                    workspace_trusted=True,
+                    enablements=enablements,
+                    registry=registry,
+                )
+            else:
+                candidate_mcp = McpManager(
+                    configs=_mcp_configs(application_config),
+                    workspace_key=self._workspace.key,
+                    workspace_trusted=True,
+                    enablements=enablements,
+                    registry=registry,
+                    client_factory=self._mcp_client_factory,
+                )
+
+            local_memory = LocalMemoryService(
+                paths=self._paths,
+                workspace_key=self._workspace.key,
+                enabled=application_config.memory.local_file_memory,
+            )
+            refresh_local_memory_tools(registry, local_memory)
+            mem0_identity = self._mem0_identity(application_config)
+            mem0_adapter, mem0_diagnostic = self._create_mem0_adapter(sources)
+            mem0_session = _Mem0Session(
+                enabled=application_config.memory.mem0_cloud,
+                adapter=mem0_adapter,
+                identity=mem0_identity,
+                diagnostic=mem0_diagnostic,
+            )
+
+            model_catalog = ModelCatalog.from_application(application_config)
+            context_model_limit = min(
+                profile.context_limit for profile in model_catalog.models
+            )
+            context_budget = calculate_context_budget(
+                application_config.budgets.total_context_tokens,
+                context_model_limit,
+            )
+            workspace_instruction_snapshot = load_workspace_instructions(
+                workspace_root=self._workspace.canonical_path,
+                workspace_trusted=True,
+                effective_input_limit=context_budget.effective_input_limit,
+            )
+            context_service = ApplicationContextService(
+                conversation=self._conversation,
+                workspace=self._workspace,
+                builder=ContextBuilder(),
+                compressor=ThreadCompressor(gateway_router),
+                configured_total_tokens=application_config.budgets.total_context_tokens,
+                model_context_limit=context_model_limit,
+                product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
+                workspace_instructions=(workspace_instruction_snapshot.content or ""),
+                workspace_instruction_source_id=workspace_instruction_snapshot.source_id,
+                model_identity=lambda turn: ModelIdentitySnapshot.from_models(
+                    configured_model=turn.model,
+                    effective_model=turn.model,
+                ),
+                skill_loader=skill_loader,
+                local_memory=local_memory,
+                mem0_recall=mem0_session.recall,
+            )
+
+            graph = compile_agent_graph(saver)
+
+            def runtime_factory(
+                turn: Turn,
+                operation_id: str,
+                projector: ApplicationEventProjector,
+            ) -> AgentRuntimeContext:
+                runtime = self._require_runtime()
+                turn_id = turn.id
+                budgets = turn.budgets
+
+                async def resolve_tool_interaction(
+                    request: ToolApprovalRequest,
+                ) -> ToolApprovalDecision:
+                    pending = self._interactions.create(
+                        kind=InteractionKind.TOOL_APPROVAL,
+                        prompt=request.prompt,
+                        operation=request.operation,
+                        target=request.target,
+                        capability=request.capability,
+                        choices=tool_approval_choices(request.capability),
                         thread_id=turn.thread_id,
                         turn_id=turn_id,
                         operation_id=operation_id,
                     )
-                except BaseException:
-                    self._interactions.discard(pending.id)
-                    raise
-                decision = await self._interactions.wait(pending.id)
-                return ToolApprovalDecision(decision.value)
+                    try:
+                        await self._emitter.emit(
+                            InteractionRequiredPayload(
+                                interaction_id=pending.id,
+                                interaction_kind="tool_approval",
+                                prompt=pending.prompt,
+                                operation=pending.operation,
+                                target=pending.target,
+                                capability=pending.capability,
+                                choices=tuple(
+                                    InteractionChoicePayload(
+                                        decision=choice.decision.value,
+                                        label=choice.label,
+                                        description=choice.description,
+                                    )
+                                    for choice in pending.choices
+                                ),
+                            ),
+                            thread_id=turn.thread_id,
+                            turn_id=turn_id,
+                            operation_id=operation_id,
+                        )
+                    except BaseException:
+                        self._interactions.discard(pending.id)
+                        raise
+                    decision = await self._interactions.wait(pending.id)
+                    return ToolApprovalDecision(decision.value)
 
-            def tool_context(
-                state: object,
+                def tool_context(
+                    state: object,
+                    request: ToolRequest,
+                ) -> ToolExecutionContext:
+                    del state
+                    return ToolExecutionContext(
+                        workspace=self._workspace,
+                        thread_id=turn.thread_id,
+                        operation_id=operation_id,
+                        turn_id=turn_id,
+                        origin=ToolExecutionOrigin.AGENT,
+                        emitter=self._emitter,
+                        activity_writer=self._repositories.tool_activities,
+                        monotonic=monotonic,
+                        change_set_id=runtime.change_scope.change_set_for_tool(
+                            tool_name=request.tool_name,
+                            owner=turn_id,
+                            turn_id=turn_id,
+                        ),
+                        permission_session=self._permission_session,
+                        approval_resolver=resolve_tool_interaction,
+                    )
+
+                def record_context_snapshot(
+                    manifest: tuple[dict[str, JsonValue], ...],
+                ) -> None:
+                    runtime.conversation.store_context_manifest(turn.id, manifest)
+
+                post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
+                if (
+                    runtime.mem0_session.enabled
+                    and runtime.mem0_session.adapter is not None
+                    and runtime.mem0_session.identity is not None
+                ):
+                    post_answer_memory = CloudPostAnswerMemory(
+                        distiller=MemoryDistiller(gateway_router),
+                        adapter=runtime.mem0_session.adapter,
+                        identity=runtime.mem0_session.identity,
+                    )
+                return AgentRuntimeContext(
+                    gateway=gateway_factory(
+                        cast(ProviderId, turn.provider),
+                        turn.model,
+                    ),
+                    executor=executor,
+                    tool_catalog=registry.specifications,
+                    tool_context_factory=tool_context,
+                    event_projector=projector,
+                    context_builder=context_service.build,
+                    budget=TurnBudget(
+                        model_calls=budgets.model_calls,
+                        tool_calls=budgets.tool_calls,
+                        provider_retries=budgets.provider_retries,
+                        compressions=budgets.compressions,
+                        active_execution_seconds=budgets.active_execution_seconds,
+                    ),
+                    monotonic=monotonic,
+                    context_token_estimator=estimate_messages,
+                    compressor=context_service,
+                    current_user_text=context_service.runtime_current_input(turn),
+                    context_snapshot_recorder=record_context_snapshot,
+                    post_answer_memory=post_answer_memory,
+                )
+
+            turns = TurnCoordinator(
+                workspace_key=self._workspace.key,
+                conversation=self._conversation,
+                config_resolver=self._turn_config,
+                graph=cast(Any, graph),
+                runtime_context_factory=runtime_factory,
+                operations=self._operations,
+                emitter=self._emitter,
+                checkpoints=checkpoints,
+                seal_changes=self._seal_turn,
+                reconcile_changes=change_scope.reconcile,
+                turn_input_preparer=context_service.prepare_turn,
+                turn_extension_preparer=self._prepare_turn_extensions,
+                context_snapshot_validator=context_service.validate_frozen_snapshot,
+            )
+
+            def direct_context(
+                thread_id: str,
+                operation_id: str,
                 request: ToolRequest,
             ) -> ToolExecutionContext:
-                del state
+                runtime = self._require_runtime()
                 return ToolExecutionContext(
                     workspace=self._workspace,
-                    thread_id=turn.thread_id,
+                    thread_id=thread_id,
                     operation_id=operation_id,
-                    turn_id=turn_id,
-                    origin=ToolExecutionOrigin.AGENT,
+                    turn_id=None,
+                    origin=ToolExecutionOrigin.DIRECT,
                     emitter=self._emitter,
                     activity_writer=self._repositories.tool_activities,
                     monotonic=monotonic,
                     change_set_id=runtime.change_scope.change_set_for_tool(
                         tool_name=request.tool_name,
-                        owner=turn_id,
-                        turn_id=turn_id,
+                        owner=operation_id,
+                        turn_id=None,
                     ),
-                    permission_session=self._permission_session,
-                    approval_resolver=resolve_tool_interaction,
+                    permission_session=PermissionSession(
+                        mode=PermissionMode.FULL_ACCESS
+                    ),
                 )
 
-            def record_context_snapshot(
-                manifest: tuple[dict[str, JsonValue], ...],
-            ) -> None:
-                runtime.conversation.store_context_manifest(turn.id, manifest)
-
-            post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
-            if (
-                runtime.mem0_session.enabled
-                and runtime.mem0_session.adapter is not None
-                and runtime.mem0_session.identity is not None
-            ):
-                post_answer_memory = CloudPostAnswerMemory(
-                    distiller=MemoryDistiller(gateway_router),
-                    adapter=runtime.mem0_session.adapter,
-                    identity=runtime.mem0_session.identity,
-                )
-            return AgentRuntimeContext(
-                gateway=gateway_factory(
-                    cast(ProviderId, turn.provider),
-                    turn.model,
-                ),
+            direct = DirectCommandService(
+                conversation=self._conversation,
                 executor=executor,
-                tool_catalog=registry.specifications,
-                tool_context_factory=tool_context,
-                event_projector=projector,
-                context_builder=context_service.build,
-                budget=TurnBudget(
-                    model_calls=budgets.model_calls,
-                    tool_calls=budgets.tool_calls,
-                    provider_retries=budgets.provider_retries,
-                    compressions=budgets.compressions,
-                    active_execution_seconds=budgets.active_execution_seconds,
-                ),
-                monotonic=monotonic,
-                context_token_estimator=estimate_messages,
-                compressor=context_service,
-                current_user_text=context_service.runtime_current_input(turn),
-                context_snapshot_recorder=record_context_snapshot,
-                post_answer_memory=post_answer_memory,
+                operations=self._operations,
+                context_factory=direct_context,
+                finalize_operation=self._seal_direct,
             )
-
-        self._turns = TurnCoordinator(
-            workspace_key=self._workspace.key,
-            conversation=self._conversation,
-            config_resolver=self._turn_config,
-            graph=cast(Any, graph),
-            runtime_context_factory=runtime_factory,
-            operations=self._operations,
-            emitter=self._emitter,
-            checkpoints=checkpoints,
-            seal_changes=self._seal_turn,
-            reconcile_changes=self._change_scope.reconcile,
-            turn_input_preparer=context_service.prepare_turn,
-            turn_extension_preparer=self._prepare_turn_extensions,
-            context_snapshot_validator=context_service.validate_frozen_snapshot,
-        )
-
-        def direct_context(
-            thread_id: str,
-            operation_id: str,
-            request: ToolRequest,
-        ) -> ToolExecutionContext:
-            runtime = self._require_runtime()
-            return ToolExecutionContext(
-                workspace=self._workspace,
-                thread_id=thread_id,
-                operation_id=operation_id,
-                turn_id=None,
-                origin=ToolExecutionOrigin.DIRECT,
+            commands = ConversationCommandService(
+                conversation=self._conversation,
+                workspace_key=self._workspace.key,
+                application_snapshot=self.application_state,
+                thread_snapshot=self.thread_state,
+                has_active_operation=lambda: (
+                    self._operations.active_operation_id is not None
+                ),
+                default_model=self._initial_thread_model,
+                on_thread_selected=self._on_thread_selected,
+                selected_thread_id=selected_thread_id,
+            )
+            extensions = ApplicationExtensionService(
+                conversation=self._conversation,
+                catalog=catalog,
+                manager=candidate_mcp,
+                enablements=enablements,
+                workspace_key=self._workspace.key,
+                registry=registry,
+                current_thread_id=lambda: (
+                    self._require_runtime().commands.current_thread_id
+                ),
+                credential_statuses=lambda: (
+                    self._require_runtime().sources.provider_credentials
+                ),
+                local_memory=local_memory,
+                config_writer=UserConfigWriter(self._paths.config_file),
+                mem0_cloud=mem0_adapter,
+                mem0_enabled=application_config.memory.mem0_cloud,
+                mem0_user_id=application_config.memory.mem0_user_id,
+                mem0_initialization_diagnostic=mem0_diagnostic,
+                mem0_state_changed=mem0_session.update,
+                has_active_turn=lambda: (
+                    self._operations.active_operation_id is not None
+                ),
+            )
+            await extensions.prepare_turn_extensions()
+            provider_configuration = ProviderConfigurationService(
+                conversation=self._conversation,
+                config_writer=UserConfigWriter(self._paths.config_file),
+                secret_store=UserSecretStore(self._paths.env_file),
+                validator=self._credential_validator,
+                sources=lambda: self._require_runtime().sources,
+                load_configuration=self._load_provider_configuration,
+                apply_configuration=self._apply_provider_configuration,
+                model_transaction_journal=self._provider_model_journal,
+                credential_transaction_journal=self._provider_credential_journal,
+            )
+            diagnostic_commands = DiagnosticCommandService(
+                workspace_path=self._workspace.display_path,
+                registry=registry,
+                permission_session=self._permission_session,
+                status_reader=self._command_status_snapshot,
+                usage_reader=self._command_usage,
+                credential_statuses=lambda: (
+                    self._require_runtime().sources.provider_credentials
+                ),
+                provider_doctor=provider_configuration.doctor,
+                configuration_ready=lambda: self._runtime is not None,
+                sqlite_ready=lambda: sqlite_database_health(
+                    self._paths.application_db
+                ),
+                checkpoints_ready=lambda: sqlite_database_health(
+                    self._paths.checkpoint_db
+                ),
+                workspace_instruction_diagnostic=lambda: (
+                    self._require_runtime().workspace_instruction_snapshot.diagnostic
+                ),
+            )
+            change_commands = ChangeCommandService(
+                operations=change_operations,
+                store=change_store,
+                workspace_key=self._workspace.key,
+            )
+            permission_commands = PermissionCommandService(
+                session=self._permission_session,
+                operations=self._operations,
+                interactions=self._interactions,
                 emitter=self._emitter,
-                activity_writer=self._repositories.tool_activities,
-                monotonic=monotonic,
-                change_set_id=runtime.change_scope.change_set_for_tool(
-                    tool_name=request.tool_name,
-                    owner=operation_id,
-                    turn_id=None,
+                current_thread_id=lambda: (
+                    self._require_runtime().commands.current_thread_id
                 ),
-                permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
             )
-
-        self._direct = DirectCommandService(
-            conversation=self._conversation,
-            executor=executor,
-            operations=self._operations,
-            context_factory=direct_context,
-            finalize_operation=self._seal_direct,
-        )
-        assert self._mem0_session is not None
-        self._commands = ConversationCommandService(
-            conversation=self._conversation,
-            workspace_key=self._workspace.key,
-            application_snapshot=self.application_state,
-            thread_snapshot=self.thread_state,
-            has_active_operation=lambda: (
-                self._operations.active_operation_id is not None
-            ),
-            default_model=self._initial_thread_model,
-            on_thread_selected=self._on_thread_selected,
-        )
-        self._extensions = ApplicationExtensionService(
-            conversation=self._conversation,
-            catalog=catalog,
-            manager=self._mcp,
-            enablements=enablements,
-            workspace_key=self._workspace.key,
-            registry=registry,
-            current_thread_id=lambda: (
-                self._require_runtime().commands.current_thread_id
-            ),
-            credential_statuses=lambda: (
-                self._require_runtime().sources.provider_credentials
-            ),
-            local_memory=self._local_memory,
-            config_writer=UserConfigWriter(self._paths.config_file),
-            mem0_cloud=self._mem0_adapter,
-            mem0_enabled=self._application_config.memory.mem0_cloud,
-            mem0_user_id=self._application_config.memory.mem0_user_id,
-            mem0_initialization_diagnostic=self._mem0_diagnostic,
-            mem0_state_changed=self._mem0_session.update,
-            has_active_turn=lambda: self._operations.active_operation_id is not None,
-        )
-        await self._extensions.prepare_turn_extensions()
-        self._provider_configuration = ProviderConfigurationService(
-            conversation=self._conversation,
-            config_writer=UserConfigWriter(self._paths.config_file),
-            secret_store=UserSecretStore(self._paths.env_file),
-            validator=self._credential_validator,
-            sources=lambda: self._require_runtime().sources,
-            load_configuration=self._load_provider_configuration,
-            apply_configuration=self._apply_provider_configuration,
-            model_transaction_journal=self._provider_model_journal,
-            credential_transaction_journal=self._provider_credential_journal,
-        )
-        self._diagnostic_commands = DiagnosticCommandService(
-            workspace_path=self._workspace.display_path,
-            registry=registry,
-            permission_session=self._permission_session,
-            status_reader=self._command_status_snapshot,
-            usage_reader=self._command_usage,
-            credential_statuses=lambda: (
-                self._require_runtime().sources.provider_credentials
-            ),
-            provider_doctor=self._provider_configuration.doctor,
-            configuration_ready=lambda: self._runtime is not None,
-            sqlite_ready=lambda: sqlite_database_health(self._paths.application_db),
-            checkpoints_ready=lambda: sqlite_database_health(self._paths.checkpoint_db),
-            workspace_instruction_diagnostic=lambda: (
-                self._require_runtime().workspace_instruction_snapshot.diagnostic
-            ),
-        )
-        assert self._change_operations is not None
-        assert self._change_store is not None
-        self._change_commands = ChangeCommandService(
-            operations=self._change_operations,
-            store=self._change_store,
-            workspace_key=self._workspace.key,
-        )
-        self._permission_commands = PermissionCommandService(
-            session=self._permission_session,
-            operations=self._operations,
-            interactions=self._interactions,
-            emitter=self._emitter,
-            current_thread_id=lambda: (
-                self._require_runtime().commands.current_thread_id
-            ),
-        )
-        self._command_dispatcher = CommandDispatcher(
-            {
-                CommandName.NEW: self._commands.new,
-                CommandName.RENAME: self._commands.rename,
-                CommandName.RESUME: self._commands.resume,
-                CommandName.CONTEXT: self._context_command,
-                CommandName.COMPACT: self._compact_command,
-                CommandName.AUTH: self._provider_configuration.auth_command,
-                CommandName.MODEL: self._model_command,
-                CommandName.THINKING: self._commands.thinking,
-                CommandName.WORKSPACE: self._diagnostic_commands.workspace,
-                CommandName.DIFF: self._change_commands.diff,
-                CommandName.UNDO: self._change_commands.undo,
-                CommandName.REDO: self._change_commands.redo,
-                CommandName.TOOLS: self._diagnostic_commands.tools,
-                CommandName.SKILLS: self._extensions.skills,
-                CommandName.MCP: self._extensions.mcp,
-                CommandName.MEMORY: self._extensions.memory,
-                CommandName.STATUS: self._diagnostic_commands.status,
-                CommandName.USAGE: self._diagnostic_commands.usage,
-                CommandName.DOCTOR: self._diagnostic_commands.doctor,
-                CommandName.CONFIG: self._diagnostic_commands.config,
-                CommandName.PERMISSIONS: self._permission_commands.permissions,
-            },
-            foreground=self._foreground,
-            has_pending_interaction=lambda: self._interactions.pending is not None,
-            mutation_guard=self._require_runtime_consistent,
-        )
-        recovery_results = await self._turns.reconcile_startup()
-        self._recovery_queue = [
-            result
-            for result in recovery_results
-            if result.status
-            in {RecoveryStatus.RESUMABLE, RecoveryStatus.INTERACTION_REQUIRED}
-        ]
-        runtime = self._capture_workspace_runtime(model_catalog=model_catalog)
-        await self._present_next_recovery()
-        self._runtime = runtime
-        self._initialized = True
-
-    def _capture_workspace_runtime(
-        self,
-        *,
-        model_catalog: ModelCatalog,
-    ) -> WorkspaceRuntime:
-        turns = self._turns
-        commands = self._commands
-        command_dispatcher = self._command_dispatcher
-        diagnostic_commands = self._diagnostic_commands
-        change_commands = self._change_commands
-        permission_commands = self._permission_commands
-        provider_configuration = self._provider_configuration
-        direct = self._direct
-        extensions = self._extensions
-        context = self._context
-        tool_registry = self._registry
-        local_memory = self._local_memory
-        mem0_session = self._mem0_session
-        mcp = self._mcp
-        change_scope = self._change_scope
-        change_store = self._change_store
-        change_analyzer = self._change_analyzer
-        change_operations = self._change_operations
-        workspace_instruction_snapshot = self._workspace_instruction_snapshot
-        assert turns is not None
-        assert commands is not None
-        assert command_dispatcher is not None
-        assert diagnostic_commands is not None
-        assert change_commands is not None
-        assert permission_commands is not None
-        assert provider_configuration is not None
-        assert direct is not None
-        assert extensions is not None
-        assert context is not None
-        assert tool_registry is not None
-        assert local_memory is not None
-        assert mem0_session is not None
-        assert mcp is not None
-        assert change_scope is not None
-        assert change_store is not None
-        assert change_analyzer is not None
-        assert change_operations is not None
-        assert workspace_instruction_snapshot is not None
-        return WorkspaceRuntime(
-            sources=self._sources,
-            application_config=self._application_config,
-            conversation=self._conversation,
-            turns=turns,
-            commands=commands,
-            command_dispatcher=command_dispatcher,
-            diagnostic_commands=diagnostic_commands,
-            change_commands=change_commands,
-            permission_commands=permission_commands,
-            provider_configuration=provider_configuration,
-            direct=direct,
-            extensions=extensions,
-            context=context,
-            tool_registry=tool_registry,
-            model_catalog=model_catalog,
-            local_memory=local_memory,
-            mem0_session=mem0_session,
-            mcp=mcp,
-            change_scope=change_scope,
-            change_store=change_store,
-            change_analyzer=change_analyzer,
-            change_operations=change_operations,
-            workspace_branch=self._workspace_branch,
-            workspace_instruction_snapshot=workspace_instruction_snapshot,
-        )
-
-    async def _close_activation_candidate(self, candidate: McpManager) -> None:
-        close_task = asyncio.create_task(candidate.aclose())
-        try:
-            done, _ = await asyncio.wait(
-                (close_task,),
-                timeout=_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS,
+            command_dispatcher = CommandDispatcher(
+                {
+                    CommandName.NEW: commands.new,
+                    CommandName.RENAME: commands.rename,
+                    CommandName.RESUME: commands.resume,
+                    CommandName.CONTEXT: self._context_command,
+                    CommandName.COMPACT: self._compact_command,
+                    CommandName.AUTH: provider_configuration.auth_command,
+                    CommandName.MODEL: self._model_command,
+                    CommandName.THINKING: commands.thinking,
+                    CommandName.WORKSPACE: diagnostic_commands.workspace,
+                    CommandName.DIFF: change_commands.diff,
+                    CommandName.UNDO: change_commands.undo,
+                    CommandName.REDO: change_commands.redo,
+                    CommandName.TOOLS: diagnostic_commands.tools,
+                    CommandName.SKILLS: extensions.skills,
+                    CommandName.MCP: extensions.mcp,
+                    CommandName.MEMORY: extensions.memory,
+                    CommandName.STATUS: diagnostic_commands.status,
+                    CommandName.USAGE: diagnostic_commands.usage,
+                    CommandName.DOCTOR: diagnostic_commands.doctor,
+                    CommandName.CONFIG: diagnostic_commands.config,
+                    CommandName.PERMISSIONS: permission_commands.permissions,
+                },
+                foreground=self._foreground,
+                has_pending_interaction=lambda: (
+                    self._interactions.pending is not None
+                ),
+                mutation_guard=self._require_runtime_consistent,
+            )
+            return WorkspaceRuntime(
+                sources=sources,
+                application_config=application_config,
+                conversation=self._conversation,
+                turns=turns,
+                commands=commands,
+                command_dispatcher=command_dispatcher,
+                diagnostic_commands=diagnostic_commands,
+                change_commands=change_commands,
+                permission_commands=permission_commands,
+                provider_configuration=provider_configuration,
+                direct=direct,
+                extensions=extensions,
+                context=context_service,
+                tool_registry=registry,
+                model_catalog=model_catalog,
+                local_memory=local_memory,
+                mem0_session=mem0_session,
+                mcp=candidate_mcp,
+                change_scope=change_scope,
+                change_store=change_store,
+                change_analyzer=change_analyzer,
+                change_operations=change_operations,
+                workspace_branch=workspace_branch,
+                workspace_instruction_snapshot=workspace_instruction_snapshot,
             )
         except BaseException:
-            close_task.cancel()
-            close_task.add_done_callback(_consume_background_task_result)
+            if candidate_mcp is not None:
+                await self._close_mcp_bounded(candidate_mcp)
+            raise
+
+    def _validate_workspace_runtime(self, candidate: WorkspaceRuntime) -> None:
+        if candidate.conversation is not self._conversation:
+            raise RuntimeError("Workspace runtime owns the wrong Conversation service.")
+        expected_catalog = ModelCatalog.from_application(candidate.application_config)
+        if candidate.model_catalog != expected_catalog:
+            raise RuntimeError("Workspace runtime Model Catalog is inconsistent.")
+
+    def _require_runtime_publication_idle(self) -> None:
+        if self._closed or self._foreground.closing:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Application shutdown prevents workspace runtime replacement.",
+                retryable=True,
+            )
+        if (
+            self._foreground.operation_active
+            or self._operations.active_operation_id is not None
+        ):
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "An active Operation prevents workspace runtime replacement.",
+                retryable=True,
+            )
+
+    def _publish_workspace_runtime(
+        self,
+        candidate: WorkspaceRuntime,
+        *,
+        expected_previous: WorkspaceRuntime | None,
+    ) -> None:
+        if self._runtime is not expected_previous:
+            raise RuntimeError("Workspace runtime changed before publication.")
+        self._runtime = candidate
+
+    async def _close_workspace_runtime(self, runtime: WorkspaceRuntime) -> None:
+        retirement = self._schedule_workspace_runtime_retirement(runtime)
+        if retirement is not None:
+            await asyncio.shield(retirement)
+
+    def _schedule_workspace_runtime_retirement(
+        self,
+        runtime: WorkspaceRuntime,
+    ) -> asyncio.Task[None] | None:
+        if runtime.mcp in self._closed_mcp_resources:
+            return None
+        retirement = self._runtime_retirements.get(runtime.mcp)
+        if retirement is None:
+            retirement = asyncio.create_task(
+                self._drain_and_close_workspace_runtime(runtime),
+                name="workspace-runtime-retirement",
+            )
+            self._runtime_retirements[runtime.mcp] = retirement
+        return retirement
+
+    async def _drain_and_close_workspace_runtime(
+        self,
+        runtime: WorkspaceRuntime,
+    ) -> None:
+        try:
+            await self._wait_for_runtime_readers(runtime)
+            await self._close_mcp_bounded(runtime.mcp)
+        finally:
+            retirement = self._runtime_retirements.get(runtime.mcp)
+            if retirement is asyncio.current_task():
+                self._runtime_retirements.pop(runtime.mcp, None)
+
+    async def _close_mcp_bounded(self, candidate: McpManager) -> None:
+        if candidate in self._closed_mcp_resources:
             return
-        if close_task not in done:
+        close_task = self._mcp_close_tasks.get(candidate)
+        if close_task is None:
+            close_task = asyncio.create_task(
+                self._run_mcp_close_bounded(candidate),
+                name="workspace-mcp-close",
+            )
+            self._mcp_close_tasks[candidate] = close_task
+        await asyncio.shield(close_task)
+
+    async def _run_mcp_close_bounded(self, candidate: McpManager) -> None:
+        close_task = asyncio.create_task(candidate.aclose())
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(close_task),
+                timeout=_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
             close_task.cancel()
             close_task.add_done_callback(_consume_background_task_result)
             await asyncio.sleep(0)
-            return
-        with suppress(Exception, asyncio.CancelledError):
-            close_task.result()
+        except (Exception, asyncio.CancelledError):
+            pass
+        finally:
+            self._closed_mcp_resources.add(candidate)
+            owned_close = self._mcp_close_tasks.get(candidate)
+            if owned_close is asyncio.current_task():
+                self._mcp_close_tasks.pop(candidate, None)
 
     def _load_sources(self, *, workspace_trusted: bool) -> LoadedConfigSources:
         return load_config_sources(
@@ -2385,26 +2526,33 @@ class _LocalApplicationBackend:
         sources = self._load_sources(workspace_trusted=True)
         return sources, resolve_application_config(sources)
 
-    def _apply_provider_configuration(
+    async def _apply_provider_configuration(
         self,
         snapshot: ProviderConfigurationSnapshot,
+        publication: ProviderConfigurationPublication,
     ) -> None:
-        sources, application_config = snapshot
-        runtime = self._runtime
-        if runtime is None:
-            raise RuntimeError("Workspace runtime is not initialized.")
-        replacement = replace(
-            runtime,
-            sources=sources,
-            application_config=application_config,
-            model_catalog=ModelCatalog.from_application(application_config),
+        runtime = self._require_runtime()
+        candidate = await self._build_workspace_runtime(
+            configuration=snapshot,
+            selected_thread_id=runtime.commands.current_thread_id,
         )
-        # Candidate assembly still reads these fields until the activation
-        # transaction is replaced in the next architecture step. Publish the
-        # immutable request snapshot last, without an await in between.
-        self._sources = sources
-        self._application_config = application_config
-        self._runtime = replacement
+        published = False
+        try:
+            self._validate_workspace_runtime(candidate)
+            self._require_runtime_publication_idle()
+            publication.require_active()
+            self._publish_workspace_runtime(
+                candidate,
+                expected_previous=runtime,
+            )
+            published = True
+            # This callback runs inside the request scope bound to ``runtime``.
+            # Retirement must begin now but cannot wait for that same reader.
+            self._schedule_workspace_runtime_retirement(runtime)
+        except BaseException:
+            if not published:
+                await self._close_workspace_runtime(candidate)
+            raise
 
     def _on_thread_selected(self) -> None:
         pending = self._interactions.pending
@@ -2661,32 +2809,37 @@ class _LocalApplicationBackend:
                 continue
         return 0
 
-    def _mem0_identity(self) -> Mem0Identity | None:
-        user_id = self._application_config.memory.mem0_user_id
+    def _mem0_identity(
+        self,
+        application_config: ApplicationConfig,
+    ) -> Mem0Identity | None:
+        user_id = application_config.memory.mem0_user_id
         if user_id is None:
             return None
         return Mem0Identity(user_id=user_id, workspace_key=self._workspace.key)
 
-    def _create_mem0_adapter(self) -> Mem0CloudAdapter | None:
+    def _create_mem0_adapter(
+        self,
+        sources: LoadedConfigSources,
+    ) -> tuple[Mem0CloudAdapter | None, Mem0Diagnostic | None]:
         client = self._injected_mem0_client
         if client is None:
-            secret = self._sources.secrets.mem0_api_key
+            secret = sources.secrets.mem0_api_key
             try:
                 client = create_mem0_client(
                     secret.get_secret_value() if secret is not None else None
                 )
             except Mem0CloudError as error:
-                self._mem0_diagnostic = error.diagnostic
-                return None
-        return Mem0CloudAdapter(cast(Mem0Client, client))
+                return None, error.diagnostic
+        return Mem0CloudAdapter(cast(Mem0Client, client)), None
 
     def _seal_turn(self, turn_id: str) -> None:
-        runtime = self._runtime
+        runtime = self._request_runtime.get() or self._runtime
         if runtime is not None:
             runtime.change_scope.seal(turn_id)
 
     def _seal_direct(self, operation_id: str) -> None:
-        runtime = self._runtime
+        runtime = self._request_runtime.get() or self._runtime
         if runtime is not None:
             runtime.change_scope.seal(operation_id)
 
@@ -2718,6 +2871,9 @@ class _LocalApplicationBackend:
             ) from error
 
     def _require_runtime(self) -> WorkspaceRuntime:
+        bound = self._request_runtime.get()
+        if bound is not None:
+            return bound
         self._require_open()
         runtime = self._runtime
         if runtime is None:
@@ -2726,6 +2882,48 @@ class _LocalApplicationBackend:
                 "Trust the workspace before using project capabilities.",
             )
         return runtime
+
+    @contextmanager
+    def _runtime_request_scope(
+        self,
+        runtime: WorkspaceRuntime,
+    ) -> Iterator[WorkspaceRuntime]:
+        bound = self._request_runtime.get()
+        if bound is not None:
+            yield bound
+            return
+        key = id(runtime.mcp)
+        readers = self._runtime_readers.get(key)
+        if readers is None:
+            idle = asyncio.Event()
+            idle.set()
+            readers = _RuntimeReaderState(
+                resources=runtime.mcp,
+                count=0,
+                idle=idle,
+            )
+            self._runtime_readers[key] = readers
+        elif readers.resources is not runtime.mcp:
+            raise RuntimeError("Workspace runtime resource identity collision.")
+        readers.count += 1
+        readers.idle.clear()
+        token = self._request_runtime.set(runtime)
+        try:
+            yield runtime
+        finally:
+            self._request_runtime.reset(token)
+            readers.count -= 1
+            if readers.count == 0:
+                readers.idle.set()
+                self._runtime_readers.pop(key, None)
+
+    async def _wait_for_runtime_readers(self, runtime: WorkspaceRuntime) -> None:
+        readers = self._runtime_readers.get(id(runtime.mcp))
+        if readers is None:
+            return
+        if readers.resources is not runtime.mcp:
+            raise RuntimeError("Workspace runtime resource identity collision.")
+        await readers.idle.wait()
 
     def _require_open(self) -> None:
         if self._closed or self._foreground.closing:
@@ -2778,18 +2976,10 @@ class _LocalApplicationBackend:
         include_branch: bool,
         runtime: WorkspaceRuntime | None = None,
     ) -> WorkspacePresentation:
-        runtime = runtime or self._runtime
+        runtime = runtime or self._request_runtime.get() or self._runtime
         return WorkspacePresentation(
             display_path=str(self._workspace.display_path),
-            branch=(
-                (
-                    runtime.workspace_branch
-                    if runtime is not None
-                    else self._workspace_branch
-                )
-                if include_branch
-                else None
-            ),
+            branch=runtime.workspace_branch if include_branch and runtime else None,
         )
 
     def _page_change_summaries(

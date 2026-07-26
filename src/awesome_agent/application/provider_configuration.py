@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 
 from pydantic import SecretStr
@@ -49,7 +51,10 @@ from awesome_agent.config.model_transaction import (
     ProviderModelTransactionRecord,
 )
 from awesome_agent.conversation import ConversationService, ThreadNotFound
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.cancellation import (
+    finish_bounded_cancellation_cleanup,
+    run_cancellation_safe_blocking_call,
+)
 
 _PROVIDER_LABELS: dict[ProviderName, str] = {
     "deepseek": "DeepSeek",
@@ -69,6 +74,38 @@ _SERVICE_HELP_URLS: dict[CredentialService, str] = {
 type ProviderConfigurationSnapshot = tuple[LoadedConfigSources, ApplicationConfig]
 
 logger = logging.getLogger(__name__)
+
+# Provider persistence can wait on two independently locked user-state files. Keep
+# the runtime publication cleanup at the same bounded horizon as that transaction.
+_RUNTIME_PUBLICATION_CLEANUP_TIMEOUT_SECONDS = 22.0
+
+
+@dataclass(slots=True)
+class ProviderConfigurationPublication:
+    """Revocable authority for one committed runtime publication attempt."""
+
+    generation: int
+    _active: bool = True
+
+    def revoke(self) -> None:
+        self._active = False
+
+    def require_active(self) -> None:
+        if not self._active:
+            raise RuntimeError("Provider runtime publication authority was revoked.")
+
+
+async def _await_shielded_task(task: asyncio.Task[None]) -> None:
+    await asyncio.shield(task)
+
+
+def _consume_background_task_result(task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        return
+    try:
+        task.exception()
+    except Exception:
+        return
 
 
 class ProviderConfigurationRecoveryRequired(RuntimeError):
@@ -213,7 +250,10 @@ class ProviderConfigurationService:
         validator: CredentialValidator,
         sources: Callable[[], LoadedConfigSources],
         load_configuration: Callable[[], ProviderConfigurationSnapshot],
-        apply_configuration: Callable[[ProviderConfigurationSnapshot], None],
+        apply_configuration: Callable[
+            [ProviderConfigurationSnapshot, ProviderConfigurationPublication],
+            Awaitable[None],
+        ],
         model_transaction_journal: ProviderModelTransactionJournal,
         credential_transaction_journal: ProviderCredentialTransactionJournal,
     ) -> None:
@@ -227,6 +267,7 @@ class ProviderConfigurationService:
         self._model_transaction_journal = model_transaction_journal
         self._credential_transaction_journal = credential_transaction_journal
         self._recovery_required: ProviderConfigurationRecoveryRequired | None = None
+        self._publication_generation = 0
 
     def require_consistent(self) -> None:
         with self._config_writer.transaction():
@@ -419,8 +460,6 @@ class ProviderConfigurationService:
         except ThreadNotFound:
             return _error("thread_not_found", "Thread was not found.")
 
-        updated_model: str | None = None
-
         def persist_model() -> tuple[ProviderConfigurationSnapshot, str]:
             # YAML and Application SQLite cannot share one storage transaction.
             # The config lock is therefore the provider-configuration ordering
@@ -496,19 +535,10 @@ class ProviderConfigurationService:
                     raise failure from primary_error
                 return snapshot, model
 
-        def commit_model(
-            persisted: tuple[ProviderConfigurationSnapshot, str],
-        ) -> None:
-            nonlocal updated_model
-            snapshot, updated_model = persisted
-            self._apply_configuration(snapshot)
-
-        await run_cancellation_safe_blocking_call(
+        _, updated_model = await self._persist_and_apply(
             persist_model,
-            on_completed=commit_model,
-            on_abandoned=self._fence_abandoned_transaction,
+            snapshot=lambda persisted: persisted[0],
         )
-        assert updated_model is not None
         return result(
             ModelCommandPayload(
                 model=updated_model,
@@ -522,10 +552,9 @@ class ProviderConfigurationService:
     ) -> ProviderCredentialSetResult:
         status = _status(self._sources(), request.provider)
         if request.action == "delete":
-            await run_cancellation_safe_blocking_call(
+            await self._persist_and_apply(
                 lambda: self._persist_credential_transaction(request, None),
-                on_completed=self._apply_configuration,
-                on_abandoned=self._fence_abandoned_transaction,
+                snapshot=lambda persisted: persisted,
             )
             return ProviderCredentialSetResult(
                 provider=request.provider,
@@ -564,10 +593,9 @@ class ProviderConfigurationService:
                 code=result.code,
             )
 
-        await run_cancellation_safe_blocking_call(
+        await self._persist_and_apply(
             lambda: self._persist_credential_transaction(request, api_key),
-            on_completed=self._apply_configuration,
-            on_abandoned=self._fence_abandoned_transaction,
+            snapshot=lambda persisted: persisted,
         )
         return ProviderCredentialSetResult(
             provider=request.provider,
@@ -641,10 +669,118 @@ class ProviderConfigurationService:
                 self._write_source(service, source)
                 return self._load_configuration()
 
-        await run_cancellation_safe_blocking_call(
+        await self._persist_and_apply(
             persist_source,
-            on_completed=self._apply_configuration,
-            on_abandoned=self._fence_abandoned_transaction,
+            snapshot=lambda persisted: persisted,
+        )
+
+    async def _persist_and_apply[ResultT](
+        self,
+        persist: Callable[[], ResultT],
+        *,
+        snapshot: Callable[[ResultT], ProviderConfigurationSnapshot],
+    ) -> ResultT:
+        """Persist one mutation, then publish its runtime snapshot asynchronously."""
+
+        completed: list[ResultT] = []
+
+        def capture(result: ResultT) -> None:
+            completed.append(result)
+
+        try:
+            persisted = await run_cancellation_safe_blocking_call(
+                persist,
+                on_completed=capture,
+                on_abandoned=self._fence_abandoned_transaction,
+            )
+        except asyncio.CancelledError:
+            if completed:
+                await self._apply_after_committed_cancellation(
+                    snapshot(completed[-1])
+                )
+            raise
+        await self._apply_committed_configuration(snapshot(persisted))
+        return persisted
+
+    async def _apply_committed_configuration(
+        self,
+        snapshot: ProviderConfigurationSnapshot,
+    ) -> None:
+        authority = self._new_publication_authority()
+        publication = asyncio.create_task(
+            self._apply_and_fence(snapshot, authority),
+            name="provider-runtime-publication",
+        )
+        try:
+            await asyncio.shield(publication)
+        except asyncio.CancelledError:
+            await self._finish_runtime_publication(publication, authority)
+            raise
+
+    async def _apply_after_committed_cancellation(
+        self,
+        snapshot: ProviderConfigurationSnapshot,
+    ) -> None:
+        authority = self._new_publication_authority()
+        publication = asyncio.create_task(
+            self._apply_and_fence(snapshot, authority),
+            name="provider-runtime-publication-after-cancellation",
+        )
+        await self._finish_runtime_publication(publication, authority)
+
+    def _new_publication_authority(self) -> ProviderConfigurationPublication:
+        self._publication_generation += 1
+        return ProviderConfigurationPublication(self._publication_generation)
+
+    async def _finish_runtime_publication(
+        self,
+        publication: asyncio.Task[None],
+        authority: ProviderConfigurationPublication,
+    ) -> None:
+        await finish_bounded_cancellation_cleanup(
+            _await_shielded_task(publication),
+            timeout_seconds=_RUNTIME_PUBLICATION_CLEANUP_TIMEOUT_SECONDS,
+        )
+        if publication.done():
+            if publication.cancelled():
+                authority.revoke()
+                self._fence_runtime_publication_abandoned("cancelled")
+            else:
+                # Retrieve any failure. ``_apply_and_fence`` already converted and
+                # fenced ordinary publication errors before surfacing them.
+                publication.exception()
+            return
+        authority.revoke()
+        self._fence_runtime_publication_abandoned("timed_out")
+        publication.cancel()
+        publication.add_done_callback(_consume_background_task_result)
+
+    async def _apply_and_fence(
+        self,
+        snapshot: ProviderConfigurationSnapshot,
+        authority: ProviderConfigurationPublication,
+    ) -> None:
+        try:
+            await self._apply_configuration(snapshot, authority)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            failure = ProviderConfigurationRecoveryRequired(
+                error,
+                (("runtime_publish", error),),
+            )
+            self._fence(failure)
+            raise failure from error
+
+    def _fence_runtime_publication_abandoned(self, reason: str) -> None:
+        primary = RuntimeError(
+            f"Committed Provider configuration publication {reason}."
+        )
+        self._fence(
+            ProviderConfigurationRecoveryRequired(
+                primary,
+                (("runtime_publish_abandoned", primary),),
+            )
         )
 
     def _write_source(
@@ -811,6 +947,8 @@ class ProviderConfigurationService:
         return None
 
     def _fence(self, failure: ProviderConfigurationRecoveryRequired) -> None:
+        if self._recovery_required is not None:
+            return
         self._recovery_required = failure
         logger.critical(
             "Provider configuration recovery requires restart; stages=%s",

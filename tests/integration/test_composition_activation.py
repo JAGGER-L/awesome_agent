@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
+import weakref
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Any, ClassVar, cast
@@ -11,17 +14,26 @@ import pytest
 from pydantic import SecretStr
 
 from awesome_agent.application import composition
+from awesome_agent.application.command_results import CommandOutcome
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import (
+    InteractionResult,
     ProductErrorCode,
     ProviderCredentialSetRequest,
 )
+from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import LocalApplication
 from awesome_agent.application.provider_configuration import (
+    ProviderConfigurationPublication,
     ProviderConfigurationRecoveryRequired,
+    ProviderConfigurationSnapshot,
     reconcile_provider_credential_transaction,
 )
-from awesome_agent.application.turns import TurnCoordinator
+from awesome_agent.application.turns import (
+    RecoveryResult,
+    RecoveryStatus,
+    TurnCoordinator,
+)
 from awesome_agent.config import (
     BudgetConfig,
     CredentialSource,
@@ -96,7 +108,7 @@ async def test_invalid_provider_credential_journal_fails_before_activation(
     assert initialized.ok is False
     assert initialized.error is not None
     assert initialized.error.code is ProductErrorCode.RECOVERY_REQUIRED
-    assert backend._initialized is False
+    assert backend._runtime is None
     await application.shutdown()
 
 
@@ -286,8 +298,9 @@ async def test_runtime_provider_recovery_fence_blocks_all_mutations_but_not_snap
         CommandIntent(name=CommandName.NEW, arguments=())
     )
     assert created.ok is True
-    assert backend._commands is not None
-    thread_id = backend._commands.current_thread_id
+    runtime = backend._runtime
+    assert runtime is not None
+    thread_id = runtime.commands.current_thread_id
     assert thread_id is not None
     journal = backend._paths.provider_model_transaction_file
     journal.write_bytes(b'{"version":1,"phase":"prepared","unknown":true}')
@@ -568,15 +581,19 @@ async def test_selected_model_context_limit_clamps_turn_and_context_budgets(
     initialized = await application.initialize()
 
     assert initialized.ok is True
-    context = backend._context
-    assert context is not None
+    runtime = backend._runtime
+    assert runtime is not None
+    context = runtime.context
     assert context._configured_total_tokens == 999_999
     assert context._model_context_limit == 262_144
     thread = backend._conversation.create_thread(
         backend._workspace.key,
         current_model="deepseek/deepseek-v4-flash",
     )
-    assert backend._turn_config(thread).budgets.total_context_tokens == 262_144
+    assert (
+        backend._turn_config(thread, runtime=runtime).budgets.total_context_tokens
+        == 262_144
+    )
     await application.shutdown()
 
 
@@ -592,12 +609,12 @@ async def test_activation_publishes_one_immutable_workspace_runtime(
     runtime = backend._runtime
     assert runtime is not None
     assert runtime.conversation is backend._conversation
-    assert runtime.turns is backend._turns
-    assert runtime.commands is backend._commands
-    assert runtime.command_dispatcher is backend._command_dispatcher
-    assert runtime.tool_registry is backend._registry
-    assert runtime.context is backend._context
-    assert runtime.mcp is backend._mcp
+    assert runtime.turns is not None
+    assert runtime.commands is not None
+    assert runtime.command_dispatcher is not None
+    assert runtime.tool_registry is not None
+    assert runtime.context is not None
+    assert runtime.mcp is not None
     assert not hasattr(runtime, "__dict__")
     with pytest.raises(FrozenInstanceError):
         cast(Any, runtime).workspace_branch = "changed"
@@ -605,16 +622,15 @@ async def test_activation_publishes_one_immutable_workspace_runtime(
 
 
 @pytest.mark.asyncio
-async def test_requests_read_the_published_runtime_not_candidate_fields(
+async def test_requests_read_the_published_runtime_without_candidate_fields(
     tmp_path: Path,
 ) -> None:
     application, backend = await _trusted_application(tmp_path)
     assert (await application.initialize()).ok is True
     runtime = backend._runtime
     assert runtime is not None
-    backend._commands = None
-    backend._command_dispatcher = None
-    backend._conversation = cast(Any, object())
+    for name in _REMOVED_ACTIVATION_FIELDS:
+        assert not hasattr(backend, name)
 
     created = await application.execute_command(
         CommandIntent(name=CommandName.NEW, arguments=())
@@ -635,8 +651,14 @@ async def test_provider_configuration_replaces_the_runtime_snapshot(
 ) -> None:
     application, backend = await _trusted_application(tmp_path)
     assert (await application.initialize()).ok is True
+    created = await application.execute_command(
+        CommandIntent(name=CommandName.NEW, arguments=())
+    )
+    assert created.ok is True
     original = backend._runtime
     assert original is not None
+    selected_thread_id = original.commands.current_thread_id
+    assert selected_thread_id is not None
     updated_user = original.sources.user.model_copy(
         update={
             "providers": original.sources.user.providers.model_copy(
@@ -647,7 +669,10 @@ async def test_provider_configuration_replaces_the_runtime_snapshot(
     updated_sources = replace(original.sources, user=updated_user)
     updated_config = resolve_application_config(updated_sources)
 
-    backend._apply_provider_configuration((updated_sources, updated_config))
+    await backend._apply_provider_configuration(
+        (updated_sources, updated_config),
+        ProviderConfigurationPublication(1),
+    )
 
     current = backend._runtime
     assert current is not None
@@ -656,10 +681,13 @@ async def test_provider_configuration_replaces_the_runtime_snapshot(
     assert current.application_config is updated_config
     assert current.model_catalog.default_model == "kimi/kimi-k2.6"
     assert original.application_config.providers.default_model is None
-    assert current.turns is original.turns
-    assert current.command_dispatcher is original.command_dispatcher
-    assert backend._sources is updated_sources
-    assert backend._application_config is updated_config
+    assert current.turns is not original.turns
+    assert current.command_dispatcher is not original.command_dispatcher
+    assert current.context is not original.context
+    assert current.mcp is not original.mcp
+    assert current.commands.current_thread_id == selected_thread_id
+    assert not hasattr(backend, "_sources")
+    assert not hasattr(backend, "_application_config")
     await application.shutdown()
 
 
@@ -693,7 +721,10 @@ class _TrackingMcpManager:
                 raise
 
 
-_ROLLED_BACK_FIELDS = (
+_REMOVED_ACTIVATION_FIELDS = (
+    "_initialized",
+    "_sources",
+    "_application_config",
     "_commands",
     "_command_dispatcher",
     "_diagnostic_commands",
@@ -713,6 +744,7 @@ _ROLLED_BACK_FIELDS = (
     "_change_store",
     "_change_analyzer",
     "_change_operations",
+    "_workspace_branch",
     "_workspace_instruction_snapshot",
 )
 
@@ -720,9 +752,8 @@ _ROLLED_BACK_FIELDS = (
 def _assert_activation_rolled_back(
     backend: composition._LocalApplicationBackend,
 ) -> None:
-    assert backend._initialized is False
     assert backend._runtime is None
-    assert all(getattr(backend, name) is None for name in _ROLLED_BACK_FIELDS)
+    assert all(not hasattr(backend, name) for name in _REMOVED_ACTIVATION_FIELDS)
 
 
 @pytest.mark.asyncio
@@ -795,3 +826,538 @@ async def test_cancelled_activation_bounds_candidate_cleanup_and_rolls_back(
     assert candidate.close_cancelled is True
     _assert_activation_rolled_back(backend)
     await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_runtime_build_failure_closes_only_the_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    original = backend._runtime
+    assert original is not None
+    original_mcp = _TrackingMcpManager.instances[0]
+
+    def fail_after_mcp(**_: object) -> object:
+        raise RuntimeError("candidate construction failed")
+
+    monkeypatch.setattr(
+        composition,
+        "load_workspace_instructions",
+        fail_after_mcp,
+    )
+
+    with pytest.raises(RuntimeError, match="candidate construction failed"):
+        await backend._activate()
+
+    candidate_mcp = _TrackingMcpManager.instances[1]
+    assert backend._runtime is original
+    assert original_mcp.close_calls == 0
+    assert candidate_mcp.close_calls == 1
+    await application.shutdown()
+    assert original_mcp.close_calls == 1
+    assert candidate_mcp.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_foreground_operation_rejects_candidate_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    original = backend._runtime
+    assert original is not None
+    lease = backend._foreground.acquire_operation()
+    try:
+        with pytest.raises(ApplicationFailure) as blocked:
+            await backend._activate()
+    finally:
+        lease.release()
+
+    assert blocked.value.error.code is ProductErrorCode.OPERATION_BUSY
+    assert backend._runtime is original
+    assert _TrackingMcpManager.instances[0].close_calls == 0
+    assert _TrackingMcpManager.instances[1].close_calls == 1
+    await application.shutdown()
+    assert _TrackingMcpManager.instances[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_post_publish_notification_failure_keeps_candidate_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    original = backend._runtime
+    assert original is not None
+
+    async def fail_notification() -> None:
+        raise RuntimeError("notification failed")
+
+    monkeypatch.setattr(backend, "_present_next_recovery", fail_notification)
+    with pytest.raises(RuntimeError, match="notification failed"):
+        await backend._activate()
+
+    candidate = backend._runtime
+    assert candidate is not None
+    assert candidate is not original
+    assert _TrackingMcpManager.instances[0].close_calls == 1
+    assert _TrackingMcpManager.instances[1].close_calls == 0
+    state = await application.get_state()
+    assert state.ok is True
+    assert state.value is not None
+    assert state.value.initialized is True
+    await application.shutdown()
+    assert _TrackingMcpManager.instances[0].close_calls == 1
+    assert _TrackingMcpManager.instances[1].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_initial_recovery_delivery_reuses_published_runtime_and_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BlockFirstRecoveryDelivery(CollectingEventSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.first_started = asyncio.Event()
+            self.interaction_ids: list[str] = []
+
+        async def emit(self, event: Any) -> None:
+            payload = event.payload
+            if (
+                getattr(payload, "interaction_kind", None)
+                == "recovery_decision"
+            ):
+                self.interaction_ids.append(payload.interaction_id)
+                if len(self.interaction_ids) == 1:
+                    self.first_started.set()
+                    await asyncio.Event().wait()
+            await super().emit(event)
+
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    reconcile_calls = 0
+
+    async def recover_once(self: TurnCoordinator) -> tuple[RecoveryResult, ...]:
+        del self
+        nonlocal reconcile_calls
+        reconcile_calls += 1
+        return (
+            RecoveryResult(
+                thread_id="thread_recovery",
+                turn_id="turn_recovery",
+                status=RecoveryStatus.INTERACTION_REQUIRED,
+                error_code="tool_outcome_uncertain",
+            ),
+        )
+
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    monkeypatch.setattr(TurnCoordinator, "reconcile_startup", recover_once)
+    monkeypatch.setattr(composition, "_RECOVERY_EVENT_DELIVERY_ATTEMPTS", 1)
+    monkeypatch.setattr(
+        composition,
+        "_RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS",
+        0.01,
+    )
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    WorkspaceTrustService(
+        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
+    ).accept(resolve_workspace(workspace))
+    sink = _BlockFirstRecoveryDelivery()
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=sink,
+        environ={},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+    initializing = asyncio.create_task(application.initialize())
+    await asyncio.wait_for(sink.first_started.wait(), timeout=1)
+    published = backend._runtime
+    assert published is not None
+    pending = backend._interactions.pending
+    assert pending is not None
+    pending_id = pending.id
+    assert sink.interaction_ids == [pending_id]
+    assert _TrackingMcpManager.instances[0].close_calls == 0
+
+    initializing.cancel("cancel-initial-delivery")
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await asyncio.wait_for(initializing, timeout=1)
+
+    assert isinstance(cancelled.value, asyncio.CancelledError)
+    assert backend._runtime is published
+    assert backend._interactions.pending is not None
+    assert backend._interactions.pending.id == pending_id
+    assert reconcile_calls == 1
+    assert _TrackingMcpManager.instances[0].close_calls == 0
+
+    ready = await application.initialize()
+    assert ready.ok is True
+    assert ready.value is not None
+    assert ready.value.status.value == "ready"
+    assert reconcile_calls == 1
+    assert sink.interaction_ids == [pending_id, pending_id]
+    assert backend._runtime is published
+    await application.shutdown()
+    assert _TrackingMcpManager.instances[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_published_runtime_waits_for_bound_reader_before_old_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    original = backend._runtime
+    assert original is not None
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    published = asyncio.Event()
+    seen_by_old_request: list[composition.WorkspaceRuntime] = []
+    seen_by_new_request: list[composition.WorkspaceRuntime] = []
+    original_handler = original.command_dispatcher._handlers[CommandName.STATUS]
+
+    async def pause_old_request(intent: CommandIntent) -> CommandOutcome:
+        seen_by_old_request.append(backend._require_runtime())
+        entered.set()
+        await release.wait()
+        seen_by_old_request.append(backend._require_runtime())
+        return await original_handler(intent)
+
+    original.command_dispatcher._handlers[CommandName.STATUS] = pause_old_request
+    old_request = asyncio.create_task(
+        application.execute_command(CommandIntent(name=CommandName.STATUS))
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    publish_runtime = backend._publish_workspace_runtime
+
+    def capture_publication(
+        candidate: composition.WorkspaceRuntime,
+        *,
+        expected_previous: composition.WorkspaceRuntime | None,
+    ) -> None:
+        publish_runtime(candidate, expected_previous=expected_previous)
+        published.set()
+
+    monkeypatch.setattr(backend, "_publish_workspace_runtime", capture_publication)
+    activation = asyncio.create_task(backend._activate())
+    await asyncio.wait_for(published.wait(), timeout=1)
+    candidate = backend._runtime
+    assert candidate is not None
+    assert candidate is not original
+    assert _TrackingMcpManager.instances[0].close_calls == 0
+    assert activation.done() is False
+
+    candidate_handler = candidate.command_dispatcher._handlers[CommandName.STATUS]
+
+    async def observe_new_request(intent: CommandIntent) -> CommandOutcome:
+        seen_by_new_request.append(backend._require_runtime())
+        return await candidate_handler(intent)
+
+    candidate.command_dispatcher._handlers[CommandName.STATUS] = observe_new_request
+    new_request = await application.execute_command(
+        CommandIntent(name=CommandName.STATUS)
+    )
+    assert new_request.ok is True
+    assert seen_by_new_request == [candidate]
+    assert _TrackingMcpManager.instances[0].close_calls == 0
+
+    release.set()
+    assert (await old_request).ok is True
+    await asyncio.wait_for(activation, timeout=1)
+    assert seen_by_old_request == [original, original]
+    assert _TrackingMcpManager.instances[0].close_calls == 1
+    assert backend._request_runtime.get() is None
+    assert backend._runtime_readers == {}
+    await application.shutdown()
+    assert _TrackingMcpManager.instances[0].close_calls == 1
+    assert _TrackingMcpManager.instances[1].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_request_scope_resets_after_exception_and_cancellation(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    runtime = backend._runtime
+    assert runtime is not None
+
+    async def fail_request(_: CommandIntent) -> CommandOutcome:
+        assert backend._require_runtime() is runtime
+        raise RuntimeError("request failed")
+
+    runtime.command_dispatcher._handlers[CommandName.STATUS] = fail_request
+    with pytest.raises(RuntimeError, match="request failed"):
+        await backend.run_command(CommandIntent(name=CommandName.STATUS))
+    assert backend._request_runtime.get() is None
+    assert backend._runtime_readers == {}
+
+    entered = asyncio.Event()
+
+    async def cancel_request(_: CommandIntent) -> CommandOutcome:
+        assert backend._require_runtime() is runtime
+        entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    runtime.command_dispatcher._handlers[CommandName.STATUS] = cancel_request
+    request = asyncio.create_task(
+        backend.run_command(CommandIntent(name=CommandName.STATUS))
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    request.cancel("request-cancelled")
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await request
+    assert cancelled.value.args == ("request-cancelled",)
+    assert backend._request_runtime.get() is None
+    assert backend._runtime_readers == {}
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_releases_bootstrap_lock_before_reader_drain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    request_entered = asyncio.Event()
+    queue_request = asyncio.Event()
+
+    async def resolve_after_bootstrap(
+        interaction_id: str,
+        decision: str,
+        *,
+        runtime: composition.WorkspaceRuntime | None,
+    ) -> InteractionResult:
+        del interaction_id, decision
+        assert runtime is backend._runtime
+        request_entered.set()
+        await queue_request.wait()
+        async with backend._bootstrap_lock:
+            return InteractionResult(accepted=False, status="not_found")
+
+    monkeypatch.setattr(
+        backend,
+        "_resolve_interaction_in_runtime",
+        resolve_after_bootstrap,
+    )
+    await backend._bootstrap_lock.acquire()
+    try:
+        request = asyncio.create_task(
+            backend.resolve_interaction("interaction_missing", "deny")
+        )
+        await asyncio.wait_for(request_entered.wait(), timeout=1)
+        shutdown = asyncio.create_task(application.shutdown())
+        while not backend._foreground.closing:
+            await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        queue_request.set()
+        await asyncio.sleep(0)
+    finally:
+        backend._bootstrap_lock.release()
+
+    resolved = await asyncio.wait_for(request, timeout=1)
+    stopped = await asyncio.wait_for(shutdown, timeout=1)
+    assert resolved.status == "not_found"
+    assert stopped.ok is True
+    assert backend._runtime is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_prevents_cancelled_provider_child_from_publishing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    original = backend._runtime
+    assert original is not None
+    provider_configuration = original.provider_configuration
+    candidate_build_entered = asyncio.Event()
+    release_candidate_build = asyncio.Event()
+    build_runtime = backend._build_workspace_runtime
+
+    async def block_provider_candidate(
+        *,
+        configuration: ProviderConfigurationSnapshot | None = None,
+        selected_thread_id: str | None = None,
+    ) -> composition.WorkspaceRuntime:
+        if configuration is not None:
+            candidate_build_entered.set()
+            await release_candidate_build.wait()
+        return await build_runtime(
+            configuration=configuration,
+            selected_thread_id=selected_thread_id,
+        )
+
+    monkeypatch.setattr(
+        backend,
+        "_build_workspace_runtime",
+        block_provider_candidate,
+    )
+    saving = asyncio.create_task(
+        application.set_provider_credential(
+            ProviderCredentialSetRequest(
+                provider="mem0",
+                action="add",
+                api_key=SecretStr("persisted-during-shutdown"),
+            )
+        )
+    )
+    await asyncio.wait_for(candidate_build_entered.wait(), timeout=1)
+    shutdown = asyncio.create_task(application.shutdown())
+    while not backend._foreground.closing:
+        await asyncio.sleep(0)
+    release_candidate_build.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await saving
+    stopped = await asyncio.wait_for(shutdown, timeout=1)
+    assert stopped.ok is True
+    assert backend._runtime is None
+    assert len(_TrackingMcpManager.instances) == 2
+    assert all(manager.close_calls == 1 for manager in _TrackingMcpManager.instances)
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
+        provider_configuration.require_consistent()
+    assert "runtime_publish" in {
+        stage for stage, _ in fenced.value.recovery_failures
+    }
+
+
+@pytest.mark.asyncio
+async def test_repeated_runtime_rebuilds_release_close_registrations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _TrackingMcpManager.instances = []
+    _TrackingMcpManager.hang_first_close = False
+    monkeypatch.setattr(composition, "McpManager", _TrackingMcpManager)
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+
+    for generation in range(1, 6):
+        await backend._activate()
+        assert len(_TrackingMcpManager.instances) == generation + 1
+        assert all(
+            manager.close_calls == 1
+            for manager in _TrackingMcpManager.instances[:-1]
+        )
+        assert _TrackingMcpManager.instances[-1].close_calls == 0
+        assert len(backend._runtime_retirements) == 0
+        assert len(backend._mcp_close_tasks) == 0
+
+    await application.shutdown()
+    assert all(manager.close_calls == 1 for manager in _TrackingMcpManager.instances)
+    assert len(backend._runtime_retirements) == 0
+    assert len(backend._mcp_close_tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_candidate_resource_tasks_do_not_inherit_request_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    backend._paths.config_file.parent.mkdir(parents=True, exist_ok=True)
+    backend._paths.config_file.write_text(
+        "mcp_servers:\n"
+        "  - id: fake\n"
+        "    command: fake\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+    observed_contexts: list[composition.WorkspaceRuntime | None] = []
+
+    class _ContextCapturingMcpManager(_TrackingMcpManager):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            self._background: asyncio.Task[None] | None = None
+
+        async def start_enabled(self) -> None:
+            started = asyncio.Event()
+
+            async def long_lived_resource() -> None:
+                observed_contexts.append(backend._request_runtime.get())
+                started.set()
+                await asyncio.Event().wait()
+
+            self._background = asyncio.create_task(long_lived_resource())
+            await started.wait()
+
+        async def aclose(self) -> None:
+            await super().aclose()
+            background = self._background
+            if background is None:
+                return
+            background.cancel()
+            with suppress(asyncio.CancelledError):
+                await background
+
+    _ContextCapturingMcpManager.instances = []
+    _ContextCapturingMcpManager.hang_first_close = False
+    monkeypatch.setattr(
+        composition,
+        "McpManager",
+        _ContextCapturingMcpManager,
+    )
+    assert (await application.initialize()).ok is True
+    old_runtime = backend._runtime
+    assert old_runtime is not None
+    old_commands_ref = weakref.ref(old_runtime.commands)
+
+    configured = await application.set_provider_credential(
+        ProviderCredentialSetRequest(
+            provider="mem0",
+            action="delete",
+        )
+    )
+    assert configured.ok is True
+    assert backend._runtime is not old_runtime
+    assert observed_contexts == [None, None]
+    for _ in range(20):
+        if (
+            _ContextCapturingMcpManager.instances[0].close_calls == 1
+            and len(backend._runtime_retirements) == 0
+        ):
+            break
+        await asyncio.sleep(0)
+    assert _ContextCapturingMcpManager.instances[0].close_calls == 1
+    assert len(backend._runtime_retirements) == 0
+    del old_runtime
+
+    for _ in range(10):
+        gc.collect()
+        await asyncio.sleep(0)
+        if old_commands_ref() is None:
+            break
+    assert old_commands_ref() is None
+    await application.shutdown()
+    assert all(
+        manager.close_calls == 1
+        for manager in _ContextCapturingMcpManager.instances
+    )

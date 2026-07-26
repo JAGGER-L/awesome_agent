@@ -328,12 +328,20 @@ After trusted activation, the backend publishes one frozen, slotted
 `WorkspaceRuntime`. It is the request-visible snapshot of resolved
 configuration and the composed Conversation, Turn, command, tool, model
 catalog, context, extension, memory, MCP, and Change Journal services. Each
-request captures that object once and continues through the same service graph;
-provider configuration changes publish a new snapshot with
-`dataclasses.replace`. Foreground ownership, interactions, permission session,
-recovery delivery, and process-lifetime resources remain Application lifecycle
-state rather than fields of the workspace snapshot. Candidate fields and their
-rollback are still private activation machinery and are not request authority.
+request binds that object once and continues through the same service graph,
+including awaited callbacks and foreground-owned child tasks. A replacement is
+assembled entirely
+as a local candidate, validated, checked against foreground Operation ownership,
+and published by one pointer assignment. New requests then bind the new runtime;
+already admitted readers finish against the old runtime before its owned MCP
+resources close. Startup recovery notification happens after publication and
+cannot roll a ready runtime back. Candidate failure or cancellation closes only
+candidate resources and leaves the previously published runtime untouched.
+Provider and credential mutations use the same complete-candidate publication
+path, without repeating startup recovery, and preserve the selected Thread.
+Foreground ownership, interactions, permission session, recovery delivery,
+checkpoint saver, and process-lifetime resources remain Application lifecycle
+state rather than fields of the workspace snapshot.
 
 A shared foreground arbiter grants one atomic lease to Agent Turns, direct
 commands, state-changing commands, credential mutation, non-Tool interaction

@@ -570,9 +570,11 @@ async def test_pending_interaction_wins_operation_admission_after_async_prefligh
     thread_id = created.payload.transition.thread.view.thread.id
 
     backend = cast(Any, application)._backend
+    runtime = backend._runtime
+    assert runtime is not None
     consistency = BlockFirstConsistencyCheck()
     monkeypatch.setattr(
-        backend._provider_configuration,
+        runtime.provider_configuration,
         "ensure_consistent",
         consistency,
     )
@@ -663,7 +665,9 @@ async def test_active_operation_wins_pending_interaction_creation(
         await gateway.started.wait()
     else:
         backend = cast(Any, application)._backend
-        backend._direct._executor = direct_executor
+        runtime = backend._runtime
+        assert runtime is not None
+        runtime.direct._executor = direct_executor
         accepted = _unwrap(
             await application.execute_direct(thread_id, "echo hold-operation")
         )

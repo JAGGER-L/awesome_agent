@@ -296,11 +296,17 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 
 受信激活完成后，backend 会发布一个 frozen、slotted 的 `WorkspaceRuntime`。它是请求可见
 的快照，统一包含已解析配置以及组装后的 Conversation、Turn、command、tool、model
-catalog、context、extension、memory、MCP 和 Change Journal service。每个请求只捕获一次
-该对象，并始终沿同一 service graph 执行；provider 配置变化通过 `dataclasses.replace`
-发布新快照。前台所有权、interaction、permission session、recovery delivery 和进程生命
-周期资源仍属于 Application 生命周期状态，而不是 workspace snapshot 字段。Candidate
-字段及其 rollback 仍只是私有激活机制，不是请求权威。
+catalog、context、extension、memory、MCP 和 Change Journal service。每个请求只绑定一次
+该对象；被 await 的 callback 和由 foreground 持有的子 task 始终沿同一 service graph
+执行。替换时会先完全使用局部变量构建 candidate，完成校验和前台 Operation 所有权检查后，
+再通过一次指针赋值发布。
+随后新请求绑定新 runtime；已准入的 reader 继续使用旧 runtime，直至完成后才关闭旧
+runtime 持有的 MCP 资源。启动 recovery 通知发生在发布之后，失败也不会回滚已 ready 的
+runtime。Candidate 构建失败或取消只关闭候选资源，不影响此前发布的 runtime。Provider 与
+credential mutation 复用同一条完整 candidate 发布路径，但不重复 startup recovery，并保留
+已选择的 Thread。前台所有权、interaction、permission session、recovery delivery、
+checkpoint saver 和进程生命周期资源仍属于 Application 生命周期状态，而不是 workspace
+snapshot 字段。
 
 共享 foreground arbiter 向 Agent Turn、直接命令、改变状态的命令、credential mutation、
 非 Tool interaction resolution 或 shutdown 授予唯一原子 lease。准入发生在 Turn 持久化

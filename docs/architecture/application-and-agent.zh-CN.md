@@ -61,11 +61,22 @@ Registry、Model Catalog、context 与 extension、memory 与 MCP，以及 Chang
 service。Foreground ownership、pending interaction、permission grant、recovery delivery
 和进程 shutdown 等可变生命周期协调仍保留在 Application backend 上。
 
-普通请求会在跨越异步边界前只捕获一次 `_runtime`，不会在同一请求后续通过多个 backend
-字段重新拼装依赖。Provider 配置 mutation 会保留 service graph，并通过
-`dataclasses.replace` 在一次赋值中发布新的配置与 Model Catalog 快照。本阶段的
-activation candidate 字段与逐字段 rollback 仍是私有构造机制；失败的构造结果不会成为
-请求可见 runtime。
+顶层请求会在 Application 持有的 request context 中只绑定一次 `_runtime`。被 await 的
+callback 和由 foreground 持有的子 task 会继承这份不可变快照，不会通过多个 backend 字段
+重新拼装依赖。Detached task 不会取得独立的 runtime reader lease，因此不是受支持的所有权
+边界。发布遵循唯一顺序：
+完全使用局部值构建 candidate，完成校验，在 workspace activation 时校正 startup state，
+确认没有前台 Operation，再通过一次赋值更新 runtime 指针。随后针对已发布 candidate 发送
+recovery 通知；通知失败会被报告，但不会恢复旧 runtime。
+
+发布前已准入的请求继续看到旧 runtime，新请求则看到新 runtime。Application 按 runtime
+持有的 MCP 资源跟踪这些 reader，并在有界关闭前等待它们退出，因此不会在暂停的 reader
+下方关闭资源。Candidate 构建失败或取消只会关闭一次候选 MCP，不改变旧 runtime 或请求
+权威。Candidate 构建会在启动长期资源前清除调用方的 runtime binding，避免新资源 task
+保留旧 generation。Provider 与 credential mutation 会从已提交快照构建完整 candidate，但不重复
+startup reconciliation；它把已选择的 Thread 静默带入 candidate，不触发 selection callback，
+完成原子发布后，等绑定旧 runtime 的 mutation 请求退出再回收旧 runtime。跨 runtime
+generation 复用的 checkpoint saver 始终由 Application `AsyncExitStack` 持有。
 
 ## 前台串行化
 

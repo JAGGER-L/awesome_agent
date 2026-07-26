@@ -466,8 +466,8 @@ async def test_checkpoint_retries_at_most_once_through_application_protocol(
         if event.event_type is EventType.OPERATION_STARTED and event.turn_id == turn.id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     stale = _success_value(
         await dispatcher.dispatch(
@@ -582,8 +582,8 @@ async def test_recovery_queue_presents_one_item_and_rejects_old_response(
         and event.turn_id == first.turn_id
     )
     assert first_operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(first_operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(first_operation_id)
     [_, second] = _recovery_events(sink)
     assert second.payload.interaction_id != first_id
     assert second.turn_id != first.turn_id
@@ -663,8 +663,9 @@ async def test_retry_publishes_resolution_before_presenting_next_recovery(
         sink,
         monkeypatch,
     )
-    assert backend._turns is not None
-    resume_unfinished = backend._turns.resume_unfinished
+    assert backend._runtime is not None
+    turn_coordinator = backend._runtime.turns
+    resume_unfinished = turn_coordinator.resume_unfinished
 
     async def delay_response_until_turn_completion(
         *args: Any,
@@ -675,7 +676,7 @@ async def test_retry_publishes_resolution_before_presenting_next_recovery(
         return accepted
 
     monkeypatch.setattr(
-        backend._turns,
+        turn_coordinator,
         "resume_unfinished",
         delay_response_until_turn_completion,
     )
@@ -702,7 +703,7 @@ async def test_retry_publishes_resolution_before_presenting_next_recovery(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    await backend._turns.wait(operation_id)
+    await turn_coordinator.wait(operation_id)
 
     interaction_events = [
         event
@@ -778,8 +779,8 @@ async def test_retry_claim_survives_response_cancellation_without_replay(
     assert len(operation_events) == 1
     operation_id = operation_events[0].operation_id
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
     stale = await backend.resolve_interaction(
         required.payload.interaction_id,
         "retry",
@@ -827,8 +828,8 @@ async def test_retry_emitter_failure_does_not_replay_claimed_recovery(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     stale = await backend.resolve_interaction(first.payload.interaction_id, "retry")
     assert stale.accepted is False
@@ -885,8 +886,8 @@ async def test_continuous_retry_resolution_failure_blocks_next_until_reinitializ
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     assert sink.resolution_attempt_ids == [
         first.payload.interaction_id,
@@ -959,8 +960,8 @@ async def test_retry_resolution_cancellation_releases_next_without_replay(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     stale = await backend.resolve_interaction(first.payload.interaction_id, "retry")
     assert stale.accepted is False
@@ -1140,8 +1141,8 @@ async def test_next_recovery_required_failure_once_reuses_interaction_id(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     [_, second] = _recovery_events(sink)
     assert sink.required_attempt_ids == [
@@ -1186,8 +1187,8 @@ async def test_continuous_next_required_failure_keeps_same_pending_for_reinitial
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     pending = backend._interactions.pending
     assert pending is not None

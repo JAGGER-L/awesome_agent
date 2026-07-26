@@ -27,6 +27,7 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetStatus,
 )
 from awesome_agent.application.provider_configuration import (
+    ProviderConfigurationPublication,
     ProviderConfigurationRecoveryRequired,
     ProviderConfigurationService,
     reconcile_provider_credential_transaction,
@@ -113,9 +114,11 @@ def _service(
     if runtime is not None:
         runtime.append(load_configuration())
 
-    def apply_configuration(
+    async def apply_configuration(
         snapshot: tuple[LoadedConfigSources, ApplicationConfig],
+        publication: ProviderConfigurationPublication,
     ) -> None:
+        publication.require_active()
         if runtime is not None:
             runtime[0] = snapshot
 
@@ -224,6 +227,13 @@ def _service_with_secret_store(
         loaded = sources()
         return loaded, resolve_application_config(loaded)
 
+    async def apply_configuration(
+        _: tuple[LoadedConfigSources, ApplicationConfig],
+        publication: ProviderConfigurationPublication,
+    ) -> None:
+        publication.require_active()
+        return None
+
     return ProviderConfigurationService(
         conversation=ConversationService(
             store=SQLiteConversationRepositories(tmp_path / "application.db")
@@ -233,7 +243,7 @@ def _service_with_secret_store(
         validator=FakeValidator(CredentialValidationStatus.VALID),
         sources=sources,
         load_configuration=load_configuration,
-        apply_configuration=lambda _: None,
+        apply_configuration=apply_configuration,
         model_transaction_journal=ProviderModelTransactionJournal(
             paths.provider_model_transaction_file
         ),
@@ -418,7 +428,15 @@ async def test_abandoned_credential_worker_fences_late_commit_until_restart(
         ),
     )
     applied: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
-    monkeypatch.setattr(service, "_apply_configuration", applied.append)
+
+    async def record_configuration(
+        snapshot: tuple[LoadedConfigSources, ApplicationConfig],
+        publication: ProviderConfigurationPublication,
+    ) -> None:
+        publication.require_active()
+        applied.append(snapshot)
+
+    monkeypatch.setattr(service, "_apply_configuration", record_configuration)
 
     async def short_cleanup(
         call: Callable[[], object],
@@ -919,6 +937,166 @@ async def test_cancelled_auth_lock_wait_finishes_transaction_without_blocking_lo
         is CredentialSource.ENVIRONMENT
     )
     assert runtime[0] is not initial_runtime
+
+
+@pytest.mark.asyncio
+async def test_cancelled_runtime_publication_finishes_before_cancellation_returns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, _, _ = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        runtime=runtime,
+    )
+    initial_runtime = runtime[0]
+    publication_entered = asyncio.Event()
+    release_publication = asyncio.Event()
+
+    async def blocking_publication(
+        snapshot: tuple[LoadedConfigSources, ApplicationConfig],
+        publication: ProviderConfigurationPublication,
+    ) -> None:
+        publication_entered.set()
+        await release_publication.wait()
+        publication.require_active()
+        runtime[0] = snapshot
+
+    monkeypatch.setattr(service, "_apply_configuration", blocking_publication)
+    operation = asyncio.create_task(
+        service.set_credential(
+            ProviderCredentialSetRequest(
+                provider="mem0",
+                action="add",
+                api_key=SecretStr("committed-secret"),
+            )
+        )
+    )
+    await asyncio.wait_for(publication_entered.wait(), timeout=1)
+    operation.cancel("configuration-shutdown")
+    await asyncio.sleep(0)
+    assert operation.done() is False
+
+    release_publication.set()
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await operation
+
+    assert cancelled.value.args == ("configuration-shutdown",)
+    assert runtime[0] is not initial_runtime
+    assert runtime[0][0].provider_credentials.mem0.selected_source is (
+        CredentialSource.AWESOME
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_publication_failure_fences_persisted_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, _, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        runtime=runtime,
+    )
+    initial_runtime = runtime[0]
+    primary = RuntimeError("runtime publication failed")
+
+    async def fail_publication(
+        _: tuple[LoadedConfigSources, ApplicationConfig],
+        publication: ProviderConfigurationPublication,
+    ) -> None:
+        publication.require_active()
+        raise primary
+
+    monkeypatch.setattr(service, "_apply_configuration", fail_publication)
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as failed:
+        await service.set_credential(
+            ProviderCredentialSetRequest(
+                provider="mem0",
+                action="add",
+                api_key=SecretStr("persisted-secret"),
+            )
+        )
+
+    assert failed.value.primary_error is primary
+    assert failed.value.recovery_failures == (("runtime_publish", primary),)
+    assert sources().provider_credentials.mem0.selected_source is (
+        CredentialSource.AWESOME
+    )
+    assert runtime[0] is initial_runtime
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
+        await service.ensure_consistent()
+    assert fenced.value is failed.value
+
+
+@pytest.mark.asyncio
+async def test_runtime_publication_timeout_revokes_stubborn_late_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _ = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+    )
+    publication_entered = asyncio.Event()
+    child_cancelled = asyncio.Event()
+    allow_late_completion = asyncio.Event()
+    child_finished = asyncio.Event()
+    applied: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+
+    async def stubborn_publication(
+        snapshot: tuple[LoadedConfigSources, ApplicationConfig],
+        publication: ProviderConfigurationPublication,
+    ) -> None:
+        publication_entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            child_cancelled.set()
+        try:
+            await allow_late_completion.wait()
+            publication.require_active()
+            applied.append(snapshot)
+        finally:
+            child_finished.set()
+
+    monkeypatch.setattr(service, "_apply_configuration", stubborn_publication)
+    monkeypatch.setattr(
+        provider_configuration,
+        "_RUNTIME_PUBLICATION_CLEANUP_TIMEOUT_SECONDS",
+        0.01,
+    )
+    operation = asyncio.create_task(
+        service.set_credential(
+            ProviderCredentialSetRequest(
+                provider="mem0",
+                action="add",
+                api_key=SecretStr("persisted-secret"),
+            )
+        )
+    )
+    await asyncio.wait_for(publication_entered.wait(), timeout=1)
+    operation.cancel("primary-cancellation")
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await asyncio.wait_for(operation, timeout=1)
+
+    assert cancelled.value.args == ("primary-cancellation",)
+    assert child_cancelled.is_set()
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
+        service.require_consistent()
+    assert {
+        stage for stage, _ in fenced.value.recovery_failures
+    } == {"runtime_publish_abandoned"}
+
+    allow_late_completion.set()
+    await asyncio.wait_for(child_finished.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert applied == []
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as still_fenced:
+        service.require_consistent()
+    assert still_fenced.value is fenced.value
 
 
 @pytest.mark.asyncio

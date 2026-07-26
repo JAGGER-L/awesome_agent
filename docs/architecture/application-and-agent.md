@@ -67,13 +67,30 @@ Mutable lifecycle coordination such as foreground ownership, pending
 interactions, permission grants, recovery delivery, and process shutdown stays
 on the Application backend.
 
-A normal request captures `_runtime` once before it crosses an asynchronous
-boundary. It does not assemble dependencies by reading independent backend
-fields later in the same request. Provider configuration mutation preserves
-the service graph and uses `dataclasses.replace` to publish a new configuration
-and Model Catalog snapshot in one assignment. Activation candidate fields and
-field-by-field rollback remain private construction machinery at this stage;
-failed construction never becomes the request-visible runtime.
+A top-level request binds `_runtime` once in an Application-owned request
+context. Awaited callbacks and foreground-owned child tasks inherit that
+immutable snapshot instead of reassembling dependencies from independent
+backend fields. Detached tasks do not acquire an independent runtime reader
+lease and are not a supported ownership boundary. Publication follows
+one sequence: build the complete candidate from local values, validate it,
+reconcile startup state when this is an activation, confirm there is no
+foreground Operation, and assign the runtime pointer once. Recovery notification
+then runs against the published candidate; notification failure is reported but
+does not restore the old runtime.
+
+Requests admitted before publication continue to see the old runtime while new
+requests see the new one. Application tracks those readers against the runtime's
+owned MCP resource and drains them before a bounded close, so publication never
+closes a resource beneath a paused reader. Candidate construction failure or
+cancellation closes the candidate MCP exactly once and leaves the old runtime
+and request authority unchanged. Candidate construction clears the caller's
+runtime binding before it starts long-lived resources, so new resource tasks do
+not retain the previous generation. Provider and credential mutations build a
+complete candidate from the committed snapshot without repeating startup
+reconciliation, carry the selected Thread into that candidate without firing a
+selection callback, publish it atomically, and retire the old runtime only after
+the bound mutation request exits. The checkpoint saver remains owned by the
+Application `AsyncExitStack` across runtime generations.
 
 ## Foreground serialization
 

@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "e06d82a0dea4186dbce2aedcc812bb53b3559031b76c85e8406e3ed7b239f8da",
-      "chinese_sha256": "4b59e1bcbbd01f892c7479199e11e2c7c81f02af4395a3a6741bdb9b2724ad3a"
+      "english_sha256": "86a8a3c1473c5a2ce2b8cbdaed3a5f378325c48f0e95551f77d531adeb79d16f",
+      "chinese_sha256": "5d3ef175827f5ab07481662f377d21c8cf8a826eb1912def6cc79ed0d4509e5f"
     },
     {
       "english_source": "README.md",
@@ -30,8 +30,8 @@
     {
       "english_source": "docs/architecture/application-and-agent.md",
       "chinese_source": "docs/architecture/application-and-agent.zh-CN.md",
-      "english_sha256": "57539f6bb7d2c4b51f4dfb5826fc9950fd5b9c7689fe3fcdbdbee32ff81617a9",
-      "chinese_sha256": "3522179026ee4887a6d44ac99318bfa3041a177f28bf6714fa14a5e060481f94"
+      "english_sha256": "e0219815a269213525ed96b58e74fb6f10cf42d619993b8580d6f4e8a7935188",
+      "chinese_sha256": "91818ac8a6d9d84cc9c25e7016b172ca459417a5f9dcaaf8b07d9410102b1051"
     },
     {
       "english_source": "docs/architecture/context-model-and-extensions.md",
