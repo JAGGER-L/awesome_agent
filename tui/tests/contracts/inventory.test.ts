@@ -151,6 +151,9 @@ describe("strict wire boundaries", () => {
 
   it("rejects unsafe and boolean request IDs", () => {
     expect(requestIdSchema.safeParse(true).success).toBe(false);
+    expect(requestIdSchema.safeParse("\ud800").success).toBe(false);
+    expect(requestIdSchema.safeParse("\udc00").success).toBe(false);
+    expect(requestIdSchema.safeParse("😀").success).toBe(true);
     expect(requestIdSchema.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(
       false,
     );

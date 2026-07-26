@@ -161,7 +161,7 @@ class Facade:
         return ApplicationResult.success(ShutdownResult())
 
 
-def test_dispatcher_exposes_exact_protocol_v1_method_table() -> None:
+def test_dispatcher_exposes_exact_protocol_v3_method_table() -> None:
     assert set(JsonRpcDispatcher(Facade()).methods) == {
         "initialize",
         "application.getState",
@@ -244,6 +244,39 @@ async def test_closed_method_table_dispatches_typed_params(
     assert "result" in response
     assert response["result"]["ok"] is (method != "command.execute")
     assert facade.calls[0][0] == call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_id",
+    [
+        "",
+        "r" * 129,
+        "\ud800",
+        9_007_199_254_740_992,
+        -9_007_199_254_740_992,
+    ],
+)
+async def test_request_ids_match_the_tui_interoperability_contract(
+    request_id: object,
+) -> None:
+    facade = Facade()
+
+    response = await JsonRpcDispatcher(facade).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "application.getState",
+            "params": {},
+        }
+    )
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    }
+    assert facade.calls == []
 
 
 @pytest.mark.asyncio

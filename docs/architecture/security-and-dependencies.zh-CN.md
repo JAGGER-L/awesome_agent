@@ -161,13 +161,15 @@ store 或 child-process 访问。有意 daemonize 的 POSIX 进程可以离开�
 工作区指令、Skills、Memory、MCP description/result、显式文件和 provider text 都是给
 模型的不受信输入。它们不能改变 capability 决策或绕过 Tool Executor。
 
-Workspace Skill discovery/load 会在不跟随链接的情况下重新校验每个路径身份。MCP
-Manager 会发布一个完整、已校验、有界且只含本地引用的 catalog，之后 Application 以
-原子方式替换对应 Registry namespace。这两个提交不是同一事务；Manager `CONNECTED`
-不能证明 namespace 已安装，超过 128 字符 `/tools` payload 上限（或 200 字符 model/event
-上限）的 namespaced tool name 会暴露当前下游缺口。参数在审批和远程 I/O 前经过 schema
-校验。绑定 generation 的 handler 不能通过旧 validator 调用更新后的 catalog。Timeout
-或连接丢失属于不确定结果，不会透明重放。
+Workspace Skill discovery/load 会在不跟随链接的情况下重新校验每个路径身份。在一个 server
+lock 下，MCP Manager 会编译一个完整、已校验、有界、只含本地引用并包含最终 namespaced
+name 的候选项。共享 Registry 会先校验完整聚合快照（128 个工具，以及 1 MiB 规范化模型
+定义），再以原子方式替换该服务器 namespace。随后 Manager 在中间没有 `await` 的情况下
+发布 generation、client、catalog 和 `CONNECTED`；因此 connected 也能证明 namespace 已
+安装。失败会关闭候选 client、使 generation 失效、移除该 namespace，并且只暴露固定、
+脱敏的诊断。参数在审批和远程 I/O 前经过 schema 校验。绑定 generation 的 handler 不能
+通过旧 validator 调用更新后的 catalog。Timeout 或连接丢失属于不确定结果，不会透明
+重放。每次 MCP 调用仍然需要单次审批，即使处于 Full access 也是如此。
 
 一个无效 Skill 或 MCP server 会被隔离为诊断，不会扩大其他扩展的权限。
 

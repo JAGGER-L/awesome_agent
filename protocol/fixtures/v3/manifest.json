@@ -52,13 +52,13 @@
   ],
   "files": {
     "command-results.invalid.json": "30d84fdbe274597e3f2b25eca8ee3411520fe347692c8e0a93d8f4c026f64634",
-    "command-results.valid.json": "02e6edd732327872dd56ee219eb9fd4e1548915c0a6377b9c11c4696e6b64ec1",
+    "command-results.valid.json": "69421a0e81ff272e2a90e0b269f300d51e20bb302cee1d5917968d5654669441",
     "commands.json": "f1c3ef46e58fef972715d528d5c1d31ab2e79b590323b8fb17a956dd8dabd196",
-    "events.invalid.json": "8fc0665f310bedc08ed565e64b2bca9f91c114a5d8435cf6cc98bee4724948e3",
-    "events.valid.json": "3ab89b8fc56f608c0ef1be9b2d2975359fde5172fa809ee27424f66c94c6ef32",
-    "methods.invalid.json": "56f8ea9632f99aa596152b902a2e3525ddf90f7bd9308299d38dec374ac5f227",
-    "methods.valid.json": "79ac80a1d3d3ceb0409a7dfd951e359eed9bf555e1e75b3d610799fdc93d924f",
-    "results.failures.json": "94a1460fd6f8b5cd7cfd3ced848f55860538633f1cb0757f4bf9614adafc2a7e"
+    "events.invalid.json": "5c1fce6dd2c4b2e6aa24f651231437a6d2e00bed711c2527a729f5ec8c917de0",
+    "events.valid.json": "18875661a2f38c83bc7638e2003c5cf1fcb41c1c07e386ade7dc53005d8f08fb",
+    "methods.invalid.json": "c0315503389f11d98ded692077057892dd067c60a24275a7e157a598ae898e04",
+    "methods.valid.json": "979df8945f5267e6cd62f161ad147ab8a8a7eae35acd22707ae0984ace06f058",
+    "results.failures.json": "39bab801b9896e10cf71a036312f71ebc7a2484456aa4612557efd9deb3355af"
   },
   "fixture_version": 1,
   "methods": [
@@ -74,6 +74,6 @@
     "operation.cancel",
     "shutdown"
   ],
-  "product_version": "1.2.1",
+  "product_version": "1.3.0",
   "protocol_version": 3
 }

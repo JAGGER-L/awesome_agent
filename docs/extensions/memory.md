@@ -52,6 +52,13 @@ Enabling or disabling either backend is a state mutation and is rejected while
 a foreground operation is active. The selection is written to user
 configuration and takes effect in the current session.
 
+The local switch treats the configuration value, the in-memory service flag,
+and all four Memory tool registrations as one state transition. Before writing
+configuration, Core validates the complete candidate tool set against the
+aggregate 128-tool and 1 MiB catalog bounds. If it cannot fit, the command
+returns `tool_registry_limit` and leaves configuration, service state, and the
+existing Registry unchanged; it never exposes a partial Memory tool set.
+
 Inspect and mutate local entries with:
 
 ```text
@@ -155,14 +162,14 @@ deduplication input, so equivalent handwritten and cloud text can both appear.
 Local and cloud failures deliberately differ. When local Memory is enabled, an
 invalid or unreadable `USER.md` or `MEMORY.md` propagates from snapshot capture
 and fails Turn preparation. Awesome does not silently continue with only one
-local scope because that would hide which durable facts were used. There is a
-current lifecycle gap at this exact point: the Turn record has already been
-created, but `MemoryDocumentInvalid` is not terminalized by the Turn coordinator.
-The Operation reports failure while the Turn may remain `in_progress` until
-startup recovery reconciles it. Repair or disable local Memory, then restart;
-do not treat the failed Operation as proof that no recovery record remains.
-Mem0 search or initialization failures instead become bounded diagnostics and
-the Turn continues without the cloud source.
+local scope because that would hide which durable facts were used. The
+coordinator terminalizes the already-created Turn as failed, emits one failed
+Operation outcome, and attempts to remove its checkpoint. A cleanup failure is
+logged without replacing the primary error; startup reconciliation retries
+removal of any checkpoint left for the terminal Turn. A later Turn can start
+normally after the document is repaired or local Memory is disabled. Mem0 search or
+initialization failures instead become bounded diagnostics and the Turn
+continues without the cloud source.
 
 ```text
 USER.md -----\

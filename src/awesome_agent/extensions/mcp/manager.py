@@ -9,11 +9,14 @@ from typing import Protocol
 
 from mcp.types import CallToolResult, Tool
 
+from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.extensions.mcp.adapter import McpToolAdapter
 from awesome_agent.extensions.mcp.catalog import (
     McpCatalog,
     McpCatalogError,
     compile_mcp_catalog,
 )
+from awesome_agent.extensions.mcp.errors import McpCallUncertain, McpUnavailable
 from awesome_agent.extensions.mcp.models import (
     McpServerConfig,
     McpSource,
@@ -69,14 +72,6 @@ class McpServerStatus:
         return self.state is McpConnectionState.CONNECTED
 
 
-class McpUnavailable(RuntimeError):
-    pass
-
-
-class McpCallUncertain(RuntimeError):
-    """The external call may have executed before the connection was lost."""
-
-
 class McpManager:
     def __init__(
         self,
@@ -85,6 +80,7 @@ class McpManager:
         workspace_key: str,
         workspace_trusted: bool,
         enablements: McpEnablementReader,
+        registry: ToolRegistry,
         client_factory: Callable[[McpServerConfig], McpClient] = McpStdioClient,
         call_timeout_seconds: float = _MCP_CALL_TIMEOUT_SECONDS,
         catalog_timeout_seconds: float = _MCP_CATALOG_TIMEOUT_SECONDS,
@@ -99,6 +95,7 @@ class McpManager:
         self._workspace_key = workspace_key
         self._workspace_trusted = workspace_trusted
         self._enablements = enablements
+        self._registry = registry
         self._client_factory = client_factory
         self._call_timeout_seconds = call_timeout_seconds
         self._catalog_timeout_seconds = catalog_timeout_seconds
@@ -108,7 +105,6 @@ class McpManager:
         self._generations = {server_id: 0 for server_id in self._configs}
         self._statuses: dict[str, McpServerStatus] = {}
         self._locks = {server_id: asyncio.Lock() for server_id in self._configs}
-        self._catalog_invalidators: dict[str, Callable[[], None]] = {}
 
     def configs(self) -> tuple[McpServerConfig, ...]:
         return tuple(self._configs.values())
@@ -138,14 +134,6 @@ class McpManager:
             raise McpUnavailable(
                 f"MCP server has no active catalog: {server_id}"
             ) from error
-
-    def bind_catalog_invalidator(
-        self,
-        server_id: str,
-        invalidator: Callable[[], None],
-    ) -> None:
-        self._config(server_id)
-        self._catalog_invalidators[server_id] = invalidator
 
     async def start_enabled(self) -> tuple[McpServerStatus, ...]:
         await asyncio.gather(
@@ -275,7 +263,11 @@ class McpManager:
         client = self._client_factory(config)
         generation = self._generations[config.id] + 1
         catalog_task = asyncio.create_task(
-            self._load_catalog(client, generation=generation),
+            self._load_catalog(
+                client,
+                server_id=config.id,
+                generation=generation,
+            ),
             name=f"mcp-{config.id}-catalog",
         )
         self._catalog_tasks[config.id] = catalog_task
@@ -336,13 +328,26 @@ class McpManager:
                 "MCP server connection failed.",
             )
             return
-        self._generations[config.id] = generation
-        self._clients[config.id] = client
-        self._catalogs[config.id] = catalog
-        self._statuses[config.id] = McpServerStatus(
-            config.id,
-            McpConnectionState.CONNECTED,
-        )
+        try:
+            registered = McpToolAdapter(self, config.id).registered_tools(catalog)
+            self._registry.replace_namespace(f"mcp.{config.id}", registered)
+            self._generations[config.id] = generation
+            self._clients[config.id] = client
+            self._catalogs[config.id] = catalog
+            self._statuses[config.id] = McpServerStatus(
+                config.id,
+                McpConnectionState.CONNECTED,
+            )
+        except Exception:
+            self._clients.pop(config.id, None)
+            self._invalidate_catalog(config.id)
+            self._statuses[config.id] = McpServerStatus(
+                config.id,
+                McpConnectionState.ERROR,
+                "MCP server catalog could not be published.",
+            )
+            await self._close_client(client)
+            return
 
     def _catalog_task_completed(
         self,
@@ -358,11 +363,16 @@ class McpManager:
     async def _load_catalog(
         client: McpClient,
         *,
+        server_id: str,
         generation: int,
     ) -> McpCatalog:
         await client.connect()
         tools = await client.list_tools()
-        return compile_mcp_catalog(tools, generation=generation)
+        return compile_mcp_catalog(
+            tools,
+            server_id=server_id,
+            generation=generation,
+        )
 
     async def _invalidate_call_locked(self, server_id: str, detail: str) -> None:
         client = self._clients.pop(server_id, None)
@@ -382,12 +392,9 @@ class McpManager:
             await self._close_client(client)
 
     def _invalidate_catalog(self, server_id: str) -> None:
-        existed = self._catalogs.pop(server_id, None) is not None
+        self._catalogs.pop(server_id, None)
         self._generations[server_id] += 1
-        invalidator = self._catalog_invalidators.get(server_id)
-        if existed and invalidator is not None:
-            with suppress(Exception):
-                invalidator()
+        self._registry.remove_namespace(f"mcp.{server_id}")
 
     @staticmethod
     async def _close_client(client: McpClient) -> None:

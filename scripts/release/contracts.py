@@ -128,6 +128,10 @@ def _parse_metadata(content: bytes, expected_version: str) -> None:
         raise ReleaseContractError("wheel project identity is invalid")
     if versions != [expected_version]:
         raise ReleaseContractError("wheel metadata version is invalid")
+    if metadata.get_all("License-Expression", []) != ["MIT"]:
+        raise ReleaseContractError("wheel license expression is invalid")
+    if metadata.get_all("License-File", []) != ["LICENSE"]:
+        raise ReleaseContractError("wheel license declaration is invalid")
 
 
 def _parse_wheel_metadata(content: bytes) -> None:
@@ -193,11 +197,16 @@ def _validate_record(
             raise ReleaseContractError("wheel RECORD digest is invalid")
 
 
-def validate_release_wheel(path: Path, expected_version: str) -> None:
+def validate_release_wheel(
+    path: Path,
+    expected_version: str,
+    expected_license: bytes,
+) -> None:
     expected_name = f"awesome_agent-{expected_version}-py3-none-any.whl"
     if not path.is_file() or path.name != expected_name:
         raise ReleaseContractError("wheel filename is invalid")
     dist_info = f"awesome_agent-{expected_version}.dist-info"
+    license_path = f"{dist_info}/licenses/LICENSE"
     required = {
         "awesome_agent/__init__.py",
         "awesome_agent/paths.py",
@@ -208,6 +217,7 @@ def validate_release_wheel(path: Path, expected_version: str) -> None:
         f"{dist_info}/RECORD",
         f"{dist_info}/WHEEL",
         f"{dist_info}/entry_points.txt",
+        license_path,
     }
     try:
         with ZipFile(path) as archive:
@@ -237,6 +247,8 @@ def validate_release_wheel(path: Path, expected_version: str) -> None:
             _parse_metadata(archive.read(f"{dist_info}/METADATA"), expected_version)
             _parse_wheel_metadata(archive.read(f"{dist_info}/WHEEL"))
             _parse_entry_points(archive.read(f"{dist_info}/entry_points.txt"))
+            if archive.read(license_path) != expected_license:
+                raise ReleaseContractError("wheel license content is invalid")
             _validate_record(archive, names, f"{dist_info}/RECORD")
     except ReleaseContractError:
         raise

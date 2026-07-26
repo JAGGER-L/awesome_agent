@@ -91,6 +91,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
             workspace_key=workspace.key,
             workspace_trusted=False,
             enablements=SQLiteMcpEnablementStore(tmp_path / "untrusted.db"),
+            registry=ToolRegistry(),
         ).configs()
         == ()
     )
@@ -107,14 +108,15 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     conversation = ConversationService(store=repositories)
     thread = conversation.create_thread(workspace.key)
     enablements = SQLiteMcpEnablementStore(database)
+    registry = ToolRegistry()
+    register_read_tools(registry)
     manager = McpManager(
         configs=(fixture_config, broken_config),
         workspace_key=workspace.key,
         workspace_trusted=True,
         enablements=enablements,
+        registry=registry,
     )
-    registry = ToolRegistry()
-    register_read_tools(registry)
 
     extensions = ApplicationExtensionService(
         conversation=conversation,
@@ -223,14 +225,15 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     )
     await manager.aclose()
 
+    restarted_registry = ToolRegistry()
+    register_read_tools(restarted_registry)
     restarted = McpManager(
         configs=(fixture_config,),
         workspace_key=workspace.key,
         workspace_trusted=True,
         enablements=enablements,
+        registry=restarted_registry,
     )
-    restarted_registry = ToolRegistry()
-    register_read_tools(restarted_registry)
     restarted_extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
@@ -264,14 +267,15 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     await restarted.aclose()
 
     changed = fixture_config.model_copy(update={"args": (*fixture_config.args, "x")})
+    invalidated_registry = ToolRegistry()
+    register_read_tools(invalidated_registry)
     invalidated = McpManager(
         configs=(changed,),
         workspace_key=workspace.key,
         workspace_trusted=True,
         enablements=enablements,
+        registry=invalidated_registry,
     )
-    invalidated_registry = ToolRegistry()
-    register_read_tools(invalidated_registry)
     invalidated_extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
@@ -303,6 +307,7 @@ async def test_skills_select_mode_without_submitting_a_hidden_turn(
     database = tmp_path / "application.db"
     conversation = ConversationService(store=SQLiteConversationRepositories(database))
     thread = conversation.create_thread("workspace")
+    registry = ToolRegistry()
     service = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
@@ -311,10 +316,11 @@ async def test_skills_select_mode_without_submitting_a_hidden_turn(
             workspace_key="workspace",
             workspace_trusted=True,
             enablements=SQLiteMcpEnablementStore(database),
+            registry=registry,
         ),
         enablements=SQLiteMcpEnablementStore(database),
         workspace_key="workspace",
-        registry=ToolRegistry(),
+        registry=registry,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
     )

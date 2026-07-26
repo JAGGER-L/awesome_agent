@@ -139,9 +139,11 @@ class _FixtureFacade:
         self, request: ProviderCredentialSetRequest
     ) -> ApplicationResult[ProviderCredentialSetResult]:
         del request
-        return ApplicationResult[ProviderCredentialSetResult].model_validate(
-            self._result
-        )
+        payload = self._result.model_dump(mode="json", exclude_none=True)
+        value = payload.get("value")
+        if payload.get("ok") is True and isinstance(value, dict):
+            payload["value"] = {"source": None, **value}
+        return ApplicationResult[ProviderCredentialSetResult].model_validate(payload)
 
     async def respond_interaction(
         self, interaction_id: str, decision: str
@@ -190,6 +192,32 @@ async def test_every_valid_method_fixture_round_trips_through_dispatcher() -> No
         assert len(encoded) < 1_048_576
 
 
+def test_provider_credential_fixtures_freeze_source_omission_contract() -> None:
+    credential_cases = {
+        case["name"]: case
+        for case in _cases("methods.valid.json")
+        if case["method"] == "provider.credential.set"
+    }
+
+    assert set(credential_cases) == {
+        "provider.credential.set.configured",
+        "provider.credential.set.invalid",
+        "provider.credential.set.confirm_unverified",
+        "provider.credential.set.deleted",
+    }
+    configured = credential_cases["provider.credential.set.configured"]["result"][
+        "value"
+    ]
+    assert configured["source"] == "awesome"
+    for name in {
+        "provider.credential.set.invalid",
+        "provider.credential.set.confirm_unverified",
+        "provider.credential.set.deleted",
+    }:
+        value = credential_cases[name]["result"]["value"]
+        assert "source" not in value
+
+
 def test_thread_read_fixture_contains_discriminated_change_deltas() -> None:
     case = next(
         item for item in _cases("methods.valid.json") if item["name"] == "thread.read"
@@ -212,7 +240,7 @@ async def test_every_invalid_method_fixture_fails_at_declared_boundary() -> None
         response = await dispatcher.dispatch(
             {
                 "jsonrpc": "2.0",
-                "id": index,
+                "id": case.get("request_id", index),
                 "method": case["method"],
                 "params": case["params"],
             }

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -9,6 +13,7 @@ from awesome_agent.config import (
     config_source_paths,
     load_config_sources,
 )
+from awesome_agent.config.resource_lock import exclusive_resource_lock
 from awesome_agent.paths import AwesomePaths
 
 
@@ -222,3 +227,79 @@ def test_workspace_dotenv_is_never_loaded(tmp_path: Path) -> None:
     )
 
     assert loaded.secrets.mem0_api_key is None
+
+
+def test_user_dotenv_hardlink_is_rejected_without_reading_external_secret(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    external = tmp_path / "external-sentinel"
+    external.write_text("DEEPSEEK_API_KEY=external-secret\n", encoding="utf-8")
+    os.link(external, home / ".env")
+
+    with pytest.raises(ConfigurationInvalid) as raised:
+        load_config_sources(
+            paths=AwesomePaths.from_home(home),
+            workspace=tmp_path / "workspace",
+            workspace_trusted=False,
+            environ={},
+        )
+
+    assert raised.value.code == "provider_secret_file_unsafe"
+    assert "external-secret" not in str(raised.value)
+    assert external.read_text(encoding="utf-8") == (
+        "DEEPSEEK_API_KEY=external-secret\n"
+    )
+
+
+def test_user_dotenv_with_nul_is_rejected_before_parsing(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".env").write_bytes(b"MEM0_API_KEY=must-not-load\0suffix\n")
+
+    with pytest.raises(ConfigurationInvalid) as raised:
+        load_config_sources(
+            paths=AwesomePaths.from_home(home),
+            workspace=tmp_path / "workspace",
+            workspace_trusted=False,
+            environ={},
+        )
+
+    assert raised.value.code == "provider_secret_file_unsafe"
+    assert "must-not-load" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_config_loader_does_not_wait_on_dotenv_mutation_lock(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    env_file = home / ".env"
+    env_file.write_text("DEEPSEEK_API_KEY=managed-secret\n", encoding="utf-8")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold_mutation_lock() -> None:
+        with exclusive_resource_lock(env_file):
+            entered.set()
+            assert release.wait(1.0)
+
+    holder = threading.Thread(target=hold_mutation_lock, daemon=True)
+    holder.start()
+    assert await asyncio.to_thread(entered.wait, 1.0)
+    started = time.monotonic()
+    try:
+        loaded = load_config_sources(
+            paths=AwesomePaths.from_home(home),
+            workspace=tmp_path / "workspace",
+            workspace_trusted=False,
+            environ={},
+        )
+    finally:
+        release.set()
+        await asyncio.to_thread(holder.join, 1.0)
+
+    assert time.monotonic() - started < 0.2
+    assert loaded.provider_credentials.deepseek.awesome_configured is True

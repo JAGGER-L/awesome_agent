@@ -45,29 +45,11 @@ future features and not guarantees that the limitation is desirable:
   [tool contract](reference/built-in-tools.md#common-request-and-result-contract),
   [configuration](reference/configuration.md), and
   [Skills](extensions/skills.md#create-a-skill).
-- MCP Manager publication and Registry replacement are two all-or-none commits,
-  not one transaction. The compiler does not yet reject a complete namespaced
-  tool name that exceeds the 128-character `/tools` payload limit or the
-  200-character model/event limit. See
-  [MCP publication](extensions/mcp.md#catalog-and-registry-publication).
-- Invalid enabled local Memory can fail after a Turn record is created but
-  before the coordinator terminalizes it, leaving startup recovery to reconcile
-  that Turn. See [Memory context](extensions/memory.md#what-reaches-the-model).
 - Skill modes `auto` and `off` currently have the same observable behavior; no
   automatic selector exists. See [Skill selection](extensions/skills.md#select-and-load-skills).
-- Core and TUI do not yet enforce identical JSON-RPC request-ID bounds, and
-  `direct.execute` accepts a 30,000-character transport field before delegating
+- `direct.execute` accepts a 30,000-character transport field before delegating
   to an 8,000-character tool field. See the
-  [Protocol request contract](reference/protocol.md#json-rpc-request-shape) and
   [method table](reference/protocol.md#method-catalog).
-- Core bounds request lines but does not preflight its own serialized output
-  against the TUI's 1 MiB frame limit. A large `thread.read` page or unpaginated
-  `/tools` result can therefore make the TUI close an otherwise valid channel.
-  See [protocol framing](reference/protocol.md#process-and-transport).
-- A Direct Operation does not preserve its primary cancellation/failure if
-  ChangeSet finalization itself raises; cancellation can surface as
-  `operation.failed`. See the
-  [Direct lifecycle](architecture/request-lifecycles.md#direct-shell-command).
 - `/auth mem0` stores locally valid input without remotely verifying the Mem0
   credential; failure appears on the first cloud operation. See
   [Memory configuration](extensions/memory.md#configuration).

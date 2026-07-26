@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,21 +10,18 @@ import yaml
 
 from awesome_agent.config.loader import read_user_config_document
 from awesome_agent.config.models import UserConfigDocument
-
-_LOCKS_GUARD = threading.Lock()
-_LOCKS: dict[Path, threading.RLock] = {}
+from awesome_agent.config.resource_lock import exclusive_resource_lock
 
 
 class UserConfigWriter:
     def __init__(self, path: Path) -> None:
         self._path = path.expanduser()
-        self._lock = _lock_for(self._path)
 
     def update(
         self,
         transform: Callable[[UserConfigDocument], UserConfigDocument],
     ) -> UserConfigDocument:
-        with self._lock:
+        with self.transaction():
             current = read_user_config_document(self._path)
             candidate = transform(current)
             if not isinstance(candidate, UserConfigDocument):
@@ -34,6 +31,25 @@ class UserConfigWriter:
             )
             self._write(updated)
             return updated
+
+    def read(self) -> UserConfigDocument:
+        with self.transaction():
+            return read_user_config_document(self._path)
+
+    def replace(self, document: UserConfigDocument) -> UserConfigDocument:
+        with self.transaction():
+            restored = UserConfigDocument.model_validate(
+                document.model_dump(mode="python")
+            )
+            self._write(restored)
+            return restored
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Hold the user-config lock across one related user-state transaction."""
+
+        with exclusive_resource_lock(self._path):
+            yield
 
     def _write(self, document: UserConfigDocument) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,13 +67,3 @@ class UserConfigWriter:
             os.replace(temporary, self._path)
         finally:
             temporary.unlink(missing_ok=True)
-
-
-def _lock_for(path: Path) -> threading.RLock:
-    key = path.absolute()
-    with _LOCKS_GUARD:
-        lock = _LOCKS.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _LOCKS[key] = lock
-        return lock

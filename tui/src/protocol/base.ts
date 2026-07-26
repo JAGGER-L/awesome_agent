@@ -32,6 +32,20 @@ export const safeIntegerSchema = z
   .min(Number.MIN_SAFE_INTEGER)
   .max(Number.MAX_SAFE_INTEGER);
 
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export const permissionModeSchema = z.enum([
   "request_approval",
   "accept_edits",
@@ -57,7 +71,10 @@ export const utcTimestampSchema = boundedText(1, 64).refine(
 );
 
 export const requestIdSchema = z.union([
-  boundedText(1, 128),
+  boundedText(1, 128).refine(
+    isWellFormedUnicode,
+    "Expected well-formed Unicode without unpaired surrogates",
+  ),
   safeIntegerSchema,
 ]);
 
@@ -83,6 +100,7 @@ const genericProductErrorCodes = [
   "provider_not_configured",
   "invalid_arguments",
   "command_not_available",
+  "result_too_large",
   "checkpoint_missing",
   "checkpoint_corrupt",
   "recovery_required",

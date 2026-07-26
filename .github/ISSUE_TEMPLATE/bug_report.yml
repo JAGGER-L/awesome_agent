@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible, non-sensitive product defect.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not include credentials, private code, transcripts, or security
+        vulnerabilities. Report security issues privately through the Security tab.
+  - type: input
+    id: version
+    attributes:
+      label: Awesome version or commit
+      placeholder: 1.3.0 or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows 11 x64
+        - WSL2 Ubuntu 24.04 x64
+        - Apple Silicon macOS
+        - Development environment (unsupported release host)
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Reproduction and observed behavior
+      description: Use a minimal workspace and synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Include commands and error codes, with secrets and private paths removed.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private data, and private repository content.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

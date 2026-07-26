@@ -121,6 +121,18 @@
       }
     },
     {
+      "code": "result_too_large",
+      "result": {
+        "error": {
+          "code": "result_too_large",
+          "data": {},
+          "message": "Safe result_too_large message.",
+          "retryable": false
+        },
+        "ok": false
+      }
+    },
+    {
       "code": "checkpoint_missing",
       "result": {
         "error": {

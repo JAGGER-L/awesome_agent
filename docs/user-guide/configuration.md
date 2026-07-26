@@ -196,6 +196,16 @@ input. The secret store writes the corresponding value under `AWESOME_HOME`
 with an atomic replacement. Removing it deletes the local value but does not
 revoke the Provider-side key.
 
+The value in `.env` and the selected source in `config.yaml` are committed as
+one crash-recoverable product operation. Awesome keeps a temporary non-secret
+journal plus an owner-only full `.env` backup directly under `AWESOME_HOME`,
+verifies both files, then removes the recovery evidence. On restart, it resolves
+an interrupted operation before loading credentials, checking state, or asking
+for workspace trust. Do not edit or delete
+`.provider-credential-transaction.json` or
+`.provider-credential-transaction.env`; if their evidence is inconsistent,
+startup reports `recovery_required` instead of using a half-updated key.
+
 Saving a DeepSeek or Kimi key performs a short validation. Invalid keys are not
 saved. A network failure produces an explicit choice to save it unverified.
 Mem0 availability is checked when the extension is enabled or used.

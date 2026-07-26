@@ -83,19 +83,23 @@ Extensions are optional to the Agent Loop:
 
 - one invalid Skill produces a diagnostic without hiding valid Skills;
 - invalid or unreadable enabled **local** Memory fails Turn context preparation
-  rather than silently omitting durable facts; a current cleanup gap may leave
-  that just-created Turn for startup recovery;
+  rather than silently omitting durable facts; the coordinator terminalizes
+  the already-created Turn and attempts to remove its checkpoint, while startup
+  reconciliation retries removal after a cleanup failure;
 - unavailable **Mem0 Cloud** recall omits that cloud source and reports a
   bounded diagnostic;
-- an invalid MCP catalog or failed MCP transport invalidates that server's
-  Manager snapshot without replacing Core state or another server's tools.
+- an invalid MCP catalog, failed publication, or failed MCP transport
+  invalidates that server's Manager snapshot and Registry namespace without
+  replacing Core state or another server's tools.
 
 These boundaries are not uniform. In particular, the current workspace
 configuration reader is trust-gated but does not yet have the bounded,
 no-follow, post-open identity checks used for `AGENTS.md` and Workspace Skills.
-The MCP Manager catalog and Tool Registry namespace are also published in two
-separate atomic steps. See the explicit current limitations in
-[configuration](../reference/configuration.md) and [MCP](mcp.md).
+For MCP, one server lock protects candidate compilation and publication: the
+Registry replaces the complete namespace first, then the Manager publishes the
+same generation and `CONNECTED` without an intervening `await`. Shared Registry
+limits can reject the whole candidate without disturbing another namespace.
+See [configuration](../reference/configuration.md) and [MCP](mcp.md).
 
 Optional does not mean invisible. A degraded extension can change the evidence
 available to the model, so diagnose it rather than assuming a Turn used the

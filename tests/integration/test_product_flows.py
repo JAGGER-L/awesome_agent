@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 from pydantic import SecretStr
 
+import awesome_agent.config.resource_lock as resource_lock
 from awesome_agent.application.command_results import (
     CommandApplicationInteraction,
     CommandError,
@@ -30,7 +31,19 @@ from awesome_agent.application.contracts import (
     ThreadReadQuery,
 )
 from awesome_agent.application.facade import LocalApplication
+from awesome_agent.application.interactions import (
+    InteractionKind,
+    recovery_decision_choices,
+)
+from awesome_agent.application.operations import (
+    OperationBusy,
+    OperationContinuation,
+)
 from awesome_agent.config import CredentialValidation, CredentialValidationStatus
+from awesome_agent.config.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
+)
 from awesome_agent.context import ContextManifestItem
 from awesome_agent.conversation import ThreadView
 from awesome_agent.core.events import (
@@ -38,6 +51,12 @@ from awesome_agent.core.events import (
     EventEnvelope,
     EventType,
     InteractionResolvedPayload,
+)
+from awesome_agent.core.tools import (
+    ToolExecutionContext,
+    ToolRequest,
+    ToolResult,
+    ToolStatus,
 )
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -180,6 +199,44 @@ class BlockingCredentialValidator:
         )
 
 
+class BlockFirstConsistencyCheck:
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = 0
+
+    async def __call__(self) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            self.entered.set()
+            await self.release.wait()
+
+
+class BlockingDirectExecutor:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = 0
+
+    async def execute(
+        self,
+        request: ToolRequest,
+        *,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        del context
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        return ToolResult(
+            call_id=request.call_id,
+            tool_name=request.tool_name,
+            status=ToolStatus.SUCCESS,
+            content="done",
+            metadata={"exit_code": 0},
+        )
+
+
 class FailOnceOnFullAccessResolvedSink(CollectingEventSink):
     def __init__(self) -> None:
         super().__init__()
@@ -227,6 +284,97 @@ async def _wait_for_interaction(application: LocalApplication) -> str:
             return state.pending_interaction_id
         await asyncio.sleep(0.01)
     raise AssertionError("execute interaction was not requested")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "error_code", "retryable"),
+    [
+        (ResourceLockTimeout(), "operation_busy", True),
+        (ResourceLockUnavailable(), "state_unavailable", True),
+    ],
+)
+async def test_credential_resource_lock_failures_are_typed_and_sanitized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    error_code: str,
+    retryable: bool,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+
+    def fail_lock(_: int, __: float) -> None:
+        raise failure
+
+    monkeypatch.setattr(resource_lock, "_acquire_platform_lock", fail_lock)
+    outcome = await application.set_provider_credential(
+        ProviderCredentialSetRequest(
+            provider="mem0",
+            action="add",
+            api_key=SecretStr("synthetic-secret"),
+        )
+    )
+
+    assert outcome.ok is False
+    assert outcome.error is not None
+    assert outcome.error.code == error_code
+    assert outcome.error.retryable is retryable
+    assert "lock" not in outcome.error.message.lower()
+    if error_code == "state_unavailable":
+        assert outcome.error.data == {
+            "state_directory": str((tmp_path / "home" / "state").resolve())
+        }
+    assert not (tmp_path / "home" / ".env").exists()
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_operation_guard_state_unavailable_matches_protocol_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    created = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(created, CommandResult)
+    assert isinstance(created.payload, ThreadTransitionCommandPayload)
+    thread_id = created.payload.transition.thread.view.thread.id
+
+    def fail_lock(_: int, __: float) -> None:
+        raise ResourceLockUnavailable
+
+    monkeypatch.setattr(resource_lock, "_acquire_platform_lock", fail_lock)
+    outcome = await application.execute_direct(thread_id, "echo must-not-run")
+
+    assert outcome.ok is False
+    assert outcome.error is not None
+    assert outcome.error.code == "state_unavailable"
+    assert outcome.error.retryable is True
+    assert outcome.error.data == {
+        "state_directory": str((tmp_path / "home" / "state").resolve())
+    }
+    await application.shutdown()
 
 
 @pytest.mark.asyncio
@@ -391,6 +539,253 @@ async def test_credential_and_turn_leases_exclude_each_other_in_both_directions(
         await asyncio.sleep(0.01)
     else:
         raise AssertionError("cancelled operation did not release its lease")
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation_kind", ["turn", "direct"])
+async def test_pending_interaction_wins_operation_admission_after_async_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation_kind: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    gateway = FakeGateway("deepseek", "deepseek/deepseek-v4-flash")
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=lambda provider, model: cast(ModelGateway, gateway),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    created = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(created, CommandResult)
+    assert isinstance(created.payload, ThreadTransitionCommandPayload)
+    thread_id = created.payload.transition.thread.view.thread.id
+
+    backend = cast(Any, application)._backend
+    consistency = BlockFirstConsistencyCheck()
+    monkeypatch.setattr(
+        backend._provider_configuration,
+        "ensure_consistent",
+        consistency,
+    )
+    if operation_kind == "turn":
+        starting = asyncio.create_task(
+            application.submit_turn(
+                thread_id,
+                "must lose admission",
+                "client_pending_race",
+            )
+        )
+    else:
+        starting = asyncio.create_task(
+            application.execute_direct(thread_id, "echo must-not-run")
+        )
+    await consistency.entered.wait()
+
+    confirmation = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert isinstance(confirmation, CommandInteractionResult)
+    assert isinstance(confirmation.interaction, CommandApplicationInteraction)
+    consistency.release.set()
+    blocked = await starting
+
+    assert blocked.ok is False
+    assert blocked.error is not None
+    assert blocked.error.code == "operation_busy"
+    state = _unwrap(await application.get_state())
+    assert state.active_operation_id is None
+    assert state.pending_interaction_id == confirmation.interaction.interaction_id
+    view = _unwrap(
+        await application.read_thread(ThreadReadQuery(thread_id=thread_id))
+    ).view
+    assert view.turns == ()
+    assert view.entries == ()
+    assert gateway.requests == []
+
+    _unwrap(
+        await application.respond_interaction(
+            confirmation.interaction.interaction_id,
+            "deny",
+        )
+    )
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation_kind", ["turn", "direct"])
+async def test_active_operation_wins_pending_interaction_creation(
+    tmp_path: Path,
+    operation_kind: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    gateway = BlockingGateway("deepseek", "deepseek/deepseek-v4-flash")
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=lambda provider, model: cast(ModelGateway, gateway),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    created = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(created, CommandResult)
+    assert isinstance(created.payload, ThreadTransitionCommandPayload)
+    thread_id = created.payload.transition.thread.view.thread.id
+
+    direct_executor = BlockingDirectExecutor()
+    if operation_kind == "turn":
+        accepted = _unwrap(
+            await application.submit_turn(
+                thread_id,
+                "hold operation lease",
+                "client_operation_race",
+            )
+        )
+        await gateway.started.wait()
+    else:
+        backend = cast(Any, application)._backend
+        backend._direct._executor = direct_executor
+        accepted = _unwrap(
+            await application.execute_direct(thread_id, "echo hold-operation")
+        )
+        await direct_executor.started.wait()
+
+    blocked = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.PERMISSIONS,
+                arguments=("full_access",),
+            )
+        )
+    )
+    assert isinstance(blocked, CommandError)
+    assert blocked.code == "operation_busy"
+    assert _unwrap(await application.get_state()).pending_interaction_id is None
+
+    if operation_kind == "turn":
+        gateway.release.set()
+        await _wait_for_thread(application, thread_id, entries=2)
+    else:
+        direct_executor.release.set()
+        for _ in range(200):
+            state = _unwrap(await application.get_state())
+            if state.active_operation_id is None:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("direct operation did not release its lease")
+        assert direct_executor.calls == 1
+    assert accepted.operation_id
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_recovery_operation_admission_requires_exact_current_binding(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+    backend = cast(Any, application)._backend
+
+    pending = backend._interactions.create(
+        kind=InteractionKind.RECOVERY_DECISION,
+        prompt="Resume recovery?",
+        operation="recover_turn",
+        target="turn_1",
+        capability=None,
+        choices=recovery_decision_choices(uncertain=False),
+        thread_id="thread_1",
+        turn_id="turn_1",
+    )
+    current = OperationContinuation(
+        interaction_id=pending.id,
+        interaction_generation=pending.generation,
+        thread_id="thread_1",
+        turn_id="turn_1",
+    )
+    mismatched = (
+        current.__class__(
+            interaction_id="interaction_stale",
+            interaction_generation=current.interaction_generation,
+            thread_id=current.thread_id,
+            turn_id=current.turn_id,
+        ),
+        current.__class__(
+            interaction_id=current.interaction_id,
+            interaction_generation=current.interaction_generation + 1,
+            thread_id=current.thread_id,
+            turn_id=current.turn_id,
+        ),
+        current.__class__(
+            interaction_id=current.interaction_id,
+            interaction_generation=current.interaction_generation,
+            thread_id="thread_other",
+            turn_id=current.turn_id,
+        ),
+        current.__class__(
+            interaction_id=current.interaction_id,
+            interaction_generation=current.interaction_generation,
+            thread_id=current.thread_id,
+            turn_id="turn_other",
+        ),
+    )
+    for continuation in mismatched:
+        with pytest.raises(OperationBusy, match="pending interaction"):
+            backend._operations.reserve(continuation=continuation)
+
+    reservation = backend._operations.reserve(continuation=current)
+    backend._operations.abort(reservation)
+    assert backend._interactions.discard(pending.id) is True
+    replacement = backend._interactions.create(
+        kind=InteractionKind.RECOVERY_DECISION,
+        prompt="Resume replacement recovery?",
+        operation="recover_turn",
+        target="turn_1",
+        capability=None,
+        choices=recovery_decision_choices(uncertain=False),
+        thread_id="thread_1",
+        turn_id="turn_1",
+    )
+
+    with pytest.raises(OperationBusy, match="pending interaction"):
+        backend._operations.reserve(continuation=current)
+    replacement_token = OperationContinuation(
+        interaction_id=replacement.id,
+        interaction_generation=replacement.generation,
+        thread_id="thread_1",
+        turn_id="turn_1",
+    )
+    reservation = backend._operations.reserve(continuation=replacement_token)
+    backend._operations.abort(reservation)
+    backend._interactions.discard(replacement.id)
     await application.shutdown()
 
 

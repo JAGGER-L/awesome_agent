@@ -5,16 +5,23 @@ import csv
 import hashlib
 import io
 import json
+import os
+import queue
 import shutil
+import subprocess
 import sys
+import textwrap
+from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.release import build_bundle as release_builder
+from scripts.release import storage_contract as release_storage_contract
 from scripts.release import verify_bundle as release_verifier
 from scripts.release.build_bundle import (
     BundleError,
@@ -23,15 +30,35 @@ from scripts.release.build_bundle import (
     validate_version_files,
 )
 from scripts.release.contracts import ReleaseContractError, validate_release_wheel
+from scripts.release.storage_contract import verify_storage_contract
 from scripts.release.verify_bundle import (
     BundleVerificationError,
     verify_release_assets,
     verify_release_bundle,
-    verify_storage_contract,
 )
 
 from awesome_agent import paths as awesome_paths_module
 from awesome_agent import storage as application_storage
+
+ROOT = Path(__file__).resolve().parents[2]
+MIT_LICENSE = (ROOT / "LICENSE").read_bytes()
+
+
+@pytest.mark.parametrize("arguments", [["--help"], ["--unexpected"]])
+def test_build_bundle_cli_introspection_is_side_effect_free(
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: list[str],
+) -> None:
+    monkeypatch.setattr(
+        release_builder,
+        "build_bundle",
+        lambda root: pytest.fail(f"unexpected release build from {root}"),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        release_builder.main(arguments)
+
+    assert error.value.code == (0 if arguments == ["--help"] else 2)
 
 
 def _write_test_wheel(
@@ -49,6 +76,7 @@ def _write_test_wheel(
         "awesome_agent/version.py": f'PRODUCT_VERSION = "{version}"\n'.encode(),
         f"{dist_info}/METADATA": (
             f"Metadata-Version: 2.4\nName: awesome-agent\nVersion: {version}\n"
+            "License-Expression: MIT\nLicense-File: LICENSE\n"
         ).encode(),
         f"{dist_info}/WHEEL": b"Wheel-Version: 1.0\n"
         b"Generator: awesome-tests\n"
@@ -58,6 +86,7 @@ def _write_test_wheel(
         or b"[console_scripts]\n"
         b"awesome-core = awesome_agent.protocol.stdio:main\n"
         b"awesome-dev = awesome_agent.development.launcher:main\n",
+        f"{dist_info}/licenses/LICENSE": MIT_LICENSE,
     }
     record_path = f"{dist_info}/RECORD"
     record = io.StringIO(newline="")
@@ -108,19 +137,17 @@ def _refresh_release_checksums(release: Path, version: str) -> None:
 
 
 def _stub_runtime_verification(monkeypatch: pytest.MonkeyPatch) -> None:
-    version_module = SimpleNamespace(PRODUCT_VERSION="1.0.0")
-    monkeypatch.setattr(
-        release_verifier,
-        "_load_wheel_modules",
-        lambda *_: (version_module, SimpleNamespace(), SimpleNamespace()),
-    )
-    monkeypatch.setattr(release_verifier, "verify_storage_contract", lambda *_: None)
     monkeypatch.setattr(release_verifier, "_verify_core_install", lambda *_: None)
     monkeypatch.setattr(release_verifier, "_verify_tui", lambda *_: None)
 
 
 def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
     (root / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    (root / "LICENSE").write_bytes(MIT_LICENSE)
+    (root / "pyproject.toml").write_text(
+        '[project]\nlicense = "MIT"\nlicense-files = ["LICENSE"]\n',
+        encoding="utf-8",
+    )
     (root / "install.sh").write_text(
         f'#!/bin/sh\nVERSION="{version}"\n',
         encoding="utf-8",
@@ -135,7 +162,7 @@ def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
         "#!/usr/bin/env node\n",
         encoding="utf-8",
     )
-    package = {"name": "@awesome-agent/tui", "version": version}
+    package = {"name": "@awesome-agent/tui", "version": version, "license": "MIT"}
     lock = {"name": "@awesome-agent/tui", "version": version, "packages": {"": package}}
     (tui / "package.json").write_text(
         f"{json.dumps(package, indent=2)}\n",
@@ -145,7 +172,7 @@ def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
         f"{json.dumps(lock, indent=2)}\n",
         encoding="utf-8",
     )
-    (tui / "LICENSE").write_text("test license\n", encoding="utf-8")
+    (tui / "LICENSE").write_bytes(MIT_LICENSE)
     source = tui / "src"
     source.mkdir(exist_ok=True)
     (source / "version.ts").write_text(
@@ -261,15 +288,6 @@ def test_bundle_verifier_rejects_empty_wheel_before_runtime_fallback(
         verify_release_bundle(bundle, "1.0.0")
 
 
-def test_wheel_loader_rejects_editable_environment_fallback(tmp_path: Path) -> None:
-    wheel = tmp_path / "awesome_agent-1.0.0-py3-none-any.whl"
-    with ZipFile(wheel, "w"):
-        pass
-
-    with pytest.raises(BundleVerificationError, match="extraction root"):
-        release_verifier._load_wheel_modules(wheel, tmp_path / "wheel-import")
-
-
 @pytest.mark.parametrize(
     ("member", "replacement", "diagnostic"),
     [
@@ -292,7 +310,7 @@ def test_wheel_contract_rejects_metadata_and_record_tampering(
     _replace_bundle_member(wheel, member, replacement)
 
     with pytest.raises(ReleaseContractError, match=diagnostic):
-        validate_release_wheel(wheel, "1.0.0")
+        validate_release_wheel(wheel, "1.0.0", MIT_LICENSE)
 
 
 def test_wheel_contract_rejects_namespace_and_editable_wheels(tmp_path: Path) -> None:
@@ -300,12 +318,12 @@ def test_wheel_contract_rejects_namespace_and_editable_wheels(tmp_path: Path) ->
     _write_test_wheel(wheel, "1.0.0")
     _remove_bundle_member(wheel, "awesome_agent/__init__.py")
     with pytest.raises(ReleaseContractError, match="required members"):
-        validate_release_wheel(wheel, "1.0.0")
+        validate_release_wheel(wheel, "1.0.0", MIT_LICENSE)
 
     _write_test_wheel(wheel, "1.0.0")
     _replace_bundle_member(wheel, "__editable__.awesome_agent.pth", b"fallback\n")
     with pytest.raises(ReleaseContractError, match="editable"):
-        validate_release_wheel(wheel, "1.0.0")
+        validate_release_wheel(wheel, "1.0.0", MIT_LICENSE)
 
 
 def test_wheel_contract_rejects_forged_console_entry_points(tmp_path: Path) -> None:
@@ -321,7 +339,7 @@ def test_wheel_contract_rejects_forged_console_entry_points(tmp_path: Path) -> N
     )
 
     with pytest.raises(ReleaseContractError, match="entry point"):
-        validate_release_wheel(wheel, "1.0.0")
+        validate_release_wheel(wheel, "1.0.0", MIT_LICENSE)
 
 
 def test_bundle_verifier_rejects_archive_path_escape(
@@ -371,11 +389,19 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[list[str]] = []
+    handshakes: list[tuple[list[str], Path, Path, str]] = []
     monkeypatch.setattr(release_verifier, "resolve_executable", lambda _: "uv")
     monkeypatch.setattr(
         release_verifier,
         "_run_core_check",
         lambda command, *_: commands.append(command),
+    )
+    monkeypatch.setattr(
+        release_verifier,
+        "_verify_core_protocol_handshake",
+        lambda command, *, cwd, home, expected_version: handshakes.append(
+            (list(command), cwd, home, expected_version)
+        ),
     )
     core = tmp_path / "core"
     core.mkdir()
@@ -389,7 +415,7 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
         "1.0.0",
     )
 
-    assert len(commands) == 5
+    assert len(commands) == 6
     assert commands[0][:4] == ["uv", "venv", "--python", sys.executable]
     assert "--require-hashes" in commands[1]
     assert "--no-deps" in commands[1]
@@ -397,6 +423,244 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
     assert commands[2][-2:] == ["--no-deps", str(wheel)]
     assert commands[3][1:3] == ["pip", "check"]
     assert commands[4][1:3] == ["-I", "-c"]
+    assert commands[5][1] == "-I"
+    assert Path(commands[5][2]).name == "storage_contract.py"
+    assert commands[5][3:] == [
+        "1.0.0",
+        str(core / ".verification-environment"),
+        str(core / ".storage-contract"),
+    ]
+    assert len(handshakes) == 1
+    expected_scripts = release_verifier._environment_scripts_directory(
+        core / ".verification-environment"
+    )
+    expected_entrypoint = expected_scripts / (
+        "awesome-core.exe" if sys.platform == "win32" else "awesome-core"
+    )
+    assert handshakes[0][0] == [str(expected_entrypoint)]
+    assert handshakes[0][1:] == (
+        core / ".protocol-workspace",
+        core / ".protocol-home",
+        "1.0.0",
+    )
+
+
+def test_installed_storage_contract_rejects_editable_environment_fallback(
+    tmp_path: Path,
+) -> None:
+    environment = tmp_path / "candidate" / ".verification-environment"
+    environment.mkdir(parents=True)
+    worktree_module = tmp_path / "worktree" / "awesome_agent" / "storage.py"
+    worktree_module.parent.mkdir(parents=True)
+    worktree_module.write_text("", encoding="utf-8")
+    module = ModuleType("awesome_agent.storage")
+    module.__file__ = str(worktree_module)
+
+    with pytest.raises(
+        release_storage_contract.StorageContractError,
+        match="escaped the clean environment",
+    ):
+        release_storage_contract._require_installed_module(module, environment)
+
+
+def test_storage_contract_inventory_detects_nested_state_mutation(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    nested = state / "nested"
+    nested.mkdir(parents=True)
+    (nested / "before.db").write_bytes(b"before")
+    before = release_storage_contract._tree_inventory(state)
+
+    deeper = nested / "created-during-preflight"
+    deeper.mkdir()
+    (deeper / "mutation").write_bytes(b"after")
+
+    assert release_storage_contract._tree_inventory(state) != before
+
+
+def test_storage_contract_inventory_rejects_file_replacement_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_path = tmp_path / "expected.db"
+    replacement = tmp_path / "replacement.db"
+    expected_path.write_bytes(b"expected")
+    replacement.write_bytes(b"replaced")
+    expected = os.lstat(expected_path)
+    real_open = os.open
+
+    def open_replacement(path: Path, flags: int) -> int:
+        del path
+        return real_open(replacement, flags)
+
+    monkeypatch.setattr(
+        os,
+        "open",
+        open_replacement,
+    )
+
+    with pytest.raises(
+        release_storage_contract.StorageContractError,
+        match="changed while opening",
+    ):
+        release_storage_contract._read_stable_regular_file(expected_path, expected)
+
+
+def test_storage_contract_inventory_rejects_directory_change_during_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "before.db").write_bytes(b"before")
+    original_scandir = os.scandir
+
+    def mutating_scandir(path: Path) -> Iterator[os.DirEntry[str]]:
+        entries = list(original_scandir(path))
+        observed = os.lstat(state)
+        (state / "created-during-scan").mkdir()
+        os.utime(
+            state,
+            ns=(observed.st_atime_ns, observed.st_mtime_ns + 1_000_000_000),
+        )
+        return iter(entries)
+
+    monkeypatch.setattr(os, "scandir", mutating_scandir)
+
+    with pytest.raises(
+        release_storage_contract.StorageContractError,
+        match="changed while reading",
+    ):
+        release_storage_contract._tree_inventory(state)
+
+
+def test_virtual_environment_scripts_do_not_follow_interpreter_symlinks() -> None:
+    environment = Path("candidate") / ".verification-environment"
+
+    assert (
+        release_verifier._environment_scripts_directory(
+            environment,
+            platform="linux",
+        )
+        == environment / "bin"
+    )
+    assert (
+        release_verifier._environment_scripts_directory(
+            environment,
+            platform="darwin",
+        )
+        == environment / "bin"
+    )
+    assert (
+        release_verifier._environment_scripts_directory(
+            environment,
+            platform="win32",
+        )
+        == environment / "Scripts"
+    )
+
+
+def test_installed_core_protocol_handshake_is_v3_trusted_and_bounded(
+    tmp_path: Path,
+) -> None:
+    server = tmp_path / "fake_core.py"
+    home = tmp_path / "isolated-home"
+    workspace = tmp_path / "isolated-workspace"
+    server.write_text(
+        textwrap.dedent(
+            """
+            import json
+            import os
+            import sys
+
+            expected_version, expected_home = sys.argv[1:]
+            assert os.environ["AWESOME_HOME"] == expected_home
+            assert "DEEPSEEK_API_KEY" not in os.environ
+            assert "MOONSHOT_API_KEY" not in os.environ
+            assert "MEM0_API_KEY" not in os.environ
+
+            def receive(identifier, method):
+                request = json.loads(sys.stdin.readline())
+                assert request["jsonrpc"] == "2.0"
+                assert request["id"] == identifier
+                assert request["method"] == method
+                return request["params"]
+
+            def respond(identifier, value):
+                print(json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": identifier,
+                    "result": {"ok": True, "value": value},
+                }), flush=True)
+
+            params = receive(1, "initialize")
+            assert params == {
+                "protocol_version": 3,
+                "client_name": "awesome",
+                "client_version": expected_version,
+            }
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "method": "event",
+                "params": {},
+            }), flush=True)
+            respond(1, {
+                "protocol_version": 3,
+                "product_version": expected_version,
+                "status": "trust_required",
+                "interaction_id": "interaction_release",
+            })
+            assert receive(2, "interaction.respond") == {
+                "interaction_id": "interaction_release",
+                "decision": "trust",
+            }
+            respond(2, {"accepted": True, "status": "resolved"})
+            assert receive(3, "application.getState") == {}
+            respond(3, {"initialized": True, "workspace_trusted": True})
+            assert receive(4, "shutdown") == {}
+            respond(4, {"stopped": True})
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+
+    release_verifier._verify_core_protocol_handshake(
+        [sys.executable, str(server), "1.3.0", str(home)],
+        cwd=workspace,
+        home=home,
+        expected_version="1.3.0",
+    )
+
+
+@pytest.mark.parametrize(
+    ("frame", "diagnostic"),
+    [
+        (
+            b'{"jsonrpc":"2.0","method":"event","params":{"value":NaN}}\n',
+            "frame is invalid",
+        ),
+        (b"x" * (release_verifier._MAX_PROTOCOL_FRAME_BYTES + 2), "frame is invalid"),
+        (None, "closed early"),
+    ],
+    ids=("non-finite-json", "oversized-frame", "early-eof"),
+)
+def test_protocol_smoke_rejects_invalid_or_incomplete_frames(
+    frame: bytes | None,
+    diagnostic: str,
+) -> None:
+    frames: queue.Queue[bytes | None] = queue.Queue()
+    frames.put(frame)
+
+    with pytest.raises(BundleVerificationError, match=diagnostic):
+        release_verifier._protocol_response(frames, identifier=1)
+
+
+def test_protocol_smoke_timeout_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(release_verifier, "_PROTOCOL_RESPONSE_TIMEOUT_SECONDS", 0.01)
+
+    with pytest.raises(BundleVerificationError, match="timed out"):
+        release_verifier._protocol_response(queue.Queue(), identifier=1)
 
 
 @pytest.mark.parametrize(
@@ -485,6 +749,7 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
 
     with ZipFile(second.archive) as archive:
         assert archive.namelist() == [
+            "awesome-1.0.0/LICENSE",
             "awesome-1.0.0/VERSION",
             "awesome-1.0.0/core/awesome_agent-1.0.0-py3-none-any.whl",
             "awesome-1.0.0/core/requirements.lock",
@@ -493,6 +758,8 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
             "awesome-1.0.0/tui/package-lock.json",
             "awesome-1.0.0/tui/package.json",
         ]
+        assert archive.read("awesome-1.0.0/LICENSE") == MIT_LICENSE
+        assert archive.read("awesome-1.0.0/tui/LICENSE") == MIT_LICENSE
         assert {entry.date_time for entry in archive.infolist()} == {
             (1980, 1, 1, 0, 0, 0)
         }
@@ -502,6 +769,123 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
         constraints = archive.read("awesome-1.0.0/core/requirements.lock")
         assert b"langgraph==1.2.6" in constraints
         assert b"--hash=sha256:" in constraints
+
+
+def test_release_build_commands_share_the_exact_commit_timestamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixture(tmp_path)
+    environments: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        release_builder,
+        "source_date_epoch",
+        lambda _: "1700000000",
+    )
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1")
+
+    def record_command(
+        _: Path,
+        *command: str,
+        environment: dict[str, str] | None = None,
+    ) -> None:
+        del command
+        assert environment is not None
+        environments.append(environment)
+
+    monkeypatch.setattr(release_builder, "_run", record_command)
+
+    release_builder.build_bundle(tmp_path)
+
+    assert len(environments) == 5
+    assert {environment["SOURCE_DATE_EPOCH"] for environment in environments} == {
+        "1700000000"
+    }
+
+
+def test_release_source_date_epoch_is_the_head_commit_time() -> None:
+    expected = subprocess.run(
+        ["git", "show", "-s", "--format=%ct", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert release_builder.source_date_epoch(ROOT) == expected
+
+
+@pytest.mark.parametrize(
+    ("return_code", "output"),
+    [(1, "1700000000\n"), (0, ""), (0, "-1\n"), (0, "not-a-time\n")],
+    ids=("git-failure", "empty", "negative", "malformed"),
+)
+def test_release_source_date_epoch_fails_closed_on_invalid_git_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    return_code: int,
+    output: str,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=return_code,
+            stdout=output,
+        ),
+    )
+
+    with pytest.raises(BundleError, match="commit timestamp is unavailable"):
+        release_builder.source_date_epoch(tmp_path)
+
+
+def test_release_source_date_epoch_fails_closed_when_git_cannot_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(subprocess, "run", fail)
+
+    with pytest.raises(BundleError, match="commit timestamp is unavailable"):
+        release_builder.source_date_epoch(tmp_path)
+
+
+def test_hatch_wheel_is_byte_reproducible_for_one_source_date_epoch(
+    tmp_path: Path,
+) -> None:
+    environment = os.environ.copy()
+
+    def build(label: str, epoch: str) -> bytes:
+        output = tmp_path / label
+        environment["SOURCE_DATE_EPOCH"] = epoch
+        subprocess.run(
+            [
+                "uv",
+                "build",
+                "--wheel",
+                "--no-build-isolation",
+                "--out-dir",
+                str(output),
+            ],
+            cwd=ROOT,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        wheel = tuple(output.glob("*.whl"))
+        assert len(wheel) == 1
+        return wheel[0].read_bytes()
+
+    first = build("first", "1700000000")
+    second = build("second", "1700000000")
+    different_epoch = build("different", "1700003600")
+
+    assert second == first
+    assert different_epoch != first
 
 
 @pytest.mark.parametrize(

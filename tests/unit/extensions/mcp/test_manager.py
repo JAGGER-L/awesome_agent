@@ -1,9 +1,18 @@
 import asyncio
 from pathlib import Path
+from typing import cast
 
 import pytest
 from mcp.types import CallToolResult, TextContent, Tool
+from pydantic import BaseModel
 
+from awesome_agent.core.tools import (
+    ExpectedToolFailure,
+    ToolExecutionContext,
+    ToolOutput,
+    ToolSpec,
+)
+from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
 from awesome_agent.extensions.mcp import (
     McpCallUncertain,
     McpConnectionState,
@@ -78,6 +87,14 @@ class FakeClient:
             raise RuntimeError("close failed")
 
 
+async def unused_handler(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> ToolOutput:
+    del arguments, context
+    return ToolOutput(content="unused")
+
+
 @pytest.mark.asyncio
 async def test_manager_is_lazy_reuses_sessions_and_isolates_failure(
     tmp_path: Path,
@@ -113,6 +130,7 @@ async def test_manager_is_lazy_reuses_sessions_and_isolates_failure(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=store,
+        registry=ToolRegistry(),
         client_factory=factory,
     )
 
@@ -158,6 +176,7 @@ async def test_enabled_servers_connect_independently(tmp_path: Path) -> None:
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda config: clients[config.id],
     )
 
@@ -173,6 +192,202 @@ async def test_enabled_servers_connect_independently(tmp_path: Path) -> None:
     statuses = await asyncio.wait_for(starting, timeout=0.2)
     assert all(status.connected for status in statuses)
     await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_connected_is_published_only_after_registry_installation(
+    tmp_path: Path,
+) -> None:
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    manager_ref: list[McpManager] = []
+
+    class ObservingRegistry(ToolRegistry):
+        def replace_namespace(
+            self,
+            namespace: str,
+            tools: tuple[RegisteredTool, ...],
+        ) -> None:
+            manager = manager_ref[0]
+            assert manager.status("user").state is not McpConnectionState.CONNECTED
+            super().replace_namespace(namespace, tools)
+            assert self.resolve("mcp.user.echo") is not None
+            assert manager.status("user").state is not McpConnectionState.CONNECTED
+
+    registry = ObservingRegistry()
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
+        client_factory=lambda _: FakeClient("user"),
+    )
+    manager_ref.append(manager)
+
+    statuses = await manager.start_enabled()
+
+    assert statuses[0].state is McpConnectionState.CONNECTED
+    assert registry.resolve("mcp.user.echo") is not None
+
+
+@pytest.mark.asyncio
+async def test_registry_publication_failure_closes_candidate_and_is_sanitized(
+    tmp_path: Path,
+) -> None:
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+
+    class FailingRegistry(ToolRegistry):
+        def replace_namespace(
+            self,
+            namespace: str,
+            tools: tuple[RegisteredTool, ...],
+        ) -> None:
+            del namespace, tools
+            raise RuntimeError("secret registry failure")
+
+    client = FakeClient("user")
+    registry = FailingRegistry()
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
+        client_factory=lambda _: client,
+    )
+
+    statuses = await manager.start_enabled()
+
+    assert statuses[0].state is McpConnectionState.ERROR
+    assert statuses[0].detail == "MCP server catalog could not be published."
+    assert "secret" not in str(statuses[0])
+    assert client.closed is True
+    assert manager.tools("user") == ()
+    assert registry.resolve("mcp.user.echo") is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_catalog_failure_preserves_the_committed_namespace(
+    tmp_path: Path,
+) -> None:
+    full_config = McpServerConfig(
+        id="full",
+        command="full-server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    extra_config = McpServerConfig(
+        id="extra",
+        command="extra-server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    full = FakeClient(
+        "full",
+        tools=tuple(
+            Tool(name=f"tool_{index}", inputSchema={"type": "object"})
+            for index in range(128)
+        ),
+    )
+    extra = FakeClient("extra")
+    extra.list_started = asyncio.Event()
+    extra.list_release = asyncio.Event()
+    clients = {"full": full, "extra": extra}
+    registry = ToolRegistry()
+    manager = McpManager(
+        configs=(full_config, extra_config),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
+        client_factory=lambda config: clients[config.id],
+    )
+
+    starting = asyncio.create_task(manager.start_enabled())
+    await extra.list_started.wait()
+    async with asyncio.timeout(0.5):
+        while manager.status("full").state is not McpConnectionState.CONNECTED:
+            await asyncio.sleep(0)
+    extra.list_release.set()
+    statuses = {status.server_id: status for status in await starting}
+
+    assert statuses["full"].state is McpConnectionState.CONNECTED
+    assert statuses["extra"].state is McpConnectionState.ERROR
+    assert statuses["extra"].detail == "MCP server catalog could not be published."
+    assert extra.closed is True
+    assert len(registry.specifications()) == 128
+    assert registry.resolve("mcp.full.tool_0") is not None
+    assert registry.resolve("mcp.extra.echo") is None
+    assert manager.tools("extra") == ()
+
+
+@pytest.mark.asyncio
+async def test_aggregate_catalog_byte_budget_rejects_whole_candidate(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry()
+    registry.replace_namespace(
+        "user.base",
+        (
+            RegisteredTool(
+                ToolSpec(
+                    name="user.base.seed",
+                    description="base",
+                    input_schema={
+                        "type": "string",
+                        "description": "x" * 400_000,
+                    },
+                    capability="workspace.read",
+                    read_only=True,
+                ),
+                BaseModel,
+                unused_handler,
+            ),
+        ),
+    )
+    config = McpServerConfig(
+        id="user",
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    client = FakeClient(
+        "user",
+        tools=tuple(
+            Tool(
+                name=f"large_{index}",
+                inputSchema={"type": "string", "default": "y" * 240_000},
+            )
+            for index in range(3)
+        ),
+    )
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
+        client_factory=lambda _: client,
+    )
+
+    statuses = await manager.start_enabled()
+
+    assert statuses[0].state is McpConnectionState.ERROR
+    assert statuses[0].detail == "MCP server catalog could not be published."
+    assert client.closed is True
+    assert registry.resolve("user.base.seed") is not None
+    assert registry.resolve("mcp.user.large_0") is None
+    assert manager.tools("user") == ()
 
 
 @pytest.mark.asyncio
@@ -204,6 +419,7 @@ async def test_workspace_trust_and_hash_gate_project_but_not_user(
         workspace_key="workspace",
         workspace_trusted=False,
         enablements=store,
+        registry=ToolRegistry(),
         client_factory=factory,
     )
 
@@ -228,6 +444,7 @@ async def test_connection_loss_is_uncertain_and_current_call_is_not_replayed(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
     await manager.start_enabled()
@@ -270,6 +487,7 @@ async def test_call_tool_never_connects_lazily(tmp_path: Path) -> None:
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=factory,
     )
 
@@ -298,6 +516,7 @@ async def test_next_turn_preparation_may_reconnect_after_uncertain_call(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: clients.pop(0),
     )
     await manager.start_enabled()
@@ -344,6 +563,7 @@ async def test_invalid_catalog_is_never_committed_and_is_sanitized(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
 
@@ -357,6 +577,43 @@ async def test_invalid_catalog_is_never_committed_and_is_sanitized(
     assert manager.tools("user") == ()
     with pytest.raises(McpUnavailable):
         manager.catalog("user")
+
+
+@pytest.mark.asyncio
+async def test_overlong_namespaced_tool_atomically_fails_with_safe_diagnostic(
+    tmp_path: Path,
+) -> None:
+    server_id = "s" * 64
+    config = McpServerConfig(
+        id=server_id,
+        command="server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    secret_name = "secret_tool_" + ("t" * 48)
+    client = FakeClient(
+        server_id,
+        tools=(Tool(name=secret_name, inputSchema={"type": "object"}),),
+    )
+    registry = ToolRegistry()
+    manager = McpManager(
+        configs=(config,),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
+        client_factory=lambda _: client,
+    )
+
+    statuses = await manager.start_enabled()
+
+    assert statuses[0].state is McpConnectionState.ERROR
+    assert statuses[0].detail == "MCP server returned an invalid tool catalog."
+    assert secret_name not in str(statuses[0])
+    assert server_id not in statuses[0].detail
+    assert client.closed is True
+    assert manager.tools(server_id) == ()
+    assert not any(spec.name.startswith("mcp.") for spec in registry.specifications())
 
 
 @pytest.mark.asyncio
@@ -383,16 +640,17 @@ async def test_restart_with_invalid_json_pointer_atomically_removes_old_catalog(
         ),
     )
     clients = [valid, invalid]
+    registry = ToolRegistry()
     manager = McpManager(
         configs=(config,),
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
         client_factory=lambda _: clients.pop(0),
     )
-    invalidations: list[str] = []
-    manager.bind_catalog_invalidator("user", lambda: invalidations.append("user"))
     await manager.start_enabled()
+    assert registry.resolve("mcp.user.echo") is not None
 
     status = await manager.restart("user")
 
@@ -400,7 +658,8 @@ async def test_restart_with_invalid_json_pointer_atomically_removes_old_catalog(
     assert status.detail == "MCP server returned an invalid tool catalog."
     assert valid.closed is True
     assert invalid.closed is True
-    assert invalidations == ["user"]
+    assert registry.resolve("mcp.user.echo") is None
+    assert registry.resolve("mcp.user.unsafe") is None
     assert manager.tools("user") == ()
     with pytest.raises(McpUnavailable):
         manager.catalog("user")
@@ -424,6 +683,7 @@ async def test_catalog_connection_deadline_closes_client_without_publication(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
         catalog_timeout_seconds=0.01,
     )
@@ -466,6 +726,7 @@ async def test_catalog_deadline_never_accepts_late_backend_success(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
         catalog_timeout_seconds=0.01,
     )
@@ -514,6 +775,7 @@ async def test_catalog_timeout_cannot_accumulate_cancellation_ignoring_tasks(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=factory,
         catalog_timeout_seconds=0.01,
     )
@@ -554,6 +816,7 @@ async def test_catalog_load_cancellation_closes_client_and_preserves_cancel(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
     start = asyncio.create_task(manager.start_enabled())
@@ -578,45 +841,55 @@ async def test_restart_invalidates_old_catalog_generation_before_reconnect(
         source=McpSource.USER,
         enabled=True,
     )
-    clients = [
-        FakeClient(
-            "user",
-            tools=(
-                Tool(
-                    name="echo",
-                    description="first",
-                    inputSchema={"type": "object"},
-                ),
+    first_client = FakeClient(
+        "user",
+        tools=(
+            Tool(
+                name="echo",
+                description="first",
+                inputSchema={"type": "object"},
             ),
         ),
-        FakeClient(
-            "user",
-            tools=(
-                Tool(
-                    name="echo",
-                    description="second",
-                    inputSchema={"type": "object"},
-                ),
+    )
+    second_client = FakeClient(
+        "user",
+        tools=(
+            Tool(
+                name="echo",
+                description="second",
+                inputSchema={"type": "object"},
             ),
         ),
-    ]
+    )
+    clients = [first_client, second_client]
+    registry = ToolRegistry()
     manager = McpManager(
         configs=(config,),
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
         client_factory=lambda _: clients.pop(0),
     )
-    invalidations: list[str] = []
-    manager.bind_catalog_invalidator("user", lambda: invalidations.append("user"))
 
     await manager.start_enabled()
     first_generation = manager.catalog("user").generation
+    first_registered = registry.resolve("mcp.user.echo")
+    assert first_registered is not None
     await manager.restart("user")
     second_generation = manager.catalog("user").generation
 
     assert second_generation > first_generation
-    assert invalidations == ["user"]
+    second_registered = registry.resolve("mcp.user.echo")
+    assert second_registered is not None
+    assert second_registered is not first_registered
+    with pytest.raises(ExpectedToolFailure):
+        await first_registered.handler(
+            first_registered.input_model.model_validate({}),
+            cast(ToolExecutionContext, object()),
+        )
+    assert first_client.call_count == 0
+    assert second_client.call_count == 0
     with pytest.raises(McpUnavailable, match="stale"):
         await manager.call_tool(
             "user",
@@ -624,6 +897,69 @@ async def test_restart_invalidates_old_catalog_generation_before_reconnect(
             {},
             generation=first_generation,
         )
+
+
+@pytest.mark.asyncio
+async def test_restart_publication_failure_leaves_no_stale_namespace(
+    tmp_path: Path,
+) -> None:
+    base_config = McpServerConfig(
+        id="base",
+        command="base-server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    user_config = McpServerConfig(
+        id="user",
+        command="user-server",
+        source=McpSource.USER,
+        enabled=True,
+    )
+    base = FakeClient(
+        "base",
+        tools=tuple(
+            Tool(name=f"tool_{index}", inputSchema={"type": "object"})
+            for index in range(127)
+        ),
+    )
+    first = FakeClient("user")
+    replacement = FakeClient(
+        "user",
+        tools=(
+            Tool(name="first", inputSchema={"type": "object"}),
+            Tool(name="second", inputSchema={"type": "object"}),
+        ),
+    )
+    user_clients = [first, replacement]
+
+    def factory(config: McpServerConfig) -> FakeClient:
+        return base if config.id == "base" else user_clients.pop(0)
+
+    registry = ToolRegistry()
+    manager = McpManager(
+        configs=(base_config, user_config),
+        workspace_key="workspace",
+        workspace_trusted=True,
+        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
+        client_factory=factory,
+    )
+    statuses = await manager.start_enabled()
+    assert all(status.connected for status in statuses)
+    assert len(registry.specifications()) == 128
+    assert registry.resolve("mcp.user.echo") is not None
+
+    status = await manager.restart("user")
+
+    assert status.state is McpConnectionState.ERROR
+    assert status.detail == "MCP server catalog could not be published."
+    assert first.closed is True
+    assert replacement.closed is True
+    assert registry.resolve("mcp.user.echo") is None
+    assert registry.resolve("mcp.user.first") is None
+    assert registry.resolve("mcp.base.tool_0") is not None
+    assert len(registry.specifications()) == 127
+    assert manager.tools("user") == ()
 
 
 @pytest.mark.asyncio
@@ -641,11 +977,13 @@ async def test_restart_removes_stale_catalog_before_waiting_for_reconnect(
     second.connect_started = asyncio.Event()
     second.connect_release = asyncio.Event()
     clients = [first, second]
+    registry = ToolRegistry()
     manager = McpManager(
         configs=(config,),
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=registry,
         client_factory=lambda _: clients.pop(0),
     )
     await manager.start_enabled()
@@ -656,10 +994,12 @@ async def test_restart_removes_stale_catalog_before_waiting_for_reconnect(
     assert first.closed is True
     assert manager.tools("user") == ()
     assert manager.status("user").state is McpConnectionState.CONFIGURED
+    assert registry.resolve("mcp.user.echo") is None
 
     second.connect_release.set()
     status = await restart
     assert status.state is McpConnectionState.CONNECTED
+    assert registry.resolve("mcp.user.echo") is not None
 
 
 @pytest.mark.asyncio
@@ -678,6 +1018,7 @@ async def test_timeout_invalidates_catalog_without_replaying(tmp_path: Path) -> 
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
         call_timeout_seconds=0.01,
     )
@@ -726,6 +1067,7 @@ async def test_timeout_never_accepts_late_success_from_backend_that_swallows_can
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
         call_timeout_seconds=0.01,
     )
@@ -760,6 +1102,7 @@ async def test_cancel_invalidates_catalog_and_preserves_cancellation(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
     await manager.start_enabled()
@@ -810,6 +1153,7 @@ async def test_backend_self_cancellation_is_uncertain_not_caller_cancellation(
         workspace_key="workspace",
         workspace_trusted=True,
         enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
     await manager.start_enabled()

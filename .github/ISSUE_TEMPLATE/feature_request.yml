@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a user problem and a product-level outcome.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the underlying need, not only a proposed mechanism.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Explain the workflow, recovery path, and how success is observed.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and tradeoffs
+      description: What existing commands or extension mechanisms did you consider?
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Safety and compatibility boundaries
+      description: Note permission, protocol, storage, provider, or platform impact.

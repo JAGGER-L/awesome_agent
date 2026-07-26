@@ -6,14 +6,31 @@ import pytest
 from jsonschema.exceptions import ValidationError
 from mcp.types import Tool
 
+import awesome_agent.extensions.mcp.catalog as mcp_catalog
 from awesome_agent.extensions.mcp.catalog import (
     MAX_MCP_CATALOG_BYTES,
     MAX_MCP_SCHEMA_BYTES,
     MAX_MCP_SCHEMA_DEPTH,
     MAX_MCP_TOOLS,
+    McpCatalog,
     McpCatalogError,
-    compile_mcp_catalog,
 )
+from awesome_agent.extensions.mcp.catalog import (
+    compile_mcp_catalog as _compile_mcp_catalog,
+)
+
+
+def compile_mcp_catalog(
+    tools: tuple[Tool, ...],
+    *,
+    server_id: str = "fixture",
+    generation: int = 0,
+) -> McpCatalog:
+    return _compile_mcp_catalog(
+        tools,
+        server_id=server_id,
+        generation=generation,
+    )
 
 
 def tool(name: str, schema: Mapping[str, object]) -> Tool:
@@ -66,6 +83,17 @@ def test_catalog_keeps_format_as_annotation_by_default() -> None:
     )
 
     catalog.resolve("email").validator.validate("not-an-email")
+
+
+def test_catalog_rejects_contract_text_that_is_not_utf8_encodable() -> None:
+    unsafe = Tool(
+        name="unsafe",
+        description="\ud800",
+        inputSchema={"type": "object"},
+    )
+
+    with pytest.raises(McpCatalogError, match="bounded JSON"):
+        compile_mcp_catalog((unsafe,))
 
 
 def test_catalog_compiles_and_keeps_output_validator() -> None:
@@ -435,6 +463,29 @@ def test_catalog_rejects_duplicate_invalid_and_oversized_contracts() -> None:
         )
 
 
+def test_catalog_validates_the_final_namespaced_tool_name() -> None:
+    server_id = "s" * 64
+    accepted = "t" * 59
+    rejected = "secret_tool_" + ("t" * 48)
+
+    catalog = compile_mcp_catalog(
+        (tool(accepted, {}),),
+        server_id=server_id,
+    )
+
+    assert catalog.resolve(accepted).tool.name == accepted
+    with pytest.raises(McpCatalogError) as raised:
+        compile_mcp_catalog(
+            (tool(rejected, {}),),
+            server_id=server_id,
+        )
+    assert str(raised.value) == (
+        "MCP namespaced tool name exceeds the 128-character limit"
+    )
+    assert "secret_tool" not in str(raised.value)
+    assert server_id not in str(raised.value)
+
+
 def test_catalog_rejects_excessive_schema_depth() -> None:
     schema: dict[str, object] = {"type": "string"}
     for _ in range(MAX_MCP_SCHEMA_DEPTH):
@@ -442,3 +493,45 @@ def test_catalog_rejects_excessive_schema_depth() -> None:
 
     with pytest.raises(McpCatalogError, match="depth"):
         compile_mcp_catalog((tool("deep", schema),))
+
+
+@pytest.mark.parametrize("keyword", ("default", "examples", "x-extension"))
+def test_catalog_rejects_excessive_depth_in_arbitrary_json(keyword: str) -> None:
+    nested: object = "leaf"
+    for _ in range(MAX_MCP_SCHEMA_DEPTH - 1):
+        if keyword == "default":
+            nested = {"value": nested}
+        elif keyword == "examples":
+            nested = [nested]
+        else:
+            nested = {"value": [nested]}
+    schema = {keyword: nested}
+
+    with pytest.raises(McpCatalogError, match="depth"):
+        compile_mcp_catalog((tool("deep_annotation", schema),))
+
+
+def test_catalog_preflights_complete_depth_before_schema_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nested: object = "leaf"
+    for _ in range(MAX_MCP_SCHEMA_DEPTH - 1):
+        nested = [nested]
+
+    def reject_semantic_traversal(_: dict[str, object]) -> object:
+        raise AssertionError("deep schema reached dialect or semantic traversal")
+
+    monkeypatch.setattr(mcp_catalog, "_validator_type", reject_semantic_traversal)
+
+    with pytest.raises(McpCatalogError, match="depth"):
+        compile_mcp_catalog((tool("deep_preflight", {"default": nested}),))
+
+
+def test_catalog_accepts_arbitrary_json_at_depth_limit() -> None:
+    nested: object = "leaf"
+    for _ in range(MAX_MCP_SCHEMA_DEPTH - 2):
+        nested = [nested]
+
+    catalog = compile_mcp_catalog((tool("bounded_annotation", {"default": nested}),))
+
+    assert catalog.resolve("bounded_annotation").tool.inputSchema["default"] == nested

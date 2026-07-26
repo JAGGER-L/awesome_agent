@@ -130,6 +130,45 @@ The installer downloads executable artifacts from GitHub, Astral, and
 nodejs.org. In managed networks, those hosts must be reachable through the
 organization's approved proxy and certificate policy.
 
+The `latest` URL above selects only the bootstrap script. That script carries
+one product `VERSION` and downloads `awesome-<version>.zip` plus
+`SHA256SUMS` from the matching `v<version>` release tag. It never combines a
+bootstrap from one release with payload bytes silently replaced under another
+release's `latest` route.
+
+Replacement is a small filesystem transaction, not a recursive overwrite:
+
+```text
+acquire one exclusive installer lock for the complete run
+                         |
+                         v
+reconcile a prior marker/rollback and create staging inside the install root
+                         |
+                         v
+rename old app -> app.rollback, then create .install-transaction
+                         |
+                         v
+rename validated candidate -> app and atomically replace the launcher
+                         |
+                         v
+remove .install-transaction (commit point), then clean app.rollback
+```
+
+Staging and application renames stay on the same filesystem. Before the commit
+point, a failure restores the old application; a failed first installation
+removes its incomplete candidate. After the commit point, failure to delete the
+rollback copy is reported as a warning: the new application remains committed,
+and the next installer run cleans the residue. The launcher is replaced from a
+temporary file in its own directory. Install roots, transaction slots, and
+launcher locations that are links or reparse points are rejected rather than
+followed.
+
+This boundary is process-interruption recovery, not storage-level durability or
+an OS sandbox. The installer does not `fsync` every directory entry against
+sudden power loss and cannot defend its private install tree from a hostile
+process running concurrently as the same OS user. Use normal host access
+controls and do not mutate the install root while installation is running.
+
 ## Verify the Installation
 
 In a new terminal, run:
@@ -160,6 +199,16 @@ inside the replaceable application directory.
 
 Close all running Awesome sessions before upgrading. An open process may hold
 application files or state leases, especially on Windows.
+
+The installer lock is acquired before recovery or staging and is held through
+the complete run. A concurrent installer exits instead of sharing temporary or
+rollback state. If a process is interrupted, rerun the same installer: Windows
+releases its exclusive file handle when the process exits, while POSIX records
+the owner identity and reclaims only a demonstrably dead or stably incomplete
+lock. Startup reconciliation then either restores the previous application or
+finishes cleanup according to the transaction marker. Do not delete
+`.install.lock`, `.install-transaction`, or `app.rollback` manually while an
+installer may still be running.
 
 If startup reports that local state was created by a newer product version,
 upgrade instead of resetting the data. If it offers an explicit state reset,
@@ -221,6 +270,21 @@ Do not bypass checksum validation. Retry after confirming network access and
 the system clock. Persistent failures may indicate a proxy rewriting downloads
 or an incomplete release; capture the exact installer error and consult
 [Troubleshooting](../user-guide/troubleshooting.md).
+
+### Another installer is running
+
+Wait for the other installation to finish and retry. Do not run two upgrades
+against one user install root. If the previous process crashed, rerunning is
+the recovery action; a live lock is preserved, and a dead lock is reclaimed
+without deleting a newer owner's lock.
+
+### Installation completed with a warning
+
+A warning about `PATH` or a shell profile means the application transaction
+committed but automatic command discovery did not. Add the documented launcher
+directory manually, open a new terminal, and run `awesome --version`. A warning
+about deferred rollback cleanup also leaves the new version committed; rerun
+the installer after closing Awesome to reconcile the residue.
 
 ## Next Step
 

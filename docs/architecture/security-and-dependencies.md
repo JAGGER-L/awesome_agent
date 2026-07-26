@@ -199,15 +199,19 @@ files, and provider text are untrusted input to the model. They cannot change
 the capability decision or bypass the Tool Executor.
 
 Workspace Skill discovery/load revalidates every path identity without
-following links. The MCP Manager publishes one whole validated, bounded,
-local-reference-only catalog, after which Application atomically replaces the
-corresponding Registry namespace. These two commits are not one transaction;
-Manager `CONNECTED` does not prove namespace installation, and a namespaced
-tool name that exceeds the 128-character `/tools` payload limit (or the
-200-character model/event limit) currently exposes that downstream gap.
-Arguments are schema-validated before approval and remote I/O. Generation-bound
-handlers cannot call a newer catalog through an old validator. Timeout or
-connection loss is an uncertain outcome and is not replayed transparently.
+following links. Under one server lock, the MCP Manager compiles one whole
+validated, bounded, local-reference-only candidate, including the final
+namespaced names. The shared Registry first validates its complete aggregate
+snapshot (128 tools and 1 MiB of canonical model definitions) and atomically
+replaces that server namespace. With no intervening `await`, the Manager then
+publishes the generation, client, catalog, and `CONNECTED`; connected therefore
+also proves namespace installation. Failure closes the candidate client,
+invalidates the generation, removes that namespace, and exposes only a fixed,
+sanitized diagnostic. Arguments are schema-validated before approval and remote
+I/O. Generation-bound handlers cannot call a newer catalog through an old
+validator. Timeout or connection loss is an uncertain outcome and is not
+replayed transparently. Every MCP invocation still requires one-call approval,
+including in Full access.
 
 One invalid Skill or MCP server is isolated as a diagnostic; it does not widen
 another extension's permissions.

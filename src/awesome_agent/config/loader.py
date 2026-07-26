@@ -7,13 +7,14 @@ from pathlib import Path
 from typing import cast
 
 import yaml
-from dotenv import dotenv_values
 from pydantic import BaseModel, SecretStr, ValidationError
 from yaml.nodes import MappingNode
 
 from awesome_agent.config.credentials import (
     ProviderCredentialStatus,
     ProviderCredentialStatuses,
+    UserSecretStoreError,
+    read_provider_secret_values,
     resolve_provider_credential_statuses,
 )
 from awesome_agent.config.models import (
@@ -123,12 +124,20 @@ def load_config_sources(
             source_label="workspace config",
         )
     environment = os.environ if environ is None else environ
+    try:
+        from_file = read_provider_secret_values(sources.user_env)
+    except UserSecretStoreError as error:
+        raise ConfigurationInvalid(
+            "provider_secret_file_unsafe",
+            "user Provider secret file cannot be read safely.",
+        ) from error
     provider_credentials = resolve_provider_credential_statuses(
         sources.user_env,
         environment,
         user.credentials,
+        from_file=from_file,
     )
-    secrets = _load_secrets(sources.user_env, environment, provider_credentials)
+    secrets = _load_secrets(from_file, environment, provider_credentials)
     status = SecretStatus(
         deepseek_api_key=secrets.deepseek_api_key is not None,
         moonshot_api_key=secrets.moonshot_api_key is not None,
@@ -184,12 +193,10 @@ def read_user_config_document(path: Path) -> UserConfigDocument:
 
 
 def _load_secrets(
-    path: Path,
+    from_file: Mapping[str, str | None],
     environ: Mapping[str, str],
     statuses: ProviderCredentialStatuses,
 ) -> SecretValues:
-    from_file = dotenv_values(path) if path.is_file() else {}
-
     def value(name: str, status: ProviderCredentialStatus) -> SecretStr | None:
         raw: str | None = None
         if status.selected_source is CredentialSource.ENVIRONMENT:

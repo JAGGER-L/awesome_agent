@@ -1,11 +1,112 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
-from collections.abc import Coroutine
+import math
+import threading
+from collections.abc import Callable, Coroutine
+from concurrent.futures import Future as ConcurrentFuture
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# A credential transaction can wait on two independently locked user-state files.
+# Two 10-second lock deadlines plus bounded local persistence remain below this cap.
+_BLOCKING_CALL_CLEANUP_TIMEOUT_SECONDS = 22.0
+
+
+async def run_cancellation_safe_blocking_call[ResultT](
+    call: Callable[[], ResultT],
+    *,
+    on_completed: Callable[[ResultT], None] | None = None,
+    on_abandoned: Callable[[], None] | None = None,
+    cleanup_timeout_seconds: float = _BLOCKING_CALL_CLEANUP_TIMEOUT_SECONDS,
+) -> ResultT:
+    """Run one indivisible blocking transaction without freezing the event loop.
+
+    Cancellation cannot stop a Python worker thread. Keep the worker shielded, wait
+    long enough for the resource-lock deadline, and run the optional in-memory
+    commit on the event-loop thread before re-raising the caller's cancellation.
+    If cleanup expires, invoke ``on_abandoned`` synchronously so callers can fence
+    state that a late worker may still change without an in-memory commit.
+    The commit must be non-blocking and must not perform filesystem, network, lock,
+    or database I/O; all such work belongs in ``call`` and its returned value.
+    """
+
+    if cleanup_timeout_seconds <= 0 or not math.isfinite(cleanup_timeout_seconds):
+        raise ValueError("Blocking-call cleanup timeout must be finite and positive.")
+
+    worker_source, worker_result = _start_daemon_worker(call)
+    try:
+        result = await asyncio.shield(worker_result)
+    except asyncio.CancelledError:
+        await finish_bounded_cancellation_cleanup(
+            _await_shielded(worker_result),
+            timeout_seconds=cleanup_timeout_seconds,
+        )
+        if not worker_result.done():
+            if on_abandoned is not None:
+                try:
+                    on_abandoned()
+                except BaseException:
+                    logger.critical(
+                        "Blocking-call abandonment callback failed.",
+                        exc_info=True,
+                    )
+            worker_source.add_done_callback(_consume_concurrent_future)
+            worker_result.cancel()
+        elif not worker_result.cancelled() and worker_result.exception() is None:
+            try:
+                if on_completed is not None:
+                    on_completed(worker_result.result())
+            except BaseException:
+                logger.warning(
+                    "Blocking-call completion failed while preserving cancellation.",
+                    exc_info=True,
+                )
+        raise
+    if on_completed is not None:
+        on_completed(result)
+    return result
+
+
+def _start_daemon_worker[ResultT](
+    call: Callable[[], ResultT],
+) -> tuple[ConcurrentFuture[ResultT], asyncio.Future[ResultT]]:
+    """Run a blocking call without enrolling it in asyncio's shutdown executor."""
+
+    loop = asyncio.get_running_loop()
+    source: ConcurrentFuture[ResultT] = ConcurrentFuture()
+    result = asyncio.wrap_future(source, loop=loop)
+    context = contextvars.copy_context()
+
+    def worker() -> None:
+        if not source.set_running_or_notify_cancel():
+            return
+        try:
+            value = context.run(call)
+        except BaseException as error:
+            source.set_exception(error)
+        else:
+            source.set_result(value)
+
+    thread = threading.Thread(
+        target=worker,
+        name="awesome-blocking-state-transaction",
+        daemon=True,
+    )
+    try:
+        thread.start()
+    except BaseException:
+        source.cancel()
+        result.cancel()
+        raise
+    return source, result
+
+
+async def _await_shielded[ResultT](result: asyncio.Future[ResultT]) -> None:
+    await asyncio.shield(result)
 
 
 async def finish_bounded_cancellation_cleanup(
@@ -19,9 +120,9 @@ async def finish_bounded_cancellation_cleanup(
     ``CancelledError``. Cleanup failures are deliberately reported and consumed so
     the caller can re-raise that original cancellation.
     """
-    if timeout_seconds <= 0:
+    if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
         cleanup.close()
-        raise ValueError("Cancellation cleanup timeout must be positive.")
+        raise ValueError("Cancellation cleanup timeout must be finite and positive.")
 
     cleanup_task = asyncio.create_task(cleanup, name="bounded-cancellation-cleanup")
     deadline = asyncio.get_running_loop().time() + timeout_seconds
@@ -55,10 +156,19 @@ async def finish_bounded_cancellation_cleanup(
         )
 
 
-def _consume_cleanup_task(task: asyncio.Task[object]) -> None:
+def _consume_cleanup_task(task: asyncio.Task[Any]) -> None:
     if task.cancelled():
         return
     try:
         task.exception()
+    except Exception:
+        return
+
+
+def _consume_concurrent_future(result: ConcurrentFuture[Any]) -> None:
+    if result.cancelled():
+        return
+    try:
+        result.exception()
     except Exception:
         return

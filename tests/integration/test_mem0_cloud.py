@@ -171,6 +171,7 @@ def _extensions(
 
     adapter = Mem0CloudAdapter(client)
     current_config = read_user_config_document(paths.config_file)
+    registry = ToolRegistry()
     return (
         ApplicationExtensionService(
             conversation=conversation,
@@ -180,10 +181,11 @@ def _extensions(
                 workspace_key=workspace.key,
                 workspace_trusted=True,
                 enablements=enablements,
+                registry=registry,
             ),
             enablements=enablements,
             workspace_key=workspace.key,
-            registry=ToolRegistry(),
+            registry=registry,
             current_thread_id=lambda: thread.id,
             credential_statuses=_credential_statuses,
             config_writer=UserConfigWriter(paths.config_file),

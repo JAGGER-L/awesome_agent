@@ -16,6 +16,7 @@ from awesome_agent.modeling.messages import AssistantMessage, ModelMessage
 from awesome_agent.modeling.tools import ToolChoice, ToolChoiceMode, ToolDefinition
 
 type ProviderId = Literal["deepseek", "kimi"]
+_MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
 
 
 class StopReason(StrEnum):
@@ -38,11 +39,11 @@ class ContinuationState(BaseModel):
 class ModelUsage(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    reasoning_tokens: int = Field(default=0, ge=0)
-    cache_read_tokens: int = Field(default=0, ge=0)
-    cache_write_tokens: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    output_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    reasoning_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    cache_read_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    cache_write_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     provider_retries: int = Field(default=0, ge=0, le=6)
 
     def __add__(self, other: ModelUsage) -> ModelUsage:

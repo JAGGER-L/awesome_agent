@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -32,9 +33,12 @@ from awesome_agent.core.tools.permissions import (
     ToolApprovalRequest,
 )
 from awesome_agent.core.tools.registry import (
+    MAX_REGISTERED_TOOL_CATALOG_BYTES,
+    MAX_REGISTERED_TOOLS,
     DuplicateToolName,
     RegisteredTool,
     ToolRegistry,
+    ToolRegistryLimitError,
 )
 from awesome_agent.core.workspace import resolve_workspace
 
@@ -360,6 +364,324 @@ def test_registry_replaces_one_namespace_atomically() -> None:
     assert registry.resolve("echo") is not None
     assert registry.resolve("mcp.two.second") is not None
     assert registry.resolve("mcp.one.replaced") is None
+
+
+def test_registry_replaces_an_exact_tool_set_without_touching_mcp_namespace() -> None:
+    registry = echo_registry()
+
+    def registered(name: str) -> RegisteredTool:
+        return RegisteredTool(
+            ToolSpec(
+                name=name,
+                description=name,
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+            ),
+            EmptyArguments,
+            handler,
+        )
+
+    mcp_tool = registered("mcp.fixture.search")
+    registry.replace_namespace("mcp.fixture", (mcp_tool,))
+    managed_names = ("memory_list", "memory_add")
+
+    registry.replace_exact_set(
+        managed_names,
+        (registered("memory_list"), registered("memory_add")),
+    )
+
+    assert registry.resolve("mcp.fixture.search") is mcp_tool
+    assert registry.resolve("echo") is not None
+    assert registry.resolve("memory_list") is not None
+    assert registry.resolve("memory_add") is not None
+
+    registry.replace_exact_set(managed_names, ())
+
+    assert registry.resolve("mcp.fixture.search") is mcp_tool
+    assert registry.resolve("echo") is not None
+    assert registry.resolve("memory_list") is None
+    assert registry.resolve("memory_add") is None
+
+
+@pytest.mark.parametrize("base_count", [125, 126, 127, 128])
+def test_registry_rejects_exact_set_over_aggregate_limit_without_partial_change(
+    base_count: int,
+) -> None:
+    registry = ToolRegistry()
+
+    def registered(name: str) -> RegisteredTool:
+        return RegisteredTool(
+            ToolSpec(
+                name=name,
+                description="bounded",
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+            ),
+            EmptyArguments,
+            handler,
+        )
+
+    for index in range(base_count - 1):
+        item = registered(f"base_{index}")
+        registry.register(
+            spec=item.spec,
+            input_model=item.input_model,
+            handler=item.handler,
+        )
+    mcp_tool = registered("mcp.fixture.search")
+    registry.replace_namespace("mcp.fixture", (mcp_tool,))
+    before = registry.specifications()
+
+    with pytest.raises(ToolRegistryLimitError, match="128-tool aggregate limit"):
+        registry.replace_exact_set(
+            ("memory_list", "memory_add", "memory_replace", "memory_remove"),
+            tuple(
+                registered(name)
+                for name in (
+                    "memory_list",
+                    "memory_add",
+                    "memory_replace",
+                    "memory_remove",
+                )
+            ),
+        )
+
+    assert registry.specifications() == before
+    assert registry.resolve("mcp.fixture.search") is mcp_tool
+    assert all(
+        registry.resolve(name) is None
+        for name in (
+            "memory_list",
+            "memory_add",
+            "memory_replace",
+            "memory_remove",
+        )
+    )
+
+
+def test_registry_accepts_exact_set_at_aggregate_limit() -> None:
+    registry = ToolRegistry()
+
+    def registered(name: str) -> RegisteredTool:
+        return RegisteredTool(
+            ToolSpec(
+                name=name,
+                description="bounded",
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+            ),
+            EmptyArguments,
+            handler,
+        )
+
+    for index in range(MAX_REGISTERED_TOOLS - 4):
+        item = registered(f"base_{index}")
+        registry.register(
+            spec=item.spec,
+            input_model=item.input_model,
+            handler=item.handler,
+        )
+    memory_tools = tuple(
+        registered(name)
+        for name in (
+            "memory_list",
+            "memory_add",
+            "memory_replace",
+            "memory_remove",
+        )
+    )
+
+    registry.replace_exact_set(
+        tuple(tool.spec.name for tool in memory_tools),
+        memory_tools,
+    )
+
+    assert len(registry.specifications()) == MAX_REGISTERED_TOOLS
+    assert all(registry.resolve(tool.spec.name) is tool for tool in memory_tools)
+
+
+def test_registry_rejects_invalid_exact_set_contracts_without_mutation() -> None:
+    registry = echo_registry()
+    before = registry.specifications()
+    valid_spec = ToolSpec(
+        name="memory_list",
+        description="List memory.",
+        input_schema={},
+        capability="memory.read",
+        read_only=True,
+    )
+    invalid_spec = ToolSpec.model_construct(
+        name="memory_list",
+        description="",
+        input_schema={},
+        capability="memory.read",
+        read_only=True,
+        display_metadata={},
+    )
+    candidates = (
+        RegisteredTool(invalid_spec, EmptyArguments, handler),
+        RegisteredTool(valid_spec, EmptyArguments, cast(ToolHandler, None)),
+        RegisteredTool(
+            valid_spec,
+            EmptyArguments,
+            handler,
+            cancellation_grace_seconds=0.0,
+        ),
+        RegisteredTool(
+            valid_spec,
+            EmptyArguments,
+            handler,
+            cancellation_grace_seconds=cast(float, "invalid"),
+        ),
+    )
+
+    for candidate in candidates:
+        with pytest.raises(ToolRegistryLimitError):
+            registry.replace_exact_set(("memory_list",), (candidate,))
+        assert registry.specifications() == before
+
+
+def test_registry_rejects_duplicate_or_unmanaged_exact_set_tools() -> None:
+    registry = echo_registry()
+
+    def registered(name: str) -> RegisteredTool:
+        return RegisteredTool(
+            ToolSpec(
+                name=name,
+                description=name,
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+            ),
+            EmptyArguments,
+            handler,
+        )
+
+    before = registry.specifications()
+    duplicate = registered("memory_list")
+    with pytest.raises(DuplicateToolName, match="memory_list"):
+        registry.replace_exact_set(
+            ("memory_list",),
+            (duplicate, duplicate),
+        )
+    with pytest.raises(ValueError, match="outside the managed exact set"):
+        registry.replace_exact_set(
+            ("memory_list",),
+            (registered("memory_add"),),
+        )
+
+    assert registry.specifications() == before
+
+
+def test_registry_rejects_aggregate_tool_count_without_partial_replacement() -> None:
+    registry = ToolRegistry()
+
+    def registered(name: str) -> RegisteredTool:
+        return RegisteredTool(
+            ToolSpec(
+                name=name,
+                description="bounded",
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+            ),
+            EmptyArguments,
+            handler,
+        )
+
+    for index in range(MAX_REGISTERED_TOOLS - 1):
+        item = registered(f"base_{index}")
+        registry.register(
+            spec=item.spec,
+            input_model=item.input_model,
+            handler=item.handler,
+        )
+    registry.replace_namespace("mcp.one", (registered("mcp.one.previous"),))
+
+    with pytest.raises(ToolRegistryLimitError) as raised:
+        registry.replace_namespace(
+            "mcp.one",
+            (
+                registered("mcp.one.first"),
+                registered("mcp.one.second"),
+            ),
+        )
+
+    assert str(raised.value) == "Tool registry exceeds the 128-tool aggregate limit"
+    assert registry.resolve("mcp.one.previous") is not None
+    assert registry.resolve("mcp.one.first") is None
+    assert len(registry.specifications()) == MAX_REGISTERED_TOOLS
+
+
+def test_registry_rejects_aggregate_bytes_without_mutating_existing_tools() -> None:
+    registry = echo_registry()
+    oversized = RegisteredTool(
+        ToolSpec(
+            name="mcp.one.large",
+            description="bounded",
+            input_schema={
+                "type": "string",
+                "description": "x" * MAX_REGISTERED_TOOL_CATALOG_BYTES,
+            },
+            capability="mcp.invoke",
+            read_only=False,
+        ),
+        EmptyArguments,
+        handler,
+    )
+
+    with pytest.raises(ToolRegistryLimitError) as raised:
+        registry.replace_namespace("mcp.one", (oversized,))
+
+    assert str(raised.value) == (
+        "Tool registry exceeds the 1 MiB aggregate catalog limit"
+    )
+    assert registry.resolve("echo") is not None
+    assert registry.resolve("mcp.one.large") is None
+
+
+def test_registry_rejects_non_utf8_contract_without_mutating_snapshot() -> None:
+    registry = echo_registry()
+
+    with pytest.raises(ToolRegistryLimitError, match="unsafe catalog contract"):
+        registry.register(
+            spec=ToolSpec.model_construct(
+                name="unsafe",
+                description="\ud800",
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+                display_metadata={},
+            ),
+            input_model=EmptyArguments,
+            handler=handler,
+        )
+
+    assert [spec.name for spec in registry.specifications()] == ["echo"]
+
+
+@pytest.mark.parametrize("grace", [0.0, -1.0, float("inf"), float("nan")])
+def test_registry_rejects_invalid_handler_cancellation_grace(grace: float) -> None:
+    registry = echo_registry()
+
+    with pytest.raises(ToolRegistryLimitError, match="invalid cancellation grace"):
+        registry.register(
+            spec=ToolSpec(
+                name="invalid_grace",
+                description="Invalid cancellation contract",
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+            ),
+            input_model=EmptyArguments,
+            handler=handler,
+            cancellation_grace_seconds=grace,
+        )
+
+    assert [spec.name for spec in registry.specifications()] == ["echo"]
 
 
 @pytest.mark.asyncio

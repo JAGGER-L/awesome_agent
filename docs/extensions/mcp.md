@@ -87,8 +87,8 @@ Provider credentials is not automatically exported to an MCP child.
 | `untrusted` | Workspace declaration exists but the workspace is not trusted. |
 | `enablement_required` | Trusted workspace declaration has no matching current config-hash approval. |
 | `configured` | Effective declaration is eligible but not currently connected. |
-| `connected` | The Manager owns a live client plus one complete compiled catalog generation. Registry synchronization is a subsequent Application step. |
-| `error` | Connection, catalog, call, or cleanup failed and the Manager catalog is invalid. The Application removes the matching namespace when it synchronizes or receives the bound invalidation callback. |
+| `connected` | The live client, complete compiled catalog generation, and complete Registry namespace are all published. |
+| `error` | Connection, catalog, publication, call, or cleanup failed; the Manager catalog is invalid and that server's Registry namespace is absent. |
 
 `/mcp restart <id>` first drops the old client and catalog, which removes the
 old `mcp.<server-id>.*` registry namespace, then performs a fresh connection.
@@ -104,28 +104,26 @@ Awesome does not register tools page by page:
 spawn + initialize stdio client
   -> list every catalog page
   -> enforce page/tool/byte limits
-  -> compile every input and output JSON Schema
-  -> Manager atomically publishes client + catalog generation + CONNECTED
-  -> Application builds every RegisteredTool for that generation
-  -> Registry atomically replaces the complete server namespace
+  -> compile every input/output JSON Schema and final namespaced name
+  -> build every generation-bound RegisteredTool candidate
+  -> Registry validates its aggregate snapshot and atomically replaces namespace
+  -> without awaiting, Manager commits generation + client + catalog + CONNECTED
 ```
 
-If any tool name, contract, schema, page cursor, or resource limit is invalid,
-the new client closes, the Manager catalog is invalidated, and status becomes
-`error`. On synchronization, the Application removes the server namespace. A
-valid subset of a Manager catalog or Registry namespace is never published.
+The complete candidate is compiled while the Manager holds that server's lock.
+Registry replacement is an all-or-none synchronous operation. After it
+succeeds, no `await` separates the Manager assignments that publish the same
+generation and finally set `CONNECTED`. Therefore `connected` means both the
+Manager catalog and that generation's complete namespace are available; it is
+not an intermediate catalog-only state.
 
-The two atomic replacements are not one cross-component transaction.
-`connected` describes Manager state and is not, by itself, proof that the
-namespace was installed. There is also a current contract gap: the catalog
-accepts an upstream component tool name of unbounded length, while a complete
-namespaced name is limited to 128 characters in `/tools` payloads and 200 in
-model/event contracts. An overlong valid-looking name can therefore leave the
-Manager `connected` while Registry adaptation, model exposure, or `/tools`
-presentation fails. Treat that state as unavailable, correct the server
-catalog, and restart; runtime hardening should validate the complete
-`mcp.<server>.<tool>` name against the strictest downstream consumer during
-catalog compilation.
+If any tool name, contract, schema, page cursor, per-server bound, or shared
+Registry bound is invalid, the new client closes, the Manager invalidates the
+catalog generation and removes that server namespace, and status becomes
+`error` with a fixed, sanitized diagnostic. No valid subset is published, and
+another server's committed namespace remains intact. The compiler validates the
+complete `mcp.<server>.<tool>` name against the 128-character downstream limit,
+so an overlong name fails before Registry publication.
 
 Catalog limits are:
 
@@ -135,8 +133,16 @@ Catalog limits are:
 | Tools per server | 128 |
 | One input or output schema | 256 KiB |
 | Complete catalog | 1 MiB |
-| Schema nesting | 64 levels |
+| Complete schema JSON nesting | 64 levels |
+| Complete `mcp.<server>.<tool>` name | 128 characters |
 | Tool description | 500 characters |
+
+The shared Tool Registry also enforces aggregate limits across built-ins and
+all extension namespaces: at most 128 tools and at most 1 MiB for the canonical
+model-facing definitions (`name`, `description`, and `input_schema`). These are
+whole-Registry budgets, not additional per-server allowances. A candidate that
+fits its server catalog can therefore still be rejected as a whole when the
+effective shared Registry would exceed either budget.
 
 Input and output schemas default to JSON Schema Draft 2020-12. An explicit
 `$schema` may select a dialect supported by the installed `jsonschema` runtime.
@@ -150,7 +156,9 @@ MCP argument or result validation.
 target a fragment in the same schema resource. Missing fragments, remote
 references, duplicate anchors or resource IDs, unknown dialects, and required
 unknown vocabularies reject the catalog. Schema compilation never fetches the
-network.
+network. Before dialect, semantic, or reference traversal, the 64-level limit
+is applied to the complete schema JSON tree, including `default`, `examples`,
+and unknown extension-keyword values.
 
 ## Generation-bound invocation
 
@@ -179,7 +187,8 @@ and must validate. Structured JSON is preflighted before schema traversal at
 64 KiB, 4,096 nodes, and 64 levels. Responses may contain at most 1,024 content
 blocks. Rendered text is bounded to 30,000 characters, retaining a head and tail
 with an explicit omitted-character marker when needed. Invalid or missing
-structured output becomes a sanitized, non-retryable execution failure.
+structured output, and any text block that is not valid UTF-8, becomes a
+sanitized, non-retryable execution failure before rendering.
 
 ## Timeout, cancellation, and uncertain outcome
 

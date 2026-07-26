@@ -39,7 +39,7 @@ name: review-api
 description: Review an HTTP API change for compatibility and operational risk
 allowed-tools: [ls, read_file, glob, grep]
 license: MIT
-compatibility: Awesome Agent 1.2.x
+compatibility: Awesome Agent 1.3.x
 metadata:
   owner: platform-team
   maturity: stable

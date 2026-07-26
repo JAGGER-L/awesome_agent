@@ -59,6 +59,7 @@ from awesome_agent.core.changes import (
     SymlinkChange,
     TextFileChange,
 )
+from awesome_agent.core.contracts import MAX_JSON_SAFE_INTEGER
 from awesome_agent.core.events import (
     AssistantReasoningDeltaPayload,
     AssistantTextDeltaPayload,
@@ -106,11 +107,11 @@ METHODS = (
 )
 
 
-def _json_bytes(value: object) -> bytes:
+def _json_bytes(value: object, *, ensure_ascii: bool = False) -> bytes:
     return (
         json.dumps(
             value,
-            ensure_ascii=False,
+            ensure_ascii=ensure_ascii,
             indent=2,
             sort_keys=True,
         )
@@ -319,7 +320,7 @@ def _valid_methods() -> dict[str, object]:
             _success(result(StatusCommandPayload(snapshot=status_snapshot))),
         ),
         (
-            "provider.credential.set",
+            "provider.credential.set.configured",
             "provider.credential.set",
             {
                 "provider": "deepseek",
@@ -333,6 +334,55 @@ def _valid_methods() -> dict[str, object]:
                     status=ProviderCredentialSetStatus.CONFIGURED,
                     source=CredentialSource.AWESOME,
                     code="credential_saved",
+                )
+            ),
+        ),
+        (
+            "provider.credential.set.invalid",
+            "provider.credential.set",
+            {
+                "provider": "deepseek",
+                "action": "add",
+                "api_key": "fixture-invalid-secret",
+                "allow_unverified": False,
+            },
+            _success(
+                ProviderCredentialSetResult(
+                    provider="deepseek",
+                    status=ProviderCredentialSetStatus.INVALID,
+                    source=None,
+                    code="credential_invalid",
+                )
+            ),
+        ),
+        (
+            "provider.credential.set.confirm_unverified",
+            "provider.credential.set",
+            {
+                "provider": "kimi",
+                "action": "add",
+                "api_key": "fixture-unverified-secret",
+                "allow_unverified": False,
+            },
+            _success(
+                ProviderCredentialSetResult(
+                    provider="kimi",
+                    status=ProviderCredentialSetStatus.CONFIRM_UNVERIFIED,
+                    source=None,
+                    code="credential_validation_unavailable",
+                )
+            ),
+        ),
+        (
+            "provider.credential.set.deleted",
+            "provider.credential.set",
+            {"provider": "mem0", "action": "delete"},
+            _success(
+                ProviderCredentialSetResult(
+                    provider="mem0",
+                    status=ProviderCredentialSetStatus.DELETED,
+                    source=None,
+                    code="credential_deleted",
                 )
             ),
         ),
@@ -414,6 +464,13 @@ def _invalid_methods() -> dict[str, object]:
                 "method": "application.getState",
                 "params": {"extra": True},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "request_id.unpaired_surrogate",
+                "request_id": "\ud800",
+                "method": "application.getState",
+                "params": {},
+                "expected": {"kind": "jsonrpc_error", "code": -32600},
             },
             {
                 "name": "thread.list.limit",
@@ -626,7 +683,10 @@ def _payload(event_type: EventType) -> EventPayload:
             estimated_tokens=128,
         )
     if event_type is EventType.USAGE_UPDATED:
-        return UsageUpdatedPayload(input_tokens=12, output_tokens=4)
+        return UsageUpdatedPayload(
+            input_tokens=MAX_JSON_SAFE_INTEGER,
+            output_tokens=4,
+        )
     if event_type is EventType.MEMORY_STATUS:
         return MemoryStatusPayload(layer="local", enabled=False, status="disabled")
     if event_type is EventType.INTERACTION_REQUIRED:
@@ -688,12 +748,35 @@ def _invalid_events() -> dict[str, object]:
     assert isinstance(valid, dict)
     operation = _model(_event(EventType.OPERATION_STARTED, 2))
     assert isinstance(operation, dict)
+    usage = _model(_event(EventType.USAGE_UPDATED, 3))
+    assert isinstance(usage, dict)
+    usage_payload = usage["payload"]
+    assert isinstance(usage_payload, dict)
     return {
         "cases": [
             {
                 "name": "sequence.zero",
                 "event": {**valid, "sequence": 0},
                 "reason": "sequence",
+            },
+            {
+                "name": "sequence.unsafe_integer",
+                "event": {
+                    **valid,
+                    "sequence": MAX_JSON_SAFE_INTEGER + 1,
+                },
+                "reason": "safe range",
+            },
+            {
+                "name": "usage.unsafe_integer",
+                "event": {
+                    **usage,
+                    "payload": {
+                        **usage_payload,
+                        "input_tokens": MAX_JSON_SAFE_INTEGER + 1,
+                    },
+                },
+                "reason": "safe range",
             },
             {
                 "name": "event_type.payload_mismatch",
@@ -1069,7 +1152,7 @@ def build_files() -> dict[str, bytes]:
         "commands.json": _json_bytes(_commands()),
         "events.invalid.json": _json_bytes(_invalid_events()),
         "events.valid.json": _json_bytes(_valid_events()),
-        "methods.invalid.json": _json_bytes(_invalid_methods()),
+        "methods.invalid.json": _json_bytes(_invalid_methods(), ensure_ascii=True),
         "methods.valid.json": _json_bytes(_valid_methods()),
         "results.failures.json": _json_bytes(_failure_results()),
     }

@@ -7,7 +7,7 @@ scheme, compatibility proxy, or promise that third-party clients can mix
 versions independently.
 
 Protocol version **3** is paired with the exact installed product version. The
-current repository product version is **1.2.1**. Event envelopes have their own
+current repository product version is **1.3.0**. Event envelopes have their own
 version **1**.
 
 ## Process and transport
@@ -20,11 +20,15 @@ version **1**.
   Empty lines are ignored; invalid UTF-8, invalid JSON, or an oversized request
   returns JSON-RPC parse error `-32700` and the reader continues.
 - The TUI applies the same 1 MiB limit when encoding requests and decoding Core
-  output. Core's `JsonLineWriter` currently has no corresponding output-size
-  preflight. A valid aggregate response can therefore exceed the TUI limit and
-  make the TUI close the protocol as an invalid frame. This is a current
-  cross-process contract gap, not a larger supported response size.
+  output. Core measures compact UTF-8 content before writing stdout. An
+  oversized request result is replaced with the bounded, non-retryable product
+  error `result_too_large`; an oversized event is rejected before any bytes are
+  written. Core never emits a frame that the bundled TUI must reject for size.
 - Output serialization is compact UTF-8 JSON with non-ASCII text preserved.
+  Non-finite numbers and text that cannot be represented as UTF-8 are never
+  written. An otherwise completed request with an unrepresentable result is
+  replaced by one redacted `internal_error` Application failure using the same
+  request ID.
 - The bounded stdout queue holds 64 frames; an undrained/full queue or a write
   that does not complete within five seconds breaks the channel rather than
   allowing unbounded memory growth.
@@ -41,13 +45,21 @@ Ink                     Protocol Host              Application
  |                            |                          |
  |------ turn.submit -------->|                          |
  |                            |-- atomically admit ----->|
+ |<---- event: operation.started ------------------------|
  |                            |<-- OperationAccepted ----|
  |<---- JSON-RPC response ----|                          |
- |<---- event: operation.started ------------------------|
  |<---- event: turn.started / deltas / tools ------------|
  |<---- event: turn.completed ---------------------------|
  |<---- event: operation.completed ----------------------|
 ```
+
+`operation.started` is written before the Application returns
+`OperationAccepted`, so it precedes the matching JSON-RPC response on the
+shared output stream. Once the Operation task is scheduled, later Turn or Tool
+events can also race that response. The bundled TUI starts its event consumer
+before submitting work and correlates these self-identifying events by
+`operation_id`, `turn_id`, and `client_message_id`; a client must not discard
+an event merely because its request promise has not resolved yet.
 
 ## JSON-RPC request shape
 
@@ -57,16 +69,18 @@ Ink                     Protocol Host              Application
 
 Only `jsonrpc`, `id`, `method`, and `params` are allowed. `jsonrpc` must be
 `"2.0"`; `method` must be a non-empty string; `params` defaults to `{}` and must
-be an object for a registered method. An ID is a string or integer, never a
-boolean or `null`. Typed integer fields in method parameters are limited to
-JavaScript's interoperable safe range and must be integral JSON numbers.
+be an object for a registered method. An ID is a 1–128 Unicode-scalar string
+without unpaired UTF-16 surrogates, or a JavaScript-interoperable safe integer;
+it is never a boolean or `null`. Core and TUI enforce the same contract. Typed
+integer fields in method parameters use the same safe range and must be
+integral JSON numbers.
 
-The shipped TUI additionally requires a request ID to be either a 1–128
-character string or a safe integer. Core's outer JSON-RPC parser currently does
-not enforce that ID length/range; it accepts any Python string or integer. This
-is a cross-language contract gap, not permission for another private client to
-send larger IDs, because a large integer cannot round-trip safely through the
-TUI. Protocol hardening should make Core reject what the TUI rejects.
+The safe-integer rule also covers every integer-valued number in results,
+errors, and events, including sequence numbers, token counters, durations, and
+generic diagnostic data. Non-integral numbers must be finite. Before writing a
+frame, Core recursively rejects unsafe integral numbers, non-string object
+keys, invalid Unicode, non-JSON containers, and structures deeper than 64
+levels; the TUI applies the corresponding safe-number rule when decoding.
 
 Notifications omit `id` and receive no response, even on method/parameter
 failure. Production clients should use requests for lifecycle/control methods
@@ -89,7 +103,7 @@ The Host begins `UNINITIALIZED`. `initialize` must use:
   "params": {
     "protocol_version": 3,
     "client_name": "awesome",
-    "client_version": "1.2.1"
+    "client_version": "1.3.0"
   }
 }
 ```
@@ -131,7 +145,7 @@ Lengths are Unicode string lengths after JSON decoding.
 | `turn.submit` | `thread_id`; `content` 1–200,000; `client_message_id` matching `client_[A-Za-z0-9_-]+`, max 128 | Operation, Thread, Turn, and client-message IDs |
 | `direct.execute` | `thread_id`; transport accepts `command` 1–30,000; the delegated `execute` tool accepts at most 8,000 | Operation and Thread IDs |
 | `command.execute` | `name`; optional `arguments` string array | One typed `CommandOutcome` |
-| `provider.credential.set` | see below | Provider, status, selected source, diagnostic code |
+| `provider.credential.set` | see below | Provider, status, optional selected source, diagnostic code |
 | `interaction.respond` | `interaction_id` 1–128; `decision` enum | Accepted flag and status |
 | `operation.cancel` | `operation_id` 1–128 | Operation ID and whether cancellation was requested |
 | `shutdown` | `{}` | `{ "stopped": true }` |
@@ -161,10 +175,9 @@ making otherwise valid YAML configuration unusable.
 `thread.list` uses an opaque cursor; clients must not decode or synthesize it.
 `thread.read` paginates backward with `before_sequence` and returns
 `next_before_sequence` when more entries exist. Explicit null pagination fields
-are invalid so “not supplied” has one unambiguous wire representation. Until
-Core enforces or chunks its own output frame size, clients should request small
-`thread.read` pages: the schema permits 500 entries and each transcript entry
-may be large enough for the aggregate response to exceed 1 MiB.
+are invalid so “not supplied” has one unambiguous wire representation. The
+Application dynamically reduces a requested page until the encoded result fits
+its 900 KiB budget and preserves `next_before_sequence` for the omitted entries.
 
 ### Turn and direct acceptance
 
@@ -194,9 +207,10 @@ exactly one branch: typed `result`, typed `interaction`, or stable command
 `error`. Exact grammar and foreground snapshot exceptions are in
 [Slash Commands](commands.md).
 
-The `/tools` result is not paginated. A sufficiently large aggregate of
-built-in, Skill-support, and MCP tools can therefore hit the same Core-output
-frame gap described above even when every individual tool contract is valid.
+The `/tools` result is not paginated. Catalog admission applies its own
+aggregate bounds; the transport's final byte check still returns
+`result_too_large` instead of emitting an invalid frame if another producer
+breaks that invariant.
 
 ### `provider.credential.set`
 
@@ -213,6 +227,12 @@ key the Provider rejects is not saved. For `mem0`, Core currently performs no
 remote credential validation and saves any locally valid input; an invalid key
 fails only when a later Mem0 initialization or operation reaches the service.
 
+The result contains `source` only when Core can report a selected credential
+source. It is normally `awesome` after a successful save, but invalid,
+save-unverified-confirmation, or delete results can have no selected source; in
+that case the field is omitted. Explicit `"source": null` is not a valid v3
+result.
+
 ### `interaction.respond`
 
 Decision values are `trust`, `reset_state`, `allow_once`,
@@ -225,9 +245,14 @@ authority.
 ### `operation.cancel` and `shutdown`
 
 Cancel is best-effort and identity-specific. A true result means cancellation
-was delivered to the active operation; terminal completion is still observed
-through events. Handler/process/MCP cleanup is bounded, after which the original
-cancellation continues to propagate.
+was delivered while the matching Operation was still cancellable, and its
+terminal outcome is `operation.cancelled`. False also covers an unknown ID, an
+Operation already cancelling, or an Operation whose completed/failed outcome
+has crossed its commit point. Cancellation after that commit point cannot
+rewrite the durable outcome; the original completed/failed terminal event is
+published instead. Handler/process/MCP cleanup and terminal publication are
+bounded, after which the original pre-commit cancellation continues to
+propagate.
 
 Shutdown is urgent. A valid request first cancels other background requests,
 prevents new foreground leases, cancels/waits for active operations and
@@ -267,12 +292,18 @@ Product error codes are:
 | Configuration/workspace | `configuration_invalid`, `workspace_not_trusted`, `model_not_configured`, `provider_not_configured` |
 | Conversation/foreground | `thread_not_found`, `turn_not_found`, `turn_busy`, `operation_busy`, `recovery_required` |
 | Input/commands | `invalid_arguments`, `command_not_available` |
+| Output bounds | `result_too_large` |
 | Checkpoints | `checkpoint_missing`, `checkpoint_corrupt` |
 | Compatibility/state | `client_version_incompatible`, `protocol_version_incompatible`, `state_created_by_newer_version`, `state_unknown`, `state_unavailable`, `state_reset_busy`, `state_reset_failed` |
 | Invariant failure | `internal_error` |
 
 Clients use the `retryable` flag plus current state, not string matching on the
 message, to decide whether a retry is appropriate.
+
+In Protocol v3, an Application-level `state_unavailable` error is retryable and
+includes bounded `state_directory` metadata. This is distinct from the
+non-retryable `state_unavailable` inside a built-in Memory tool's `ToolOutput`;
+the two envelopes must not be normalized by code string alone.
 
 ## JSON-RPC errors
 
@@ -339,7 +370,9 @@ The emitter enforces one start and at most one terminal lifecycle event for a
 given operation or Turn. The Tool Executor likewise finalizes one ToolActivity
 and one terminal tool event per call. Consumers should render by sequence and
 correlation IDs rather than assuming response/event arrival order across
-concurrent requests.
+concurrent requests. In particular, `operation.started` for an accepted Turn or
+Direct command precedes its acceptance response, and subsequent events may
+arrive before that response is handled.
 
 ## Concurrency and backpressure
 

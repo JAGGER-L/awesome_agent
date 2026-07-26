@@ -52,10 +52,12 @@ Pydantic 默认值，会忽略未知 object 字段，并强制转换兼容标量
   duration。
 
 稳定的内置 error code 为 `invalid_arguments`、`not_found`、`workspace_not_trusted`、
-`workspace_escape`、`permission_denied`、`conflict`、`timeout`、`execution_failed`、
-`uncertain_outcome`、`memory_disabled`、`memory_conflict`、`memory_rejected` 和
-`cancelled`。`uncertain_outcome` 主要用于 MCP 边界：它表示外部副作用可能已经发生，绝不能
-自动重放。
+`workspace_escape`、`permission_denied`、`conflict`、`timeout`、`state_unavailable`、
+`execution_failed`、`uncertain_outcome`、`memory_disabled`、`memory_conflict`、
+`memory_rejected` 和 `cancelled`。当另一进程持有 Local Memory mutation 锁时，
+`timeout` 可重试；`state_unavailable` 表示无法安全使用 lock sidecar 或平台锁边界，
+不可重试。`uncertain_outcome` 主要用于 MCP 边界：它表示外部副作用可能已经发生，
+绝不能自动重放。
 
 普通 handler 的外层期限是 30 秒。`execute` 提供下面说明的动态期限。有界清理后会继续传播
 取消；取消不会转换为普通错误结果。

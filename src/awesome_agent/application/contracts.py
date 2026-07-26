@@ -40,6 +40,7 @@ class ProductErrorCode(StrEnum):
     PROVIDER_NOT_CONFIGURED = "provider_not_configured"
     INVALID_ARGUMENTS = "invalid_arguments"
     COMMAND_NOT_AVAILABLE = "command_not_available"
+    RESULT_TOO_LARGE = "result_too_large"
     CHECKPOINT_MISSING = "checkpoint_missing"
     CHECKPOINT_CORRUPT = "checkpoint_corrupt"
     RECOVERY_REQUIRED = "recovery_required"
@@ -74,7 +75,7 @@ class ProviderCredentialSetRequest(BaseModel):
         if value is None:
             return None
         raw = value.get_secret_value()
-        if not raw.strip() or "\r" in raw or "\n" in raw:
+        if not raw.strip() or "\0" in raw or "\r" in raw or "\n" in raw:
             raise ValueError("Provider credential value is invalid.")
         return value
 

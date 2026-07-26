@@ -10,7 +10,10 @@ byte。
 - `VERSION` 是唯一手工维护的产品版本来源。
 - Python metadata、TUI package/lock/generated source、Protocol fixture manifest、
   installer、archive name 与内嵌 payload 都与 `VERSION` 一致。
-- Release revision 位于 `main`，并已通过 Required 与 Security check。
+- 根目录、Python wheel 与 TUI 的 package metadata 和 license 文件都声明并携带同一份
+  MIT license。授权正文必须精确一致；只有单独一行 copyright 可以变化。
+- Release revision 位于 `main`，且精确 `GITHUB_SHA` 上由 GitHub Actions 生成的最新
+  `Required` 与 `Security required` check-run 都已成功。
 - 确定性测试不需要 live credential 或网络服务。
 - Bundle 只在 Ubuntu build 一次，下载后的相同 byte 在 Windows 与 macOS 验证。
 - `SHA256SUMS` 恰好覆盖三个已发布 executable/archive asset。
@@ -32,15 +35,22 @@ dist/release/
 Archive 包含唯一、确定性的顶层目录，其中有：
 
 - `VERSION`；
+- 根目录 MIT `LICENSE`；
 - 已校验的 pure-Python Awesome wheel；
 - 一份精确、带 SHA-256 hash 的生产 requirements lock；
-- 构建后的 TUI entry point、package metadata、npm lock 与 license。
+- 构建后的 TUI entry point、package metadata、npm lock 与匹配的 license。
 
 Installer 与 archive 一同发布，因为单行安装 URL 直接指向这些 asset。它们会校验 checksum，
 并在产品安装根目录下安装私有 Python/Node runtime；它们不是 source-checkout 开发脚本。
 安装根目录与负责配置、凭据、状态和 Memory 的 `AWESOME_HOME` 不同。默认安装根目录在
 POSIX 上是 `~/.local/share/awesome`，在 Windows 上是
 `%LOCALAPPDATA%\Programs\Awesome`。
+
+公共 bootstrap asset 通过 `latest` 获取，但其中内嵌的 `VERSION` 必须把每个应用 payload
+request 绑定到 `releases/download/v<version>`。两个 installer 都从 staging 前 recovery 到最终
+清理全程持有唯一排他锁，在 install root 下 staging 以保证同文件系统 rename，并且只有应用与
+launcher 都替换完成后，才通过删除 `.install-transaction` 提交。`app.rollback` 是 recovery
+状态，不是第二个已安装版本。
 
 ## 1. 选择并准备版本
 
@@ -60,9 +70,20 @@ POSIX 上是 `~/.local/share/awesome`，在 Windows 上是
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-5. 从已接受变更准备 GitHub Release note，包括用户可见行为、安全边界、配置/状态兼容性
+5. 获取仓库 tag，证明 candidate 版本尚未使用，并验证所有版本与 license 表面一致：
+
+   ```powershell
+   git fetch --tags origin
+   uv run python scripts/release/check_identity.py --tag-policy absent
+   ```
+
+   此脚本刻意读取本地 Git ref，而不调用 GitHub。CI 会在调用前 checkout 完整 tag history，
+   因此开发者 checkout 必须先 fetch tag。确定性的 PR CI 无法证明一个没有对应本地 tag 的
+   GitHub Release 不存在；发布前仍需检查 Releases 页面，并在仓库设置中保护版本 tag
+   namespace。
+6. 从已接受变更准备 GitHub Release note，包括用户可见行为、安全边界、配置/状态兼容性
    和已知限制。
-6. 检查每一处版本相关 diff。Feature branch 不应包含意外版本变更。
+7. 检查每一处版本相关 diff。Feature branch 不应包含意外版本变更。
 
 Protocol version 与 Application schema version 相互独立。仅在线缆不兼容变更时递增
 Protocol；只有持久化语义不能安全读取时才递增 Application schema。两者都不能取代唯一
@@ -114,8 +135,10 @@ uv run python scripts/release/verify_bundle.py `
   "dist/release/awesome-$Version.zip" $Version
 ```
 
-Builder 自己会创建 wheel、导出 hashed requirement、检查版本一致性与 TUI output、拒绝
-禁止内容、组装确定性 ZIP、复制 installer，并写入 checksum。
+Builder 会从精确 Git commit time 派生 `SOURCE_DATE_EPOCH`，创建 wheel、导出 hashed
+requirement、检查版本一致性与 TUI output、拒绝禁止内容、组装确定性 ZIP、复制 installer，
+并写入 checksum。Packaging test 证明 Hatch 在同一个 source epoch 下会生成相同 wheel
+byte；两个 CI run 之间的最终依据仍是 asset checksum 比较，而不是环境变量本身。
 
 Verifier 检查：
 
@@ -125,6 +148,8 @@ Verifier 检查：
   以及不存在 editable/migration content；
 - 精确 hashed dependency requirement 与隔离安装；
 - `uv pip check`、Core import 与 console entry point；
+- 在全新 home 与 workspace 中运行已安装 wheel 的 Protocol v3 生命周期：
+  `initialize` -> workspace trust -> `application.getState` -> `shutdown`；
 - TUI package/version/entry point；
 - 当前 storage bootstrap、不兼容状态分类、独占 reset 所有权，以及保留 config、Skills
   与 Memory。
@@ -156,10 +181,79 @@ Merge 前：
 4. 校验 diff 不包含 secret、generated cache、debug output 或过期文档；
 5. 将经过审查的精确 revision 合并到 `main`。
 
-在最新、干净的 `main` 上重新运行本地 identity/fixture check。手动 dispatch `Release gate`
-workflow 只允许来自 `main`；它会 build 并上传 candidate，但不会 attest provenance。
+在最新、干净的 `main` 上重新运行本地 identity/fixture check。Required CI 使用
+`absent-or-current`：已发布 revision 仍然有效，而后续有变化的 revision 必须选择新版本。
 
-## 6. 打 tag 并验证 CI artifact
+## 6. 构建 candidate 并收集 tag 前实机证据
+
+等待 `main` push 上名为 `Required` 和 `Security required` 的 run 成功，再从 `main` 手动
+dispatch `Release gate`。Workflow 只有只读 Checks 权限；除非精确 `GITHUB_SHA` 上由
+GitHub Actions 生成的这两个同名最新 check-run 都成功，否则它拒绝 build。它还使用
+`absent` tag policy，因此已占用的版本 tag（包括不能解析到 commit 的 tag）会 fail closed。
+Manual dispatch 会上传 candidate artifact，但不会 attest provenance。
+
+下载 `awesome-release-<commit>`，保留外层 artifact digest、四文件 inventory 与
+`SHA256SUMS`，并在测试前校验其中三个条目。使用受信的静态服务器，只在 loopback 暴露该
+artifact 目录；例如在单独 terminal 中运行：
+
+```text
+python -m http.server 8765 --bind 127.0.0.1 --directory <artifact-directory>
+```
+
+在每个真实支持 host 上运行 candidate installer。WSL2 Ubuntu 24.04 x64 与 Apple Silicon
+macOS 使用：
+
+```sh
+AWESOME_INSTALL_CANDIDATE=1 \
+AWESOME_INSTALL_CANDIDATE_ASSET_BASE=http://127.0.0.1:8765 \
+sh ./install.sh
+```
+
+Windows 11 x64 使用：
+
+```powershell
+$env:AWESOME_INSTALL_CANDIDATE = "1"
+$env:AWESOME_INSTALL_CANDIDATE_ASSET_BASE = "http://127.0.0.1:8765"
+try {
+  & .\install.ps1
+} finally {
+  Remove-Item Env:AWESOME_INSTALL_CANDIDATE, `
+    Env:AWESOME_INSTALL_CANDIDATE_ASSET_BASE -ErrorAction SilentlyContinue
+}
+```
+
+Candidate mode 是 release 测试 hook，不是备用下载功能。只有显式启用时才接受，并且只允许
+没有嵌套 path、credential、query 或 fragment 的
+`http://127.0.0.1:<1..65535>`；正常 installer 会拒绝 override。Windows 还要求 client
+workstation（`ProductType == 1`），因此 Windows Server hosted runner 不能冒充 Windows 11
+证据。
+
+收集 host 证据前，运行两个可执行 installer contract harness。Fault injection 必须覆盖旧版本与
+首次安装 rollback、每一种 marker/rollback recovery 形态、延迟的 commit 后清理、同根 staging、
+原子 launcher replacement、活动/崩溃锁、由确定性 barrier 分隔的两个 stale-lock reclaim
+contender，以及保持外部 sentinel 不变的 link/reparse path。Windows harness 要同时在 Windows
+PowerShell 5.1 与当前受支持 PowerShell 下运行；portable `sh` harness 要在用于 release 证据的
+POSIX host 上运行。
+
+三台 host 都要验证：
+
+```text
+candidate installer succeeds from the loopback-served artifact
+awesome --version == VERSION
+workspace starts and trust prompt is correct
+provider configuration is visible without exposing a key
+one simple Turn completes
+one read-only command and one approved edit behave correctly
+close/restart and --continue restore the expected Thread
+```
+
+使用一次性 OS user 或 VM snapshot 与临时 workspace；安装会修改产品 install root，也可能
+更新用户 PATH 或 shell profile。停止 loopback server，并记录 host OS/architecture、commit
+SHA、artifact checksum、命令与脱敏结果。只有 Windows 11 x64、WSL2 Ubuntu 24.04 x64 与
+Apple Silicon macOS 全部通过后，candidate 才有资格打 tag。缺少任一结果时只能合并 source
+candidate，不得 tag 或 release。
+
+## 7. 打 tag 并验证 CI artifact
 
 创建与 `VERSION` 精确匹配的 annotated 或 lightweight version tag：
 
@@ -169,8 +263,9 @@ git tag "v$Version"
 git push origin "v$Version"
 ```
 
-`Release gate` workflow 会校验 tagged commit 是 `origin/main` 的 ancestor，且 tag 恰好为
-`v<version>`。然后它会：
+`Release gate` workflow 会再次校验精确 `GITHUB_SHA` 上的 Required/Security check-run，
+校验 tagged commit 是 `origin/main` 的 ancestor、tag 恰好为 `v<version>`，且该 tag
+解析到当前 checkout commit。然后它会：
 
 1. 安装锁定 Python 与 TUI 依赖；
 2. 重新运行确定性 release check 与 audit；
@@ -181,9 +276,22 @@ git push origin "v$Version"
 7. 重新检查 `SHA256SUMS`，为三个有 checksum 的 subject 创建 GitHub artifact
    attestation。
 
-Windows 与 macOS 不重新 build。任一平台 verifier 失败都会使 candidate 无效。
+Windows 与 macOS 不重新 build。每个平台 verifier 都会安装下载到的 wheel 并执行同一条
+Protocol v3 生命周期，因此它证明 packaged Core 能在各 CI runtime 启动，而不只是能在
+Ubuntu import。任一平台 verifier 失败都会使 candidate 无效。
 
-## 7. 发布 GitHub Release
+Hosted runner 验证与最终用户 host 的 installer 证据回答不同问题。前者在公共 asset 尚未
+存在时验证 candidate bundle；它不能证明已发布的一行 installer，也不能代替 Windows 11、
+WSL2 Ubuntu 24.04 或 Apple Silicon 用户环境。不要把普通 Ubuntu runner 重新标记为 WSL
+证据。
+
+发布前下载成功的 tag artifact，将 `SHA256SUMS` 中全部三个条目与已批准的 tag 前 candidate
+比较。如果每个 asset hash 都完全相同，三端实机证据可用于 tagged byte；如果任一 hash
+不同，必须针对 tag artifact 重新执行第 6 节完整的三端 loopback smoke，之后才能发布。
+`SOURCE_DATE_EPOCH` 消除了已知的 wheel timestamp 变化，但 checksum 相等才是证明；不能
+仅因 source SHA 相同就推断 byte 相同。
+
+## 8. 发布 GitHub Release
 
 Workflow 不会自动创建 GitHub Release。Tagged workflow 与 attestation 成功后：
 
@@ -198,10 +306,12 @@ Workflow 不会自动创建 GitHub Release。Tagged workflow 与 attestation 成
 
 CI 验证与上传之间，不要 rebuild、编辑、重新压缩或重新生成任何 asset。
 
-## 8. 安装 smoke test
+## 9. Rollout recheck
 
-发布后关闭现有 Awesome 进程，并在需要 release 证据的每个支持 host 上测试文档中的
-installer。
+发布后在 Windows 11 x64、WSL2 Ubuntu 24.04 x64 与 Apple Silicon macOS 上使用文档中的
+公共 one-line installer，重新检查 GitHub Release routing、公共 asset 名称、checksum 与
+startup。这是 rollout recheck，不能替代 tag 前 host gate，也不能作为缺少该证据时先发布
+的理由。
 
 验证：
 
@@ -215,8 +325,9 @@ one read-only command and one approved edit behave correctly
 close/restart and --continue restore the expected Thread
 ```
 
-安装测试应使用临时 home 与 workspace。绝不要把破坏性测试清理指向用户 home、仓库根或
-未解析的环境变量。
+使用一次性 user 或 VM snapshot 与临时 workspace。绝不要把破坏性测试清理指向用户
+home、仓库根或未解析的环境变量。Rollout recheck 失败时执行下方 defective-release
+流程；不得静默替换已发布 asset。
 
 ## 源代码外的仓库控制
 
@@ -257,7 +368,8 @@ fail closed。
 - Required/Security/Release gate run link；
 - artifact attestation 与 checksum；
 - 确定性和可选 live 证据；
-- 支持平台 smoke result；
+- tag 前支持 host candidate result、tagged-asset checksum 比较、必要的 tagged-asset smoke
+  重跑，以及 rollout recheck；
 - 未验证证据与残余风险；
 - state/protocol 兼容说明；
 - 精确已发布 asset inventory。

@@ -2,10 +2,10 @@
 
 An extension is successful when it enters an existing authority boundary. A
 provider translates model I/O, a tool enters the Registry/Policy/Executor path,
-a Skill contributes bounded instructions, and an MCP server contributes an
-all-or-none compiled Manager catalog followed by an all-or-none Registry
-namespace replacement. Those two commits are not one transaction. None creates
-a second Agent loop, command runtime, permission system, or database owner.
+a Skill contributes bounded instructions, and an MCP server contributes one
+complete candidate published through the Manager-owned Registry critical
+section. None creates a second Agent loop, command runtime, permission system,
+or database owner.
 
 ## Decide whether to extend
 
@@ -244,7 +244,18 @@ never workspace YAML.
 The client must complete and compile the entire paginated catalog before
 publishing any registry item. Standard JSON Schema constraints are supported,
 but references must remain local and network retrieval is forbidden. Respect
-tool/page/schema/catalog/depth limits.
+the per-server limits: 128 tools and pages, 256 KiB per input or output schema,
+1 MiB per catalog, depth 64, and 128 characters for the final
+`mcp.<server>.<tool>` name. Also account for the shared Registry aggregate:
+128 tools and 1 MiB of canonical model-facing definitions across built-ins and
+all extensions.
+
+The Manager holds the server lock while compiling the candidate and publishing
+it. Registry replacement validates and swaps the complete namespace first; no
+`await` then separates publication of the matching generation, client, catalog,
+and `CONNECTED`. A failure must close the candidate client, set `ERROR`, remove
+that server namespace, and retain unrelated namespaces. Never expose raw
+catalog data in the diagnostic.
 
 Do not:
 
@@ -254,7 +265,8 @@ Do not:
 - validate arguments after approval or remote I/O;
 - reuse an old validator with a new catalog generation;
 - replay a timed-out or disconnected call in the same Turn;
-- force JSON Schema `format` checks while claiming default semantics.
+- force JSON Schema `format` checks while claiming default semantics;
+- classify MCP as implicitly allowed in any permission mode.
 
 MCP input validation errors must be generic and must not expose raw arguments
 or schemas. Output validation and JSON traversal occur under their own byte,

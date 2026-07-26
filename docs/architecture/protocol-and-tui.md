@@ -24,7 +24,8 @@ drift explicit.
 The protocol is not a public network API. It assumes one launcher-owned local
 peer, but still validates every request and applies explicit input/backpressure
 bounds because malformed or mismatched local components must not corrupt state.
-Frame enforcement is currently asymmetric, as described below.
+Both inbound and outbound frames enforce the same strict 1 MiB UTF-8 JSON
+boundary, as described below.
 
 ## Protocol v3 contract
 
@@ -33,10 +34,18 @@ and the same product version as Core. A v2 client fails explicitly even if its
 product version matches. Protocol and product versions answer different
 questions: wire compatibility versus release identity.
 
-Request IDs are JSON/JavaScript-safe integers or strings as allowed by the
-JSON-RPC parser. Numeric IDs must be integral, finite, non-Boolean, and within
-`-(2^53 - 1)..2^53 - 1`. Optional fields are omitted when absent; explicit
-`null` is accepted only by a schema that declares it nullable.
+Request IDs are JSON/JavaScript-safe integers or 1–128 Unicode-scalar strings
+without unpaired UTF-16 surrogates. Numeric IDs must be integral, finite,
+non-Boolean, and within `-(2^53 - 1)..2^53 - 1`. Optional fields are omitted
+when absent; explicit `null` is accepted only by a schema that declares it
+nullable.
+
+The same safe-integer boundary applies recursively to integer-valued numbers in
+all results, errors, events, and generic JSON values. The Core writer also
+rejects non-finite numbers, invalid Unicode, non-string object keys, non-JSON
+containers, and output nesting beyond 64 levels before serialization. This is
+the final invariant boundary even when an upstream producer returns an
+unconstrained Python object.
 
 The current request methods are:
 
@@ -109,8 +118,8 @@ the current snapshot without creating a second Application.
 
 Core limits each request line to 1 MiB. The TUI limits both encoded requests and
 decoded Core frames to the same size. Core's output writer serializes one whole
-line but does not currently reject an output frame larger than 1 MiB. Core reads
-one sequential byte stream, while accepted ordinary requests run in independent
+line and checks its compact UTF-8 byte count before writing. Core reads one
+sequential byte stream, while accepted ordinary requests run in independent
 tasks. This prevents a slow provider or command from blocking urgent control
 parsing.
 
@@ -118,7 +127,8 @@ parsing.
 | --- | ---: |
 | Core request line | 1 MiB |
 | TUI encoded/decoded frame | 1 MiB |
-| Core output frame | no explicit size preflight |
+| Core output frame | 1 MiB compact UTF-8 content |
+| Core output JSON depth | 64 levels |
 | ordinary in-flight requests | 128 |
 | background control requests | 16 |
 | active/recent request IDs | 4,096 |
@@ -139,13 +149,19 @@ is serialized whole, so concurrently completed requests cannot interleave JSON
 bytes. A blocked consumer or write failure closes the transport path rather
 than accumulating unbounded memory.
 
-The asymmetric frame bound is observable: a schema-valid `thread.read` page can
-contain as many as 500 large entries, and `/tools` has no aggregate pagination.
-Either response can exceed 1 MiB, be written by Core, and then be treated as a
-fatal oversized frame by the shipped TUI. Callers should use smaller transcript
-pages; `/tools` currently has no caller-side mitigation. A runtime fix needs an
-explicit Core output policy—reject, paginate, or chunk—plus cross-language
-regression fixtures rather than a documentation-only promise.
+For Turn and Direct admission, `operation.started` is enqueued before the
+Application can return `OperationAccepted`; later lifecycle events may then
+race the matching response. The TUI installs the event consumer before issuing
+requests and treats event correlation IDs as authoritative, so early events do
+not depend on response-first buffering.
+
+`thread.read` first shrinks its page under its application byte budget. The
+writer is the final invariant boundary for every method and event: if any
+request result still exceeds 1 MiB, Core sends a bounded `result_too_large`
+Application failure with the same request ID. It is non-retryable because the
+method may already have produced an external effect; the protocol never
+transparently replays it. Event schemas are independently bounded, and an
+oversized event is rejected before stdout receives a partial or invalid frame.
 
 Wire concurrency is not mutation concurrency. The Application foreground
 arbiter still decides which Turn, direct command, state mutation, interaction,

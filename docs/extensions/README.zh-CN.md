@@ -70,14 +70,17 @@ user config / trusted workspace config / package files
 
 - 一个无效 Skill 会产生一条诊断，但不会隐藏有效 Skill；
 - 已启用的**本地** Memory 若无效或不可读，会使 Turn 上下文准备失败，而不是静默遗漏持久
-  事实；当前的一个清理缺口可能会把刚创建的 Turn 留给启动恢复流程处理；
+  事实；coordinator 会终结已创建的 Turn 并尝试删除其 checkpoint；如果清理失败，启动
+  reconciliation 会重试删除遗留的 checkpoint；
 - **Mem0 Cloud** recall 不可用时，会省略该云端来源并报告有界诊断；
-- 无效的 MCP catalog 或失败的 MCP 传输会使该服务器的 Manager 快照失效，但不会替换
-  Core 状态或其他服务器的工具。
+- 无效的 MCP catalog、失败的发布或失败的 MCP 传输会使该服务器的 Manager 快照与
+  Registry namespace 失效，但不会替换 Core 状态或其他服务器的工具。
 
 这些边界并不完全一致。尤其是，当前 Workspace 配置读取器虽受信任门控制，却还没有采用
-`AGENTS.md` 和 Workspace Skills 所使用的有界、禁止跟随链接、打开后身份检查。MCP Manager
-catalog 与 Tool Registry namespace 也分两个独立的原子步骤发布。明确的当前限制见
+`AGENTS.md` 和 Workspace Skills 所使用的有界、禁止跟随链接、打开后身份检查。对于 MCP，
+一个 server lock 会保护候选项编译与发布：Registry 先替换完整 namespace，随后 Manager
+在中间没有 `await` 的情况下发布同一 generation 和 `CONNECTED`。共享 Registry 限制可以
+整体拒绝候选项，而不影响其他 namespace。见
 [配置](../reference/configuration.zh-CN.md)与 [MCP](mcp.zh-CN.md)。
 
 可选不等于不可见。降级的扩展可能改变模型可获得的证据，因此应当诊断它，而不能假定一个

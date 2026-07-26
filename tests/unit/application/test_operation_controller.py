@@ -4,7 +4,11 @@ import pytest
 
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.foreground import ForegroundArbiter, ForegroundBusy
-from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.application.operations import (
+    OperationBusy,
+    OperationContinuation,
+    OperationController,
+)
 from awesome_agent.core.events import (
     CollectingEventSink,
     EventEmitter,
@@ -47,6 +51,19 @@ class BlockingOperationSink:
         await self.release.wait()
 
 
+class BlockingStartedCollectingSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.OPERATION_STARTED:
+            self.entered.set()
+            await self.release.wait()
+        await super().emit(event)
+
+
 class CancelAfterStartedEventSink:
     async def emit(self, event: EventEnvelope) -> None:
         if event.event_type is EventType.OPERATION_STARTED:
@@ -59,6 +76,31 @@ class FailOnOperationCancelledSink(CollectingEventSink):
     async def emit(self, event: EventEnvelope) -> None:
         if event.event_type is EventType.OPERATION_CANCELLED:
             raise BrokenPipeError("protocol output closed")
+        await super().emit(event)
+
+
+class BlockingOperationTerminalSink(CollectingEventSink):
+    def __init__(self, terminal: EventType) -> None:
+        super().__init__()
+        self._terminal = terminal
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is self._terminal:
+            self.entered.set()
+            await self.release.wait()
+        await super().emit(event)
+
+
+class SelfCancellingOperationTerminalSink(CollectingEventSink):
+    def __init__(self, terminal: EventType) -> None:
+        super().__init__()
+        self._terminal = terminal
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is self._terminal:
+            raise asyncio.CancelledError
         await super().emit(event)
 
 
@@ -113,6 +155,42 @@ async def test_operation_and_exclusive_leases_are_atomic_in_both_directions() ->
 
 
 @pytest.mark.asyncio
+async def test_operation_admission_runs_inside_lease_and_releases_on_rejection() -> (
+    None
+):
+    foreground = ForegroundArbiter()
+    allowed = OperationContinuation(
+        interaction_id="interaction_1",
+        interaction_generation=2,
+        thread_id="thread_1",
+        turn_id="turn_1",
+    )
+    observed: list[tuple[bool, OperationContinuation | None]] = []
+
+    def admission(continuation: OperationContinuation | None) -> bool:
+        observed.append((foreground.operation_active, continuation))
+        return continuation == allowed
+
+    controller = OperationController(
+        _emitter(CollectingEventSink()),
+        foreground,
+        admission_gate=admission,
+    )
+
+    with pytest.raises(OperationBusy, match="pending interaction"):
+        controller.reserve()
+    assert foreground.active_kind is None
+    assert controller.active_operation_id is None
+
+    reservation = controller.reserve(continuation=allowed)
+    assert foreground.operation_active is True
+    controller.abort(reservation)
+
+    assert observed == [(True, None), (True, allowed)]
+    assert foreground.active_kind is None
+
+
+@pytest.mark.asyncio
 async def test_aborted_reservation_releases_foreground_without_events() -> None:
     foreground = ForegroundArbiter()
     controller = OperationController(
@@ -162,6 +240,35 @@ async def test_shutdown_cancels_unpublished_operation_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_during_started_publication_prevents_factory_execution() -> None:
+    sink = BlockingStartedCollectingSink()
+    controller = OperationController(_emitter(sink))
+    factory_called = False
+
+    async def factory(operation_id: str) -> None:
+        nonlocal factory_called
+        del operation_id
+        factory_called = True
+
+    starter = asyncio.create_task(controller.start(factory))
+    await sink.entered.wait()
+    operation_id = controller.active_operation_id
+    assert operation_id is not None
+
+    assert await controller.cancel(operation_id) is True
+    sink.release.set()
+    handle = await starter
+    with pytest.raises(asyncio.CancelledError):
+        await handle.task
+
+    assert factory_called is False
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        EventType.OPERATION_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_cancel_during_child_publication_cancels_and_waits_for_child() -> None:
     controller = OperationController(
         EventEmitter(
@@ -208,6 +315,183 @@ async def test_operation_failure_emits_one_failed_terminal_event() -> None:
         EventType.OPERATION_STARTED,
         EventType.OPERATION_FAILED,
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal", "fails"),
+    [
+        (EventType.OPERATION_COMPLETED, False),
+        (EventType.OPERATION_FAILED, True),
+    ],
+)
+async def test_committed_operation_rejects_cancel_during_terminal_publication(
+    terminal: EventType,
+    fails: bool,
+) -> None:
+    sink = BlockingOperationTerminalSink(terminal)
+    controller = OperationController(_emitter(sink))
+
+    async def factory(operation_id: str) -> str:
+        if fails:
+            raise RuntimeError(operation_id)
+        return operation_id
+
+    running = asyncio.create_task(controller.run(factory))
+    await sink.entered.wait()
+    operation_id = controller.active_operation_id
+    assert operation_id is not None
+
+    assert await controller.cancel(operation_id) is False
+    sink.release.set()
+    if fails:
+        with pytest.raises(RuntimeError, match=operation_id):
+            await running
+    else:
+        assert await running == operation_id
+
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        terminal,
+    ]
+    assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_committed_operation_publication() -> None:
+    sink = BlockingOperationTerminalSink(EventType.OPERATION_COMPLETED)
+    controller = OperationController(_emitter(sink))
+
+    async def factory(operation_id: str) -> str:
+        return operation_id
+
+    running = asyncio.create_task(controller.run(factory))
+    await sink.entered.wait()
+    shutdown = asyncio.create_task(controller.shutdown())
+    await asyncio.sleep(0)
+
+    assert shutdown.done() is False
+    sink.release.set()
+    await shutdown
+    assert await running is not None
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        EventType.OPERATION_COMPLETED,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+async def test_internal_terminal_publication_cancel_preserves_committed_outcome(
+    fails: bool,
+) -> None:
+    terminal = EventType.OPERATION_FAILED if fails else EventType.OPERATION_COMPLETED
+    sink = SelfCancellingOperationTerminalSink(terminal)
+    controller = OperationController(_emitter(sink))
+
+    async def factory(operation_id: str) -> str:
+        if fails:
+            raise RuntimeError(operation_id)
+        return operation_id
+
+    if fails:
+        with pytest.raises(RuntimeError, match="operation_"):
+            await controller.run(factory)
+    else:
+        assert (await controller.run(factory)).startswith("operation_")
+
+    assert [event.event_type for event in sink.events] == [EventType.OPERATION_STARTED]
+    assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("committed", "factory_exit", "terminal"),
+    [
+        ("completed", "cancel", EventType.OPERATION_COMPLETED),
+        ("failed", "cancel", EventType.OPERATION_FAILED),
+        ("failed", "return", EventType.OPERATION_FAILED),
+        ("completed", "error", EventType.OPERATION_COMPLETED),
+    ],
+)
+async def test_committed_terminal_is_authoritative_over_later_factory_exit(
+    committed: str,
+    factory_exit: str,
+    terminal: EventType,
+) -> None:
+    sink = CollectingEventSink()
+    controller = OperationController(_emitter(sink))
+
+    async def factory(operation_id: str) -> str:
+        if committed == "completed":
+            controller.commit_completed(operation_id, lambda: None)
+        else:
+            controller.commit_failed(operation_id, lambda: None)
+        if factory_exit == "cancel":
+            raise asyncio.CancelledError
+        if factory_exit == "error":
+            raise RuntimeError("after commit")
+        return "returned"
+
+    if factory_exit == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await controller.run(factory)
+    elif factory_exit == "error":
+        with pytest.raises(RuntimeError, match="after completion was committed"):
+            await controller.run(factory)
+    else:
+        with pytest.raises(RuntimeError, match="after failure was committed"):
+            await controller.run(factory)
+
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        terminal,
+    ]
+    assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_in_flight_cancelled_terminal_publication() -> None:
+    sink = BlockingOperationTerminalSink(EventType.OPERATION_CANCELLED)
+    controller = OperationController(_emitter(sink))
+    started = asyncio.Event()
+
+    async def factory(operation_id: str) -> None:
+        del operation_id
+        started.set()
+        await asyncio.Event().wait()
+
+    running = asyncio.create_task(controller.run(factory))
+    await started.wait()
+    operation_id = controller.active_operation_id
+    assert operation_id is not None
+    assert await controller.cancel(operation_id) is True
+    await sink.entered.wait()
+
+    shutdown = asyncio.create_task(controller.shutdown())
+    await asyncio.sleep(0)
+    assert shutdown.done() is False
+    sink.release.set()
+    await shutdown
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        EventType.OPERATION_CANCELLED,
+    ]
+    assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_closes_future_operation_admission() -> None:
+    foreground = ForegroundArbiter()
+    controller = OperationController(_emitter(CollectingEventSink()), foreground)
+
+    await controller.shutdown()
+
+    with pytest.raises(OperationBusy):
+        controller.reserve()
 
 
 @pytest.mark.asyncio

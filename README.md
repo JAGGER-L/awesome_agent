@@ -40,7 +40,7 @@ Local memory and Mem0 Cloud are independent and default off.
 curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-### Windows
+### Windows 11 x64
 
 ```powershell
 irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
@@ -116,6 +116,11 @@ Contributors can run the current checkout with `uv run awesome-dev`; see
 startup, and troubleshooting flow.
 
 ## Security
+
+Report vulnerabilities privately through the
+[security policy](https://github.com/JAGGER-L/awesome_agent/blob/main/SECURITY.md)
+([简体中文](https://github.com/JAGGER-L/awesome_agent/blob/main/SECURITY.zh-CN.md));
+do not disclose sensitive details in a public issue.
 
 Only trust projects you understand. Review `/diff` before keeping changes, and
 enter credentials only through Awesome's masked `/model` or `/auth` flow. Full

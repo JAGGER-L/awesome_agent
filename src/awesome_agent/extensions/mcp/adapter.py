@@ -2,25 +2,26 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import ClassVar, Protocol, cast
 
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from jsonschema.protocols import Validator
-from mcp.types import CallToolResult, TextContent, Tool
+from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput, ToolSpec
 from awesome_agent.core.tools.errors import ExpectedToolFailure
-from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
+from awesome_agent.core.tools.registry import RegisteredTool
 from awesome_agent.extensions.mcp.catalog import CompiledMcpTool, McpCatalog
-from awesome_agent.extensions.mcp.manager import McpCallUncertain, McpUnavailable
+from awesome_agent.extensions.mcp.errors import McpCallUncertain, McpUnavailable
 
 _MAX_CONTENT_CHARS = 30_000
 _CONTENT_HEAD_CHARS = 24_000
 _CONTENT_TAIL_CHARS = 5_000
 _MAX_CONTENT_BLOCKS = 1_024
+_UTF8_VALIDATION_CHUNK_CHARS = 4_096
 _MAX_STRUCTURED_WIRE_BYTES = 64 * 1024
 _MAX_STRUCTURED_NODES = 4_096
 _MAX_STRUCTURED_DEPTH = 64
@@ -45,14 +46,6 @@ class _UnsafeContentOutput(ValueError):
 
 
 class McpCaller(Protocol):
-    def catalog(self, server_id: str) -> McpCatalog: ...
-
-    def bind_catalog_invalidator(
-        self,
-        server_id: str,
-        invalidator: Callable[[], None],
-    ) -> None: ...
-
     async def call_tool(
         self,
         server_id: str,
@@ -71,6 +64,7 @@ class _McpArguments(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def validate_schema(cls, value: object) -> object:
+        _validate_strict_json(value)
         try:
             cls.schema_validator.validate(cast(JsonValue, value))
         except JsonSchemaValidationError as error:
@@ -78,34 +72,42 @@ class _McpArguments(BaseModel):
         return value
 
 
+def _validate_strict_json(value: object) -> None:
+    """Reject Python values that cannot be represented by strict JSON."""
+
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if current is None or isinstance(current, bool | str | int):
+            continue
+        if isinstance(current, float):
+            if not math.isfinite(current):
+                raise ValueError("MCP arguments are not strict JSON")
+            continue
+        if isinstance(current, dict):
+            if any(not isinstance(key, str) for key in current):
+                raise ValueError("MCP arguments are not strict JSON")
+            pending.extend(current.values())
+            continue
+        if isinstance(current, list):
+            pending.extend(current)
+            continue
+        raise ValueError("MCP arguments are not strict JSON")
+
+
 class McpToolAdapter:
     def __init__(self, manager: McpCaller, server_id: str) -> None:
         self._manager = manager
         self._server_id = server_id
 
-    def replace_registry_tools(
+    def registered_tools(
         self,
-        registry: ToolRegistry,
-        tools: tuple[Tool, ...],
-    ) -> None:
-        catalog = self._manager.catalog(self._server_id)
-        if tuple(tool.name for tool in tools) != tuple(
-            item.tool.name for item in catalog.compiled_tools
-        ):
-            raise McpUnavailable("MCP catalog changed before registry synchronization")
-        registered = tuple(
+        catalog: McpCatalog,
+    ) -> tuple[RegisteredTool, ...]:
+        return tuple(
             self._registered(item, generation=catalog.generation)
             for item in catalog.compiled_tools
         )
-        namespace = f"mcp.{self._server_id}"
-        registry.replace_namespace(namespace, registered)
-        self._manager.bind_catalog_invalidator(
-            self._server_id,
-            lambda: registry.remove_namespace(namespace),
-        )
-
-    def remove_registry_tools(self, registry: ToolRegistry) -> None:
-        registry.remove_namespace(f"mcp.{self._server_id}")
 
     def _registered(
         self,
@@ -236,6 +238,19 @@ def _bounded_content(result: CallToolResult) -> tuple[str, bool]:
 def _preflight_content(result: CallToolResult) -> None:
     if len(result.content) > _MAX_CONTENT_BLOCKS:
         raise _UnsafeContentOutput
+    for item in result.content:
+        if isinstance(item, TextContent):
+            _validate_utf8_text(item.text)
+
+
+def _validate_utf8_text(value: str) -> None:
+    """Validate remote text without allocating an unbounded encoded copy."""
+
+    try:
+        for start in range(0, len(value), _UTF8_VALIDATION_CHUNK_CHARS):
+            value[start : start + _UTF8_VALIDATION_CHUNK_CHARS].encode("utf-8")
+    except (TypeError, UnicodeEncodeError) as error:
+        raise _UnsafeContentOutput from error
 
 
 class _BoundedTextBuilder:

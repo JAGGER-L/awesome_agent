@@ -249,3 +249,15 @@ def test_usage_summary_adds_non_negative_counters() -> None:
 
     with pytest.raises(ValidationError):
         UsageSummary(input_tokens=-1)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [9_007_199_254_740_992, float("inf"), float("nan")],
+)
+def test_usage_summary_rejects_non_interoperable_numbers(value: int | float) -> None:
+    with pytest.raises(ValidationError):
+        UsageSummary(
+            input_tokens=value if isinstance(value, int) else 0,
+            active_execution_seconds=(value if isinstance(value, float) else 0.0),
+        )

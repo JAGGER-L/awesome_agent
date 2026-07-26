@@ -41,6 +41,19 @@ Tool 无法执行？ -----> 参数/路径/权限/硬拒绝
 
 不要绕过校验和。确认可以访问 GitHub release assets、releases.astral.sh 和 nodejs.org，检查企业代理是否改写下载，然后重试。持续不匹配可能是发布损坏或不完整，报告时应包含 asset 名称和精确错误。
 
+### 另一个安装器正在运行或升级曾被中断
+
+一个排他 installer lock 会覆盖 recovery、download、同根 staging、应用替换、launcher 替换与
+commit 后清理。请等待存活的安装器结束，不要再启动一个。如果它已被终止，请重新运行同一个
+version-bound installer；安装器会先验证记录的 owner，再回收死亡锁，并协调
+`.install-transaction` 与 `app.rollback`。除非已经独立证明没有安装器进程存活，否则不要手工
+删除这些路径。
+
+如果运行以 `PATH`、shell-profile 或延迟清理 warning 结束，应用可能已经提交。打开新终端或
+手工添加文档中的 launcher 目录，检查 `awesome --version`，关闭正在运行的 Awesome session，
+再运行一次以清理 rollback 遗留项。不要把 cleanup warning 理解成覆盖 release asset 或绕过
+checksum 的许可。
+
 ### Awesome 要求交互式终端
 
 Ink UI 需要 TTY 输入和输出。请直接在终端中启动，不要通过非交互式 pipe 或重定向的标准输出启动。自动化请使用普通 shell 工具；Awesome 当前不提供 TUI batch interface。
@@ -175,7 +188,7 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 
 运行 `/memory`，再检查所请求的 user 或 Workspace scope。Memory 默认关闭，显式 mutation 使用内容 hash 防止丢失更新。解决并发编辑后，针对新的 list 重试，而不要盲目替换文件。
 
-如果已启用的 `USER.md` 或 `MEMORY.md` 无效或不可读，Turn 上下文准备会失败，而不是省略该 scope。当前的一个清理缺口可能在 Operation 报告失败后，让已经创建的 Turn 仍停留在 `in_progress`。修复 managed marker/UTF-8/size 问题或禁用 Local Memory，然后重启，让启动恢复协调 Turn。
+如果已启用的 `USER.md` 或 `MEMORY.md` 无效或不可读，Turn 上下文准备会失败，而不是省略该 scope。同一 Operation 会把已创建的 Turn 终结为失败并尝试删除其 checkpoint，因此后续 Turn 可正常开始。如果清理失败，系统会保留主要错误，并在启动 reconciliation 时重试删除遗留的 checkpoint。请先修复 managed marker/UTF-8/size 问题或禁用 Local Memory，再重试。
 
 ### Mem0 Cloud 不可用
 
@@ -190,7 +203,7 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 /mcp status <id>
 ```
 
-确认配置的命令、参数、allowlist 中的环境变量名、可执行文件可用性和 server schema。`/mcp restart <id>` 会先删除旧 namespace，再重新连接。Manager 只发布完整 catalog，Registry replacement 也只发布完整 namespace；它们是两个原子步骤，而不是一个事务。如果 Manager status 为 `connected`，但 `/tools` 或 Turn 准备失败，还应检查完整的 `mcp.<server>.<tool>` 名称是否超过 128 字符的 `/tools` 契约。当前 compiler 不会拒绝这一 downstream mismatch。
+确认配置的命令、参数、allowlist 中的环境变量名、可执行文件可用性和 server schema。`/mcp restart <id>` 会先删除旧 namespace，再重新连接。`connected` 表示存活 client、完整编译的 catalog 和完整 Registry namespace 均已发布。如果发布报告 `error`，请检查 server catalog 是否包含无效 schema，或最终 `mcp.<server>.<tool>` 名称是否超过 128 个字符。如果有效共享 Registry 将超过 128 个工具或 1 MiB，也需要减少启用的工具集或 schema 定义；被拒绝的候选项不会留下过期 namespace，也不会影响其他服务器的 namespace。
 
 MCP 超时或连接丢失后，server 可能已经执行。Awesome 会使 catalog 失效并报告不可重试的不确定结果，而不会在同一 Turn 中重连和重放。
 

@@ -192,6 +192,11 @@ Provider、Mem0、MCP 和进程测试使用 fake 或本地 fixture。普通 CI �
 平台 skip 记录的是缺失证据，不是通过的替代品。真实 Windows-only reparse/process 测试
 应放在 Windows contracts job，并使用 nightly 三 OS 矩阵提供更广泛 system 证据。
 
+Candidate installer hook 使 tag 前 release 证据无需先发布 asset 就能执行：在
+`127.0.0.1` 提供 manual-dispatch artifact，再用显式 candidate 变量运行 installer。证据
+仍必须来自 Windows 11 x64、WSL2 Ubuntu 24.04 x64 与 Apple Silicon macOS。Windows
+Server hosted job 不是 Windows 11，普通 Ubuntu runner 也不是 WSL2。
+
 ## Required CI
 
 `.github/workflows/ci.yml` 在 pull request、推送到 `main`、merge-queue revision 和手动
@@ -230,20 +235,19 @@ TUI/package 测试，以及 npm audit。Nightly 证据扩大平台覆盖，但�
 
 ## 已知 CI 证据缺口
 
-当前 workflow 仍适合增加以下五项。应把它们作为聚焦 job 添加，不应夸大现有 gate：
+Candidate-artifact installer smoke 现在是显式 manual tag 前 gate，但不会被错误标记为
+hosted CI 证据。Workflow 仍适合增加以下四项自动化；应把它们作为聚焦 job 添加，不应
+夸大现有 gate：
 
-1. **候选 artifact installer smoke。** 在每个支持 OS 的临时安装 root/home 中安装，然后
-   验证 `awesome --version`、一次 TUI/Core Protocol 握手和限定范围的卸载清理。当前
-   Windows CI 校验 installer 源代码契约，但不执行真实安装。
-2. **从源代码派生的文档契约。** 从 `COMMAND_OWNERS`、配置模型、Tool 注册和 Protocol
+1. **从源代码派生的文档契约。** 从 `COMMAND_OWNERS`、配置模型、Tool 注册和 Protocol
    method model 生成或比较 reference inventory，避免新公共契约因忘记更新手抄测试列表
    而绕过文档。
-3. **浏览器 accessibility smoke。** 对构建后的首页、一个英文指南和对应中文页面运行
+2. **浏览器 accessibility smoke。** 对构建后的首页、一个英文指南和对应中文页面运行
    Playwright + axe。静态 contrast 与 link 检查无法证明键盘导航、landmark、ARIA、移动
    菜单、搜索、语言切换或 copy-button 行为。
-4. **定时外部链接检查。** 使用有界 timeout、retry 和 allowlist，作为不阻塞 PR 的定时
+3. **定时外部链接检查。** 使用有界 timeout、retry 和 allowlist，作为不阻塞 PR 的定时
    workflow；确定性本地 link checker 有意跳过其他 origin。
-5. **部署后 Pages smoke。** 部署后请求真实 base URL、代表性英文与中文页面、`llms.txt`，
+4. **部署后 Pages smoke。** 部署后请求真实 base URL、代表性英文与中文页面、`llms.txt`，
    以及一个必须直接返回 404、不得重定向的代表性未知/非规范路由。Build 成功并不能证明
    已部署 origin 和 base-path routing 可访问。
 
@@ -252,6 +256,13 @@ TUI/package 测试，以及 npm audit。Nightly 证据扩大平台覆盖，但�
 Release workflow 从精确 revision 重新构建，运行确定性 Python、TUI、Protocol、audit
 和 packaging gate，在 Ubuntu 上构建唯一 release bundle，再在 Windows 与 macOS 上
 重新验证下载后的 artifact。只有通过所有非特权 job 的 tag run 才能进入 attestation。
+
+从 `main` manual dispatch 时，还要求精确 `GITHUB_SHA` 上由 GitHub Actions 生成的最新
+`Required` 与 `Security required` check-run 都成功。它生成的 artifact 会在允许打 tag 前
+通过 loopback 在三台真实支持 host 上运行 installer smoke。缺少该证据时只能合并
+candidate，不能 tag 或 release。Tag workflow 会重新 build，并通过三个待发布 asset hash
+与 tag 前 artifact 做 byte 比较；只要任一项不同，就必须在发布前针对 tag artifact 重跑
+三端实机 loopback smoke。命令与发布后的 rollout recheck 见[发布](release.zh-CN.md)。
 
 本地 release-quality gate 为：
 

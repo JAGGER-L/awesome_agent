@@ -19,18 +19,25 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 ```text
 <HOME>/
 ├── .env
+├── .env.lock
+├── .provider-credential-transaction.json
+├── .provider-credential-transaction.env
 ├── .state.lock
+├── .config.yaml.lock
 ├── config.yaml
 ├── ui.json
 ├── skills/
 ├── memory/
+│   ├── .USER.md.lock
 │   └── USER.md
 ├── workspaces/
 │   └── <workspace_key>/
+│       ├── .MEMORY.md.lock
 │       └── MEMORY.md
 ├── state/
 │   ├── application.db
 │   ├── checkpoints.db
+│   ├── provider-model-transaction.json
 │   └── change-journal/
 │       └── blobs/
 ├── .workspace-leases/
@@ -84,6 +91,27 @@ User Skill 包，通常为 `<HOME>/skills/<name>/SKILL.md` 加可选资源。Use
 `<HOME>/workspaces/<workspace_key>/MEMORY.md`；它刻意放在仓库之外，避免记忆事实意外变成
 一次 commit。两者都是带稳定条目 ID 和 content hash 的有界托管 Markdown 文档。见
 [Memory](../extensions/memory.zh-CN.md)。
+
+### User 状态 mutation 锁
+
+Core 会在线程和进程之间串行化 `config.yaml`、`.env`、`USER.md` 以及每个
+Workspace `MEMORY.md` 的 read-modify-write 事务。它使用一个持久的单字节 sibling
+`.<resource>.lock`；已经隐藏的 `.env` 使用 `.env.lock`，不会再增加一个前导点。
+等待这些锁有明确上限，且不在 event-loop 线程中运行，因此另一进程不会冻结
+foreground cancellation 或状态渲染。已取消的 mutation 会先在有界清理窗口内完成
+已经开始的文件系统事务，再报告取消；错过该窗口的 worker 不能之后再提交内存状态。
+在之后的进程重新加载持久文件前，必须把该 worker 的文件系统 outcome 视为不确定。
+
+等待锁达到 deadline 时，Command 和 credential RPC 会返回可重试的
+`operation_busy`，Memory tool 调用会返回可重试的 `timeout`。不安全或不可用的
+sidecar/平台锁有两种类型化 envelope：Application command 或 RPC 返回可重试的
+`state_unavailable`，并携带有界的 `state_directory` metadata；Memory tool 则返回
+不可重试的 `state_unavailable` `ToolOutput`。这些错误是固定且脱敏的，不会暴露
+sidecar 路径或操作系统异常。
+
+这些 sidecar 是协调 artifact，不是配置或 Memory 内容。只要 Awesome 进程可能仍在运行，
+就不要编辑或删除它们。第一次 mutation 前缺失它们是正常的；Core 会按需创建，
+并拒绝 link、reparse point、非常规文件，以及打开后 identity 与路径不匹配的 sidecar。
 
 ## Workspace 拥有的文件
 
@@ -140,6 +168,47 @@ ID。Tool activity 有唯一的 `(operation_id, call_id)` 边界，因此 comple
 
 不要手动编辑此 database。Row invariant、foreign key、Checkpoint store 和 Change Journal
 blob 虽使用不同文件，却共同组成一份恢复契约。
+
+## Provider model transaction journal
+
+`<HOME>/state/provider-model-transaction.json` 用于闭合 `config.yaml` 中 default model 与
+`application.db` 中 Thread selected model 之间的原子性缺口。这两类资源无法加入同一个
+database transaction。因此 model mutation 会先写入包含旧值与目标 model identity 的持久
+`prepared` 记录，再替换并 reload 配置、更新 Thread、验证两侧状态，将记录改为
+`committed`，最后才移除 journal。
+
+启动时，`prepared` 记录会回滚到旧值，`committed` 记录会向前完成到目标值。
+Reconciliation 是幂等的，只有两侧均验证通过后才清除 journal。journal 格式错误或无法恢复
+时，activation 会以 `recovery_required` 失败；若 runtime 检测到同一状态，则会阻止新的
+operation 与状态 mutation，但 snapshot 读取、取消和 shutdown 仍可使用。
+
+journal 使用严格、有界的 UTF-8 JSON，且绝不包含 credential。Core 会拒绝 linked/reparse
+parent、symlink/reparse file、hard link 或非常规文件、打开期间 identity 变化、重复 key、
+非有限 JSON 值以及超过 4 KiB 的内容。不要编辑或删除此文件：它的存在表示恢复 intent，
+而不是可随意丢弃的 cache 状态。
+
+## Provider credential 事务文件
+
+`/auth` 可能需要同时修改完整的 `<HOME>/.env` 文档，以及 `<HOME>/config.yaml` 中选中的
+credential source。两个文件不能共享一次文件系统 commit，因此 Core 在 `<HOME>` 根目录用
+两个隐藏文件协调：
+
+- `.provider-credential-transaction.json` 是严格且不含 secret 的 journal，只记录 service、
+  action、phase、source 选择和整文件 hash；
+- `.provider-credential-transaction.env` 是之前 `.env` 的逐字节完整备份，包括注释和无关
+  条目。
+
+系统先暂存 backup，再发布 `PREPARED`。启动时，`PREPARED` 和 `SECRET_COMMITTED` 都会通过
+恢复完整的旧 `.env` 与旧 source 来回滚；只有目标 `.env` hash 匹配时，`COMMITTED` 才会
+向前收敛到目标 source。只有两个持久事实都验证通过后才删除这两个文件。Reconciliation
+发生在首次真实配置加载、state preflight/reset 和 Workspace trust 处理之前，因此半写入的
+secret 无法影响启动。
+
+JSON 文件上限为 4 KiB，且绝不存储 credential。Backup 上限为 1 MiB，其中包含 secret，
+在 POSIX 上仅 owner 可读写。两者都会拒绝 symlink、reparse point、hard link、非常规文件和
+打开期间的 identity drift。`.env` 同样是有界的严格 UTF-8 输入；NUL 字节和不安全文件
+identity 会 fail closed。不要手动删除任何一个事务文件。记录无效或不一致时，系统会产生
+`recovery_required`，而不会猜测哪次写入成功。
 
 ## LangGraph checkpoint
 
@@ -202,9 +271,10 @@ Reset 会移除：
 - checkpoint；
 - ChangeSet、undo/redo 历史和 blob。
 
-Reset 保留 `<HOME>/state` 之外的一切：`config.yaml`、`.env`、`ui.json`、User Skills、
-Local Memory 文档/设置，以及已安装 release。Mem0 已存储的 Cloud Memory 记录位于外部，
-不会被本地 reset 删除。
+Reset 保留 `<HOME>/state` 之外的一切：`config.yaml`、`.env`、Provider credential 事务
+journal 与 backup、`ui.json`、User Skills、Local Memory 文档/设置和已安装 release。
+把 credential 恢复证据放在可重置 namespace 之外，可防止 state reset 抹去一项尚未解决的
+跨文件事务。Mem0 已存储的 Cloud Memory 记录位于外部，不会被本地 reset 删除。
 
 ## 备份与恢复
 

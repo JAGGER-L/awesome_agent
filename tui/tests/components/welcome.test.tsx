@@ -12,7 +12,7 @@ import { terminalDisplayWidth } from "../../src/layout/width.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 
 const baseProps = {
-  version: "1.2.1",
+  version: "1.3.0",
   workspacePath: "E:\\projects\\awesome",
   thread: { kind: "new" as const },
   model: "deepseek/deepseek-v4-flash",
@@ -63,7 +63,7 @@ describe("Welcome", () => {
 
   it("renders approved Welcome C metadata without a tagline", () => {
     const view = render(<Welcome {...baseProps} width={80} />);
-    expect(view.lastFrame()).toContain("Version      1.2.1");
+    expect(view.lastFrame()).toContain("Version      1.3.0");
     expect(view.lastFrame()).toContain("Workspace    E:\\projects\\awesome");
     expect(view.lastFrame()).toContain("Thread       New thread");
     expect(view.lastFrame()).toContain(

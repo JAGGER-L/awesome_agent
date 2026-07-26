@@ -449,25 +449,24 @@ parallel output object for ordinary file changes.
 Workspace Skill paths and opened identities are revalidated without following
 links or reparse points; one invalid package remains an isolated diagnostic.
 MCP consumes the complete paginated catalog under page, tool-count, byte, and
-deadline bounds, then compiles its JSON Schemas before the Manager atomically
-publishes the client, generation, and `CONNECTED` state. Application next builds
-the entire generation and atomically replaces its Registry namespace. Those are
-two atomic commits, not one transaction: Manager `CONNECTED` alone does not
-prove Registry installation. References remain local to one schema. Input
-arguments are validated before approval or remote I/O; a declared
+deadline bounds, then compiles its JSON Schemas and complete namespaced tool
+names before building every generation-bound Registry entry. While holding the
+server lock, the Manager synchronously replaces the complete Registry namespace
+and, without another `await`, publishes the matching client, catalog, generation,
+and `CONNECTED` state. Publication is therefore all-or-none: `CONNECTED` proves
+that the same generation's complete namespace is installed. References remain
+local to one schema. Input arguments are validated before approval or remote
+I/O; a declared
 `outputSchema` validates `structuredContent`, and structured output without text
 is rendered as bounded JSON. Restart removes the previous namespace first, and
 timeout, disconnect, or cancellation invalidates the generation; calls never
 lazily reconnect or replay an uncertain external action in the same Turn.
 
-The current catalog-name regex has no component-length bound although `/tools`
-payload names are capped at 128 characters and model/event tool names at 200.
-An excessively long namespaced name can therefore compile and leave Manager
-state connected while Registry adaptation, model exposure, or `/tools`
-presentation fails. This is a known runtime contract gap; the compiler must
-validate the complete `mcp.<server>.<tool>` name against the strictest downstream
-consumer before the two publication steps can be described as a closed
-end-to-end transaction.
+The compiler validates the complete `mcp.<server>.<tool>` name against the
+strictest downstream 128-character limit before Registry publication. Invalid
+names, schemas, duplicate names, or aggregate Registry limits close the new
+client, invalidate the candidate generation, remove that server namespace, and
+publish a sanitized `ERROR` state without exposing a valid subset.
 
 ### Memory
 
@@ -604,6 +603,7 @@ the protocol imports the Application facade rather than individual subsystems.
 | Agent graph channels | LangGraph | `state/checkpoints.db` | unfinished Turn only |
 | ChangeSet metadata | Change Journal + Storage | `state/application.db` | durable local history |
 | Change blobs | Change Journal | `state/change-journal/` | while referenced |
+| Provider model transaction intent | Application + Config | `state/provider-model-transaction.json` | until verified reconciliation |
 | User memory | Memory | `memory/USER.md` | user controlled |
 | Workspace memory | Memory | `workspaces/<key>/MEMORY.md` | workspace scoped |
 | Cloud facts | Mem0 Cloud | external account | only when enabled |

@@ -141,6 +141,13 @@ Awesome 识别：
 
 在 `/auth` 中选择服务，选择 **Awesome API key**，然后使用遮罩输入。secret store 会在 `AWESOME_HOME` 下原子替换相应值。删除它会删除本地值，但不会吊销 Provider 侧密钥。
 
+`.env` 中的值与 `config.yaml` 中选中的 source 会作为一项可从崩溃恢复的产品操作提交。
+Awesome 会在 `AWESOME_HOME` 根目录临时保存一份不含 secret 的 journal，以及仅 owner 可访问的
+完整 `.env` backup；验证两个文件后才删除恢复证据。重启时，系统会在加载 credential、检查
+state 或询问 Workspace trust 之前解决中断操作。不要编辑或删除
+`.provider-credential-transaction.json` 与 `.provider-credential-transaction.env`；若证据
+不一致，启动会报告 `recovery_required`，而不会使用只更新了一半的 key。
+
 保存 DeepSeek 或 Kimi 密钥时会执行简短验证。无效密钥不会保存。网络失败会提供显式选项，将其保存为 unverified。Mem0 可用性在扩展启用或使用时检查。
 
 绝不要把密钥放在 slash-command 参数、chat request、Workspace 配置、`AGENTS.md`、Skill 或项目 `.env` 文件中。

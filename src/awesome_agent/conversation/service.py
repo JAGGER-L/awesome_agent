@@ -107,11 +107,11 @@ class ConversationService:
     def set_skill_mode(self, thread_id: str, skill_mode: str) -> Thread:
         if re.fullmatch(r"(?:auto|off|[a-z][a-z0-9-]{0,63})", skill_mode) is None:
             raise ValueError("Skill mode is invalid.")
-        current = self._store.read_thread(thread_id).thread
-        updated = current.model_copy(
-            update={"skill_mode": skill_mode, "updated_at": self._clock()}
+        return self._store.set_thread_skill_mode(
+            thread_id,
+            skill_mode,
+            updated_at=self._clock(),
         )
-        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 
     def rename_thread(self, thread_id: str, title: str) -> Thread:
         normalized = normalize_title(title)
@@ -119,29 +119,25 @@ class ConversationService:
             raise ValueError("Title required · /rename <title>")
         if len(visible_graphemes(normalized)) > 100:
             raise ValueError("Thread title must be 100 characters or fewer.")
-        current = self._store.read_thread(thread_id).thread
-        updated = current.model_copy(
-            update={
-                "title": normalized,
-                "title_source": ThreadTitleSource.MANUAL,
-                "updated_at": self._clock(),
-            }
+        return self._store.rename_thread(
+            thread_id,
+            normalized,
+            updated_at=self._clock(),
         )
-        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 
-    def set_model(self, thread_id: str, model: str) -> Thread:
-        current = self._store.read_thread(thread_id).thread
-        updated = current.model_copy(
-            update={"current_model": model, "updated_at": self._clock()}
+    def set_model(self, thread_id: str, model: str | None) -> Thread:
+        return self._store.set_thread_model(
+            thread_id,
+            model,
+            updated_at=self._clock(),
         )
-        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 
     def set_thinking(self, thread_id: str, enabled: bool) -> Thread:
-        current = self._store.read_thread(thread_id).thread
-        updated = current.model_copy(
-            update={"thinking_enabled": enabled, "updated_at": self._clock()}
+        return self._store.set_thread_thinking(
+            thread_id,
+            enabled,
+            updated_at=self._clock(),
         )
-        return self._store.update_thread(Thread.model_validate(updated.model_dump()))
 
     def read_thread(self, thread_id: str) -> ThreadView:
         return self._store.read_thread(thread_id)
@@ -195,13 +191,18 @@ class ConversationService:
             created_at=now,
             updated_at=now,
         )
-        thread_update: dict[str, object] = {"updated_at": now}
-        if view.thread.title_source is ThreadTitleSource.AUTOMATIC and not view.entries:
-            thread_update["title"] = automatic_title(user_content)
-        updated_thread = Thread.model_validate(
-            view.thread.model_copy(update=thread_update).model_dump()
+        suggested_title = (
+            automatic_title(user_content)
+            if view.thread.title_source is ThreadTitleSource.AUTOMATIC
+            and not view.entries
+            else None
         )
-        return self._store.begin_turn(entry, turn, updated_thread)
+        return self._store.begin_turn(
+            entry,
+            turn,
+            automatic_title=suggested_title,
+            updated_at=now,
+        )
 
     def complete_turn(
         self,

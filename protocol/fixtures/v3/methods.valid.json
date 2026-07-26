@@ -5,7 +5,7 @@
       "name": "initialize.ready",
       "params": {
         "client_name": "awesome",
-        "client_version": "1.2.1",
+        "client_version": "1.3.0",
         "protocol_version": 3
       },
       "result": {
@@ -16,7 +16,7 @@
             "turns",
             "commands"
           ],
-          "product_version": "1.2.1",
+          "product_version": "1.3.0",
           "protocol_version": 3,
           "session_id": "session_11111111111111111111111111111111",
           "status": "ready",
@@ -32,7 +32,7 @@
       "name": "initialize.state_reset_required",
       "params": {
         "client_name": "awesome",
-        "client_version": "1.2.1",
+        "client_version": "1.3.0",
         "protocol_version": 3
       },
       "result": {
@@ -44,7 +44,7 @@
             "commands"
           ],
           "interaction_id": "interaction_state_reset",
-          "product_version": "1.2.1",
+          "product_version": "1.3.0",
           "protocol_version": 3,
           "session_id": "session_11111111111111111111111111111111",
           "status": "state_reset_required",
@@ -284,7 +284,7 @@
               "thread_display_id": "thread_11111111",
               "thread_id": "thread_11111111111111111111111111111111",
               "thread_title": "Fixture Thread",
-              "version": "1.2.1",
+              "version": "1.3.0",
               "workspace_path": "C:\\workspace"
             }
           }
@@ -293,7 +293,7 @@
     },
     {
       "method": "provider.credential.set",
-      "name": "provider.credential.set",
+      "name": "provider.credential.set.configured",
       "params": {
         "action": "add",
         "allow_unverified": false,
@@ -307,6 +307,58 @@
           "provider": "deepseek",
           "source": "awesome",
           "status": "configured"
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set.invalid",
+      "params": {
+        "action": "add",
+        "allow_unverified": false,
+        "api_key": "fixture-invalid-secret",
+        "provider": "deepseek"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_invalid",
+          "provider": "deepseek",
+          "status": "invalid"
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set.confirm_unverified",
+      "params": {
+        "action": "add",
+        "allow_unverified": false,
+        "api_key": "fixture-unverified-secret",
+        "provider": "kimi"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_validation_unavailable",
+          "provider": "kimi",
+          "status": "confirm_unverified"
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set.deleted",
+      "params": {
+        "action": "delete",
+        "provider": "mem0"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_deleted",
+          "provider": "mem0",
+          "status": "deleted"
         }
       }
     },

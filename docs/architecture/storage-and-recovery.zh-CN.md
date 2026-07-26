@@ -12,6 +12,9 @@ Awesome 将产品状态保存在解析后的 `AWESOME_HOME` 本地目录。之�
 | `state/application.db` | Application Storage | trust、Thread、entry、Turn、summary、tool activity、ChangeSet、pending mutation、MCP enablement | 持久化本地历史 |
 | `state/checkpoints.db` | LangGraph adapter | 未完成的 `AgentState` channel | 仅未完成 Turn |
 | `state/change-journal/` | Change Journal | 按内容寻址的 before/after blob | 被引用期间 |
+| `state/provider-model-transaction.json` | Application + Config | 连接用户默认 model 与一个 Thread model 的有界恢复 intent | 直到完成验证后的 reconciliation |
+| `.provider-credential-transaction.json` | Application + Config | 不含 secret 的 credential/source 恢复 intent | 直到完成验证后的 reconciliation |
+| `.provider-credential-transaction.env` | Application + Config | 之前 `.env` 的精确字节；包含 secret | 直到完成验证后的 reconciliation |
 | `config.yaml` | Config | 用户管理的非 secret 配置 | 由用户控制 |
 | `.env` | Config secret loader | 显式持久化的凭据 | 由用户控制 |
 | `memory/USER.md` | local Memory | 可选用户事实 | 由用户控制 |
@@ -168,6 +171,82 @@ read unfinished Turn + latest checkpoint
 这是崩溃收敛，而不是对恶意本地状态的证明。如果攻击者能同时替换 checkpoint 内容和
 匹配的 hash，系统没有第二个外部权威来认证它们。
 
+## Provider model 跨存储事务
+
+修改 `/model` 会更新两项独立持久化的事实：`config.yaml` 中新 Thread 使用的默认 model，
+以及 `application.db` 中当前 Thread 选择的 model。两个文件都无法加入对方的事务。如果只把
+其中一次写入当作 best-effort compensation，那么进程被强杀与成功的半更新将无法区分。因此
+Application 使用一份小型 write-ahead journal，并把用户配置 resource lock 作为排序边界：
+
+```text
+acquire config resource lock
+  -> reject any unresolved journal
+  -> persist PREPARED(previous values, target values)
+  -> replace and reload config.yaml
+  -> patch only the Thread model field in Application SQLite
+  -> verify both durable values
+  -> persist COMMITTED
+  -> remove journal
+release lock
+  -> publish the verified configuration to the live runtime
+```
+
+新进程会在加载受信配置前校正该 journal。`PREPARED` 表示恢复两侧旧值，`COMMITTED` 表示
+把两侧都写到目标值。两条路径均为幂等操作，会验证两个 store，并且只在验证完成后移除
+journal。journal 格式错误、校正失败或进程内补偿失败都会产生 `recovery_required`。此后
+live runtime 会拒绝新 Turn、Direct command、credential、interaction 与其他状态 mutation，
+但仍允许有界 snapshot、取消和 shutdown。系统不会猜测哪一侧胜出，也不会重放 Provider
+调用。
+
+journal 是最多 4 KiB 的严格 UTF-8 JSON，只包含 model 与 Thread identity，不包含
+credential；它会拒绝 link、reparse point、hard link、非常规文件、重复 key、非有限数值和
+打开期间的 identity drift。journal 替换前后会同步文件与目录。`config.yaml`、SQLite 与
+journal 之间仍不存在共同的断电提交原语，因此本契约证明的是普通进程崩溃收敛，而不是
+整机断电原子性。
+
+## Provider credential 跨文件事务
+
+Awesome 管理的 credential 有两个独立持久化部分：完整 `.env` 文档中的值，以及
+`config.yaml` 中选中的 source。原子替换能防止单个文件出现部分字节，却无法使这两个文件
+共同原子化。因此 `/auth` 会按固定顺序取得 config 与 secret resource lock，并执行以下
+write-ahead 协议：
+
+```text
+acquire config lock, then .env lock
+  -> reject unresolved Provider journals
+  -> snapshot the complete previous .env
+  -> persist the secret backup, then PREPARED with whole-file hashes
+  -> atomically replace .env and verify the target hash
+  -> persist SECRET_COMMITTED
+  -> update the selected source in config.yaml and reload
+  -> verify both durable facts
+  -> persist COMMITTED
+  -> remove the journal and backup
+release locks
+  -> publish the verified configuration to the live runtime
+```
+
+JSON journal 绝不包含 secret。配套 backup 保存之前 `.env` 的精确完整字节，而不是只保存
+被修改的 key；因此注释、无关 service、顺序，以及文件不存在与空文件之间的区别都能保留。
+两个文件都直接位于 `<AWESOME_HOME>`，处在可重置的 `state/` namespace 之外，因为 reset
+不得抹去尚未解决的恢复证据。
+
+启动会在首次真实 config/secret 加载之前、state preflight/reset 之前和 Workspace trust
+之前校正该事务。系统保守地认为 `PREPARED` 也可能已经修改 `.env`，因此 `PREPARED` 与
+`SECRET_COMMITTED` 都会恢复并校验完整的旧文件和旧 source。`COMMITTED` 会验证目标文件，
+并把 source 向前完成。证据缺失、格式错误、存在 link、超过上限或 hash 不一致时，会以
+`recovery_required` fail closed；系统不会根据当前 secret 猜测 phase。
+
+取消还增加一条同进程边界。如果 blocking mutation 在清理 deadline 后仍忽略取消，event-loop
+线程会先安装 Provider 配置 fence，再返回取消。即使迟到的 worker 随后提交并删除 journal，
+该进程也不会发布陈旧 snapshot 或接受另一项 mutation；新进程会重新加载已验证的持久结果。
+同一 abandonment fence 同时覆盖 model 与 credential 事务。
+
+如果已经验证并删除 `COMMITTED` 记录，之后发生 cleanup 错误，系统不能返回 RPC 失败、保留
+陈旧 runtime 且没有任何恢复证据。Mutation 要么发布已验证结果，要么保持 runtime fence。
+与 model journal 一样，文件和目录同步证明的是有界普通进程崩溃收敛，并不是两个用户文件
+之间共同的整机断电 commit。
+
 ## 恢复决策
 
 Coordinator 会对未完成 Turn 分类：
@@ -203,6 +282,12 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 | running Turn 提交后、checkpoint 前 | 产品 Turn 没有有效 checkpoint | 以稳定恢复错误码失败 |
 | checkpoint 提交但投影未提交 | 已校验的冻结 manifest | 受 lineage 约束的 compare-and-swap |
 | answer 持久化后 checkpoint 仍存在 | 终态产品 Turn | 移除残留 checkpoint |
+| Provider model journal 为 `PREPARED` | 旧值与目标 model identity | 恢复并验证两侧旧值 |
+| Provider model journal 为 `COMMITTED` | 旧值与目标 model identity | 写入并验证两侧目标值 |
+| Provider model journal 无效或无法校正 | journal 保留；runtime 不发布或保持 fenced | 以 `recovery_required` 失败；不 mutation、不猜测 |
+| Provider credential journal 为 `PREPARED` 或 `SECRET_COMMITTED` | 精确的旧 `.env` backup、source identity 与整文件 hash | 恢复并验证完整旧文件与旧 source |
+| Provider credential journal 为 `COMMITTED` | 目标 `.env` hash 与 source identity | 验证目标文件并向前完成 source |
+| Provider credential 证据无效或无法校正 | journal/backup 保留；runtime 不发布或保持 fenced | 以 `recovery_required` 失败；不加载半状态 |
 | mutation intent 持久化，作用不确定 | PendingMutation + blob | 校验、完成或回滚 |
 | shell/MCP transport 调度后失败 | 保守 observation / 不确定工具状态 | 显式 Abort 或 Retry |
 | state reset 的全新初始化失败 | 已改名的原目录 | 恢复原 namespace |
@@ -225,7 +310,15 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 - 跨进程 lease：`storage/state_lease.py`
 - 变更持久化：`storage/changes.py`、`core/changes/`
 - Turn 恢复：`application/turns.py`
+- Provider model 事务：`config/model_transaction.py`、
+  `application/provider_configuration.py`
+- Provider credential 事务：`config/credential_transaction.py`、
+  `config/credentials.py`、`application/provider_configuration.py`
 - 测试：`tests/unit/storage/`、`tests/integration/test_sqlite_checkpoints.py`、
   `tests/integration/test_agent_recovery.py`、
+  `tests/unit/config/test_model_transaction.py`、
+  `tests/unit/config/test_credential_transaction.py`、
+  `tests/unit/config/test_user_state_concurrency.py`、
+  `tests/integration/test_composition_activation.py`、
   `tests/integration/test_state_reset_concurrency.py`、
   `tests/structural/test_storage_architecture.py`

@@ -66,11 +66,19 @@ from awesome_agent.application.interactions import (
     tool_approval_choices,
     workspace_trust_choices,
 )
-from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.application.operations import (
+    OperationBusy,
+    OperationContinuation,
+    OperationController,
+)
 from awesome_agent.application.permission_commands import PermissionCommandService
 from awesome_agent.application.provider_configuration import (
     CredentialValidator,
+    ProviderConfigurationRecoveryRequired,
     ProviderConfigurationService,
+    ProviderConfigurationSnapshot,
+    reconcile_provider_credential_transaction,
+    reconcile_provider_model_transaction,
 )
 from awesome_agent.application.turns import (
     RecoveryResult,
@@ -81,13 +89,23 @@ from awesome_agent.application.turns import (
 from awesome_agent.config import (
     ApplicationConfig,
     LoadedConfigSources,
+    ProviderCredentialTransactionJournal,
+    SecretStatus,
+    SecretValues,
     ThreadConfigState,
     TurnConfig,
+    UserConfigDocument,
     UserConfigWriter,
     UserSecretStore,
     load_config_sources,
+    missing_provider_credential_statuses,
     resolve_application_config,
     resolve_turn_config,
+)
+from awesome_agent.config.model_transaction import ProviderModelTransactionJournal
+from awesome_agent.config.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
 )
 from awesome_agent.context import (
     CODING_AGENT_PRODUCT_INSTRUCTIONS,
@@ -412,16 +430,34 @@ class _LocalApplicationBackend:
             sink=event_sink,
         )
         self._foreground = ForegroundArbiter()
-        self._operations = OperationController(self._emitter, self._foreground)
         self._interactions = InteractionCoordinator()
+        self._operations = OperationController(
+            self._emitter,
+            self._foreground,
+            admission_gate=self._operation_admitted,
+        )
         self._trust = WorkspaceTrustService(
             SQLiteWorkspaceTrustStore(paths.application_db)
         )
         self._repositories = SQLiteConversationRepositories(paths.application_db)
         self._conversation = ConversationService(store=self._repositories)
+        self._provider_model_journal = ProviderModelTransactionJournal(
+            paths.provider_model_transaction_file
+        )
+        self._provider_credential_journal = ProviderCredentialTransactionJournal(
+            paths.provider_credential_transaction_file,
+            paths.provider_credential_backup_file,
+        )
+        self._provider_credential_reconciled = False
         self._saver: BaseCheckpointSaver[str] | None = None
         self._checkpoints: LangGraphCheckpointStore | None = None
-        self._sources = self._load_sources(workspace_trusted=False)
+        self._sources = LoadedConfigSources(
+            user=UserConfigDocument(),
+            workspace=None,
+            secrets=SecretValues(),
+            secret_status=SecretStatus(),
+            provider_credentials=missing_provider_credential_statuses(),
+        )
         self._application_config = resolve_application_config(self._sources)
         self._initialized = False
         self._closed = False
@@ -480,6 +516,7 @@ class _LocalApplicationBackend:
                 workspace=self._workspace_presentation(include_branch=True),
                 capabilities=_CAPABILITIES,
             )
+        await self._reconcile_provider_credentials_before_state()
         try:
             self._ensure_state_lease()
             trust_status = self._trust.status(self._workspace)
@@ -619,7 +656,11 @@ class _LocalApplicationBackend:
 
     async def application_state(self) -> ApplicationState:
         self._require_open()
-        current_id = self._commands.current_thread_id if self._commands else None
+        current_id = (
+            self._commands.current_thread_id
+            if self._initialized and self._commands
+            else None
+        )
         current = (
             self._conversation.read_thread(current_id).thread
             if current_id is not None
@@ -636,9 +677,7 @@ class _LocalApplicationBackend:
             session_id=self._session_id,
             workspace_key=self._workspace.key,
             workspace=self._workspace_presentation(include_branch=True),
-            workspace_trusted=(
-                self._trust.status(self._workspace) is TrustStatus.TRUSTED
-            ),
+            workspace_trusted=self._initialized,
             current_thread_id=current_id,
             model_identity=self._model_identity(current) if current else None,
             thinking_enabled=current.thinking_enabled if current else True,
@@ -772,6 +811,7 @@ class _LocalApplicationBackend:
                 retryable=True,
             )
         try:
+            await self._require_runtime_consistent()
             thread = self._conversation.read_thread(thread_id).thread
             config = self._turn_config(thread)
             self._require_provider_configured(config.provider)
@@ -780,6 +820,12 @@ class _LocalApplicationBackend:
                 content,
                 client_message_id=client_message_id,
             )
+        except ProviderConfigurationRecoveryRequired as error:
+            raise _application_failure(
+                ProductErrorCode.RECOVERY_REQUIRED,
+                "Provider configuration recovery is required. Restart Awesome.",
+                retryable=False,
+            ) from error
         except ApplicationFailure:
             raise
         except OperationBusy as error:
@@ -821,7 +867,10 @@ class _LocalApplicationBackend:
                 retryable=True,
             )
         try:
+            await self._require_runtime_consistent()
             return await self._direct.start(thread_id, command)
+        except ApplicationFailure:
+            raise
         except OperationBusy as error:
             raise _application_failure(
                 ProductErrorCode.OPERATION_BUSY,
@@ -839,6 +888,12 @@ class _LocalApplicationBackend:
         assert self._command_dispatcher is not None
         try:
             return await self._command_dispatcher.dispatch(intent)
+        except ProviderConfigurationRecoveryRequired as error:
+            raise _application_failure(
+                ProductErrorCode.RECOVERY_REQUIRED,
+                "Provider configuration recovery is required. Restart Awesome.",
+                retryable=False,
+            ) from error
         except ThreadNotFound as error:
             raise _application_failure(
                 ProductErrorCode.THREAD_NOT_FOUND,
@@ -866,7 +921,30 @@ class _LocalApplicationBackend:
                 retryable=True,
             ) from error
         async with lease:
-            return await self._provider_configuration.set_credential(request)
+            try:
+                await self._require_runtime_consistent()
+                return await self._provider_configuration.set_credential(request)
+            except ApplicationFailure:
+                raise
+            except ProviderConfigurationRecoveryRequired as error:
+                raise _application_failure(
+                    ProductErrorCode.RECOVERY_REQUIRED,
+                    "Provider configuration recovery is required. Restart Awesome.",
+                    retryable=False,
+                ) from error
+            except ResourceLockTimeout as error:
+                raise _application_failure(
+                    ProductErrorCode.OPERATION_BUSY,
+                    "User state is being changed by another Awesome process.",
+                    retryable=True,
+                ) from error
+            except ResourceLockUnavailable as error:
+                raise _application_failure(
+                    ProductErrorCode.STATE_UNAVAILABLE,
+                    "User state cannot be accessed safely.",
+                    retryable=True,
+                    data={"state_directory": str(self._paths.state_dir.resolve())},
+                ) from error
 
     async def resolve_interaction(
         self,
@@ -874,6 +952,8 @@ class _LocalApplicationBackend:
         decision: str,
     ) -> InteractionResult:
         self._require_open()
+        if self._initialized:
+            await self._require_runtime_consistent()
         pending = self._interactions.pending
         if pending is None or pending.id != interaction_id:
             return InteractionResult(accepted=False, status="not_found")
@@ -1089,6 +1169,12 @@ class _LocalApplicationBackend:
             turns.resume_unfinished(
                 recovery.thread_id,
                 expected_turn_id=recovery.turn_id,
+                continuation=OperationContinuation(
+                    interaction_id=pending.id,
+                    interaction_generation=pending.generation,
+                    thread_id=recovery.thread_id,
+                    turn_id=recovery.turn_id,
+                ),
                 claim=claim,
                 finished=finished,
             )
@@ -1284,6 +1370,27 @@ class _LocalApplicationBackend:
         ):
             return None
         return recovery
+
+    def _operation_admitted(
+        self,
+        continuation: OperationContinuation | None,
+    ) -> bool:
+        """Bind operation admission to the interaction state under one lease."""
+
+        pending = self._interactions.pending
+        if pending is None:
+            return continuation is None
+        if (
+            continuation is None
+            or pending.kind is not InteractionKind.RECOVERY_DECISION
+        ):
+            return False
+        return (
+            pending.id == continuation.interaction_id
+            and pending.generation == continuation.interaction_generation
+            and pending.thread_id == continuation.thread_id
+            and pending.turn_id == continuation.turn_id
+        )
 
     def _discard_recovery(
         self,
@@ -1531,6 +1638,27 @@ class _LocalApplicationBackend:
                 await self._resources.aclose()
             self._closed = True
 
+    async def _reconcile_provider_credentials_before_state(self) -> None:
+        if self._provider_credential_reconciled:
+            return
+        try:
+            await asyncio.to_thread(
+                reconcile_provider_credential_transaction,
+                journal=self._provider_credential_journal,
+                config_writer=UserConfigWriter(self._paths.config_file),
+                secret_store=UserSecretStore(self._paths.env_file),
+            )
+        except ProviderConfigurationRecoveryRequired as error:
+            raise _application_failure(
+                ProductErrorCode.RECOVERY_REQUIRED,
+                "Provider credential recovery could not be completed.",
+                retryable=False,
+                data={"state_directory": str(self._paths.home.resolve())},
+            ) from error
+        self._sources = self._load_sources(workspace_trusted=False)
+        self._application_config = resolve_application_config(self._sources)
+        self._provider_credential_reconciled = True
+
     def _ensure_state_lease(self) -> None:
         if self._state_lease is not None and self._state_lease.active:
             return
@@ -1679,6 +1807,20 @@ class _LocalApplicationBackend:
             _git_branch,
             self._workspace.canonical_path,
         )
+        try:
+            await asyncio.to_thread(
+                reconcile_provider_model_transaction,
+                journal=self._provider_model_journal,
+                config_writer=UserConfigWriter(self._paths.config_file),
+                conversation=self._conversation,
+            )
+        except ProviderConfigurationRecoveryRequired as error:
+            raise _application_failure(
+                ProductErrorCode.RECOVERY_REQUIRED,
+                "Provider configuration recovery could not be completed.",
+                retryable=False,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
         self._sources = self._load_sources(workspace_trusted=True)
         self._application_config = resolve_application_config(self._sources)
         gateway_factory = self._injected_gateway_factory or self._provider_factory()
@@ -1740,6 +1882,7 @@ class _LocalApplicationBackend:
                 workspace_key=self._workspace.key,
                 workspace_trusted=True,
                 enablements=enablements,
+                registry=registry,
             )
         else:
             self._mcp = McpManager(
@@ -1747,6 +1890,7 @@ class _LocalApplicationBackend:
                 workspace_key=self._workspace.key,
                 workspace_trusted=True,
                 enablements=enablements,
+                registry=registry,
                 client_factory=self._mcp_client_factory,
             )
 
@@ -2003,7 +2147,10 @@ class _LocalApplicationBackend:
             secret_store=UserSecretStore(self._paths.env_file),
             validator=self._credential_validator,
             sources=lambda: self._sources,
-            reload_configuration=self._reload_provider_configuration,
+            load_configuration=self._load_provider_configuration,
+            apply_configuration=self._apply_provider_configuration,
+            model_transaction_journal=self._provider_model_journal,
+            credential_transaction_journal=self._provider_credential_journal,
         )
         self._diagnostic_commands = DiagnosticCommandService(
             workspace_path=self._workspace.display_path,
@@ -2061,6 +2208,7 @@ class _LocalApplicationBackend:
             },
             foreground=self._foreground,
             has_pending_interaction=lambda: self._interactions.pending is not None,
+            mutation_guard=self._require_runtime_consistent,
         )
         recovery_results = await self._turns.reconcile_startup()
         self._recovery_queue = [
@@ -2099,9 +2247,17 @@ class _LocalApplicationBackend:
             environ=self._environ,
         )
 
-    def _reload_provider_configuration(self) -> None:
-        self._sources = self._load_sources(workspace_trusted=True)
-        self._application_config = resolve_application_config(self._sources)
+    def _load_provider_configuration(self) -> ProviderConfigurationSnapshot:
+        sources = self._load_sources(workspace_trusted=True)
+        return sources, resolve_application_config(sources)
+
+    def _apply_provider_configuration(
+        self,
+        snapshot: ProviderConfigurationSnapshot,
+    ) -> None:
+        sources, application_config = snapshot
+        self._sources = sources
+        self._application_config = application_config
 
     def _on_thread_selected(self) -> None:
         pending = self._interactions.pending
@@ -2334,6 +2490,30 @@ class _LocalApplicationBackend:
     def _seal_direct(self, operation_id: str) -> None:
         if self._change_scope is not None:
             self._change_scope.seal(operation_id)
+
+    async def _require_runtime_consistent(self) -> None:
+        assert self._provider_configuration is not None
+        try:
+            await self._provider_configuration.ensure_consistent()
+        except ProviderConfigurationRecoveryRequired as error:
+            raise _application_failure(
+                ProductErrorCode.RECOVERY_REQUIRED,
+                "Provider configuration recovery is required. Restart Awesome.",
+                retryable=False,
+            ) from error
+        except ResourceLockTimeout as error:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "User state is being changed by another Awesome process.",
+                retryable=True,
+            ) from error
+        except ResourceLockUnavailable as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "User state cannot be accessed safely.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
 
     def _require_active(self) -> None:
         self._require_open()

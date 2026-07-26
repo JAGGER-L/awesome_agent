@@ -75,7 +75,34 @@ class ToolActivityRepository(Protocol):
 
 class ConversationStore(Protocol):
     def create_thread(self, thread: Thread) -> Thread: ...
-    def update_thread(self, thread: Thread) -> Thread: ...
+    def set_thread_model(
+        self,
+        thread_id: str,
+        model: str | None,
+        *,
+        updated_at: datetime,
+    ) -> Thread: ...
+    def rename_thread(
+        self,
+        thread_id: str,
+        title: str,
+        *,
+        updated_at: datetime,
+    ) -> Thread: ...
+    def set_thread_thinking(
+        self,
+        thread_id: str,
+        enabled: bool,
+        *,
+        updated_at: datetime,
+    ) -> Thread: ...
+    def set_thread_skill_mode(
+        self,
+        thread_id: str,
+        skill_mode: str,
+        *,
+        updated_at: datetime,
+    ) -> Thread: ...
     def list_threads(self, workspace_key: str) -> Sequence[Thread]: ...
     def match_threads(
         self,
@@ -104,7 +131,9 @@ class ConversationStore(Protocol):
         self,
         user_entry: ThreadEntry,
         turn: Turn,
-        updated_thread: Thread,
+        *,
+        automatic_title: str | None,
+        updated_at: datetime,
     ) -> Turn: ...
     def update_in_progress_turn(
         self,
