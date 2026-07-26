@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   link,
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
@@ -11,8 +12,9 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   atomicWriteSafeSiteFile,
@@ -304,6 +306,19 @@ async function temporarySite(t) {
   await mkdir(siteDirectory);
   return { root, siteDirectory };
 }
+
+test("generated docs have an ordinary versioned parent scaffold", async () => {
+  const marker = fileURLToPath(new URL("../src/content/.gitkeep", import.meta.url));
+  const parentMetadata = await lstat(dirname(marker));
+  const markerMetadata = await lstat(marker);
+
+  assert.equal(parentMetadata.isDirectory(), true);
+  assert.equal(parentMetadata.isSymbolicLink(), false);
+  assert.equal(parentMetadata.isReparsePoint?.() ?? false, false);
+  assert.equal(markerMetadata.isFile(), true);
+  assert.equal(markerMetadata.isSymbolicLink(), false);
+  assert.equal(markerMetadata.isReparsePoint?.() ?? false, false);
+});
 
 test("atomic file replacement never follows a target swapped to an external hard link", async (t) => {
   const { root, siteDirectory } = await temporarySite(t);
