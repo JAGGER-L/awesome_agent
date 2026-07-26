@@ -328,9 +328,7 @@ async def compose_local_application(
         application = LocalApplication(
             backend,
             middleware=middleware,
-            diagnostics_close=(
-                diagnostics.aclose if diagnostics is not None else None
-            ),
+            diagnostics_close=(diagnostics.aclose if diagnostics is not None else None),
         )
     except BaseException:
         try:
@@ -2123,7 +2121,12 @@ class _LocalApplicationBackend:
 
             registry = ToolRegistry()
             register_read_tools(registry)
-            register_modifying_tools(registry, journal, ProcessRunner())
+            register_modifying_tools(
+                registry,
+                journal,
+                ProcessRunner(),
+                workspace=self._workspace,
+            )
             executor = ToolExecutor(registry)
             change_scope = ChangeScope(
                 journal=journal,
@@ -2355,6 +2358,7 @@ class _LocalApplicationBackend:
                 turn_input_preparer=context_service.prepare_turn,
                 turn_extension_preparer=self._prepare_turn_extensions,
                 context_snapshot_validator=context_service.validate_frozen_snapshot,
+                tool_replay_safety=registry.replay_safety,
             )
 
             async def direct_context(

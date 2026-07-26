@@ -128,27 +128,6 @@ def test_builtin_memory_defers_to_its_own_explicit_user_policy(
     assert decision.action is PolicyAction.ALLOW
 
 
-@pytest.mark.parametrize(
-    "reason",
-    [
-        "Sensitive workspace paths are protected.",
-        "Privilege elevation commands are not allowed.",
-    ],
-)
-def test_hard_denial_wins_in_every_permission_mode(reason: str) -> None:
-    for mode in PermissionMode:
-        decision = PermissionPolicy().evaluate(
-            PolicyRequest(
-                capability=ToolCapability.SHELL_EXECUTE,
-                mode=mode,
-                hard_deny_reason=reason,
-            )
-        )
-
-        assert decision.action is PolicyAction.DENY
-        assert decision.reason == reason
-
-
 def test_mode_transition_clears_grants_and_advances_generation() -> None:
     session = PermissionSession()
     session.grant_thread_writes()

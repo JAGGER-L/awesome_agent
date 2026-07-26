@@ -48,6 +48,27 @@ def _deny_protected(relative: Path) -> None:
         )
 
 
+def admit_delete(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    options = cast(DeleteArguments, arguments)
+    validate_workspace_path_syntax(options.path)
+    requested = Path(options.path)
+    if requested in {Path("."), Path()}:
+        raise ExpectedToolFailure(
+            ToolErrorCode.PERMISSION_DENIED,
+            "The workspace root cannot be deleted.",
+        )
+    parent = resolve_workspace_path(
+        context.workspace,
+        requested.parent.as_posix(),
+        must_exist=True,
+        expected_kind="directory",
+    )
+    _deny_protected(parent.relative / requested.name)
+
+
 def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
     async def delete(
         arguments: BaseModel,

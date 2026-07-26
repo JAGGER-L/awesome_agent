@@ -115,6 +115,17 @@ class ToolPresentation(BaseModel):
     duration_ms: int | None = Field(default=None, ge=0)
 
 
+class ToolInvocationDescription(BaseModel):
+    """Validated display and approval facts derived from strict arguments."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    verb: str = Field(min_length=1, max_length=64)
+    display_target: str | None = Field(default=None, max_length=2_000)
+    approval_operation: str = Field(min_length=1, max_length=128)
+    approval_target: str = Field(min_length=1, max_length=8_000)
+
+
 class ToolResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 

@@ -23,7 +23,7 @@ from awesome_agent.core.tools import (
     ToolStatus,
 )
 from awesome_agent.core.tools.executor import ToolExecutor
-from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.tools.registry import ToolRegistry, ToolReplaySafety
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.extensions.mcp import McpCallUncertain, McpUnavailable
 from awesome_agent.extensions.mcp.adapter import McpToolAdapter
@@ -138,6 +138,7 @@ async def test_adapter_registers_and_executes_only_through_shared_executor(
     registered = registry.resolve("mcp.fixture.echo")
     assert registered is not None
     assert registered.spec.read_only is False
+    assert registered.replay_safety is ToolReplaySafety.NON_REPLAYABLE
     assert registered.timeout_resolver is not None
     assert (
         registered.timeout_resolver(

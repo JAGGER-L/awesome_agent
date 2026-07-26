@@ -142,16 +142,19 @@ Operation 和打开的 ChangeSet：
   -> validate Thread and pending interaction
   -> reserve Operation
   -> ToolExecutor(execute, origin=direct)
+       -> strict-validate registered execute arguments
+       -> registered hard admission
+       -> typed description exactly once
        -> emit tool.started
-       -> validate execute arguments
-       -> command hard-deny + Direct permission policy
-       -> Process Runner and bounded process cleanup
+       -> Direct capability policy
+       -> deadline + Process Runner + bounded process cleanup
   -> bounded transcript entry + ChangeSet observation
   -> seal ChangeSet and emit terminal Operation event
 ```
 
-直接执行与 Agent `execute` 调用使用相同的命令 policy、process runner、脱敏、超时、取消
-和审计路径。即使它有 ChangeSet，也不代表执行变得可逆；任意 shell 副作用仍不受管理。
+直接执行与 Agent `execute` 调用使用相同的注册 admission、命令 policy、process runner、
+脱敏、deadline、取消和审计路径。即使它有 ChangeSet，也不代表执行变得可逆；任意 shell
+副作用仍不受管理。
 
 它与选中 Thread 的 permission mode 无关。用户输入的确切 `! command` 本身就是授权，
 因此 Application 为该 Direct Operation 提供自己的 Full-access permission session，
@@ -241,14 +244,20 @@ MCP 副作用可能已经发生。
 ```text
 unfinished Turn + checkpoint
   |-- completed valid graph state -> finalize product records
-  |-- valid resumable graph state -> recovery decision / resume
-  |-- uncertain shell or MCP call -> Abort (safe default) or explicit Retry
+  |-- resumable + currently registered replayable tool -> resume
+  |-- non-replayable, missing, or unknown metadata -> interaction: Abort | explicit Retry
   |-- missing, corrupt, or conflicting state -> fail Turn with stable code
 ```
 
 Checkpoint 的冻结 manifest 只有通过 compare-and-swap，才能修复空的或 lineage 匹配的
 Application 投影。自洽但无关的 checkpoint 不会被接受为权威。即使一个 Turn 恢复失败，
 恢复过程仍会处理其他 Turn。
+
+对于中断的工具调用，恢复流程会在当前 Runtime Registry 中查找同名工具，并使用该注册项的
+replay-safety metadata；它不按具体工具名分支。经证明的本地 built-in 可以是 replayable。
+MCP 为 non-replayable，metadata 缺失或未知时 fail closed。这些情况绝不会自动重试：
+interaction 默认选择 Abort，而显式 Retry 可以继续旧 checkpoint 并重复 pending call。因此，
+变更同名工具契约时必须考虑 checkpoint compatibility。
 
 ## Shutdown
 

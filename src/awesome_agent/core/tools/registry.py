@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 
 from pydantic import BaseModel
 
-from awesome_agent.core.tools.context import ToolHandler
-from awesome_agent.core.tools.contracts import ToolSpec
+from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
+from awesome_agent.core.tools.contracts import ToolInvocationDescription, ToolSpec
 from awesome_agent.core.tools.errors import DuplicateToolName as DuplicateToolName
 
 type ToolTimeoutResolver = Callable[[BaseModel], float]
+type ToolDescriber = Callable[[BaseModel], ToolInvocationDescription]
+type ToolAdmitter = Callable[[BaseModel, ToolExecutionContext], None]
 
 MAX_REGISTERED_TOOLS = 128
 MAX_REGISTERED_TOOL_CATALOG_BYTES = 1024 * 1024
@@ -23,11 +27,54 @@ class ToolRegistryLimitError(ValueError):
     """A candidate Registry snapshot cannot be published safely."""
 
 
+class ToolReplaySafety(StrEnum):
+    REPLAYABLE = "replayable"
+    NON_REPLAYABLE = "non_replayable"
+
+
+def _admit_by_default(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    del arguments, context
+
+
+def _opaque_description(arguments: BaseModel) -> ToolInvocationDescription:
+    del arguments
+    return ToolInvocationDescription(
+        verb="Use",
+        approval_operation="use",
+        approval_target="tool",
+    )
+
+
+def _default_describer(spec: ToolSpec) -> ToolDescriber:
+    configured = spec.display_metadata.get("verb")
+    verb = (
+        configured
+        if isinstance(configured, str) and configured
+        else spec.name.replace("_", " ").title()
+    )[:64]
+
+    def describe(arguments: BaseModel) -> ToolInvocationDescription:
+        del arguments
+        return ToolInvocationDescription(
+            verb=verb,
+            approval_operation="use",
+            approval_target=spec.name,
+        )
+
+    return describe
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredTool:
     spec: ToolSpec
     input_model: type[BaseModel]
     handler: ToolHandler
+    describe: ToolDescriber = _opaque_description
+    admit: ToolAdmitter = _admit_by_default
+    replay_safety: ToolReplaySafety = ToolReplaySafety.NON_REPLAYABLE
     timeout_resolver: ToolTimeoutResolver | None = None
     cancellation_grace_seconds: float | None = None
 
@@ -42,6 +89,9 @@ class ToolRegistry:
         spec: ToolSpec,
         input_model: type[BaseModel],
         handler: ToolHandler,
+        describe: ToolDescriber | None = None,
+        admit: ToolAdmitter = _admit_by_default,
+        replay_safety: ToolReplaySafety = ToolReplaySafety.NON_REPLAYABLE,
         timeout_resolver: ToolTimeoutResolver | None = None,
         cancellation_grace_seconds: float | None = None,
     ) -> None:
@@ -49,17 +99,26 @@ class ToolRegistry:
             raise DuplicateToolName(spec.name)
         updated = dict(self._items)
         updated[spec.name] = RegisteredTool(
-            spec,
-            input_model,
-            handler,
-            timeout_resolver,
-            cancellation_grace_seconds,
+            spec=spec,
+            input_model=input_model,
+            handler=handler,
+            describe=(describe if describe is not None else _default_describer(spec)),
+            admit=admit,
+            replay_safety=replay_safety,
+            timeout_resolver=timeout_resolver,
+            cancellation_grace_seconds=cancellation_grace_seconds,
         )
         _validate_snapshot(updated)
         self._items = updated
 
     def resolve(self, name: str) -> RegisteredTool | None:
         return self._items.get(name)
+
+    def replay_safety(self, name: str) -> ToolReplaySafety:
+        registered = self.resolve(name)
+        if registered is None:
+            return ToolReplaySafety.NON_REPLAYABLE
+        return registered.replay_safety
 
     def specifications(self) -> tuple[ToolSpec, ...]:
         return tuple(self._items[name].spec for name in sorted(self._items))
@@ -232,14 +291,30 @@ def _validate_registered_tool(name: str, registered: RegisteredTool) -> None:
         not isinstance(input_model, type)
         or not issubclass(input_model, BaseModel)
         or not callable(registered.handler)
+        or not callable(registered.describe)
+        or _is_async_callable(registered.describe)
+        or not callable(registered.admit)
+        or _is_async_callable(registered.admit)
+        or not isinstance(registered.replay_safety, ToolReplaySafety)
         or (
             registered.timeout_resolver is not None
-            and not callable(registered.timeout_resolver)
+            and (
+                not callable(registered.timeout_resolver)
+                or _is_async_callable(registered.timeout_resolver)
+            )
         )
     ):
         raise ToolRegistryLimitError(
             "Tool registry contains an invalid runtime contract"
         )
+
+
+def _is_async_callable(callback: object) -> bool:
+    if not callable(callback):
+        return False
+    if inspect.iscoroutinefunction(callback):
+        return True
+    return inspect.iscoroutinefunction(type(callback).__call__)
 
 
 def _validate_tool_spec(spec: ToolSpec) -> None:

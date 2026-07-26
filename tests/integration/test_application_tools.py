@@ -30,7 +30,12 @@ async def test_builtin_tool_metadata_controls_change_scope(tmp_path: Path) -> No
     )
     registry = ToolRegistry()
     register_read_tools(registry)
-    register_modifying_tools(registry, journal, ProcessRunner())
+    register_modifying_tools(
+        registry,
+        journal,
+        ProcessRunner(),
+        workspace=workspace,
+    )
     scope = ChangeScope(
         journal=journal,
         store=store,

@@ -803,12 +803,20 @@ async def test_directory_read_tools_reject_regular_root_generation_replacement(
     old_target = workspace / "target.old"
     original_resolve = module.resolve_workspace_path
     replaced = False
+    target_resolutions = 0
 
     def resolve_then_replace(*args: object, **kwargs: object) -> object:
-        nonlocal replaced
+        nonlocal replaced, target_resolutions
         safe = original_resolve(*args, **kwargs)
         requested = args[1] if len(args) > 1 else kwargs.get("requested")
-        if requested == "target" and not replaced:
+        if requested == "target":
+            target_resolutions += 1
+        replace_after = 2 if module is search_module else 1
+        if (
+            requested == "target"
+            and target_resolutions == replace_after
+            and not replaced
+        ):
             target.rename(old_target)
             target.mkdir()
             (target / "new.py").write_text(

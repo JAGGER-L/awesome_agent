@@ -1,14 +1,49 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Never, cast
 
 from pydantic import BaseModel, Field
 
-from awesome_agent.core.tools import ToolArguments, ToolOutput, ToolSpec
+from awesome_agent.core.tools import (
+    ExpectedToolFailure,
+    ToolArguments,
+    ToolErrorCode,
+    ToolInvocationDescription,
+    ToolOutput,
+    ToolSpec,
+)
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.permissions import ToolCapability
-from awesome_agent.core.tools.registry import ToolRegistry
-from awesome_agent.extensions.skills.loader import SkillLoader
+from awesome_agent.core.tools.registry import ToolRegistry, ToolReplaySafety
+from awesome_agent.extensions.skills.loader import (
+    SkillLoader,
+    SkillResourceError,
+    SkillResourceErrorKind,
+)
+from awesome_agent.extensions.skills.models import SkillNotFound
+
+_SKILL_FAILURES = {
+    SkillResourceErrorKind.INVALID_ARGUMENTS: (
+        ToolErrorCode.INVALID_ARGUMENTS,
+        "Skill resource path is invalid.",
+    ),
+    SkillResourceErrorKind.NOT_FOUND: (
+        ToolErrorCode.NOT_FOUND,
+        "Skill or resource was not found.",
+    ),
+    SkillResourceErrorKind.CONFLICT: (
+        ToolErrorCode.CONFLICT,
+        "Skill changed after discovery.",
+    ),
+    SkillResourceErrorKind.PERMISSION_DENIED: (
+        ToolErrorCode.PERMISSION_DENIED,
+        "Skill resource could not be opened safely.",
+    ),
+    SkillResourceErrorKind.EXECUTION_FAILED: (
+        ToolErrorCode.EXECUTION_FAILED,
+        "Skill content could not be loaded.",
+    ),
+}
 
 
 class LoadSkillArguments(ToolArguments):
@@ -21,13 +56,57 @@ class ReadSkillResourceArguments(ToolArguments):
 
 
 def register_skill_tools(registry: ToolRegistry, loader: SkillLoader) -> None:
+    def admit_load(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> None:
+        del context
+        options = cast(LoadSkillArguments, arguments)
+        try:
+            loader.admit_load(options.name)
+        except (SkillNotFound, SkillResourceError) as error:
+            _raise_expected_failure(error)
+
+    def admit_resource(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> None:
+        del context
+        options = cast(ReadSkillResourceArguments, arguments)
+        try:
+            loader.admit_resource(options.name, options.relative_path)
+        except (SkillNotFound, SkillResourceError) as error:
+            _raise_expected_failure(error)
+
+    def describe_load(arguments: BaseModel) -> ToolInvocationDescription:
+        options = cast(LoadSkillArguments, arguments)
+        return ToolInvocationDescription(
+            verb="Load Skill",
+            display_target=options.name,
+            approval_operation="load",
+            approval_target=options.name,
+        )
+
+    def describe_resource(arguments: BaseModel) -> ToolInvocationDescription:
+        options = cast(ReadSkillResourceArguments, arguments)
+        target = f"{options.name}/{options.relative_path}"
+        return ToolInvocationDescription(
+            verb="Read Skill Resource",
+            display_target=target[:2_000],
+            approval_operation="read",
+            approval_target=target[:8_000],
+        )
+
     async def load_skill(
         arguments: BaseModel,
         context: ToolExecutionContext,
     ) -> ToolOutput:
         del context
         options = cast(LoadSkillArguments, arguments)
-        loaded = loader.load(options.name)
+        try:
+            loaded = loader.load(options.name)
+        except (SkillNotFound, SkillResourceError) as error:
+            _raise_expected_failure(error)
         return ToolOutput(
             content=loaded.body,
             metadata={
@@ -44,11 +123,14 @@ def register_skill_tools(registry: ToolRegistry, loader: SkillLoader) -> None:
     ) -> ToolOutput:
         del context
         options = cast(ReadSkillResourceArguments, arguments)
-        resource = loader.read_resource(
-            options.name,
-            options.relative_path,
-            token_limit=5_000,
-        )
+        try:
+            resource = loader.read_resource(
+                options.name,
+                options.relative_path,
+                token_limit=5_000,
+            )
+        except (SkillNotFound, SkillResourceError) as error:
+            _raise_expected_failure(error)
         return ToolOutput(
             content=resource.content,
             metadata={
@@ -68,6 +150,9 @@ def register_skill_tools(registry: ToolRegistry, loader: SkillLoader) -> None:
         ),
         input_model=LoadSkillArguments,
         handler=load_skill,
+        describe=describe_load,
+        admit=admit_load,
+        replay_safety=ToolReplaySafety.REPLAYABLE,
     )
     registry.register(
         spec=ToolSpec(
@@ -79,4 +164,17 @@ def register_skill_tools(registry: ToolRegistry, loader: SkillLoader) -> None:
         ),
         input_model=ReadSkillResourceArguments,
         handler=read_resource,
+        describe=describe_resource,
+        admit=admit_resource,
+        replay_safety=ToolReplaySafety.REPLAYABLE,
     )
+
+
+def _raise_expected_failure(error: SkillNotFound | SkillResourceError) -> Never:
+    if isinstance(error, SkillNotFound):
+        raise ExpectedToolFailure(
+            ToolErrorCode.NOT_FOUND,
+            "Skill was not found.",
+        ) from error
+    code, message = _SKILL_FAILURES[error.kind]
+    raise ExpectedToolFailure(code, message) from error

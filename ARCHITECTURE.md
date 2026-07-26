@@ -226,14 +226,20 @@ terminal state; startup reconciliation retries stale terminal evidence.
 
 ```text
 Model ToolCall
-    -> ToolRegistry lookup
-    -> schema validation
-    -> workspace and command policy
-    -> ToolExecutor timeout/cancellation/event envelope
-    -> built-in or MCP adapter
-    -> normalized ToolResult
-    -> bounded activity summary + Agent observation
+    -> bind ToolRegistry snapshot + resolve registration
+    -> strict registered-input validation
+    -> registered hard admission
+    -> typed description exactly once
+    -> capability policy + bound approval
+    -> registered deadline + handler under cancellation envelope
+    -> normalized ToolResult + event + bounded audit/Agent observation
 ```
+
+The registration owns typed description, hard admission, replay safety, and
+deadline resolution. Description runs only after hard admission, so rejected
+path-like input cannot trigger description-time probing. The Executor applies
+that one sequence uniformly and does not branch on concrete tool names;
+capability grants cannot override hard admission.
 
 File-changing built-ins write through the Change Journal and shared
 identity-bound filesystem primitives. Lexical containment is only admission:
@@ -305,9 +311,14 @@ LangGraph checkpoints:
 - a completed graph state is finalized into product records;
 - a valid unfinished checkpoint is resumable;
 - a missing or corrupt checkpoint fails the Turn with a stable error code;
-- an uncertain shell or MCP side effect requires an explicit retry/abort
-  interaction whose safe default is Abort;
+- a non-replayable tool, or missing/unknown replay metadata, requires an
+  explicit retry/abort interaction whose safe default is Abort;
 - checkpoints left behind by terminal product Turns are removed.
+
+Recovery resolves the same tool name from the current Runtime Registry and
+uses that registration's replay metadata. It never infers replay safety from a
+concrete tool name; unknown metadata fails closed and is never retried
+automatically.
 
 The latest strictly validated checkpoint is the recovery fact source for an
 unfinished Turn. Its frozen manifest may repair the Application SQLite

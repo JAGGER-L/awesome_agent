@@ -212,7 +212,12 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
     )
     registry = ToolRegistry()
     register_read_tools(registry)
-    register_modifying_tools(registry, journal, SuccessfulProcessRunner())
+    register_modifying_tools(
+        registry,
+        journal,
+        SuccessfulProcessRunner(),
+        workspace=workspace,
+    )
     executor = ToolExecutor(registry)
     scripts = (
         ((_completed("done"),),)

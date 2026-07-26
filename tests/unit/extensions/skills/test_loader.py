@@ -20,6 +20,7 @@ from awesome_agent.extensions.skills import (
     SkillSource,
     discover_skills,
 )
+from awesome_agent.extensions.skills.loader import SkillResourceErrorKind
 
 
 def _catalog(tmp_path: Path) -> SkillCatalog:
@@ -213,6 +214,25 @@ def test_workspace_resource_revalidates_package_boundary(tmp_path: Path) -> None
 
     with pytest.raises(SkillResourceError, match="changed after discovery"):
         loader.read_resource("review", "guide.md", token_limit=100)
+
+
+def test_workspace_resource_maps_permission_error_as_permission_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loader = SkillLoader(_workspace_catalog(tmp_path))
+
+    def deny_read(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise PermissionError("private operating-system detail")
+
+    monkeypatch.setattr(safe_files_module.PinnedPlainDirectory, "read_file", deny_read)
+
+    with pytest.raises(SkillResourceError) as captured:
+        loader.read_resource("review", "guide.md", token_limit=100)
+
+    assert captured.value.kind is SkillResourceErrorKind.PERMISSION_DENIED
+    assert "private operating-system detail" not in str(captured.value)
 
 
 def test_workspace_resource_rejects_nested_reparse_point(tmp_path: Path) -> None:

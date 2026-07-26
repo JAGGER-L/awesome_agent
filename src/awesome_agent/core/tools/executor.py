@@ -2,23 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
-from typing import Literal
+import math
+from collections.abc import Callable
+from typing import Literal, cast
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from awesome_agent.core.cancellation import finish_cancellation_safe
 from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedPayload
-from awesome_agent.core.tools.command_policy import (
-    CommandPolicyAction,
-    evaluate_command,
-    host_shell_dialect,
-)
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
     ToolError,
     ToolErrorCode,
+    ToolInvocationDescription,
     ToolOutput,
     ToolPresentation,
     ToolRequest,
@@ -28,20 +25,18 @@ from awesome_agent.core.tools.contracts import (
 from awesome_agent.core.tools.errors import (
     ExpectedToolFailure,
     ToolInvariantError,
+    validate_expected_tool_failure,
 )
 from awesome_agent.core.tools.permissions import (
     PermissionPolicy,
     PolicyAction,
+    PolicyDecision,
     PolicyRequest,
     ToolApprovalDecision,
     ToolApprovalRequest,
     ToolCapability,
 )
-from awesome_agent.core.tools.policy import (
-    validate_workspace_path_syntax,
-)
 from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
-from awesome_agent.core.workspace.path_syntax import workspace_path_platform
 
 _HANDLER_CANCELLATION_GRACE_SECONDS = 10.0
 _HANDLER_TIMEOUT_MAX_CANCELLATION_GRACE_SECONDS = 0.5
@@ -55,10 +50,6 @@ type ToolTerminalEventType = Literal[
     EventType.TOOL_FAILED,
     EventType.TOOL_CANCELLED,
 ]
-
-_WORKSPACE_PATH_TOOLS = frozenset(
-    {"delete", "edit_file", "glob", "grep", "ls", "read_file", "write_file"}
-)
 
 
 class ToolExecutor:
@@ -83,44 +74,184 @@ class ToolExecutor:
     ) -> ToolResult:
         started = context.monotonic()
         registered = self._registry.resolve(request.tool_name)
-        started_presentation = self._request_presentation(request)
-        await context.emitter.emit(
-            ToolStartedPayload(
-                call_id=request.call_id,
-                tool_name=request.tool_name,
-                verb=started_presentation.verb,
-                target=started_presentation.target,
-            ),
-            thread_id=context.thread_id,
-            turn_id=context.turn_id,
-            operation_id=context.operation_id,
-        )
+        presentation = self._static_presentation(request, registered)
         if registered is None:
+            await self._emit_started_with_cancellation(
+                request,
+                context,
+                started,
+                presentation,
+            )
             return await self._error_result(
                 request,
                 context,
                 started,
                 ToolErrorCode.NOT_FOUND,
                 "Unknown tool.",
+                presentation=presentation,
             )
+
         try:
             arguments = registered.input_model.model_validate(request.arguments)
-            self._validate_builtin_workspace_path(request.tool_name, arguments)
-            hard_deny_reason = self._hard_deny_reason(
-                registered.spec.capability,
-                arguments,
-                context,
+        except asyncio.CancelledError as cancellation:
+            await finish_cancellation_safe(
+                self._emit_started(request, context, presentation)
             )
-            decision = self._permission_policy.evaluate(
+            await self._finalize_cancellation(
+                request,
+                context,
+                started,
+                presentation=presentation,
+            )
+            raise cancellation
+        except ValidationError:
+            await self._emit_started_with_cancellation(
+                request,
+                context,
+                started,
+                presentation,
+            )
+            return await self._error_result(
+                request,
+                context,
+                started,
+                ToolErrorCode.INVALID_ARGUMENTS,
+                "Tool arguments did not match the schema.",
+                presentation=presentation,
+            )
+        except Exception as error:
+            await self._emit_started_with_cancellation(
+                request,
+                context,
+                started,
+                presentation,
+            )
+            await self._finalize_unexpected_failure(
+                request,
+                context,
+                started,
+                presentation=presentation,
+            )
+            raise ToolInvariantError(
+                "Unexpected tool input validation failure."
+            ) from error
+
+        try:
+            admit = cast(
+                Callable[[BaseModel, ToolExecutionContext], object],
+                registered.admit,
+            )
+            admission_result = admit(arguments, context)
+            if admission_result is not None:
+                self._close_awaitable(admission_result)
+                raise TypeError("Tool admitter returned an invalid contract")
+            description_result: object = registered.describe(arguments)
+            if not isinstance(description_result, ToolInvocationDescription):
+                self._close_awaitable(description_result)
+                raise TypeError("Tool describer returned an invalid contract")
+            description = ToolInvocationDescription.model_validate(
+                {
+                    "verb": description_result.verb,
+                    "display_target": description_result.display_target,
+                    "approval_operation": description_result.approval_operation,
+                    "approval_target": description_result.approval_target,
+                },
+                strict=True,
+            )
+        except asyncio.CancelledError as cancellation:
+            await finish_cancellation_safe(
+                self._emit_started(request, context, presentation)
+            )
+            await self._finalize_cancellation(
+                request,
+                context,
+                started,
+                presentation=presentation,
+            )
+            raise cancellation
+        except ExpectedToolFailure as error:
+            try:
+                failure = validate_expected_tool_failure(error)
+            except TypeError as contract_error:
+                await self._emit_started_with_cancellation(
+                    request,
+                    context,
+                    started,
+                    presentation,
+                )
+                await self._finalize_unexpected_failure(
+                    request,
+                    context,
+                    started,
+                    presentation=presentation,
+                )
+                raise ToolInvariantError(
+                    "Unexpected tool invocation policy failure."
+                ) from contract_error
+            await self._emit_started_with_cancellation(
+                request,
+                context,
+                started,
+                presentation,
+            )
+            return await self._error_result(
+                request,
+                context,
+                started,
+                failure.code,
+                failure.message,
+                presentation=presentation,
+                retryable=failure.retryable,
+                metadata=failure.metadata,
+            )
+        except Exception as error:
+            await self._emit_started_with_cancellation(
+                request,
+                context,
+                started,
+                presentation,
+            )
+            await self._finalize_unexpected_failure(
+                request,
+                context,
+                started,
+                presentation=presentation,
+            )
+            raise ToolInvariantError(
+                "Unexpected tool invocation policy failure."
+            ) from error
+
+        presentation = ToolPresentation(
+            verb=description.verb,
+            target=description.display_target,
+        )
+        await self._emit_started_with_cancellation(
+            request,
+            context,
+            started,
+            presentation,
+        )
+        try:
+            decision_result: object = self._permission_policy.evaluate(
                 PolicyRequest(
                     capability=registered.spec.capability,
                     mode=context.permission_session.mode,
                     granted_capabilities=frozenset(
                         context.permission_session.granted_capabilities
                     ),
-                    hard_deny_reason=hard_deny_reason,
                 )
             )
+            if (
+                not isinstance(decision_result, PolicyDecision)
+                or not isinstance(decision_result.action, PolicyAction)
+                or not isinstance(decision_result.reason, str)
+                or not decision_result.reason
+                or len(decision_result.reason) > 2_000
+            ):
+                raise ToolInvariantError(
+                    "Permission policy returned an invalid decision."
+                )
+            decision = decision_result
             if decision.action is PolicyAction.DENY:
                 raise ExpectedToolFailure(
                     ToolErrorCode.PERMISSION_DENIED,
@@ -133,13 +264,17 @@ class ToolExecutor:
                         ToolErrorCode.PERMISSION_DENIED,
                         "This tool operation requires approval.",
                     )
-                approval = await resolver(
+                approval_result: object = await resolver(
                     self._approval_request(
-                        request,
                         registered.spec.capability,
-                        context,
+                        description,
                     )
                 )
+                if not isinstance(approval_result, ToolApprovalDecision):
+                    raise ToolInvariantError(
+                        "Approval resolver returned an invalid decision."
+                    )
+                approval = approval_result
                 if approval is ToolApprovalDecision.DENY:
                     raise ExpectedToolFailure(
                         ToolErrorCode.PERMISSION_DENIED,
@@ -151,52 +286,76 @@ class ToolExecutor:
                             "Thread write approval cannot grant another capability."
                         )
                     context.permission_session.grant_thread_writes()
-            total_timeout = (
+                elif approval is not ToolApprovalDecision.ALLOW_ONCE:
+                    raise ToolInvariantError(
+                        "Approval resolver returned an invalid decision."
+                    )
+            elif decision.action is not PolicyAction.ALLOW:
+                raise ToolInvariantError(
+                    "Permission policy returned an invalid decision."
+                )
+            timeout_result: object = (
                 registered.timeout_resolver(arguments)
                 if registered.timeout_resolver is not None
                 else self._timeout_seconds
             )
-            if total_timeout <= 0:
+            if (
+                isinstance(timeout_result, bool)
+                or not isinstance(timeout_result, (int, float))
+                or timeout_result <= 0
+                or not math.isfinite(timeout_result)
+            ):
+                self._close_awaitable(timeout_result)
                 raise ToolInvariantError("Tool timeout must be positive.")
-            output = await self._invoke_with_deadline(
+            total_timeout = float(timeout_result)
+            output_result: object = await self._invoke_with_deadline(
                 registered,
                 arguments,
                 context,
                 timeout_seconds=total_timeout,
             )
+            if not isinstance(output_result, ToolOutput):
+                self._close_awaitable(output_result)
+                raise ToolInvariantError(
+                    "Tool handler returned an invalid output contract."
+                )
+            output_presentation = output_result.presentation
+            if output_presentation is not None:
+                if not isinstance(output_presentation, ToolPresentation):
+                    self._close_awaitable(output_presentation)
+                    raise ToolInvariantError(
+                        "Tool handler returned an invalid presentation contract."
+                    )
+                output_presentation = ToolPresentation.model_validate(
+                    {
+                        "verb": output_presentation.verb,
+                        "target": output_presentation.target,
+                        "outcome": output_presentation.outcome,
+                        "summary": output_presentation.summary,
+                        "detail": output_presentation.detail,
+                        "detail_truncated_count": (
+                            output_presentation.detail_truncated_count
+                        ),
+                        "duration_ms": output_presentation.duration_ms,
+                    },
+                    strict=True,
+                )
+            output = ToolOutput.model_validate(
+                {
+                    "content": output_result.content,
+                    "metadata": output_result.metadata,
+                    "presentation": output_presentation,
+                },
+                strict=True,
+            )
         except asyncio.CancelledError as cancellation:
-            presentation, activity = self._terminal_artifacts(
+            await self._finalize_cancellation(
                 request,
                 context,
                 started,
-                outcome="cancelled",
-                presentation=self._request_presentation(
-                    request,
-                    outcome="Cancelled",
-                    summary="Cancelled",
-                ),
-                error_code=ToolErrorCode.CANCELLED.value,
+                presentation=presentation,
             )
-            await finish_cancellation_safe(
-                self._persist_activity_after_cancellation(context, activity)
-            )
-            terminal_task = self._start_terminal_event(
-                request,
-                context,
-                presentation,
-                activity,
-                event_type=EventType.TOOL_CANCELLED,
-            )
-            await self._finish_terminal_event(terminal_task)
             raise cancellation
-        except ValidationError:
-            return await self._error_result(
-                request,
-                context,
-                started,
-                ToolErrorCode.INVALID_ARGUMENTS,
-                "Tool arguments did not match the schema.",
-            )
         except TimeoutError:
             return await self._error_result(
                 request,
@@ -204,39 +363,46 @@ class ToolExecutor:
                 started,
                 ToolErrorCode.TIMEOUT,
                 "Tool execution timed out.",
+                presentation=presentation,
             )
         except ExpectedToolFailure as error:
+            try:
+                failure = validate_expected_tool_failure(error)
+            except TypeError as contract_error:
+                await self._finalize_unexpected_failure(
+                    request,
+                    context,
+                    started,
+                    presentation=presentation,
+                )
+                raise ToolInvariantError(
+                    "Unexpected tool handler failure."
+                ) from contract_error
             return await self._error_result(
                 request,
                 context,
                 started,
-                error.code,
-                error.message,
-                retryable=error.retryable,
-                metadata=error.metadata,
+                failure.code,
+                failure.message,
+                presentation=presentation,
+                retryable=failure.retryable,
+                metadata=failure.metadata,
             )
         except Exception as error:
-            await self._finalize_handler_outcome(
+            await self._finalize_unexpected_failure(
                 request,
                 context,
                 started,
-                outcome="error",
-                presentation=self._request_presentation(
-                    request,
-                    outcome="Failed",
-                    summary=ToolErrorCode.EXECUTION_FAILED.value,
-                    detail="Tool execution failed.",
-                ),
-                error_code=ToolErrorCode.EXECUTION_FAILED.value,
-                event_type=EventType.TOOL_FAILED,
+                presentation=presentation,
             )
             raise ToolInvariantError("Unexpected tool handler failure.") from error
 
-        presentation = output.presentation or self._request_presentation(
-            request,
-            outcome="Completed",
-            summary="Completed",
-            detail=output.content[:4_000] or None,
+        presentation = output.presentation or presentation.model_copy(
+            update={
+                "outcome": "Completed",
+                "summary": "Completed",
+                "detail": output.content[:4_000] or None,
+            }
         )
         presentation = await self._finalize_handler_outcome(
             request,
@@ -256,6 +422,127 @@ class ToolExecutor:
             presentation=presentation,
         )
         return result
+
+    @staticmethod
+    def _static_presentation(
+        request: ToolRequest,
+        registered: RegisteredTool | None,
+    ) -> ToolPresentation:
+        configured = (
+            registered.spec.display_metadata.get("verb")
+            if registered is not None
+            else None
+        )
+        verb = (
+            configured
+            if isinstance(configured, str) and configured
+            else request.tool_name.replace("_", " ").title()
+        )
+        return ToolPresentation(verb=verb[:64])
+
+    @staticmethod
+    async def _emit_started(
+        request: ToolRequest,
+        context: ToolExecutionContext,
+        presentation: ToolPresentation,
+    ) -> None:
+        await context.emitter.emit(
+            ToolStartedPayload(
+                call_id=request.call_id,
+                tool_name=request.tool_name,
+                verb=presentation.verb,
+                target=presentation.target,
+            ),
+            thread_id=context.thread_id,
+            turn_id=context.turn_id,
+            operation_id=context.operation_id,
+        )
+
+    async def _emit_started_with_cancellation(
+        self,
+        request: ToolRequest,
+        context: ToolExecutionContext,
+        started: float,
+        presentation: ToolPresentation,
+    ) -> None:
+        try:
+            await self._emit_started(request, context, presentation)
+        except asyncio.CancelledError as cancellation:
+            await self._finalize_cancellation(
+                request,
+                context,
+                started,
+                presentation=presentation,
+            )
+            raise cancellation
+
+    @staticmethod
+    def _close_awaitable(value: object) -> None:
+        close = getattr(value, "close", None)
+        if callable(close):
+            try:
+                close()
+            except BaseException:
+                logger.warning(
+                    "Invalid tool callback awaitable could not be closed.",
+                    exc_info=True,
+                )
+        elif isinstance(value, asyncio.Future):
+            value.cancel()
+
+    async def _finalize_cancellation(
+        self,
+        request: ToolRequest,
+        context: ToolExecutionContext,
+        started: float,
+        *,
+        presentation: ToolPresentation,
+    ) -> None:
+        measured, activity = self._terminal_artifacts(
+            request,
+            context,
+            started,
+            outcome="cancelled",
+            presentation=presentation.model_copy(
+                update={"outcome": "Cancelled", "summary": "Cancelled"}
+            ),
+            error_code=ToolErrorCode.CANCELLED.value,
+        )
+        await finish_cancellation_safe(
+            self._persist_activity_after_cancellation(context, activity)
+        )
+        terminal_task = self._start_terminal_event(
+            request,
+            context,
+            measured,
+            activity,
+            event_type=EventType.TOOL_CANCELLED,
+        )
+        await self._finish_terminal_event(terminal_task)
+
+    async def _finalize_unexpected_failure(
+        self,
+        request: ToolRequest,
+        context: ToolExecutionContext,
+        started: float,
+        *,
+        presentation: ToolPresentation,
+    ) -> None:
+        await self._finalize_handler_outcome(
+            request,
+            context,
+            started,
+            outcome="error",
+            presentation=presentation.model_copy(
+                update={
+                    "outcome": "Failed",
+                    "summary": ToolErrorCode.EXECUTION_FAILED.value,
+                    "detail": "Tool execution failed.",
+                }
+            ),
+            error_code=ToolErrorCode.EXECUTION_FAILED.value,
+            event_type=EventType.TOOL_FAILED,
+        )
 
     @staticmethod
     async def _invoke_with_deadline(
@@ -315,20 +602,6 @@ class ToolExecutor:
         return handler_task.result()
 
     @staticmethod
-    def _validate_builtin_workspace_path(
-        tool_name: str,
-        arguments: BaseModel,
-    ) -> None:
-        if tool_name not in _WORKSPACE_PATH_TOOLS:
-            return
-        requested = getattr(arguments, "path", None)
-        if isinstance(requested, str):
-            validate_workspace_path_syntax(
-                requested,
-                platform=workspace_path_platform(),
-            )
-
-    @staticmethod
     async def _cancel_handler_task(
         handler_task: asyncio.Task[ToolOutput],
         *,
@@ -364,58 +637,21 @@ class ToolExecutor:
             return
 
     @staticmethod
-    def _hard_deny_reason(
-        capability: str,
-        arguments: BaseModel,
-        context: ToolExecutionContext,
-    ) -> str | None:
-        if capability != ToolCapability.SHELL_EXECUTE:
-            return None
-        command = getattr(arguments, "command", None)
-        if not isinstance(command, str):
-            return "Shell tool arguments do not contain a valid command."
-        requested_cwd = getattr(arguments, "cwd", None)
-        if not isinstance(requested_cwd, str):
-            return "Shell tool arguments do not contain a valid working directory."
-        decision = evaluate_command(
-            command,
-            dialect=host_shell_dialect(),
-            cwd=context.workspace.canonical_path / requested_cwd,
-            workspace=context.workspace.canonical_path,
-        )
-        return decision.reason if decision.action is CommandPolicyAction.DENY else None
-
-    @staticmethod
     def _approval_request(
-        request: ToolRequest,
         capability: str,
-        context: ToolExecutionContext,
+        description: ToolInvocationDescription,
     ) -> ToolApprovalRequest:
-        path = request.arguments.get("path")
-        if request.tool_name == "write_file" and isinstance(path, str):
-            requested = Path(path)
-            safe_relative = not requested.is_absolute() and ".." not in requested.parts
-            exists = (
-                (context.workspace.canonical_path / requested).exists()
-                if safe_relative
-                else False
-            )
-            operation, target = ("overwrite" if exists else "create"), path
-        elif request.tool_name == "edit_file" and isinstance(path, str):
-            operation, target = "edit", path
-        elif request.tool_name == "delete" and isinstance(path, str):
-            operation, target = "delete", path
-        elif request.tool_name == "execute":
-            command = request.arguments.get("command")
-            operation = "run"
-            target = command if isinstance(command, str) else "command"
-        else:
-            operation, target = "use", request.tool_name
+        operation = description.approval_operation
+        target = description.approval_target
+        full_prompt = f"Do you want to {operation} {target}?"
+        prompt = (
+            full_prompt if len(full_prompt) <= 2_000 else f"{full_prompt[:1_999]}\u2026"
+        )
         return ToolApprovalRequest(
             capability=capability,
             operation=operation,
             target=target,
-            prompt=f"Do you want to {operation} {target}?",
+            prompt=prompt,
         )
 
     async def _error_result(
@@ -426,6 +662,7 @@ class ToolExecutor:
         code: ToolErrorCode,
         message: str,
         *,
+        presentation: ToolPresentation,
         retryable: bool = False,
         metadata: dict[str, JsonValue] | None = None,
     ) -> ToolResult:
@@ -436,11 +673,12 @@ class ToolExecutor:
             context,
             started,
             outcome="error",
-            presentation=self._request_presentation(
-                request,
-                outcome="Failed",
-                summary=code.value,
-                detail=bounded,
+            presentation=presentation.model_copy(
+                update={
+                    "outcome": "Failed",
+                    "summary": code.value,
+                    "detail": bounded,
+                }
             ),
             error_code=code.value,
             event_type=EventType.TOOL_FAILED,
@@ -650,45 +888,4 @@ class ToolExecutor:
         return asyncio.create_task(
             emit_terminal(),
             name=f"tool-terminal:{request.call_id}",
-        )
-
-    def _request_presentation(
-        self,
-        request: ToolRequest,
-        *,
-        outcome: str | None = None,
-        summary: str = "",
-        detail: str | None = None,
-    ) -> ToolPresentation:
-        registered = self._registry.resolve(request.tool_name)
-        configured = (
-            registered.spec.display_metadata.get("verb")
-            if registered is not None
-            else None
-        )
-        verb = (
-            configured
-            if isinstance(configured, str) and configured
-            else request.tool_name.replace("_", " ").title()
-        )
-        target_field = {
-            "delete": "path",
-            "edit_file": "path",
-            "execute": "command",
-            "glob": "pattern",
-            "grep": "pattern",
-            "ls": "path",
-            "read_file": "path",
-            "write_file": "path",
-        }.get(request.tool_name)
-        candidate = (
-            request.arguments.get(target_field) if target_field is not None else None
-        )
-        target = candidate[:2_000] if isinstance(candidate, str) else None
-        return ToolPresentation(
-            verb=verb[:64],
-            target=target,
-            outcome=outcome,
-            summary=summary[:2_000],
-            detail=detail[:4_000] if detail is not None else None,
         )

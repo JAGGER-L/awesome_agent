@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import awesome_agent.application.turns as turns_module
 from awesome_agent.agent import AgentRuntimeContext, AgentState, new_agent_state
 from awesome_agent.application.context import frozen_context_snapshot_is_valid
 from awesome_agent.application.events import ApplicationEventProjector
@@ -26,6 +27,7 @@ from awesome_agent.core.events import (
     EventEnvelope,
     EventType,
 )
+from awesome_agent.core.tools.registry import ToolReplaySafety
 from awesome_agent.memory import MemoryDocumentInvalid
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -38,6 +40,31 @@ from awesome_agent.storage.checkpoints import CheckpointCorrupt
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 _ACTIVE_DATABASES: list[ApplicationSQLite] = []
+
+
+def test_completed_call_id_precedes_non_replayable_registration() -> None:
+    state = cast(
+        AgentState,
+        {
+            "next_tool_index": 0,
+            "pending_tool_calls": [
+                {
+                    "call_id": "call_completed",
+                    "name": "arbitrary_side_effect",
+                    "arguments_json": "{}",
+                }
+            ],
+            "tool_results": [{"call_id": "call_completed"}],
+        },
+    )
+    resolutions: list[str] = []
+
+    def resolve(name: str) -> ToolReplaySafety:
+        resolutions.append(name)
+        return ToolReplaySafety.NON_REPLAYABLE
+
+    assert turns_module._uncertain_tool_call(state, resolve) is False
+    assert resolutions == []
 
 
 @pytest.fixture(autouse=True)

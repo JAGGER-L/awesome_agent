@@ -81,13 +81,30 @@ def _glob_scan_root(
         raise
 
 
-def _validate_pattern(pattern: str) -> None:
+def validate_glob_pattern(pattern: str) -> None:
     candidate = PurePath(pattern)
     if candidate.is_absolute() or ".." in candidate.parts:
         raise ExpectedToolFailure(
             ToolErrorCode.WORKSPACE_ESCAPE,
             "Search pattern escapes the workspace boundary.",
         )
+
+
+def admit_glob(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    options = cast(GlobArguments, arguments)
+    _search_root(context, options.path)
+    validate_glob_pattern(options.pattern)
+
+
+def admit_grep(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    options = cast(GrepArguments, arguments)
+    _search_root(context, options.path)
 
 
 async def _run_scan[T](scan: Callable[[ScanCancellation], T]) -> T:
@@ -107,7 +124,7 @@ async def glob_files(
     context: ToolExecutionContext,
 ) -> ToolOutput:
     options = cast(GlobArguments, arguments)
-    _validate_pattern(options.pattern)
+    validate_glob_pattern(options.pattern)
     root = _search_root(context, options.path)
     scan_root = _glob_scan_root(root, options.pattern, context)
 

@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import awesome_agent.core.tools.builtins.execute as execute_module
-import awesome_agent.core.tools.executor as executor_module
 from awesome_agent.core.changes import ChangeJournal, ChangeReversibility
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
@@ -31,6 +30,7 @@ from awesome_agent.core.tools.builtins.execute import (
 )
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
+    CommandPolicyDecision,
     ShellDialect,
     evaluate_command,
 )
@@ -232,7 +232,7 @@ async def execute_fixture(
         workspace=identity,
     )
     registry = ToolRegistry()
-    register_modifying_tools(registry, journal, runner)
+    register_modifying_tools(registry, journal, runner, workspace=identity)
     sink = CollectingEventSink()
     context = ToolExecutionContext(
         workspace=identity,
@@ -1019,6 +1019,103 @@ async def test_agent_execute_requires_allow_once_for_simple_command(
 
 
 @pytest.mark.asyncio
+async def test_execute_rechecks_command_policy_immediately_before_runner(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = RecordingProcessRunner()
+    executor, context, journal, workspace, sink = await execute_fixture(
+        tmp_path,
+        application_database,
+        runner,
+    )
+    observed_cwds: list[Path] = []
+    decisions = iter(
+        (
+            CommandPolicyDecision(CommandPolicyAction.ALLOW, "admitted"),
+            CommandPolicyDecision(CommandPolicyAction.DENY, "changed policy"),
+        )
+    )
+
+    def staged_policy(
+        command: str,
+        *,
+        dialect: ShellDialect,
+        cwd: Path,
+        workspace: Path,
+    ) -> CommandPolicyDecision:
+        del command, dialect
+        observed_cwds.append(cwd)
+        assert workspace == context.workspace.canonical_path
+        return next(decisions)
+
+    async def approve(_request: ToolApprovalRequest) -> ToolApprovalDecision:
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    monkeypatch.setattr(execute_module, "evaluate_command", staged_policy)
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_double_policy",
+            tool_name="execute",
+            arguments={"command": "pytest"},
+        ),
+        context=replace(context, approval_resolver=approve),
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.PERMISSION_DENIED
+    assert observed_cwds == [workspace.resolve(), workspace.resolve()]
+    assert runner.calls == []
+    assert (await journal.seal(context.change_set_id or "")).execute == []
+    _assert_one_terminal_event(sink)
+    _assert_one_activity(context)
+
+
+@pytest.mark.asyncio
+async def test_execute_approval_preserves_8k_target_with_bounded_prompt_and_audit(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    command = f"echo {'x' * 7_995}"
+    assert len(command) == 8_000
+    runner = RecordingProcessRunner()
+    executor, context, _, _, sink = await execute_fixture(
+        tmp_path,
+        application_database,
+        runner,
+    )
+    approvals: list[ToolApprovalRequest] = []
+
+    async def deny(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        approvals.append(request)
+        return ToolApprovalDecision.DENY
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_long_execute",
+            tool_name="execute",
+            arguments={"command": command},
+        ),
+        context=replace(context, approval_resolver=deny),
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert len(approvals) == 1
+    assert approvals[0].target == command
+    assert len(approvals[0].prompt) == 2_000
+    assert approvals[0].prompt.endswith("\u2026")
+    assert sink.events[0].payload.target == command[:2_000]  # type: ignore[union-attr]
+    writer = cast(AsyncMock, context.activity_writer)
+    activity = writer.finalize.await_args.args[0]
+    assert activity.input_summary == "arguments: command"
+    assert command not in activity.input_summary
+    assert runner.calls == []
+
+
+@pytest.mark.asyncio
 async def test_benign_powershell_prefix_uses_normal_approval_flow(
     tmp_path: Path,
     application_database: ApplicationSQLite,
@@ -1167,7 +1264,7 @@ async def test_execute_hard_denial_never_starts_process(
     dialect: ShellDialect,
     command: str,
 ) -> None:
-    monkeypatch.setattr(executor_module, "host_shell_dialect", lambda: dialect)
+    monkeypatch.setattr(execute_module, "host_shell_dialect", lambda: dialect)
     runner = RecordingProcessRunner()
     executor, context, journal, _, sink = await execute_fixture(
         tmp_path,
@@ -1210,7 +1307,7 @@ async def test_direct_execute_cannot_bypass_hard_denial(
     dialect: ShellDialect,
     command: str,
 ) -> None:
-    monkeypatch.setattr(executor_module, "host_shell_dialect", lambda: dialect)
+    monkeypatch.setattr(execute_module, "host_shell_dialect", lambda: dialect)
     runner = RecordingProcessRunner()
     executor, context, journal, _, _ = await execute_fixture(
         tmp_path,
@@ -1264,6 +1361,95 @@ async def test_execute_invalid_arguments_do_not_record_an_attempt(
     assert result.error.code is ToolErrorCode.INVALID_ARGUMENTS
     assert runner.calls == []
     assert (await journal.seal(context.change_set_id or "")).execute == []
+    _assert_one_terminal_event(sink)
+    _assert_one_activity(context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cwd", "error_code"),
+    [
+        ("missing", ToolErrorCode.NOT_FOUND),
+        ("../outside", ToolErrorCode.WORKSPACE_ESCAPE),
+    ],
+)
+async def test_execute_invalid_cwd_is_not_described_or_approved(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+    cwd: str,
+    error_code: ToolErrorCode,
+) -> None:
+    runner = RecordingProcessRunner()
+    executor, context, _, _, sink = await execute_fixture(
+        tmp_path,
+        application_database,
+        runner,
+    )
+    approvals = 0
+
+    async def approve(_request: ToolApprovalRequest) -> ToolApprovalDecision:
+        nonlocal approvals
+        approvals += 1
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_invalid_cwd",
+            tool_name="execute",
+            arguments={"command": "pytest", "cwd": cwd},
+        ),
+        context=replace(context, approval_resolver=approve),
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is error_code
+    assert approvals == 0
+    assert runner.calls == []
+    assert sink.events[0].payload.target is None  # type: ignore[union-attr]
+    _assert_one_terminal_event(sink)
+    _assert_one_activity(context)
+
+
+@pytest.mark.asyncio
+async def test_execute_symlink_cwd_is_not_described_or_approved(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    runner = RecordingProcessRunner()
+    executor, context, _, workspace, sink = await execute_fixture(
+        tmp_path,
+        application_database,
+        runner,
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlink creation is not available")
+    approvals = 0
+
+    async def approve(_request: ToolApprovalRequest) -> ToolApprovalDecision:
+        nonlocal approvals
+        approvals += 1
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_linked_cwd",
+            tool_name="execute",
+            arguments={"command": "pytest", "cwd": "linked"},
+        ),
+        context=replace(context, approval_resolver=approve),
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.PERMISSION_DENIED
+    assert approvals == 0
+    assert runner.calls == []
+    assert sink.events[0].payload.target is None  # type: ignore[union-attr]
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
 

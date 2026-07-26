@@ -1,9 +1,9 @@
 # Tools and changes
 
 Tools are the only path from model intent to workspace or host effects. Awesome
-therefore centralizes registration, argument validation, hard-deny checks,
-permission decisions, approval, timeout, cancellation, audit, and terminal
-events before calling a built-in or MCP handler.
+therefore centralizes registration, strict argument validation, tool-owned hard
+admission, capability decisions, approval, deadlines, cancellation, audit, and
+terminal events before calling a built-in or MCP handler.
 
 The Change Journal is adjacent but separate. It records and restores file
 mutations made through managed built-ins; it cannot make arbitrary shell or MCP
@@ -11,18 +11,32 @@ effects reversible.
 
 ## Tool contract
 
-A `RegisteredTool` combines four internal facts:
+A `RegisteredTool` combines eight internal facts:
 
 - a provider-visible `ToolSpec` including name, description, JSON schema,
   capability, read-only flag, and display metadata;
 - a strict Pydantic input model;
 - one async handler;
-- an optional dynamic total-timeout resolver.
+- a typed description function that derives bounded operation facts from
+  validated arguments;
+- a hard-admission function that applies non-disableable, tool-specific checks
+  to validated arguments and execution context;
+- an explicit replay-safety classification;
+- an optional dynamic total-timeout resolver;
+- an optional handler-cancellation grace.
 
-The timeout resolver is intentionally not part of the model-visible schema. It
-lets `execute` reserve `timeout_seconds + 10` seconds for bounded cleanup and
-lets MCP use a 40-second outer envelope without teaching the model about
-executor internals.
+The description, admission, replay, deadline, and cancellation facts are
+intentionally not part of the model-visible schema. The description supplies
+bounded presentation and approval facts from an explicitly selected operation
+target; it never receives an unvalidated raw argument map. Hard
+admission owns facts such as path or command safety and cannot be overridden by
+a permission mode or temporary grant. Description runs exactly once after hard
+admission: any bounded metadata probe it performs is inside that admitted
+operation and still precedes approval, the handler, and external effects.
+Replay safety gives recovery an explicit answer instead of asking it to
+recognize tool names. The timeout resolver lets `execute` reserve
+`timeout_seconds + 10` seconds for its total deadline, while cancellation grace
+bounds handler cleanup without teaching the model about executor internals.
 
 The built-in baseline is:
 
@@ -41,24 +55,35 @@ replaced atomically with names such as `mcp.<server>.<tool>`.
 ```text
 ToolRequest
   -> resolve registry item
-  -> validate Pydantic arguments
-  -> validate built-in path syntax
-  -> compute non-disableable hard deny
-  -> PermissionPolicy: allow | ask | deny
+  -> strict-validate with its registered input model
+  -> run its registered hard admission
+  -> derive its typed description exactly once
+  -> PermissionPolicy for its registered capability: allow | ask | deny
   -> resolve bound approval, when asked
-  -> resolve total timeout
+  -> resolve total deadline
   -> invoke handler under deadline
   -> normalize result or expected failure
-  -> write one ToolActivity
+  -> write one ToolActivity and audit summary
   -> emit one terminal tool event
   -> return one bounded ToolResult
 ```
 
-`tool.started` is emitted before resolution so an unknown tool is still an
-observable attempted call. Argument errors, policy denials, timeouts, and
-expected handler failures become bounded `ToolResult` errors. An unexpected
-handler exception is an invariant failure and terminates the Turn rather than
-being disguised as a model-correctable error.
+Every attempted call emits exactly one `tool.started`, including unknown tools,
+invalid arguments, and hard-admission failures. Calls that fail before a typed
+description exists use only the registration's static presentation and never
+derive a target from untrusted values; an admitted call emits its typed,
+bounded presentation before capability policy or handler execution. Argument
+errors, policy denials, timeouts, and expected handler failures become bounded
+`ToolResult` errors. An unexpected handler exception is an invariant failure
+and terminates the Turn rather than being disguised as a model-correctable
+error.
+
+This is the only execution order. The Executor invokes registration-owned
+behavior uniformly; it does not branch on concrete tool names. Hard admission
+and capability policy answer different questions: admission decides whether
+this exact validated operation is ever acceptable, while policy decides
+whether the registered capability is allowed, denied, or needs approval in the
+current permission session.
 
 Cancellation finalizes a single cancelled activity/event with a bounded cleanup
 attempt, then re-raises the caller's original cancellation. Handler tasks that
@@ -68,9 +93,24 @@ result is consumed to avoid leaking task exceptions.
 Tool content is bounded before it enters Agent state or the transcript. Audit
 summaries retain argument names, not raw argument values.
 
+## Replay safety
+
+Replay safety is registration metadata, not a property inferred by recovery.
+Only a built-in whose managed local semantics prove that a repeated call is
+safe may be marked replayable. MCP calls and other external or unclassified
+effects are non-replayable. Recovery looks up the same name in the current
+Runtime Registry and consumes that registration's metadata. Replayable work may
+resume; non-replayable, missing, or unknown metadata fails closed into a
+recovery interaction and is never retried automatically. The user may
+explicitly choose Retry instead of the default Abort. A change to a same-named
+tool's contract must therefore be managed as a checkpoint-compatibility change.
+Neither the Executor nor recovery keeps a parallel list of special tool names.
+
 ## Permission decision
 
-Permission is a pure capability decision. Hard denial always wins:
+Permission is a pure capability decision evaluated only after registered hard
+admission succeeds. A hard rejection always wins and cannot be converted to an
+allow by any row in this table:
 
 | Mode | Read | Create/modify | Delete | Shell | MCP/unknown |
 | --- | --- | --- | --- | --- | --- |
@@ -138,12 +178,13 @@ host writer.
 ## Command circuit breaker
 
 Both Agent `execute` and direct `!` input call the same pure command policy. The
-executor's pre-approval check receives the command, explicit shell dialect,
-workspace, and the requested lexical working directory joined beneath the
-canonical workspace root. The handler then resolves and identity-checks that
-directory; its pre-spawn check calls the same policy with the verified resolved
-directory. Sharing the evaluator prevents rule drift, while the second stage is
-the one backed by opened-path evidence.
+`execute` registration's hard-admission check receives the command, explicit
+shell dialect, and workspace. It first resolves the requested working directory
+as an existing, no-follow directory inside the pinned workspace, then evaluates
+the command against that resolved path before description or approval. The
+handler repeats both identity resolution and the same policy immediately before
+spawn. Sharing the evaluator prevents rule drift, while the second check closes
+changes between admission and process creation with fresh opened-path evidence.
 
 Bounded CMD, POSIX shell, and PowerShell inspection expands known wrappers,
 compound commands, pipelines, and newlines. It normalizes executable paths,

@@ -210,14 +210,19 @@ turn.submit -> ApplicationFacade.submit_turn
 
 ```text
 Model ToolCall
-    -> ToolRegistry lookup
-    -> schema validation
-    -> workspace and command policy
-    -> ToolExecutor timeout/cancellation/event envelope
-    -> built-in or MCP adapter
-    -> normalized ToolResult
-    -> bounded activity summary + Agent observation
+    -> bind ToolRegistry snapshot + resolve registration
+    -> strict registered-input validation
+    -> registered hard admission
+    -> typed description exactly once
+    -> capability policy + bound approval
+    -> registered deadline + handler under cancellation envelope
+    -> normalized ToolResult + event + bounded audit/Agent observation
 ```
+
+注册项拥有类型化 description、hard admission、replay safety 与 deadline resolution。
+Description 只在 hard admission 后运行，使被拒绝的路径类输入不能触发 description-time
+probe。Executor 对所有工具统一应用这一条顺序，不按具体工具名分支；capability grant
+不能覆盖 hard admission。
 
 改变文件的 built-in 会通过 Change Journal 和共享的 identity-bound filesystem primitive
 写入。词法包含只负责准入：实际 mutation 会固定 workspace 与 parent directory chain，
@@ -279,8 +284,12 @@ pending Surface lifecycle state，不是第二种持久化 operation model。
 - 已完成 graph state 会被终结为产品记录；
 - 有效未完成 checkpoint 可以恢复；
 - checkpoint 缺失或损坏时，Turn 以稳定错误码失败；
-- 不确定 shell 或 MCP 副作用要求显式 retry/abort interaction，安全默认是 Abort；
+- non-replayable 工具或缺失/未知 replay metadata 要求显式 retry/abort interaction，安全
+  默认是 Abort；
 - 终态产品 Turn 残留的 checkpoint 会被删除。
+
+恢复会在当前 Runtime Registry 中解析同名工具并使用该注册项的 replay metadata。它不从
+具体工具名推断 replay safety；未知 metadata 会 fail closed，绝不自动重试。
 
 对于未完成 Turn，最新且经过严格校验的 checkpoint 是恢复事实来源。只有当 Application
 SQLite 投影为空或其不可变 source anchor 共享 lineage，且旧投影仍匹配显式

@@ -157,18 +157,20 @@ model prompt. It still creates a foreground Operation and an open ChangeSet:
   -> validate Thread and pending interaction
   -> reserve Operation
   -> ToolExecutor(execute, origin=direct)
+       -> strict-validate registered execute arguments
+       -> registered hard admission
+       -> typed description exactly once
        -> emit tool.started
-       -> validate execute arguments
-       -> command hard-deny + Direct permission policy
-       -> Process Runner and bounded process cleanup
+       -> Direct capability policy
+       -> deadline + Process Runner + bounded process cleanup
   -> bounded transcript entry + ChangeSet observation
   -> seal ChangeSet and emit terminal Operation event
 ```
 
-Direct execution uses the same command policy, process runner, redaction,
-timeout, cancellation, and audit path as an Agent `execute` call. It does not
-become reversible merely because it has a ChangeSet; arbitrary shell effects
-remain unmanaged.
+Direct execution uses the same registered admission, command policy, process
+runner, redaction, deadline, cancellation, and audit path as an Agent `execute`
+call. It does not become reversible merely because it has a ChangeSet;
+arbitrary shell effects remain unmanaged.
 
 It is independent of the selected Thread permission mode. The user's exact
 `! command` is the authorization, so Application supplies that Direct Operation
@@ -275,8 +277,8 @@ Startup reconciles each non-terminal product Turn with its checkpoint:
 ```text
 unfinished Turn + checkpoint
   |-- completed valid graph state -> finalize product records
-  |-- valid resumable graph state -> recovery decision / resume
-  |-- uncertain shell or MCP call -> Abort (safe default) or explicit Retry
+  |-- resumable + currently registered replayable tool -> resume
+  |-- non-replayable, missing, or unknown metadata -> interaction: Abort | explicit Retry
   |-- missing, corrupt, or conflicting state -> fail Turn with stable code
 ```
 
@@ -284,6 +286,15 @@ The checkpoint's frozen manifest may repair an empty or lineage-matching
 Application projection only with compare-and-swap. A self-consistent but
 unrelated checkpoint is not accepted as authority. Recovery processes other
 Turns even if one fails.
+
+For an interrupted tool call, recovery looks up the same name in the current
+Runtime Registry and uses that registration's replay-safety metadata; it does
+not branch on concrete tool names. A proven local built-in may be replayable.
+MCP is non-replayable, and missing or unknown metadata fails closed. Those cases
+never retry automatically: the interaction defaults to Abort, while an
+explicit Retry may continue the old checkpoint and repeat the pending call.
+Changing a same-named tool contract must therefore account for checkpoint
+compatibility.
 
 ## Shutdown
 

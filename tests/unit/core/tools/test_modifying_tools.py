@@ -53,6 +53,10 @@ write_file_module = __import__(
     "awesome_agent.core.tools.builtins.write_file",
     fromlist=["write_file"],
 )
+builtins_module = __import__(
+    "awesome_agent.core.tools.builtins",
+    fromlist=["resolve_workspace_path"],
+)
 
 
 @pytest.fixture
@@ -86,7 +90,7 @@ async def modifying_fixture(
         identity,
     )
     registry = ToolRegistry()
-    register_modifying_tools(registry, journal)
+    register_modifying_tools(registry, journal, workspace=identity)
     change_set_id = None
     if with_change_set:
         change_set_id = (
@@ -453,7 +457,7 @@ async def test_windows_ambiguous_path_is_rejected_before_approval(
         return ToolApprovalDecision.ALLOW_ONCE
 
     monkeypatch.setattr(
-        "awesome_agent.core.tools.executor.workspace_path_platform",
+        "awesome_agent.core.workspace.path_syntax.workspace_path_platform",
         lambda: "windows",
     )
     context = replace(
@@ -476,6 +480,50 @@ async def test_windows_ambiguous_path_is_rejected_before_approval(
     assert result.error.code is ToolErrorCode.INVALID_ARGUMENTS
     assert approvals == 0
     assert list(workspace.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_unsafe_write_is_not_described_or_approved(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor, context, _, _, sink = await modifying_fixture(
+        tmp_path,
+        application_database,
+    )
+    resolution_calls = 0
+    approvals = 0
+    original_resolve = builtins_module.resolve_workspace_path
+
+    def observed_resolve(*args: object, **kwargs: object) -> object:
+        nonlocal resolution_calls
+        resolution_calls += 1
+        return original_resolve(*args, **kwargs)
+
+    async def approve(_request: ToolApprovalRequest) -> ToolApprovalDecision:
+        nonlocal approvals
+        approvals += 1
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    monkeypatch.setattr(builtins_module, "resolve_workspace_path", observed_resolve)
+    context = replace(context, approval_resolver=approve)
+
+    result = await executor.execute(
+        ToolRequest(
+            call_id="call_unsafe_write",
+            tool_name="write_file",
+            arguments={"path": "../outside.txt", "content": "private"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.WORKSPACE_ESCAPE
+    assert resolution_calls == 1
+    assert approvals == 0
+    assert all(event.payload.target is None for event in sink.events)  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -758,7 +806,7 @@ async def test_delete_rejects_windows_rooted_paths_before_filesystem_access(
         tmp_path, application_database
     )
     monkeypatch.setattr(
-        "awesome_agent.core.tools.executor.workspace_path_platform",
+        "awesome_agent.core.workspace.path_syntax.workspace_path_platform",
         lambda: "windows",
     )
 

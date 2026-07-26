@@ -9,6 +9,7 @@ from typing import Any, cast
 import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
+from pydantic import BaseModel
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
@@ -33,11 +34,14 @@ from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventTy
 from awesome_agent.core.tools import (
     ToolError,
     ToolErrorCode,
+    ToolExecutionContext,
+    ToolOutput,
     ToolRequest,
     ToolResult,
     ToolSpec,
     ToolStatus,
 )
+from awesome_agent.core.tools.registry import ToolRegistry, ToolReplaySafety
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
@@ -73,6 +77,10 @@ async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLit
 class UnusedGraph:
     async def ainvoke(self, *args: object, **kwargs: object) -> AgentState:
         raise AssertionError("reconciliation must not execute the graph")
+
+
+class RecoveryToolArguments(BaseModel):
+    pass
 
 
 class RecoveryCheckpoints:
@@ -972,9 +980,28 @@ async def test_recovery_rejects_unverifiable_context_snapshots(
 
 
 @pytest.mark.asyncio
-async def test_uncertain_execute_is_not_replayed_and_requests_interaction(
+@pytest.mark.parametrize(
+    ("tool_name", "replay_safety", "expected_status"),
+    [
+        (
+            "side_effect_tool",
+            ToolReplaySafety.NON_REPLAYABLE,
+            RecoveryStatus.INTERACTION_REQUIRED,
+        ),
+        (
+            "safe_reader",
+            ToolReplaySafety.REPLAYABLE,
+            RecoveryStatus.RESUMABLE,
+        ),
+        ("missing_tool", None, RecoveryStatus.INTERACTION_REQUIRED),
+    ],
+)
+async def test_recovery_uses_registration_replay_safety_and_misses_fail_closed(
     tmp_path: Path,
     application_database: ApplicationSQLite,
+    tool_name: str,
+    replay_safety: ToolReplaySafety | None,
+    expected_status: RecoveryStatus,
 ) -> None:
     repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
@@ -983,13 +1010,13 @@ async def test_uncertain_execute_is_not_replayed_and_requests_interaction(
     state = _state(turn)
     await _freeze_context(state, turn, conversation)
     state["pending_tool_calls"] = [
-        {"call_id": "call_1", "name": "execute", "arguments_json": "{}"}
+        {"call_id": "call_1", "name": tool_name, "arguments_json": "{}"}
     ]
     pending_assistant = AssistantMessage(
         tool_calls=(
             ToolCall(
                 call_id="call_1",
-                name="execute",
+                name=tool_name,
                 arguments_json="{}",
             ),
         )
@@ -1004,6 +1031,28 @@ async def test_uncertain_execute_is_not_replayed_and_requests_interaction(
         workspace_key="workspace_1",
         sink=sink,
     )
+    registry = ToolRegistry()
+    if replay_safety is not None:
+
+        async def handler(
+            arguments: BaseModel,
+            context: ToolExecutionContext,
+        ) -> ToolOutput:
+            del arguments, context
+            return ToolOutput(content="unused")
+
+        registry.register(
+            spec=ToolSpec(
+                name=tool_name,
+                description="Recovery fixture tool",
+                input_schema={},
+                capability="workspace.read",
+                read_only=(replay_safety is ToolReplaySafety.REPLAYABLE),
+            ),
+            input_model=RecoveryToolArguments,
+            handler=handler,
+            replay_safety=replay_safety,
+        )
     coordinator = TurnCoordinator(
         workspace_key="workspace_1",
         conversation=conversation,
@@ -1014,11 +1063,12 @@ async def test_uncertain_execute_is_not_replayed_and_requests_interaction(
         emitter=emitter,
         checkpoints=checkpoints,
         seal_changes=_noop_seal_changes,
+        tool_replay_safety=registry.replay_safety,
     )
 
     [result] = await coordinator.reconcile_startup()
 
-    assert result.status is RecoveryStatus.INTERACTION_REQUIRED
+    assert result.status is expected_status
     assert checkpoints.deleted == []
     assert (await conversation.read_thread(thread.id)).turns[
         0

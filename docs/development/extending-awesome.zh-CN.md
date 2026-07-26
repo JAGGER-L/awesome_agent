@@ -128,32 +128,41 @@ Read tool 使用共享 workspace policy 和有界、校验身份的 reader。Wri
 
 ### 4. 只注册一次
 
-在 built-in registry composition 中注册 `ToolSpec`、input model、handler、capability、
-read-only 标志、display verb 和可选内部 timeout resolver。名称必须匹配共享 tool-name
-pattern，且不能与 built-in 或 extension namespace 冲突。
+在 built-in registry composition 中注册一个完整工具，其中包含 `ToolSpec`、严格 input
+model、handler、类型化 operation description、hard admission、replay-safety 分类和可选内部
+timeout resolver，以及可选 handler cancellation grace。Capability、read-only 状态与展示
+metadata 属于 spec。名称必须匹配共享 tool-name pattern，且不能与 built-in 或 extension
+namespace 冲突。
 
-模型可见 schema 来自 input model。内部清理预算不能伪装成模型参数。
+模型可见 schema 来自 input model。内部清理预算不能伪装成模型参数。Hard admission
+消费已校验参数与执行 context，拒绝不可关闭的不安全情况。只有它成功后，operation
+description 才恰好运行一次，返回展示与审批所需的有界事实。它可以为已准入操作执行有界
+metadata inspection，但仍发生在审批、handler 或任何外部作用之前。Admission 与 capability
+policy 保持分离；权限模式或临时 grant 不能覆盖它。
 
 ### 5. 定义生命周期行为
 
 记录并测试：
 
-- 审批前的 argument 与 path validation；
-- mode grant 之前的 hard-deny rule；
+- 唯一执行顺序：resolve、strict validation、hard admission、一次 typed description、
+  capability policy、approval、deadline、handler，再到 result/event/audit；
+- 审批、handler 执行或外部作用前的 argument 与 path validation；
+- mode grant 之前的 hard-admission rule；
 - 从已校验 operation fact 派生的审批文本；
 - 总 timeout 和 handler cancellation grace；
 - output/content/presentation 边界；
 - 一条 ToolActivity 和一个终态 event；
 - 不可逆作用前是否记录 attempt；
 - 作用完全、部分或完全不可逆；
+- replay 是否可被证明安全，未知分类必须 fail closed；
 - 崩溃与启动恢复证据。
 
 ### 工具测试
 
-为 schema、正常 result、预期 error、未知 capability、所有 permission mode、hard denial、
-timeout、cancellation 和 output bound 添加单元测试。工具涉及 workspace identity、Change
-Journal、进程、Application approval、transcript activity 或 recovery 时添加集成测试。
-在所属 OS 上测试真实平台 primitive。
+为 schema、正常 result、预期 error、类型化描述、未知 capability、所有 permission mode、
+hard admission、replay safety、timeout、cancellation 和 output bound 添加单元测试。工具
+涉及 workspace identity、Change Journal、进程、Application approval、transcript activity
+或 recovery 时添加集成测试。在所属 OS 上测试真实平台 primitive。
 
 ## 扩展 shell 行为
 
@@ -211,6 +220,10 @@ Skill 指令属于 context。`allowed-tools` 表示兼容性，不授权工具�
 Workspace Skill 代码必须保留 anchor/package identity 重校验。不要为了支持 linked
 package 而削弱它；如果用户有意管理 linked layout，请使用 user Skill。
 
+内置 Skill 工具注册项会在派生 target 前 hard-admit catalog membership、可移植词法资源
+路径以及 no-follow plain-file 边界。Handler 会在读取时重复安全检查；Workspace Skill 还会
+比较 discovery 时捕获的 package identity，并在其被替换时 fail closed。
+
 ## 通过 MCP 集成
 
 MCP 是独立运营工具的首选边界。Server 配置不含 secret：只有 command、argument、
@@ -242,6 +255,10 @@ namespace。诊断绝不能暴露原始 catalog 数据。
 
 MCP input validation error 必须是通用错误，不能暴露原始 argument 或 schema。Output
 validation 与 JSON traversal 在各自 byte、node、depth 和 content-block 边界内执行。
+
+每个 MCP 注册项都显式标记为 non-replayable。恢复通过同一个 Registry 契约消费该
+metadata，不得从 `mcp.` 前缀推断安全性。注册项缺失或未知时会 fail closed，进入同一
+interaction。两种情况都不会自动重试；只有用户显式选择 Retry 才可继续旧 checkpoint。
 
 ## 添加 Memory provider
 
@@ -312,8 +329,9 @@ Python strict model
 
 - [ ] 一个现有 package 负责新行为。
 - [ ] 没有第二 graph、executor、command runtime、policy 或 storage owner。
-- [ ] Input 在审批/外部 I/O 前严格且有界。
-- [ ] Capability 与 hard-deny 行为显式。
+- [ ] Input 在审批、handler 执行或外部作用前严格且有界。
+- [ ] Hard admission 与 capability policy 显式且保持分离。
+- [ ] Replay safety 显式，metadata 缺失或未知时 fail closed。
 - [ ] Timeout、cancellation、cleanup 与 uncertain outcome 已测试。
 - [ ] 持久化事实和恢复规则已有文档。
 - [ ] Secret 与原始 payload 不能进入 event、audit、fixture 或 log。

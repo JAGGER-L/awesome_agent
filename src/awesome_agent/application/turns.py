@@ -46,6 +46,7 @@ from awesome_agent.core.cancellation import (
 )
 from awesome_agent.core.events import EventEmitter
 from awesome_agent.core.tools import ToolErrorCode, ToolResult, ToolStatus
+from awesome_agent.core.tools.registry import ToolReplaySafety
 from awesome_agent.modeling import ModelUsage
 from awesome_agent.storage.checkpoints import CheckpointCorrupt, TurnCheckpointStore
 
@@ -91,6 +92,7 @@ type PostAnswerMemory = Callable[[AgentState], Awaitable[AgentState]]
 type TurnExtensionPreparer = Callable[[], Awaitable[None]]
 type ResumeClaim = Callable[[Turn], Awaitable[None]]
 type ResumeFinished = Callable[[], Awaitable[None]]
+type ToolReplaySafetyResolver = Callable[[str], ToolReplaySafety]
 
 
 class TurnExecutionFailed(RuntimeError):
@@ -130,6 +132,11 @@ async def disabled_change_reconciler() -> None:
     return None
 
 
+def fail_closed_replay_safety(tool_name: str) -> ToolReplaySafety:
+    del tool_name
+    return ToolReplaySafety.NON_REPLAYABLE
+
+
 class TurnCoordinator:
     def __init__(
         self,
@@ -152,6 +159,7 @@ class TurnCoordinator:
         context_snapshot_validator: ContextSnapshotValidator = (
             frozen_context_snapshot_is_valid
         ),
+        tool_replay_safety: ToolReplaySafetyResolver = fail_closed_replay_safety,
     ) -> None:
         self._workspace_key = workspace_key
         self._conversation = conversation
@@ -167,6 +175,7 @@ class TurnCoordinator:
         self._turn_input_preparer = turn_input_preparer
         self._turn_extension_preparer = turn_extension_preparer
         self._context_snapshot_validator = context_snapshot_validator
+        self._tool_replay_safety = tool_replay_safety
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     @property
@@ -575,7 +584,10 @@ class TurnCoordinator:
                         )
                     )
                     continue
-                if not resumable_budget_interruption and _uncertain_tool_call(state):
+                if not resumable_budget_interruption and _uncertain_tool_call(
+                    state,
+                    self._tool_replay_safety,
+                ):
                     results.append(
                         RecoveryResult(
                             thread_id=thread.id,
@@ -1297,18 +1309,26 @@ def _resumable_budget_interruption(state: AgentState, turn: Turn) -> bool:
     )
 
 
-def _uncertain_tool_call(state: AgentState) -> bool:
+def _uncertain_tool_call(
+    state: AgentState,
+    replay_safety: ToolReplaySafetyResolver,
+) -> bool:
     index = state["next_tool_index"]
     if index >= len(state["pending_tool_calls"]):
         return False
     call = state["pending_tool_calls"][index]
     name = call.get("name")
     call_id = call.get("call_id")
-    if not isinstance(name, str) or not (name == "execute" or name.startswith("mcp.")):
-        return False
     completed_ids = {
         result.get("call_id")
         for result in state["tool_results"]
         if isinstance(result.get("call_id"), str)
     }
-    return call_id not in completed_ids
+    if call_id in completed_ids:
+        return False
+    if not isinstance(name, str):
+        return True
+    try:
+        return replay_safety(name) is not ToolReplaySafety.REPLAYABLE
+    except Exception:
+        return True

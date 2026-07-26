@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ from awesome_agent.core.tools.builtins import (
 )
 from awesome_agent.core.tools.permissions import ToolCapability
 from awesome_agent.core.tools.process import ProcessRunner
-from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.tools.registry import ToolRegistry, ToolReplaySafety
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.storage import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
@@ -31,7 +32,12 @@ async def test_baseline_tools_exist_without_fixing_total_tool_count(
     )
     registry = ToolRegistry()
     register_read_tools(registry)
-    register_modifying_tools(registry, journal, ProcessRunner())
+    register_modifying_tools(
+        registry,
+        journal,
+        ProcessRunner(),
+        workspace=identity,
+    )
 
     specifications = registry.specifications()
     baseline = {
@@ -62,4 +68,76 @@ async def test_baseline_tools_exist_without_fixing_total_tool_count(
         "read_file": ToolCapability.WORKSPACE_READ,
         "write_file": ToolCapability.WORKSPACE_WRITE,
     }
+    assert {name: registry.replay_safety(name) for name in baseline} == {
+        "delete": ToolReplaySafety.REPLAYABLE,
+        "edit_file": ToolReplaySafety.REPLAYABLE,
+        "execute": ToolReplaySafety.NON_REPLAYABLE,
+        "glob": ToolReplaySafety.REPLAYABLE,
+        "grep": ToolReplaySafety.REPLAYABLE,
+        "ls": ToolReplaySafety.REPLAYABLE,
+        "read_file": ToolReplaySafety.REPLAYABLE,
+        "write_file": ToolReplaySafety.REPLAYABLE,
+    }
     await database.aclose()
+
+
+def test_executor_ast_contains_no_concrete_tool_name_policy() -> None:
+    executor_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "awesome_agent"
+        / "core"
+        / "tools"
+        / "executor.py"
+    )
+    tree = ast.parse(executor_path.read_text(encoding="utf-8"))
+    string_literals = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+    assert string_literals.isdisjoint(
+        {
+            "delete",
+            "edit_file",
+            "execute",
+            "glob",
+            "grep",
+            "ls",
+            "read_file",
+            "write_file",
+        }
+    )
+
+
+def test_production_tool_registrations_declare_replay_safety() -> None:
+    repository = Path(__file__).parents[2]
+    production_paths = (
+        repository
+        / "src"
+        / "awesome_agent"
+        / "core"
+        / "tools"
+        / "builtins"
+        / "__init__.py",
+        repository / "src" / "awesome_agent" / "extensions" / "skills" / "tools.py",
+        repository / "src" / "awesome_agent" / "extensions" / "mcp" / "adapter.py",
+        repository / "src" / "awesome_agent" / "memory" / "tools.py",
+    )
+
+    for path in production_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+            function_name = (
+                call.func.attr
+                if isinstance(call.func, ast.Attribute)
+                else call.func.id
+                if isinstance(call.func, ast.Name)
+                else None
+            )
+            if function_name not in {"register", "RegisteredTool"}:
+                continue
+            assert "replay_safety" in {keyword.arg for keyword in call.keywords}, (
+                f"{path} contains an implicit replay-safety registration"
+            )

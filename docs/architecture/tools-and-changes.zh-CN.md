@@ -1,25 +1,34 @@
 # 工具与变更
 
 工具是模型意图对工作区或 host 产生作用的唯一通路。因此，Awesome 在调用 built-in 或
-MCP handler 之前，统一处理注册、参数校验、hard-deny 检查、权限决策、审批、超时、取消、
-审计和终态事件。
+MCP handler 之前，统一处理注册、严格参数校验、工具自有 hard admission、capability 决策、
+审批、期限、取消、审计和终态事件。
 
 Change Journal 与工具相邻，但职责独立。它记录并恢复通过受管 built-in 产生的文件
 mutation；它无法让任意 shell 或 MCP 副作用变得可逆。
 
 ## 工具契约
 
-一个 `RegisteredTool` 组合四项内部事实：
+一个 `RegisteredTool` 组合八项内部事实：
 
 - 提供商可见的 `ToolSpec`，其中包含名称、描述、JSON schema、capability、read-only
   标志和展示 metadata；
 - 一个严格的 Pydantic input model；
 - 一个 async handler；
-- 一个可选的动态总超时解析器。
+- 一个从已校验参数派生有界 operation fact 的类型化描述函数；
+- 一个对已校验参数和执行 context 应用不可关闭、工具特定检查的 hard-admission 函数；
+- 一个显式 replay-safety 分类；
+- 一个可选的动态总超时解析器；
+- 一个可选的 handler cancellation grace。
 
-超时解析器有意不属于模型可见 schema。它让 `execute` 可以用
-`timeout_seconds + 10` 秒覆盖请求期限和有界清理，也让 MCP 可以使用 40 秒外层封装，
-而不向模型泄露 executor 内部机制。
+描述、admission、replay、deadline 与 cancellation 事实有意不属于模型可见 schema。
+描述函数从显式选择的 operation target 提供有界展示与审批事实；它不会接收未经校验的
+原始参数映射。Hard admission 拥有路径或命令安全等事实，任何权限模式或临时 grant 都不能
+覆盖它。Description 恰好在 hard admission 后运行
+一次：它进行的任何有界 metadata probe 都位于已准入操作内，并且仍发生在审批、handler 与
+外部作用之前。Replay safety 为恢复提供显式答案，使其不必识别工具名。Timeout resolver
+让 `execute` 可以用 `timeout_seconds + 10` 秒作为总期限；cancellation grace 则对 handler
+清理设限，而不向模型泄露 executor 内部机制。
 
 Built-in 基线如下：
 
@@ -38,22 +47,29 @@ Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式
 ```text
 ToolRequest
   -> resolve registry item
-  -> validate Pydantic arguments
-  -> validate built-in path syntax
-  -> compute non-disableable hard deny
-  -> PermissionPolicy: allow | ask | deny
+  -> strict-validate with its registered input model
+  -> run its registered hard admission
+  -> derive its typed description exactly once
+  -> PermissionPolicy for its registered capability: allow | ask | deny
   -> resolve bound approval, when asked
-  -> resolve total timeout
+  -> resolve total deadline
   -> invoke handler under deadline
   -> normalize result or expected failure
-  -> write one ToolActivity
+  -> write one ToolActivity and audit summary
   -> emit one terminal tool event
   -> return one bounded ToolResult
 ```
 
-`tool.started` 会在解析前发出，因此未知工具仍是可观察的尝试调用。参数错误、policy
-denial、timeout 和预期 handler failure 会成为有界 `ToolResult` error。意外 handler
-exception 属于不变量失败，会终止 Turn，而不会伪装成模型可修正的错误。
+每次尝试调用都恰好发出一条 `tool.started`，包括未知工具、无效参数和 hard-admission
+失败。若失败发生在类型化描述产生之前，事件只使用注册项的静态展示信息，绝不从不可信值
+派生 target；已准入调用则在 capability policy 或 handler 执行前发出类型化、有界的展示。
+参数错误、policy denial、timeout 和预期 handler failure 会成为有界 `ToolResult` error。
+意外 handler exception 属于不变量失败，会终止 Turn，而不会伪装成模型可修正的错误。
+
+这是唯一的执行顺序。Executor 统一调用注册项拥有的行为，不按具体工具名分支。Hard
+admission 与 capability policy 回答不同问题：admission 判断这一项经过校验的具体操作是否
+在任何情况下都可接受；policy 判断注册的 capability 在当前 permission session 中应允许、
+拒绝还是请求审批。
 
 取消会通过有界清理尝试终结唯一一条 cancelled activity/event，然后重新抛出调用方的
 原始取消。忽略取消的 handler task 只有在其宽限期限结束后才会被 detach，其结果仍会被
@@ -62,9 +78,20 @@ exception 属于不变量失败，会终止 Turn，而不会伪装成模型可�
 工具内容进入 Agent state 或 transcript 前会受到边界约束。审计 summary 只保留参数名，
 不保留原始参数值。
 
+## 重放安全性
+
+Replay safety 是注册 metadata，而不是由恢复流程推断的属性。只有受管本地语义能够证明
+重复调用安全的 built-in 才可标记为 replayable。MCP 调用以及其它外部或未分类作用均为
+non-replayable。恢复会在当前 Runtime Registry 中查找同名工具，并消费该注册项的
+metadata。Replayable 工作可以继续；non-replayable、metadata 缺失或未知时会 fail closed，
+进入恢复 interaction，绝不自动重试。用户可以显式选择 Retry，而不是默认的 Abort。因此，
+同名工具的契约变更必须按 checkpoint compatibility 变更管理。Executor 与恢复流程都不
+维护另一份特殊工具名列表。
+
 ## 权限决策
 
-权限是纯 capability 决策。Hard denial 始终优先：
+权限是纯 capability 决策，只在注册的 hard admission 成功后求值。Hard rejection 始终
+优先，表中任何一行都不能把它转为允许：
 
 | 模式 | 读取 | 创建/修改 | 删除 | Shell | MCP/未知扩展 |
 | --- | --- | --- | --- | --- | --- |
@@ -120,11 +147,11 @@ POSIX 最终 symlink 节点本身可以在不跟随目标的情况下删除；�
 
 ## 命令 circuit breaker
 
-Agent `execute` 与直接 `!` 输入都会调用同一个纯命令 policy。Executor 的审批前检查接收
-命令、显式 shell dialect、workspace，以及在规范工作区根下拼接出的请求词法 working
-directory。随后 handler 解析并校验该目录的身份；spawn 前检查使用已校验的 resolved
-directory 再次调用同一 policy。共享 evaluator 可以防止规则漂移，而第二阶段具有已打开
-路径证据支撑。
+Agent `execute` 与直接 `!` 输入都会调用同一个纯命令 policy。`execute` 注册项的 hard-
+admission 检查接收命令、显式 shell dialect 与 workspace。它先把请求 working directory
+解析为 pinned workspace 内已存在的 no-follow 目录，再在描述或审批前基于 resolved path
+评估命令。Handler 在 spawn 前重复身份解析与同一 policy。共享 evaluator 可以防止规则
+漂移；第二次检查使用新鲜的 opened-path 证据，封闭 admission 与进程创建之间的变化。
 
 对 CMD、POSIX shell 和 PowerShell 的有界检查会展开已知 wrapper、复合命令、pipeline
 和换行。它会规范化 executable path、大小写与 executable suffix；在目录切换间保守

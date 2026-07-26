@@ -60,7 +60,6 @@ class PolicyRequest:
     capability: ToolCapability | str
     mode: PermissionMode
     granted_capabilities: frozenset[ToolCapability | str] = frozenset()
-    hard_deny_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,12 +69,9 @@ class PolicyDecision:
 
 
 class PermissionPolicy:
-    """Pure capability policy. Hard safety boundaries always take precedence."""
+    """Pure capability policy evaluated after registration-owned admission."""
 
     def evaluate(self, request: PolicyRequest) -> PolicyDecision:
-        if request.hard_deny_reason is not None:
-            return PolicyDecision(PolicyAction.DENY, request.hard_deny_reason)
-
         capability = str(request.capability)
         if capability in {"memory.read", "memory.write"}:
             return PolicyDecision(

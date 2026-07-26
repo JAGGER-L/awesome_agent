@@ -59,7 +59,7 @@ async def delete_fixture(
         workspace=identity,
     )
     registry = ToolRegistry()
-    register_modifying_tools(registry, journal)
+    register_modifying_tools(registry, journal, workspace=identity)
     context = ToolExecutionContext(
         workspace=identity,
         thread_id="thread_1",

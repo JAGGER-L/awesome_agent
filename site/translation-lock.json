@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "5d25552cd3345359b3974cc2021ee9cd1aa5a5e814ec6a0de6813f0d89cc13dd",
-      "chinese_sha256": "d9d1e1079fea299e1d9f2a072a974221154f58db8b060d7c84a2b8b19ed98f1b"
+      "english_sha256": "8802547dc5caedad60a12e4677038baf61462b111ca607051a7a026725f70110",
+      "chinese_sha256": "acd20164c401bf1c3eeb7ae21a8b2c87e9565357845a34c5fc8a035575b7ec9a"
     },
     {
       "english_source": "README.md",
@@ -48,8 +48,8 @@
     {
       "english_source": "docs/architecture/request-lifecycles.md",
       "chinese_source": "docs/architecture/request-lifecycles.zh-CN.md",
-      "english_sha256": "9d3d2735d91eb8c92a642292f1dd773aa2cb6f39ae78831a3dbaeb793d4869bd",
-      "chinese_sha256": "67f9325f1a1296b29036adfb5ab83fc6d4b77b94b523a2b037f2cf35dc87b535"
+      "english_sha256": "7868a5ca91d11ccb2f592c31961b7fd9d0fea8d383aeee5d84045ff685578ff2",
+      "chinese_sha256": "1da088491e75ec459a65e3515fe5ffde289502a092fb40d34135d98e6d61cf84"
     },
     {
       "english_source": "docs/architecture/security-and-dependencies.md",
@@ -66,8 +66,8 @@
     {
       "english_source": "docs/architecture/tools-and-changes.md",
       "chinese_source": "docs/architecture/tools-and-changes.zh-CN.md",
-      "english_sha256": "f3b3e2c050d5ec124f8772c725df7136dfb808f0c8caa9dce83900fc4b3e09de",
-      "chinese_sha256": "504091bdb6f6d03f737f2b3748e03ffbf0a42b552aa5f035ae393ee815451dcf"
+      "english_sha256": "ee56ee9cdbcbbb9654c57d01eb8c9b971abed9c4b47b0be3680b2ceeec26ee99",
+      "chinese_sha256": "6b3d2cc06102ec43bdf6b2cc8fe4728542dffe1a3fd2ffa86717e3341fec0593"
     },
     {
       "english_source": "docs/concepts/README.md",
@@ -108,8 +108,8 @@
     {
       "english_source": "docs/development/extending-awesome.md",
       "chinese_source": "docs/development/extending-awesome.zh-CN.md",
-      "english_sha256": "0574c07c52723aeff7aaad9ef3e0ba184fcc340aaa3fcebb0b9621a546329f7b",
-      "chinese_sha256": "e4276f5745b720aba7e1b384384f4d036318c6233237530ee93607153179646e"
+      "english_sha256": "35cba8e5f79a45b3d686fc733f44a89f13becf44af85b0d6de8990e8f62f2d64",
+      "chinese_sha256": "38bec2e7cf5f6f73169af7aa710355a2999290fdd90a7e1bd6b8280cbd5408dd"
     },
     {
       "english_source": "docs/development/release.md",

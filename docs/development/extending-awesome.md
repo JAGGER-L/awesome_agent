@@ -140,32 +140,46 @@ primitives. Do not call `Path.resolve()`, `read_text()`, `write_text()`,
 
 ### 4. Register once
 
-Register the `ToolSpec`, input model, handler, capability, read-only flag,
-display verb, and optional internal timeout resolver in the built-in registry
-composition. The name must match the shared tool-name pattern and cannot collide
-with built-in or extension namespaces.
+Register one complete tool containing its `ToolSpec`, strict input model,
+handler, typed operation description, hard admission, replay-safety
+classification, optional internal timeout resolver, and optional handler-
+cancellation grace in the built-in registry composition. Capability, read-only
+state, and display metadata belong to the spec. The name must match the shared
+tool-name pattern and cannot collide with built-in or extension namespaces.
 
 The model-visible schema comes from the input model. Internal cleanup budgets
-must not appear as fake model arguments.
+must not appear as fake model arguments. Hard admission consumes validated
+arguments and execution context and rejects non-disableable unsafe cases. Only
+after it succeeds, the operation description runs exactly once and returns the
+bounded facts needed for presentation and approval. It may perform bounded
+metadata inspection for the admitted operation, but still runs before approval,
+the handler, or any external effect. Admission remains separate from capability
+policy, and a permission mode or temporary grant cannot override it.
 
 ### 5. Define lifecycle behavior
 
 Document and test:
 
-- argument and path validation before approval;
-- hard-deny rules before mode grants;
+- the one execution order: resolve, strict validation, hard admission, one
+  typed description, capability policy, approval, deadline, handler, then
+  result/event/audit;
+- argument and path validation before approval, handler execution, or external
+  effects;
+- hard-admission rules before mode grants;
 - approval text derived from validated operation facts;
 - total timeout and handler cancellation grace;
 - output/content/presentation bounds;
 - one ToolActivity and one terminal event;
 - whether an attempt is recorded before an irreversible effect;
 - whether the effect is fully, partially, or not reversible;
+- whether replay is provably safe, with unknown classifications failing closed;
 - crash and startup-recovery evidence.
 
 ### Tool tests
 
-Add unit tests for schema, normal result, expected error, unknown capability,
-all permission modes, hard denial, timeout, cancellation, and output bounds.
+Add unit tests for schema, normal result, expected error, typed descriptions,
+unknown capability, all permission modes, hard admission, replay safety,
+timeout, cancellation, and output bounds.
 Add integration tests when the tool touches workspace identity, Change Journal,
 processes, Application approval, transcript activity, or recovery. Test real
 platform primitives on their owning OS.
@@ -234,6 +248,12 @@ Workspace Skill code must retain anchor/package identity revalidation. Do not
 weaken it to support a linked package; use a user Skill if the user intentionally
 manages a linked layout.
 
+The built-in Skill tool registrations hard-admit catalog membership, portable
+lexical resource paths, and a no-follow plain-file boundary before deriving a
+target. The handler repeats the safe read checks; Workspace Skills additionally
+compare the package identity captured at discovery and fail closed on a
+replacement.
+
 ## Integrate through MCP
 
 MCP is the preferred boundary for independently operated tools. Server
@@ -271,6 +291,12 @@ Do not:
 MCP input validation errors must be generic and must not expose raw arguments
 or schemas. Output validation and JSON traversal occur under their own byte,
 node, depth, and content-block bounds.
+
+Every MCP registration is explicitly non-replayable. Recovery consumes that
+metadata through the same Registry contract and must not infer safety from the
+`mcp.` prefix. A missing or unknown registration fails closed into the same
+interaction. Neither case retries automatically; only an explicit user Retry
+may continue the old checkpoint.
 
 ## Add a Memory provider
 
@@ -350,8 +376,10 @@ events; it must not call Agent, tools, or storage directly.
 
 - [ ] One existing package owns the new behavior.
 - [ ] No second graph, executor, command runtime, policy, or storage owner.
-- [ ] Input is strict and bounded before approval/external I/O.
-- [ ] Capability and hard-deny behavior are explicit.
+- [ ] Input is strict and bounded before approval, handler execution, or
+      external effects.
+- [ ] Hard admission and capability policy are explicit and remain separate.
+- [ ] Replay safety is explicit, and missing/unknown metadata fails closed.
 - [ ] Timeout, cancellation, cleanup, and uncertain outcome are tested.
 - [ ] Durable facts and recovery rules are documented.
 - [ ] Secrets and raw payloads cannot enter events, audit, fixtures, or logs.

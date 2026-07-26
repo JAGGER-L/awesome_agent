@@ -23,7 +23,10 @@ from awesome_agent.core.tools.contracts import (
     ToolPresentation,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure, ToolInvariantError
-from awesome_agent.core.tools.policy import resolve_workspace_path
+from awesome_agent.core.tools.policy import (
+    resolve_workspace_path,
+    validate_workspace_path_syntax,
+)
 from awesome_agent.core.tools.process import ShellExecutionBackend
 from awesome_agent.safety.redaction import redact_text
 
@@ -40,6 +43,33 @@ class ExecuteArguments(ToolArguments):
 def resolve_execute_timeout(arguments: BaseModel) -> float:
     options = cast(ExecuteArguments, arguments)
     return options.timeout_seconds + _EXECUTE_CLEANUP_BUDGET_SECONDS
+
+
+def admit_execute(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    """Bind cwd and apply the command circuit breaker before permission policy."""
+
+    options = cast(ExecuteArguments, arguments)
+    validate_workspace_path_syntax(options.cwd)
+    cwd = resolve_workspace_path(
+        context.workspace,
+        options.cwd,
+        must_exist=True,
+        expected_kind="directory",
+    )
+    decision = evaluate_command(
+        options.command,
+        dialect=host_shell_dialect(),
+        cwd=cwd.resolved,
+        workspace=context.workspace.canonical_path,
+    )
+    if decision.action is CommandPolicyAction.DENY:
+        raise ExpectedToolFailure(
+            ToolErrorCode.PERMISSION_DENIED,
+            decision.reason,
+        )
 
 
 def _sanitized_environment() -> dict[str, str]:

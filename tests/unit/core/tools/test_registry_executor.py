@@ -1,10 +1,17 @@
 import asyncio
+import warnings
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    ValidationError,
+    model_validator,
+)
 
 from awesome_agent.core.events import (
     CollectingEventSink,
@@ -20,7 +27,9 @@ from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolHandler,
+    ToolInvocationDescription,
     ToolOutput,
+    ToolPresentation,
     ToolRequest,
     ToolSpec,
     ToolStatus,
@@ -28,7 +37,11 @@ from awesome_agent.core.tools import (
 from awesome_agent.core.tools.errors import ToolInvariantError
 from awesome_agent.core.tools.executor import ToolExecutor
 from awesome_agent.core.tools.permissions import (
+    PermissionPolicy,
     PermissionSession,
+    PolicyAction,
+    PolicyDecision,
+    PolicyRequest,
     ToolApprovalDecision,
     ToolApprovalRequest,
 )
@@ -37,8 +50,12 @@ from awesome_agent.core.tools.registry import (
     MAX_REGISTERED_TOOLS,
     DuplicateToolName,
     RegisteredTool,
+    ToolAdmitter,
+    ToolDescriber,
     ToolRegistry,
     ToolRegistryLimitError,
+    ToolReplaySafety,
+    ToolTimeoutResolver,
 )
 from awesome_agent.core.workspace import resolve_workspace
 
@@ -55,6 +72,16 @@ class EchoArguments(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     text: str
+
+
+def test_expected_tool_failure_constructor_rejects_invalid_contract() -> None:
+    with pytest.raises(TypeError, match="Invalid expected tool failure contract"):
+        ExpectedToolFailure(
+            cast(ToolErrorCode, "invalid"),
+            cast(str, None),
+            retryable=cast(bool, "yes"),
+            metadata=cast(dict[str, JsonValue], {"value": float("nan")}),
+        )
 
 
 def execution_context(
@@ -158,6 +185,18 @@ class PreDeliveryBlockingToolTerminalSink(CollectingEventSink):
         await super().emit(event)
 
 
+class PreDeliveryBlockingToolStartedSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started_entered = asyncio.Event()
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.TOOL_STARTED:
+            self.started_entered.set()
+            await asyncio.Event().wait()
+        await super().emit(event)
+
+
 def echo_registry(
     handler_override: ToolHandler | None = None,
     *,
@@ -183,6 +222,773 @@ def echo_registry(
         handler=echo if handler_override is None else handler_override,
     )
     return registry
+
+
+def test_registry_preserves_falsey_describer() -> None:
+    class FalseyDescriber:
+        def __bool__(self) -> bool:
+            return False
+
+        def __call__(self, arguments: BaseModel) -> ToolInvocationDescription:
+            del arguments
+            return ToolInvocationDescription(
+                verb="Echo",
+                approval_operation="echo",
+                approval_target="value",
+            )
+
+    describer = FalseyDescriber()
+    registry = ToolRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema=EchoArguments.model_json_schema(),
+            capability="workspace.read",
+            read_only=True,
+        ),
+        input_model=EchoArguments,
+        handler=handler,
+        describe=describer,
+    )
+
+    registered = registry.resolve("echo")
+    assert registered is not None
+    assert registered.describe is describer
+
+
+@pytest.mark.asyncio
+async def test_executor_runs_registration_policy_in_exact_order_once(
+    tmp_path: Path,
+) -> None:
+    order: list[str] = []
+
+    class OrderedArguments(BaseModel):
+        model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+        validation_order: ClassVar[list[str]] = order
+
+        text: str
+
+        @model_validator(mode="before")
+        @classmethod
+        def record_validation(cls, value: object) -> object:
+            cls.validation_order.append("validate")
+            return value
+
+    class RecordingRegistry(ToolRegistry):
+        def resolve(self, name: str) -> RegisteredTool | None:
+            order.append("resolve")
+            return super().resolve(name)
+
+    class RecordingPolicy(PermissionPolicy):
+        def evaluate(self, request: PolicyRequest) -> PolicyDecision:
+            order.append("policy")
+            return super().evaluate(request)
+
+    def admit(arguments: BaseModel, context: ToolExecutionContext) -> None:
+        assert isinstance(arguments, OrderedArguments)
+        del context
+        order.append("admit")
+
+    def describe(arguments: BaseModel) -> ToolInvocationDescription:
+        assert isinstance(arguments, OrderedArguments)
+        order.append("describe")
+        return ToolInvocationDescription(
+            verb="Echo",
+            display_target=arguments.text,
+            approval_operation="echo",
+            approval_target=arguments.text,
+        )
+
+    def timeout(arguments: BaseModel) -> float:
+        assert isinstance(arguments, OrderedArguments)
+        order.append("timeout")
+        return 1.0
+
+    async def ordered_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        order.append("handler")
+        return ToolOutput(content="ok")
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        assert request.target == "validated"
+        order.append("approval")
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    registry = RecordingRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema=OrderedArguments.model_json_schema(),
+            capability="workspace.write",
+            read_only=False,
+        ),
+        input_model=OrderedArguments,
+        handler=ordered_handler,
+        describe=describe,
+        admit=admit,
+        replay_safety=ToolReplaySafety.REPLAYABLE,
+        timeout_resolver=timeout,
+    )
+    order.clear()
+    context, _, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=approve)
+
+    result = await ToolExecutor(
+        registry,
+        permission_policy=RecordingPolicy(),
+    ).execute(
+        ToolRequest(
+            call_id="call_order",
+            tool_name="echo",
+            arguments={"text": "validated"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert order == [
+        "resolve",
+        "validate",
+        "admit",
+        "describe",
+        "policy",
+        "approval",
+        "timeout",
+        "handler",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admission_failure_never_describes_or_asks_and_has_no_target(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def deny(arguments: BaseModel, context: ToolExecutionContext) -> None:
+        del arguments, context
+        calls.append("admit")
+        raise ExpectedToolFailure(
+            ToolErrorCode.PERMISSION_DENIED,
+            "Registration denied the invocation.",
+        )
+
+    def describe(arguments: BaseModel) -> ToolInvocationDescription:
+        del arguments
+        calls.append("describe")
+        raise AssertionError("denied arguments must not be described")
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        del request
+        calls.append("approval")
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    registry = ToolRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema=EchoArguments.model_json_schema(),
+            capability="workspace.write",
+            read_only=False,
+            display_metadata={"verb": "Echo"},
+        ),
+        input_model=EchoArguments,
+        handler=handler,
+        describe=describe,
+        admit=deny,
+    )
+    context, sink, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=approve)
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="call_denied",
+            tool_name="echo",
+            arguments={"text": "private target"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.PERMISSION_DENIED
+    assert calls == ["admit"]
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert all(event.payload.target is None for event in sink.events)  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_invalid_raw_arguments_never_admit_describe_or_ask(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def admit(arguments: BaseModel, context: ToolExecutionContext) -> None:
+        del arguments, context
+        calls.append("admit")
+
+    def describe(arguments: BaseModel) -> ToolInvocationDescription:
+        del arguments
+        calls.append("describe")
+        return ToolInvocationDescription(
+            verb="Echo",
+            display_target="should-not-appear",
+            approval_operation="echo",
+            approval_target="should-not-appear",
+        )
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        del request
+        calls.append("approval")
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    registry = ToolRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema=EchoArguments.model_json_schema(),
+            capability="workspace.write",
+            read_only=False,
+            display_metadata={"verb": "Echo"},
+        ),
+        input_model=EchoArguments,
+        handler=handler,
+        describe=describe,
+        admit=admit,
+    )
+    context, sink, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=approve)
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="call_invalid_raw",
+            tool_name="echo",
+            arguments={"text": "private", "unexpected": "secret"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.INVALID_ARGUMENTS
+    assert calls == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert all(event.payload.target is None for event in sink.events)  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_malformed_description_is_finalized_without_warning_or_target(
+    tmp_path: Path,
+) -> None:
+    class MalformedDescription(ToolInvocationDescription):
+        pass
+
+    handler_calls = 0
+
+    def malformed(arguments: BaseModel) -> ToolInvocationDescription:
+        del arguments
+        return MalformedDescription.model_construct(
+            verb=123,
+            display_target=object(),
+            approval_operation="echo",
+            approval_target="target",
+        )
+
+    async def unreachable(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        return ToolOutput(content="unreachable")
+
+    registry = echo_registry(unreachable)
+    registered = registry.resolve("echo")
+    assert registered is not None
+    registry.unregister("echo")
+    registry.register(
+        spec=registered.spec,
+        input_model=registered.input_model,
+        handler=registered.handler,
+        describe=malformed,
+        admit=registered.admit,
+        replay_safety=registered.replay_safety,
+    )
+    context, sink, writer = execution_context(tmp_path)
+
+    with warnings.catch_warnings(record=True) as captured_warnings:
+        warnings.simplefilter("always")
+        with pytest.raises(
+            ToolInvariantError,
+            match="Unexpected tool invocation policy failure",
+        ):
+            await ToolExecutor(registry).execute(
+                ToolRequest(
+                    call_id="call_malformed_description",
+                    tool_name="echo",
+                    arguments={"text": "value"},
+                ),
+                context=context,
+            )
+
+    assert captured_warnings == []
+    assert handler_calls == 0
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert all(event.payload.target is None for event in sink.events)  # type: ignore[union-attr]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_type", [RuntimeError, TypeError])
+async def test_unexpected_input_validation_failure_is_finalized_without_leakage(
+    tmp_path: Path,
+    failure_type: type[Exception],
+) -> None:
+    class ExplodingArguments(BaseModel):
+        @model_validator(mode="before")
+        @classmethod
+        def explode(cls, value: object) -> object:
+            del cls, value
+            raise failure_type("private validator value")
+
+    handler_calls = 0
+
+    async def unreachable(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        return ToolOutput(content="unreachable")
+
+    registry = ToolRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema={"type": "object"},
+            capability="workspace.read",
+            read_only=True,
+        ),
+        input_model=ExplodingArguments,
+        handler=unreachable,
+    )
+    context, sink, writer = execution_context(tmp_path)
+
+    with pytest.raises(
+        ToolInvariantError,
+        match="Unexpected tool input validation failure",
+    ) as captured:
+        await ToolExecutor(registry).execute(
+            ToolRequest(
+                call_id="call_invalid_validator",
+                tool_name="echo",
+                arguments={},
+            ),
+            context=context,
+        )
+
+    assert "private validator value" not in str(captured.value)
+    assert handler_calls == 0
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "error"
+    assert activity.error_code == ToolErrorCode.EXECUTION_FAILED
+
+
+@pytest.mark.asyncio
+async def test_input_validation_cancellation_preserves_original_cancellation(
+    tmp_path: Path,
+) -> None:
+    class CancellingArguments(BaseModel):
+        @model_validator(mode="before")
+        @classmethod
+        def cancel(cls, value: object) -> object:
+            del cls, value
+            raise asyncio.CancelledError("cancelled in validator")
+
+    registry = ToolRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema={"type": "object"},
+            capability="workspace.read",
+            read_only=True,
+        ),
+        input_model=CancellingArguments,
+        handler=handler,
+    )
+    context, sink, writer = execution_context(tmp_path)
+
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await ToolExecutor(registry).execute(
+            ToolRequest(
+                call_id="call_cancelled_validator",
+                tool_name="echo",
+                arguments={},
+            ),
+            context=context,
+        )
+
+    assert captured.value.args == ("cancelled in validator",)
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_CANCELLED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_kind",
+    [
+        "none",
+        "malformed",
+        "nested_presentation",
+        "nested_awaitable",
+        "awaitable",
+    ],
+)
+async def test_invalid_handler_output_is_finalized_as_invariant_failure(
+    tmp_path: Path,
+    invalid_kind: str,
+) -> None:
+    class MalformedToolOutput(ToolOutput):
+        pass
+
+    class ClosableAwaitable:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __await__(self):  # type: ignore[no-untyped-def]
+            if False:
+                yield None
+            return ToolOutput(content="unreachable")
+
+        def close(self) -> None:
+            self.closed = True
+
+    nested = ClosableAwaitable()
+
+    async def invalid_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        if invalid_kind == "none":
+            return cast(ToolOutput, None)
+        if invalid_kind == "awaitable":
+            return cast(ToolOutput, nested)
+        if invalid_kind == "nested_presentation":
+            malformed_presentation = ToolPresentation.model_construct(
+                verb=123,
+                target=object(),
+            )
+            return ToolOutput.model_construct(
+                content="safe",
+                metadata={},
+                presentation=malformed_presentation,
+            )
+        if invalid_kind == "nested_awaitable":
+            return ToolOutput.model_construct(
+                content="safe",
+                metadata={},
+                presentation=nested,
+            )
+        return MalformedToolOutput.model_construct(content=123)
+
+    context, sink, writer = execution_context(tmp_path)
+
+    with warnings.catch_warnings(record=True) as captured_warnings:
+        warnings.simplefilter("always")
+        with pytest.raises(
+            ToolInvariantError,
+            match="Unexpected tool handler failure",
+        ):
+            await ToolExecutor(echo_registry(invalid_handler)).execute(
+                ToolRequest(
+                    call_id="call_invalid_output",
+                    tool_name="echo",
+                    arguments={"text": "value"},
+                ),
+                context=context,
+            )
+
+    assert captured_warnings == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "error"
+    assert activity.error_code == ToolErrorCode.EXECUTION_FAILED
+    assert nested.closed is (invalid_kind in {"awaitable", "nested_awaitable"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["admit", "handler"])
+async def test_mutated_expected_failure_contract_is_finalized_as_invariant(
+    tmp_path: Path,
+    failure_stage: str,
+) -> None:
+    failure = ExpectedToolFailure(ToolErrorCode.NOT_FOUND, "Initially valid.")
+    failure.code = cast(ToolErrorCode, "private-invalid-code")
+    handler_calls = 0
+
+    def admit(arguments: BaseModel, context: ToolExecutionContext) -> None:
+        del arguments, context
+        if failure_stage == "admit":
+            raise failure
+
+    async def failing_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        raise failure
+
+    registry = ToolRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema=EchoArguments.model_json_schema(),
+            capability="workspace.read",
+            read_only=True,
+        ),
+        input_model=EchoArguments,
+        handler=failing_handler,
+        admit=admit,
+    )
+    context, sink, writer = execution_context(tmp_path)
+    expected_message = (
+        "Unexpected tool invocation policy failure"
+        if failure_stage == "admit"
+        else "Unexpected tool handler failure"
+    )
+
+    with pytest.raises(ToolInvariantError, match=expected_message) as captured:
+        await ToolExecutor(registry).execute(
+            ToolRequest(
+                call_id="call_malformed_expected_failure",
+                tool_name="echo",
+                arguments={"text": "value"},
+            ),
+            context=context,
+        )
+
+    assert "private-invalid-code" not in str(captured.value)
+    assert handler_calls == (1 if failure_stage == "handler" else 0)
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "error"
+    assert activity.error_code == ToolErrorCode.EXECUTION_FAILED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_decision", [None, "allow_once"])
+async def test_invalid_approval_decision_fails_closed_before_handler(
+    tmp_path: Path,
+    invalid_decision: object,
+) -> None:
+    handler_calls = 0
+
+    async def counted_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        return ToolOutput(content="unreachable")
+
+    async def invalid_resolver(
+        request: ToolApprovalRequest,
+    ) -> ToolApprovalDecision:
+        del request
+        return cast(ToolApprovalDecision, invalid_decision)
+
+    context, sink, writer = execution_context(tmp_path)
+    context = replace(context, approval_resolver=invalid_resolver)
+
+    with pytest.raises(ToolInvariantError, match="Unexpected tool handler failure"):
+        await ToolExecutor(
+            echo_registry(counted_handler, capability="workspace.write")
+        ).execute(
+            ToolRequest(
+                call_id="call_invalid_approval",
+                tool_name="echo",
+                arguments={"text": "value"},
+            ),
+            context=context,
+        )
+
+    assert handler_calls == 0
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_policy", [None, "invalid_action"])
+async def test_invalid_permission_policy_decision_fails_closed_before_handler(
+    tmp_path: Path,
+    invalid_policy: object,
+) -> None:
+    handler_calls = 0
+
+    async def counted_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        return ToolOutput(content="unreachable")
+
+    class InvalidPolicy(PermissionPolicy):
+        def evaluate(self, request: PolicyRequest) -> PolicyDecision:
+            del request
+            if invalid_policy is None:
+                return cast(PolicyDecision, None)
+            return PolicyDecision(
+                action=cast(PolicyAction, invalid_policy),
+                reason="invalid",
+            )
+
+    context, sink, writer = execution_context(tmp_path)
+
+    with pytest.raises(ToolInvariantError, match="Unexpected tool handler failure"):
+        await ToolExecutor(
+            echo_registry(counted_handler),
+            permission_policy=InvalidPolicy(),
+        ).execute(
+            ToolRequest(
+                call_id="call_invalid_policy",
+                tool_name="echo",
+                arguments={"text": "value"},
+            ),
+            context=context,
+        )
+
+    assert handler_calls == 0
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "error"
+
+
+@pytest.mark.asyncio
+async def test_executor_closes_invalid_admission_awaitable_and_fails_closed(
+    tmp_path: Path,
+) -> None:
+    class ClosableAwaitable:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __await__(self):  # type: ignore[no-untyped-def]
+            if False:
+                yield None
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    returned = ClosableAwaitable()
+    handler_calls = 0
+
+    def invalid_admit(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> object:
+        del arguments, context
+        return returned
+
+    async def unreachable_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        del arguments, context
+        handler_calls += 1
+        return ToolOutput(content="unreachable")
+
+    registered = RegisteredTool(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema=EchoArguments.model_json_schema(),
+            capability="workspace.read",
+            read_only=True,
+        ),
+        input_model=EchoArguments,
+        handler=unreachable_handler,
+        admit=cast(ToolAdmitter, invalid_admit),
+    )
+
+    class UnvalidatedRegistry(ToolRegistry):
+        def resolve(self, name: str) -> RegisteredTool | None:
+            return registered if name == "echo" else None
+
+    context, sink, writer = execution_context(tmp_path)
+
+    with pytest.raises(ToolInvariantError, match="invocation policy"):
+        await ToolExecutor(UnvalidatedRegistry()).execute(
+            ToolRequest(
+                call_id="call_invalid_admit",
+                tool_name="echo",
+                arguments={"text": "value"},
+            ),
+            context=context,
+        )
+
+    assert returned.closed is True
+    assert handler_calls == 0
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert next(iter(writer.activities.values())).error_code == "execution_failed"
+
+
+def test_registry_replay_safety_is_fail_closed_for_defaults_and_misses() -> None:
+    registry = echo_registry()
+
+    assert registry.replay_safety("echo") is ToolReplaySafety.NON_REPLAYABLE
+    assert registry.replay_safety("missing_tool") is ToolReplaySafety.NON_REPLAYABLE
 
 
 @pytest.mark.asyncio
@@ -280,6 +1086,102 @@ async def test_thread_write_grant_suppresses_later_write_approval(
         assert result.status is ToolStatus.SUCCESS
 
     assert len(approvals) == 1
+
+
+@pytest.mark.asyncio
+async def test_registry_replacement_during_approval_keeps_current_snapshot(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry()
+
+    def describe(target: str) -> ToolDescriber:
+        def callback(arguments: BaseModel) -> ToolInvocationDescription:
+            del arguments
+            return ToolInvocationDescription(
+                verb="Echo",
+                display_target=target,
+                approval_operation="echo",
+                approval_target=target,
+            )
+
+        return callback
+
+    async def old_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        return ToolOutput(content="old")
+
+    async def new_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        return ToolOutput(content="new")
+
+    spec = ToolSpec(
+        name="echo",
+        description="Echo text",
+        input_schema=EchoArguments.model_json_schema(),
+        capability="workspace.write",
+        read_only=False,
+    )
+    registry.register(
+        spec=spec,
+        input_model=EchoArguments,
+        handler=old_handler,
+        describe=describe("old"),
+        replay_safety=ToolReplaySafety.REPLAYABLE,
+    )
+    replacement = RegisteredTool(
+        spec=spec,
+        input_model=EchoArguments,
+        handler=new_handler,
+        describe=describe("new"),
+        replay_safety=ToolReplaySafety.NON_REPLAYABLE,
+    )
+    approvals = 0
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        nonlocal approvals
+        approvals += 1
+        if approvals == 1:
+            assert request.target == "old"
+            registry.replace_exact_set(("echo",), (replacement,))
+        else:
+            assert request.target == "new"
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    context, sink, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=approve)
+    executor = ToolExecutor(registry)
+
+    first = await executor.execute(
+        ToolRequest(
+            call_id="call_old",
+            tool_name="echo",
+            arguments={"text": "value"},
+        ),
+        context=context,
+    )
+    second = await executor.execute(
+        ToolRequest(
+            call_id="call_new",
+            tool_name="echo",
+            arguments={"text": "value"},
+        ),
+        context=context,
+    )
+
+    assert (first.content, second.content) == ("old", "new")
+    started_targets = [
+        event.payload.target  # type: ignore[union-attr]
+        for event in sink.events
+        if event.event_type is EventType.TOOL_STARTED
+    ]
+    assert started_targets == ["old", "new"]
+    assert registry.replay_safety("echo") is ToolReplaySafety.NON_REPLAYABLE
 
 
 def test_registry_rejects_duplicates_and_lists_sorted_specs() -> None:
@@ -548,9 +1450,88 @@ def test_registry_rejects_invalid_exact_set_contracts_without_mutation() -> None
             handler,
             cancellation_grace_seconds=cast(float, "invalid"),
         ),
+        RegisteredTool(
+            valid_spec,
+            EmptyArguments,
+            handler,
+            replay_safety=cast(ToolReplaySafety, "replayable"),
+        ),
     )
 
     for candidate in candidates:
+        with pytest.raises(ToolRegistryLimitError):
+            registry.replace_exact_set(("memory_list",), (candidate,))
+        assert registry.specifications() == before
+
+
+def test_registry_rejects_async_invocation_callbacks_atomically() -> None:
+    registry = echo_registry()
+    before = registry.specifications()
+    spec = ToolSpec(
+        name="memory_list",
+        description="List memory.",
+        input_schema=EmptyArguments.model_json_schema(),
+        capability="memory.read",
+        read_only=True,
+    )
+
+    async def async_describe(arguments: BaseModel) -> ToolInvocationDescription:
+        del arguments
+        return ToolInvocationDescription(
+            verb="List",
+            approval_operation="list",
+            approval_target="memory",
+        )
+
+    async def async_admit(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> None:
+        del arguments, context
+
+    async def async_timeout(arguments: BaseModel) -> float:
+        del arguments
+        return 1.0
+
+    class AsyncAdmitter:
+        async def __call__(
+            self,
+            arguments: BaseModel,
+            context: ToolExecutionContext,
+        ) -> None:
+            del arguments, context
+
+    candidates = (
+        RegisteredTool(
+            spec,
+            EmptyArguments,
+            handler,
+            describe=cast(ToolDescriber, async_describe),
+        ),
+        RegisteredTool(
+            spec,
+            EmptyArguments,
+            handler,
+            admit=cast(ToolAdmitter, async_admit),
+        ),
+        RegisteredTool(
+            spec,
+            EmptyArguments,
+            handler,
+            admit=cast(ToolAdmitter, AsyncAdmitter()),
+        ),
+        RegisteredTool(
+            spec,
+            EmptyArguments,
+            handler,
+            timeout_resolver=cast(ToolTimeoutResolver, async_timeout),
+        ),
+    )
+
+    for candidate in candidates:
+        with pytest.raises(ToolRegistryLimitError):
+            registry.validate_exact_set(("memory_list",), (candidate,))
+        assert registry.specifications() == before
         with pytest.raises(ToolRegistryLimitError):
             registry.replace_exact_set(("memory_list",), (candidate,))
         assert registry.specifications() == before
@@ -860,6 +1841,43 @@ async def test_executor_records_cancellation_then_reraises(
     [activity] = writer.activities.values()
     assert activity.outcome == "cancelled"
     assert activity.error_code == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_while_started_is_blocked_records_one_terminal(
+    tmp_path: Path,
+) -> None:
+    context, _, writer = execution_context(tmp_path)
+    sink = PreDeliveryBlockingToolStartedSink()
+    context = replace(
+        context,
+        emitter=EventEmitter(
+            session_id="session_1",
+            workspace_key=context.workspace.key,
+            sink=sink,
+        ),
+    )
+    task = asyncio.create_task(
+        ToolExecutor(echo_registry()).execute(
+            ToolRequest(
+                call_id="call_started_cancel",
+                tool_name="echo",
+                arguments={"text": "ok"},
+            ),
+            context=context,
+        )
+    )
+    await sink.started_entered.wait()
+
+    task.cancel("caller-started-cancel")
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await task
+
+    assert raised.value.args == ("caller-started-cancel",)
+    assert [event.event_type for event in sink.events] == [EventType.TOOL_CANCELLED]
+    [activity] = writer.activities.values()
+    assert activity.outcome == "cancelled"
+    assert activity.error_code == ToolErrorCode.CANCELLED.value
 
 
 @pytest.mark.asyncio
