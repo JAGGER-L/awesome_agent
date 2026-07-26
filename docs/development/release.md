@@ -166,14 +166,15 @@ The verifier checks:
 - release-directory inventory and all checksums;
 - archive path safety, member inventory, and payload version;
 - wheel filename, metadata, compatibility, entry points, RECORD hashes, import
-  origins, and absence of editable/migration content;
+  origins, and absence of editable or non-production content;
 - exact hashed dependency requirements and isolated installation;
 - `uv pip check`, Core import, and console entry point;
 - an installed-wheel Protocol v3 lifecycle in a fresh home and workspace:
   `initialize` -> workspace trust -> `application.getState` -> `shutdown`;
 - TUI package/version/entry point;
-- current storage bootstrap, incompatible-state classification, exclusive reset
-  ownership, and preservation of config, Skills, and Memory.
+- Schema 7 bootstrap, floor-7 empty migration registry, incompatible-state
+  classification, exclusive reset ownership, and preservation of config,
+  Skills, and Memory.
 
 Verification must operate on the built wheel and extracted payload. A fallback
 to the editable checkout would prove the wrong artifact and is rejected.

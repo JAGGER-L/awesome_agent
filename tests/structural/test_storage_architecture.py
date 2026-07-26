@@ -20,6 +20,7 @@ STORAGE_MODULES = {
     "database.py",
     "health.py",
     "mcp.py",
+    "migrations.py",
     "pagination.py",
     "state_lease.py",
     "state_recovery.py",

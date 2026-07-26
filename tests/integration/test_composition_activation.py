@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import os
+import sqlite3
 import threading
 import weakref
 from collections.abc import AsyncIterator, Mapping
@@ -18,6 +19,7 @@ from awesome_agent.application import composition
 from awesome_agent.application.command_results import CommandOutcome
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import (
+    InitializeStatus,
     InteractionResult,
     ProductErrorCode,
     ProviderCredentialSetRequest,
@@ -57,11 +59,14 @@ from awesome_agent.extensions.skills import SkillCatalog, discover_skills
 from awesome_agent.modeling import ModelGateway
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage import (
+    ApplicationSchemaMismatch,
     ApplicationSQLite,
     ApplicationSQLiteClosed,
+    StateCompatibility,
     StateLease,
     StateLeaseMode,
     StateLeaseUnavailable,
+    StatePreflight,
 )
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
@@ -584,6 +589,192 @@ async def test_cancelled_state_initialization_publishes_a_shared_lease(
     assert backend._state_lease.active is True
     assert backend._state_lease.mode is StateLeaseMode.SHARED
     assert await backend._database.quick_check() is True
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_migration_rechecks_exclusively_then_downgrades_before_initialize(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+    required = StatePreflight(
+        compatibility=StateCompatibility.MIGRATION_REQUIRED,
+        found_schema=7,
+        expected_schema=8,
+    )
+    preflights = iter((required, required))
+    calls: list[str] = []
+    migration_lease: StateLease | None = None
+    downgrade = StateLease.downgrade
+
+    async def preflight() -> StatePreflight:
+        calls.append("preflight")
+        return next(preflights)
+
+    async def migrate(lease: StateLease) -> Path:
+        nonlocal migration_lease
+        migration_lease = lease
+        calls.append(f"migrate:{lease.mode.value}")
+        assert lease.active is True
+        assert lease.mode is StateLeaseMode.EXCLUSIVE
+        return backend._paths.application_db.with_name(
+            "application.db.pre-migration.bak"
+        )
+
+    def observe_downgrade(lease: StateLease) -> None:
+        calls.append(f"downgrade:{lease.mode.value}")
+        downgrade(lease)
+
+    async def initialize() -> None:
+        assert migration_lease is not None
+        calls.append(f"initialize:{migration_lease.mode.value}")
+        assert migration_lease.mode is StateLeaseMode.SHARED
+
+    monkeypatch.setattr(backend._database, "preflight", preflight)
+    monkeypatch.setattr(backend._database, "migrate", migrate)
+    monkeypatch.setattr(backend._database, "initialize", initialize)
+    monkeypatch.setattr(StateLease, "downgrade", observe_downgrade)
+
+    await backend._ensure_state_lease()
+
+    assert calls == [
+        "preflight",
+        "preflight",
+        "migrate:exclusive",
+        "downgrade:exclusive",
+        "initialize:shared",
+    ]
+    assert backend._state_lease is migration_lease
+    assert backend._state_lease is not None
+    assert backend._state_lease.mode is StateLeaseMode.SHARED
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_migration_exclusive_recheck_rejects_changed_state_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+    preflights = iter(
+        (
+            StatePreflight(
+                compatibility=StateCompatibility.MIGRATION_REQUIRED,
+                found_schema=7,
+                expected_schema=9,
+            ),
+            StatePreflight(
+                compatibility=StateCompatibility.MIGRATION_UNAVAILABLE,
+                found_schema=6,
+                expected_schema=9,
+            ),
+        )
+    )
+
+    async def preflight() -> StatePreflight:
+        return next(preflights)
+
+    async def reject_migrate(_lease: StateLease) -> None:
+        raise AssertionError("migration ran without a confirmed migration path")
+
+    monkeypatch.setattr(backend._database, "preflight", preflight)
+    monkeypatch.setattr(backend._database, "migrate", reject_migrate)
+
+    with pytest.raises(ApplicationSchemaMismatch) as raised:
+        await backend._ensure_state_lease()
+
+    assert raised.value.direction is StateCompatibility.MIGRATION_UNAVAILABLE
+    assert backend._state_lease is None
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_pending_reset_reclassified_as_migratable_runs_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    path = home / "state" / "application.db"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA user_version = 6")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+    initialized = await application.initialize()
+    assert initialized.ok is True
+    pending = initialized.value
+    assert pending is not None
+    assert pending.status is InitializeStatus.STATE_RESET_REQUIRED
+    assert pending.interaction_id is not None
+    calls: list[str] = []
+    migration_lease: StateLease | None = None
+
+    async def migratable() -> StatePreflight:
+        calls.append("preflight:migration_required")
+        return StatePreflight(
+            compatibility=StateCompatibility.MIGRATION_REQUIRED,
+            found_schema=7,
+            expected_schema=8,
+        )
+
+    async def migrate(lease: StateLease) -> Path:
+        nonlocal migration_lease
+        migration_lease = lease
+        calls.append(f"migrate:{lease.mode.value}")
+        assert lease.mode is StateLeaseMode.EXCLUSIVE
+        return path.with_name("application.db.pre-migration.bak")
+
+    async def initialize() -> None:
+        assert migration_lease is not None
+        calls.append(f"initialize:{migration_lease.mode.value}")
+        assert migration_lease.mode is StateLeaseMode.SHARED
+
+    monkeypatch.setattr(backend._database, "preflight", migratable)
+    monkeypatch.setattr(backend._database, "migrate", migrate)
+    monkeypatch.setattr(backend._database, "initialize", initialize)
+
+    response = await application.respond_interaction(
+        pending.interaction_id,
+        "reset_state",
+    )
+
+    assert response.ok is True
+    assert response.value is not None
+    assert response.value.accepted is True
+    assert calls == [
+        "preflight:migration_required",
+        "migrate:exclusive",
+        "initialize:shared",
+    ]
+    assert backend._state_lease is migration_lease
+    assert backend._state_lease is not None
+    assert backend._state_lease.mode is StateLeaseMode.SHARED
     await application.shutdown()
 
 

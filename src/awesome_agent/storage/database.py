@@ -220,7 +220,8 @@ def initialize_application_database(path: Path) -> None:
     if preflight.compatibility is StateCompatibility.CURRENT:
         return
     if preflight.compatibility in {
-        StateCompatibility.OLDER,
+        StateCompatibility.MIGRATION_REQUIRED,
+        StateCompatibility.MIGRATION_UNAVAILABLE,
         StateCompatibility.NEWER,
     }:
         assert preflight.found_schema is not None

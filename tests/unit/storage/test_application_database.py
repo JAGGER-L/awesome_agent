@@ -57,7 +57,7 @@ def test_noncurrent_schema_is_rejected_without_mutation(tmp_path: Path) -> None:
 
     assert raised.value.found == 1
     assert raised.value.expected == APPLICATION_SCHEMA_VERSION
-    assert raised.value.direction.value == "older"
+    assert raised.value.direction.value == "migration_unavailable"
     assert path.read_bytes() == before
     assert tuple(sorted(item.name for item in path.parent.iterdir())) == before_entries
     assert not path.with_name("application.db-wal").exists()

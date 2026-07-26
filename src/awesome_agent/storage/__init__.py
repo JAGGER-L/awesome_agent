@@ -24,6 +24,20 @@ from awesome_agent.storage.database import (
 )
 from awesome_agent.storage.health import sqlite_database_health
 from awesome_agent.storage.mcp import SQLiteMcpEnablementStore, mcp_config_hash
+from awesome_agent.storage.migrations import (
+    APPLICATION_MIGRATIONS,
+    APPLICATION_SCHEMA_FLOOR,
+    ApplicationMigration,
+    ApplicationMigrationBackupError,
+    ApplicationMigrationBoundaryError,
+    ApplicationMigrationConnection,
+    ApplicationMigrationCursor,
+    ApplicationMigrationError,
+    ApplicationMigrationOutcomeUnknown,
+    ApplicationMigrationRegistry,
+    ApplicationMigrationStepError,
+    ApplicationMigrationUnavailable,
+)
 from awesome_agent.storage.state_lease import (
     StateLease,
     StateLeaseMode,
@@ -33,7 +47,19 @@ from awesome_agent.storage.state_recovery import StateResetError, reset_local_st
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 __all__ = [
+    "APPLICATION_MIGRATIONS",
+    "APPLICATION_SCHEMA_FLOOR",
     "APPLICATION_SCHEMA_VERSION",
+    "ApplicationMigration",
+    "ApplicationMigrationBackupError",
+    "ApplicationMigrationBoundaryError",
+    "ApplicationMigrationConnection",
+    "ApplicationMigrationCursor",
+    "ApplicationMigrationError",
+    "ApplicationMigrationOutcomeUnknown",
+    "ApplicationMigrationRegistry",
+    "ApplicationMigrationStepError",
+    "ApplicationMigrationUnavailable",
     "ApplicationSQLite",
     "ApplicationSQLiteBusy",
     "ApplicationSQLiteClosed",

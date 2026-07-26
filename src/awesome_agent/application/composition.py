@@ -217,6 +217,7 @@ from awesome_agent.providers import (
     managed_gateway_factory,
 )
 from awesome_agent.storage import (
+    ApplicationMigrationError,
     ApplicationSchemaMismatch,
     ApplicationSQLite,
     ApplicationStateUnavailable,
@@ -492,9 +493,23 @@ class _LocalApplicationBackend:
             await self._ensure_state_lease()
             trust_status = await self._trust.status(self._workspace)
         except ApplicationSchemaMismatch as error:
-            if error.direction is StateCompatibility.OLDER:
+            if error.direction is StateCompatibility.MIGRATION_UNAVAILABLE:
                 return await self._state_reset_required()
-            raise self._newer_state_failure(error.found, error.expected) from error
+            if error.direction is StateCompatibility.NEWER:
+                raise self._newer_state_failure(error.found, error.expected) from error
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome could not migrate local state safely.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
+        except ApplicationMigrationError as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome could not migrate local state safely.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
         except ApplicationStateUnknown as error:
             raise _application_failure(
                 ProductErrorCode.STATE_UNKNOWN,
@@ -1637,9 +1652,13 @@ class _LocalApplicationBackend:
         cancellation: asyncio.CancelledError | None = None
         try:
             preflight = await self._database.preflight()
-            if preflight.compatibility is StateCompatibility.OLDER:
+            if preflight.compatibility is StateCompatibility.MIGRATION_UNAVAILABLE:
                 cancellation = await _finish_state_mutation(
                     self._database.reset(exclusive)
+                )
+            elif preflight.compatibility is StateCompatibility.MIGRATION_REQUIRED:
+                cancellation = await _finish_state_mutation(
+                    self._database.migrate(exclusive)
                 )
             elif preflight.compatibility in {
                 StateCompatibility.NEW,
@@ -1663,6 +1682,11 @@ class _LocalApplicationBackend:
             except StateLeaseUnavailable:
                 await _finish_state_mutation(self._database.suspend())
                 raise
+            initialize_cancellation = await _finish_state_mutation(
+                self._database.initialize()
+            )
+            if cancellation is None:
+                cancellation = initialize_cancellation
         except asyncio.CancelledError:
             exclusive.close()
             raise
@@ -1704,6 +1728,14 @@ class _LocalApplicationBackend:
                     "diagnostic_code": error.code,
                     "state_directory": str(self._paths.state_dir.resolve()),
                 },
+            ) from error
+        except ApplicationMigrationError as error:
+            exclusive.close()
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome could not migrate local state safely.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
             ) from error
         self._state_lease = exclusive
         if cancellation is not None:
@@ -1808,7 +1840,10 @@ class _LocalApplicationBackend:
                 raise cancellation
             return
         shared.close()
-        if preflight.compatibility is not StateCompatibility.NEW:
+        if preflight.compatibility not in {
+            StateCompatibility.NEW,
+            StateCompatibility.MIGRATION_REQUIRED,
+        }:
             self._raise_preflight(preflight)
 
         exclusive = StateLease.acquire(
@@ -1820,15 +1855,22 @@ class _LocalApplicationBackend:
             confirmed = await self._database.preflight()
             if confirmed.compatibility is StateCompatibility.NEW:
                 cancellation = await _finish_state_mutation(self._database.initialize())
+            elif confirmed.compatibility is StateCompatibility.MIGRATION_REQUIRED:
+                cancellation = await _finish_state_mutation(
+                    self._database.migrate(exclusive)
+                )
             elif confirmed.compatibility is not StateCompatibility.CURRENT:
                 self._raise_preflight(confirmed)
-            else:
-                cancellation = await _finish_state_mutation(self._database.initialize())
             try:
                 exclusive.downgrade()
             except StateLeaseUnavailable:
                 await _finish_state_mutation(self._database.suspend())
                 raise
+            initialize_cancellation = await _finish_state_mutation(
+                self._database.initialize()
+            )
+            if cancellation is None:
+                cancellation = initialize_cancellation
         except BaseException:
             exclusive.close()
             raise
@@ -1838,7 +1880,8 @@ class _LocalApplicationBackend:
 
     def _raise_preflight(self, preflight: StatePreflight) -> None:
         if preflight.compatibility in {
-            StateCompatibility.OLDER,
+            StateCompatibility.MIGRATION_REQUIRED,
+            StateCompatibility.MIGRATION_UNAVAILABLE,
             StateCompatibility.NEWER,
         }:
             assert preflight.found_schema is not None
@@ -3002,8 +3045,8 @@ async def _await_shielded_task(task: asyncio.Task[None]) -> None:
     await asyncio.shield(task)
 
 
-async def _finish_state_mutation(
-    operation: Awaitable[None],
+async def _finish_state_mutation[ResultT](
+    operation: Awaitable[ResultT],
 ) -> asyncio.CancelledError | None:
     """Finish a lease-bound state mutation before exposing caller cancellation."""
 

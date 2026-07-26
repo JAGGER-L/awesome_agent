@@ -78,8 +78,9 @@ Application schema 身份与产品版本相互独立。当前 bootstrap schema �
 身份以及分离的 before/after node type 遵循这一规则。没有 mutation ID 的旧版已完成
 记录仍可读取；崩溃窗口中语义不明的证据仍保持 pending，供诊断使用。
 
-Awesome 有意不提供通用迁移框架或历史 adapter chain。这会减少隐式兼容行为，却意味着
-旧 schema 必须显式重置，而不能自动迁移。
+Awesome 只提供一个刻意保持精简的前向 migration registry。它只接受相邻的 `N -> N+1`
+step，并要求从支持 floor 到当前 schema 只有一条完整线性路径。生产环境的 floor 与当前
+identity 都是 7，因此 registry 为空，Schema 1–6 仍然不可迁移。
 
 ## 只读启动预检
 
@@ -90,12 +91,39 @@ Application 数据库分类：
 | --- | --- |
 | new | 在独占 state lease 下创建当前 schema |
 | current | 保留共享 state lease 并继续 |
-| older | 展示 reset-or-exit interaction |
+| migration required | 在独占 state lease 下执行完整的已注册迁移链 |
+| migration unavailable | 展示 reset-or-exit interaction |
 | newer | 停止并要求用户升级 |
 | unknown/corrupt/unreadable/locked | 停止并显示诊断 |
 
-只有旧 schema 提供 reset。若把更新或未知 schema 当作可丢弃内容，可能会破坏当前 binary
-只是尚不能理解的状态。
+只有不可迁移的旧 schema 提供 reset。若把更新、未知或损坏 schema 当作可丢弃内容，可能会
+破坏当前 binary 只是尚不能理解的状态。
+
+## 非破坏性迁移路径
+
+```text
+shared-lease read-only preflight
+  -> acquire exclusive state lease
+  -> recheck compatibility and database identity
+  -> source quick_check
+  -> SQLite Backup API snapshot
+     <AWESOME_HOME>/state/application.db.pre-migration.bak
+  -> independently reopen and validate the backup
+  -> BEGIN IMMEDIATE
+  -> apply the complete adjacent migration chain
+  -> final quick_check -> COMMIT
+  -> downgrade to shared lease
+  -> initialize Application repositories
+```
+
+源路径必须仍是 exclusive lease 所属的私有、regular、无链接数据库。Backup 通过同目录
+temporary file 写入，收紧权限、刷盘并原子替换。SQLite Backup API 会包含已提交的 WAL
+状态；这里不使用 `immutable=1` 捷径。
+
+从发现版本到当前版本的完整链共享一个 transaction。任一步骤失败都会回滚全部 schema
+和数据变更。固定 backup 会保留供手动恢复，包括 migration 失败时；Awesome 绝不会自动
+restore，也不会把 migration failure 转换成自动 reset。无法证明 rollback 结果时，database
+worker 会 fail closed。
 
 ## State lease 与重置
 
@@ -299,13 +327,16 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 | Provider credential 证据无效或无法校正 | journal/backup 保留；runtime 不发布或保持 fenced | 以 `recovery_required` 失败；不加载半状态 |
 | mutation intent 持久化，作用不确定 | PendingMutation + blob | 校验、完成或回滚 |
 | shell/MCP transport 调度后失败 | 保守 observation / 不确定工具状态 | 显式 Abort 或 Retry |
+| migration step 失败并回滚 | 固定的 migration 前 SQLite backup | 启动失败；保留 backup 供手动恢复 |
+| 无法证明 migration rollback | 固定 backup 与被 fenced 的 database worker | fail closed；需要人工诊断 |
 | state reset 的全新初始化失败 | 已改名的原目录 | 恢复原 namespace |
 
 ## 设计取舍
 
 - 嵌入式 SQLite 消除了服务运维，却使本地文件所有权和锁成为产品契约的一部分。
 - 产品/checkpoint 数据库分离保持边界，但要求严格收敛。
-- 显式破坏性 reset 不如 migration 方便，却避免静默重新解释状态。
+- 对 floor 之前状态执行显式破坏性 reset 不如 migration 方便，却避免静默重新解释不受支持的
+  状态。
 - WAL 与 `synchronous=NORMAL` 偏向交互性能，不宣称在数据库和工作区文件之间具有断电
   原子性。
 - 保守 pending evidence 可能需要人工诊断；删除它会抹去不确定 mutation 的唯一证据。
@@ -316,7 +347,8 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 - Application SQLite owner：`storage/application_sqlite.py`
 - Conversation 与 trust：`storage/conversations.py`、`storage/trust.py`
 - Checkpoint：`storage/checkpoints.py`
-- 兼容与重置：`storage/compatibility.py`、`storage/state_recovery.py`
+- 兼容、迁移与重置：`storage/compatibility.py`、`storage/migrations.py`、
+  `storage/state_recovery.py`
 - 跨进程 lease：`storage/state_lease.py`
 - 变更持久化：`storage/changes.py`、`core/changes/`
 - Turn 恢复：`application/turns.py`

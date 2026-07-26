@@ -162,8 +162,14 @@ Turn 当作崩溃恢复。
 
 Application state preflight 是只读的，运行在建立信任、访问 checkpoint 或可写存储之前。
 当前格式是 Schema 7。产品版本与 schema 版本相互独立：schema identity 只随持久化语义
-变化，并单调递增。旧状态只能通过类型化启动 interaction 重置；更新、未知、损坏、不可读
+变化，并单调递增。Migration catalog 的 floor 是 7、current 是 7，且没有生产 migration
+step。因此 Schema 1–6 只提供类型化 reset-or-exit interaction；更新、未知、损坏、不可读
 或锁定的状态绝不会被静默删除。
+
+未来已注册的 migration 只会在 shared-lease preflight、取得 exclusive lease 并再次检查
+兼容性之后执行。Storage 会校验并原子发布能感知 WAL 的 SQLite backup，在一个 transaction
+中执行完整的相邻迁移链，降级 lease，然后才初始化 Application repository。失败会回滚
+transaction 并保留 backup 供手动恢复；启动绝不会自动 reset 或 restore。
 
 ### 对话 Turn
 

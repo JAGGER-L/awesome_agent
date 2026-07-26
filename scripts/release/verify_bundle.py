@@ -608,16 +608,23 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
             ) from error
         except OSError as error:
             raise BundleVerificationError("bundle requirements are missing") from error
+        allowed_migration_module = "awesome_agent/storage/migrations.py"
         with ZipFile(wheels[0]) as wheel_archive:
             module_paths = {
-                Path(name).as_posix().casefold()
+                PurePosixPath(name).as_posix()
                 for name in wheel_archive.namelist()
                 if name.endswith(".py")
             }
-        if any(
-            "/migrations/" in path or Path(path).stem in {"migration", "migrations"}
+        forbidden_migration_modules = {
+            path
             for path in module_paths
-        ):
+            if path != allowed_migration_module
+            and (
+                "/migrations/" in path.casefold()
+                or PurePosixPath(path).stem.casefold() in {"migration", "migrations"}
+            )
+        }
+        if forbidden_migration_modules:
             raise BundleVerificationError("wheel contains a migration module")
 
         _verify_core_install(

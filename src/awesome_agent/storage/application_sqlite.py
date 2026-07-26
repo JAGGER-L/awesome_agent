@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future as ConcurrentFuture
@@ -12,13 +13,20 @@ from threading import BoundedSemaphore, Lock, Thread
 from typing import cast
 
 from awesome_agent.storage.compatibility import (
-    APPLICATION_SCHEMA_VERSION,
     ApplicationStateUnavailable,
-    StateCompatibility,
     StatePreflight,
+    classify_application_schema,
     inspect_application_state,
 )
 from awesome_agent.storage.database import _connect, initialize_application_database
+from awesome_agent.storage.migrations import (
+    APPLICATION_MIGRATIONS,
+    ApplicationMigrationError,
+    ApplicationMigrationOutcomeUnknown,
+    ApplicationMigrationRegistry,
+    migrate_application_database,
+    validate_application_migration_boundary,
+)
 from awesome_agent.storage.state_lease import StateLease, StateLeaseMode
 from awesome_agent.storage.state_recovery import StateResetError, reset_local_state
 
@@ -97,10 +105,18 @@ class ApplicationSQLite:
     in-flight SQLite transaction never has an unknowable commit state.
     """
 
-    def __init__(self, path: Path, *, queue_capacity: int = 256) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        queue_capacity: int = 256,
+        migration_registry: ApplicationMigrationRegistry = APPLICATION_MIGRATIONS,
+    ) -> None:
         if queue_capacity < 1:
             raise ValueError("queue_capacity must be at least 1")
-        self._path = path.expanduser().resolve()
+        self._lexical_path = Path(os.path.abspath(path.expanduser()))
+        self._path = self._lexical_path.resolve()
+        self._migration_registry = migration_registry
         # One extra queue position is reserved for the close sentinel. The
         # semaphore enforces the advertised bound for normal queued operations;
         # the operation currently executing on the worker does not consume a
@@ -148,6 +164,14 @@ class ApplicationSQLite:
             self._open_connection_on_worker()
 
         await self._submit(reset_on_worker, durable=True)
+
+    async def migrate(self, lease: StateLease) -> Path | None:
+        """Back up and migrate state under one validated exclusive lease."""
+
+        return await self._submit(
+            lambda: self._migrate_on_worker(lease),
+            durable=True,
+        )
 
     async def read[T](
         self,
@@ -327,32 +351,93 @@ class ApplicationSQLite:
     def _preflight_on_worker(self) -> StatePreflight:
         connection = self._connection
         if connection is None:
-            return inspect_application_state(self._path)
+            return inspect_application_state(
+                self._lexical_path,
+                registry=self._migration_registry,
+            )
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         user_objects = int(
             connection.execute(
                 "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
             ).fetchone()[0]
         )
-        if version == 0:
-            compatibility = (
-                StateCompatibility.NEW
-                if user_objects == 0
-                else StateCompatibility.UNKNOWN
-            )
-        elif version == APPLICATION_SCHEMA_VERSION:
-            compatibility = StateCompatibility.CURRENT
-        elif 0 < version < APPLICATION_SCHEMA_VERSION:
-            compatibility = StateCompatibility.OLDER
-        elif version > APPLICATION_SCHEMA_VERSION:
-            compatibility = StateCompatibility.NEWER
-        else:
-            compatibility = StateCompatibility.UNKNOWN
+        compatibility = classify_application_schema(
+            version,
+            user_objects=user_objects,
+            registry=self._migration_registry,
+        )
         return StatePreflight(
             compatibility=compatibility,
             found_schema=version,
-            expected_schema=APPLICATION_SCHEMA_VERSION,
+            expected_schema=self._migration_registry.current,
         )
+
+    def _migrate_on_worker(self, lease: StateLease) -> Path | None:
+        validated = validate_application_migration_boundary(
+            lease,
+            self._lexical_path,
+        )
+        if validated != self._path:
+            raise RuntimeError("Application migration path identity changed.")
+        if self._connection is not None:
+            raise ApplicationMigrationError(
+                "Application migration requires an unopened runtime connection."
+            )
+        connection = self._open_migration_connection_on_worker()
+        try:
+            backup = migrate_application_database(
+                connection,
+                self._path,
+                registry=self._migration_registry,
+            )
+        except ApplicationMigrationOutcomeUnknown as error:
+            secondary_error = error.rollback_error
+            try:
+                connection.close()
+            except BaseException as close_error:
+                secondary_error = BaseExceptionGroup(
+                    "Migration rollback and connection close both failed.",
+                    [secondary_error, close_error],
+                )
+            raise _ApplicationSQLiteFatal(
+                error.operation_error,
+                secondary_error,
+            ) from error
+        except BaseException as operation_error:
+            try:
+                connection.close()
+            except BaseException as close_error:
+                raise _ApplicationSQLiteFatal(
+                    operation_error,
+                    close_error,
+                ) from close_error
+            raise
+        try:
+            connection.close()
+        except BaseException as close_error:
+            raise _ApplicationSQLiteFatal(
+                ApplicationMigrationError(
+                    "Application migration connection could not close safely."
+                ),
+                close_error,
+            ) from close_error
+        return backup
+
+    def _open_migration_connection_on_worker(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            f"{self._path.as_uri()}?mode=rw",
+            uri=True,
+            timeout=5.0,
+            check_same_thread=True,
+            isolation_level=None,
+        )
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+        except BaseException:
+            connection.close()
+            raise
+        return connection
 
     def _open_connection_on_worker(self) -> None:
         if self._connection is not None:

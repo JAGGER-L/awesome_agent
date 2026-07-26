@@ -5,13 +5,19 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-APPLICATION_SCHEMA_VERSION = 7
+from awesome_agent.storage.migrations import (
+    APPLICATION_MIGRATIONS,
+    ApplicationMigrationRegistry,
+)
+
+APPLICATION_SCHEMA_VERSION = APPLICATION_MIGRATIONS.current
 
 
 class StateCompatibility(StrEnum):
     NEW = "new"
     CURRENT = "current"
-    OLDER = "older"
+    MIGRATION_REQUIRED = "migration_required"
+    MIGRATION_UNAVAILABLE = "migration_unavailable"
     NEWER = "newer"
     UNKNOWN = "unknown"
 
@@ -30,19 +36,23 @@ class ApplicationStateUnavailable(RuntimeError):
         self.path = resolved
 
 
-def inspect_application_state(path: Path) -> StatePreflight:
+def inspect_application_state(
+    path: Path,
+    *,
+    registry: ApplicationMigrationRegistry = APPLICATION_MIGRATIONS,
+) -> StatePreflight:
     database_path = path.expanduser().resolve()
     if not database_path.exists():
         return StatePreflight(
             compatibility=StateCompatibility.NEW,
             found_schema=None,
-            expected_schema=APPLICATION_SCHEMA_VERSION,
+            expected_schema=registry.current,
         )
 
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(
-            f"{database_path.as_uri()}?mode=ro&immutable=1",
+            f"{database_path.as_uri()}?mode=ro",
             uri=True,
             timeout=5.0,
         )
@@ -58,20 +68,37 @@ def inspect_application_state(path: Path) -> StatePreflight:
         if connection is not None:
             connection.close()
 
-    if version == 0:
-        compatibility = (
-            StateCompatibility.NEW if user_objects == 0 else StateCompatibility.UNKNOWN
-        )
-    elif version == APPLICATION_SCHEMA_VERSION:
-        compatibility = StateCompatibility.CURRENT
-    elif 0 < version < APPLICATION_SCHEMA_VERSION:
-        compatibility = StateCompatibility.OLDER
-    elif version > APPLICATION_SCHEMA_VERSION:
-        compatibility = StateCompatibility.NEWER
-    else:
-        compatibility = StateCompatibility.UNKNOWN
+    compatibility = classify_application_schema(
+        version,
+        user_objects=user_objects,
+        registry=registry,
+    )
     return StatePreflight(
         compatibility=compatibility,
         found_schema=version,
-        expected_schema=APPLICATION_SCHEMA_VERSION,
+        expected_schema=registry.current,
     )
+
+
+def classify_application_schema(
+    version: int,
+    *,
+    user_objects: int,
+    registry: ApplicationMigrationRegistry = APPLICATION_MIGRATIONS,
+) -> StateCompatibility:
+    if version == 0:
+        return (
+            StateCompatibility.NEW if user_objects == 0 else StateCompatibility.UNKNOWN
+        )
+    if version == registry.current:
+        return StateCompatibility.CURRENT
+    if 0 < version < registry.current:
+        path = registry.path_from(version)
+        return (
+            StateCompatibility.MIGRATION_REQUIRED
+            if path
+            else StateCompatibility.MIGRATION_UNAVAILABLE
+        )
+    if version > registry.current:
+        return StateCompatibility.NEWER
+    return StateCompatibility.UNKNOWN

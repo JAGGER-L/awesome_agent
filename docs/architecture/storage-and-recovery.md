@@ -91,9 +91,10 @@ meaning. Change mutation identity and separate before/after node types follow
 this rule. Completed older records without mutation IDs remain readable;
 ambiguous crash-window evidence remains pending for diagnosis.
 
-Awesome intentionally has no generic migration framework or historical adapter
-chain. That reduces hidden compatibility behavior, but means an older schema
-requires an explicit reset rather than an automatic migration.
+Awesome has one deliberately small forward-migration registry. It accepts only
+adjacent `N -> N+1` steps and requires one complete linear path from the support
+floor to the current schema. The production floor and current identity are both
+7, so the registry is empty and Schemas 1–6 remain migration-unavailable.
 
 ## Read-only startup preflight
 
@@ -104,12 +105,42 @@ Storage classifies an existing Application database:
 | --- | --- |
 | new | create current schema under an exclusive state lease |
 | current | retain shared state lease and continue |
-| older | present reset-or-exit interaction |
+| migration required | run the complete registered chain under an exclusive state lease |
+| migration unavailable | present reset-or-exit interaction |
 | newer | stop and ask the user to upgrade |
 | unknown/corrupt/unreadable/locked | stop with a diagnostic |
 
-Only an older schema offers reset. Treating a newer or unknown schema as
-disposable could destroy state the current binary simply does not understand.
+Only migration-unavailable old state offers reset. Treating newer, unknown, or
+corrupt state as disposable could destroy state the current binary simply does
+not understand.
+
+## Non-destructive migration path
+
+```text
+shared-lease read-only preflight
+  -> acquire exclusive state lease
+  -> recheck compatibility and database identity
+  -> source quick_check
+  -> SQLite Backup API snapshot
+     <AWESOME_HOME>/state/application.db.pre-migration.bak
+  -> independently reopen and validate the backup
+  -> BEGIN IMMEDIATE
+  -> apply the complete adjacent migration chain
+  -> final quick_check -> COMMIT
+  -> downgrade to shared lease
+  -> initialize Application repositories
+```
+
+The source path must remain the private, regular, non-linked database owned by
+the exclusive lease. The backup is written through a same-directory temporary
+file, permission-restricted, flushed, and atomically replaced. SQLite's Backup
+API includes committed WAL state; no `immutable=1` shortcut is used.
+
+The whole found-to-current chain is one transaction. Failure in any step rolls
+back every schema and data change. The fixed backup remains for manual recovery,
+including when migration fails; Awesome never automatically restores it and
+never converts a migration failure into an automatic reset. An unprovable
+rollback outcome fails the database worker closed.
 
 ## State leases and reset
 
@@ -350,6 +381,8 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 | Provider credential evidence is invalid or cannot reconcile | journal/backup remains; runtime stays unpublished or fenced | fail with `recovery_required`; do not load the half-state |
 | mutation intent persists, effect uncertain | PendingMutation + blobs | verify, finalize, or roll back |
 | shell/MCP transport fails after dispatch | conservative observation / uncertain tool state | explicit Abort or Retry |
+| migration step fails and rolls back | fixed pre-migration SQLite backup | fail startup; preserve backup for manual recovery |
+| migration rollback cannot be proved | fixed backup plus fenced database worker | fail closed; require manual diagnosis |
 | state reset fresh initialization fails | renamed original directory | restore original namespace |
 
 ## Design tradeoffs
@@ -358,8 +391,8 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
   locking part of the product contract.
 - Separate product/checkpoint databases preserve boundaries but require strict
   convergence.
-- Explicit destructive reset is less convenient than migration, but avoids
-  silently reinterpreting state.
+- Explicit destructive reset for pre-floor state is less convenient than
+  migration, but avoids silently reinterpreting unsupported state.
 - WAL and `synchronous=NORMAL` favor interactive performance over a claim of
   power-loss atomicity across databases and workspace files.
 - Conservative pending evidence may require manual diagnosis; deleting it
@@ -371,8 +404,8 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 - Application SQLite owner: `storage/application_sqlite.py`
 - Conversations and trust: `storage/conversations.py`, `storage/trust.py`
 - Checkpoints: `storage/checkpoints.py`
-- Compatibility and reset: `storage/compatibility.py`,
-  `storage/state_recovery.py`
+- Compatibility, migration, and reset: `storage/compatibility.py`,
+  `storage/migrations.py`, `storage/state_recovery.py`
 - Cross-process lease: `storage/state_lease.py`
 - Change persistence: `storage/changes.py`, `core/changes/`
 - Turn recovery: `application/turns.py`

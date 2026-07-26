@@ -263,9 +263,20 @@ Memory 不能 grant Tool capability，也不能成为隐藏 provider fallback。
 ## 变更存储或恢复
 
 Storage 变更不只是添加 column。应判断字段缺失在 Schema 7 中是否有安全解释。如果没有，
-则递增 schema identity 并定义旧/新状态的产品行为。Awesome 没有自动 migration framework，
-因此新 schema 必须更新 preflight、reset verification、packaging check、docs 和 recovery
-test。
+则递增 schema identity 并定义旧/新状态的产品行为。把每个受支持的升级作为一个相邻
+`N -> N+1` operation 加入 Storage 所属的 migration registry。Registry 必须从显式 floor
+到 current 始终保持一条完整线性链；不要添加 branch、gap、历史 adapter，也不要把
+migration 逻辑放到该 owner 之外。Schema 7 当前同时是 floor 与 current，因此生产环境没有
+step，Schema 1–6 仍然不可迁移。
+
+Migration code 必须保持启动协议：shared-lease read-only preflight、exclusive lease、重新检查
+兼容性、在 `application.db.pre-migration.bak` 创建并校验能感知 WAL 的 SQLite backup，然后
+在一个 transaction 内执行完整链。只有成功后，启动才能降级 lease 并初始化 repository。
+Migration step 只能获得受限的 schema/data connection facade；不得自行 commit、rollback、
+创建 savepoint、attach 其它 database，或运行管理 transaction 的 script。步骤失败会回滚
+整条链，并保留 backup 供手动恢复；绝不能自动 reset 或 restore 状态。应使用
+synthetic multi-step schema 测试 registry，包括数据保留、backup 校验、rollback 和 rollback
+结果未知。相同 schema 变更中还要更新 preflight、release contract、双语文档与 recovery test。
 
 为每个新持久化事实说明：
 

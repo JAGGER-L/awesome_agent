@@ -43,7 +43,11 @@ awesome [workspace]
   -> Ink starts one private awesome-core
   -> initialize(protocol=3, client identity)
   -> resolve candidate workspace identity
-  -> read-only state preflight + trust lookup
+  -> shared-lease read-only state preflight
+  -> if migration_required:
+       exclusive lease -> recheck -> SQLite backup -> one transaction
+       -> downgrade to shared lease -> initialize repositories
+  -> trust lookup
   -> trust decision, if required
   -> after acceptance/already trusted: acquire path + entity leases
   -> recheck workspace root identity under those leases
@@ -60,9 +64,11 @@ awesome [workspace]
 后，系统取得两种 lease，并在激活前重新校验身份。拒绝信任会退出，且不会持久化为
 denial。
 
-旧版 Application schema 会生成类型化的 reset-or-exit interaction。更新且未知、损坏、
-不可读或锁定的状态都会安全停止，绝不会被静默删除。确认 reset 后，会在 bootstrap lock、
-前台 interaction-resolution lease 和独占跨进程 state lease 下执行。
+生产 migration floor 与当前 schema 都是 7，并且没有注册 step。因此 Schema 1–6 会生成
+类型化 reset-or-exit interaction。未来需要 migration 的 schema 会遵循上面的独占序列，并
+保留 `application.db.pre-migration.bak` 供手动恢复。Migration 绝不会触发自动 reset 或
+restore。更新、未知、损坏、不可读或锁定的状态都会安全停止，绝不会被静默删除。确认 reset
+后，会在 bootstrap lock、前台 interaction-resolution lease 和独占跨进程 state lease 下执行。
 
 进入 `ready` 前的失败会让协议握手保持关闭。状态分类详见
 [存储与恢复](storage-and-recovery.zh-CN.md)，握手 gate 详见

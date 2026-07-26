@@ -157,6 +157,32 @@ def _read_schema(path: Path) -> int:
         return int(connection.execute("PRAGMA user_version").fetchone()[0])
 
 
+def _verify_migration_registry(storage_module: ModuleType) -> None:
+    expected_floor = 7
+    expected_current = 7
+    if expected_floor != storage_module.APPLICATION_SCHEMA_FLOOR:
+        raise StorageContractError("wheel migration floor is invalid")
+    registry = storage_module.APPLICATION_MIGRATIONS
+    if registry.floor != expected_floor or registry.current != expected_current:
+        raise StorageContractError("wheel migration registry identity is invalid")
+
+    migrations = tuple(registry.migrations)
+    sources = tuple(migration.from_schema for migration in migrations)
+    targets = tuple(migration.to_schema for migration in migrations)
+    expected_sources = tuple(range(expected_floor, expected_current))
+    expected_targets = tuple(range(expected_floor + 1, expected_current + 1))
+    if sources != expected_sources or targets != expected_targets:
+        raise StorageContractError("wheel migration registry is not one linear chain")
+    if len(set(sources)) != len(sources):
+        raise StorageContractError("wheel migration registry contains a branch")
+    if migrations:
+        raise StorageContractError("Schema 7 wheel unexpectedly publishes migrations")
+    if registry.path_from(expected_current) != ():
+        raise StorageContractError("current schema migration path is invalid")
+    if registry.path_from(expected_floor - 1) is not None:
+        raise StorageContractError("pre-floor schema unexpectedly has a migration path")
+
+
 def verify_storage_contract(
     storage_module: ModuleType,
     paths_module: ModuleType,
@@ -165,6 +191,7 @@ def verify_storage_contract(
     expected_schema = 7
     if expected_schema != storage_module.APPLICATION_SCHEMA_VERSION:
         raise StorageContractError("wheel schema version is invalid")
+    _verify_migration_registry(storage_module)
 
     fresh = root / "fresh-state" / "application.db"
     storage_module.initialize_application_database(fresh)
@@ -182,7 +209,11 @@ def verify_storage_contract(
     if not required_tables.issubset(tables):
         raise StorageContractError("fresh database tables are incomplete")
 
-    for found_schema, expected_direction in ((2, "older"), (6, "older"), (8, "newer")):
+    for found_schema, expected_direction in (
+        (2, "migration_unavailable"),
+        (6, "migration_unavailable"),
+        (8, "newer"),
+    ):
         incompatible = root / f"schema-{found_schema}" / "application.db"
         _write_versioned_database(incompatible, found_schema)
         before = _tree_inventory(incompatible.parent)
@@ -262,9 +293,10 @@ def main() -> int:
 
     import awesome_agent.paths as paths_module
     import awesome_agent.storage as storage_module
+    import awesome_agent.storage.migrations as migrations_module
     import awesome_agent.version as version_module
 
-    modules = (paths_module, storage_module, version_module)
+    modules = (paths_module, storage_module, migrations_module, version_module)
     for module in modules:
         _require_installed_module(module, arguments.environment)
     version = cast(_VersionModule, version_module).PRODUCT_VERSION

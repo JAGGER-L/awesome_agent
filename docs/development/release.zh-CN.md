@@ -145,14 +145,14 @@ Verifier 检查：
 - release-directory inventory 与所有 checksum；
 - archive path safety、member inventory 与 payload version；
 - wheel filename、metadata、compatibility、entry point、RECORD hash、import origin，
-  以及不存在 editable/migration content；
+  以及不存在 editable 或非生产 content；
 - 精确 hashed dependency requirement 与隔离安装；
 - `uv pip check`、Core import 与 console entry point；
 - 在全新 home 与 workspace 中运行已安装 wheel 的 Protocol v3 生命周期：
   `initialize` -> workspace trust -> `application.getState` -> `shutdown`；
 - TUI package/version/entry point；
-- 当前 storage bootstrap、不兼容状态分类、独占 reset 所有权，以及保留 config、Skills
-  与 Memory。
+- Schema 7 bootstrap、floor-7 空 migration registry、不兼容状态分类、独占 reset
+  所有权，以及保留 config、Skills 与 Memory。
 
 验证必须在 build wheel 和解压后的 payload 上运行。Fallback 到 editable checkout 会证明
 错误的 artifact，因此会被拒绝。

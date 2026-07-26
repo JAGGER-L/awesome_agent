@@ -39,6 +39,7 @@ home, not the operating-system home.
 │       └── MEMORY.md
 ├── state/
 │   ├── application.db
+│   ├── application.db.pre-migration.bak
 │   ├── checkpoints.db
 │   ├── provider-model-transaction.json
 │   └── change-journal/
@@ -297,7 +298,7 @@ is released. A competing process receives `operation_busy` rather than running
 recovery or mutations concurrently. These lock directories are coordination
 artifacts, not user configuration; do not delete them while Awesome is running.
 
-## Schema compatibility and reset
+## Schema compatibility, migration, and reset
 
 Awesome performs a read-only preflight before normal database access:
 
@@ -305,13 +306,21 @@ Awesome performs a read-only preflight before normal database access:
 | --- | --- |
 | No database, or empty SQLite with version 0 | Initialize schema 7 under an exclusive lease, then downgrade to shared ownership. |
 | Schema 7 | Open normally. |
-| Schema 1–6 | Ask the user to reset local state; no automatic migration. |
+| Schema 1–6 | Migration is unavailable; ask the user to reset local state or exit. |
 | Schema greater than 7 | Refuse with `state_created_by_newer_version`. |
 | Non-empty version 0, invalid SQLite, or unknown format | Refuse as unknown/unavailable state. |
 
-The project deliberately has no in-place database migration layer in this
-release. Reset is explicit because silently interpreting old recovery data can
-be more dangerous than losing local conversation history.
+The production migration registry has floor 7, current 7, and no steps. Future
+supported upgrades must form one adjacent linear chain. Startup then performs a
+shared-lease preflight, acquires the exclusive state lease, rechecks the schema,
+and creates `<HOME>/state/application.db.pre-migration.bak` with SQLite's Backup
+API before applying the whole chain in one transaction. It downgrades to shared
+ownership before initializing repositories.
+
+The backup is independently reopened and checked before migration. A failed
+step rolls back every schema and data change and leaves the backup available for
+manual recovery. Startup never automatically restores that backup or resets
+state. Newer, unknown, corrupt, unreadable, and locked states fail closed.
 
 After confirmation, reset validates that the exact `<HOME>/state` boundary is
 not a symlink, renames it to a same-parent staging directory, initializes a new
@@ -348,3 +357,7 @@ Journal blobs and is not a supported consistent backup. For the same reason,
 restore the whole stopped-state snapshot as a unit and use a product version
 that accepts its Application schema. If only preferences or Skills are needed,
 copy those user-owned files separately and deliberately exclude `.env`.
+
+`application.db.pre-migration.bak` is a WAL-aware safety snapshot for manual
+migration recovery, not a complete Awesome backup: it does not include the
+checkpoint database, Change Journal blobs, configuration, or credentials.

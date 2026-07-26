@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -66,6 +66,7 @@ def _write_test_wheel(
     version: str,
     *,
     entry_points: bytes | None = None,
+    extra_members: Mapping[str, bytes] | None = None,
 ) -> None:
     dist_info = f"awesome_agent-{version}.dist-info"
     members = {
@@ -73,6 +74,7 @@ def _write_test_wheel(
         "awesome_agent/paths.py": b"",
         "awesome_agent/protocol/stdio.py": b"",
         "awesome_agent/storage/__init__.py": b"",
+        "awesome_agent/storage/migrations.py": b"",
         "awesome_agent/version.py": f'PRODUCT_VERSION = "{version}"\n'.encode(),
         f"{dist_info}/METADATA": (
             f"Metadata-Version: 2.4\nName: awesome-agent\nVersion: {version}\n"
@@ -88,6 +90,7 @@ def _write_test_wheel(
         b"awesome-dev = awesome_agent.development.launcher:main\n",
         f"{dist_info}/licenses/LICENSE": MIT_LICENSE,
     }
+    members.update(extra_members or {})
     record_path = f"{dist_info}/RECORD"
     record = io.StringIO(newline="")
     writer = csv.writer(record, lineterminator="\n")
@@ -285,6 +288,45 @@ def test_bundle_verifier_rejects_empty_wheel_before_runtime_fallback(
     _stub_runtime_verification(monkeypatch)
 
     with pytest.raises(BundleVerificationError, match="wheel"):
+        verify_release_bundle(bundle, "1.0.0")
+
+
+def test_bundle_verifier_accepts_owned_storage_migration_module(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = _fixture(tmp_path)
+    with ZipFile(wheel) as archive:
+        assert "awesome_agent/storage/migrations.py" in archive.namelist()
+    bundle = assemble_bundle(tmp_path, "1.0.0").archive
+    _stub_runtime_verification(monkeypatch)
+
+    verify_release_bundle(bundle, "1.0.0")
+
+
+@pytest.mark.parametrize(
+    "forbidden_module",
+    [
+        "awesome_agent/migration.py",
+        "awesome_agent/agent/migrations.py",
+        "awesome_agent/migrations/helper.py",
+    ],
+)
+def test_bundle_verifier_rejects_other_migration_modules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    forbidden_module: str,
+) -> None:
+    wheel = _fixture(tmp_path)
+    _write_test_wheel(
+        wheel,
+        "1.0.0",
+        extra_members={forbidden_module: b""},
+    )
+    bundle = assemble_bundle(tmp_path, "1.0.0").archive
+    _stub_runtime_verification(monkeypatch)
+
+    with pytest.raises(BundleVerificationError, match="migration module"):
         verify_release_bundle(bundle, "1.0.0")
 
 
@@ -907,7 +949,7 @@ def test_bundle_rejects_installer_version_drift(
         assemble_bundle(tmp_path, "1.0.0")
 
 
-def test_release_storage_contract_uses_current_schema_without_migrations(
+def test_release_storage_contract_uses_schema_seven_migration_floor(
     tmp_path: Path,
 ) -> None:
     contract_root = tmp_path / "storage-contract"

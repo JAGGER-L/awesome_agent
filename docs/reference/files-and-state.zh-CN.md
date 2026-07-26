@@ -36,6 +36,7 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 │       └── MEMORY.md
 ├── state/
 │   ├── application.db
+│   ├── application.db.pre-migration.bak
 │   ├── checkpoints.db
 │   ├── provider-model-transaction.json
 │   └── change-journal/
@@ -251,7 +252,7 @@ Awesome 对一字节 `.state.lock` 文件使用 non-blocking filesystem lock：
 `operation_busy`，而不是并发运行 recovery 或 mutation。这些 lock directory 是协调 artifact，
 不是用户配置；Awesome 运行时不要删除它们。
 
-## Schema 兼容性与重置
+## Schema 兼容性、迁移与重置
 
 正常访问 database 前，Awesome 会执行只读预检：
 
@@ -259,12 +260,19 @@ Awesome 对一字节 `.state.lock` 文件使用 non-blocking filesystem lock：
 | --- | --- |
 | 没有 database，或 version 0 的空 SQLite | 在 exclusive lease 下初始化 schema 7，然后降级为 shared ownership。 |
 | Schema 7 | 正常打开。 |
-| Schema 1–6 | 询问用户是否重置本地状态；不执行自动 migration。 |
+| Schema 1–6 | Migration 不可用；询问用户是否重置本地状态或退出。 |
 | Schema 大于 7 | 拒绝并返回 `state_created_by_newer_version`。 |
 | 非空 version 0、无效 SQLite 或未知格式 | 以未知/不可用状态拒绝。 |
 
-本 release 刻意没有原地 database migration layer。重置必须显式进行，因为静默解释旧恢复数据
-可能比丢失本地对话历史更危险。
+生产 migration registry 的 floor 是 7、current 是 7，且没有 step。未来受支持的升级必须形成
+一条相邻线性链。启动时先在 shared lease 下 preflight，再取得 exclusive state lease、重新检查
+schema，并用 SQLite Backup API 创建
+`<HOME>/state/application.db.pre-migration.bak`，然后在一个 transaction 内执行完整链。降级为
+shared ownership 后才初始化 repository。
+
+Migration 前会独立重新打开并检查 backup。任一步骤失败都会回滚全部 schema 与数据变更，
+并保留 backup 供手动恢复。启动绝不会自动 restore 该 backup 或 reset 状态。更新、未知、损坏、
+不可读和锁定状态都会 fail closed。
 
 确认后，reset 会验证精确的 `<HOME>/state` 边界不是 symlink，将其重命名到同父 staging
 directory，初始化新的 `application.db`，然后移除 staging。初始化失败会恢复旧目录。清理失败
@@ -295,3 +303,7 @@ journal 与 backup、`ui.json`、User Skills、Local Memory 文档/设置和已�
 一致备份。基于同样原因，应把整个已停止状态快照作为一个单元恢复，并使用接受其 Application
 schema 的产品版本。如果只需要 preferences 或 Skills，请单独复制这些用户拥有的文件，并
 有意排除 `.env`。
+
+`application.db.pre-migration.bak` 是能够感知 WAL、供手动 migration recovery 使用的安全
+快照，而不是完整 Awesome backup：它不包含 checkpoint database、Change Journal blob、
+配置或凭据。

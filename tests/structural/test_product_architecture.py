@@ -201,14 +201,18 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
 
 
 def test_application_schema_identity_is_independent_from_product_version() -> None:
-    compatibility = ROOT / "storage" / "compatibility.py"
+    schema_owners = (
+        ROOT / "storage" / "compatibility.py",
+        ROOT / "storage" / "migrations.py",
+    )
 
     assert APPLICATION_SCHEMA_VERSION == 7
-    assert not any(
-        imported == "awesome_agent.version"
-        or imported.startswith("awesome_agent.version.")
-        for imported in _imports(compatibility)
-    )
+    for owner in schema_owners:
+        assert not any(
+            imported == "awesome_agent.version"
+            or imported.startswith("awesome_agent.version.")
+            for imported in _imports(owner)
+        )
 
 
 def test_tui_is_one_minimal_node_22_package() -> None:

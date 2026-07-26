@@ -173,9 +173,17 @@ meaning-changing truncation. That diagnostic does not invalidate configuration.
 Application state preflight is read-only and runs before trust, checkpoints,
 or writable storage. The current format is Schema 7. Product and schema
 versions are independent: schema identity changes only with persisted
-semantics and increases monotonically. Older state can be reset only through
-the typed startup interaction; newer, unknown, corrupt, unreadable, or locked
-state is never silently deleted.
+semantics and increases monotonically. The migration catalog has floor 7,
+current 7, and no production steps. Schemas 1–6 therefore offer only the typed
+reset-or-exit interaction; newer, unknown, corrupt, unreadable, or locked state
+is never silently deleted.
+
+A future registered migration runs only after shared-lease preflight, exclusive
+lease acquisition, and a second compatibility check. Storage validates and
+atomically publishes a WAL-aware SQLite backup, applies the complete adjacent
+chain in one transaction, downgrades the lease, and only then initializes the
+Application repositories. Failure rolls the transaction back and retains the
+backup for manual recovery; startup never automatically resets or restores it.
 
 ### Conversation Turn
 

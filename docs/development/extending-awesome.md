@@ -294,9 +294,25 @@ Memory cannot grant Tool capabilities or become a hidden provider fallback.
 
 Storage changes require more than adding a column. Determine whether absence
 has a safe interpretation under Schema 7. If not, increment schema identity and
-define product behavior for older/newer state. Awesome has no automatic
-migration framework, so a new schema must update preflight, reset verification,
-packaging checks, docs, and recovery tests.
+define product behavior for older/newer state. Add each supported upgrade as
+one adjacent `N -> N+1` operation in the Storage-owned migration registry. The
+registry must remain a complete linear chain from its explicit floor to current;
+do not add branches, gaps, historical adapters, or migration logic outside that
+owner. Schema 7 is currently both floor and current, so production has no steps
+and Schemas 1–6 remain migration-unavailable.
+
+Migration code must preserve the startup protocol: shared-lease read-only
+preflight, exclusive lease, compatibility recheck, validated WAL-aware SQLite
+backup at `application.db.pre-migration.bak`, then the complete chain in one
+transaction. Only after success may startup downgrade the lease and initialize
+repositories. A migration step receives only the restricted schema/data
+connection facade; it must not commit, roll back, open savepoints, attach another
+database, or run scripts that manage transactions. A failed step rolls back the
+entire chain and retains the backup for manual recovery; never automatically
+reset or restore state. Test the
+registry with synthetic multi-step schemas, including data preservation, backup
+validation, rollback, and unknown rollback outcomes. Update preflight, release
+contracts, bilingual docs, and recovery tests in the same schema change.
 
 For every new durable fact specify:
 

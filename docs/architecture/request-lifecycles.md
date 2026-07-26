@@ -47,7 +47,11 @@ awesome [workspace]
   -> Ink starts one private awesome-core
   -> initialize(protocol=3, client identity)
   -> resolve candidate workspace identity
-  -> read-only state preflight + trust lookup
+  -> shared-lease read-only state preflight
+  -> if migration_required:
+       exclusive lease -> recheck -> SQLite backup -> one transaction
+       -> downgrade to shared lease -> initialize repositories
+  -> trust lookup
   -> trust decision, if required
   -> after acceptance/already trusted: acquire path + entity leases
   -> recheck workspace root identity under those leases
@@ -66,10 +70,14 @@ user decides. Acceptance (or an existing trust record) is followed by acquiring
 both leases and rechecking identity before activation. A rejected trust
 decision exits and is not persisted as a denial.
 
-An older Application schema produces a typed reset-or-exit interaction. A
-newer, unknown, corrupt, unreadable, or locked state stops safely; it is never
-silently deleted. A confirmed reset runs under the bootstrap lock, a foreground
-interaction-resolution lease, and an exclusive cross-process state lease.
+The production migration floor and current schema are both 7, with no registered
+steps. Schemas 1–6 therefore produce a typed reset-or-exit interaction. A
+future migration-required schema follows the exclusive sequence above and keeps
+`application.db.pre-migration.bak` for manual recovery. Migration never triggers
+automatic reset or restore. Newer, unknown, corrupt, unreadable, or locked state
+stops safely and is never silently deleted. A confirmed reset runs under the
+bootstrap lock, a foreground interaction-resolution lease, and an exclusive
+cross-process state lease.
 
 Failure before `ready` leaves the protocol handshake closed. See
 [Storage and recovery](storage-and-recovery.md) for state classification and
