@@ -1,0 +1,145 @@
+# 路线图
+
+本路线图区分 Awesome 今天已经具备的能力与仍需设计和实现的产品方向。它描述的是
+意图和架构约束，不是发布日期或兼容性承诺。
+
+如需了解当前行为，请阅读[用户指南](user-guide/README.zh-CN.md)和
+[参考手册](reference/README.zh-CN.md)。在实现与测试落地之前，路线图条目不得被写成
+已经可用的命令、配置键或子系统。
+
+## 当前基础
+
+Awesome 目前提供：
+
+- 由一个私有 Python Core 支撑的单一终端产品界面；
+- 通过提供商中立的模型契约支持 DeepSeek 和 Kimi；
+- 受信任 Workspace 启动、根目录 `AGENTS.md` 指令、Threads、Turns、取消、
+  checkpoints 与恢复；
+- 通过唯一的 Registry、Policy 与 Executor 路径提供工作区文件工具和有界本地命令执行；
+- 三种权限模式、单次审批、绑定 Thread 的临时 `workspace.write` 授权，以及不可关闭的
+  命令防误操作断路器；
+- 可见的 ChangeSet，以及 diff、undo、redo 和保守的崩溃恢复；
+- 彼此独立且可选的本地 Memory 与 Mem0 Cloud；
+- Bundled、User 和受信任 Workspace 三类 Skills；
+- 使用经过校验且绑定 generation 的 catalog 的 MCP stdio 服务器；
+- Python Core 与 Ink TUI 之间有版本的 Protocol v3 边界；
+- 从本目录生成、支持搜索的 GitHub Pages 文档站。
+
+[架构总览](../ARCHITECTURE.zh-CN.md)定义当前组件边界。本页其余部分讨论可能增加的能力。
+
+## 当前已知限制
+
+以下内容是当前版本已经存在的行为或契约缺口，不是未来功能，也不表示这些限制值得保留：
+
+- 受信任工作区中的 `.awesome/config.yaml` 读取受 trust gate 保护，但不像
+  `AGENTS.md` 和 Workspace Skills 那样具备大小限制、no-follow 或身份固定。
+  参见[配置](reference/configuration.zh-CN.md#workspace-配置)。
+- 大多数内置工具和 Skill 支持工具的参数模型会忽略未知字段并转换可兼容标量；配置与
+  Skill frontmatter 也存在已记录的转换/语法差异。参见
+  [工具契约](reference/built-in-tools.zh-CN.md#通用请求与结果契约)、
+  [配置](reference/configuration.zh-CN.md)和
+  [Skills](extensions/skills.zh-CN.md#创建-skill)。
+- MCP Manager 发布与 Registry 替换是两次各自全有或全无的提交，而不是一个事务。
+  compiler 还不会拒绝完整命名空间工具名超过 `/tools` payload 的 128 字符限制或
+  model/event 的 200 字符限制。参见
+  [MCP 发布](extensions/mcp.zh-CN.md#catalog-与-registry-发布)。
+- 无效但已启用的本地 Memory 可能在 Turn 记录创建之后、coordinator 将其终态化之前
+  失败，使启动恢复负责协调该 Turn。参见
+  [Memory 上下文](extensions/memory.zh-CN.md#进入模型的内容)。
+- Skill 模式 `auto` 与 `off` 当前具有相同的可观察行为；尚不存在自动选择器。参见
+  [Skill 选择](extensions/skills.zh-CN.md#选择和加载-skills)。
+- Core 与 TUI 尚未强制执行完全相同的 JSON-RPC request ID 边界；
+  `direct.execute` 先接受 30,000 字符的传输字段，再委托给 8,000 字符的工具字段。
+  参见 [Protocol 请求契约](reference/protocol.zh-CN.md#json-rpc-request-形状)与
+  [方法目录](reference/protocol.zh-CN.md#method-catalog)。
+- Core 会限制请求行，却不会按 TUI 的 1 MiB frame 上限预检自己序列化后的输出。
+  因此，较大的 `thread.read` 页面或未分页的 `/tools` 结果可能使 TUI 关闭一个原本
+  有效的通道。参见 [Protocol framing](reference/protocol.zh-CN.md#进程与传输)。
+- 如果 ChangeSet finalization 自身抛出异常，Direct Operation 不会保留原始取消/失败；
+  取消可能表现为 `operation.failed`。参见
+  [Direct 生命周期](architecture/request-lifecycles.zh-CN.md#直接-shell-命令)。
+- `/auth mem0` 会保存本地格式有效的输入，而不远程验证 Mem0 凭据；失败会在第一次
+  云操作时出现。参见 [Memory 配置](extensions/memory.zh-CN.md#配置)。
+
+关闭任一缺口都需要运行时回归测试，并同步更新参考与架构文档。没有这些证据就删除
+条目，会把文档变成没有依据的承诺。
+
+## 近期产品方向
+
+### 一条命令安装 Skills
+
+**用户需要：** 查找并安装 Skill 不应要求用户手工构造包目录。
+
+**不变量：** 安装必须保留 manifest 校验、来源优先级、Workspace 信任、有界读取和
+现有工具策略路径。发现更方便不能把 Skill 变成可执行权限。
+
+**待决策：** registry 所有权、包真实性、更新行为、版本固定、移除与离线安装。
+
+### Multi-Agent 委派
+
+**用户需要：** 部分调查与相互独立的工作包能从并行或专业化执行中获益。
+
+**不变量：** 一个面向用户的 Turn 仍对结果负责。每个委派者都需要明确的上下文、预算、
+工具边界、取消和证据；委派不得创建隐藏的第二套权限或持久化系统。
+
+**待决策：** 调度、结果汇总、嵌套委派、共享工作区冲突、每个 Agent 的预算，以及
+foreground-operation 模型应如何演进。
+
+### 更多模型提供商
+
+**用户需要：** 模型选择不应局限于最初两个适配器。
+
+**不变量：** 提供商实现共享的消息、流、用量、reasoning、工具、错误和取消契约。
+提供商专用 payload 不得泄漏到 Agent nodes、工具、存储、协议或 TUI。
+
+**待决策：** 下一个具体提供商、模型 catalog 所有权、能力协商、上下文限制和凭据验证。
+
+### 搜索工具
+
+**用户需要：** 编程工作经常需要 Workspace 中不存在的最新 Web 或文档事实。
+
+**不变量：** Web Search 与 Web Fetch 应与所有其他工具一样进入同一 Registry、Policy、
+Executor、结果、事件、超时和审批路径。远程内容始终是不受信任的上下文。
+
+**待决策：** 提供商选择、网络 allowlist、引用保留、隐私、缓存、输出限制和不确定结果处理。
+
+## 后续方向
+
+### 更多 Memory 提供商
+
+第二个外部 Memory 适配器可能足以证明抽象提供商层的必要性。在此之前，Awesome 会
+刻意明确保留本地 Memory 与 Mem0 Cloud，而不是围绕单一实现发明框架。任何新提供商
+都必须定义同意、身份、保留、删除、故障隔离，以及哪些数据会离开本机。
+
+### 定时任务
+
+定时工作应复用 Agent、工具、Skill、Memory、信任、预算与恢复契约。调度器不得成为
+第二个执行引擎。无人值守审批、凭据可用性、错过的计划、并发 Workspace 修改和结果
+交付，都需要在实现前单独建立威胁模型和产品模型。
+
+### Gateway 消息
+
+消息平台可以适配类型化 Application intents 与 events，让用户在终端之外提交工作并
+接收进度。适配器不得复制 Agent 行为、保存隐藏 transcript，或削弱 Workspace 和权限
+边界。身份、租户、交付顺序和密钥处理仍待决定。
+
+### 可选隔离工具后端
+
+可选的 Docker 或等价后端可以为有需要的用户提供更强的进程与文件系统隔离。它位于
+Tool Executor 策略下方；上层仍必须保留信任、审批、命令 hard-deny、输出边界与审计。
+
+当前本地后端不是操作系统沙箱。增加隔离后端需要明确的平台支持、挂载与网络策略、
+镜像生命周期、性能和恢复语义，而不是增加一个简单配置开关。
+
+## 路线图条目如何成为产品契约
+
+一个方向只有在满足以下条件后才能进入当前文档：
+
+1. 写明用户需要与非目标；
+2. 确定架构所有权与依赖方向；
+3. 明确公共配置、协议、存储和安全变化；
+4. 测试失败、取消、恢复和兼容性行为；
+5. 用户指南、参考页、架构页与发布说明保持一致；
+6. 支持范围内具备打包与跨平台证据。
+
+这条规则把设想性设计留在运行时文档之外，也防止原型意外成为公共契约。

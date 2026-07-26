@@ -309,6 +309,7 @@ jobs:
       - name: Check built links
         working-directory: site
         env:
+          SITE_URL: https://jagger-l.github.io
           BASE_PATH: /awesome_agent
         run: npm run check:links
 

@@ -80,39 +80,6 @@ export const docsSidebar = [
   group("Project", "项目", ["roadmap"], true),
 ];
 
-// Only these routes have independently maintained English and Chinese content.
-// Every other zh-cn route is Starlight's English-content fallback.
-export const translatedRoutes = new Set(["", "getting-started/quickstart"]);
-
-const movedRoutes = [
-  ["user-guide/workspace-and-tools", "user-guide/tools-and-shell"],
-  ["user-guide/memory-skills-mcp", "extensions"],
-  ["architecture/agent-core", "architecture/application-and-agent"],
-  ["architecture/application-and-langgraph", "architecture/application-and-agent"],
-  ["architecture/protocol-and-ink", "architecture/protocol-and-tui"],
-  ["architecture/storage", "architecture/storage-and-recovery"],
-  ["architecture/security", "architecture/security-and-dependencies"],
-  ["development/command-regression", "development/testing"],
-];
-
-export const docsRedirects = Object.fromEntries(
-  movedRoutes.flatMap(([source, destination]) => [
-    [`/${source}`, `/${destination}/`],
-    [`/zh-cn/${source}`, `/zh-cn/${destination}/`],
-  ]),
-);
-
-export function redirectsForBase(basePath, redirects = docsRedirects) {
-  const normalizedBase = String(basePath ?? "").replace(/^\/+|\/+$/g, "");
-  const prefix = normalizedBase ? `/${normalizedBase}` : "";
-  return Object.fromEntries(
-    Object.entries(redirects).map(([source, destination]) => [
-      source,
-      `${prefix}${destination}`,
-    ]),
-  );
-}
-
 export function sidebarRoutes(sidebar = docsSidebar) {
   const routes = [];
   const visit = (item) => {

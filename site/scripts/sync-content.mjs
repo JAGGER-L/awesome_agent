@@ -1,13 +1,22 @@
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  compileDocumentationCatalog,
+  resolveCatalogSourceLink,
+} from "../documentation-catalog.mjs";
+import {
+  atomicWriteSafeSiteFile,
+  ensureSafeSiteDirectory,
+  replaceSafeSiteDirectory,
+} from "./safe-site-paths.mjs";
+import { rewriteMarkdownLinks as rewriteMarkdownLinksWithAst } from "./markdown-ast.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const siteDirectory = resolve(scriptDirectory, "..");
 const repositoryRoot = resolve(siteDirectory, "..");
-const sourceDocs = join(repositoryRoot, "docs");
-const seedDirectory = join(siteDirectory, "content");
 const generatedDocs = join(siteDirectory, "src", "content", "docs");
 
 function assertGeneratedTarget(target) {
@@ -75,80 +84,28 @@ function findDescription(body) {
   return "Awesome documentation.";
 }
 
-function routeForOutput(outputRelativePath) {
-  const withoutExtension = outputRelativePath
-    .replace(/\\/g, "/")
-    .replace(/\.(md|mdx)$/i, "");
-  return withoutExtension.replace(/(^|\/)index$/i, "").replace(/\/$/, "");
+function rewriteMarkdownLinks(body, entry, catalog) {
+  const currentRoute = entry.route || ".";
+  return rewriteMarkdownLinksWithAst(body, (destination) => {
+    const suffixIndex = destination.search(/[?#]/u);
+    const sourceTarget =
+      suffixIndex === -1 ? destination : destination.slice(0, suffixIndex);
+    const suffix = suffixIndex === -1 ? "" : destination.slice(suffixIndex);
+    if (!/\.md$/iu.test(sourceTarget)) return null;
+    const target = resolveCatalogSourceLink(catalog, entry.source, sourceTarget);
+    if (!target || target.route === null) return null;
+    const targetRoute = target.route || ".";
+    const relativeRoute = posix.relative(currentRoute, targetRoute);
+    return `${relativeRoute || "."}/${suffix}`;
+  });
 }
 
-function targetOutputPath(sourceRelativePath, markdownPath) {
-  const normalizedSource = sourceRelativePath.replace(/\\/g, "/");
-  const sourceIsChinese = normalizedSource.endsWith(".zh-CN.md");
-  const normalizedTarget = posix.normalize(
-    posix.join(posix.dirname(normalizedSource), markdownPath),
-  );
-
-  if (normalizedSource === "ARCHITECTURE.md") {
-    if (normalizedTarget.startsWith("docs/")) {
-      return outputPathFor(normalizedTarget.slice("docs/".length)).replace(/\\/g, "/");
-    }
-    return null;
-  }
-
-  if (normalizedTarget === "../ARCHITECTURE.md") {
-    return "architecture/overview.md";
-  }
-  if (normalizedTarget === "../README.md") return "index.mdx";
-  if (normalizedTarget.startsWith("../")) return null;
-  const outputPath = outputPathFor(normalizedTarget).replace(/\\/g, "/");
-  return sourceIsChinese && !outputPath.startsWith("zh-cn/")
-    ? `zh-cn/${outputPath}`
-    : outputPath;
-}
-
-function rewriteMarkdownLinks(body, sourceRelativePath, outputRelativePath) {
-  const currentRoute = routeForOutput(outputRelativePath) || ".";
-  let fence = null;
-
-  return body
-    .split("\n")
-    .map((line) => {
-      const marker = line.match(/^\s*(`{3,}|~{3,})/);
-      if (marker) {
-        const candidate = marker[1];
-        if (fence === null) {
-          fence = candidate;
-        } else if (candidate[0] === fence[0] && candidate.length >= fence.length) {
-          fence = null;
-        }
-        return line;
-      }
-      if (fence !== null) return line;
-
-      return line.replace(
-        /\]\((?!https?:|mailto:|#)([^)\s]+?)\.md(#[^)]+)?\)/g,
-        (_match, path, hash = "") => {
-          const targetOutput = targetOutputPath(sourceRelativePath, `${path}.md`);
-          if (!targetOutput) return _match;
-
-          const targetRoute = routeForOutput(targetOutput) || ".";
-          const relativeRoute = posix.relative(currentRoute, targetRoute);
-          const href = `${relativeRoute || "."}/${hash}`;
-          return `](${href})`;
-        },
-      );
-    })
-    .join("\n");
-}
-
-function withFrontmatter(raw, sourceRelativePath, outputRelativePath, lastUpdated) {
-  const normalized = raw.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
-  const existing = normalized.match(/^---\n([\s\S]*?)\n---\n?/);
+function withFrontmatter(raw, entry, catalog, lastUpdated) {
+  const existing = raw.match(/^---\n([\s\S]*?)\n---\n?/);
   let frontmatter = existing?.[1] ?? "";
-  let body = existing ? normalized.slice(existing[0].length) : normalized;
+  let body = existing ? raw.slice(existing[0].length) : raw;
   const heading = body.match(/^#\s+(.+)\s*$/m);
-  const title = heading?.[1]?.trim() || fallbackTitle(outputRelativePath);
+  const title = heading?.[1]?.trim() || fallbackTitle(entry.output);
 
   if (heading) {
     body = `${body.slice(0, heading.index)}${body.slice((heading.index ?? 0) + heading[0].length)}`
@@ -164,51 +121,18 @@ function withFrontmatter(raw, sourceRelativePath, outputRelativePath, lastUpdate
     fields.push(`lastUpdated: ${lastUpdated}`);
   }
   if (!/^editUrl\s*:/m.test(frontmatter)) {
-    const sourcePath = sourceRelativePath === "ARCHITECTURE.md"
-      ? "ARCHITECTURE.md"
-      : `docs/${sourceRelativePath.replace(/\\/g, "/")}`;
     fields.push(
-      `editUrl: ${JSON.stringify(`https://github.com/JAGGER-L/awesome_agent/edit/main/${sourcePath}`)}`,
+      `editUrl: ${JSON.stringify(`https://github.com/JAGGER-L/awesome_agent/edit/main/${entry.source}`)}`,
     );
   }
-  if (/\/index\.md$/i.test(`/${outputRelativePath.replace(/\\/g, "/")}`)) {
-    const slug = dirname(outputRelativePath).replace(/\\/g, "/");
+  if (/\/index\.md$/i.test(`/${entry.output}`)) {
+    const slug = dirname(entry.output).replace(/\\/g, "/");
     if (slug !== "." && !/^slug\s*:/m.test(frontmatter)) fields.push(`slug: ${slug}`);
   }
 
   frontmatter = [frontmatter.trim(), ...fields].filter(Boolean).join("\n");
-  body = rewriteMarkdownLinks(body, sourceRelativePath, outputRelativePath).trimStart();
+  body = rewriteMarkdownLinks(body, entry, catalog).trimStart();
   return `---\n${frontmatter}\n---\n\n${body.trimEnd()}\n`;
-}
-
-async function listMarkdownFiles(directory) {
-  const files = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await listMarkdownFiles(path)));
-    if (entry.isFile() && /\.md$/i.test(entry.name)) files.push(path);
-  }
-  return files;
-}
-
-function outputPathFor(sourceRelativePath) {
-  const normalized = sourceRelativePath.replace(/\\/g, "/");
-  const chinese = normalized.endsWith(".zh-CN.md");
-  const localized = chinese ? normalized.replace(/\.zh-CN\.md$/, ".md") : normalized;
-  const indexed = localized.replace(/(^|\/)README\.md$/i, "$1index.md");
-  return chinese ? join("zh-cn", ...indexed.split("/")) : join(...indexed.split("/"));
-}
-
-async function writeGeneratedPage(sourcePath, sourceRelativePath, outputRelativePath) {
-  const targetPath = join(generatedDocs, outputRelativePath);
-  const content = await readFile(sourcePath, "utf8");
-  const lastUpdated = await lastUpdatedFor(sourcePath);
-  await mkdir(dirname(targetPath), { recursive: true });
-  await writeFile(
-    targetPath,
-    withFrontmatter(content, sourceRelativePath, outputRelativePath, lastUpdated),
-    "utf8",
-  );
 }
 
 async function lastUpdatedFor(sourcePath) {
@@ -225,36 +149,51 @@ async function lastUpdatedFor(sourcePath) {
   return (await stat(sourcePath)).mtime.toISOString().slice(0, 10);
 }
 
+async function writeCatalogPage(entry, catalog, outputRoot) {
+  const targetPath = join(outputRoot, ...entry.output.split("/"));
+  const targetDirectory = dirname(targetPath);
+  await ensureSafeSiteDirectory({
+    siteDirectory,
+    targetDirectory,
+    label: `Generated documentation parent for ${entry.output}`,
+  });
+  if (entry.kind === "homepage") {
+    await atomicWriteSafeSiteFile({
+      siteDirectory,
+      targetFile: targetPath,
+      content: entry.content,
+      label: `Generated documentation page ${entry.output}`,
+    });
+    return;
+  }
+  const lastUpdated = await lastUpdatedFor(entry.absolutePath);
+  const content = withFrontmatter(entry.content, entry, catalog, lastUpdated);
+  await atomicWriteSafeSiteFile({
+    siteDirectory,
+    targetFile: targetPath,
+    content,
+    label: `Generated documentation page ${entry.output}`,
+  });
+}
+
 async function main() {
   assertGeneratedTarget(generatedDocs);
-  await rm(generatedDocs, { recursive: true, force: true });
-  await mkdir(generatedDocs, { recursive: true });
+  const catalog = await compileDocumentationCatalog({ repositoryRoot });
 
-  await cp(join(seedDirectory, "index.mdx"), join(generatedDocs, "index.mdx"));
-  await mkdir(join(generatedDocs, "zh-cn"), { recursive: true });
-  await cp(
-    join(seedDirectory, "index.zh-cn.mdx"),
-    join(generatedDocs, "zh-cn", "index.mdx"),
+  await replaceSafeSiteDirectory({
+    siteDirectory,
+    targetDirectory: generatedDocs,
+    label: "Generated documentation replacement",
+    populate: async (stagingDirectory) => {
+      for (const entry of catalog.pages) {
+        await writeCatalogPage(entry, catalog, stagingDirectory);
+      }
+    },
+  });
+
+  console.log(
+    `Generated ${catalog.pages.length} documentation pages from one validated catalog.`,
   );
-
-  const docsFiles = await listMarkdownFiles(sourceDocs);
-  let pageCount = 2;
-  for (const sourcePath of docsFiles) {
-    const sourceRelativePath = relative(sourceDocs, sourcePath);
-    if (sourceRelativePath.replace(/\\/g, "/") === "README.md") continue;
-    const outputRelativePath = outputPathFor(sourceRelativePath);
-    await writeGeneratedPage(sourcePath, sourceRelativePath, outputRelativePath);
-    pageCount += 1;
-  }
-
-  await writeGeneratedPage(
-    join(repositoryRoot, "ARCHITECTURE.md"),
-    "ARCHITECTURE.md",
-    join("architecture", "overview.md"),
-  );
-  pageCount += 1;
-
-  console.log(`Generated ${pageCount} documentation pages from repository Markdown.`);
 }
 
 await main();

@@ -7,16 +7,18 @@
     "node": ">=22.12.0"
   },
   "scripts": {
+    "check:contracts": "node --test scripts/built-site-contracts.test.mjs scripts/documentation-catalog.test.mjs scripts/documentation-input-safety.test.mjs scripts/homepage-content.test.mjs scripts/markdown-ast.test.mjs scripts/safe-site-paths.test.mjs scripts/semantic-html.test.mjs scripts/semantic-xml.test.mjs",
+    "translations:lock": "node scripts/update-translation-lock.mjs",
     "sync-content": "node scripts/sync-content.mjs",
-    "predev": "npm run sync-content",
+    "predev": "npm run check:contracts && npm run sync-content && npm run check:navigation",
     "dev": "astro dev",
-    "prebuild": "npm run sync-content && npm run check:navigation && npm run check:contrast",
+    "prebuild": "npm run check:contracts && npm run sync-content && npm run check:navigation && npm run check:contrast",
     "build": "astro build",
     "postbuild": "node scripts/generate-llms.mjs",
     "check:links": "node scripts/check-built-links.mjs",
     "check:navigation": "node scripts/check-navigation.mjs",
     "check:contrast": "node scripts/check-contrast.mjs",
-    "precheck": "npm run sync-content && npm run check:navigation && npm run check:contrast",
+    "precheck": "npm run check:contracts && npm run sync-content && npm run check:navigation && npm run check:contrast",
     "check": "astro check",
     "preview": "astro preview"
   },
@@ -30,6 +32,13 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.6",
-    "typescript": "5.9.3"
+    "hast-util-from-html": "2.0.3",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-stringify": "11.0.0",
+    "saxes": "6.0.0",
+    "typescript": "5.9.3",
+    "unified": "11.0.5",
+    "unist-util-visit": "5.1.0"
   }
 }

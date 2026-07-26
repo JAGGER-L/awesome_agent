@@ -1,5 +1,7 @@
 # Awesome documentation
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 This directory is the canonical documentation source for Awesome. The GitHub
 Pages site is generated from these Markdown files; this page is intentionally
 kept as the repository-facing map and is not published as a second website
@@ -39,7 +41,6 @@ What exists now or later? -> Roadmap
 - [Product overview and learning paths](getting-started/README.md)
 - [Installation](getting-started/installation.md)
 - [Five-step quickstart](getting-started/quickstart.md)
-- [五步快速开始](getting-started/quickstart.zh-CN.md)
 
 ### Core concepts
 
@@ -108,7 +109,7 @@ owner:
 | Exact command syntax, config fields, tool schemas, limits, and permission matrix | `docs/reference/` |
 | User tasks and recovery procedures | `docs/user-guide/` |
 | Extension setup and trust boundaries | `docs/extensions/` |
-| System topology and dependency direction | Root `ARCHITECTURE.md` |
+| System topology and dependency direction | Root `ARCHITECTURE.md` / `ARCHITECTURE.zh-CN.md` pair |
 | Subsystem invariants and implementation flows | `docs/architecture/` |
 | Build, test, CI, documentation, and release procedure | `docs/development/` |
 | Current versus future product scope | `docs/roadmap.md` |
@@ -118,26 +119,36 @@ configuration block.
 
 ## Language policy
 
-English is the complete canonical set. The Chinese website homepage and
-quickstart are maintained as first-class translations because they form the
-shortest onboarding path. For advanced pages Starlight serves the canonical
-English page under the Chinese locale; the Chinese homepage explicitly marks
-those destinations as English. The existence of a Chinese route or Chinese
-navigation chrome must not be interpreted as a completed translation.
+English and Simplified Chinese are complete, first-class documentation sets.
+Every English Markdown source must have exactly one `name.zh-CN.md` peer in the
+same directory; the authoritative architecture overview uses the root
+`ARCHITECTURE.md` / `ARCHITECTURE.zh-CN.md` pair. Both versions preserve the
+same behavior, safety boundaries, examples, diagrams, and link destinations.
+The homepage follows the same rule through the paired
+`site/homepage-content.en.json` and `site/homepage-content.zh-CN.json` sources,
+with one shared route map.
 
-A translated file must use the exact `name.zh-CN.md` pairing and preserve the
-behavior, safety boundaries, examples, and link targets of its English source.
-Partial or silently stale translations are worse than an honest fallback.
+Synchronization and navigation checks fail when either side is missing or a
+translation is orphaned. The site does not synthesize locale fallback pages.
+Renamed or removed pages are deleted from the canonical route set and old URLs
+return 404 instead of entering a compatibility redirect layer.
+
+`site/translation-lock.json` binds each reviewed pair to the normalized hashes
+of both sources. After updating and reviewing both languages, run
+`npm --prefix site run translations:lock` and inspect the lock diff; refreshing
+the lock without reviewing the translation is not completion evidence.
 
 ## Maintenance contract
 
 When product behavior changes:
 
 1. update the canonical owner page;
-2. update any task guide whose outcome changed;
-3. update architecture only when ownership, flow, or an invariant changed;
-4. add the page to the shared site navigation manifest;
-5. run the documentation structure, site type, production build, route, and
+2. update its English or Simplified Chinese peer in the same change;
+3. update any task guide whose outcome changed;
+4. update architecture only when ownership, flow, or an invariant changed;
+5. add the page to the shared site navigation manifest;
+6. refresh the translation lock after both language versions are reviewed;
+7. run the documentation structure, site type, production build, route, and
    anchor checks described in the [development guide](development/contracts-and-documentation.md).
 
 Documentation examples are product contracts. Commands must be runnable,

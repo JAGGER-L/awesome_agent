@@ -83,6 +83,15 @@ Update documentation when changing:
 
 Keep `README.md` and `README.zh-CN.md` behaviorally consistent. Internal
 refactors and test-only changes do not require artificial documentation edits.
+Every public source under `docs/`, the root README, and the root architecture
+overview must keep its English and `.zh-CN.md` peer behaviorally synchronized;
+the site does not provide untranslated locale fallbacks or legacy route
+redirects.
+The homepage uses the paired `site/homepage-content.en.json` and
+`site/homepage-content.zh-CN.json` sources; keep their schema, stable IDs, and
+shared destinations synchronized.
+After both languages are reviewed, refresh the site translation lock and
+inspect its diff before running the documentation build gates.
 
 ## Validation Rules
 
@@ -180,9 +189,11 @@ Before ending:
 
 - `README.md` / `README.zh-CN.md`: product introduction, installation, first
   use, capabilities, and documentation links.
-- `docs/README.md`: reader-oriented documentation index.
-- `ARCHITECTURE.md`: authoritative topology, data flow, package ownership,
-  state, dependency direction, and extension boundaries.
+- `docs/README.md` / `docs/README.zh-CN.md`: bilingual reader-oriented
+  documentation indexes.
+- `ARCHITECTURE.md` / `ARCHITECTURE.zh-CN.md`: authoritative bilingual
+  topology, data flow, package ownership, state, dependency direction, and
+  extension boundaries.
 - `docs/getting-started/`: product orientation, installation, and the English
   and Chinese first-session path.
 - `docs/concepts/`: product mental model, lifecycle vocabulary, context,

@@ -1,99 +1,28 @@
 ---
-const isChinese = Astro.locals.starlightRoute.locale === "zh-cn";
+import englishHomepageContent from "../../homepage-content.en.json";
+import {
+  compileHomepageContentSources,
+} from "../../homepage-content.mjs";
+import chineseHomepageContent from "../../homepage-content.zh-CN.json";
 
+type ProofPill = { text: string };
+type Boundary = { eyebrow: string; title: string; description: string };
+type LoopStep = { number: string; title: string; description: string };
+type Resource = {
+  eyebrow: string;
+  title: string;
+  description: string;
+  href: string;
+};
+
+const isChinese = Astro.locals.starlightRoute.locale === "zh-cn";
+const homepageContentByLocale = compileHomepageContentSources({
+  english: englishHomepageContent,
+  chinese: chineseHomepageContent,
+});
 const content = isChinese
-  ? {
-      kicker: "终端原生 · 单一 Python Core · 修改可恢复",
-      title: "把开发意图，变成经过验证的修改。",
-      lead:
-        "Awesome 是面向审慎软件开发的 AI 编程助手。它理解代码库、规划修改、通过受控工具执行并验证结果，让每一步都保持可见、有边界且可以恢复。",
-      primaryAction: "五分钟快速开始",
-      secondaryAction: "了解工作方式",
-      copy: "复制",
-      copied: "已复制",
-      installPlatform: "快速安装 · Windows PowerShell",
-      installReview: "先审阅安装器、完整性边界与其他平台 →",
-      previewLabel: "基于 Awesome 当前 TUI 还原的产品界面预览",
-      userPrompt: "收紧 Workspace 路径策略，并运行最小相关测试。",
-      assistantReply: "已收紧路径边界并补充覆盖测试。相关单元测试全部通过。",
-      boundariesLabel: "产品边界",
-      proofPills: ["默认 Request approval", "单一前台 Operation", "Change Journal"],
-      boundaries: [
-        ["01 / CORE", "一个行为权威", "模型、工具、状态与恢复统一进入 Python Core。"],
-        ["02 / CONTROL", "操作始终可见", "审批、事件和规范化结果共享同一条执行路径。"],
-        ["03 / VERIFY", "验证不是附加项", "按风险运行最小充分检查，并记录真实结果。"],
-        ["04 / RECOVER", "修改可以恢复", "Change Journal 为受控修改提供明确的撤销语义。"],
-      ],
-      loopEyebrow: "01 / PRODUCT LOOP",
-      loopTitle: "从理解到验证，形成完整闭环。",
-      loopLead: "Awesome 不只生成代码，而是围绕一项真实的软件工作组织上下文、执行和证据。",
-      loop: [
-        ["01", "Understand", "读取相关代码、约束、文档和当前契约，建立有限上下文。"],
-        ["02", "Plan", "明确目标、影响范围、风险与最轻验证路径。"],
-        ["03", "Change", "所有工具调用经过统一 Registry、Policy 和 Executor。"],
-        ["04", "Verify", "运行相关检查，解释结果，并保留恢复路径。"],
-      ],
-      resourcesEyebrow: "02 / START HERE",
-      resourcesTitle: "按任务进入文档。",
-      resourcesLead: "直接选择你要完成的工作，不必先读完整个目录树。",
-      resources: [
-        ["GET STARTED", "安装并完成第一次会话", "选择安装方式、配置模型、信任 Workspace，并从只读任务开始。", "./getting-started/quickstart/"],
-        ["DAILY WORK", "建立可靠的日常工作流", "组织上下文、提交任务、检查证据，并在需要时继续会话。详细指南当前为英文。", "./user-guide/"],
-        ["CONTROL", "安全地审批、检查与恢复", "理解三档权限、Shell 边界、diff、undo、取消和恢复。详细指南当前为英文。", "./user-guide/permissions/"],
-        ["EXTEND", "选择 Memory、Skills 或 MCP", "按需要扩展事实、工作方法或外部工具，同时保留统一策略边界。扩展文档当前为英文。", "./extensions/"],
-        ["UNDERSTAND", "阅读系统架构与数据流", "从 Ink 到 Application、Agent、工具、协议与持久化。架构正文暂为英文。", "./architecture/overview/"],
-        ["CONTRIBUTE", "修改 Core、TUI 或文档", "从开发环境、包边界、测试门禁和发布契约开始。贡献文档暂为英文。", "./development/"],
-      ],
-      closingTitle: "从一次可控的只读任务开始。",
-      closingLead: "安装 Awesome、信任当前 Workspace，然后让第一轮对话只解释代码库。",
-      closingAction: "打开快速开始",
-    }
-  : {
-      kicker: "Terminal-native · One Python Core · Recoverable changes",
-      title: "Turn intent into a verified change.",
-      lead:
-        "Awesome is an AI coding assistant for deliberate software work. It understands your codebase, plans the change, acts through controlled tools, verifies the result, and keeps every step visible, bounded, and recoverable.",
-      primaryAction: "Start in five minutes",
-      secondaryAction: "See how it works",
-      copy: "Copy",
-      copied: "Copied",
-      installPlatform: "Fast path · Windows PowerShell",
-      installReview: "Review the installer, integrity boundary, and other platforms →",
-      previewLabel: "Product interface preview based on Awesome's current TUI",
-      userPrompt: "Tighten the workspace path policy and run the smallest relevant tests.",
-      assistantReply: "The path boundary is tighter and coverage is in place. All related unit tests pass.",
-      boundariesLabel: "Product boundaries",
-      proofPills: ["Request approval by default", "One foreground operation", "Change Journal"],
-      boundaries: [
-        ["01 / CORE", "One behavior authority", "Models, tools, state, and recovery converge in Python Core."],
-        ["02 / CONTROL", "Operations stay visible", "Approvals, events, and normalized results share one execution path."],
-        ["03 / VERIFY", "Verification is part of the work", "Awesome runs the smallest sufficient checks and records real results."],
-        ["04 / RECOVER", "Changes have a way back", "The Change Journal gives controlled edits explicit undo semantics."],
-      ],
-      loopEyebrow: "01 / PRODUCT LOOP",
-      loopTitle: "A complete loop, from understanding to evidence.",
-      loopLead: "Awesome organizes context, execution, and proof around a real software task—not just a code completion.",
-      loop: [
-        ["01", "Understand", "Read the relevant code, constraints, docs, and current contracts into bounded context."],
-        ["02", "Plan", "Define the goal, affected surface, risks, and the lightest validation path."],
-        ["03", "Change", "Route every tool call through one Registry, Policy, and Executor."],
-        ["04", "Verify", "Run relevant checks, explain the result, and preserve a recovery path."],
-      ],
-      resourcesEyebrow: "02 / START HERE",
-      resourcesTitle: "Enter the docs by task.",
-      resourcesLead: "Choose the outcome you need instead of learning the whole documentation tree first.",
-      resources: [
-        ["GET STARTED", "Install and complete a first session", "Choose an installation path, configure a model, trust the workspace, and begin read-only.", "./getting-started/"],
-        ["DAILY WORK", "Build a reliable working loop", "Frame context, submit work, inspect evidence, and continue a session when useful.", "./user-guide/"],
-        ["CONTROL", "Approve, inspect, and recover safely", "Understand permission modes, shell boundaries, diff, undo, cancellation, and recovery.", "./user-guide/permissions/"],
-        ["EXTEND", "Choose Memory, Skills, or MCP", "Add facts, working methods, or external tools without bypassing shared policy.", "./extensions/"],
-        ["UNDERSTAND", "Read the architecture and data flow", "Follow typed intent through Ink, Application, Agent, tools, protocol, and storage.", "./architecture/overview/"],
-        ["CONTRIBUTE", "Change Core, TUI, or documentation", "Start with the development environment, package boundaries, test gates, and release contract.", "./development/"],
-      ],
-      closingTitle: "Start with one controlled, read-only task.",
-      closingLead: "Install Awesome, trust the current workspace, and use the first turn to understand the codebase.",
-      closingAction: "Open the quickstart",
-    };
+  ? homepageContentByLocale["zh-CN"]
+  : homepageContentByLocale.en;
 
 const installCommand =
   "irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex";
@@ -124,7 +53,7 @@ const installCommand =
         <a href="./getting-started/installation/">{content.installReview}</a>
       </p>
       <div class="proof-pills" aria-label={content.boundariesLabel}>
-        {content.proofPills.map((item) => <span>{item}</span>)}
+        {content.proofPills.map(({ text }: ProofPill) => <span>{text}</span>)}
       </div>
     </div>
 
@@ -165,7 +94,7 @@ const installCommand =
   </section>
 
   <section class="product-proof-strip" aria-label={content.boundariesLabel}>
-    {content.boundaries.map(([eyebrow, title, description]) => (
+    {content.boundaries.map(({ eyebrow, title, description }: Boundary) => (
       <article>
         <span>{eyebrow}</span>
         <strong>{title}</strong>
@@ -180,7 +109,7 @@ const installCommand =
       <div><h2>{content.loopTitle}</h2><p>{content.loopLead}</p></div>
     </header>
     <div class="product-loop">
-      {content.loop.map(([number, title, description]) => (
+      {content.loop.map(({ number, title, description }: LoopStep) => (
         <article class="loop-step">
           <span>{number}</span><h3>{title}</h3><p>{description}</p>
         </article>
@@ -194,7 +123,7 @@ const installCommand =
       <div><h2>{content.resourcesTitle}</h2><p>{content.resourcesLead}</p></div>
     </header>
     <div class="resource-grid">
-      {content.resources.map(([eyebrow, title, description, href]) => (
+      {content.resources.map(({ eyebrow, title, description, href }: Resource) => (
         <a class="resource-card" href={href}>
           <span>{eyebrow}</span>
           <h3>{title}<i aria-hidden="true">→</i></h3>

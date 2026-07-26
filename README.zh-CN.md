@@ -93,22 +93,19 @@ awesome --help
 ## 文档
 
 - [浏览文档网站](https://jagger-l.github.io/awesome_agent/zh-cn/)
-- [文档总览](docs/README.md)
-- [快速开始](docs/getting-started/quickstart.zh-CN.md)
-- [建立日常工作流](docs/user-guide/README.md)
-- [理解权限与安全修改](docs/user-guide/permissions.md)
-- [选择 Memory、Skills 或 MCP](docs/extensions/README.md)
-- [查询命令、配置、工具和协议的精确契约](docs/reference/README.md)
-- [架构](ARCHITECTURE.md)
-- [贡献与开发](docs/development/README.md)
-- [故障排查](docs/user-guide/troubleshooting.md)
-- [Roadmap](docs/roadmap.md)
-
-除中文首页和快速开始外，深入文档目前以英文为权威版本；文档网站会明确显示
-英文回退，不会把尚未翻译的路由标记为已翻译。
+- [文档总览](docs/README.zh-CN.md)
+- [安装并完成快速开始](docs/getting-started/quickstart.zh-CN.md)
+- [建立日常工作流](docs/user-guide/README.zh-CN.md)
+- [理解权限与安全修改](docs/user-guide/permissions.zh-CN.md)
+- [选择 Memory、Skills 或 MCP](docs/extensions/README.zh-CN.md)
+- [查询命令、配置、工具和协议的精确契约](docs/reference/README.zh-CN.md)
+- [架构](ARCHITECTURE.zh-CN.md)
+- [贡献与开发](docs/development/README.zh-CN.md)
+- [故障排查](docs/user-guide/troubleshooting.zh-CN.md)
+- [Roadmap](docs/roadmap.zh-CN.md)
 
 开发者可以通过 `uv run awesome-dev` 运行当前源码；完整的环境准备、启动和故障排查流程请参阅
-[开发环境](docs/development/setup.md)（英文）。
+[开发环境](docs/development/setup.zh-CN.md)。
 
 ## 安全
 

@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "locale": "zh-CN",
+  "kicker": "终端原生 · 单一 Python Core · 修改可恢复",
+  "title": "把开发意图，变成经过验证的修改。",
+  "lead": "Awesome 是面向审慎软件开发的 AI 编程助手。它理解代码库、规划修改、通过受控工具执行并验证结果，让每一步都保持可见、有边界且可以恢复。",
+  "primaryAction": "五分钟快速开始",
+  "secondaryAction": "了解工作方式",
+  "copy": "复制",
+  "copied": "已复制",
+  "installPlatform": "快速安装 · Windows PowerShell",
+  "installReview": "先审阅安装器、完整性边界与其他平台 →",
+  "previewLabel": "基于 Awesome 当前 TUI 还原的产品界面预览",
+  "userPrompt": "收紧 Workspace 路径策略，并运行最小相关测试。",
+  "assistantReply": "已收紧路径边界并补充覆盖测试。相关单元测试全部通过。",
+  "boundariesLabel": "产品边界",
+  "proofPills": [
+    {
+      "id": "approval-default",
+      "text": "默认 Request approval"
+    },
+    {
+      "id": "single-operation",
+      "text": "单一前台 Operation"
+    },
+    {
+      "id": "change-journal",
+      "text": "Change Journal 变更记录"
+    }
+  ],
+  "boundaries": [
+    {
+      "id": "core",
+      "eyebrow": "01 / CORE",
+      "title": "一个行为权威",
+      "description": "模型、工具、状态与恢复统一进入 Python Core。"
+    },
+    {
+      "id": "control",
+      "eyebrow": "02 / CONTROL",
+      "title": "操作始终可见",
+      "description": "审批、事件和规范化结果共享同一条执行路径。"
+    },
+    {
+      "id": "verify",
+      "eyebrow": "03 / VERIFY",
+      "title": "验证不是附加项",
+      "description": "按风险运行最小充分检查，并记录真实结果。"
+    },
+    {
+      "id": "recover",
+      "eyebrow": "04 / RECOVER",
+      "title": "修改可以恢复",
+      "description": "Change Journal 为受控修改提供明确的撤销语义。"
+    }
+  ],
+  "loopEyebrow": "01 / PRODUCT LOOP",
+  "loopTitle": "从理解到验证，形成完整闭环。",
+  "loopLead": "Awesome 不只生成代码，而是围绕一项真实的软件工作组织上下文、执行和证据。",
+  "loop": [
+    {
+      "id": "understand",
+      "number": "01",
+      "title": "理解",
+      "description": "读取相关代码、约束、文档和当前契约，建立有限上下文。"
+    },
+    {
+      "id": "plan",
+      "number": "02",
+      "title": "规划",
+      "description": "明确目标、影响范围、风险与最轻验证路径。"
+    },
+    {
+      "id": "change",
+      "number": "03",
+      "title": "修改",
+      "description": "所有工具调用经过统一 Registry、Policy 和 Executor。"
+    },
+    {
+      "id": "verify",
+      "number": "04",
+      "title": "验证",
+      "description": "运行相关检查，解释结果，并保留恢复路径。"
+    }
+  ],
+  "resourcesEyebrow": "02 / START HERE",
+  "resourcesTitle": "按任务进入文档。",
+  "resourcesLead": "直接选择你要完成的工作，不必先读完整个目录树。",
+  "resources": [
+    {
+      "id": "get-started",
+      "eyebrow": "GET STARTED",
+      "title": "安装并完成第一次会话",
+      "description": "选择安装方式、配置模型、信任 Workspace，并从只读任务开始。"
+    },
+    {
+      "id": "daily-work",
+      "eyebrow": "DAILY WORK",
+      "title": "建立可靠的日常工作流",
+      "description": "组织上下文、提交任务、检查证据，并在需要时继续会话。"
+    },
+    {
+      "id": "control",
+      "eyebrow": "CONTROL",
+      "title": "安全地审批、检查与恢复",
+      "description": "理解三档权限、Shell 边界、diff、undo、取消和恢复。"
+    },
+    {
+      "id": "extend",
+      "eyebrow": "EXTEND",
+      "title": "选择 Memory、Skills 或 MCP",
+      "description": "按需要扩展事实、工作方法或外部工具，同时保留统一策略边界。"
+    },
+    {
+      "id": "understand",
+      "eyebrow": "UNDERSTAND",
+      "title": "阅读系统架构与数据流",
+      "description": "从 Ink 到 Application、Agent、工具、协议与持久化。"
+    },
+    {
+      "id": "contribute",
+      "eyebrow": "CONTRIBUTE",
+      "title": "修改 Core、TUI 或文档",
+      "description": "从开发环境、包边界、测试门禁和发布契约开始。"
+    }
+  ],
+  "closingTitle": "从一次可控的只读任务开始。",
+  "closingLead": "安装 Awesome、信任当前 Workspace，然后让第一轮对话只解释代码库。",
+  "closingAction": "打开快速开始"
+}
